@@ -26,6 +26,20 @@ func WithRetention(r history.RetentionSettings) Option {
 	return func(o *settings) { o.jobRetention = r }
 }
 
+// JobRetentionOf answers the retention periods that NewServer would give to
+// the job recorder for opts. It applies opts to the default settings and reads
+// the result. It checks nothing and builds nothing, so a test can show which
+// periods a set of options carries.
+func JobRetentionOf(opts ...Option) history.RetentionSettings {
+	cfg := defaultSettings()
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	return cfg.jobRetention
+}
+
 // checkJobRetention refuses a retention period outside the range that
 // history.RetentionSettings.Validate allows. Defense in depth: the recorder
 // checks the same range when it starts, and the binary checks the flags
