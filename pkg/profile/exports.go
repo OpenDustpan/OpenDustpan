@@ -68,9 +68,11 @@ const (
 	proxyFieldCertificates = "certificates"
 )
 
-// pathSegments is one or more segments of a path: ".name", ["name"] or
-// ['name'].
-const pathSegments = `(?:\.` + identifier + `|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])+`
+// pathSegment1 is one segment of a path: ".name", ["name"] or ['name'].
+const pathSegment1 = `(?:\.` + identifier + `|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])`
+
+// pathSegments is one or more segments of a path.
+const pathSegments = pathSegment1 + `+`
 
 // Limits of exports.proxy.
 const (
@@ -121,14 +123,15 @@ var (
 	queryName = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 	// soleSecretRef is a string that is exactly one reference to a value:
 	// a path under values (group 1), an output of a provider or a rotator, or
-	// a value of another profile (group 2 holds the name of imports[...]).
-	// Any other shape (an operator, a function, a literal, text around the
+	// a value of another profile. Group 1 is the values path, groups 2 and 3
+	// the group and the name of a block, groups 4 and 5 the root and the
+	// name of another profile. Any other shape (an operator, a function, a literal, text around the
 	// reference) does not match. The pattern accepts only a chain of names
 	// and quoted indexes, which the expression language reads as a plain
 	// read of that path.
-	soleSecretRef = regexp.MustCompile(`^\$\{\s*(?:(values` + pathSegments + `)|(?:providers|rotators)` +
-		pathSegments + `|imports\[\s*"([^"\\]*)"\s*\]\.values` + pathSegments + `|profiles\[\s*"[^"\\]*"\s*\]\.values` +
-		pathSegments + `)\s*\}$`)
+	soleSecretRef = regexp.MustCompile(`^\$\{\s*(?:(values` + pathSegments + `)|(providers|rotators)(` +
+		pathSegment1 + `)(?:` + pathSegment1 + `)*|(imports|profiles)\[\s*"([^"\\]*)"\s*\]\.values` + pathSegments +
+		`)\s*\}$`)
 	// soleValuesRef is a string that is exactly one reference into values.
 	soleValuesRef = regexp.MustCompile(`^\$\{\s*(values` + pathSegments + `)\s*\}$`)
 )
@@ -512,15 +515,16 @@ func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth 
 		return false
 	}
 
-	if m[2] != "" {
-		// imports[...] reads only an import that the document declares.
-		return d.declaresImport(m[2])
-	}
-
-	if m[1] == "" {
-		// An output of a provider or a rotator, or a value of another
-		// profile that profiles[...] names.
-		return true
+	switch {
+	case m[2] != "":
+		// A provider or rotator output reads only a block that the document
+		// declares, or a block that an import can give.
+		return d.declaresBlock(m[2], segmentText(m[3])) || d.hasImports()
+	case m[4] != "":
+		// imports[...] and profiles[...] read only a profile that imports
+		// of the document declares. So a profile cannot read a plain value
+		// of its own through profiles[...].
+		return d.declaresImport(m[5])
 	}
 
 	var ref []string
@@ -540,6 +544,24 @@ func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth 
 	}
 
 	return d.readsSecret(target, seen, depth+1)
+}
+
+// declaresBlock reports whether the group (providers or rotators) of the
+// document holds a block with name.
+func (d *Document) declaresBlock(group, name string) bool {
+	blocks := mapGet(d.root, group)
+
+	return blocks != nil && blocks.Kind == yaml.MappingNode && mapGet(blocks, name) != nil
+}
+
+// segmentText returns the name in one path segment.
+func segmentText(seg string) string {
+	m := pathSegment.FindStringSubmatch(seg)
+	if m == nil {
+		return ""
+	}
+
+	return m[1] + m[2] + m[3]
 }
 
 // declaresImport reports whether imports of the document holds name, with
