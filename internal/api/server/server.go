@@ -234,13 +234,17 @@ type Handler struct {
 	stateWrite     stategate.Effective
 	preferences    *preferences.Service
 	localUsers     *localusersvc.Service
-	settings       *setting.Service
-	gitHost        *forge.Service
-	idem           *idempotent.Middleware
-	instances      installation.InstanceStore
-	storeChecks    *storecheck.Service
-	mux            *patternMux
-	routes         []Route
+	// passkeys is the passkey service of the console sign-in. With no
+	// sign-in there is no service.
+	passkeys      PasskeyService
+	passkeyBegins *beginLimiter
+	settings      *setting.Service
+	gitHost       *forge.Service
+	idem          *idempotent.Middleware
+	instances     installation.InstanceStore
+	storeChecks   *storecheck.Service
+	mux           *patternMux
+	routes        []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
@@ -294,16 +298,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
 		localUsers:     cfg.LocalUsers,
-		settings:       cfg.Settings,
-		gitHost:        cfg.GitHost,
-		idem:           cfg.Idempotency,
-		instances:      cfg.Instances, storeChecks: cfg.StoreChecks,
+		passkeys:       nil, passkeyBegins: newBeginLimiter(),
+		settings:  cfg.Settings,
+		gitHost:   cfg.GitHost,
+		idem:      cfg.Idempotency,
+		instances: cfg.Instances, storeChecks: cfg.StoreChecks,
 		mux:    newPatternMux(),
 		routes: nil,
 	}
 
 	if h.now == nil {
 		h.now = time.Now
+	}
+
+	if signIn != nil {
+		h.passkeys = signIn.passkeys
 	}
 
 	h.routes = h.buildRoutes()

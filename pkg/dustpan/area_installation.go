@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -111,7 +112,7 @@ func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 		AuditChain:       auditChainPort(in.chain),
 		AuditSinks:       auditSinksOf(in.shipper),
 		Workers:          in.workers,
-		SignIn:           in.signIn,
+		SignIn:           withPasskeys(in.signIn, in.extras.passkeys),
 		Preferences:      newPreferencesService(in.store, in.now),
 		LocalUsers:       in.extras.localUsers,
 		Settings:         in.extras.settings,
@@ -123,6 +124,22 @@ func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// withPasskeys returns a copy of the console sign-in signIn that holds the
+// passkey service passkeys, or signIn as it is when the server has no console
+// sign-in or no passkey service. The copy keeps the shared sign-in unchanged.
+// A nil *mfasvc.Service never goes into the interface: the handler would
+// mount the passkey routes on a service that is not there.
+func withPasskeys(signIn *serverapi.SignIn, passkeys *mfasvc.Service) *serverapi.SignIn {
+	if signIn == nil || passkeys == nil {
+		return signIn
+	}
+
+	withService := *signIn
+	withService.Passkeys = passkeys
+
+	return &withService
 }
 
 // auditSinksOf returns the source of the audit sink list, or nil when no audit

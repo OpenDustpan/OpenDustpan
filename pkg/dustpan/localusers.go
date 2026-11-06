@@ -7,6 +7,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -19,17 +20,19 @@ import (
 
 // serverExtras holds the parts of the installation API that newServerHandler
 // builds after the principals: the IP allowlists, the audit store of the
-// installation, the settings service and the local user service.
+// installation, the settings service, the local user service and the
+// passkey service. passkeys is nil when the server keeps no passkeys.
 type serverExtras struct {
 	allow      *ipallow.Service
 	audit      audit.ServerStore
 	settings   *setting.Service
 	localUsers *localusersvc.Service
+	passkeys   *mfasvc.Service
 }
 
 // newServerExtras builds the serverExtras of cfg.
 func newServerExtras(cfg *settings, deps installationDeps, principals *principal.Service) (serverExtras, error) {
-	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil}
+	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil, passkeys: nil}
 
 	allow, err := newIPAllowlistService(cfg.ipAllowlists, deps.services.namespaces, cfg.now)
 	if err != nil {
@@ -58,7 +61,15 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 		}
 	}
 
-	return serverExtras{allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service}, nil
+	passkeys, err := newPasskeyService(cfg.namespaceStore, cfg.publicURL, serverAudit, cfg.now, cfg.logger)
+	if err != nil {
+		return none, err
+	}
+
+	return serverExtras{
+		allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service,
+		passkeys: passkeys.service,
+	}, nil
 }
 
 // localUserWiring holds the service of the local users. The service is nil
