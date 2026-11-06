@@ -193,6 +193,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 			OnDevRefused: nil,
 			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
 			PasswordLimiter: nil,
+			Passkeys:        nil,
 			Providers:       nil, DevCode: handlerCode, DevAdmin: devAdmin,
 		},
 		InstallationKind: parts.kind,

@@ -52,6 +52,7 @@ import {
   decodeErrorCode,
   decodeErrorResponse,
   decodeExchangeWorkloadTokenRequest,
+  decodeFinishPasskeyRegistrationRequest,
   decodeFireTriggerRequest,
   decodeFireTriggerResult,
   decodeGate,
@@ -95,6 +96,7 @@ import {
   decodeListGitHostInstallationsResponse,
   decodeListModuleReleasesResponse,
   decodeListNotificationSinksResponse,
+  decodeListPasskeysResponse,
   decodeListPlacementRulesResponse,
   decodeListProfileRevisionsResponse,
   decodeListProfilesResponse,
@@ -118,6 +120,8 @@ import {
   decodeMaintenanceActiveWorkError,
   decodeMaintenanceActiveWorkErrorArgs,
   decodeManualLock,
+  decodeMfaPasskeyLimitError,
+  decodeMfaPasskeyLimitErrorArgs,
   decodeModuleRelease,
   decodeModuleReleaseArchive,
   decodeNamespaceIssuer,
@@ -128,6 +132,8 @@ import {
   decodeNotificationSinkTest,
   decodeOutputSharing,
   decodeOutputSharingRequest,
+  decodePasskey,
+  decodePasskeyCreationOptions,
   decodePasswordSignInRequest,
   decodePasswordTooShortError,
   decodePasswordTooShortErrorArgs,
@@ -305,6 +311,7 @@ import type {
   ErrorCode,
   ErrorResponse,
   ExchangeWorkloadTokenRequest,
+  FinishPasskeyRegistrationRequest,
   FireTriggerRequest,
   FireTriggerResult,
   Gate,
@@ -348,6 +355,7 @@ import type {
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
   ListNotificationSinksResponse,
+  ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
   ListProfilesResponse,
@@ -371,6 +379,8 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   ManualLock,
+  MfaPasskeyLimitError,
+  MfaPasskeyLimitErrorArgs,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -381,6 +391,8 @@ import type {
   NotificationSinkTest,
   OutputSharing,
   OutputSharingRequest,
+  Passkey,
+  PasskeyCreationOptions,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -515,6 +527,11 @@ export interface AddRegistryKeyInput {
   readonly body: AddRegistryKeyRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation beginPasskeyRegistration. */
+export interface BeginPasskeyRegistrationInput {
   readonly signal?: AbortSignal;
 }
 
@@ -910,6 +927,12 @@ export interface ExportNamespaceIssuerInput {
   readonly path: {
     readonly namespace: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation finishPasskeyRegistration. */
+export interface FinishPasskeyRegistrationInput {
+  readonly body: FinishPasskeyRegistrationRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -1418,6 +1441,11 @@ export interface ListNotificationSinksInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listPasskeys. */
+export interface ListPasskeysInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listPlacementRules. */
 export interface ListPlacementRulesInput {
   readonly path: {
@@ -1677,6 +1705,14 @@ export interface PutGitHostInstallationInput {
 /** The input of the operation redeemLocalUserCode. */
 export interface RedeemLocalUserCodeInput {
   readonly body: RedeemLocalUserCodeRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation removePasskey. */
+export interface RemovePasskeyInput {
+  readonly path: {
+    readonly id: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -2048,6 +2084,23 @@ export const operations = {
       statuses: [201],
     },
     ref(() => decodeRegistryKey),
+  ),
+  beginPasskeyRegistration: operation<PasskeyCreationOptions>(
+    {
+      id: "beginPasskeyRegistration",
+      method: "POST",
+      path: "/api/dustpan/v1/me/passkeys/register/begin",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodePasskeyCreationOptions),
   ),
   bulkReplaceUnitSettings: operation<BulkUnitSettingsResult>(
     {
@@ -2677,6 +2730,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNamespaceIssuerExport),
+  ),
+  finishPasskeyRegistration: operation<Passkey>(
+    {
+      id: "finishPasskeyRegistration",
+      method: "POST",
+      path: "/api/dustpan/v1/me/passkeys/register/finish",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodePasskey),
   ),
   fireTrigger: operation<FireTriggerResult>(
     {
@@ -3630,6 +3700,23 @@ export const operations = {
     },
     ref(() => decodeListNotificationSinksResponse),
   ),
+  listPasskeys: operation<ListPasskeysResponse>(
+    {
+      id: "listPasskeys",
+      method: "GET",
+      path: "/api/dustpan/v1/me/passkeys",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListPasskeysResponse),
+  ),
   listPlacementRules: operation<ListPlacementRulesResponse>(
     {
       id: "listPlacementRules",
@@ -4017,6 +4104,23 @@ export const operations = {
       requiredQueryParameters: [],
       requestBody: "application/json",
       requestBodyRequired: true,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  removePasskey: operation<void>(
+    {
+      id: "removePasskey",
+      method: "DELETE",
+      path: "/api/dustpan/v1/me/passkeys/{id}",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
       statuses: [204],
     },
     undefined,

@@ -104,7 +104,22 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureFull(t, entries, nil)
+}
+
+// newAccessFixtureFull builds the fixture of newAccessFixtureWith with the
+// passkey service passkeys. With nil, the handler gets a real passkey service
+// over the store.
+func newAccessFixtureFull(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+) accessFixture {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+
+	if passkeys == nil {
+		passkeys = newRoutePasskeys(t, st)
+	}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
@@ -199,6 +214,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 			Service:      newTestSignInService(t, st, sessions, principals),
 			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
 			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
+			Passkeys: passkeys,
 		},
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,

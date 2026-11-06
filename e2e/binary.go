@@ -104,6 +104,10 @@ type envInput struct {
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
 	signInRealTime bool
+	// passkeys gives the server a public URL with the host name localhost
+	// in place of its address, because a passkey relying party ID is never an
+	// IP address.
+	passkeys bool
 	// journalRefuser corrupts one outputs-only journal batch on the way to
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
