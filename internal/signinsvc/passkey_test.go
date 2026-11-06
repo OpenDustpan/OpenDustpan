@@ -21,9 +21,18 @@ type stateWorld struct {
 }
 
 func (s *stateWorld) PrincipalState(_ context.Context, _ string) (session.PrincipalState, error) {
-	return session.PrincipalState{
-		Owner: s.owner, Policy: session.Policy{}, Accounts: session.AccountPolicy{}, Generation: s.gen,
-	}, s.err
+	var (
+		policy   session.Policy
+		accounts session.AccountPolicy
+	)
+
+	return session.PrincipalState{Owner: s.owner, Policy: policy, Accounts: accounts, Generation: s.gen}, s.err
+}
+
+// stateOf returns the reader of the state of a person who is owner, at the
+// session generation gen.
+func stateOf(owner session.Owner, gen uint64) *stateWorld {
+	return &stateWorld{err: nil, owner: owner, gen: gen}
 }
 
 // localOwner is a local user that can sign in.
@@ -71,7 +80,7 @@ func TestCompletePasskeyStartsTheSession(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld()
-	st := &stateWorld{owner: localOwner(), gen: 9}
+	st := stateOf(localOwner(), 9)
 
 	res, err := passkeyService(t, w, st).CompletePasskey(t.Context(), passkeyRequest())
 	if err != nil {
@@ -82,11 +91,7 @@ func TestCompletePasskeyStartsTheSession(t *testing.T) {
 		t.Fatalf("sessions = %d, want 1", len(w.starts))
 	}
 
-	got := w.starts[0]
-	if got.Generation != 9 || got.PrincipalID != "prn-1" || got.Provider != session.LocalProviderID ||
-		got.Alert != nil || got.Stored {
-		t.Errorf("start = %+v, want the local session of prn-1 with generation 9 and no alert", got)
-	}
+	checkLocalPasskeyStart(t, &w.starts[0])
 
 	e := &w.startEntries[0]
 	if res.Method != session.MethodPasskey || e.Subject != "local:usr-1" || changeOf(e, "method") != "passkey" ||
@@ -96,6 +101,17 @@ func TestCompletePasskeyStartsTheSession(t *testing.T) {
 
 	if len(w.signInInputs) != 0 {
 		t.Errorf("the passkey branch searched for a principal: %+v", w.signInInputs)
+	}
+}
+
+// checkLocalPasskeyStart fails unless got is the session of prn-1 with the
+// generation 9 and no alert.
+func checkLocalPasskeyStart(t *testing.T, got *session.Start) {
+	t.Helper()
+
+	if got.Generation != 9 || got.PrincipalID != "prn-1" || got.Provider != session.LocalProviderID ||
+		got.Alert != nil || got.Stored {
+		t.Errorf("start = %+v, want the local session of prn-1 with generation 9 and no alert", *got)
 	}
 }
 
@@ -124,31 +140,51 @@ func TestCompletePasskeyRefuses(t *testing.T) {
 		stErr  error
 		reason string
 	}{
-		{"no user verification", func(r *signinsvc.PasskeyRequest) { r.UserVerified = false }, localOwner(), nil,
-			signinsvc.ReasonPasskeyNotVerified},
-		{"assertion of another person", func(r *signinsvc.PasskeyRequest) { r.Assertion.PrincipalID = "prn-2" },
-			localOwner(), nil, signinsvc.ReasonPasskeyPerson},
-		{"subject of another person", func(r *signinsvc.PasskeyRequest) { r.Assertion.Subject = "prn-2" },
-			localOwner(), nil, signinsvc.ReasonPasskeyPerson},
-		{"no person", func(r *signinsvc.PasskeyRequest) { r.PrincipalID = "" }, localOwner(), nil,
-			signinsvc.ReasonPasskeyPerson},
+		{
+			"no user verification", func(r *signinsvc.PasskeyRequest) { r.UserVerified = false }, localOwner(), nil,
+			signinsvc.ReasonPasskeyNotVerified,
+		},
+		{
+			"assertion of another person", func(r *signinsvc.PasskeyRequest) { r.Assertion.PrincipalID = "prn-2" },
+			localOwner(), nil, signinsvc.ReasonPasskeyPerson,
+		},
+		{
+			"subject of another person", func(r *signinsvc.PasskeyRequest) { r.Assertion.Subject = "prn-2" },
+			localOwner(), nil, signinsvc.ReasonPasskeyPerson,
+		},
+		{
+			"no person", func(r *signinsvc.PasskeyRequest) { r.PrincipalID = "" }, localOwner(), nil,
+			signinsvc.ReasonPasskeyPerson,
+		},
 		{"method of the password", func(r *signinsvc.PasskeyRequest) {
 			r.Assertion.Method = session.MethodLocalPassword
 			r.Assertion.Factors = []session.Factor{session.FactorPassword}
 		}, localOwner(), nil, signinsvc.ReasonMethodMismatch},
-		{"provider of an identity provider", func(r *signinsvc.PasskeyRequest) { r.Assertion.ProviderID = "corp" },
-			localOwner(), nil, signinsvc.ReasonAssertion},
-		{"no passkey factor", func(r *signinsvc.PasskeyRequest) { r.Assertion.Factors = nil }, localOwner(), nil,
-			signinsvc.ReasonAssertion},
+		{
+			"provider of an identity provider", func(r *signinsvc.PasskeyRequest) { r.Assertion.ProviderID = "corp" },
+			localOwner(), nil, signinsvc.ReasonAssertion,
+		},
+		{
+			"no passkey factor", func(r *signinsvc.PasskeyRequest) { r.Assertion.Factors = nil }, localOwner(), nil,
+			signinsvc.ReasonAssertion,
+		},
 		{"disabled person", func(*signinsvc.PasskeyRequest) {}, disabled, nil, signinsvc.ReasonDisabled},
-		{"state of another person", func(*signinsvc.PasskeyRequest) {}, namedOther, nil,
-			signinsvc.ReasonPasskeyNotTarget},
-		{"person of an identity provider", func(*signinsvc.PasskeyRequest) {}, oidcPerson, nil,
-			signinsvc.ReasonPasskeyNotTarget},
-		{"principal that is no person", func(*signinsvc.PasskeyRequest) {}, notPerson, nil,
-			signinsvc.ReasonPasskeyNotTarget},
-		{"principal gone", func(*signinsvc.PasskeyRequest) {}, localOwner(), session.ErrPrincipalNotFound,
-			signinsvc.ReasonLocalPrincipalGone},
+		{
+			"state of another person", func(*signinsvc.PasskeyRequest) {}, namedOther, nil,
+			signinsvc.ReasonPasskeyNotTarget,
+		},
+		{
+			"person of an identity provider", func(*signinsvc.PasskeyRequest) {}, oidcPerson, nil,
+			signinsvc.ReasonPasskeyNotTarget,
+		},
+		{
+			"principal that is no person", func(*signinsvc.PasskeyRequest) {}, notPerson, nil,
+			signinsvc.ReasonPasskeyNotTarget,
+		},
+		{
+			"principal gone", func(*signinsvc.PasskeyRequest) {}, localOwner(), session.ErrPrincipalNotFound,
+			signinsvc.ReasonLocalPrincipalGone,
+		},
 	}
 
 	for _, tc := range cases {
@@ -157,6 +193,7 @@ func TestCompletePasskeyRefuses(t *testing.T) {
 
 			w := newWorld()
 			st := &stateWorld{owner: tc.owner, gen: 1, err: tc.stErr}
+
 			req := passkeyRequest()
 			tc.change(req)
 
@@ -202,7 +239,7 @@ func TestCompletePasskeyChangedGeneration(t *testing.T) {
 	w := newWorld()
 	w.startErr = session.ErrGenerationChanged
 
-	_, err := passkeyService(t, w, &stateWorld{owner: localOwner(), gen: 3}).CompletePasskey(
+	_, err := passkeyService(t, w, stateOf(localOwner(), 3)).CompletePasskey(
 		t.Context(), passkeyRequest(),
 	)
 	if !signinsvc.IsRefusal(err) {
@@ -233,7 +270,7 @@ func TestCompletePasskeyBreakGlassRaisesTheAlert(t *testing.T) {
 	req := passkeyRequest()
 	req.Reason = "  the identity provider is down  "
 
-	_, err := passkeyService(t, w, &stateWorld{owner: breakGlassOwner(), gen: 4}).CompletePasskey(t.Context(), req)
+	_, err := passkeyService(t, w, stateOf(breakGlassOwner(), 4)).CompletePasskey(t.Context(), req)
 	if err != nil {
 		t.Fatalf("CompletePasskey() = %v", err)
 	}
@@ -286,7 +323,7 @@ func TestCompletePasskeyBreakGlassNeedsAReason(t *testing.T) {
 			req := passkeyRequest()
 			req.Reason = tc.reason
 
-			_, err := passkeyService(t, w, &stateWorld{owner: breakGlassOwner(), gen: 1}).CompletePasskey(
+			_, err := passkeyService(t, w, stateOf(breakGlassOwner(), 1)).CompletePasskey(
 				t.Context(), req,
 			)
 			if !signinsvc.IsRefusal(err) || !errors.Is(err, signinsvc.ErrReasonRequired) {
@@ -310,9 +347,8 @@ func TestCompletePasskeyLocalUserNeedsNoReason(t *testing.T) {
 	req := passkeyRequest()
 	req.Reason = "typed anyway"
 
-	if _, err := passkeyService(t, w, &stateWorld{owner: localOwner(), gen: 1}).CompletePasskey(
-		t.Context(), req,
-	); err != nil {
+	_, err := passkeyService(t, w, stateOf(localOwner(), 1)).CompletePasskey(t.Context(), req)
+	if err != nil {
 		t.Fatalf("CompletePasskey() = %v", err)
 	}
 

@@ -165,11 +165,11 @@ type signInState struct {
 	passkeyBegins   SignInLimiter
 	passkeyFailures SignInLimiter
 	stored          StoredProviders
-	admin     *session.ProviderAdmin
-	providers map[string]SignInProvider
-	checker   *sessionauth.Checker
-	devCode   *devcode.Code
-	devAdmin  identity.Principal
+	admin           *session.ProviderAdmin
+	providers       map[string]SignInProvider
+	checker         *sessionauth.Checker
+	devCode         *devcode.Code
+	devAdmin        identity.Principal
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -232,19 +232,19 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 	}
 
 	return &signInState{
-		service:   cfg.Service,
-		sessions:  cfg.Sessions,
-		limiter:   cfg.Limiter,
-		passwords: cfg.PasswordLimiter,
-		passkeys:  cfg.Passkeys,
+		service:       cfg.Service,
+		sessions:      cfg.Sessions,
+		limiter:       cfg.Limiter,
+		passwords:     cfg.PasswordLimiter,
+		passkeys:      cfg.Passkeys,
 		passkeySignIn: cfg.PasskeySignIn, passkeyBegins: cfg.PasskeyBeginLimiter,
 		passkeyFailures: cfg.PasskeyLimiter,
 		stored:          cfg.Stored,
-		admin:     cfg.Admin,
-		providers: providers,
-		checker:   checker,
-		devCode:   cfg.DevCode,
-		devAdmin:  cfg.DevAdmin,
+		admin:           cfg.Admin,
+		providers:       providers,
+		checker:         checker,
+		devCode:         cfg.DevCode,
+		devAdmin:        cfg.DevAdmin,
 	}, nil
 }
 

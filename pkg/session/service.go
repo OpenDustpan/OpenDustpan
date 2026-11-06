@@ -322,7 +322,7 @@ func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest,
 	return s.providers.CreateProviderSession(ctx, sess, d, e)
 }
 
-// createWithAlert stores sess and the alert of in in one transaction. It
+// createWithAlert stores sess and the alert of the Start together. It
 // fails closed: a store that cannot write an alert, or a Start with a stored
 // provider, stores no session.
 func (s *Sessions) createWithAlert(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {

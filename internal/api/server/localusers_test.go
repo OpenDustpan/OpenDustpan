@@ -418,7 +418,7 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 
 	_, secret, err := f.sessions.Start(t.Context(), e, session.Start{
 		AuthTime: now.Add(-24 * time.Hour), PrincipalID: "prn-admin", Provider: localuser.ProviderID,
-		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false,
+		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		t.Fatalf("start the session: %v", err)

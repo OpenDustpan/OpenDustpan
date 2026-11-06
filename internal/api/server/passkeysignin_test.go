@@ -2,9 +2,11 @@ package server_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,16 +41,19 @@ type passkeySignInEnv struct {
 	ana      *webauthntest.Credential
 }
 
+// newPasskeyLimiter returns a budget that refuses nothing and counts.
+func newPasskeyLimiter() *fakeLimiter {
+	return &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
+}
+
 // newPasskeySignInEnv builds the handler and registers a passkey for the local
 // user prn-lena and for the break-glass account prn-ana.
 func newPasskeySignInEnv(t *testing.T) *passkeySignInEnv {
 	t.Helper()
 
-	e := &passkeySignInEnv{
-		begins:   &fakeLimiter{},
-		failures: &fakeLimiter{},
-		auth:     webauthntest.New(relyingID, relyingOrigin),
-	}
+	e := new(passkeySignInEnv)
+	e.begins, e.failures = newPasskeyLimiter(), newPasskeyLimiter()
+	e.auth = webauthntest.New(relyingID, relyingOrigin)
 
 	e.f = newAccessFixtureSignIn(t, func(st *sqlite.Store) auditStore { return st }, nil,
 		func(in *apiserver.SignIn, st *sqlite.Store) {
@@ -136,9 +141,7 @@ func (e *passkeySignInEnv) post(t *testing.T, target, body string, header http.H
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
-	for k, v := range header {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, header)
 
 	rec := httptest.NewRecorder()
 	e.f.handler.ServeHTTP(rec, req)
@@ -281,19 +284,21 @@ func TestPasskeySignInLocalUser(t *testing.T) {
 
 	var found bool
 
-	for _, en := range serverEntries(t, e.f.store) {
+	entries := serverEntries(t, e.f.store)
+	for i := range entries {
+		en := &entries[i]
 		if en.Action == "session:sign-in" && en.Subject == "local:lena" && en.Outcome == audit.OutcomeSuccess {
 			found = changeNew(en, "method") == "passkey" && changeNew(en, "factorCount") == "2"
 		}
 	}
 
 	if !found {
-		t.Errorf("no sign-in entry of local:lena with the method passkey and two factors")
+		t.Error("no sign-in entry of local:lena with the method passkey and two factors")
 	}
 }
 
 // changeNew returns the new value of the change key of en, or "".
-func changeNew(en audit.Entry, key string) string {
+func changeNew(en *audit.Entry, key string) string {
 	for _, c := range en.Changes {
 		if c.Key == key {
 			return c.New
@@ -319,13 +324,16 @@ func TestPasskeySignInBeginNamesNoPerson(t *testing.T) {
 	for _, rec := range []*httptest.ResponseRecorder{first, second} {
 		body := rec.Body.String()
 		if strings.Contains(body, "prn-lena") || strings.Contains(body, "prn-ana") ||
-			strings.Contains(body, `"userVerification":"preferred"`) || !strings.Contains(body, `"userVerification":"required"`) {
+			strings.Contains(
+				body,
+				`"userVerification":"preferred"`,
+			) || !strings.Contains(body, `"userVerification":"required"`) {
 			t.Errorf("options = %s, want no person and user verification required", body)
 		}
 	}
 
 	if first.Body.String() == second.Body.String() {
-		t.Errorf("two begins gave the same options")
+		t.Error("two begins gave the same options")
 	}
 }
 
@@ -339,6 +347,15 @@ type passkeyRefusalCase struct {
 	change func(c webauthntest.Ceremony) webauthntest.Ceremony
 }
 
+// lenaCredential is the credential of the local user.
+func lenaCredential(e *passkeySignInEnv) *webauthntest.Credential { return e.lena }
+
+// ceremonyCase returns the refusal case of the local user whose response the
+// change alters.
+func ceremonyCase(name string, change func(c webauthntest.Ceremony) webauthntest.Ceremony) passkeyRefusalCase {
+	return passkeyRefusalCase{name: name, setup: nil, cred: lenaCredential, header: nil, change: change}
+}
+
 // TestPasskeySignInRefusals sends hostile responses through the whole route.
 // Each one gets the one text of a failed sign-in, no cookie, one more failure
 // of the source address, and at least one new audit entry that is not a
@@ -346,46 +363,35 @@ type passkeyRefusalCase struct {
 func TestPasskeySignInRefusals(t *testing.T) {
 	t.Parallel()
 
-	lena := func(e *passkeySignInEnv) *webauthntest.Credential { return e.lena }
-
 	cases := []passkeyRefusalCase{
+		ceremonyCase("no user verification", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithFlags(webauthntest.FlagUserPresent)
+		}),
+		ceremonyCase("user handle of another person", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithUserHandle([]byte("prn-ana"))
+		}),
+		ceremonyCase("user handle of nobody", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithUserHandle([]byte("prn-none"))
+		}),
+		ceremonyCase("origin of another site in the client data", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithOrigin(evilOrigin)
+		}),
+		ceremonyCase("relying party of another site", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithRPID("evil.example")
+		}),
+		ceremonyCase("signature that does not match", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithBadSignature()
+		}),
+		ceremonyCase("type of a registration", func(c webauthntest.Ceremony) webauthntest.Ceremony {
+			return c.WithType("webauthn.create")
+		}),
 		{
-			name: "no user verification", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony {
-				return c.WithFlags(webauthntest.FlagUserPresent)
-			},
-		},
-		{
-			name: "user handle of another person", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithUserHandle([]byte("prn-ana")) },
-		},
-		{
-			name: "user handle of nobody", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithUserHandle([]byte("prn-none")) },
-		},
-		{
-			name: "origin of another site in the client data", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithOrigin(evilOrigin) },
-		},
-		{
-			name: "origin of the server only in a header", cred: lena,
+			name: "origin of the server only in a header", setup: nil, cred: lenaCredential,
 			header: http.Header{"Origin": {relyingOrigin}, "Host": {"dustpan.example.com"}},
 			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithOrigin(evilOrigin) },
 		},
 		{
-			name: "relying party of another site", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithRPID("evil.example") },
-		},
-		{
-			name: "signature that does not match", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithBadSignature() },
-		},
-		{
-			name: "type of a registration", cred: lena,
-			change: func(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithType("webauthn.create") },
-		},
-		{
-			name: "disabled person", cred: lena,
+			name: "disabled person", cred: lenaCredential, header: nil, change: nil,
 			setup: func(t *testing.T, e *passkeySignInEnv) {
 				t.Helper()
 
@@ -395,10 +401,11 @@ func TestPasskeySignInRefusals(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown credential", cred: func(*passkeySignInEnv) *webauthntest.Credential {
+			name: "unknown credential", setup: nil, header: nil, change: nil,
+			cred: func(*passkeySignInEnv) *webauthntest.Credential {
 				c, err := webauthntest.NewCredential([]byte("prn-lena"), false)
 				if err != nil {
-					panic(err)
+					t.Fatalf("make the credential: %v", err)
 				}
 
 				return c
@@ -449,8 +456,8 @@ func disableEntry() audit.Entry {
 func lastSequence(entries []audit.Entry) int64 {
 	var last int64
 
-	for _, en := range entries {
-		last = max(last, en.Sequence)
+	for i := range entries {
+		last = max(last, entries[i].Sequence)
 	}
 
 	return last
@@ -460,9 +467,9 @@ func lastSequence(entries []audit.Entry) int64 {
 func entriesAfter(entries []audit.Entry, mark int64) []audit.Entry {
 	var out []audit.Entry
 
-	for _, en := range entries {
-		if en.Sequence > mark {
-			out = append(out, en)
+	for i := range entries {
+		if entries[i].Sequence > mark {
+			out = append(out, entries[i])
 		}
 	}
 
@@ -472,8 +479,8 @@ func entriesAfter(entries []audit.Entry, mark int64) []audit.Entry {
 // hasRefusal reports whether entries holds an entry that is a denial or a
 // failure.
 func hasRefusal(entries []audit.Entry) bool {
-	for _, en := range entries {
-		if en.Outcome == audit.OutcomeDenied || en.Outcome == audit.OutcomeFailure {
+	for i := range entries {
+		if entries[i].Outcome == audit.OutcomeDenied || entries[i].Outcome == audit.OutcomeFailure {
 			return true
 		}
 	}
@@ -553,7 +560,7 @@ func TestPasskeySignInCounterRegression(t *testing.T) {
 	noSession(t, "suspended passkey", good)
 
 	if len(serverEntries(t, e.f.store)) <= before {
-		t.Errorf("the refusal of the suspended passkey wrote no audit entry")
+		t.Error("the refusal of the suspended passkey wrote no audit entry")
 	}
 }
 
@@ -595,7 +602,7 @@ func TestPasskeySignInBodies(t *testing.T) {
 			}
 
 			if len(serverEntries(t, e.f.store)) <= before {
-				t.Errorf("the refusal wrote no audit entry")
+				t.Error("the refusal wrote no audit entry")
 			}
 		})
 	}
@@ -671,19 +678,42 @@ func TestPasskeySignInBreakGlass(t *testing.T) {
 		t.Errorf("failures = %d, want none: the person only forgot the reason", e.failures.count())
 	}
 
-	signedIn(t, "break-glass sign-in", e.signIn(t, e.ana, "the identity provider is down", nil, nil))
+	signedIn(t, "break-glass sign-in", e.signIn(t, e.ana, breakGlassReasonText, nil, nil))
 
-	got := e.alerts(t)
-	if len(got) != 1 || got[0].Type != notify.BreakGlassUsed || got[0].Severity != notify.SeverityCritical ||
-		!got[0].Recipients[0].Admins || !strings.Contains(got[0].Summary, "the identity provider is down") ||
-		got[0].Attributes["principal"] != "prn-ana" || got[0].Attributes["session"] == "" ||
-		got[0].ObjectID != got[0].Attributes["session"] {
-		t.Fatalf("alerts = %+v, want one critical break-glass.used alert of the session of prn-ana", got)
+	checkBreakGlassAlert(t, e.alerts(t))
+	checkBreakGlassEntry(t, serverEntries(t, e.f.store))
+}
+
+// breakGlassReasonText is the reason that the break-glass tests type.
+const breakGlassReasonText = "the identity provider is down"
+
+// checkBreakGlassAlert fails unless got is one critical alert of a break-glass
+// use of prn-ana for the administrators, with the reason and the session.
+func checkBreakGlassAlert(t *testing.T, got []notify.Notification) {
+	t.Helper()
+
+	if len(got) != 1 {
+		t.Fatalf("alerts = %+v, want one", got)
 	}
 
-	for _, en := range serverEntries(t, e.f.store) {
+	n := &got[0]
+	if n.Type != notify.BreakGlassUsed || n.Severity != notify.SeverityCritical || len(n.Recipients) != 1 ||
+		!n.Recipients[0].Admins || !strings.Contains(n.Summary, breakGlassReasonText) ||
+		n.Attributes["principal"] != "prn-ana" || n.Attributes["session"] == "" ||
+		n.ObjectID != n.Attributes["session"] {
+		t.Fatalf("alert = %+v, want a critical break-glass.used alert of the session of prn-ana", *n)
+	}
+}
+
+// checkBreakGlassEntry fails unless entries holds the successful sign-in of
+// the break-glass account with the typed reason.
+func checkBreakGlassEntry(t *testing.T, entries []audit.Entry) {
+	t.Helper()
+
+	for i := range entries {
+		en := &entries[i]
 		if en.Action == "session:sign-in" && en.Outcome == audit.OutcomeSuccess && en.Subject == "break-glass:ana" {
-			if en.Reason != "the identity provider is down" {
+			if en.Reason != breakGlassReasonText {
 				t.Errorf("entry reason = %q, want the typed reason", en.Reason)
 			}
 
@@ -691,7 +721,7 @@ func TestPasskeySignInBreakGlass(t *testing.T) {
 		}
 	}
 
-	t.Errorf("no sign-in entry of the break-glass account")
+	t.Error("no sign-in entry of the break-glass account")
 }
 
 // alerts returns the notifications of the server scope.
@@ -740,7 +770,7 @@ func TestPasskeySignInNeedsTheBudgets(t *testing.T) {
 				func(in *apiserver.SignIn, st *sqlite.Store) {
 					svc := newRoutePasskeys(t, st)
 					in.Passkeys, in.PasskeySignIn = svc, svc
-					in.PasskeyBeginLimiter, in.PasskeyLimiter = &fakeLimiter{}, &fakeLimiter{}
+					in.PasskeyBeginLimiter, in.PasskeyLimiter = newPasskeyLimiter(), newPasskeyLimiter()
 					tc.tweak(in)
 				},
 			)
