@@ -129,6 +129,7 @@ func runUnitSettingsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	fx.readsADefaultView(ctx, t)
 	fx.writesWithTheVersionThatWasRead(ctx, t)
+	t.Run("job_uses_location", func(t *testing.T) { fx.jobUsesTheLocation(ctx, t) })
 	fx.refusesWhatItMust(ctx, t)
 	fx.setsNamespaceDefaults(ctx, t)
 	fx.linksManyUnits(ctx, t)
@@ -278,6 +279,41 @@ func (fx *unitSettingsFixture) writesWithTheVersionThatWasRead(ctx context.Conte
 		http.StatusOK, inDoc(`"suggestions"`)))
 	fx.run(ctx, t, fx.admin, readStep("read the settings again after the suggestions", path, http.StatusOK,
 		checkOrigins(1, nil)))
+}
+
+// jobUsesTheLocation starts a job that names no code location and no pool, and
+// reads it back: the job holds the code location and the pool of the settings
+// of the unit.
+func (fx *unitSettingsFixture) jobUsesTheLocation(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	var jobID string
+
+	jobs := "/api/dustpan/v1/namespaces/" + refusalNamespace + "/jobs"
+
+	fx.run(ctx, t, fx.admin, unitStep{
+		name: "start a job with no location", method: http.MethodPost, path: jobs,
+		body: `{"unit":{"tool":"opentofu","name":"web"},"operation":"plan","reason":"e2e"}`,
+		want: http.StatusCreated, version: "",
+		check: func(body string) error {
+			var doc jobDoc
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.ID == "" {
+				return fmt.Errorf("%w: %s", errUnitSettingsDoc, body)
+			}
+
+			jobID = doc.ID
+
+			return nil
+		},
+	})
+
+	// The bootstrap token reads the job, as in the other job steps.
+	fx.env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: unitSettingsAgent, Name: "read the job", Method: http.MethodGet, Path: jobs + "/" + jobID, Body: "",
+		Want: http.StatusOK, Scheme: "token",
+		Check: inDoc(`"location":{"repository":"acme/infra","ref":"main","directory":"stacks/web"}`,
+			`"poolID":"`+fx.pool+`"`, `"defaulted":["pool","location"]`),
+	})
 }
 
 // refusesWhatItMust sends the refusals of a viewer, of a person with no grant
