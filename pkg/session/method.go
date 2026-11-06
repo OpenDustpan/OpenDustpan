@@ -464,14 +464,11 @@ const AssertionSkew = time.Minute
 //   - a local password or a passkey has the provider ID "local" and a
 //     principal ID; each other method has a valid provider ID that is not
 //     "local" or "dev", and no principal ID;
-//   - the subject has 1 to MaxAssertionSubject bytes of UTF-8 and no control
-//     character;
+//   - the subject has 1 to MaxAssertionSubject bytes of SafeText;
 //   - the user name, the email and each name have at most MaxAssertionName
-//     bytes of UTF-8 and no control character, and a verified email is not
-//     empty;
+//     bytes of SafeText, and a verified email is not empty;
 //   - groups only with GroupsPresent, at most MaxAssertionGroups of them,
-//     each of 1 to MaxAssertionGroup bytes of UTF-8 with no control
-//     character;
+//     each of 1 to MaxAssertionGroup bytes of SafeText;
 //   - the factors are known: none for a redirect method or a request
 //     method, the password for a password method and a local password, and
 //     the passkey for a passkey sign-in;
@@ -535,14 +532,14 @@ func checkAssertionMethod(a Assertion, _ time.Time) error {
 func checkAssertionPerson(a Assertion, _ time.Time) error {
 	if !validAssertionText(a.Subject, 1, MaxAssertionSubject) {
 		return invalidAssertion(fmt.Sprintf(
-			"the subject must have 1 to %d bytes of UTF-8 and no control character", MaxAssertionSubject,
+			"the subject must have 1 to %d bytes of UTF-8 with graphic characters only", MaxAssertionSubject,
 		))
 	}
 
 	for _, v := range append([]string{a.UserName, a.Email}, a.Names...) {
 		if !validAssertionText(v, 0, MaxAssertionName) {
 			return invalidAssertion(fmt.Sprintf(
-				"a name, a user name or an email must have at most %d bytes of UTF-8 and no control character",
+				"a name, a user name or an email must have at most %d bytes of UTF-8 with graphic characters only",
 				MaxAssertionName,
 			))
 		}
@@ -568,7 +565,7 @@ func checkAssertionGroups(a Assertion, _ time.Time) error {
 	for _, g := range a.Groups {
 		if !validAssertionText(g, 1, MaxAssertionGroup) {
 			return invalidAssertion(fmt.Sprintf(
-				"a group must have 1 to %d bytes of UTF-8 and no control character", MaxAssertionGroup,
+				"a group must have 1 to %d bytes of UTF-8 with graphic characters only", MaxAssertionGroup,
 			))
 		}
 	}
@@ -634,8 +631,25 @@ func checkAssertionAuthTime(a Assertion, now time.Time) error {
 	}
 }
 
-// validAssertionText reports whether s is UTF-8 with no control character,
-// C1 controls included, and has minLen to maxLen bytes.
+// validAssertionText reports whether s is SafeText and has minLen to maxLen
+// bytes.
 func validAssertionText(s string, minLen, maxLen int) bool {
-	return len(s) >= minLen && len(s) <= maxLen && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+	return len(s) >= minLen && len(s) <= maxLen && SafeText(s)
+}
+
+// SafeText reports whether s is UTF-8 whose each character is graphic, and
+// whose only space is the ASCII space. It refuses control characters (C0
+// and C1), format characters such as the bidirectional overrides and the
+// zero-width characters, the line and paragraph separators, private-use and
+// unassigned code points, and each other space. Such a character can make
+// a name look like another name in the console or the audit log, or break
+// a line of a log.
+func SafeText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return !unicode.IsGraphic(r) || (unicode.Is(unicode.Zs, r) && r != ' ')
+	})
 }

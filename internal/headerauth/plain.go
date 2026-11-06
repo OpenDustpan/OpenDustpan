@@ -5,8 +5,6 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -20,6 +18,8 @@ func (m *Method) fromPlain(f session.RequestFacts, user string) (session.Asserti
 		return none, fmt.Errorf("%w: the shared secret of the proxy is missing or wrong", session.ErrUntrustedSource)
 	}
 
+	// The subject is used byte for byte. It is never case-folded or
+	// normalized, so two subjects that only look the same stay two persons.
 	if !subjectPattern.MatchString(user) {
 		return none, fmt.Errorf("%w: the subject has characters outside the allowlist or a wrong length",
 			session.ErrMethodInput)
@@ -68,8 +68,9 @@ func (m *Method) secretMatches(values []string) bool {
 // is an empty list. It returns ErrMethodInput for a header of the wrong form
 // and ErrMethodAnswer for more groups than the limit.
 func parseGroupsHeader(v string) ([]string, error) {
-	if len(v) > maxGroupsHeader || !printableASCIIOrUTF8(v) {
-		return nil, fmt.Errorf("%w: the groups header is too long or has control characters", session.ErrMethodInput)
+	if len(v) > maxGroupsHeader || !session.SafeText(v) {
+		return nil, fmt.Errorf("%w: the groups header is too long or has a character that is not graphic",
+			session.ErrMethodInput)
 	}
 
 	if strings.TrimSpace(v) == "" {
@@ -104,10 +105,4 @@ func printableASCII(s string) bool {
 	}
 
 	return true
-}
-
-// printableASCIIOrUTF8 reports whether s is UTF-8 with no control
-// character, C1 controls included.
-func printableASCIIOrUTF8(s string) bool {
-	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
 }

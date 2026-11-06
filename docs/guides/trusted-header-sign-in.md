@@ -49,8 +49,8 @@ The proxy sends a signed JWT. The server checks these items:
 
 - The signature, with the keys of the issuer. The server reads the keys
   from the key URL through the egress rules, and keeps them for at most 15
-  minutes. A token with an unknown key ID reads the key URL again at most
-  once in 30 seconds.
+  minutes. It reads the key URL at most once in 30 seconds, for all key IDs
+  together. It follows no redirect of the key URL.
 - The algorithm. The presets accept ES256 only. A custom issuer accepts
   ES256, ES384, EdDSA, and RS256, RS384, RS512, PS256, PS384 and PS512.
   The server refuses `none` and each HMAC algorithm.
@@ -61,7 +61,11 @@ The proxy sends a signed JWT. The server checks these items:
 - A header that names or holds a key (`jku`, `jwk`, `x5u`, `x5c`). The
   server refuses it. The key always comes from the key URL.
 
-The subject is the `sub` claim. The email is the `email` claim.
+The subject is the `sub` claim. The email is the `email` claim. The
+server uses the subject byte for byte: it never changes the case or the
+form of a character. It refuses a subject, an email or a group with a
+character that is not graphic, for example a bidirectional override, a
+zero-width character or a line separator.
 
 ### Google Cloud IAP
 
@@ -84,6 +88,14 @@ The subject is the `sub` claim. The email is the `email` claim.
 The load balancer sends no audience. The `signer` field of the token must
 equal the ARN that you set. The key ID must match `^[A-Za-z0-9-]{1,128}$`
 before the server puts it into the key URL.
+
+The load balancer puts `iss` and `exp` in the JWT header. The server
+requires both there, and checks `exp` with the same rules as above. When the
+payload also holds `iss`, `exp`, `iat` or `nbf`, the server checks them too.
+
+You can also set the client ID of the authenticate rule of the load
+balancer. Then the `client` field of the token must equal it. Set it when
+one load balancer has more than one rule with the same identity provider.
 
 ### A custom issuer
 

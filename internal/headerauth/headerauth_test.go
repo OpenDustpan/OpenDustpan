@@ -166,7 +166,7 @@ func TestNewRefusesAConfigurationThatIsNotValid(t *testing.T) {
 			Secret: session.NewPassword(""), KeyTimeout: 0,
 			JWT: headerauth.JWTConfig{
 				Preset: headerauth.PresetCustom, Issuer: customIss, Audience: audience,
-				KeyURL: "https://issuer.example.com/jwks", Region: "", SignerARN: "", GroupsClaim: "",
+				KeyURL: "https://issuer.example.com/jwks", Region: "", SignerARN: "", ClientID: "", GroupsClaim: "",
 			},
 		}
 	}
@@ -220,6 +220,14 @@ func TestNewRefusesAConfigurationThatIsNotValid(t *testing.T) {
 		c.JWT.Preset, c.JWT.Audience, c.JWT.KeyURL = headerauth.PresetAWSALB, "", ""
 		c.JWT.Region, c.JWT.SignerARN = "evil.example.com/x", albARN
 	})
+	add("Google IAP with a client ID", jwtBase, func(c *headerauth.Config) {
+		c.JWT.Preset, c.JWT.KeyURL, c.JWT.ClientID = headerauth.PresetGoogleIAP, "", "app-client"
+	})
+	add("a custom issuer with a client ID", jwtBase, func(c *headerauth.Config) { c.JWT.ClientID = "app-client" })
+	add("ALB with a client ID that has a control character", jwtBase, func(c *headerauth.Config) {
+		c.JWT.Preset, c.JWT.Audience, c.JWT.KeyURL = headerauth.PresetAWSALB, "", ""
+		c.JWT.Region, c.JWT.SignerARN, c.JWT.ClientID = "us-east-1", albARN, "app\nclient"
+	})
 	add("a groups claim with a space", jwtBase, func(c *headerauth.Config) { c.JWT.GroupsClaim = "my groups" })
 
 	for name, cfg := range tests {
@@ -242,7 +250,7 @@ func TestALBKeyURLRefusesAKeyIDOutsideTheAllowlist(t *testing.T) {
 
 	for _, kid := range []string{
 		"../x", "..", "a/b", "a\\b", "a.b", "a?b", "a#b", "%2e%2e", "a b", "a\x00", "", "@evil.example.com",
-		"ä", strings.Repeat("a", 129),
+		"\u00e4", strings.Repeat("a", 129),
 	} {
 		if u, err := headerauth.ALBKeyURL(base, kid); !errors.Is(err, session.ErrMethodInput) || u != "" {
 			t.Fatalf("ALBKeyURL(%q) = %q, %v, want %v", kid, u, err, session.ErrMethodInput)
