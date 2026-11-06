@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -405,13 +406,14 @@ func TestRunThroughTheRegistry(t *testing.T) {
 		tokens func(*issuer) provider.TokenSource
 		aud    string
 		want   error
+		issued int
 	}{
-		{"valid", func(i *issuer) provider.TokenSource { return i.tokens() }, audience, nil},
-		{"refused audience", func(i *issuer) provider.TokenSource { return i.tokens() }, issuerHost, profile.ErrInvalid},
+		{"valid", func(i *issuer) provider.TokenSource { return i.tokens() }, audience, nil, 1},
+		{"refused audience", func(i *issuer) provider.TokenSource { return i.tokens() }, issuerHost, profile.ErrInvalid, 0},
 		{
 			"token for another audience",
 			func(i *issuer) provider.TokenSource { return issuerTokens{iss: i, aud: "https://other.example.com"} },
-			audience, provider.ErrUnavailable,
+			audience, provider.ErrUnavailable, 1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -424,24 +426,46 @@ func TestRunThroughTheRegistry(t *testing.T) {
 			}
 
 			got, err := reg.Run(t.Context(), blocks, provider.Call{
-				Claims: nil, Tokens: func(string) provider.TokenSource { return rec },
+				Claims: nil, Tokens: func(string) provider.TokenSource { return rec }, Limit: 0,
 			})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Run = %v, want %v", err, tc.want)
 			}
 
 			checkRun(t, got, err, rec.Values())
+			checkEntries(t, got.Tokens, tc.issued)
 		})
+	}
+}
+
+// checkEntries checks that Run gives the caller the audit entry of each
+// token that the issuer signed, also when the block failed after it.
+func checkEntries(t *testing.T, issued []provider.Issued, want int) {
+	t.Helper()
+
+	if len(issued) != want {
+		t.Fatalf("Run gave %d tokens to commit, want %d", len(issued), want)
+	}
+
+	for n := range issued {
+		i := &issued[n]
+		hasJTI := slices.ContainsFunc(i.Entry.Changes, func(c audit.Change) bool {
+			return c.Key == "jti" && c.New == i.ID
+		})
+
+		if i.Block != "vault" || i.ID == "" || i.Entry.Action == "" || !hasJTI {
+			t.Errorf("issued token = %+v, want the entry of the issuer with its jti", i)
+		}
 	}
 }
 
 // checkRun checks that an error of Run holds no token, and that a result
 // marks the token as a secret.
-func checkRun(t *testing.T, got map[string]provider.Result, err error, tokens []string) {
+func checkRun(t *testing.T, got provider.Outcome, err error, tokens []string) {
 	t.Helper()
 
 	if err == nil {
-		if !got["vault"].Value[oidc.OutputToken].Secret {
+		if !got.Results["vault"].Value[oidc.OutputToken].Secret {
 			t.Error("the token has no secret mark")
 		}
 

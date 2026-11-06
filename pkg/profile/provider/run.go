@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -37,6 +38,37 @@ type Call struct {
 	// Tokens returns the token source of one block. Run calls it only for an
 	// adapter whose spec mints tokens.
 	Tokens func(block string) TokenSource
+	// Limit is the deadline of the whole open. Zero means MaxRunTime. A
+	// caller can set a shorter limit, never a longer one.
+	Limit time.Duration
+}
+
+// Outcome is what Run gives the open.
+//
+// The caller commits the Entry of each item of Tokens in the transaction
+// that records the open, and gives no value of Results to anyone before
+// that commit. When Run fails, Results is nil, and the caller still commits
+// the entries of Tokens: the issuer signed each of them, and an adapter
+// may have sent it to a remote system.
+type Outcome struct {
+	// Results holds the result of each block by name.
+	Results map[string]Result
+	// Tokens holds each token that an adapter got from its token source, in
+	// the order of the calls.
+	Tokens []Issued
+}
+
+// Issued is one token that a block got from its token source. It holds no
+// token value.
+type Issued struct {
+	// Entry is the audit entry of the token, from profile.Token.
+	Entry audit.Entry
+	// Block is the name of the block that asked for the token.
+	Block string
+	// ID is the jti of the token.
+	ID string
+	// Warnings are the texts for a person from profile.Token.
+	Warnings []string
 }
 
 // BlockError is the error of one block. Err is the class: profile.ErrInvalid,
@@ -72,42 +104,73 @@ func classes() []error {
 // redacted replaces a secret in an error message.
 const redacted = "[secret]"
 
+// MaxRunTime is the longest time of the provider blocks of one open, all
+// blocks together.
+const MaxRunTime = 60 * time.Second
+
+// errRunLimit is the cause of the end of the deadline of a whole open.
+var errRunLimit = errors.New("the provider blocks of the open did not end in time")
+
 // minTokenPart is the shortest part of a token that Run removes from an
 // error message on its own: a part of a compact JWT is longer.
 const minTokenPart = 16
 
-// Run evaluates blocks in order for one open and returns the result of each
-// block by name. It checks every block before it opens the first one: an
-// unknown use, an input that the spec or the adapter refuses, a block name
-// that repeats or is not valid, a timeout above MaxTimeout and a login
-// reference that names no earlier login block all fail with
-// profile.ErrInvalid, and no adapter is opened. It then opens each block with
-// its deadline. On the first error it returns a *BlockError and no result.
-func (r *Registry) Run(ctx context.Context, blocks []Block, c Call) (map[string]Result, error) {
+// Run evaluates blocks in order for one open. It checks every block before
+// it opens the first one: an unknown use, an input that the spec or the
+// adapter refuses, a block name that repeats or is not valid, a timeout above
+// MaxTimeout, a limit above MaxRunTime and a login reference that names no
+// earlier login block all fail with profile.ErrInvalid, and no adapter is
+// opened. It then opens each block with its deadline, and all blocks within
+// the limit of the open. Run enforces each deadline itself: it does not wait
+// for an adapter that ignores its context. On the first error it returns a
+// *BlockError, no result, and the tokens that the blocks got until then.
+func (r *Registry) Run(ctx context.Context, blocks []Block, c Call) (Outcome, error) {
+	out := Outcome{Results: nil, Tokens: nil}
+
 	if len(blocks) > profile.MaxProviderBlocks {
-		return nil, fmt.Errorf("%w: an open has at most %d provider blocks", profile.ErrInvalid,
+		return out, fmt.Errorf("%w: an open has at most %d provider blocks", profile.ErrInvalid,
 			profile.MaxProviderBlocks)
+	}
+
+	if c.Limit < 0 || c.Limit > MaxRunTime {
+		return out, fmt.Errorf("%w: the limit of an open is from 0 to %s", profile.ErrInvalid, MaxRunTime)
+	}
+
+	limit := c.Limit
+	if limit == 0 {
+		limit = MaxRunTime
 	}
 
 	entries, err := r.checkBlocks(blocks, c)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
+
+	rctx, cancel := context.WithTimeoutCause(ctx, limit, errRunLimit)
+	defer cancel()
 
 	results := make(map[string]Result, len(blocks))
 
 	for i := range blocks {
 		b := &blocks[i]
 
-		res, err := r.open(ctx, b, &entries[i], c, results)
+		res, issued, err := r.open(rctx, b, &entries[i], c, results)
+		out.Tokens = append(out.Tokens, issued...)
+
 		if err != nil {
-			return nil, err
+			if errors.Is(context.Cause(rctx), errRunLimit) {
+				err = blockFailure(b, ErrUnavailable, fmt.Sprintf("the provider blocks did not end in %s", limit))
+			}
+
+			return out, err
 		}
 
 		results[b.Name] = res
 	}
 
-	return results, nil
+	out.Results = results
+
+	return out, nil
 }
 
 // checkBlocks checks every block with no network and returns the adapter of
@@ -172,9 +235,15 @@ func (r *Registry) checkBlock(b *Block, kinds map[string]Kind) (entry, error) {
 	return e, nil
 }
 
+// opened is the answer of one call of Open.
+type opened struct {
+	err error
+	res Result
+}
+
 func (r *Registry) open(
 	ctx context.Context, b *Block, e *entry, c Call, results map[string]Result,
-) (Result, error) {
+) (Result, []Issued, error) {
 	timeout := b.Timeout
 	if timeout == 0 {
 		timeout = DefaultTimeout
@@ -188,7 +257,9 @@ func (r *Registry) open(
 	var tokens *recordingTokens
 
 	if e.spec.MintsTokens {
-		tokens = &recordingTokens{next: c.Tokens(b.Name), mu: sync.Mutex{}, values: nil}
+		tokens = &recordingTokens{
+			next: c.Tokens(b.Name), block: b.Name, values: nil, issued: nil, mu: sync.Mutex{}, closed: false,
+		}
 		req.Tokens = tokens
 	}
 
@@ -197,9 +268,13 @@ func (r *Registry) open(
 		req.Login = &login
 	}
 
-	res, err := e.p.Open(bctx, req)
+	res, err := callOpen(bctx, e.p, req)
 
-	secrets := slices.Concat(secretsOf(b.Inputs), tokens.minted(), secretsOf(res.Value))
+	// Close the token source of the block before it reads the tokens: a
+	// token that a late adapter asks for after this point is not signed for
+	// it, and no token leaves without its entry in issued.
+	issued, minted := tokens.close()
+	secrets := slices.Concat(secretsOf(b.Inputs), minted, secretsOf(res.Value))
 
 	if bctx.Err() != nil {
 		// The deadline of the block or the open ended. The class is
@@ -210,18 +285,44 @@ func (r *Registry) open(
 			msg = "the open ended before the block"
 		}
 
-		return Result{}, blockFailure(b, ErrUnavailable, msg)
+		return Result{}, issued, blockFailure(b, ErrUnavailable, msg)
 	}
 
 	if err != nil {
-		return Result{}, newBlockError(b, err, secrets)
+		return Result{}, issued, newBlockError(b, err, secrets)
 	}
 
 	if err := CheckResult(e.p.Kind(), &e.spec, &res, r.now()); err != nil {
-		return Result{}, newBlockError(b, err, secrets)
+		return Result{}, issued, newBlockError(b, err, secrets)
 	}
 
-	return res, nil
+	return res, issued, nil
+}
+
+// callOpen calls p.Open in its own goroutine and returns when Open returns
+// or ctx ends, whichever is first. An adapter that ignores ctx cannot hold
+// the open past its deadline. Its goroutine ends when Open returns, and its
+// late answer is dropped. A panic of the adapter is an ErrAdapter.
+func callOpen(ctx context.Context, p Provider, req Request) (Result, error) {
+	done := make(chan opened, 1)
+
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				done <- opened{err: fmt.Errorf("%w: the adapter stopped with a panic", ErrAdapter), res: Result{Expires: time.Time{}, Value: nil, Identity: ""}}
+			}
+		}()
+
+		res, err := p.Open(ctx, req)
+		done <- opened{err: err, res: res}
+	}()
+
+	select {
+	case o := <-done:
+		return o.res, o.err
+	case <-ctx.Done():
+		return Result{}, fmt.Errorf("%w: the block did not end before its deadline", ErrUnavailable)
+	}
 }
 
 // CheckResult validates the result of one block against the spec: each
@@ -385,12 +486,20 @@ func safeUse(use string) string {
 	return use
 }
 
+// errClosed is the error of a token source after the end of its block.
+var errClosed = errors.New("the block ended, and its token source is closed")
+
 // recordingTokens keeps the value of each token that it mints, so that Run
-// can remove them from an error message.
+// can remove them from an error message, and the audit entry of each token
+// that it gives to the adapter, so that the caller can commit it. After close
+// it gives no token.
 type recordingTokens struct {
 	next   TokenSource
+	block  string
 	values []string
+	issued []Issued
 	mu     sync.Mutex
+	closed bool
 }
 
 func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime time.Duration) (profile.Token, error) {
@@ -398,27 +507,51 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 		return profile.Token{}, fmt.Errorf("%w: the open has no token source", profile.ErrMissingDependency)
 	}
 
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+
+	if closed {
+		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
+	}
+
 	tok, err := t.next.Token(ctx, audience, lifetime)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if tok.Value != "" {
-		t.mu.Lock()
 		t.values = append(t.values, tok.Value)
-		t.mu.Unlock()
 	}
 
 	if err != nil {
 		return profile.Token{}, fmt.Errorf("token: %w", err)
 	}
 
+	if t.closed {
+		// The block ended while the issuer signed. The value never reaches
+		// the adapter, so no token leaves without its entry.
+		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
+	}
+
+	t.issued = append(t.issued, Issued{
+		Entry: tok.Entry, Block: t.block, ID: tok.ID, Warnings: slices.Clone(tok.Warnings),
+	})
+
 	return tok, nil
 }
 
-func (t *recordingTokens) minted() []string {
+// close stops the source and returns the tokens that it gave to the adapter
+// and the value of each token that it minted.
+func (t *recordingTokens) close() ([]Issued, []string) {
 	if t == nil {
-		return nil
+		return nil, nil
 	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	return append([]string(nil), t.values...)
+	t.closed = true
+
+	return slices.Clone(t.issued), slices.Clone(t.values)
 }
