@@ -298,6 +298,10 @@ func (t passkeyTx) CountOpenChallengesBySource(
 	return n, passkeyErr(err)
 }
 
+// LockSignInChallenges does nothing: the write transactions of this store run
+// one at a time, so a count and the insert after it are one step.
+func (t passkeyTx) LockSignInChallenges(context.Context) error { return nil }
+
 func (t passkeyTx) DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error) {
 	n, err := t.q.DeleteExpiredPasskeyChallenges(ctx, atMs)
 

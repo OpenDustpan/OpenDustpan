@@ -1654,6 +1654,14 @@ SELECT pg_try_advisory_lock(sqlc.arg(class)::int, hashtext(current_schema()))::b
 -- session does not hold the lock.
 SELECT pg_advisory_unlock(sqlc.arg(class)::int, hashtext(current_schema()))::boolean AS unlocked;
 
+-- name: LockPasskeySignInChallenges :exec
+-- Orders the starts of passkey sign-ins. A start counts the open challenges of
+-- its source and of the installation, and then inserts its row. Without this
+-- lock, starts at the same time in READ COMMITTED all count the same rows and
+-- go over the caps. The lock holds until the end of the transaction. The key
+-- is fixed and is the text "passkey sign-in challenges" for hashtextextended.
+SELECT pg_advisory_xact_lock(hashtextextended('passkey sign-in challenges', 0));
+
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.

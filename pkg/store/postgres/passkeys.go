@@ -278,6 +278,10 @@ func (t passkeyTx) CountOpenChallengesBySource(
 	return n, passkeyErr(err)
 }
 
+func (t passkeyTx) LockSignInChallenges(ctx context.Context) error {
+	return passkeyErr(t.q.LockPasskeySignInChallenges(ctx))
+}
+
 func (t passkeyTx) DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error) {
 	n, err := t.q.DeleteExpiredPasskeyChallenges(ctx, atMs)
 

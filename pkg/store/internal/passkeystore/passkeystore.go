@@ -112,6 +112,11 @@ type Writes interface {
 type ChallengeWrites interface {
 	CreateChallenge(ctx context.Context, r ChallengeRow) (int64, error)
 	DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error)
+	// LockSignInChallenges orders the sign-in starts that write a challenge:
+	// it returns when no other transaction holds the lock, and the lock
+	// holds until the end of this transaction. An adapter whose write
+	// transactions already run one at a time may do nothing.
+	LockSignInChallenges(ctx context.Context) error
 	// CountOpenChallenges counts the challenges of the kind that have not
 	// expired at atMs.
 	CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error)
@@ -521,6 +526,13 @@ func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) 
 	}
 
 	if c.Kind == mfa.CeremonySignIn {
+		// The caps count rows and then the insert adds one. The lock makes
+		// that read and write one step for all starts at the same time, so a
+		// flood cannot go over a cap.
+		if err := tx.LockSignInChallenges(ctx); err != nil {
+			return fmt.Errorf("lock sign-in challenges: %w", err)
+		}
+
 		if err := checkSignInCaps(ctx, tx, c); err != nil {
 			return err
 		}

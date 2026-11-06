@@ -177,7 +177,10 @@ Each source address also holds at most 20 open sign-in challenges. An IPv6
 source is its /64 range. Over that count a start answers 429 with the error
 code `mfa.sign-in-source-limit`, stores no row, and writes an audit entry. The
 limit keeps one source from using the whole budget of the installation, so a
-sign-in from another address, a break-glass sign-in included, still works.
+sign-in from another address, a break-glass sign-in included, still works
+while one source floods. Many sources together can still fill the 10,000
+challenges of the installation. Then every sign-in with a passkey fails until
+challenges end, and a break-glass sign-in with a passkey fails too.
 
 The installation also holds at most 10,000 open sign-in challenges. Over that
 count a start answers 503 with the error code `mfa.unavailable` and stores no

@@ -97,6 +97,11 @@ func passkeyCases() []passkeyCase {
 		},
 		{name: "a challenge with a hostile source fails with ErrInvalid", test: testChallengeSourceChecks},
 		{
+			name: "starts of one source at the same time: exactly the cap succeeds and the others get " +
+				"ErrSourceChallengeLimit",
+			test: testSourceCapRace,
+		},
+		{
 			name: "a challenge after its expiry fails with ErrNotFound, also on a second take",
 			test: testChallengeExpired,
 		},
@@ -1116,6 +1121,49 @@ func testSignInSourceCap(t *testing.T, s PasskeyStore) {
 	}
 
 	testSourceRecovers(t, s, flood, over)
+}
+
+// testSourceCapRace sends twice the count of one source at the same time. The
+// count and the insert of a start are one step, so exactly the count succeeds
+// and each other start gets ErrSourceChallengeLimit. The same step covers the
+// total of the installation.
+func testSourceCapRace(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	const sends = 2 * mfa.MaxOpenSignInChallengesPerSource
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		ok      int
+		refused int
+		other   []error
+	)
+
+	for i := range sends {
+		wg.Go(func() {
+			err := s.CreateChallenge(t.Context(), challengeFrom("198.51.100.7", 0), digest(i))
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, mfa.ErrSourceChallengeLimit):
+				refused++
+			default:
+				other = append(other, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if ok != mfa.MaxOpenSignInChallengesPerSource || refused != sends-ok || len(other) != 0 {
+		t.Fatalf("%d starts at the same time: %d ok, %d refused, other errors %v; want exactly %d ok",
+			sends, ok, refused, other, mfa.MaxOpenSignInChallengesPerSource)
+	}
 }
 
 // testSourceRecovers checks that a source at its count works again after one

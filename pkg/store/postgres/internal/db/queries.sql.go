@@ -17682,6 +17682,20 @@ func (q *Queries) LockNamespaceCreatesShared(ctx context.Context, namespace stri
 	return err
 }
 
+const lockPasskeySignInChallenges = `-- name: LockPasskeySignInChallenges :exec
+SELECT pg_advisory_xact_lock(hashtextextended('passkey sign-in challenges', 0))
+`
+
+// Orders the starts of passkey sign-ins. A start counts the open challenges of
+// its source and of the installation, and then inserts its row. Without this
+// lock, starts at the same time in READ COMMITTED all count the same rows and
+// go over the caps. The lock holds until the end of the transaction. The key
+// is fixed and is the text "passkey sign-in challenges" for hashtextextended.
+func (q *Queries) LockPasskeySignInChallenges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockPasskeySignInChallenges)
+	return err
+}
+
 const lockPersonPreferences = `-- name: LockPersonPreferences :one
 SELECT p.id, pp.document, pp.updated_at_ms
 FROM principals AS p

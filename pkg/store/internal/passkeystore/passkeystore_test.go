@@ -157,6 +157,8 @@ func (looseTx) DeleteExpiredChallenges(context.Context, int64) (int64, error) { 
 
 func (looseTx) CountOpenChallenges(context.Context, string, int64) (int64, error) { return 0, nil }
 
+func (looseTx) LockSignInChallenges(context.Context) error { return nil }
+
 func (looseTx) CountOpenChallengesBySource(context.Context, string, string, int64) (int64, error) {
 	return 0, nil
 }
