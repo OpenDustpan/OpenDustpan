@@ -1,13 +1,16 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -660,19 +664,32 @@ func TestPasskeySignInLimits(t *testing.T) {
 func TestPasskeySignInChallengeCap(t *testing.T) {
 	t.Parallel()
 
-	e := newPasskeySignInEnv(t)
-	now := time.Now()
+	e := new(passkeySignInEnv)
+	capped := new(cappedChallenges)
 
-	for i := range mfa.MaxOpenSignInChallenges {
-		c := mfa.Challenge{
-			CreatedAt: now, ExpiresAt: mfa.ChallengeExpiry(now), Kind: mfa.CeremonySignIn,
-			PersonID: "", PendingID: "", SessionID: "",
-		}
+	e.begins, e.failures = newPasskeyLimiter(), newPasskeyLimiter()
+	e.f = newAccessFixtureSignIn(t, func(st *sqlite.Store) auditStore { return st }, nil,
+		func(in *apiserver.SignIn, st *sqlite.Store) {
+			capped.PasskeyStore = st
 
-		if err := e.f.store.CreateChallenge(t.Context(), c, mfa.DigestOf([]byte("fill "+strconv.Itoa(i)))); err != nil {
-			t.Fatalf("fill %d: %v", i, err)
-		}
-	}
+			rp, err := gowebauthn.New(relyingOrigin)
+			if err != nil {
+				t.Fatalf("relying party: %v", err)
+			}
+
+			svc, err := mfasvc.New(mfasvc.Config{
+				Store: capped, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
+			})
+			if err != nil {
+				t.Fatalf("passkey service: %v", err)
+			}
+
+			in.Passkeys, in.PasskeySignIn = svc, svc
+			in.PasskeyBeginLimiter, in.PasskeyLimiter = e.begins, e.failures
+		},
+	)
+
+	capped.open.Store(mfa.MaxOpenSignInChallenges)
 
 	before := len(serverEntries(t, e.f.store))
 	over := e.post(t, signInBeginTarget, "", nil)
@@ -682,18 +699,43 @@ func TestPasskeySignInChallengeCap(t *testing.T) {
 		t.Error("the refused begin wrote no audit entry")
 	}
 
-	if _, err := e.f.store.TakeChallenge(t.Context(), mfa.DigestOf([]byte("fill 0")), now); err != nil {
-		t.Fatalf("end one open challenge: %v", err)
+	if capped.stored.Load() != 0 {
+		t.Errorf("the refused begin stored %d rows, want 0", capped.stored.Load())
 	}
 
-	want(t, "begin after one ended", e.post(t, signInBeginTarget, "", nil), http.StatusOK, "")
-	want(
-		t,
-		"second begin",
-		e.post(t, signInBeginTarget, "", nil),
-		http.StatusServiceUnavailable,
-		errcode.MFAUnavailable,
-	)
+	capped.open.Store(mfa.MaxOpenSignInChallenges - 1)
+
+	want(t, "begin under the cap", e.post(t, signInBeginTarget, "", nil), http.StatusOK, "")
+
+	if capped.stored.Load() != 1 {
+		t.Errorf("the begin under the cap stored %d rows, want 1", capped.stored.Load())
+	}
+}
+
+// cappedChallenges is a passkey store whose count of open sign-in challenges
+// a test sets. It applies the cap as the stores do: a sign-in challenge at the
+// cap stores no row and returns mfa.ErrChallengeLimit. The stores run the same
+// rule in the transaction of the write, and the conformance suite checks it
+// against each of them with the real count.
+type cappedChallenges struct {
+	mfa.PasskeyStore
+
+	open   atomic.Int64
+	stored atomic.Int64
+}
+
+func (c *cappedChallenges) CreateChallenge(ctx context.Context, ch mfa.Challenge, d mfa.Digest) error {
+	if ch.Kind == mfa.CeremonySignIn && c.open.Load() >= mfa.MaxOpenSignInChallenges {
+		return mfa.ErrChallengeLimit
+	}
+
+	c.stored.Add(1)
+
+	if err := c.PasskeyStore.CreateChallenge(ctx, ch, d); err != nil {
+		return fmt.Errorf("create the challenge: %w", err)
+	}
+
+	return nil
 }
 
 // badSignature alters the signature of a response.
