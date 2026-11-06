@@ -55,7 +55,7 @@ type xmlResponse struct {
 
 // xmlSuccess is the element authenticationSuccess.
 type xmlSuccess struct {
-	User       []string        `xml:"http://www.yale.edu/tp/cas user"`
+	User       []xmlValue      `xml:"http://www.yale.edu/tp/cas user"`
 	Attributes []xmlAttributes `xml:"http://www.yale.edu/tp/cas attributes"`
 	PGT        []xmlAny        `xml:"http://www.yale.edu/tp/cas proxyGrantingTicket"`
 	Proxies    []xmlAny        `xml:"http://www.yale.edu/tp/cas proxies"`
@@ -134,9 +134,9 @@ func checkDocument(b []byte) error {
 	d.Strict = true
 	// No CharsetReader: a declared encoding other than UTF-8 fails.
 
-	depth := 0
+	var sc scanner
 
-	for n := 0; ; n++ {
+	for {
 		tok, err := d.RawToken()
 		if errors.Is(err, io.EOF) {
 			break
@@ -146,8 +146,8 @@ func checkDocument(b []byte) error {
 			return fmt.Errorf("%w: read a token: %w", ErrAnswer, err)
 		}
 
-		if depth, err = checkToken(tok, depth, n); err != nil {
-			return err
+		if checkErr := sc.check(tok); checkErr != nil {
+			return checkErr
 		}
 	}
 
@@ -161,31 +161,50 @@ func checkDocument(b []byte) error {
 	return nil
 }
 
-// checkToken checks one token of an answer at the depth before it, and
-// returns the depth after it. n is the index of the token in the answer.
-func checkToken(tok xml.Token, depth, n int) (int, error) {
+// scanner is the state of the check of the tokens of one answer.
+type scanner struct {
+	// depth is the nesting of the elements before the next token.
+	depth int
+	// n is the index of the next token.
+	n int
+	// closed is true after the end of the root element.
+	closed bool
+}
+
+// check checks the next token of an answer and updates the state.
+func (sc *scanner) check(tok xml.Token) error {
+	defer func() { sc.n++ }()
+
 	switch v := tok.(type) {
 	case xml.Directive:
-		return depth, fmt.Errorf("%w: the answer holds a document type declaration or a directive", ErrAnswer)
+		return fmt.Errorf("%w: the answer holds a document type declaration or a directive", ErrAnswer)
 	case xml.ProcInst:
-		if n != 0 || v.Target != "xml" {
-			return depth, fmt.Errorf("%w: the answer holds a processing instruction", ErrAnswer)
+		if sc.n != 0 || v.Target != "xml" {
+			return fmt.Errorf("%w: the answer holds a processing instruction", ErrAnswer)
 		}
 	case xml.StartElement:
-		if depth+1 > MaxAnswerDepth {
-			return depth, fmt.Errorf("%w: the answer is deeper than %d elements", ErrAnswer, MaxAnswerDepth)
+		if sc.closed {
+			// The decoder reads the first root only. A second root, or any
+			// element after the first one, is refused so that no value
+			// outside the read root can be in the answer.
+			return fmt.Errorf("%w: the answer holds an element after its root", ErrAnswer)
 		}
 
-		return depth + 1, nil
+		if sc.depth+1 > MaxAnswerDepth {
+			return fmt.Errorf("%w: the answer is deeper than %d elements", ErrAnswer, MaxAnswerDepth)
+		}
+
+		sc.depth++
 	case xml.EndElement:
-		return depth - 1, nil
+		sc.depth--
+		sc.closed = sc.depth == 0
 	case xml.CharData, xml.Comment:
 	default:
 		// Fail closed: the decoder has no other token type today.
-		return depth, fmt.Errorf("%w: the answer holds an unknown token", ErrAnswer)
+		return fmt.Errorf("%w: the answer holds an unknown token", ErrAnswer)
 	}
 
-	return depth, nil
+	return nil
 }
 
 // failure returns the Response of a failure element.
@@ -216,6 +235,11 @@ func success(s xmlSuccess, ns string) (Response, error) {
 		return none, fmt.Errorf("%w: the answer is of a proxy ticket", ErrAnswer)
 	case len(s.User) != 1:
 		return none, fmt.Errorf("%w: the success must hold exactly one user", ErrAnswer)
+	case len(s.User[0].Inner) > 0:
+		// The decoder skips an element inside a text field, so the user
+		// keeps a record of each element and refuses it, as each attribute
+		// value does.
+		return none, fmt.Errorf("%w: the user holds an element", ErrAnswer)
 	case len(s.Attributes) > 1:
 		return none, fmt.Errorf("%w: the success holds more than one attributes element", ErrAnswer)
 	}
@@ -241,5 +265,5 @@ func success(s xmlSuccess, ns string) (Response, error) {
 		}
 	}
 
-	return Response{Attributes: attrs, User: strings.TrimSpace(s.User[0]), FailureCode: "", Success: true}, nil
+	return Response{Attributes: attrs, User: strings.TrimSpace(s.User[0].Text), FailureCode: "", Success: true}, nil
 }
