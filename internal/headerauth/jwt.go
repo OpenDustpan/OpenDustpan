@@ -6,22 +6,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
-	"net/http"
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
@@ -31,7 +27,8 @@ const (
 	// KeyMaxAge is the longest time that the method uses the keys of one
 	// read of the key URL.
 	KeyMaxAge = 15 * time.Minute
-	// KeyRetryAfter is the shortest time between two reads of one key URL.
+	// KeyRetryAfter is the shortest time between two reads of the key URL,
+	// for all keys together.
 	// A token with an unknown key ID reads the key URL again at most this
 	// often.
 	KeyRetryAfter = 30 * time.Second
@@ -133,7 +130,7 @@ func (m *Method) verifyALB(ctx context.Context, raw string) (trustrule.Token, er
 		decoded[i] = b
 	}
 
-	kid, err := m.checkALBHeader(decoded[0])
+	kid, header, err := m.checkALBHeader(decoded[0])
 	if err != nil {
 		return none, err
 	}
@@ -152,49 +149,84 @@ func (m *Method) verifyALB(ctx context.Context, raw string) (trustrule.Token, er
 		return none, answerError(fmt.Errorf("payload: %w", err))
 	}
 
-	tok := trustrule.Token{Claims: claims, Alg: "ES256", Kid: kid}
-	if err := m.checkClaims(&tok); err != nil {
+	if err := m.checkALBPayload(claims, header); err != nil {
 		return none, err
 	}
 
-	return tok, nil
+	return trustrule.Token{Claims: claims, Alg: "ES256", Kid: kid}, nil
+}
+
+// checkALBPayload checks the iss and the time claims of the payload of a
+// JWT of the AWS ALB. The AWS ALB puts exp and iss in the header, and the
+// header check requires them. A payload iss must be the issuer too. A
+// payload exp, iat or nbf must pass the time check too; a payload with no
+// exp is checked with the exp of the header.
+func (m *Method) checkALBPayload(claims, header map[string]json.RawMessage) error {
+	if _, ok := claims["iss"]; ok {
+		payload := trustrule.Token{Claims: claims, Alg: "", Kid: ""}
+		if err := payload.CheckIssuer(m.issuer); err != nil {
+			return answerError(err)
+		}
+	}
+
+	times := maps.Clone(claims)
+	if _, ok := times["exp"]; !ok {
+		times["exp"] = header["exp"]
+	}
+
+	payload := trustrule.Token{Claims: times, Alg: "", Kid: ""}
+	if err := payload.CheckTime(m.now()); err != nil {
+		return answerError(err)
+	}
+
+	return nil
 }
 
 // checkALBHeader checks the decoded JWT header of the AWS ALB and returns
-// its key ID. It returns ErrMethodInput for a key ID outside the
-// allowlist, and ErrMethodAnswer for each other failed check.
-func (m *Method) checkALBHeader(raw []byte) (string, error) {
+// its key ID and its members. It checks the members that the AWS ALB puts in
+// the header: alg, kid, signer, the client ID when the method has one, iss
+// and exp. It returns ErrMethodInput for a key ID outside the allowlist, and
+// ErrMethodAnswer for each other failed check.
+func (m *Method) checkALBHeader(raw []byte) (string, map[string]json.RawMessage, error) {
 	header, err := decodeObject(raw)
 	if err != nil {
-		return "", answerError(fmt.Errorf("header: %w", err))
+		return "", nil, answerError(fmt.Errorf("header: %w", err))
 	}
 
 	for name := range header {
 		if !slices.Contains(albHeaderMembers(), name) {
-			return "", fmt.Errorf("%w: the header member %q is not allowed", session.ErrMethodAnswer, name)
+			return "", nil, fmt.Errorf("%w: the header member %q is not allowed", session.ErrMethodAnswer, name)
 		}
 	}
 
 	if alg, _ := stringMember(header, "alg"); !slices.Contains(presetAlgorithms(), alg) {
-		return "", fmt.Errorf("%w: the algorithm %q is not allowed", session.ErrMethodAnswer, alg)
+		return "", nil, fmt.Errorf("%w: the algorithm %q is not allowed", session.ErrMethodAnswer, alg)
 	}
 
 	kid, _ := stringMember(header, "kid")
 	if !albKeyIDPattern.MatchString(kid) {
-		return "", fmt.Errorf("%w: the key ID is outside the allowlist", session.ErrMethodInput)
+		return "", nil, fmt.Errorf("%w: the key ID is outside the allowlist", session.ErrMethodInput)
 	}
 
 	if signer, _ := stringMember(header, "signer"); signer != m.signerARN {
-		return "", fmt.Errorf("%w: the signer is not the configured load balancer", session.ErrMethodAnswer)
+		return "", nil, fmt.Errorf("%w: the signer is not the configured load balancer", session.ErrMethodAnswer)
 	}
 
-	if _, ok := header["iss"]; ok {
-		if iss, isString := stringMember(header, "iss"); !isString || iss != m.issuer {
-			return "", fmt.Errorf("%w: the iss header member is not the issuer", session.ErrMethodAnswer)
-		}
+	if client, _ := stringMember(header, "client"); m.albClient != "" && client != m.albClient {
+		return "", nil, fmt.Errorf("%w: the client is not the configured client ID", session.ErrMethodAnswer)
 	}
 
-	return kid, nil
+	// The header holds iss and exp. CheckTime requires exp.
+	tok := trustrule.Token{Claims: header, Alg: "", Kid: ""}
+	if err := tok.CheckIssuer(m.issuer); err != nil {
+		return "", nil, answerError(fmt.Errorf("header: %w", err))
+	}
+
+	if err := tok.CheckTime(m.now()); err != nil {
+		return "", nil, answerError(fmt.Errorf("header: %w", err))
+	}
+
+	return kid, header, nil
 }
 
 // decodeALBPart decodes one part of a JWT of the AWS ALB: base64url, with
@@ -250,15 +282,17 @@ func (m *Method) checkClaims(tok *trustrule.Token) error {
 func (m *Method) assertionOf(tok *trustrule.Token) (session.Assertion, error) {
 	var none session.Assertion
 
+	// The subject is used byte for byte. It is never case-folded or
+	// normalized, so two subjects that only look the same stay two persons.
 	sub := tok.Subject()
-	if sub == "" || len(sub) > MaxSubject || !printableASCIIOrUTF8(sub) {
+	if sub == "" || len(sub) > MaxSubject || !session.SafeText(sub) {
 		return none, fmt.Errorf("%w: the sub claim is missing or not a valid subject", session.ErrMethodAnswer)
 	}
 
 	a := headerAssertion(m.providerID, sub)
 
 	if email, ok := stringMember(tok.Claims, "email"); ok {
-		if len(email) > session.MaxAssertionName || !printableASCIIOrUTF8(email) {
+		if len(email) > session.MaxAssertionName || !session.SafeText(email) {
 			return none, fmt.Errorf("%w: the email claim is not valid", session.ErrMethodAnswer)
 		}
 
@@ -299,7 +333,7 @@ func groupsOf(claims map[string]json.RawMessage, name string) ([]string, error) 
 	}
 
 	for _, g := range groups {
-		if g == "" || len(g) > session.MaxAssertionGroup || !printableASCIIOrUTF8(g) {
+		if g == "" || len(g) > session.MaxAssertionGroup || !session.SafeText(g) {
 			return nil, fmt.Errorf("%w: a group of the groups claim is not valid", session.ErrMethodAnswer)
 		}
 	}
@@ -391,194 +425,4 @@ func ALBKeyURL(base, kid string) (string, error) {
 	// The escape changes no character of the allowlist. It stays so that
 	// the value is encoded where it is used.
 	return base + url.PathEscape(kid), nil
-}
-
-// albKey is one key of the AWS ALB and the time of its read.
-type albKey struct {
-	at  time.Time
-	pub *ecdsa.PublicKey
-}
-
-// keyCache reads and keeps the keys of the issuer. One mutex guards it.
-// A read of the key URL holds the mutex, so the method sends at most one
-// read at a time, bounded by the timeout.
-type keyCache struct {
-	set      trustrule.KeySet
-	setAt    time.Time
-	tried    time.Time
-	client   *http.Client
-	now      func() time.Time
-	alb      map[string]albKey
-	albTried map[string]time.Time
-	url      string
-	timeout  time.Duration
-	mu       sync.Mutex
-}
-
-// newKeyCache returns an empty cache of the keys at keyURL.
-func newKeyCache(client *http.Client, keyURL string, timeout time.Duration, now func() time.Time) *keyCache {
-	return &keyCache{
-		set: trustrule.KeySet{}, setAt: time.Time{}, tried: time.Time{}, client: client, now: now,
-		alb: map[string]albKey{}, albTried: map[string]time.Time{}, url: keyURL, timeout: timeout,
-		mu: sync.Mutex{},
-	}
-}
-
-// recent reports whether t is less than KeyRetryAfter before now.
-func recent(t, now time.Time) bool {
-	d := now.Sub(t)
-
-	return !t.IsZero() && d >= 0 && d < KeyRetryAfter
-}
-
-// jwks returns the key set of the JWKS URL. It reads the URL again when the
-// cached set is older than KeyMaxAge, or has no key with the ID kid, at most
-// once in KeyRetryAfter. It returns ErrMethodUnavailable when it has no
-// usable set.
-func (c *keyCache) jwks(ctx context.Context, kid string) (trustrule.KeySet, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := c.now()
-	fresh := !c.setAt.IsZero() && now.Sub(c.setAt) >= 0 && now.Sub(c.setAt) < KeyMaxAge
-
-	if fresh && (kid == "" || c.set.Has(kid)) {
-		return c.set, nil
-	}
-
-	if recent(c.tried, now) {
-		if fresh {
-			// The token names a key that the set does not hold; the check
-			// of the signature refuses it.
-			return c.set, nil
-		}
-
-		return trustrule.KeySet{}, fmt.Errorf("%w: the keys of the issuer were not read", session.ErrMethodUnavailable)
-	}
-
-	c.tried = now
-
-	body, err := c.get(ctx, c.url)
-	if err != nil {
-		return trustrule.KeySet{}, err
-	}
-
-	set, err := trustrule.ParseKeySet(body)
-	if err != nil {
-		return trustrule.KeySet{}, fmt.Errorf(
-			"%w: the key set of the issuer is not valid",
-			session.ErrMethodUnavailable,
-		)
-	}
-
-	c.set, c.setAt = set, now
-
-	return set, nil
-}
-
-// albKeyOf returns the key of the AWS ALB with the ID kid.
-func (c *keyCache) albKeyOf(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
-	u, err := ALBKeyURL(c.url, kid)
-	if err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := c.now()
-
-	if k, ok := c.alb[kid]; ok && now.Sub(k.at) >= 0 && now.Sub(k.at) < KeyMaxAge {
-		return k.pub, nil
-	}
-
-	if t, ok := c.albTried[kid]; ok && recent(t, now) {
-		return nil, fmt.Errorf("%w: the key of the load balancer was not read", session.ErrMethodUnavailable)
-	}
-
-	// Limit the memory of the cache: a full map starts again.
-	if len(c.albTried) >= maxALBKeys {
-		clear(c.albTried)
-	}
-
-	if len(c.alb) >= maxALBKeys {
-		clear(c.alb)
-	}
-
-	c.albTried[kid] = now
-
-	body, err := c.get(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-
-	pub, err := ParseALBKey(body)
-	if err != nil {
-		return nil, err
-	}
-
-	c.alb[kid] = albKey{at: now, pub: pub}
-
-	return pub, nil
-}
-
-// ParseALBKey parses a key of the AWS ALB: one PEM block "PUBLIC KEY" that
-// holds an ECDSA key on P-256. It returns ErrMethodUnavailable for each
-// other answer.
-func ParseALBKey(body []byte) (*ecdsa.PublicKey, error) {
-	errKey := fmt.Errorf("%w: the key of the load balancer is not a P-256 public key", session.ErrMethodUnavailable)
-
-	block, rest := pem.Decode(body)
-	if block == nil || block.Type != "PUBLIC KEY" || len(bytes.TrimSpace(rest)) != 0 || len(block.Headers) != 0 {
-		return nil, errKey
-	}
-
-	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, errKey
-	}
-
-	pub, ok := parsed.(*ecdsa.PublicKey)
-	if !ok || pub.Curve != elliptic.P256() {
-		return nil, errKey
-	}
-
-	return pub, nil
-}
-
-// get reads the body of u with one GET, in the timeout of the cache. The
-// error text names no address.
-func (c *keyCache) get(ctx context.Context, u string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("%w: the key URL is not valid", session.ErrMethodUnavailable)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		// The text does not tell a refused address from an unreachable one.
-		return nil, fmt.Errorf("%w: the key URL did not answer", session.ErrMethodUnavailable)
-	}
-
-	body, readErr := egresshttp.ReadBody(resp)
-	if closeErr := resp.Body.Close(); closeErr != nil && readErr == nil {
-		readErr = closeErr
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(
-			"%w: the key URL answered with the status %d",
-			session.ErrMethodUnavailable,
-			resp.StatusCode,
-		)
-	}
-
-	if readErr != nil {
-		return nil, fmt.Errorf("%w: the answer of the key URL could not be read", session.ErrMethodUnavailable)
-	}
-
-	return body, nil
 }

@@ -92,6 +92,9 @@ type RequestJWT struct {
 	Audience bool
 	// KeyIDInURL is true for an issuer whose key ID goes into the key URL.
 	KeyIDInURL bool
+	// HeaderClaims is true for an issuer that puts iss and exp in the JWT
+	// header, as the AWS ALB does. The cases then change them there.
+	HeaderClaims bool
 }
 
 // requestCase is one case of RunRequestMethod.
@@ -419,7 +422,7 @@ func rqSubjectAllowlist(t *testing.T, f RequestFixture) {
 
 	for _, s := range []string{
 		"carol smith", "carol/../admin", "carol,admin", "carol;admin", "<carol>", "carol\"", "carol*",
-		"carolé", strings.Repeat("a", session.MaxAssertionSubject+1),
+		"carol\u00e9", strings.Repeat("a", session.MaxAssertionSubject+1),
 	} {
 		facts := f.Facts(t, carol())
 		facts.Headers[f.UserHeader] = []string{s}
@@ -484,8 +487,29 @@ func rqUnnamedHeader(t *testing.T, f RequestFixture) {
 func rqOtherIssuer(t *testing.T, f RequestFixture) {
 	t.Helper()
 
-	facts := tokenFacts(t, f, carol(), func(_, c map[string]any) { c["iss"] = "https://issuer.example.net" })
+	other := "https://issuer.example.net"
+	facts := tokenFacts(t, f, carol(), func(_, c map[string]any) { c["iss"] = other })
 	requestRefused(t, f.Method, facts, session.ErrMethodAnswer)
+
+	if !f.JWT.HeaderClaims {
+		return
+	}
+
+	for _, iss := range []any{other, nil, 1} {
+		facts = tokenFacts(t, f, carol(), func(h, _ map[string]any) { setOrDelete(h, "iss", iss) })
+		requestRefused(t, f.Method, facts, session.ErrMethodAnswer)
+	}
+}
+
+// setOrDelete sets the member name of m to v, or deletes it when v is nil.
+func setOrDelete(m map[string]any, name string, v any) {
+	if v == nil {
+		delete(m, name)
+
+		return
+	}
+
+	m[name] = v
 }
 
 func rqOtherAudience(t *testing.T, f RequestFixture) {
@@ -616,14 +640,24 @@ func rqFutureIssuedAt(t *testing.T, f RequestFixture) {
 func rqExpired(t *testing.T, f RequestFixture) {
 	t.Helper()
 
-	for _, exp := range []any{f.Now().Add(-2 * time.Minute).Unix(), "tomorrow", nil} {
-		facts := tokenFacts(t, f, carol(), func(_, c map[string]any) {
-			if exp == nil {
-				delete(c, "exp")
-			} else {
-				c["exp"] = exp
-			}
-		})
+	pastSec := f.Now().Add(-2 * time.Minute).Unix()
+	values := []any{pastSec, "tomorrow", f.Now().Add(48 * time.Hour).Unix()}
+
+	if f.JWT.HeaderClaims {
+		// The exp of the header is required; a payload exp is checked too.
+		facts := tokenFacts(t, f, carol(), func(_, c map[string]any) { c["exp"] = pastSec })
+		requestRefused(t, f.Method, facts, session.ErrMethodAnswer)
+
+		for _, exp := range append(values, nil) {
+			facts = tokenFacts(t, f, carol(), func(h, _ map[string]any) { setOrDelete(h, "exp", exp) })
+			requestRefused(t, f.Method, facts, session.ErrMethodAnswer)
+		}
+
+		return
+	}
+
+	for _, exp := range append(values, nil) {
+		facts := tokenFacts(t, f, carol(), func(_, c map[string]any) { setOrDelete(c, "exp", exp) })
 		requestRefused(t, f.Method, facts, session.ErrMethodAnswer)
 	}
 }
@@ -631,7 +665,7 @@ func rqExpired(t *testing.T, f RequestFixture) {
 func rqNoSubject(t *testing.T, f RequestFixture) {
 	t.Helper()
 
-	for _, sub := range []any{nil, "", 42, "carol\x00"} {
+	for _, sub := range []any{nil, "", 42, "carol\x00", "carol\u202e", "car\u200bol", "carol\u2028admin", "\ufeffcarol"} {
 		facts := tokenFacts(t, f, carol(), func(_, c map[string]any) {
 			if sub == nil {
 				delete(c, "sub")

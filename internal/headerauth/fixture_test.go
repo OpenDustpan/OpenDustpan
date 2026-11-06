@@ -39,13 +39,16 @@ const (
 	keyID        = "key-1"
 	albARN       = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/test/50dc6c495c0c9188"
 	albIssuer    = "https://idp.example.com"
+	albClient    = "app-client"
 	customIss    = "https://issuer.example.com"
 	audience     = "/projects/123/global/backendServices/456"
 	groupsClaim  = "groups"
 	groupsHeader = "X-Auth-Groups"
 	keyTimeout   = 300 * time.Millisecond
-	rsaBits      = 2048
-	es256Coord   = 32
+	// keyServerHits is the room of the hits channel of a key server.
+	keyServerHits = 64
+	rsaBits       = 2048
+	es256Coord    = 32
 )
 
 // proxyPeer is the address of the trusted test proxy.
@@ -231,12 +234,16 @@ func encodeKey(t *testing.T, key crypto.PublicKey) encodedKey {
 
 // keyServer is the key endpoint of a test issuer.
 type keyServer struct {
-	server  *httptest.Server
-	body    map[string][]byte
-	release chan struct{}
-	paths   []string
-	mu      sync.Mutex
-	hang    atomic.Bool
+	server *httptest.Server
+	body   map[string][]byte
+	// redirect maps a path to the URL of a redirect answer.
+	redirect map[string]string
+	release  chan struct{}
+	// hits gets the path of each request, when it has room.
+	hits  chan string
+	paths []string
+	mu    sync.Mutex
+	hang  atomic.Bool
 }
 
 // newKeyServer starts a TLS key endpoint that answers each path of body.
@@ -244,7 +251,8 @@ func newKeyServer(t *testing.T, body map[string][]byte) *keyServer {
 	t.Helper()
 
 	ks := &keyServer{
-		server: nil, body: body, release: make(chan struct{}), paths: nil, mu: sync.Mutex{}, hang: atomic.Bool{},
+		server: nil, body: body, redirect: map[string]string{}, release: make(chan struct{}),
+		hits: make(chan string, keyServerHits), paths: nil, mu: sync.Mutex{}, hang: atomic.Bool{},
 	}
 	ks.server = httptest.NewTLSServer(http.HandlerFunc(ks.serve))
 	t.Cleanup(ks.server.Close)
@@ -256,7 +264,19 @@ func newKeyServer(t *testing.T, body map[string][]byte) *keyServer {
 func (ks *keyServer) serve(w http.ResponseWriter, r *http.Request) {
 	ks.mu.Lock()
 	ks.paths = append(ks.paths, r.URL.Path)
+	to, redirect := ks.redirect[r.URL.Path]
 	ks.mu.Unlock()
+
+	select {
+	case ks.hits <- r.URL.Path:
+	default:
+	}
+
+	if redirect {
+		http.Redirect(w, r, to, http.StatusFound)
+
+		return
+	}
 
 	if ks.hang.Load() {
 		select {
@@ -342,7 +362,7 @@ func plainConfig(off *atomic.Bool, groups string) headerauth.Config {
 		Enabled: func(context.Context) (bool, error) { return !off.Load(), nil },
 		JWT: headerauth.JWTConfig{
 			Preset: headerauth.PresetCustom, Issuer: "", Audience: "", KeyURL: "", Region: "", SignerARN: "",
-			GroupsClaim: "",
+			ClientID: "", GroupsClaim: "",
 		},
 	}
 }
@@ -451,7 +471,7 @@ func jwtFixture(s jwtSetup, k issuerKeys) func(t *testing.T) sessiontest.Request
 			JWT: &sessiontest.RequestJWT{
 				Header: shape.header, Claims: shape.claims, Sign: sign(k.good), SignOther: sign(k.other),
 				KeyRequests: ks.requests, PublicKeys: [][]byte{enc.pem, enc.der, jwkJSON, jwks},
-				SignerMember: "", Audience: !alb, KeyIDInURL: alb,
+				SignerMember: "", Audience: !alb, KeyIDInURL: alb, HeaderClaims: alb,
 			},
 			ProviderID: providerID, UserHeader: shape.user, SecretHeader: "",
 			UntrustedPeer: untrustedPeer(), ClientProxyPeer: clientProxyPeer(), Groups: s.claim != "",
@@ -474,13 +494,13 @@ func jwtConfig(s jwtSetup, ks *keyServer, off *atomic.Bool) headerauth.Config {
 		Enabled: func(context.Context) (bool, error) { return !off.Load(), nil },
 		JWT: headerauth.JWTConfig{
 			Preset: s.preset, Issuer: "", Audience: audience, KeyURL: ks.server.URL + "/jwks", Region: "",
-			SignerARN: "", GroupsClaim: s.claim,
+			SignerARN: "", ClientID: "", GroupsClaim: s.claim,
 		},
 	}
 
 	// Google IAP keeps the values of its preset.
 	if s.preset == headerauth.PresetAWSALB {
-		cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.SignerARN = albIssuer, "", albARN
+		cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.SignerARN, cfg.JWT.ClientID = albIssuer, "", albARN, albClient
 		cfg.JWT.KeyURL = ks.server.URL + "/alb/"
 	}
 
@@ -514,7 +534,7 @@ func jwtShapes(s jwtSetup) tokenShape {
 	header := func() map[string]any {
 		h := map[string]any{"alg": string(s.alg), "kid": keyID, "typ": "JWT"}
 		if s.preset == headerauth.PresetAWSALB {
-			h["signer"], h["iss"], h["client"] = albARN, albIssuer, "app-client"
+			h["signer"], h["iss"], h["client"] = albARN, albIssuer, albClient
 			h["exp"] = fixedNow().Add(time.Minute).Unix()
 		}
 
@@ -522,12 +542,12 @@ func jwtShapes(s jwtSetup) tokenShape {
 	}
 
 	claims := func(p sessiontest.TestPerson) map[string]any {
-		c := map[string]any{
-			"iss": issuer, "sub": p.Subject, "email": p.Email,
-			"exp": fixedNow().Add(5 * time.Minute).Unix(), "iat": fixedNow().Add(-10 * time.Second).Unix(),
-		}
+		// The AWS ALB sends the claims of the user-info endpoint of the
+		// identity provider, and puts iss and exp in the header.
+		c := map[string]any{"sub": p.Subject, "email": p.Email, "name": p.Name}
 		if s.preset != headerauth.PresetAWSALB {
-			c["aud"] = audience
+			c["iss"], c["aud"] = issuer, audience
+			c["exp"], c["iat"] = fixedNow().Add(5*time.Minute).Unix(), fixedNow().Add(-10*time.Second).Unix()
 		}
 
 		if s.claim != "" && p.GroupsPresent {

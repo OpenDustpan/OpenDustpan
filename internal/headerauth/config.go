@@ -26,7 +26,8 @@ func checkProxies(list []netip.Prefix) error {
 // emptyJWT reports whether j holds no setting.
 func emptyJWT(j JWTConfig) bool {
 	return j == JWTConfig{
-		Preset: PresetCustom, Issuer: "", Audience: "", KeyURL: "", Region: "", SignerARN: "", GroupsClaim: "",
+		Preset: PresetCustom, Issuer: "", Audience: "", KeyURL: "", Region: "", SignerARN: "", ClientID: "",
+		GroupsClaim: "",
 	}
 }
 
@@ -135,6 +136,10 @@ func applyPreset(m *Method, cfg Config) (string, error) {
 
 	switch cfg.JWT.Preset {
 	case PresetGoogleIAP:
+		if cfg.JWT.SignerARN != "" || cfg.JWT.Region != "" || cfg.JWT.ClientID != "" {
+			return "", fmt.Errorf("%w: Google IAP has no signer, no region and no client ID", ErrConfig)
+		}
+
 		m.userHeader = orDefault(cfg.UserHeader, GoogleIAPHeader)
 		m.issuer = orDefault(cfg.JWT.Issuer, GoogleIAPIssuer)
 
@@ -144,8 +149,8 @@ func applyPreset(m *Method, cfg Config) (string, error) {
 
 		return albKeyBase(cfg.JWT)
 	case PresetCustom:
-		if cfg.JWT.SignerARN != "" || cfg.JWT.Region != "" {
-			return "", fmt.Errorf("%w: a custom issuer has no signer and no region", ErrConfig)
+		if cfg.JWT.SignerARN != "" || cfg.JWT.Region != "" || cfg.JWT.ClientID != "" {
+			return "", fmt.Errorf("%w: a custom issuer has no signer, no region and no client ID", ErrConfig)
 		}
 
 		return keyURL, nil
@@ -171,6 +176,10 @@ func albKeyBase(j JWTConfig) (string, error) {
 		return "", fmt.Errorf(
 			"%w: the AWS ALB needs the ARN of the load balancer and a region, and has no audience", ErrConfig,
 		)
+	}
+
+	if len(j.ClientID) > MaxSecretBytes || !printableASCII(j.ClientID) {
+		return "", fmt.Errorf("%w: the client ID must be printable ASCII", ErrConfig)
 	}
 
 	return keyURL, nil
