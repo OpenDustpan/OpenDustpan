@@ -311,8 +311,9 @@ The action is `server:manage-settings`, and the kind is `change`.
   example `database`. A request that the server refuses because of its
   content writes one entry with the outcome `failure`.
 
-No route of the API reads the installation log (`@server`) yet. These entries become
-readable through the API when that route lands.
+The API reads the installation log (`@server`) with
+`organization=@server`. The [Read the entries](#read-the-entries) section
+gives the action that the read needs.
 
 A sensitive setting (the database URL and each secret) shows only `set` or
 `not set`, never the value. When the server cannot write the start entry,
@@ -927,8 +928,6 @@ groups:
         annotations:
           summary: An OpenDustpan audit sink falls behind
 ```
-
-OpenTelemetry logs are not a sink yet.
 
 ## What this guide does not cover
 
