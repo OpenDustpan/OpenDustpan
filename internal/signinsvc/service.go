@@ -223,6 +223,9 @@ type Config struct {
 	// Groups applies the group claims of an Assertion. Nil means that no
 	// mapping exists, so no sign-in joins a group.
 	Groups principal.GroupClaimApplier
+	// States reads the state of a person for the passkey sign-in. Nil means
+	// that the passkey sign-in refuses every request.
+	States States
 	Logger *slog.Logger
 	// OnAuditFailure is called when an audit entry cannot be written. Nil
 	// means no call.
@@ -647,6 +650,12 @@ func startChanges(a *session.Assertion) []audit.Change {
 		}
 
 		changes = append(changes, change("factors", strings.Join(factors, ",")))
+	}
+
+	if a.Method == session.MethodPasskey {
+		// A passkey sign-in needs user verification, so the passkey is the
+		// possession of the key and the verification on the device.
+		changes = append(changes, change("factorCount", "2"))
 	}
 
 	return changes

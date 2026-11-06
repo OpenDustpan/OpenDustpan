@@ -121,6 +121,16 @@ type SignIn struct {
 	// Nil mounts no passkey route: the server keeps no passkeys, or its public
 	// URL gives no relying party.
 	Passkeys PasskeyService
+	// PasskeySignIn is the part of the service of the passkeys that the
+	// passkey sign-in uses. Nil mounts no passkey sign-in route.
+	PasskeySignIn PasskeySignInService
+	// PasskeyBeginLimiter is the per-address budget of the begins of a passkey
+	// sign-in. Each begin writes a challenge row. Nil mounts no passkey
+	// sign-in route.
+	PasskeyBeginLimiter SignInLimiter
+	// PasskeyLimiter is the per-address budget of the failed responses of a
+	// passkey sign-in. Nil mounts no passkey sign-in route.
+	PasskeyLimiter SignInLimiter
 	// DevCode is the one-time code of opendustpan dev. With it, the handler
 	// mounts the route that signs a browser in as the dev administrator.
 	// Nil mounts no such route.
@@ -149,7 +159,12 @@ type signInState struct {
 	limiter   SignInLimiter
 	passwords SignInLimiter
 	passkeys  PasskeyService
-	stored    StoredProviders
+	// passkeySignIn, passkeyBegins and passkeyFailures are the passkey
+	// sign-in and its two budgets.
+	passkeySignIn   PasskeySignInService
+	passkeyBegins   SignInLimiter
+	passkeyFailures SignInLimiter
+	stored          StoredProviders
 	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
 	checker   *sessionauth.Checker
@@ -222,7 +237,9 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		limiter:   cfg.Limiter,
 		passwords: cfg.PasswordLimiter,
 		passkeys:  cfg.Passkeys,
-		stored:    cfg.Stored,
+		passkeySignIn: cfg.PasskeySignIn, passkeyBegins: cfg.PasskeyBeginLimiter,
+		passkeyFailures: cfg.PasskeyLimiter,
+		stored:          cfg.Stored,
 		admin:     cfg.Admin,
 		providers: providers,
 		checker:   checker,

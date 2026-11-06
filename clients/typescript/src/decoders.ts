@@ -152,6 +152,8 @@ import type {
   OutputSharingRequest,
   Passkey,
   PasskeyCreationOptions,
+  PasskeyRequestOptions,
+  PasskeySignInRequest,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -1313,6 +1315,17 @@ export const decodePasskey: Decoder<Passkey> = object<Passkey>("Passkey", {
 /** The validator of PasskeyCreationOptions. */
 export const decodePasskeyCreationOptions: Decoder<PasskeyCreationOptions> = object<PasskeyCreationOptions>("PasskeyCreationOptions", {
   publicKey: anyValue,
+});
+
+/** The validator of PasskeyRequestOptions. */
+export const decodePasskeyRequestOptions: Decoder<PasskeyRequestOptions> = object<PasskeyRequestOptions>("PasskeyRequestOptions", {
+  publicKey: anyValue,
+});
+
+/** The validator of PasskeySignInRequest. */
+export const decodePasskeySignInRequest: Decoder<PasskeySignInRequest> = object<PasskeySignInRequest>("PasskeySignInRequest", {
+  reason: string,
+  response: anyValue,
 });
 
 /** The validator of PasswordSignInRequest. */

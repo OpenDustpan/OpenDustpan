@@ -138,6 +138,7 @@ func withPasskeys(signIn *serverapi.SignIn, passkeys *mfasvc.Service) *serverapi
 
 	withService := *signIn
 	withService.Passkeys = passkeys
+	withService.PasskeySignIn = passkeys
 
 	return &withService
 }
