@@ -386,6 +386,7 @@ func (h *Handler) writeRegistryDenial(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
+	faultlog.LogInternal(ctx, h.logger, "registry authorization failed", faultlog.Cause(err), errcode.ServerInternal)
 	h.writeRegistryError(ctx, w, http.StatusInternalServerError, titleInternal, errcode.ServerInternal)
 }
 
