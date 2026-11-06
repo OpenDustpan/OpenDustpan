@@ -159,6 +159,7 @@ func (s methodSetup) fixture(mode oauthtest.Mode) sessiontest.RedirectFixture {
 		Disable:    func(*testing.T) { s.off.Store(true) },
 		Now:        s.clock.Now,
 		ProviderID: methodProvider, AuthTime: mode == oauthtest.ModeOIDC, Groups: false, ReportsDisabled: false,
+		CAS: nil,
 	}
 }
 
