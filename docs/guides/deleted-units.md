@@ -31,7 +31,12 @@ It needs the action `namespace:read` on the namespace. The list holds only
 the units that you can read: a grant of `unit:read` on the installation or
 on the namespace shows every deleted unit of the namespace. A grant on one
 unit shows nothing after the unit is deleted, because a grant on a unit
-follows a unit that exists.
+follows a unit that exists. A grant of `unit:read` on a collection shows
+each deleted unit of that collection in the namespace, because a deleted unit
+keeps its collection until the collection is deleted. A grant on a collection
+of another namespace shows nothing. A grant on the collection alone gives 403,
+because the list also needs `namespace:read` on the namespace. The server
+checks `namespace:read` first, and then the grant of `unit:read`.
 
 These query values filter and page the list:
 
@@ -75,6 +80,10 @@ project. The server checks the new name with the name rules of the tool and
 answers 400 for a name that is not valid. The answer is the live unit with
 the same `unitID`.
 
+The gates and the access limits of the unit stay with it through the delete
+and the restore, also under a new name. A live unit that has the name of the
+deleted unit has its own gates and access limits.
+
 ## Purge a deleted unit
 
 `DELETE /api/inventory/deleted-units/<tool>/<unitID>?organization=<namespace>`
@@ -87,13 +96,11 @@ A purge cannot be undone.
 - 404: the namespace has no deleted unit with this tool and ID. A live unit
   or a purged unit also answers 404.
 - 409: a live unit holds the name, or a failover fenced the write.
-- 409: the new name holds the gates of a deleted unit. Purge or restore that
-  unit first.
-- 409: a live unit holds the name of the deleted unit and shares its gates.
-  Delete the live unit, then restore the deleted unit under its name.
-- 403: a gate or an access limit refuses the restore or the purge. The message
-  holds the message of the gate, the error code and the ID of the decision record.
-  See [Gates and access limits on state writes](state-write-gates.md).
+- 403: a gate or an access limit of the deleted unit, of its collection or of
+  its namespace refuses the restore or the purge. The message holds the message
+  of the gate, the error code and the ID of the decision record. The server
+  checks the gates of the deleted unit, not the gates of a live unit that has
+  its name now. See [Gates and access limits on state writes](state-write-gates.md).
 - 409: a gate gave an error. The message holds the error code and the ID of the
   decision record.
 - 503: the policy engine did not answer.

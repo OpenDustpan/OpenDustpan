@@ -60,8 +60,10 @@ type wiredSignIn struct {
 
 // newWiredSignIn builds a server through NewServer with one OpenID Connect
 // provider. No test here signs in through the provider: the sessions come
-// from the store, so the provider is never read.
-func newWiredSignIn(t *testing.T) wiredSignIn {
+// from the store, so the provider is never read. The options that extra
+// returns for the store run after the options of the fixture, so they can
+// replace one of them. A nil extra adds no option.
+func newWiredSignIn(t *testing.T, extra func(st *sqlite.Store) []Option) wiredSignIn {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -101,7 +103,7 @@ func newWiredSignIn(t *testing.T) wiredSignIn {
 	clock := &sweepClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
 	log := &lockedLog{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
-	srv, err := NewServer(
+	opts := []Option{
 		WithInstallation("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
@@ -111,7 +113,13 @@ func newWiredSignIn(t *testing.T) wiredSignIn {
 			HTTPClient: nil, ID: "corp", DisplayName: "Corp", Issuer: "https://idp.example", ClientID: "dustpan",
 			ClientSecret: "client-secret-for-tests", Scopes: nil, AutoCreate: true,
 		}),
-	)
+	}
+
+	if extra != nil {
+		opts = append(opts, extra(st)...)
+	}
+
+	srv, err := NewServer(opts...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -150,6 +158,7 @@ func (w wiredSignIn) session(t *testing.T, id string) session.Secret {
 	ss := session.Session{
 		CreatedAt: now, LastSeenAt: now, AuthTime: now, EndedAt: time.Time{}, ID: "ses-" + id, PrincipalID: id,
 		Provider: "corp", EndReason: "", SourceIP: "192.0.2.1", UserAgent: "test",
+		Generation: 1,
 	}
 
 	err = w.store.CreateSession(t.Context(), ss, session.DigestOf(key), wiringEntry(now, "ses-"+id))
@@ -200,7 +209,7 @@ func wiringEntry(at time.Time, object string) audit.Entry {
 func TestNewServerSessionsApplyInactivity(t *testing.T) {
 	t.Parallel()
 
-	w := newWiredSignIn(t)
+	w := newWiredSignIn(t, nil)
 	ctx := t.Context()
 
 	inactivity, on := time.Hour, true
@@ -236,6 +245,13 @@ func TestNewServerSessionsApplyInactivity(t *testing.T) {
 		t.Fatalf("session of an active person = %d, want 200", code)
 	}
 
+	// This test is about the inactivity rule. The limit of a break-glass session
+	// is 1 hour by default and would end the session first, so the limit is the
+	// longest that the setting allows.
+	w.srv.signInRequests.SetBreakGlassLimit(func(context.Context) (time.Duration, error) {
+		return session.MaxBreakGlassMaxLength, nil
+	})
+
 	w.clock.advance(2 * time.Hour)
 
 	if code := w.readSession(t, alice); code != http.StatusUnauthorized {
@@ -252,7 +268,7 @@ func TestNewServerSessionsApplyInactivity(t *testing.T) {
 func TestRunPrunesSignInRequests(t *testing.T) {
 	t.Parallel()
 
-	w := newWiredSignIn(t)
+	w := newWiredSignIn(t, nil)
 	w.srv.signInPruneEvery = 20 * time.Millisecond
 
 	state, err := session.NewSecret()

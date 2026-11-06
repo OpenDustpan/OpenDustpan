@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -315,7 +316,7 @@ func (r *Recorder) writeTarget(ctx context.Context, t target, entry audit.Entry)
 		r.write(ctx, unknownEntry(entry))
 	case t.ns != nil:
 		if _, err := r.store.Append(ctx, t.ns.Fence(), entry); err != nil {
-			r.fail(ctx, entry, fmt.Errorf("append entry: %w", err))
+			r.fail(ctx, fmt.Errorf("append entry: %w", err))
 		}
 	default:
 		r.write(ctx, entry)
@@ -335,16 +336,13 @@ func unknownEntry(entry audit.Entry) audit.Entry {
 // write appends entry in its scope, and logs and counts a failure.
 func (r *Recorder) write(ctx context.Context, entry audit.Entry) {
 	if err := r.append(ctx, entry); err != nil {
-		r.fail(ctx, entry, err)
+		r.fail(ctx, err)
 	}
 }
 
 // fail logs and counts an append that failed.
-func (r *Recorder) fail(ctx context.Context, entry audit.Entry, err error) {
-	r.logger.ErrorContext(ctx, "audit append failed for a refused request",
-		slog.String("action", Clean(entry.Action, maxSubjectBytes)),
-		slog.String("object", Clean(entry.Object, maxObjectBytes)),
-		slog.String("error", Clean(err.Error(), maxObjectBytes)))
+func (r *Recorder) fail(ctx context.Context, err error) {
+	faultlog.LogFault(ctx, r.logger, "audit append failed for a refused request", faultlog.Cause(err), "refusal.audit")
 
 	if r.onFailure != nil {
 		r.onFailure()

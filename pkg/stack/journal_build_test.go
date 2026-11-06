@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -419,6 +420,8 @@ func newBuildFixtureGuarded(
 	t.Helper()
 
 	store := newJournalMemStore()
+	// The database runs on the clock of the test, as the service does.
+	store.dbNow = clk.Now
 
 	var checkpoints stack.CheckpointStore = store
 	if wrap != nil {
@@ -452,6 +455,7 @@ func newBuildFixtureGuarded(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Updates:            store,

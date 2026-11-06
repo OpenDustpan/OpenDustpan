@@ -70,6 +70,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a Pulumi stack keeps its collection through a rename", test: testStackRename},
 		{name: "a soft-deleted unit does not keep its collection", test: testDeletedUnitMembership},
 		{name: "CollectionOf names the collection, and false when there is none", test: testCollectionOf},
+		{name: "the unit IDs of a collection hold its units only", test: testListCollectionUnitIDs},
+		{name: "the unit IDs of a missing collection are not found", test: testListCollectionUnitIDsMissing},
+		{name: "the unit IDs of a re-created collection need its new ID", test: testListCollectionUnitIDsRecreated},
 	}
 
 	for _, tc := range cases {
@@ -784,6 +787,159 @@ func newCollection(t *testing.T, ns namespace.Name, name string) collection.Coll
 	}
 }
 
+// testListCollectionUnitIDs checks that the list holds the stable IDs of the
+// units of the collection asked, a deleted unit included, and the units of no
+// other collection: not a collection of the same name in another namespace,
+// and not an empty collection of the same namespace.
+func testListCollectionUnitIDs(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "other")
+	unit := createUnit(t, s, ns)
+	foreign := createUnit(t, s, other)
+	c := newCollection(t, ns.Name, "payments")
+	empty := newCollection(t, ns.Name, "empty")
+	same := newCollection(t, other.Name, "payments")
+
+	createColls := map[*collection.Collection]namespace.Fence{
+		&c: ns.Fence(), &empty: ns.Fence(), &same: other.Fence(),
+	}
+	for made, fence := range createColls {
+		if err := createColl(t, s, *made, fence); err != nil {
+			t.Fatalf("CreateCollection %s: %v", made.Ref, err)
+		}
+	}
+
+	if _, err := setUnit(t, s, unit, c.Ref, ns.Fence()); err != nil {
+		t.Fatalf("SetUnitCollection: %v", err)
+	}
+
+	if _, err := setUnit(t, s, foreign, same.Ref, other.Fence()); err != nil {
+		t.Fatalf("SetUnitCollection of the other namespace: %v", err)
+	}
+
+	id := unitID(t, s, unit)
+	assertUnitIDs(t, s, c.Ref, []string{id})
+	assertUnitIDs(t, s, empty.Ref, []string{})
+	assertUnitIDs(t, s, same.Ref, []string{unitID(t, s, foreign)})
+
+	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, unitName)}
+	d := auditFor(ns.Fence())
+	deletion := inventory.Deletion{Entry: d, PurgeAfter: d.At.Add(time.Hour)}
+
+	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), deletion); err != nil {
+		t.Fatalf("DeleteWorkspace: %v", err)
+	}
+
+	assertUnitIDs(t, s, c.Ref, []string{id})
+}
+
+// testListCollectionUnitIDsMissing checks ErrNotFound for a collection that
+// does not exist, and for a name that exists only in another namespace.
+func testListCollectionUnitIDsMissing(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "other")
+	same := newCollection(t, other.Name, "payments")
+
+	if err := createColl(t, s, same, other.Fence()); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	for _, ref := range []collection.Ref{
+		{Namespace: ns.Name, Name: mustName(t, "payments")},
+		{Namespace: namespace.Name("absent"), Name: mustName(t, "payments")},
+	} {
+		ids, err := s.ListCollectionUnitIDs(t.Context(), ref, "col-any")
+		if !errors.Is(err, collection.ErrNotFound) || len(ids) != 0 {
+			t.Errorf("ListCollectionUnitIDs(%s) = %v, %v; want ErrNotFound", ref, ids, err)
+		}
+	}
+}
+
+// testListCollectionUnitIDsRecreated checks the hostile case: a collection is
+// deleted and created again under the same name, and a caller still holds the
+// old ID. The old ID, an empty ID and the ID of a collection of another name
+// all return ErrNotFound with no unit, and the new ID reads the new members.
+func testListCollectionUnitIDsRecreated(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	unit := createUnit(t, s, ns)
+	first := newCollection(t, ns.Name, "payments")
+	other := newCollection(t, ns.Name, "billing")
+
+	for _, c := range []*collection.Collection{&first, &other} {
+		if err := createColl(t, s, *c, ns.Fence()); err != nil {
+			t.Fatalf("CreateCollection %s: %v", c.Ref, err)
+		}
+	}
+
+	if err := deleteColl(t, s, first.Ref, ns.Fence()); err != nil {
+		t.Fatalf("DeleteCollection: %v", err)
+	}
+
+	second := newCollection(t, ns.Name, "payments")
+	if err := createColl(t, s, second, ns.Fence()); err != nil {
+		t.Fatalf("CreateCollection again: %v", err)
+	}
+
+	if _, err := setUnit(t, s, unit, second.Ref, ns.Fence()); err != nil {
+		t.Fatalf("SetUnitCollection: %v", err)
+	}
+
+	for name, id := range map[string]string{
+		"the old ID": first.ID, "an empty ID": "", "the ID of another collection": other.ID,
+	} {
+		ids, err := s.ListCollectionUnitIDs(t.Context(), second.Ref, id)
+		if !errors.Is(err, collection.ErrNotFound) || len(ids) != 0 {
+			t.Errorf("ListCollectionUnitIDs with %s = %v, %v; want ErrNotFound", name, ids, err)
+		}
+	}
+
+	ids, err := s.ListCollectionUnitIDs(t.Context(), second.Ref, second.ID)
+	if err != nil || len(ids) != 1 || ids[0] != unitID(t, s, unit) {
+		t.Errorf("ListCollectionUnitIDs with the new ID = %v, %v; want the unit", ids, err)
+	}
+}
+
+// unitID returns the stable ID of the workspace unit.
+func unitID(t *testing.T, s Store, unit collection.UnitRef) string {
+	t.Helper()
+
+	w, err := s.GetWorkspace(
+		t.Context(),
+		workspace.Ref{Namespace: unit.Namespace, Name: mustWorkspaceName(t, unit.Name)},
+	)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	return string(w.ID)
+}
+
+// assertUnitIDs checks the unit IDs of the collection ref.
+func assertUnitIDs(t *testing.T, s Store, ref collection.Ref, want []string) {
+	t.Helper()
+
+	got, err := s.ListCollectionUnitIDs(t.Context(), ref, collectionID(t, s, ref))
+	if err != nil {
+		t.Fatalf("ListCollectionUnitIDs(%s): %v", ref, err)
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("ListCollectionUnitIDs(%s) = %v, want %v", ref, got, want)
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ListCollectionUnitIDs(%s) = %v, want %v", ref, got, want)
+		}
+	}
+}
+
 // unitName is the name of the workspace that createUnit makes.
 const unitName = "web"
 
@@ -802,6 +958,7 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         ref,
 		Revision:    1,

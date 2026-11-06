@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -249,7 +250,7 @@ type registryErrorMeta struct {
 func (h *Handler) writeRegistryError(ctx context.Context, w http.ResponseWriter, status int, text, code string) {
 	answer, err := errcode.New(code)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", code))
+		faultlog.LogInternal(ctx, h.logger, "error code failed", faultlog.CauseUnclassified, code)
 		h.writeRegistryAnswer(ctx, w, http.StatusInternalServerError, titleInternal, errcode.Internal())
 
 		return
@@ -471,7 +472,7 @@ func (h *Handler) registryServiceError(ctx context.Context, w http.ResponseWrite
 		errors.Is(err, registry.ErrInvalid), errors.Is(err, namespace.ErrNotFound):
 		h.registryNotFound(ctx, w)
 	default:
-		h.logger.ErrorContext(ctx, "registry request failed")
+		faultlog.LogInternal(ctx, h.logger, "registry request failed", faultlog.Cause(err), "")
 		h.writeRegistryError(ctx, w, http.StatusInternalServerError, titleInternal, errcode.ServerInternal)
 	}
 }

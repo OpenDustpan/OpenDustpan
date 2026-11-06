@@ -13,6 +13,7 @@ import (
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -223,7 +224,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 		Placements:     nil,
 		OutputSharing:  nil,
 		Outputs:        nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 		Views:          nil,
 		Audit:          st,
 		OnAuditFailure: nil,

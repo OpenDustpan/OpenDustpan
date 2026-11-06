@@ -71,11 +71,9 @@ the project manager accepted them for the owner.
    - The port gets no batch delete (`DeleteObjects`). A new ADR can add one
      if a measured counterexample shows that the single path does not
      converge.
-   - A research note gives a calculation: OpenDustpan/product,
-     `research/2026-10-27-blob-batch-delete.md` (27 October 2026). It finds
-     that this path converges under the load that the note assumes, with a
-     concurrency of 8 or more, with the write quota of decision 4, and with
-     the paged `List` of decision 6.
+   - A calculation of 27 October 2026 finds that this path converges under
+     the load that it assumes, with a concurrency of 8 or more, with the
+     write quota of decision 4, and with the paged `List` of decision 6.
    - (proposed by the author) The one path is a function of `pkg/blob`:
      `DeleteMany(ctx context.Context, s Store, keys []Key) error`. The
      concurrency of 8 is an unexported constant in it. No caller writes its

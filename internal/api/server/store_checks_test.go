@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/admit/admittest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -57,14 +58,43 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
-		Preferences: nil, GitHost: nil, Idempotency: nil, Workers: workers, InstallationKind: "", TempAdmins: nil,
-		Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: selectiveAuthorizer{deny: denied},
-		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Backups: nil, Restores: nil,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "",
-		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
-		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
-		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
-		StoreChecks: svc, Settings: nil,
+		LocalUsers:       nil,
+		Preferences:      nil,
+		GitHost:          nil,
+		Idempotency:      nil,
+		Workers:          workers,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: denied},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Tokens:           nil,
+		Access:           nil,
+		Audit:            st,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		DenialLimiter:    nil,
+		Instances:        nil,
+		StoreChecks:      svc,
+		Settings:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

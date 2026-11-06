@@ -3,6 +3,7 @@
 //	opendustpan --version
 //	opendustpan serve [flags]
 //	opendustpan dev [flags]
+//	opendustpan dev reset [--data-dir <dir>]
 //	opendustpan key generate --out <path>
 //	opendustpan doctor [flags]
 //	opendustpan health [flags]
@@ -55,6 +56,7 @@ import (
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -246,7 +248,7 @@ func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal 
 		return err
 	}
 
-	return kindRefusal(f.run(ctx, stderr), commandServe)
+	return schemaRefusal(kindRefusal(f.run(ctx, stderr), commandServe), commandServe, "")
 }
 
 // serveFlags holds the settings of the serve subcommand.
@@ -1269,12 +1271,16 @@ func jobStoreOption(st store) []dustpan.Option {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store)),
+			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+			}),
 		}
 	default:
 		return nil
@@ -1778,6 +1784,10 @@ type store interface {
 	tempadmin.Store
 	installation.KindStore
 	installation.InstanceStore
+	// gate.Store is here so that opendustpan serve always runs with the
+	// state.write gates on: a store wrapper that does not keep gates does not
+	// compile.
+	gate.Store
 	close()
 }
 
@@ -1805,7 +1815,8 @@ const (
 )
 
 // openStore opens the persistence adapter that --database names. Only serve,
-// dev and host create-temp-admin call it: serve and dev run the server, and
+// dev, dev reset and host create-temp-admin call it: serve and dev run the
+// server, dev reset makes the schema of a dev database again, and
 // host create-temp-admin recovers a lost administrator through the database,
 // after its off switch and the recovery mode allow it. Every other command
 // is a client of the REST API. The gate test swaps it for a function that
@@ -1867,8 +1878,9 @@ var openStore = func(
 // once at the start: each value and where it came from. The record holds no
 // host, user or password.
 func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
-	// One group for each setting, then the check and the deadline.
-	const extraAttrs = 2
+	// One group for each setting, then the check, the deadline and the three
+	// server timeouts.
+	const extraAttrs = 5
 
 	attrs := make([]any, 0, len(settings.Settings)+extraAttrs)
 
@@ -1878,7 +1890,10 @@ func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings post
 	}
 
 	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck),
-		slog.Duration("statement_deadline", settings.StatementDeadline))
+		slog.Duration("statement_deadline", settings.StatementDeadline),
+		slog.Duration("statement_timeout", settings.ServerStatementTimeout),
+		slog.Duration("idle_in_transaction_session_timeout", settings.ServerIdleInTransactionTimeout),
+		slog.Duration("client_connection_check_interval", settings.ClientConnectionCheckInterval))
 
 	logger.InfoContext(ctx, "database failover settings", attrs...)
 }

@@ -1,0 +1,38 @@
+name: Feature request
+description: Ask for a new feature or a change to an API.
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open an issue before you write a feature or a change to an API.
+        The project owner decides whether the change fits. Do not use this
+        form for a security problem. Use the private vulnerability
+        reporting route in SECURITY.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Say what you want to do and why you cannot do it now.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Say what the server must do. Name the tool (for example the Pulumi CLI or OpenTofu) if the feature is for one tool.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Say what you tried or considered instead.
+  - type: checkboxes
+    id: ai
+    attributes:
+      label: Use of AI tools
+      description: CONTRIBUTING.md says that you must tell us if an AI tool wrote part of this request.
+      options:
+        - label: A human reviewed and edited this request. If an AI tool helped, I name it in the text above.
+          required: true

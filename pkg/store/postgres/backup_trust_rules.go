@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/trustrulestore"
@@ -36,7 +34,7 @@ func pgCopyTrustRuleTables() []pgCopyTable {
 // Defense in depth: the store checks a row again when it reads it, and the
 // exchange checks the principal again. This check stays so that a bad row
 // fails the restore and does not wait for a reader.
-func checkStagedTrustRules(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedTrustRules(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT r.id, r.namespace, r.name, r.issuer, r.audience, r.key_source, r.static_keys, " +
 		"r.conditions_json, r.principal_id, r.created_by, r.created_at_ms, p.kind, p.namespace, " +
 		"COALESCE(p.deleted_at_ms, 0), p.id IS NOT NULL FROM " + stagingTable(staging, backup.TableTrustRules) +

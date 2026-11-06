@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -282,10 +283,29 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         &apiinventory.ViewsConfig{Service: service, Principals: people, Idempotency: idem},
-		Namespaces:    namespaces, Units: reader, Deleted: seededDeleted(), History: nil, Lifecycles: testLifecycles(),
-		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: nil, Moves: nil, StateGuard: nil,
-		Authenticator: viewCallers{}, Authorizer: authz, Audit: store, OnAuditFailure: nil, DenialLimiter: nil,
-		Sessions: nil, PublicURL: "", Logger: slog.New(slog.DiscardHandler), Now: nil,
+		Namespaces:    namespaces,
+		Units:         reader,
+		Deleted:       seededDeleted(),
+		History:       nil,
+		Lifecycles:    testLifecycles(),
+		ReadScope: fixedScope{
+			err: nil,
+			ids: nil,
+			all: true,
+		},
+		Collections:    nil,
+		Locks:          nil,
+		Moves:          nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Authenticator:  viewCallers{},
+		Authorizer:     authz,
+		Audit:          store,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		PublicURL:      "",
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

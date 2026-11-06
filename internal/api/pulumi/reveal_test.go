@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -22,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
@@ -103,9 +105,10 @@ func newRevealFixtureWithSessions(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
-		Updates:            mem,
+		Updates:            mem.resolving(stacks),
 		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
@@ -140,6 +143,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -560,8 +564,12 @@ func TestRevealAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {
@@ -666,8 +674,12 @@ func TestRevealOtherProviderAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {

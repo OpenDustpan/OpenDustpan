@@ -240,6 +240,10 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 		return err
 	}
 
+	if refused := s.checkPreBackupFree(ctx, req.PreBackupID); refused != nil {
+		return refused
+	}
+
 	input, err := startInput(id, req)
 	if err != nil {
 		return err
@@ -692,7 +696,7 @@ func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.
 // touchedLive reports whether the restore id of op can have changed the
 // installation: it recorded enter-maintenance, or its row holds the
 // maintenance flag of an enter that it did not confirm, or it stored audit
-// events, which it stores before each forced cancel and each repair.
+// events, which it stores before each forced cancel and each refusal to overwrite a live blob.
 func (s *RestoreService) touchedLive(ctx context.Context, op durable.Operation, id RestoreID) (bool, error) {
 	if _, entered := op.Step(RestoreStepEnterMaintenance); entered {
 		return true, nil
@@ -729,7 +733,12 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 	_, applied := op.Step(RestoreStepAfterApply)
 
 	if !swapped {
-		s.appendEvents(ctx, in)
+		end := restoreEndStopped
+		if op.State == durable.StateCanceled {
+			end = restoreEndCanceled
+		}
+
+		s.appendEvents(ctx, in, end)
 
 		return
 	}
@@ -743,7 +752,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 		return
 	}
 
-	entries, err := s.afterApplyEntries(ctx, op, in)
+	entries, err := s.afterApplyEntries(ctx, op, in, swappedFailed)
 	if err != nil {
 		s.logger.ErrorContext(
 			ctx,
@@ -766,6 +775,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 //
 //nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
 var storedRestoreSentinels = []error{
+	ErrPreBackupForeign,
 	ErrManifestKindInvalid,
 	ErrDevStripIncomplete,
 	ErrRestoreRunning,
@@ -852,6 +862,10 @@ func sanitizeRestoreError(err error) string {
 		return notBacked.Error()
 	}
 
+	if text, ok := liveBlobsRestoreMessage(err); ok {
+		return text
+	}
+
 	for _, sentinel := range storedRestoreSentinels {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -859,6 +873,23 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	return "restore failed"
+}
+
+// liveBlobsRestoreMessage answers the stored text of a refusal at the live
+// blobs, which names the counts and the keys, and of a damaged list in a
+// backup that no restore started. That text ends with the corrupt sentinel,
+// as backup check reports it, so a client gives the help of a corrupt
+// backup. It reports whether err is one of them.
+func liveBlobsRestoreMessage(err error) (string, bool) {
+	if refused, ok := errors.AsType[*LiveBlobsError](err); ok && refused != nil {
+		return refused.Error(), true
+	}
+
+	if errors.Is(err, ErrDamagedListForeign) {
+		return ErrDamagedListForeign.Error() + ": " + ErrCorrupt.Error(), true
+	}
+
+	return "", false
 }
 
 // activeWorkMessage answers the stored text for a refused maintenance
@@ -1158,6 +1189,10 @@ func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned p
 		return Manifest{}, err
 	}
 
+	if err := checkDamagedOrigin(ctx, s.backups, manifest); err != nil {
+		return Manifest{}, err
+	}
+
 	return manifest, nil
 }
 
@@ -1187,34 +1222,42 @@ func checkPinnedManifest(manifest Manifest, id ID, pinned pinnedManifest) error 
 // verifyLiveBlob checks that the live store already holds ref with the size
 // and checksum of the manifest. It writes nothing.
 func (s *RestoreService) verifyLiveBlob(ctx context.Context, ref ManifestBlob) error {
-	check, err := newObjectCheck(ref.Key, blobWant(ref))
-	if err != nil {
-		return err
-	}
-
 	key, err := blob.ParseKey(ref.Key)
 	if err != nil {
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
 	}
 
+	return s.verifyObject(ctx, key, ref, "live blob")
+}
+
+// verifyObject checks that the live store holds the object at key with the size
+// and checksum that the manifest names for ref. what names the object in the
+// error text. It writes nothing. A mismatch wraps ErrCorrupt. A read error does
+// not.
+func (s *RestoreService) verifyObject(ctx context.Context, key blob.Key, ref ManifestBlob, what string) error {
+	check, err := newObjectCheck(ref.Key, blobWant(ref))
+	if err != nil {
+		return err
+	}
+
 	reader, err := s.blobs.Get(ctx, key)
 	if err != nil {
-		return fmt.Errorf("read live blob %q: %w", ref.Key, err)
+		return fmt.Errorf("read %s %q: %w", what, ref.Key, err)
 	}
 
 	_, copyErr := io.Copy(check, reader)
 	closeErr := reader.Close()
 
 	if copyErr != nil {
-		return fmt.Errorf("read live blob %q: %w", ref.Key, copyErr)
+		return fmt.Errorf("read %s %q: %w", what, ref.Key, copyErr)
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("close live blob %q: %w", ref.Key, closeErr)
+		return fmt.Errorf("close %s %q: %w", what, ref.Key, closeErr)
 	}
 
 	if verifyErr := check.verify(ref.Key); verifyErr != nil {
-		return fmt.Errorf("live blob: %w", verifyErr)
+		return fmt.Errorf("%s: %w", what, verifyErr)
 	}
 
 	return nil

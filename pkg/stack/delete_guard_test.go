@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -281,6 +282,8 @@ func deleteInlineCheckpoint(ref stack.Ref, id, deployment string) stack.Checkpoi
 		BlobKey:       "",
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: time.Time{},
 	}
 }
 
@@ -739,6 +742,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	blobs := newMemBlob(newClock())
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            mem,

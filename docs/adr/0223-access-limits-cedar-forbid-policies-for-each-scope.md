@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 240 changes decision 4: the principal kind takes person, service and
   workload.
+- ADR 313 extends: grant conditions.
 
 ## Context
 

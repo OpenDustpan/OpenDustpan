@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 const (
@@ -49,8 +50,13 @@ const (
 // namespace.ErrFenced if it is stale.
 type UpdateStore interface {
 	// CreateUpdate persists a new, not-started u with its CreatedBy and
-	// RestoredFrom as given. It returns ErrNotFound if the stack does not exist.
-	CreateUpdate(ctx context.Context, u Update, fence namespace.Fence) error
+	// RestoredFrom as given, and calls key.NewKey in the same transaction with
+	// the reference that key.RefFor builds from the stack ID that the
+	// transaction resolves, so the record of the item key of u commits with the
+	// update row. It returns ErrNotFound if the stack does not exist,
+	// ErrInvalidUpdateKey when key.RefFor refuses key, and the error of
+	// key.NewKey. On every error it stores nothing.
+	CreateUpdate(ctx context.Context, u Update, key UpdateKey, fence namespace.Fence) error
 	// GetUpdate returns the update with its CreatedBy, RestoredFrom and
 	// CheckpointBytes, or ErrUpdateNotFound. CheckpointBytes is the size in
 	// bytes of the checkpoint the update saved, or 0 when it saved none.
@@ -99,9 +105,12 @@ type CheckpointStore interface {
 	// ErrStaleCheckpoint. A write without a sequence number is never known:
 	// it replaces the row. The row keeps the blob key with the size, the
 	// digest and the sequence, and no content. A checkpoint without a blob
-	// key returns ErrCheckpointNoKey. When the answer is known or an error
-	// that no row followed, no row names the blob of cp, and the caller may
-	// delete that blob, which holds the key of its own attempt.
+	// key returns ErrCheckpointNoKey. A checkpoint whose AttemptStartedAt
+	// fails blob.CheckAttempt against the clock of the database, in the same
+	// transaction, returns blob.ErrAttemptExpired and writes nothing, also for
+	// a replay. When the answer is known or an error that no row followed, no
+	// row names the blob of cp, and the caller may delete that blob, which
+	// holds the key of its own attempt.
 	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) (known bool, err error)
 	// LatestCheckpoint returns the checkpoint of the stack's highest version
 	// that has one, or ErrNoState.
@@ -135,7 +144,8 @@ type EventStore interface {
 	// for the update is skipped, so retries are harmless.
 	AppendEvents(ctx context.Context, batch EventBatch, fence namespace.Fence) error
 	// ListEvents returns up to limit events with Sequence greater than after,
-	// in order. It returns ErrUpdateNotFound if the update does not exist.
+	// in order, with each payload as AppendEvents stored it. It returns
+	// ErrUpdateNotFound if the update does not exist.
 	ListEvents(ctx context.Context, ref Ref, id UpdateID, after int64, limit int) ([]Event, error)
 }
 
@@ -184,6 +194,10 @@ type UpdatesConfig struct {
 	// ManualLocks refuses the start of a mutating update on a stack that a
 	// manual lock covers. Nil turns the check off.
 	ManualLocks ManualLocks
+	// Sealer creates the item key of each update and seals the payload of
+	// each event of the update with it. Required: no event is stored as the
+	// CLI sent it.
+	Sealer secret.ItemSealer
 	// BlobGuard tells whether a backup or a restore runs. Every delete of a
 	// blob that a backup snapshot or restored data can name asks it after the
 	// commit that removed the last row that names the blob, and runs only
@@ -228,6 +242,7 @@ type Updates struct {
 	replayer       JournalReplayer
 	manual         ManualLocks
 	guard          blobguard.Watch
+	sealer         secret.ItemSealer
 	skipMu         sync.Mutex
 	skipLogged     string
 	stateAt        StateAtReader
@@ -242,19 +257,11 @@ type TokenChecker interface {
 	CheckActive(ctx context.Context, id string) error
 }
 
-// NewUpdates returns Updates. Every store, Stacks, Blobs and Namespaces are required.
+// NewUpdates returns Updates. Every store, Stacks, Blobs, Namespaces and
+// Sealer are required.
 func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
-	switch {
-	case cfg.Updates == nil:
-		return nil, fmt.Errorf("%w: update store", ErrMissingDependency)
-	case cfg.Checkpoints == nil:
-		return nil, fmt.Errorf("%w: checkpoint store", ErrMissingDependency)
-	case cfg.Events == nil:
-		return nil, fmt.Errorf("%w: event store", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Stacks == nil:
-		return nil, fmt.Errorf("%w: stack resolver", ErrMissingDependency)
+	if err := checkUpdatesConfig(&cfg); err != nil {
+		return nil, err
 	}
 
 	access, err := newBlobAccess(cfg.Blobs, cfg.Refusals)
@@ -262,6 +269,32 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		return nil, err
 	}
 
+	return buildUpdates(&cfg, access), nil
+}
+
+// checkUpdatesConfig returns ErrMissingDependency for a required dependency
+// that cfg lacks.
+func checkUpdatesConfig(cfg *UpdatesConfig) error {
+	switch {
+	case cfg.Updates == nil:
+		return fmt.Errorf("%w: update store", ErrMissingDependency)
+	case cfg.Checkpoints == nil:
+		return fmt.Errorf("%w: checkpoint store", ErrMissingDependency)
+	case cfg.Events == nil:
+		return fmt.Errorf("%w: event store", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Stacks == nil:
+		return fmt.Errorf("%w: stack resolver", ErrMissingDependency)
+	case cfg.Sealer == nil:
+		return fmt.Errorf("%w: item sealer", ErrMissingDependency)
+	}
+
+	return nil
+}
+
+// buildUpdates builds the service of a checked cfg over the blob access.
+func buildUpdates(cfg *UpdatesConfig, access blobAccess) *Updates {
 	s := &Updates{
 		updates:        cfg.Updates,
 		checkpoints:    cfg.Checkpoints,
@@ -277,6 +310,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		replayer:       cfg.Replayer,
 		manual:         cfg.ManualLocks,
 		guard:          cfg.BlobGuard,
+		sealer:         cfg.Sealer,
 		skipMu:         sync.Mutex{},
 		skipLogged:     "",
 		stateAt:        nil,
@@ -306,7 +340,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		s.maxCheckpoints = DefaultMaxCheckpointBytes
 	}
 
-	return s, nil
+	return s
 }
 
 // Started is a running update and the lease token its client must present on
@@ -345,7 +379,8 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		CheckpointBytes: 0,
 	}
 
-	if err := s.updates.CreateUpdate(ctx, u, fence); err != nil {
+	key := UpdateKey{NewKey: s.sealer.NewItemKey}
+	if err := s.updates.CreateUpdate(ctx, u, key, fence); err != nil {
 		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
 	}
 
@@ -459,12 +494,6 @@ func (s *Updates) Complete(
 func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
 	return s.cancelJournaled(ctx, ref, id)
 }
-
-// sweepGracePeriod is how long after its write a checkpoint blob stays before
-// the unreferenced sweep deletes it, so a save that still commits is never
-// collected: every new blob is fresh, and the row names it only after the
-// bytes land.
-const sweepGracePeriod = time.Hour
 
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
@@ -624,7 +653,20 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 		return err
 	}
 
-	batch := EventBatch{Events: events, Ref: ref, Update: id, Lease: u.Lease.Digest}
+	item, err := s.updateItem(ctx, ref, id)
+	if err != nil {
+		return fmt.Errorf("append events to update %s: %w", id, err)
+	}
+
+	// The payload of an event can hold a secret value in plain text, for
+	// example a diagnostic message that the program printed. So each payload
+	// is sealed before the row write.
+	sealed, err := sealEvents(ctx, s.sealer, item, id, events)
+	if err != nil {
+		return fmt.Errorf("append events to update %s: %w", id, err)
+	}
+
+	batch := EventBatch{Events: sealed, Ref: ref, Update: id, Lease: u.Lease.Digest}
 	if err := s.events.AppendEvents(ctx, batch, fence); err != nil {
 		return fmt.Errorf("append events to update %s: %w", id, err)
 	}
@@ -699,6 +741,7 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 		Lease:     u.Lease.Digest,
 		Content:   content,
 		Version:   int(u.JournalVersion),
+		StartedAt: s.clock(),
 	}
 
 	if err := s.journal.Append(ctx, batch, ns.Fence()); err != nil {
@@ -1001,7 +1044,31 @@ func (s *Updates) Events(ctx context.Context, ref Ref, id UpdateID, after int64,
 		return nil, fmt.Errorf("events of update %s: %w", id, err)
 	}
 
+	if len(events) == 0 {
+		return events, nil
+	}
+
+	item, err := s.updateItem(ctx, ref, id)
+	if err != nil {
+		return nil, fmt.Errorf("events of update %s: %w", id, err)
+	}
+
+	if err := openEvents(ctx, s.sealer, item, id, events); err != nil {
+		return nil, fmt.Errorf("events of update %s: %w", id, err)
+	}
+
 	return events, nil
+}
+
+// updateItem returns the reference of the item key of the update id of the
+// stack ref.
+func (s *Updates) updateItem(ctx context.Context, ref Ref, id UpdateID) (secret.ItemRef, error) {
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return secret.ItemRef{}, err
+	}
+
+	return UpdateItem(ref.Namespace, st.ID, id)
 }
 
 // leaseGet reads one update for a lease request. A token-started update must
@@ -1035,8 +1102,8 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 	return s.writeCheckpoint(ctx, checkpointWrite{
 		op: "save checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
 		key: save.key, deployment: save.in.Deployment,
-		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) (bool, error) {
-			return s.commitCheckpoint(ctx, save, size, sum)
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (bool, error) {
+			return s.commitCheckpoint(ctx, save, size, sum, started)
 		},
 	})
 }
@@ -1047,9 +1114,9 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // failed commit leaves the blob without a row that names it; the sweep
 // collects it once it is older than the grace period.
 func (s *Updates) commitCheckpoint(
-	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
 ) (bool, error) {
-	known, err := s.commitCheckpointRow(ctx, save, size, sum)
+	known, err := s.commitCheckpointRow(ctx, save, size, sum, started)
 	if err != nil {
 		return false, fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
 	}
@@ -1063,9 +1130,10 @@ func (s *Updates) commitCheckpoint(
 	return false, nil
 }
 
-// commitCheckpointRow writes the fenced SQL row of save naming its blob.
+// commitCheckpointRow writes the fenced SQL row of save naming its blob, with
+// the start of the attempt that wrote the blob.
 func (s *Updates) commitCheckpointRow(
-	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
 ) (bool, error) {
 	cp := Checkpoint{
 		NamespaceID: "", StackID: "",
@@ -1082,6 +1150,8 @@ func (s *Updates) commitCheckpointRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+
+		AttemptStartedAt: started,
 	}
 
 	return s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
@@ -1265,14 +1335,32 @@ type sweepTarget struct {
 	update  UpdateID
 }
 
+// sweepNow returns the time that a sweep takes as now: the clock of the
+// database, which the checkpoint store reads. It returns blob.ErrClockSkew
+// when the store cannot read it, or when the clock of the instance differs
+// from it by more than blob.AttemptSkew.
+func (s *Updates) sweepNow(ctx context.Context) (time.Time, error) {
+	// A store with no clock leaves clock nil, and SweepNow refuses nil.
+	var clock blob.DatabaseClock
+	if c, ok := s.checkpoints.(blob.DatabaseClock); ok {
+		clock = c
+	}
+
+	now, err := blob.SweepNow(ctx, clock, s.clock())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("sweep clock: %w", err)
+	}
+
+	return now, nil
+}
+
 // graceCandidates returns the objects of listed that are older than the grace
-// period.
-func (s *Updates) graceCandidates(listed []blob.Object) []blob.Object {
-	now := s.clock()
+// period at now. An object with no modification time is never a candidate.
+func graceCandidates(listed []blob.Object, now time.Time) []blob.Object {
 	candidates := make([]blob.Object, 0, len(listed))
 
 	for _, obj := range listed {
-		if now.Sub(obj.ModifiedAt) >= sweepGracePeriod {
+		if blob.OldEnough(obj.ModifiedAt, now) {
 			candidates = append(candidates, obj)
 		}
 	}
@@ -1323,7 +1411,28 @@ func (s *Updates) sweepOrphans(
 ) {
 	ref, id := target.ref, target.update
 
-	candidates := s.graceCandidates(listed)
+	// The clock of the database costs a round trip, so the sweep reads it only
+	// when a blob could be old. When the clocks agree to AttemptSkew, the
+	// database is at most AttemptSkew ahead of this instance, so a blob that is
+	// not old by the instance clock plus AttemptSkew is not old by the clock of
+	// the database. When the clocks do not agree, sweepNow refuses the run and
+	// nothing is deleted, so skipping it changes only the log line.
+	if len(graceCandidates(listed, s.clock().Add(blob.AttemptSkew))) == 0 {
+		return
+	}
+
+	now, err := s.sweepNow(ctx)
+	if err != nil {
+		// The grace period holds only when the clocks agree, so a run with a
+		// clock that it cannot trust deletes nothing.
+		s.logger.WarnContext(ctx, "blob delete skipped: the clocks of the instance and the database do not agree",
+			slog.String("deleter", sweepDeleter(id)), slog.String("stack", ref.String()),
+			slog.String("error", err.Error()))
+
+		return
+	}
+
+	candidates := graceCandidates(listed, now)
 	if len(candidates) == 0 {
 		return
 	}

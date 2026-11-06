@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 310 extends decision 1: sources and units that have no git commit.
 
 ## Context
 

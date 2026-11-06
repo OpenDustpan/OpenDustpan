@@ -192,6 +192,9 @@ type Env struct {
 	backupDir string
 	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
 	signIn *signInSetup
+	// claimers keeps the job claimer of the in-process server, or is nil for
+	// the binary server.
+	claimers *claimerSlot
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -246,6 +249,8 @@ type serverBuild struct {
 	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
+	// claimers keeps the job claimer of the server, or is nil.
+	claimers *claimerSlot
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -279,6 +284,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -349,6 +355,19 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	return startEnv(ctx, in)
 }
 
+// NewEnvWithPasskeys starts a server as NewEnv does, with a public URL whose
+// host name is localhost, so the server can serve the passkey routes. A
+// passkey relying party ID is a host name and never an IP address. The server
+// still listens on its address, and the public URL names the same port.
+func NewEnvWithPasskeys(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.passkeys = true
+
+	return startEnv(ctx, in)
+}
+
 // journalTestInput returns the input of an env for cli and store with new
 // tokens, a new directory and journaling on, so the journal fault tests only
 // set their own fault.
@@ -363,6 +382,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -423,6 +443,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -470,6 +491,7 @@ func startInprocessServer(
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
 	// in-process mode uses the equivalent server option.
+	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -481,7 +503,9 @@ func startInprocessServer(
 		publicURL:         inprocessPublicURL(in, ts),
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
+		claimers:          claimers,
 	})
+	build.claimers = claimers
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
@@ -516,6 +540,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		store:         in.store,
 		client:        client,
 		inprocess:     build.store,
+		claimers:      build.claimers,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -648,6 +673,9 @@ type serverArgs struct {
 	// issuer is a fake OpenID provider whose keys the server may read on the
 	// loopback, or nil.
 	issuer *OIDCIssuerFake
+	// claimers keeps the job claimer that the in-process server builds, or
+	// is nil.
+	claimers *claimerSlot
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -695,6 +723,7 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 			wrapper,
 		),
 		jobStoreOptions(st),
+		claimerOptions(st, args.claimers),
 		savedViewStoreOptions(st),
 		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
 		sinkStoreOptions(st),
@@ -708,7 +737,9 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	return append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+	opts := append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+
+	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
@@ -785,12 +816,12 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	startServing(ctx, tb, srv)
 
 	return serverBuild{
-		handler:   srv.Handler(),
-		store:     st,
+		handler: srv.Handler(), store: st,
 		blobs:     blobs,
 		dbProxy:   dbProxy,
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
+		claimers:  nil,
 	}
 }
 
@@ -805,6 +836,22 @@ func startServing(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
 	}
 
 	startBackupWorker(ctx, tb, srv)
+}
+
+// apiOnly returns the api component alone. The in-process server runs Start
+// and serves its handler, but it never runs the claim loop of the worker, so a
+// worker component would fail the claim-loop readiness check once the server
+// has a durable store and 2 claim intervals have passed. The real binary
+// covers the worker component.
+func apiOnly(tb testing.TB) dustpan.Components {
+	tb.Helper()
+
+	c, err := dustpan.ParseComponents(string(dustpan.ComponentAPI))
+	if err != nil {
+		tb.Fatalf("parse components: %v", err)
+	}
+
+	return c
 }
 
 // startBackupWorker runs the backup worker of srv until the test ends.

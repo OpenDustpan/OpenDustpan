@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -119,6 +121,14 @@ func (m *memCollections) SetUnitCollection(
 	m.members[mv.Unit] = mv.To.Name
 
 	return nil
+}
+
+func (m *memCollections) ListCollectionUnitIDs(_ context.Context, ref collection.Ref, _ string) ([]string, error) {
+	if _, ok := m.collections[collectionKey(ref.Namespace, ref.Name)]; !ok {
+		return nil, collection.ErrNotFound
+	}
+
+	return []string{}, nil
 }
 
 func (m *memCollections) UnitCollection(_ context.Context, unit collection.UnitRef) (collection.Ref, error) {
@@ -260,7 +270,7 @@ func newMoveFixtureFull(
 		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
@@ -427,6 +437,62 @@ func TestMoveRefusedByTheEscalationCheckAnswersForbidden(t *testing.T) {
 	got, err := f.store.UnitCollection(t.Context(), f.unitRef)
 	if !errors.Is(err, collection.ErrNoCollection) {
 		t.Fatalf("UnitCollection = %q, %v; want no collection: a refused move makes no change", got.Name, err)
+	}
+}
+
+// missingMoves is a move checker that finds no unit or no collection, with the
+// errors of the access service.
+type missingMoves struct{ err error }
+
+func (m missingMoves) CheckMove(
+	_ context.Context, _ identity.Principal, _, _ identity.Object,
+) (string, error) {
+	return "", m.err
+}
+
+// TestMoveOfMissingObjectAnswersNotFound checks that a move into a collection
+// that does not exist, or of a unit that does not exist, answers 404 with the
+// code of the missing object, and that a move into a collection that exists
+// succeeds.
+func TestMoveOfMissingObjectAnswersNotFound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		moves    apiinventory.MoveChecker
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name: "missing collection",
+			moves: missingMoves{err: fmt.Errorf("move into acme/nope: %w: %w: collection does not exist",
+				access.ErrNotFound, access.ErrCollectionMissing)},
+			wantCode: http.StatusNotFound, wantErr: "collection.not-found",
+		},
+		{
+			name: "missing unit",
+			moves: missingMoves{err: fmt.Errorf("move: %w: %w: unit does not exist",
+				access.ErrNotFound, access.ErrUnitMissing)},
+			wantCode: http.StatusNotFound, wantErr: "unit.not-found",
+		},
+		{name: "collection that exists", moves: allowMoves{}, wantCode: http.StatusOK, wantErr: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMoveFixtureWith(t, objectDenier{action: "", object: ""}, tc.moves)
+
+			rec := f.move(t, "new")
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantCode, rec.Body.String())
+			}
+
+			if tc.wantErr != "" && !strings.Contains(rec.Body.String(), `"`+tc.wantErr+`"`) {
+				t.Errorf("body = %s, want error code %s", rec.Body.String(), tc.wantErr)
+			}
+		})
 	}
 }
 

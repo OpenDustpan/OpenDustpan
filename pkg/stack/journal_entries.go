@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/internal/token"
@@ -96,6 +97,11 @@ type JournalBatch struct {
 	Lease   token.Digest
 	Content []byte
 	Version int
+	// StartedAt is the start of the write attempt of the batch, by the clock
+	// of the service. The row carries it as JournalRow.AttemptStartedAt, so
+	// the store refuses a commit after the attempt deadline. A zero time is
+	// always refused.
+	StartedAt time.Time
 }
 
 // JournalRow is the row of one stored batch: the blob that holds it, and the
@@ -130,6 +136,11 @@ type JournalRow struct {
 	// refuses the batch with ErrJournalBatch, so a row is never stored
 	// unchecked. A non-nil error refuses the batch with ErrJournalBatch.
 	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
+	// AttemptStartedAt is the time at which the write attempt of the blob
+	// started, by the clock of the writer. The store checks it with
+	// blob.CheckAttempt against the clock of the database, in the transaction
+	// of the write. The store does not keep it.
+	AttemptStartedAt time.Time
 }
 
 // JournalBatchRef names the blob of one stored batch with the SHA-256 and the
@@ -178,7 +189,9 @@ type JournalStore interface {
 	// update is set in the same transaction as the write. When the row reports
 	// a rebuilt base state entry, the operation IDs of earlier batches are
 	// cleared in the same transaction, so the known set starts again from this
-	// batch.
+	// batch. A row whose AttemptStartedAt fails blob.CheckAttempt against the
+	// clock of the database, in the same transaction, returns
+	// blob.ErrAttemptExpired and writes nothing, also for a retry.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
@@ -241,6 +254,7 @@ const (
 	refusalUnauthorized = 401
 	refusalConflict     = 409
 	refusalStoreError   = 500
+	refusalUnavailable  = 503
 )
 
 // KnownOperationIDs returns the completed operation IDs that the stored rows of
@@ -525,6 +539,8 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		OperationIDs: summary.Operations,
 		HasRebuild:   summary.HasRebuild,
 		Verify:       summary.Verify,
+		// The attempt started before the blob write above.
+		AttemptStartedAt: batch.StartedAt,
 	}
 
 	if err = j.storeRow(ctx, bl, row, fence); err != nil {
@@ -698,6 +714,10 @@ func refusalStatus(err error) int {
 		return refusalConflict
 	case errors.Is(err, ErrJournalBatch):
 		return refusalBadRequest
+	case errors.Is(err, blob.ErrAttemptExpired):
+		// The client sends the batch again, and the new attempt has a new
+		// start time.
+		return refusalUnavailable
 	default:
 		return refusalStoreError
 	}
@@ -708,7 +728,8 @@ func refusalStatus(err error) int {
 func refused(err error) bool {
 	return errors.Is(err, ErrWrongUpdateState) || errors.Is(err, ErrJournalConflict) ||
 		errors.Is(err, ErrJournalBatch) || errors.Is(err, namespace.ErrFenced) ||
-		errors.Is(err, ErrNotJournaled) || errors.Is(err, ErrJournalKey)
+		errors.Is(err, ErrNotJournaled) || errors.Is(err, ErrJournalKey) ||
+		errors.Is(err, blob.ErrAttemptExpired)
 }
 
 // lowest returns the smallest sequence ID of a non-empty batch.

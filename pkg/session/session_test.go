@@ -134,6 +134,7 @@ func TestStatusAt(t *testing.T) {
 	s := session.Session{
 		CreatedAt: created, LastSeenAt: created.Add(10 * time.Minute), AuthTime: created, EndedAt: time.Time{},
 		ID: "ses-1", PrincipalID: "prn-1", Provider: "corp-idp", EndReason: "", SourceIP: "", UserAgent: "",
+		Generation: 1,
 	}
 	limits := session.DefaultLimits()
 

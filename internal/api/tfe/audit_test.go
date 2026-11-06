@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -149,7 +150,7 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 		DenialLimiter: nil,
 		Sessions:      nil,
 		SessionPolicy: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

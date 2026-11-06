@@ -366,7 +366,7 @@ func ruleBody(groups, users string, owners bool) string {
 func devStripCases() []devStripCase {
 	return []devStripCase{
 		{
-			name: "a dev principal with a grant, a session, a token, preferences, a group member",
+			name: "a dev principal with a grant, a session, a token, preferences, a group member, a local user, a session generation",
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
@@ -375,6 +375,9 @@ func devStripCases() []devStripCase {
 				out = out.with(t, "sessions", DevSessionRow("ses-dev", "prn-dev", "dev"))
 				out = out.with(t, "access_tokens", DevTokenRow("tok-dev", "prn-dev"))
 				out = out.with(t, "person_preferences", DevPreferencesRow("prn-dev"))
+				out = out.with(t, "local_users", DevLocalUserRow("lus-dev", "prn-dev"))
+				out = out.with(t, "principal_session_generations", DevSessionGenerationRow("prn-dev"))
+				out = out.with(t, "passkeys", DevPasskeyRow("pky-dev", "prn-dev"))
 				out = out.with(t, "principal_groups", DevGroupRow("grp-1"))
 
 				return out.with(t, "group_members", DevMemberRow("grp-1", "prn-dev"))
@@ -382,11 +385,13 @@ func devStripCases() []devStripCase {
 			classes: map[backup.DevRemovalClass]int64{
 				backup.RemovedPrincipals: 1, backup.RemovedGrants: 1, backup.RemovedSessions: 1,
 				backup.RemovedAccessTokens: 1, backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1,
+				backup.RemovedLocalUsers: 1, backup.RemovedSessionGenerations: 1, backup.RemovedPasskeys: 1,
 			},
 			principals: map[string]map[backup.DevRemovalClass]int64{
 				"dev:admin": {
 					backup.RemovedGrants: 1, backup.RemovedSessions: 1, backup.RemovedAccessTokens: 1,
-					backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1,
+					backup.RemovedGroupMembers: 1, backup.RemovedPreferences: 1, backup.RemovedLocalUsers: 1,
+					backup.RemovedSessionGenerations: 1, backup.RemovedPasskeys: 1,
 				},
 			},
 		},
@@ -1346,7 +1351,10 @@ func testDevRecordReport(t *testing.T, env *devEnv) {
 		Approvers: []backup.DevApproverRemoval{
 			{Kind: "approval-rule", Scope: "installation", ID: "rule-a", Replaced: true},
 		},
-		Warnings: []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
+		Warnings:       []backup.RestoreWarningCode{backup.WarnDevBackupIntoProduction},
+		PreBackupFound: nil,
+		NotHeld:        nil,
+		ErrorCode:      "",
 	}
 
 	fence := restoreClaim(t, dst, record.ID).Step(backup.RestoreStepCheck)

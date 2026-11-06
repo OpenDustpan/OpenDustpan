@@ -7,6 +7,10 @@ Changed by:
 - ADR 297 changes decisions 5, 17, 19, 20 and 21: sealed cookies, not a stored session.
 - ADR 301 extends decision 1: the same narrowing of ADR 46 decision 2 for two
   more methods.
+- ADR 312 changes decision 29: the action of a change of the own credentials
+  is `caller:manage-sign-in`.
+- ADR 320 extends decision 21: the rule of the fresh step of a password
+  applies to LDAP too.
 
 ## Context
 

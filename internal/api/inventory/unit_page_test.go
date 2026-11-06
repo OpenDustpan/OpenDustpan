@@ -70,7 +70,8 @@ func manyUnits(t *testing.T, n int, authz identity.Authorizer) (*recordingReader
 		}
 
 		entries = append(entries, coreinventory.Entry{
-			ManualLock: nil, Collection: "", LastChanged: changeTime(), Namespace: ns, Tool: "pulumi",
+			LastRelease: nil,
+			ManualLock:  nil, Collection: "", LastChanged: changeTime(), Namespace: ns, Tool: "pulumi",
 			Name: fmt.Sprintf("web/s%03d", i), UnitID: fmt.Sprintf("unit-%03d", i),
 			DisplayName: fmt.Sprintf("web/s%03d", i), Status: "", ResourceCount: nil, Lock: nil, Labels: labels,
 		})

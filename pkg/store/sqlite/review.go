@@ -46,10 +46,21 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		}
 
 		total, listErr = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
-			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
-			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
-			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
+			Principal:           p.Principal,
+			Expand:              p.Expand,
+			History:             p.History,
+			ToMs:                p.ToMs,
+			FromMs:              p.FromMs,
+			AsOfMs:              p.AsOfMs,
+			AllGrants:           p.AllGrants,
+			Namespace:           p.Namespace,
+			Target:              p.Target,
+			InsideTargets:       p.InsideTargets,
+			Containers:          p.Containers,
+			ContainerRoles:      p.ContainerRoles,
+			TokenNamespace:      p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles,
+			Subject:             p.Subject,
 		})
 		if listErr != nil {
 			return fmt.Errorf("count review rows: %w", listErr)
@@ -67,6 +78,11 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 // reviewParams returns the query parameters of one export page.
 func reviewParams(rq access.ReviewQuery) (db.ReviewGrantsParams, error) {
 	var none db.ReviewGrantsParams
+
+	inside, err := jsonList(rq.Scope.Inside)
+	if err != nil {
+		return none, err
+	}
 
 	containers, err := jsonList(rq.Scope.Containers)
 	if err != nil {
@@ -91,6 +107,7 @@ func reviewParams(rq access.ReviewQuery) (db.ReviewGrantsParams, error) {
 		AllGrants:           rq.Scope.All,
 		Namespace:           rq.Scope.Namespace,
 		Target:              scopeTarget(rq.Scope.Object),
+		InsideTargets:       inside,
 		Containers:          containers,
 		ContainerRoles:      roles,
 		TokenNamespace:      rq.Scope.TokenNamespace,

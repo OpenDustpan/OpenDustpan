@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -44,7 +45,9 @@ type BlobDeleteStore interface {
 	// StartRestore stores a checking restore row and starts its operation.
 	StartRestore(ctx context.Context, r backup.RestoreRecord, start durable.StartRequest) error
 	// MarkRestoreApplying moves the checking restore to applying.
-	MarkRestoreApplying(ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID) error
+	MarkRestoreApplying(
+		ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID, result []byte,
+	) error
 }
 
 // kindClaimer claims the installation kind, which a backup records.
@@ -78,6 +81,10 @@ func RunBlobDelete(t *testing.T, newStore BlobDeleteFactory) {
 		{name: "an OpenTofu purge during a backup keeps the state blobs", test: testBlobDeleteOpenTofuPurge},
 		{name: "the retention sweep during a backup keeps the blobs of a purged unit", test: testBlobDeleteRetention},
 		{name: "a purge during a restore keeps the blobs", test: testBlobDeleteRestore},
+		{
+			name: "a save whose commit stalls past the sweep of its blob is refused",
+			test: testStalledSaveAfterSweep,
+		},
 	}
 
 	for _, tc := range cases {
@@ -231,6 +238,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 	}
 
 	r.updates, err = stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:    secrettest.NewMemorySealer(),
 		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: r.store, Events: r.store,
 		Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: nil, Logger: nil,
 		MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
@@ -887,7 +895,7 @@ func testBlobDeleteRestore(t *testing.T, r *blobDeleteRig) {
 			claimed := mustClaimRestoreOp(t, r.store.DurableOperationsPort(), "instance-a")
 
 			err = r.store.MarkRestoreApplying(
-				ctx, claimed.Claim.Step(backup.RestoreStepPreBackup), id, backup.ID(ident.NewID("bkp-")),
+				ctx, claimed.Claim.Step(backup.RestoreStepPreBackup), id, backup.ID(ident.NewID("bkp-")), nil,
 			)
 			if err != nil {
 				t.Fatalf("mark restore applying: %v", err)

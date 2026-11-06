@@ -245,6 +245,24 @@ type ItemSealer interface {
 	// ErrKeyNotFound when ref has no item key, and ErrDecrypt for a
 	// stream of another item or binding, or a changed stream.
 	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.Reader, error)
+	// SealContents seals the Data of each part with the item key of ref and
+	// the Binding of the part, as SealContent does, and opens the key one
+	// time for all of them. It returns the sealed bytes in the order of
+	// parts, and the errors of SealContent. On an error it returns no part.
+	// The caller bounds the number and the size of the parts.
+	SealContents(ctx context.Context, ref ItemRef, parts []ContentPart) ([][]byte, error)
+	// OpenContents opens the Data of each part, as OpenContent does, and
+	// opens the key one time for all of them. It returns the plain bytes in
+	// the order of parts, and the errors of OpenContent, also ErrDecrypt for
+	// a part of another item or binding. On an error it returns no part.
+	OpenContents(ctx context.Context, ref ItemRef, parts []ContentPart) ([][]byte, error)
+}
+
+// ContentPart is one content of a batch of SealContents or OpenContents:
+// its binding and its bytes.
+type ContentPart struct {
+	Binding []byte
+	Data    []byte
 }
 
 // itemAADLabel starts the associated data of an item key and of the content

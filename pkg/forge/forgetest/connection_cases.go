@@ -45,6 +45,7 @@ func methods(secret []byte) []method {
 		{"Commit", forge.CapCommit, func(ctx context.Context, f forge.Forge, repo string) error {
 			_, err := f.Commit(ctx, repo, forge.CommitRequest{
 				Branch: "dustpan/j-1", NewBranch: true, Base: validBase, Message: "Change\n\nDustpan-Job: j-1",
+				Trailer: "Dustpan-Job: j-1",
 				Author:  forge.Person{Name: "Ada", Email: "ada@example.com"},
 				Changes: []forge.FileChange{{Path: "a.txt", Content: []byte("a"), Delete: false}},
 			})
@@ -52,7 +53,13 @@ func methods(secret []byte) []method {
 			return err
 		}},
 		{"FindCommit", forge.CapCommit, func(ctx context.Context, f forge.Forge, repo string) error {
-			_, err := f.FindCommit(ctx, repo, "main", "Dustpan-Job: j-1", time.Unix(0, 0))
+			_, err := f.FindCommit(
+				ctx,
+				repo,
+				"main",
+				forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: validBase},
+				time.Unix(0, 0),
+			)
 
 			return err
 		}},
@@ -72,6 +79,9 @@ func methods(secret []byte) []method {
 		}},
 		{"CloseReview", forge.CapReview, func(ctx context.Context, f forge.Forge, repo string) error {
 			return f.CloseReview(ctx, repo, "1")
+		}},
+		{"DeleteBranch", forge.CapReview, func(ctx context.Context, f forge.Forge, repo string) error {
+			return f.DeleteBranch(ctx, repo, "dustpan/j-1")
 		}},
 		{"RepoToken", forge.CapGitAccess, func(ctx context.Context, f forge.Forge, repo string) error {
 			_, err := f.RepoToken(ctx, repo)

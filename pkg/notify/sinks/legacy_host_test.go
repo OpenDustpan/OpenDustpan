@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/notify/notifytest"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 )
 
@@ -67,5 +68,94 @@ func TestTestRefusesAStoredHostThatFailsTheAllowlist(t *testing.T) {
 
 	if len(f.hook.got) != 0 {
 		t.Fatalf("sender got %d messages, want none", len(f.hook.got))
+	}
+}
+
+// sealChat returns the sealed items of the chat sink s with the URL url.
+func sealChat(t *testing.T, s notify.Sink, url string) []notify.SealedSecret {
+	t.Helper()
+
+	sealed, err := notifytest.Sealer().Seal(t.Context(), s, []notify.SinkSecret{
+		{Ref: s.SecretRefs[0], Value: []byte(url)},
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+
+	return sealed
+}
+
+// legacyChat makes a chat sink and then sets its stored target, and the host
+// of its stored URL, to a host that passed the checks before the host
+// allowlist of a write.
+func legacyChat(t *testing.T, f fixture) notify.Sink {
+	t.Helper()
+
+	s := f.store.sinks[makeChat(t, f).ID]
+	s.Target = "hk_1.example.com"
+	f.store.sinks[s.ID] = s
+	f.store.secrets[s.ID] = sealChat(t, s, "https://hk_1.example.com/services/T0/B0/"+canary)
+
+	return s
+}
+
+// TestTestRefusesALegacyHostOfEachKind pins the answer of the test route of a
+// sink whose stored host fails the host allowlist: the class is refused, the
+// text is the refused text, nothing is sent, and the list flags the sink.
+func TestTestRefusesALegacyHostOfEachKind(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (fixture, *fakeSender, notify.Sink)
+	}{
+		{
+			name: "webhook",
+			setup: func(t *testing.T) (fixture, *fakeSender, notify.Sink) {
+				t.Helper()
+
+				f := newFixture(t, nil)
+
+				return f, f.hook, legacyHook(t, f)
+			},
+		},
+		{
+			name: "chat",
+			setup: func(t *testing.T) (fixture, *fakeSender, notify.Sink) {
+				t.Helper()
+
+				f, sender := chatFixture(t)
+
+				return f, sender, legacyChat(t, f)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f, sender, s := tc.setup(t)
+
+			res, err := runTest(t.Context(), f, shop, s.ID)
+			if err != nil {
+				t.Fatalf("runTest: %v", err)
+			}
+
+			if res.Delivered || res.Class != notify.ClassRefused || res.Message != sinks.TextRefused {
+				t.Errorf("result = %+v, want the class refused with the refused text", res)
+			}
+
+			sender.mu.Lock()
+			sent := len(sender.got)
+			sender.mu.Unlock()
+
+			if sent != 0 {
+				t.Errorf("sender got %d messages, want none", sent)
+			}
+
+			got, err := f.svc.List(t.Context(), shop)
+			if err != nil || len(got) != 1 || got[0].ID != s.ID || !got[0].HostNeedsUpdate() {
+				t.Errorf("List = %+v, %v; want the sink, flagged for a new host", got, err)
+			}
+		})
 	}
 }

@@ -127,8 +127,18 @@ func checkPoolConfig(t *testing.T, cfg *pgxpool.Config, want poolCase) {
 		t.Error("DialFunc is nil: the pool must dial with its keepalive")
 	}
 
-	if cfg.AfterConnect == nil {
-		t.Error("AfterConnect is nil: the store must set the search path of each connection")
+	if !strings.Contains(cfg.ConnConfig.RuntimeParams["search_path"], "_control") {
+		t.Errorf("search_path start-up parameter = %q, want the live and the control schema",
+			cfg.ConnConfig.RuntimeParams["search_path"])
+	}
+
+	for name, want := range map[string]string{
+		"statement_timeout": "25000", "idle_in_transaction_session_timeout": "60000",
+		"client_connection_check_interval": "5000",
+	} {
+		if got := cfg.ConnConfig.RuntimeParams[name]; got != want {
+			t.Errorf("start-up parameter %s = %q, want %q", name, got, want)
+		}
 	}
 }
 

@@ -173,6 +173,16 @@ type StateStore interface {
 	// be current. Callers record the attempt key with RecordUploadAttempt
 	// before finalizing, so the row names sv.Content when the write runs.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
+	// FinalizeStateVersionExpecting works as FinalizeStateVersion, and also
+	// checks in the same transaction, after it locks the workspace row, that
+	// the current state version of the workspace is expect (the empty ID when
+	// the workspace has no state), else ErrConcurrentModification. A write by
+	// the same holder under the same lock cannot slip in between a read of the
+	// current version and this finalize. The expected version adds a check and
+	// removes none. ErrConcurrentModification means nothing was written.
+	FinalizeStateVersionExpecting(
+		ctx context.Context, sv StateVersion, fence namespace.Fence, expect StateVersionID,
+	) error
 	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
 	// state, in one fenced transaction. sv is a finalized fence version of w:
 	// it names the content, the new lineage, its serial and FenceBy. The
@@ -477,6 +487,7 @@ func newWorkspaceOf(ref Ref) Workspace {
 		CreatedAt:   time.Time{},
 		UpdatedAt:   time.Time{},
 		Lock:        Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: NoRelease(),
 		ID:          "",
 		Ref:         ref,
 		NamespaceID: "",
@@ -742,6 +753,16 @@ func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) 
 		return Workspace{}, err
 	}
 
+	// A LOCK that repeats the lock that the workspace holds succeeds without a
+	// change: OpenTofu sends a LOCK again when the answer of a committed LOCK
+	// is lost. The check comes before the manual lock check, because a manual
+	// lock never stops the holder of the tool lock. The check in the change
+	// below stays for a lock that another request takes after this read.
+	repeated, isRepeat, err := s.repeatedLock(ctx, id, holder, lockID)
+	if err != nil || isRepeat {
+		return repeated, err
+	}
+
 	// The manual lock check and the tool lock below run in separate
 	// transactions. A manual lock that commits between them is missed by this
 	// one request, the same as a job phase that started before the lock. The
@@ -751,8 +772,23 @@ func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) 
 	}
 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		if w.RepeatsLock(holder, lockID) {
+			return w, errRepeated
+		}
+
 		return w.lockAs(now, holder, reason, lockID)
 	})
+}
+
+// errRepeated is the result of an apply of change for a request that repeats
+// a change that the workspace already holds. change saves nothing for it.
+var errRepeated = errors.New("request repeats a committed change")
+
+// RepeatsRelease reports whether q repeats the last release of w, at the
+// time of the clock of the service (see Workspace.RepeatsRelease). A handler
+// asks it before it refuses an unlock of a free workspace.
+func (s *Service) RepeatsRelease(w Workspace, q ReleaseRepeat) bool {
+	return w.RepeatsRelease(s.clock(), q)
 }
 
 // checkLockRequest returns the error of a lock request that names no holder or
@@ -822,8 +858,19 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 // same revision, so a lock that another caller took after this one read the
 // unit is refused with ErrLockMismatch, and it is not released (ADR 49,
 // decision 6).
+//
+// On a workspace that is not locked, a request that repeats the last normal
+// release of holder succeeds without a change (see Workspace.RepeatsRelease):
+// OpenTofu sends an unlock again when the answer of a committed unlock is
+// lost. The check runs before the check of the lock ID. Each other unlock of
+// a free workspace is refused as before.
 func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		repeat := ReleaseRepeat{LockID: lockID, Holder: "", Caller: holder, Kind: ReleaseNormal}
+		if w.RepeatsRelease(now, repeat) {
+			return w, errRepeated
+		}
+
 		if lockErr := checkLockID(w, Lock{LockedAt: time.Time{}, ID: lockID, Holder: "", Reason: ""}); lockErr != nil {
 			return Workspace{}, lockErr
 		}
@@ -876,7 +923,10 @@ func (s *Service) ForceUnlock(
 
 // ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
 // releases whatever lock the unit holds. A different lock, or the same ID under
-// another holder, is refused with ErrLockMismatch. The check runs before the
+// another holder, is refused with ErrLockMismatch. On a unit that is not
+// locked, a request that repeats the last forced release by the same principal
+// succeeds without a change and without an audit entry; any other request
+// fails with ErrNotLocked. The check runs before the
 // fence and in the revision the release saves, so a lock taken after the caller
 // read the unit is not released.
 //
@@ -905,7 +955,7 @@ func (s *Service) ForceUnlockLock(
 	}
 
 	if !w.Lock.Locked() {
-		return Workspace{}, false, ErrNotLocked
+		return s.repeatedForceUnlock(ctx, w, expect, by)
 	}
 
 	if lockErr := checkLockID(w, expect); lockErr != nil {
@@ -936,7 +986,7 @@ func (s *Service) ForceUnlockLock(
 			return Workspace{}, false, fmt.Errorf("record override of %s: %w", w.Ref, recordErr)
 		}
 
-		unfenced, changeErr := s.releaseUnfenced(ctx, w, forceUnlockEntry(entry, w, by, s.clock()))
+		unfenced, changeErr := s.releaseUnfenced(ctx, w, by, forceUnlockEntry(entry, w, by, s.clock()))
 
 		return unfenced, true, changeErr
 	}
@@ -1682,6 +1732,14 @@ func (s *Service) DiffStates(
 // the version the first call made current and writes nothing new, but still
 // needs the workspace unlocked or held by holder.
 func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holder string) (StateVersion, error) {
+	return s.restoreChecked(ctx, id, from, holder, nil)
+}
+
+// restoreChecked is Restore with an optional expected current version. A nil expect
+// skips the check.
+func (s *Service) restoreChecked(
+	ctx context.Context, id ID, from StateVersionID, holder string, expect *StateVersionID,
+) (StateVersion, error) {
 	if holder == "" {
 		return StateVersion{}, fmt.Errorf("%w: restore without a holder", ErrNotLocked)
 	}
@@ -1717,7 +1775,7 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 		return StateVersion{}, err
 	}
 
-	sv, err := s.copyState(ctx, w, src)
+	sv, err := s.copyState(ctx, w, src, expect)
 	if errors.Is(err, ErrAlreadyRestored) {
 		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
 	}
@@ -1753,7 +1811,7 @@ func (s *Service) releaseWithoutState(
 
 	now := s.clock()
 
-	released, err := current.forceUnlock(now)
+	released, err := current.forceUnlock(now, by)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
@@ -2047,7 +2105,14 @@ func (s *Service) mapRestoreLockError(ctx context.Context, id ID, holder string,
 // version that records src. The pending row records the attempt before the
 // copy, and the blob lands before the finalize, so a committed version
 // never names a missing blob.
-func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) (StateVersion, error) {
+//
+// A non-nil expect names the current version that the caller read. The finalize
+// checks it in its own transaction, so a write by the same holder under the
+// same lock cannot slip in between: a mismatch gives ErrConcurrentModification
+// and writes nothing.
+func (s *Service) copyState(
+	ctx context.Context, w Workspace, src StateVersion, expect *StateVersionID,
+) (StateVersion, error) {
 	outputs, err := s.openRestoreOutputs(ctx, w, src)
 	if err != nil {
 		return StateVersion{}, err
@@ -2109,7 +2174,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Size = size
 	sv.Content = key
 
-	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
+	if err := s.finalizeRestore(ctx, sv, fence, expect); err != nil {
 		return StateVersion{}, s.refusedRestore(ctx, w, sv, fence, err)
 	}
 
@@ -2118,6 +2183,18 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Outputs = outputs
 
 	return sv, nil
+}
+
+// finalizeRestore finalizes the restored version sv. With expect set, it also
+// checks the current version in the finalize transaction.
+func (s *Service) finalizeRestore(
+	ctx context.Context, sv StateVersion, fence namespace.Fence, expect *StateVersionID,
+) error {
+	if expect == nil {
+		return s.states.FinalizeStateVersion(ctx, sv, fence)
+	}
+
+	return s.states.FinalizeStateVersionExpecting(ctx, sv, fence, *expect)
 }
 
 // refusedRestore cleans up after the failed finalize of the restored version
@@ -2131,7 +2208,7 @@ func (s *Service) refusedRestore(
 	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
 
 	switch {
-	case errors.Is(err, ErrAlreadyRestored):
+	case errors.Is(err, ErrAlreadyRestored), errors.Is(err, ErrConcurrentModification):
 		return errors.Join(
 			err,
 			s.blobs.delete(ctx, w.NamespaceID, w.ID, sv.Content),
@@ -2685,6 +2762,9 @@ func (r *closeReader) Close() error {
 }
 
 // change applies a lock transition to the stored workspace and saves it.
+//
+// An apply that returns errRepeated changes nothing: change saves nothing and
+// returns the workspace as it read it.
 func (s *Service) change(
 	ctx context.Context,
 	id ID,
@@ -2700,7 +2780,14 @@ func (s *Service) change(
 		return Workspace{}, err
 	}
 
+	read := w
+
 	w, err = apply(w, s.clock())
+	if errors.Is(err, errRepeated) {
+		// A repeated request changes nothing: no save, no new revision.
+		return read, nil
+	}
+
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
 	}
@@ -2736,14 +2823,15 @@ func (s *Service) clock() time.Time {
 }
 
 // releaseUnfenced releases the lock of the unit without writing a version, and
-// appends the audit entry of the release in the same transaction.
-func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, entry audit.Entry) (Workspace, error) {
+// appends the audit entry of the release in the same transaction. by is the
+// subject of the principal that forced the release.
+func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, by string, entry audit.Entry) (Workspace, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
 	}
 
-	released, err := w.forceUnlock(s.clock())
+	released, err := w.forceUnlock(s.clock(), by)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
@@ -2947,4 +3035,50 @@ func (s *Service) refuseUnderNamespaceLock(ctx context.Context, ns namespace.Nam
 		Lock: l, Unit: collection.UnitRef{Namespace: ns, Tool: InventoryTool, Name: name},
 		Noun: lockNounWorkspace, Name: ns.String() + "/" + name,
 	})
+}
+
+// repeatedLock returns the workspace id and true when a lock of holder under
+// lockID repeats the lock that it holds, after the fence check of its
+// namespace. It returns false when the request is not a repeat.
+func (s *Service) repeatedLock(ctx context.Context, id ID, holder, lockID string) (Workspace, bool, error) {
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+
+	if !w.RepeatsLock(holder, lockID) {
+		return w, false, nil
+	}
+
+	// A repeat writes nothing. It still needs a namespace that this
+	// installation may write to, as the first request did, so that it fails
+	// closed after a failover.
+	if _, err := s.fence(ctx, w.Ref.Namespace); err != nil {
+		return Workspace{}, false, err
+	}
+
+	return w, true, nil
+}
+
+// repeatedForceUnlock answers a force-unlock of the free workspace w. A
+// request that repeats the last forced release by the same principal by
+// succeeds without a change and without an audit entry: OpenTofu sends a
+// force-unlock again when the answer of a committed one is lost. The request
+// must name no lock, or the lock of the record. Each other request fails with
+// ErrNotLocked, as before.
+func (s *Service) repeatedForceUnlock(
+	ctx context.Context, w Workspace, expect Lock, by string,
+) (Workspace, bool, error) {
+	repeat := ReleaseRepeat{LockID: expect.ID, Holder: expect.Holder, Caller: by, Kind: ReleaseForced}
+	if !w.RepeatsRelease(s.clock(), repeat) {
+		return Workspace{}, false, ErrNotLocked
+	}
+
+	// A repeat writes nothing. It still needs a namespace that this
+	// installation may write to, as the first request did.
+	if _, err := s.fence(ctx, w.Ref.Namespace); err != nil {
+		return Workspace{}, false, err
+	}
+
+	return w, false, nil
 }

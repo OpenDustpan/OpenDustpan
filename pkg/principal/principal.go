@@ -330,6 +330,10 @@ func ValidateSubject(s string) error {
 			ErrReservedSubject, s, DevSubjectPrefix)
 	}
 
+	if IsLocalSubject(s) {
+		return errLocalSubject(s)
+	}
+
 	return refuseNamespaceServiceSubject(s)
 }
 
@@ -397,6 +401,48 @@ func IsDevSubject(s string) bool {
 	}
 
 	return true
+}
+
+// LocalSubjectPrefix starts the subject of each local user: "local:" and
+// the ID of the local user record, which never changes. Only
+// Service.CreateLocalPerson makes a principal with such a subject:
+// ValidateSubject refuses each other subject that starts with it, so no
+// identity provider and no API call can take the principal of a local user.
+const LocalSubjectPrefix = "local:"
+
+// IsLocalSubject reports whether the first 6 bytes of s equal
+// LocalSubjectPrefix when the ASCII letters ignore case, with the rule of
+// IsDevSubject.
+func IsLocalSubject(s string) bool {
+	return hasFoldedPrefix(s, LocalSubjectPrefix)
+}
+
+// hasFoldedPrefix reports whether the first bytes of s equal prefix when the
+// ASCII letters of s ignore case. prefix is in lowercase.
+func hasFoldedPrefix(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+
+	for i := range len(prefix) {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+
+		if c != prefix[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// errLocalSubject returns ErrReservedSubject for the subject s of a local
+// user.
+func errLocalSubject(s string) error {
+	return fmt.Errorf("%w: %q starts with %q, which only the local users of the installation use",
+		ErrReservedSubject, s, LocalSubjectPrefix)
 }
 
 // subjectPattern is the form of a subject made through the API.
@@ -478,6 +524,25 @@ func (p Principal) Validate() error {
 	// stays so that a change to that function never lets a record with the
 	// subject of the namespace service principal through Validate.
 	if err := refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return err
+	}
+
+	return p.validateFields()
+}
+
+// validateLocalPerson is Validate for the person of a local user: it
+// accepts only the subject LocalSubjectPrefix and the ID of the record, in
+// lowercase, for a person.
+func (p Principal) validateLocalPerson(userID string) error {
+	if userID == "" || p.Subject != LocalSubjectPrefix+userID {
+		return fmt.Errorf("%w: %q is not the subject of the local user %q", ErrReservedSubject, p.Subject, userID)
+	}
+
+	if p.Kind != KindPerson {
+		return fmt.Errorf("%w: a local user is a person, not a %s", ErrInvalid, p.Kind)
+	}
+
+	if err := checkSubjectForm(p.Subject); err != nil {
 		return err
 	}
 

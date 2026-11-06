@@ -203,6 +203,15 @@ func (c *Cluster) Operations(t *testing.T, i int) durable.Store {
 	return in.store.DurableOperationsPort()
 }
 
+// Store returns the store handle of server i, for a test that writes the gate
+// configuration or reads the decision records and the audit log through the
+// ports of the store. It fails the test when server i does not run.
+func (c *Cluster) Store(t *testing.T, i int) *postgres.Store {
+	t.Helper()
+
+	return c.instance(t, i, "store of").store
+}
+
 // SchemaURL returns the URL of the schema of the cluster, for a test that
 // reads the rows of the database. The URL names a TCP host.
 func (c *Cluster) SchemaURL() string {
@@ -537,7 +546,9 @@ func serverOptions(
 		dustpan.WithSourceFilters(store.SourceFilters()),
 		dustpan.WithTrustRules(store.TrustRules()),
 		dustpan.WithJobStore(store.Jobs()),
-		dustpan.WithJobClaimer(job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store)),
+		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g)
+		}),
 		dustpan.WithTriggerStore(store.Triggers()),
 		dustpan.WithUnitSettingsStore(store.UnitSettings()),
 		dustpan.WithDriftStore(store.DriftResults()),

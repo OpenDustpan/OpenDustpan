@@ -108,6 +108,15 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
 		{name: "a checkpoint conflict under another key keeps the first key", test: testCheckpointConflictOtherKey},
+		{name: "a checkpoint of an attempt outside its time window is refused", test: testCheckpointAttemptWindow},
+		{name: "a checkpoint replay after the attempt deadline is refused", test: testCheckpointReplayAfterDeadline},
+		{name: "a built checkpoint after the attempt deadline is refused", test: testBuiltCheckpointAttemptWindow},
+		{name: "a journal row of an attempt outside its time window is refused", test: testJournalAttemptWindow},
+		{
+			name: "a checkpoint that a lock wait holds past its deadline is refused",
+			test: testCheckpointLockWaitPastDeadline,
+		},
+		{name: "the store reads the clock of the database for the sweeps", test: testDatabaseClock},
 		{name: "an unsequenced checkpoint replaces the row and its key", test: testCheckpointUnsequencedKeys},
 		{name: "concurrent checkpoints of one sequence: one winner", test: testCheckpointConcurrentWinner},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
@@ -256,7 +265,7 @@ func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan)
 
 	u := newUpdate(ref, id, plan, plan.CreatedBy, plan.RestoredFrom)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
 	}
 
@@ -398,7 +407,7 @@ func (f historyFixture) create(
 
 	u := newUpdate(f.ref, id, plan, createdBy, restoredFrom)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
 	}
 
@@ -751,7 +760,9 @@ func testUpdateMissingStack(t *testing.T, f fixture) {
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
 	u := newUpdate(ghost, "u1", mutating(), "", 0)
 
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); !errors.Is(err, stack.ErrNotFound) {
+	if err := f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), f.fence); !errors.Is(
+		err, stack.ErrNotFound,
+	) {
 		t.Fatalf("create update of missing stack: err = %v, want stack.ErrNotFound", err)
 	}
 }
@@ -768,7 +779,7 @@ func testUpdateWritesFenced(t *testing.T, f fixture) {
 			u := waiting
 			u.ID = "fenced"
 
-			return f.s.CreateUpdate(t.Context(), u, stale)
+			return f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), stale)
 		},
 		"StartUpdate": func() error {
 			_, err := f.s.StartUpdate(t.Context(), started(t, waiting), stale)
@@ -1231,7 +1242,9 @@ func testHistoryCreateFenced(t *testing.T, f historyFixture) {
 	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
 	u := newUpdate(f.ref, "fenced", mutating(), "alice@example.com", 0)
 
-	if err := f.s.CreateUpdate(t.Context(), u, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), stale); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
 		t.Fatalf("create update with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -1382,6 +1395,8 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		BlobKey:       placeholderKey(u, seq),
 		BlobSize:      size,
 		BlobMD5:       sum,
+		// The attempt starts now, so the store accepts it in its time window.
+		AttemptStartedAt: time.Now(),
 	}
 }
 
@@ -2560,7 +2575,7 @@ func runResourcedUpdate(t *testing.T, f fixture) error {
 	t.Helper()
 
 	u := newUpdate(f.ref, "racer", mutating(), "", 0)
-	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+	if err := f.s.CreateUpdate(t.Context(), u, UnrecordedKey(), f.fence); err != nil {
 		return err
 	}
 

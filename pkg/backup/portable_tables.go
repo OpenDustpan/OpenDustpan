@@ -227,6 +227,11 @@ func portableSpec() []PortableTable {
 				{Name: "lock_holder", Kind: KindText},
 				{Name: "lock_since_ms", Kind: KindTime},
 				{Name: "lock_operation", Kind: KindText},
+				{Name: "last_release_lock_id", Kind: KindText},
+				{Name: "last_release_holder", Kind: KindText},
+				{Name: "last_release_by", Kind: KindText},
+				{Name: portColLastReleaseKind, Kind: KindText},
+				{Name: "last_release_at_ms", Kind: KindTime},
 			},
 		},
 		{
@@ -366,8 +371,7 @@ func portableSpec() []PortableTable {
 				{Name: portColKind, Kind: KindText},
 				{Name: "id", Kind: KindText},
 				{Name: "level", Kind: KindText},
-				{Name: portColTool, Kind: KindText},
-				{Name: "unit_name", Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
 				{Name: portColBody, Kind: KindText},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
@@ -412,7 +416,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "workspaces",
+			Table:   portTableWorkspaces,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -430,6 +434,11 @@ func portableSpec() []PortableTable {
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 				{Name: portColDeletedAtMs, Kind: KindTime},
 				{Name: portColDeletedName, Kind: KindText},
+				{Name: "last_release_lock_id", Kind: KindText},
+				{Name: "last_release_holder", Kind: KindText},
+				{Name: "last_release_by", Kind: KindText},
+				{Name: portColLastReleaseKind, Kind: KindText},
+				{Name: "last_release_at_ms", Kind: KindTime},
 			},
 		},
 		{
@@ -585,6 +594,7 @@ func portableSpec() []PortableTable {
 				{Name: "end_reason", Kind: KindText},
 				{Name: "source_ip", Kind: KindText},
 				{Name: "user_agent", Kind: KindText},
+				{Name: "generation", Kind: KindInteger},
 			},
 		},
 		{
@@ -735,6 +745,7 @@ func portableSpec() []PortableTable {
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),
+		portableLocalUserTables(),
 		portableSavedViewTables(),
 		portableDriftTables(),
 		portableUnitSettingsTables(),

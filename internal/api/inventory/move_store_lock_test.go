@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -176,8 +177,9 @@ func (f storeMoveFixture) createWorkspace(t *testing.T) {
 	w := workspace.Workspace{
 		NamespaceID: "",
 		CreatedAt:   time.Now(), UpdatedAt: time.Now(),
-		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: f.ns.Name, Name: name},
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: f.ns.Name, Name: name},
 		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if createErr := f.store.CreateWorkspace(t.Context(), w, f.ns.Fence()); createErr != nil {
@@ -256,7 +258,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: f.store, OnAuditFailure: nil,
 		DenialLimiter: nil, Sessions: nil,
 		Logger:     slog.New(slog.DiscardHandler),
-		StateGuard: nil,
+		StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
