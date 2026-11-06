@@ -255,6 +255,28 @@ func TestDevResetRefusesADirectoryThatCannotBeStatted(t *testing.T) {
 	}
 }
 
+// TestDevResetLinkCheckFailsClosedOnLstatError makes Lstat fail on a valid
+// dev directory. The later checks would accept that directory, so the link
+// check must refuse it on its own.
+func TestDevResetLinkCheckFailsClosedOnLstatError(t *testing.T) {
+	t.Parallel()
+
+	dir := resetTestDir(t, installation.KindDev)
+	proc := newDevTestProcess(false).process(t.TempDir(), make(chan string, 1))
+
+	if err := checkDevResetDirWithLstat(dir, proc, os.Lstat); err != nil {
+		t.Fatalf("check of a valid dev directory = %v, want nil", err)
+	}
+
+	failing := func(name string) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrPermission}
+	}
+
+	if err := checkDevResetDirWithLstat(dir, proc, failing); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("check with a failing Lstat = %v, want %v", err, fs.ErrPermission)
+	}
+}
+
 // TestDevResetKeepsTheOldData resets a dev database twice. Each reset keeps
 // the data that it replaces as dev.db.reset.bak, its log files and
 // blobs.reset.bak, names
