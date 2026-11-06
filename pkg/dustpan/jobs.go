@@ -3,6 +3,7 @@ package dustpan
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -56,7 +57,8 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		Namespaces:     svc.namespaces,
 		Jobs:           cfg.jobStore,
 		Artifacts:      artifacts,
-		LogPoll:        0,
+		Logs:           nil,
+		Cursors:        cfg.secretWrapper,
 		Starter:        starter,
 		Workers:        cfg.watch,
 		Pools:          pools,
@@ -110,6 +112,28 @@ func newJobArtifactReader(svc services, cfg *settings) (*job.ArtifactReads, bool
 	return reader, true, nil
 }
 
-// Unwrap returns the writer below, so a handler can flush a stream, such as a
-// job log, through http.ResponseController.
-func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+// FlushError sends the data written so far to the client, so a stream, such as a
+// job log, reaches it before the handler ends. A flush before any header
+// records the status 200 that the server then sends, so the status stays
+// correct in the metrics and the log. It does not expose the other optional
+// methods of the writer below, such as Hijack.
+func (w *statusWriter) FlushError() error {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+
+	if err := http.NewResponseController(w.ResponseWriter).Flush(); err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+
+	return nil
+}
+
+// SetWriteDeadline limits the time of the next writes of a stream.
+func (w *statusWriter) SetWriteDeadline(t time.Time) error {
+	if err := http.NewResponseController(w.ResponseWriter).SetWriteDeadline(t); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
+	return nil
+}

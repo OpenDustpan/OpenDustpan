@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -27,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -72,9 +72,12 @@ type Config struct {
 	DenialLimiter *denylimit.Limiter
 	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
-	// LogPoll is the time between two reads of a running phase by a log
-	// stream. Zero takes the default.
-	LogPoll time.Duration
+	// Logs sets the limits of the log streams. Nil takes every default.
+	Logs *LogOptions
+	// Cursors seals the cursor of a page token, so a token names no job. With
+	// no sealer, the job list reads every job to the end of the list, and the
+	// token holds the ID of a job that the caller can read.
+	Cursors secret.Wrapper
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
@@ -83,7 +86,9 @@ type Handler struct {
 	jobs       job.Store
 	artifacts  job.ArtifactReader
 	authz      identity.Authorizer
-	logPoll    time.Duration
+	logs       LogOptions
+	streams    *streamLimiter
+	cursors    secret.Wrapper
 	starter    job.Starter
 	workers    admit.Source
 	pools      runner.PoolReader
@@ -123,7 +128,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		jobs:       cfg.Jobs,
 		artifacts:  cfg.Artifacts,
 		authz:      cfg.Authorizer,
-		logPoll:    cfg.LogPoll,
+		logs:       logLimits(cfg.Logs),
+		streams:    nil,
+		cursors:    cfg.Cursors,
 		starter:    cfg.Starter,
 		workers:    cfg.Workers,
 		pools:      cfg.Pools,
@@ -135,6 +142,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		routes:     nil,
 	}
 
+	h.streams = newStreamLimiter(h.logs.PerPrincipal, h.logs.Total)
 	h.routes = h.buildRoutes()
 	for i := range h.routes {
 		route := &h.routes[i]
@@ -196,6 +204,8 @@ func classify(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNotFound.Error()), true
+	case errors.Is(err, errTooManyStreams):
+		return problem.New(http.StatusTooManyRequests, errcode.JobLimit, errTooManyStreams.Error()), true
 	case errors.Is(err, errLogNotAvailable):
 		return problem.New(http.StatusNotFound, errcode.JobLogNotAvailable, errLogNotAvailable.Error()), true
 	case errors.Is(err, errPageToken):

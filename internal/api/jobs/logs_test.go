@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -130,7 +131,7 @@ func logHandler(t *testing.T, holds []string, jobs *fakeJobs, logs *fakeLogs) te
 	return newWorkerHandler(
 		t,
 		newAuthorizer(holds...),
-		handlerDeps{jobs: jobs, starter: nil, entries: nil, artifacts: logs},
+		handlerDeps{jobs: jobs, starter: nil, entries: nil, artifacts: logs, logs: fastLogs(), cursors: nil},
 		nil,
 	)
 }
@@ -419,5 +420,12 @@ func TestLogFollowsARunningPhase(t *testing.T) {
 	lines := decodeLines(t, string(rest))
 	if len(lines) != 2 || lines[0].Seq != 2 || lines[0].Text != "two\n" || !lines[1].Done || lines[1].Last != 2 {
 		t.Errorf("rest = %+v", lines)
+	}
+}
+
+// fastLogs returns the log options of a test: a short poll.
+func fastLogs() *jobsapi.LogOptions {
+	return &jobsapi.LogOptions{
+		Poll: 5 * time.Millisecond, MaxLife: 0, WriteTimeout: 0, PerPrincipal: 0, Total: 0, Stopping: nil,
 	}
 }

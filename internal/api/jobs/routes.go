@@ -126,7 +126,7 @@ func (h *Handler) buildRoutes() []Route {
 			// The handler checks job:read on the unit of each job of the page.
 			Method: http.MethodGet, Path: jobsPath,
 			Scope: ScopeAuthorized, Reads: nil, Actions: nil, Writes: nil,
-			Filters:        []identity.Action{identity.ActionJobRead},
+			Filters:        listFilters(),
 			IdempotencyKey: false, ETag: false, Resolve: h.resolveNamespace, Serve: h.listJobs,
 		},
 	}
@@ -153,6 +153,10 @@ func (h *Handler) buildRoutes() []Route {
 
 	return routes
 }
+
+// listFilters are the read actions that the job list checks on the unit of
+// each job. The route row declares them and the list handler checks them.
+func listFilters() []identity.Action { return []identity.Action{identity.ActionJobRead} }
 
 const (
 	jobsPath = "/api/dustpan/v1/namespaces/{namespace}/jobs"

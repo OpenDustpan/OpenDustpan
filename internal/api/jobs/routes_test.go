@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can
@@ -231,6 +232,14 @@ func (*recordingAuthorizer) ListObjects(context.Context, identity.Principal, ide
 	return identity.Scope{}, errNoListing
 }
 
+// revoke removes a check from the ones that the authorizer allows.
+func (a *recordingAuthorizer) revoke(hold string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	delete(a.holds, hold)
+}
+
 func (a *recordingAuthorizer) seen() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -250,7 +259,12 @@ func newStartHandler(
 ) testHandler {
 	t.Helper()
 
-	return newWorkerHandler(t, authz, handlerDeps{jobs: jobs, starter: starter, entries: entries, artifacts: nil}, nil)
+	return newWorkerHandler(
+		t,
+		authz,
+		handlerDeps{jobs: jobs, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil},
+		nil,
+	)
 }
 
 // handlerDeps are the stores and services behind a test handler.
@@ -259,6 +273,8 @@ type handlerDeps struct {
 	starter   job.Starter
 	entries   audit.Store
 	artifacts job.ArtifactReader
+	logs      *jobsapi.LogOptions
+	cursors   secret.Wrapper
 }
 
 // newWorkerHandler is newStartHandler with the worker check of the start.
@@ -282,7 +298,8 @@ func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps,
 		Namespaces:     namespaces,
 		Jobs:           deps.jobs,
 		Artifacts:      deps.artifacts,
-		LogPoll:        5 * time.Millisecond,
+		Logs:           deps.logs,
+		Cursors:        deps.cursors,
 		Starter:        deps.starter,
 		Workers:        workers,
 		Pools:          nil,
@@ -700,12 +717,12 @@ func TestJobDocument(t *testing.T) {
 	// A step answers its name, role and phase only. The server never answers
 	// the arguments or the variables of a step, the internal operation of a
 	// phase, or the item key of a plan or a log. The profile answers by name.
-	for _, secret := range []string{
+	for _, hidden := range []string{
 		"hunter2", "TF_LOG", "dop-internal-operation", "ik-plan-secret", "ik-secret",
 		`"args"`, `"env"`, `"idempotencyKey"`, "key-1",
 	} {
-		if strings.Contains(body, secret) {
-			t.Errorf("body holds %q: %s", secret, body)
+		if strings.Contains(body, hidden) {
+			t.Errorf("body holds %q: %s", hidden, body)
 		}
 	}
 
@@ -808,7 +825,8 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Namespaces:     nil,
 		Jobs:           nil,
 		Artifacts:      nil,
-		LogPoll:        0,
+		Logs:           nil,
+		Cursors:        nil,
 		Starter:        nil,
 		Workers:        nil,
 		Pools:          nil,

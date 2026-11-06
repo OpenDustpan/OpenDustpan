@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -57,6 +58,9 @@ type pageTokenWire struct {
 
 // listQuery is the filter and the page of a job list.
 type listQuery struct {
+	// cursor is the cursor of the page token, as the token holds it. The
+	// handler opens it with openCursor.
+	cursor  string
 	unit    string
 	states  []job.State
 	purpose job.Purpose
@@ -76,7 +80,7 @@ func parseListQuery(r *http.Request, ns namespace.Name) (listQuery, error) {
 
 	q := listQuery{
 		unit: query.Get("unit"), states: nil, purpose: job.PurposeNone, trigger: query.Get("trigger"),
-		size: defaultPageSize, after: "",
+		size: defaultPageSize, after: "", cursor: "",
 	}
 
 	if !validOptionalID(q.unit) || !validOptionalID(q.trigger) {
@@ -97,7 +101,7 @@ func parseListQuery(r *http.Request, ns namespace.Name) (listQuery, error) {
 	}
 
 	if raw := query.Get("pageToken"); raw != "" {
-		if q.after, err = parsePageToken(raw, q.fingerprint(ns)); err != nil {
+		if q.cursor, err = parsePageToken(raw, q.fingerprint(ns)); err != nil {
 			return listQuery{}, err
 		}
 	}
@@ -153,21 +157,63 @@ func parsePageSize(raw string) (int, error) {
 	return n, nil
 }
 
-// parsePageToken returns the job ID after which the page of the token starts.
-// A token that does not decode, that holds no job ID, or that another query
-// made, gives errPageToken.
-func parsePageToken(raw, fingerprint string) (job.ID, error) {
+// parsePageToken returns the cursor of a token. A token that does not decode,
+// that holds no cursor, or that another query made, gives errPageToken.
+func parsePageToken(raw, fingerprint string) (string, error) {
 	var wire pageTokenWire
-	if err := pagetoken.Decode(raw, &wire); err != nil {
-		return "", errPageToken
-	}
-
-	if !strings.HasPrefix(wire.After, job.IDPrefix) || !ident.Valid(wire.After, maxIDLength) ||
+	if err := pagetoken.Decode(raw, &wire); err != nil || wire.After == "" ||
 		!pagetoken.SameFingerprint(wire.Fingerprint, fingerprint) {
 		return "", errPageToken
 	}
 
-	return job.ID(wire.After), nil
+	return wire.After, nil
+}
+
+// cursorAAD binds a sealed cursor to the namespace and the query, so a cursor
+// works only in the token of the query that made it.
+func cursorAAD(ns namespace.Name, fingerprint string) []byte {
+	return []byte("job-list-cursor\n" + ns.String() + "\n" + fingerprint)
+}
+
+// sealCursor returns the cursor of a token for the job ID after. With a
+// sealer, the cursor is the sealed ID, which names no job to the caller.
+func (h *Handler) sealCursor(ctx context.Context, ns namespace.Name, fingerprint string, after job.ID) (string, error) {
+	if h.cursors == nil {
+		return string(after), nil
+	}
+
+	sealed, err := h.cursors.Wrap(ctx, []byte(after), cursorAAD(ns, fingerprint))
+	if err != nil {
+		return "", fmt.Errorf("seal page cursor: %w", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
+}
+
+// openCursor returns the job ID that a cursor holds. A cursor that does not
+// open, or that does not hold a job ID, gives errPageToken.
+func (h *Handler) openCursor(ctx context.Context, ns namespace.Name, fingerprint, cursor string) (job.ID, error) {
+	id := cursor
+
+	if h.cursors != nil {
+		sealed, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			return "", errPageToken
+		}
+
+		plain, err := h.cursors.Unwrap(ctx, sealed, cursorAAD(ns, fingerprint))
+		if err != nil {
+			return "", errPageToken
+		}
+
+		id = string(plain)
+	}
+
+	if !strings.HasPrefix(id, job.IDPrefix) || !ident.Valid(id, maxIDLength) {
+		return "", errPageToken
+	}
+
+	return job.ID(id), nil
 }
 
 // fingerprint returns a short digest of the namespace and the filters, so a
@@ -221,6 +267,16 @@ func (h *Handler) listJobs(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
+	fingerprint := q.fingerprint(t.ns.Name)
+
+	if q.cursor != "" {
+		if q.after, err = h.openCursor(ctx, t.ns.Name, fingerprint, q.cursor); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+	}
+
 	page, next, err := h.scanJobs(ctx, p, t.ns.Name, &q)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -228,7 +284,7 @@ func (h *Handler) listJobs(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	h.answerJobList(w, r, &page, next, q.fingerprint(t.ns.Name))
+	h.answerJobList(w, r, &jobPage{ns: t.ns.Name, jobs: page, next: next, fingerprint: fingerprint})
 }
 
 // scanJobs reads the store until the page holds q.size jobs and one more, or
@@ -243,7 +299,12 @@ func (h *Handler) scanJobs(
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	}
 
-	for scanned := 0; scanned < maxScanned; {
+	// Without a sealer the token can hold the ID of a job that the caller may
+	// read only, so the scan has no limit: it ends at a full page or at the
+	// end of the list.
+	limited := h.cursors != nil
+
+	for scanned := 0; !limited || scanned < maxScanned; {
 		rows, err := h.jobs.List(ctx, filter)
 		if err != nil {
 			return nil, "", fmt.Errorf("list jobs: %w", err)
@@ -253,7 +314,7 @@ func (h *Handler) scanJobs(
 			scanned++
 			filter.After = rows[i].ID
 
-			if !q.matches(&rows[i], ns) || h.authz.Authorize(ctx, p, identity.ActionJobRead, rows[i].Spec.Unit) != nil {
+			if !q.matches(&rows[i], ns) || !h.mayList(ctx, p, &rows[i]) {
 				continue
 			}
 
@@ -274,15 +335,35 @@ func (h *Handler) scanJobs(
 	return page, filter.After, nil
 }
 
+// mayList reports whether p passes every filter action of the list on the unit
+// of j. Any error from the authorizer, not only a refusal, leaves the job out.
+func (h *Handler) mayList(ctx context.Context, p identity.Principal, j *job.Job) bool {
+	for _, action := range listFilters() {
+		if h.authz.Authorize(ctx, p, action, j.Spec.Unit) != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// jobPage is a page of the job list that is ready to answer.
+type jobPage struct {
+	ns          namespace.Name
+	jobs        []job.Job
+	next        job.ID
+	fingerprint string
+}
+
 // answerJobList writes the page. It names the pool of each job once for each
 // pool ID.
-func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, page *[]job.Job, next job.ID, fp string) {
+func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, p *jobPage) {
 	ctx := r.Context()
-	out := listJobsResponse{Jobs: make([]jobResponse, 0, len(*page)), NextPageToken: ""}
+	out := listJobsResponse{Jobs: make([]jobResponse, 0, len(p.jobs)), NextPageToken: ""}
 	names := map[string]string{}
 
-	for i := range *page {
-		j := &(*page)[i]
+	for i := range p.jobs {
+		j := &p.jobs[i]
 		doc := toJobResponse(j)
 
 		if j.Spec.Pool != "" {
@@ -305,8 +386,15 @@ func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, page *[]
 		out.Jobs = append(out.Jobs, doc)
 	}
 
-	if next != "" {
-		token, err := pagetoken.Encode(pageTokenWire{After: string(next), Fingerprint: fp})
+	if p.next != "" {
+		cursor, err := h.sealCursor(ctx, p.ns, p.fingerprint, p.next)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		token, err := pagetoken.Encode(pageTokenWire{After: cursor, Fingerprint: p.fingerprint})
 		if err != nil {
 			h.writeError(ctx, w, fmt.Errorf("encode page token: %w", err))
 

@@ -425,9 +425,25 @@ type notFoundWriter struct {
 	notFound bool
 }
 
-// Unwrap returns the writer below, so a handler can flush a stream through
-// http.ResponseController.
-func (c *notFoundWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
+// FlushError sends the data written so far to the client, so a stream reaches it
+// before the handler ends. It does not expose the other optional methods of
+// the writer below, such as Hijack.
+func (c *notFoundWriter) FlushError() error {
+	if err := http.NewResponseController(c.ResponseWriter).Flush(); err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+
+	return nil
+}
+
+// SetWriteDeadline limits the time of the next writes of a stream.
+func (c *notFoundWriter) SetWriteDeadline(t time.Time) error {
+	if err := http.NewResponseController(c.ResponseWriter).SetWriteDeadline(t); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
+	return nil
+}
 
 // WriteHeader swallows a 404 without the JSON media type and records it.
 // Every other status passes through.

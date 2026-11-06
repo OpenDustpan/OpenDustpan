@@ -159,7 +159,7 @@ Each job has the form of [the job document](#the-job-document).
 | `pageToken` | The `nextPageToken` of the page before, for the same query |
 
 The answer is `{"jobs": [...], "nextPageToken": "..."}`. The field `nextPageToken`
-is not in the answer of the last page. A token works for the query that made it. A
+is not in the answer of the last page. The token is opaque: the server seals its cursor, so a token never names a job. A token works for the query that made it. A
 token that was changed, or that another query made, gets 400 with the code
 `request.page-token-invalid`. A value that is not valid gets 400 with the code
 `request.invalid-query`. One request reads at most 2,000 jobs from the store. When it
@@ -195,6 +195,20 @@ entry that the client has. The stream starts with the next entry. The default is
 `request.invalid-query`.
 
 The server checks each chunk of the log before it sends the bytes of the chunk.
+A stream has these limits:
+
+- A stream lives at most 10 minutes. At that limit, the last line is
+  `{"done": false, "last": 2, "resume": true}`. Open the stream again with
+  `?after=2`, where `2` is the `last` value.
+- When the server stops, the stream ends with the same `resume` line.
+- The server sets a time limit of 30 seconds on each write. A client that does
+  not read ends its stream at that limit.
+- The server checks `namespace:read`, `job:read` and `job:read-logs` again at each
+  poll. If the caller lost one of them, the stream ends with an error line with
+  the code `access.denied`.
+- A principal can have 8 open streams, and the server can have 256. A stream over
+  a limit gets 429 with the code `job.limit`. Close a stream and try again.
+
 When a chunk fails its check, or the log was redacted, the stream ends with the line
 `{"error": {"errorCode": "...", "message": "..."}}` and no `done` line. The status is
 200 by then, so a client must read the last line. The server never sends the bytes
@@ -204,6 +218,7 @@ of a chunk that failed its check.
 | --- | --- | --- |
 | 400 | `request.invalid-query` | The `after` value is not valid |
 | 403 | `access.denied` | The caller has `job:read` but lacks `job:read-logs` |
+| 429 | `job.limit` | The principal has 8 open log streams, or the server has 256 |
 | 404 | `job.not-found` | The namespace or the job does not exist in the path, the phase is not `plan`, `apply` or `deliver`, or the caller cannot read the job |
 | 404 | `job.log-not-available` | The phase did not start, so it has no log yet |
 
