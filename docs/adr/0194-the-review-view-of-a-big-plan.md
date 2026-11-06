@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18 · part of ADR 190. Decisions 6 and 8 superseded in part by ADR 226
 
+Changed by:
+
+- ADR 222 changes decisions 6 and 8: policy reports and the plan summary are
+  facts.
+- ADR 226 changes decisions 6 and 8: plan summary and policy reports become
+  facts with built-in gates.
+
 ## Context
 
 A change of one shared local can change hundreds of resources in many

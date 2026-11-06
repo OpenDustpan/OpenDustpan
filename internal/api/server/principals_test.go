@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -124,11 +125,14 @@ func newAuditedPrincipalHandler(
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -157,6 +161,7 @@ func newAuditedPrincipalHandler(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -996,11 +1001,14 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -1029,6 +1037,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Principals:       svc,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1086,11 +1095,14 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -1119,6 +1131,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Principals:       newTestPrincipals(t),
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

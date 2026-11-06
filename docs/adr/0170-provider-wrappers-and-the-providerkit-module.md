@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · ADRs 171 to 179 give the parts. Open question answered in part by ADR 257
 
+Changed by:
+
+- ADR 257 extends: the protocol part of the open question.
+
 The code of the module is in the repository `OpenDustpan/providerkit`. Its
 first pull request is OpenDustpan/providerkit PR #1.
 

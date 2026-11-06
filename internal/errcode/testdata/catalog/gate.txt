@@ -3,3 +3,8 @@ gate.approvers-group-invalid
 gate.approvers-group-missing
 gate.approvers-unmet
 gate.approvers-user-invalid
+gate.final
+gate.invalid
+gate.limit
+gate.not-found
+gate.version-conflict

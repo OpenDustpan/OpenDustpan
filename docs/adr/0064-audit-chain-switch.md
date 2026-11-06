@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-15. The "when it is above 0" part of decision 10 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 72 changes decisions 6, 8 and 10: fence_version always hashed and the
+  migration claim rule.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 ADR 41 decision 13 gives every audit entry the hash of its own fields and of

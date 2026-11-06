@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-20. Decisions 1 to 11 and 13 are owner decisions. The project manager decided details of decisions 8, 10, 12 and 13 on the same day, under the owner's delegation. Amends ADR 213 decision 7. Accepts RFC 89, except its questions 4 and 11
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 299 changes decision 4: webhooks with three recovery paths.
+- ADR 299 extends decision 7: more comment commands and a reaction.
+- ADR 299 extends decision 2: new operations of the Forge port.
+- ADR 300 changes decision 7: a third comment command, `dustpan plan`.
+- ADR 303 extends decision 11: OpenDustpan is not a Git host. The Forge port
+  connects to Git hosts for repositories, pull requests and statuses.
+
 ## Context
 
 Many accepted decisions use a Git host and name "the `Forge` port of RFC 12,

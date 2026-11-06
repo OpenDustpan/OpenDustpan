@@ -27,7 +27,7 @@ func newOpener(t *testing.T, f *fake, rules egress.Rules) *github.Opener {
 	pool := x509.NewCertPool()
 	pool.AddCert(f.srv.Certificate())
 
-	o, err := github.NewOpener(github.Config{Rules: rules, RootCAs: pool, Now: nil})
+	o, err := github.NewOpener(github.Config{Rules: rules, RootCAs: pool, Now: nil, Prover: testProver{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,19 +100,19 @@ func harness(auth forge.AuthKind) forgetest.Factory {
 
 func TestConformanceApp(t *testing.T) {
 	t.Parallel()
-	forgetest.Run(t, harness(forge.AuthApp))
+	forgetest.Run(t, conformanceHarness(forge.AuthApp))
 }
 
 func TestConformanceToken(t *testing.T) {
 	t.Parallel()
-	forgetest.Run(t, harness(forge.AuthToken))
+	forgetest.Run(t, conformanceHarness(forge.AuthToken))
 }
 
 func TestKind(t *testing.T) {
 	t.Parallel()
 
 	o, err := github.NewOpener(
-		github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil},
+		github.Config{Rules: egress.Rules{Allow: nil, LoopbackForTests: false}, RootCAs: nil, Now: nil, Prover: nil},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -477,19 +477,20 @@ func TestStatusMapping(t *testing.T) {
 }
 
 // TestUnusedMethodsAreUnsupported checks that the methods that are not in
-// this version name GitHub in their error, and that the adapter lists no
-// capability.
+// this version name GitHub in their error, and that the adapter lists the
+// capabilities of the files, of the commits and of the review requests only.
 func TestUnusedMethodsAreUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
-	if caps := h.Forge.Capabilities(); len(caps) != 0 {
-		t.Fatalf("Capabilities = %v, want none", caps)
+	caps := h.Forge.Capabilities()
+	if len(caps) != 3 || !caps.Has(forge.CapFiles) || !caps.Has(forge.CapCommit) || !caps.Has(forge.CapReview) {
+		t.Fatalf("Capabilities = %v, want files, commit and review only", caps)
 	}
 
-	_, err := h.Forge.Head(t.Context(), "acme/infra", "main")
+	_, err := h.Forge.Compare(t.Context(), "acme/infra", "a", "b", 1)
 	if !errors.Is(err, forge.ErrUnsupported) || !strings.Contains(err.Error(), "GitHub") {
-		t.Fatalf("Head = %v", err)
+		t.Fatalf("Compare = %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -204,7 +205,7 @@ func waitForCopy(t *testing.T, blobs blob.Store, probe blob.Key) {
 	deadline := time.Now().Add(chainWait)
 
 	for {
-		objects, err := blobs.List(t.Context(), dir)
+		objects, err := blobtest.ListAll(t.Context(), blobs, dir)
 		if err != nil {
 			t.Fatalf("list %s: %v", dir, err)
 		}

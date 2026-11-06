@@ -775,15 +775,17 @@ type probeHidingBlobs struct {
 	*memBlobs
 }
 
-func (p probeHidingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	objects, err := p.memBlobs.List(ctx, prefix)
+func (p probeHidingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := p.memBlobs.ListPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return blob.Page{}, err
 	}
 
-	return slices.DeleteFunc(objects, func(o blob.Object) bool {
+	page.Objects = slices.DeleteFunc(page.Objects, func(o blob.Object) bool {
 		return strings.Contains(o.Key.String(), "/item-keys/clock-probe-")
-	}), nil
+	})
+
+	return page, nil
 }
 
 // failingDeleteBlobs refuses every delete.

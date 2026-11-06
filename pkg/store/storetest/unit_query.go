@@ -415,3 +415,35 @@ func testQueryUnitsLimit(t *testing.T, s Store) {
 		}
 	}
 }
+
+// testStackInventoryHasNoLastRelease expects the inventory entry of a Pulumi
+// stack to carry no last released lock, in the list and in the read by unit ID.
+// Only an OpenTofu workspace has that record.
+func testStackInventoryHasNoLastRelease(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	createStacks(t, s, ns, [][2]string{{"web", "prod"}}, []map[string]string{nil})
+
+	entries, err := s.ListUnits(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("list units: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("list units = %d entries, want 1", len(entries))
+	}
+
+	if entries[0].LastRelease != nil {
+		t.Fatalf("stack entry in the list has last release %+v, want none", entries[0].LastRelease)
+	}
+
+	byID, err := s.GetUnit(t.Context(), entries[0].UnitID)
+	if err != nil {
+		t.Fatalf("get unit: %v", err)
+	}
+
+	if byID.LastRelease != nil {
+		t.Fatalf("stack entry by unit ID has last release %+v, want none", byID.LastRelease)
+	}
+}

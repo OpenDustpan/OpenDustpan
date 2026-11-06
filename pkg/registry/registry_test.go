@@ -487,10 +487,11 @@ func (s *countStore) Delete(_ context.Context, _ blob.Key) error {
 	return nil
 }
 
-func (s *countStore) List(_ context.Context, _ string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it counts the call and answers an empty page.
+func (s *countStore) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
 	s.calls.Add(1)
 
-	return nil, nil
+	return blob.Page{Objects: nil, Next: ""}, nil
 }
 
 func (s *countStore) Ping(_ context.Context) error {

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Adds to ADR 103 decisions 8 and 9. Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 [ADR 17](0017-api-authorization-and-policy-for-every-feature.md) says that

@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -310,7 +315,7 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 		return job.Spec{}, err
 	}
 
-	steps, err := stepsOf(unit.Tool(), req.Purpose)
+	steps, err := stepsOf(unit, req.Purpose)
 	if err != nil {
 		return job.Spec{}, err
 	}
@@ -354,13 +359,13 @@ func checkPlanRequest(req *job.StartRequest) error {
 	}
 }
 
-// stepsOf returns the fixed steps for the tool and the purpose.
-func stepsOf(tool string, purpose job.Purpose) ([]job.Step, error) {
+// stepsOf returns the fixed steps for the unit and the purpose.
+func stepsOf(unit identity.Object, purpose job.Purpose) ([]job.Step, error) {
 	if purpose != job.PurposeDriftCheck {
-		return planSteps(tool)
+		return planSteps(unit)
 	}
 
-	return driftSteps(tool)
+	return driftSteps(unit.Tool())
 }
 
 // checkLocation checks the code location of a start in the namespace ns.
@@ -452,10 +457,57 @@ const (
 	tofuAutomation = "TF_IN_AUTOMATION"
 )
 
-// planSteps returns the default steps of a plan for the tool. Only the tools
-// with a plan step list here start a job.
-func planSteps(tool string) ([]job.Step, error) {
-	switch tool {
+// pulumiProgram is the program of the plan steps of a Pulumi stack. The runner
+// finds it on its PATH.
+const pulumiProgram = "pulumi"
+
+// The words of the Pulumi steps that this server starts.
+const (
+	pulumiPreview        = "preview"
+	pulumiNonInteractive = "--non-interactive"
+	pulumiStackFlag      = "--stack="
+	pulumiSkipUpdate     = "PULUMI_SKIP_UPDATE_CHECK"
+)
+
+// maxPulumiName is the most bytes of the organization, the project or the
+// stack of a Pulumi stack in an argument.
+const maxPulumiName = 100
+
+// validPulumiName reports whether s is on the allowlist of the organization,
+// the project and the stack of a Pulumi stack in an argument: 1 to
+// maxPulumiName ASCII letters, digits, '_', '.' and '-', with a letter, a
+// digit or '_' first, so a segment is never a flag, '.' or '..'.
+func validPulumiName(s string) bool {
+	if s == "" || len(s) > maxPulumiName || !isPulumiNameStart(s[0]) {
+		return false
+	}
+
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !isPulumiNameStart(c) && c != '.' && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isPulumiNameStart reports whether c may start a segment of a Pulumi stack:
+// an ASCII letter, a digit or '_'.
+func isPulumiNameStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+// planSteps returns the default steps of a plan for the tool of the unit. Only
+// the tools with a plan step list here start a job.
+func planSteps(unit identity.Object) ([]job.Step, error) {
+	switch tool := unit.Tool(); tool {
+	case pulumiTool:
+		step, err := pulumiPreviewStep(unit)
+		if err != nil {
+			return nil, err
+		}
+
+		return []job.Step{step}, nil
 	case opentofuTool:
 		initStep := tofuStep(tofuInit, tofuInit, tofuNoInput)
 		planStep := tofuStep(tofuPlan, tofuPlan, tofuNoInput, "-out=tfplan")
@@ -492,4 +544,138 @@ func tofuStep(name string, args ...string) job.Step {
 		Env: map[string]string{tofuAutomation: "1"}, Dir: "", Timeout: 0, AllowFailure: false,
 		ChangesResources: false, Outputs: nil,
 	}
+}
+
+// pulumiPreviewStep returns the plan-phase step that previews the stack of
+// unit. The stack goes in one argument with its flag (--stack=value), so a
+// name never reads as a flag of its own, and in its full form (namespace,
+// project, stack), so the Pulumi CLI never picks a stack from the checkout.
+// The step changes no resource and leaves no output: the log of the step
+// holds the preview.
+func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
+	project, name, _ := strings.Cut(unit.UnitName(), "/")
+
+	// Defense in depth: this allowlist stays so that a new caller of the
+	// planner cannot put a hostile name in an argument. It does not rely on
+	// the other layers: identity.UnitObject checks the unit name, the route
+	// and the stored stack check the name when the stack is made, the argument
+	// list passes the name to the program with no shell, and the Pulumi CLI
+	// checks the name too.
+	for _, part := range []string{string(unit.Namespace()), project, name} {
+		if !validPulumiName(part) {
+			return job.Step{}, fmt.Errorf("%w: the Pulumi stack %s in the namespace %s is not of the form "+
+				"project/stack with letters, digits, '_', '.' and '-'", job.ErrInvalid, ident.Echo(unit.UnitName()),
+				ident.Echo(string(unit.Namespace())))
+		}
+	}
+
+	stack := pulumiStackFlag + string(unit.Namespace()) + "/" + project + "/" + name
+
+	return job.Step{
+		Name: pulumiPreview, Role: job.RoleTool, Phase: job.PhasePlan,
+		Args: []string{pulumiProgram, pulumiPreview, pulumiNonInteractive, stack},
+		Env:  map[string]string{pulumiSkipUpdate: "true"}, Dir: "", Timeout: 0, AllowFailure: false,
+		ChangesResources: false, Outputs: nil,
+	}, nil
+}
+
+// newJobWorkers builds the periodic work of the job model: the reconcile and
+// the sweep of the artifact blobs. Each is nil when the server lacks a port
+// that it needs.
+func newJobWorkers(svc services, cfg *settings) (*job.Reconciler, *job.ArtifactSweeper, error) {
+	reconciler, err := newJobReconciler(svc, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sweeper, enabled, err := newArtifactSweeper(svc, cfg)
+	if err != nil || !enabled {
+		return reconciler, nil, err
+	}
+
+	return reconciler, sweeper, nil
+}
+
+// newArtifactSweeper builds the sweep of the plan and log blobs of jobs, the
+// schedule job.artifact-sweep. It returns false when the server lacks a port
+// that the sweep needs: the job store, the durable store, the blob store or
+// the namespace service. A job store that cannot read the names of the
+// artifact blobs, or a store that cannot tell whether a backup runs, logs a
+// warning and runs no sweep, so the server deletes no artifact blob.
+func newArtifactSweeper(svc services, cfg *settings) (*job.ArtifactSweeper, bool, error) {
+	if cfg.jobStore == nil || svc.namespaces == nil || cfg.durableStore == nil || cfg.blobStore == nil {
+		return nil, false, nil
+	}
+
+	log := cfg.logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	ports, ok := artifactSweepPortsOf(cfg, log)
+	if !ok {
+		return nil, false, nil
+	}
+
+	refusals, err := blobRefusals(cfg, job.ArtifactBlobFamily())
+	if err != nil {
+		return nil, false, err
+	}
+
+	blobs, err := job.NewArtifactBlobs(cfg.blobStore, refusals)
+	if err != nil {
+		return nil, false, fmt.Errorf("job artifact blobs: %w", err)
+	}
+
+	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
+		Jobs: cfg.jobStore, Names: ports.names, Blobs: blobs, Namespaces: jobNamespaces{namespaces: svc.namespaces},
+		Guard: ports.guard, Clock: ports.clock, Audit: ports.entries, Logger: log, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("job artifact sweep: %w", err)
+	}
+
+	return s, true, nil
+}
+
+// artifactSweepPorts are the ports of the stores that the artifact sweep needs.
+type artifactSweepPorts struct {
+	names   job.ArtifactKeyStore
+	guard   blobguard.Watch
+	clock   blob.DatabaseClock
+	entries audit.ServerStore
+}
+
+// artifactSweepPortsOf returns the ports of the stores of cfg that the artifact
+// sweep needs. It logs a warning and returns false when a store lacks one.
+func artifactSweepPortsOf(cfg *settings, log *slog.Logger) (artifactSweepPorts, bool) {
+	var p artifactSweepPorts
+
+	var ok bool
+
+	if p.names, ok = cfg.jobStore.(job.ArtifactKeyStore); !ok {
+		log.Warn("the job store cannot read the names of the artifact blobs: the server deletes no artifact blob")
+
+		return p, false
+	}
+
+	if p.guard, ok = cfg.namespaceStore.(blobguard.Watch); !ok {
+		log.Warn("the store cannot tell whether a backup or a restore runs: the server deletes no artifact blob")
+
+		return p, false
+	}
+
+	if p.clock, ok = cfg.namespaceStore.(blob.DatabaseClock); !ok {
+		log.Warn("the store cannot read the clock of the database: the server deletes no artifact blob")
+
+		return p, false
+	}
+
+	if p.entries, ok = cfg.namespaceStore.(audit.ServerStore); !ok {
+		log.Warn("the store cannot append entries of the scope of the server: the server deletes no artifact blob")
+
+		return p, false
+	}
+
+	return p, true
 }

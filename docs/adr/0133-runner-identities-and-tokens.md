@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · supersedes ADR 101 decision 10 in part · answers an open question of ADR 101
 
+Changed by:
+
+- ADR 204 extends: the open question on a token issuer, in part.
+
 ## Context
 
 [ADR 101](0101-two-executors-write-back-and-runners.md) asks whether a

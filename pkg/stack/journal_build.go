@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -199,77 +199,35 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 		BlobKey:       "",
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
+
+		// The commit of the build sets the start of its attempt.
+		AttemptStartedAt: time.Time{},
 	}, nil
 }
 
 // storeBuiltCheckpoint writes the blob of save through the checkpoint write
 // of an ordinary save, then commits its row with the delete of the journal
-// of the update. A blob that is already there belongs to a first attempt
-// whose commit never landed: the retry adopts it when it holds the same
-// build, even when the manifest time differs.
+// of the update. The blob has the key of its own attempt. A retry after a
+// first attempt whose commit never landed writes a new blob, and the sweep
+// collects the blob of the first attempt.
 func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) error {
 	prev, err := s.previousCheckpoint(ctx, save.ref, save.id)
 	if err != nil {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	key, err := checkpointBlobKey(save.blobs, save.stackID, save.id, 0, prev)
+	key, err := checkpointBlobKey(save.blobs, save.stackID, save.id, 0)
 	if err != nil {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	w := checkpointWrite{
-		op: "save built checkpoint", id: save.id, blobs: save.blobs, key: key, deployment: save.built.Deployment,
-		other: nil,
-		commit: func(ctx context.Context, size int64, sum [md5.Size]byte) error {
-			return s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum)
+	return s.writeCheckpoint(ctx, checkpointWrite{
+		op: "save built checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
+		key: key, deployment: save.built.Deployment,
+		commit: func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (bool, error) {
+			return false, s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum, started)
 		},
-	}
-	w.other = func(ctx context.Context, gave []byte, size int64, sum [md5.Size]byte) error {
-		return s.adoptOtherBuild(ctx, w, save, prev, storedBuild{gave: gave, size: size, sum: sum})
-	}
-
-	return s.writeCheckpoint(ctx, w)
-}
-
-// storedBuild is the stored gzip bytes under the key of a built save, with
-// their size and MD5. gave is nil when the stored blob is over the size
-// limit.
-type storedBuild struct {
-	gave []byte
-	size int64
-	sum  [md5.Size]byte
-}
-
-// adoptOtherBuild answers a stored blob whose bytes differ from the bytes of
-// this build. The first build may hold another manifest time: a blob with the
-// same build apart from that time commits a row that describes the stored
-// blob. Anything else is a concurrent save of the same update, which fails
-// without touching the journal.
-func (s *Updates) adoptOtherBuild(
-	ctx context.Context, w checkpointWrite, save builtSave, prev *Checkpoint, stored storedBuild,
-) error {
-	if stored.gave == nil {
-		// A stored blob over the size limit fails like a blob that cannot be
-		// read, so the journal stays for a later build.
-		return w.unavailable(ctx)
-	}
-
-	deployment, err := gunzipBytes(stored.gave, s.maxCheckpoints)
-	if err != nil {
-		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrConcurrentModification)
-	}
-
-	if !sameBuild(deployment, save.built.Deployment) {
-		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrConcurrentModification)
-	}
-
-	// The row describes the stored blob, which may hold the manifest time of
-	// the first build.
-	save.built.Deployment = deployment
-	save.built.Digest = sha256.Sum256(deployment)
-
-	return s.commitBuiltRow(ctx, builtRow(save, w.key, prev), stored.size, stored.sum)
+	})
 }
 
 // builtRow returns the checkpoint row write of save under key: the built
@@ -288,58 +246,15 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 	}
 }
 
-// sameBuild reports whether two built deployments are equal apart from the
-// time in their manifest. The replay writes the time of the build there, so
-// a retry after the clock moved builds the same deployment with a new time.
-func sameBuild(a, b []byte) bool {
-	aParts, aok := splitBuild(a)
-	bParts, bok := splitBuild(b)
-
-	return aok && bok &&
-		equalMembers(aParts.members, bParts.members) &&
-		equalMembers(aParts.manifest, bParts.manifest)
-}
-
-// buildParts holds the members of a deployment without its manifest, and the
-// members of the manifest without its time.
-type buildParts struct {
-	members  map[string]json.RawMessage
-	manifest map[string]json.RawMessage
-}
-
-// splitBuild returns the parts of a deployment that sameBuild compares. It
-// reports false when the deployment or its manifest is not a JSON object.
-func splitBuild(deployment []byte) (buildParts, bool) {
-	var parts buildParts
-
-	if err := json.Unmarshal(deployment, &parts.members); err != nil {
-		return buildParts{members: nil, manifest: nil}, false
-	}
-
-	if raw, found := parts.members["manifest"]; found {
-		if err := json.Unmarshal(raw, &parts.manifest); err != nil {
-			return buildParts{members: nil, manifest: nil}, false
-		}
-	}
-
-	delete(parts.members, "manifest")
-	delete(parts.manifest, "time")
-
-	return parts, true
-}
-
-// equalMembers reports whether two sets of JSON members hold the same bytes.
-func equalMembers(a, b map[string]json.RawMessage) bool {
-	return maps.EqualFunc(a, b, func(x, y json.RawMessage) bool { return bytes.Equal(x, y) })
-}
-
 // commitBuiltRow writes the row of a built checkpoint with the delete of its
 // journal, in one fenced transaction, then deletes the journal blobs and
 // sweeps the update like a checkpoint save does. The store checks the lease
 // and the fence; a refused build deletes nothing and keeps the journal. A
 // failed blob delete leaves the blob for the sweep and never fails the
 // build.
-func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
+func (s *Updates) commitBuiltRow(
+	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte, started time.Time,
+) error {
 	built, ok := s.checkpoints.(BuiltCheckpointStore)
 	if !ok {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, ErrMissingDependency)
@@ -360,6 +275,8 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+
+		AttemptStartedAt: started,
 	}
 
 	keys, err := built.PutBuiltCheckpoint(ctx, cp, save.fence)
@@ -367,14 +284,23 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	if len(keys) > 0 && s.journal != nil {
-		if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, keys); err != nil {
-			s.logger.WarnContext(
-				ctx,
-				"delete journal blobs",
-				slog.String("stack", save.ref.String()),
-				slog.String("update", save.id.String()),
-			)
+	// The guard comes after the commit that removed the journal rows, and again
+	// before each delete. A running backup or restore keeps the batch blobs,
+	// and the next sweep deletes them.
+	if s.journal != nil {
+		for _, key := range keys {
+			if s.deletesHeld(ctx, "journal build", save.ref) {
+				break
+			}
+
+			if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, []blob.Key{key}); err != nil {
+				s.logger.WarnContext(
+					ctx,
+					"delete journal blobs",
+					slog.String("stack", save.ref.String()),
+					slog.String("update", save.id.String()),
+				)
+			}
 		}
 	}
 

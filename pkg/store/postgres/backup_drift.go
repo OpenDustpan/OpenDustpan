@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/driftstore"
 )
@@ -32,7 +30,7 @@ func pgCopyDriftTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedDriftResults(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedDriftResults(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT d.unit_id, n.name, d.tool, d.job_id, d.status, d.checked_at_ms, d.truncated, d.resources_json FROM " +
 		stagingTable(
 			staging,

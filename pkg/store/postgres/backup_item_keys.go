@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
@@ -28,7 +26,7 @@ func pgCopyItemKeyTables() []pgCopyTable {
 
 // checkStagedOwnedRows checks the rows of a staged backup that belong to a
 // namespace and carry a rule of their own: the saved views and the item keys.
-func checkStagedOwnedRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedOwnedRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedSavedViews(ctx, pool, staging); err != nil {
 		return err
 	}
@@ -72,7 +70,7 @@ func checkStagingIdent(staging string) error {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedItemKeys(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedItemKeys(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagingIdent(staging); err != nil {
 		return err
 	}
@@ -134,7 +132,7 @@ func checkStagedItemKeys(ctx context.Context, pool *pgxpool.Pool, staging string
 //
 // Defense in depth: the store checks a plan again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedJobArtifacts(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedJobArtifacts(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagingIdent(staging); err != nil {
 		return err
 	}
@@ -189,13 +187,19 @@ func checkStagedJobArtifacts(ctx context.Context, pool *pgxpool.Pool, staging st
 //
 // Defense in depth: a reader checks the hash of a log again. This check stays
 // so that a bad row fails the restore and does not wait for a reader.
-func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedLogChunks(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagingIdent(staging); err != nil {
 		return err
 	}
 
-	query := "SELECT c.log_id, c.seq, c.sha256, c.size, l.id FROM " + stagingTable(staging, "job_log_chunks") +
-		" AS c LEFT JOIN " + stagingTable(staging, "job_logs") +
+	query := "SELECT c.log_id, c.seq, c.sha256, c.size, l.id, l.job_id, c.blob_key, c.confirmed = 1 FROM " + stagingTable(
+		staging,
+		"job_log_chunks",
+	) +
+		" AS c LEFT JOIN " + stagingTable(
+		staging,
+		"job_logs",
+	) +
 		" AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id"
 
 	rows, err := pool.Query(ctx, query)
@@ -207,20 +211,25 @@ func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging strin
 
 	for rows.Next() {
 		var (
-			logID, sha string
-			seq, size  int64
-			log        *string
+			logID, sha, blobKey string
+			seq, size           int64
+			log, jobID          *string
+			confirmed           bool
 		)
 
-		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log); scanErr != nil {
+		if scanErr := rows.Scan(&logID, &seq, &sha, &size, &log, &jobID, &blobKey, &confirmed); scanErr != nil {
 			return fmt.Errorf("read staged log chunks: %w", backup.ErrExportRead)
 		}
 
-		if log == nil {
+		if log == nil || jobID == nil {
 			return fmt.Errorf("staged chunk %d of log %q has no log version: %w", seq, logID, backup.ErrCorrupt)
 		}
 
-		if chunkErr := jobstore.CheckChunkRow(logID, seq, size, sha); chunkErr != nil {
+		check := jobstore.ChunkRowCheck{
+			Job: *jobID, Log: logID, Seq: seq, Size: size, SHA256: sha, Confirmed: confirmed, BlobKey: blobKey,
+		}
+
+		if chunkErr := jobstore.CheckChunkRow(&check); chunkErr != nil {
 			return fmt.Errorf("staged chunk %d of log %q is not valid: %w: %w", seq, logID, chunkErr, backup.ErrCorrupt)
 		}
 	}
@@ -234,7 +243,7 @@ func checkStagedLogChunks(ctx context.Context, pool *pgxpool.Pool, staging strin
 
 // checkStagedLogNamespaces refuses a staged log version or log chunk row of a
 // namespace that the backup does not hold. It returns backup.ErrCorrupt.
-func checkStagedLogNamespaces(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedLogNamespaces(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagingIdent(staging); err != nil {
 		return err
 	}

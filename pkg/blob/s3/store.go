@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -119,6 +120,9 @@ type Store struct {
 	backoff     func(attempt int) time.Duration
 	sleep       func(ctx context.Context, d time.Duration) error
 	maxSize     int64
+
+	probeDeadline time.Duration
+	logger        *slog.Logger
 }
 
 var _ blob.Store = (*Store)(nil)
@@ -144,13 +148,15 @@ func New(signer *Signer, prefix string, client *http.Client, opts ...Option) (*S
 	}
 
 	s := &Store{
-		signer:      signer,
-		prefix:      strings.Trim(prefix, "/"),
-		client:      client,
-		maxAttempts: defaultMaxAttempts,
-		backoff:     defaultBackoff,
-		sleep:       defaultSleep,
-		maxSize:     defaultMaxObjectSize,
+		signer:        signer,
+		prefix:        strings.Trim(prefix, "/"),
+		client:        client,
+		maxAttempts:   defaultMaxAttempts,
+		backoff:       defaultBackoff,
+		probeDeadline: defaultProbeDeadline,
+		logger:        slog.New(slog.DiscardHandler),
+		sleep:         defaultSleep,
+		maxSize:       defaultMaxObjectSize,
 	}
 
 	for _, opt := range opts {
@@ -183,12 +189,17 @@ func Open(
 		return nil, err
 	}
 
-	key, err := store.writeFirstProbe(ctx)
+	probeCtx, cancel := context.WithTimeout(ctx, store.probeDeadline)
+	defer cancel()
+
+	budget := newCleanupBudget()
+
+	key, err := store.writeFirstProbe(probeCtx, budget)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := store.checkSecondProbe(ctx, key); err != nil {
+	if err := store.checkSecondProbe(probeCtx, key, budget); err != nil {
 		return nil, err
 	}
 
@@ -343,27 +354,30 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 // writeFirstProbe writes the first probe copy under a fresh key. A key that
-// already exists belongs to another start, so it tries the next key. Any
-// other failure deletes the probe and reports the failure.
-func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
-	cleanupCtx := context.WithoutCancel(ctx)
-
+// already exists is ours, because the key is random: it deletes the object
+// and tries the next key. Any other failure deletes the probe and reports
+// the failure.
+func (s *Store) writeFirstProbe(ctx context.Context, budget *cleanupBudget) (blob.Key, error) {
 	for range probeAttempts {
 		key, err := newProbeKey()
 		if err != nil {
 			return "", fmt.Errorf("s3: open store at %s: %w", s.describe(), err)
 		}
 
-		err = s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
+		err = s.probePut(ctx, key)
 		if err == nil {
 			return key, nil
 		}
 
 		if errors.Is(err, blob.ErrExists) {
+			if cleanupErr := s.deleteOrphan(ctx, key, budget); cleanupErr != nil {
+				return "", cleanupErr
+			}
+
 			continue
 		}
 
-		if cleanupErr := s.Delete(cleanupCtx, key); cleanupErr != nil {
+		if cleanupErr := s.probeDelete(ctx, key, budget); cleanupErr != nil {
 			return "", errors.Join(
 				fmt.Errorf("s3: open store at %s: probe first write: %w", s.describe(), err),
 				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
@@ -376,14 +390,25 @@ func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
 	return "", fmt.Errorf("s3: open store at %s: probe key exists: %w", s.describe(), blob.ErrExists)
 }
 
+// deleteOrphan deletes the probe object of a key that the first write found
+// in place. The key is random, so the object is ours: a write that the store
+// got, but whose answer was lost or replaced by a 5xx answer, makes the
+// retry of the same key fail with ErrExists. The object must not stay behind
+// when the probe goes on with a new key.
+func (s *Store) deleteOrphan(ctx context.Context, key blob.Key, budget *cleanupBudget) error {
+	if err := s.probeDelete(ctx, key, budget); err != nil {
+		return fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), err)
+	}
+
+	return nil
+}
+
 // checkSecondProbe writes the probe a second time and deletes it. A second
 // write that succeeds means the store ignores conditional writes. It deletes
 // the probe on every path, so no probe object stays behind.
-func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key) error {
-	cleanupCtx := context.WithoutCancel(ctx)
-
-	secondErr := s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
-	cleanupErr := s.Delete(cleanupCtx, key)
+func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key, budget *cleanupBudget) error {
+	secondErr := s.probePut(ctx, key)
+	cleanupErr := s.probeDelete(ctx, key, budget)
 
 	switch {
 	case secondErr == nil:
@@ -485,7 +510,7 @@ func (e *missingError) Error() string {
 	return fmt.Sprintf("status %d code %s", e.status, e.code)
 }
 
-// retryableError marks a 5xx, 429 or SlowDown answer.
+// retryableError marks a 500, 502, 503, 504, 429 or SlowDown answer.
 type retryableError struct {
 	status int
 	code   string
@@ -770,7 +795,8 @@ func (s *Store) wait(ctx context.Context, attempt int) error {
 	return s.sleep(ctx, s.backoff(attempt))
 }
 
-// shouldRetry reports whether status and code allow another try.
+// shouldRetry reports whether status and code allow another try: 500, 502,
+// 503, 504, 429 and SlowDown. The other 5xx answers, 501 for example, are final.
 func shouldRetry(status int, code string) bool {
 	if code == slowDownCode {
 		return true
@@ -780,11 +806,17 @@ func shouldRetry(status int, code string) bool {
 		return true
 	}
 
-	return status >= 500 && status <= 599
+	switch status {
+	case http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 // readCode parses the S3 XML error code from r. It returns "" when the body
-// has no code. It never returns the body itself.
+// has no code. It drops control characters and caps the code at 128 bytes. It never returns the body itself.
 func readCode(r io.Reader) string {
 	data, err := io.ReadAll(io.LimitReader(r, maxErrorBody))
 	if err != nil || len(bytes.TrimSpace(data)) == 0 {
@@ -796,7 +828,11 @@ func readCode(r io.Reader) string {
 		return ""
 	}
 
-	return parsed.Code
+	// Defense in depth: the text comes from the store. Drop control
+	// characters and cap the length, so that a hostile endpoint cannot put CR
+	// or LF in an error that the caller prints. The log layer cleans the text
+	// again and does not rely on this.
+	return capText(stripControl(parsed.Code), maxCodeBytes)
 }
 
 // sanitizePingError wraps a ping failure without a credential, a path or a

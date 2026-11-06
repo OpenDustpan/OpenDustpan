@@ -47,6 +47,9 @@ var (
 	// a draft, or a supersede of a revision whose change is already in git.
 	// The caller reads again and decides again.
 	ErrConflict = errors.New("catalog object changed since it was read")
+	// ErrAlreadyPublished reports a publish of a draft version that has a
+	// published version. One draft version gives one version.
+	ErrAlreadyPublished = errors.New("draft version is already published")
 	// ErrInFlight reports a submit while a revision of the same request has
 	// not ended.
 	ErrInFlight = errors.New("another revision of the request has not ended")

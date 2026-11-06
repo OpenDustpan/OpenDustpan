@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -26,7 +27,11 @@ func sweepChainServer(
 		ready:            nil,
 		drainPeriod:      0,
 		tempAdmins:       nil,
+		manualLocks:      nil,
 		reconciler:       nil,
+		artifactSweeper:  nil,
+		nameLocks:        nameLockPrune{locks: nil},
+		issuer:           nil,
 		handler:          nil,
 		started:          nil,
 		ungated:          nil,
@@ -41,6 +46,7 @@ func sweepChainServer(
 		workspaces:       nil,
 		backups:          nil,
 		restores:         nil,
+		storeChecks:      nil,
 		now:              nil,
 		registry:         nil,
 		tlsCertFile:      "",
@@ -64,6 +70,10 @@ func sweepChainServer(
 		idempotencyEvery: 0,
 		auditChainEvery:  0,
 		flushDenials:     nil,
+		stateWrite: stateWriteStart{
+			effective: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+			audit:     nil,
+		},
 	}
 }
 

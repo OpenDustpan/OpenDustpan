@@ -21,3 +21,18 @@ func TestCollectionConformance(t *testing.T) {
 		return open(t, base)
 	})
 }
+
+func TestPlacementConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	collectiontest.RunPlacement(t, func(t *testing.T) collectiontest.PlacementStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}

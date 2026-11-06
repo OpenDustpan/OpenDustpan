@@ -2,6 +2,17 @@
 
 Status: accepted · 2026-10-17. Decisions 5 and 6 superseded in part by ADR 225
 
+Changed by:
+
+- ADR 222 changes decisions 5 and 6: the Catalog decision gives approval
+  requirements.
+- ADR 225 changes decisions 5 and 6: the catalog decision gives approval
+  requirements.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 299 changes decision 9: in modes 1 and 2, the approvals of a change in
+  git follow the review mode of its units.
+
 ## Context
 
 ADR 110 decides that each submit of a Catalog request makes a revision, and

@@ -2,6 +2,36 @@
 
 Status: accepted · 2026-10-17. Decision 10 superseded in part by ADR 126. Decision 9 superseded in part by ADR 141. Gate counting extended by ADR 148. Decisions 2, 7, 9, 10 and 12 and the Consequences superseded in part by ADR 128. Decisions 1 and 2 superseded in part by ADR 190. Decisions 1 and 8 extended by ADR 213. Decision 2 extended by ADR 212 decision 3. An open question answered by ADR 213 decision 10. Decision 1 and the approval gate of decision 2 superseded by ADRs 224 and 225. The age of a confirmation superseded by ADR 227
 
+Changed by:
+
+- ADR 110 changes decisions 1 and 8: several gates for each phase kind and
+  Catalog start actions.
+- ADR 126 changes decision 10: the agent field of an audit entry.
+- ADR 128 changes decisions 2, 7, 9, 10 and 12: confirmations, agent verdicts,
+  audit encoding and the consequences.
+- ADR 128 extends: answers the open question on a window of 0.
+- ADR 138 extends decisions 8 and 9: runner actions and audit entries.
+- ADR 141 changes decision 9: no audit entry for a freeze that a schedule
+  makes.
+- ADR 141 extends decision 4: scheduled freezes in the freeze table of the job
+  model.
+- ADR 142 extends decision 6: a review after each freeze break.
+- ADR 146 extends decision 2: a chat approval needs a fresh authentication and
+  records it.
+- ADR 148 extends decision 2: the independentApproval setting of gate
+  counting.
+- ADR 190 changes decisions 1 and 2: no approval gate for a job with a change
+  order origin.
+- ADR 212 extends decision 2: fresh MFA for approvals.
+- ADR 213 extends decisions 1 and 8: old and new values in the policy input,
+  plan-only secrets, freeze question.
+- ADR 222 supersedes decision 1: the start decision becomes gates.
+- ADR 222 changes decision 2: the approval gate becomes approval rules.
+- ADR 224 supersedes decision 1: the start decision becomes gates.
+- ADR 225 changes decision 2: the approval gate becomes approval rules.
+- ADR 227 changes decision 2: the age of a confirmation.
+- ADR 299 supersedes decision 3: the four review modes.
+
 ## Context
 
 ADR 100 defines jobs and ADR 101 their executors.

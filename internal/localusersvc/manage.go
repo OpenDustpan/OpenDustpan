@@ -1,0 +1,561 @@
+package localusersvc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
+)
+
+// CreateInput names a new local user: the user name, the display name of the
+// person, and the reason of the administrator.
+type CreateInput struct {
+	UserName    string
+	DisplayName string
+	Reason      string
+}
+
+// Code is a reset code or a set-up code, shown once. Text is the code, and
+// ExpiresAt the end of its life. The server keeps only the digest of Text.
+type Code struct {
+	ExpiresAt time.Time
+	Text      string
+}
+
+// Created is a new local user with its person and its set-up code.
+type Created struct {
+	User      localuser.User
+	Principal principal.Principal
+	SetUp     Code
+}
+
+// CreateUser makes a person principal, its local user record with no
+// password, and a set-up code. The administrator gives the code to the
+// person, who chooses the password with Redeem. So no administrator chooses
+// or sees the password of a person.
+//
+// It returns localuser.ErrInvalid for a user name that does not match
+// localuser.UserNamePattern, localuser.ErrReasonRequired for no reason, and
+// localuser.ErrAlreadyExists for a user name that a local user holds. When the
+// record or the code fails after the person was made, the person stays with
+// no credential: it cannot sign in, and an administrator can delete it.
+func (s *Service) CreateUser(ctx context.Context, a Actor, in CreateInput) (Created, error) {
+	// The user name is checked as it came: the server never changes a name
+	// to make it valid.
+	if err := localuser.ValidateUserName(in.UserName); err != nil {
+		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), "user name not valid", err)
+	}
+
+	if err := validReason(in.Reason); err != nil {
+		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), "no reason", err)
+	}
+
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return Created{}, err
+	}
+
+	userID, err := newUserID()
+	if err != nil {
+		return Created{}, err
+	}
+
+	object := UserObject(userID)
+	pe := s.entry(a.Entry, ActionUserCreated, "", audit.OutcomeSuccess, in.Reason)
+
+	person, err := s.principals.CreateLocalPerson(ctx, pe, userID, in.DisplayName)
+	if err != nil {
+		return Created{}, fmt.Errorf("create the person of the local user: %w", err)
+	}
+
+	u := localuser.User{
+		CreatedAt: s.Now(), PasswordSetAt: time.Time{}, ID: userID, PrincipalID: person.ID, UserName: in.UserName,
+		CreatedBy: a.Entry.Subject, ChangeRequired: false, Demo: false,
+	}
+
+	ue := s.entry(a.Entry, ActionUserCreated, object, audit.OutcomeSuccess, in.Reason)
+	ue.Changes = []audit.Change{
+		{Key: "userName", Old: nil, New: u.UserName, Layer: "", TakesEffect: ""},
+		{Key: "principal", Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
+	}
+
+	if createErr := s.store.CreateUser(ctx, u, ue); createErr != nil {
+		return Created{}, fmt.Errorf("create the local user: %w", createErr)
+	}
+
+	code, err := s.createCode(ctx, a, codeRequest{
+		user: u, purpose: localuser.PurposeSetUp, reason: in.Reason, lifetime: p.ResetLifetime, revoke: false,
+	})
+	if err != nil {
+		return Created{}, err
+	}
+
+	return Created{User: u, Principal: person, SetUp: code}, nil
+}
+
+// ResetInput names a reset of the password of a person: the reason of the
+// administrator, and whether the reset revokes each access token of the
+// person too.
+type ResetInput struct {
+	Reason             string
+	RevokeAccessTokens bool
+}
+
+// StartReset makes a reset code for the local user of the person
+// principalID. It ends every session of the person, and revokes each access
+// token of the person when in.RevokeAccessTokens is set, in the transaction
+// of the code. The administrator gives the code to the person on another
+// channel.
+//
+// It returns localuser.ErrPasswordSignInOff while the password sign-in is
+// off, localuser.ErrOwnAccount for the own account,
+// localuser.ErrReasonRequired for no reason, localuser.ErrNotFound for a
+// person with no local user, localuser.ErrBreakGlass for a break-glass
+// person, and localuser.ErrDemoFixed for the demo person.
+func (s *Service) StartReset(ctx context.Context, a Actor, principalID string, in ResetInput) (Code, error) {
+	object := principal.Ref(principalID)
+
+	p, err := s.requireEnabled(ctx)
+	if err != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "password sign-in is off", err)
+	}
+
+	// Defense in depth: the route refuses a reset of the own account too.
+	// This check stays so that a new caller of the service cannot skip it.
+	if a.PrincipalID == "" || a.PrincipalID == principalID {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "own account", localuser.ErrOwnAccount)
+	}
+
+	if reasonErr := validReason(in.Reason); reasonErr != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no reason", reasonErr)
+	}
+
+	u, err := s.store.UserByPrincipal(ctx, principalID)
+	if err != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no local user", err)
+	}
+
+	if reachErr := s.checkReach(ctx, a.PrincipalID, principalID); reachErr != nil {
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "outside the reach", reachErr)
+	}
+
+	return s.createCode(ctx, a, codeRequest{
+		user: u, purpose: localuser.PurposeReset, reason: in.Reason, lifetime: p.ResetLifetime,
+		revoke: in.RevokeAccessTokens,
+	})
+}
+
+// checkReach returns nil only when the reach of the administrator with the
+// principal ID actor covers the reach of the person with the principal ID
+// target. A reset lets the administrator sign in as the person, so the
+// administrator must already hold each action that the person holds. A
+// reach that cannot be read fails closed with localuser.ErrOutsideReach.
+func (s *Service) checkReach(ctx context.Context, actor, target string) error {
+	if actor == "" || target == "" {
+		return localuser.ErrOutsideReach
+	}
+
+	holder, err := access.ReachOf(ctx, s.reach, actor)
+	if err != nil {
+		return fmt.Errorf("%w: read the reach of the administrator: %w", localuser.ErrOutsideReach, err)
+	}
+
+	person, err := access.ReachOf(ctx, s.reach, target)
+	if err != nil {
+		return fmt.Errorf("%w: read the reach of the person: %w", localuser.ErrOutsideReach, err)
+	}
+
+	covers, err := holder.Covers(ctx, person)
+	if err != nil {
+		return fmt.Errorf("%w: compare the reaches: %w", localuser.ErrOutsideReach, err)
+	}
+
+	if !covers {
+		return localuser.ErrOutsideReach
+	}
+
+	return nil
+}
+
+// codeRequest names a new code: its user, its purpose, the reason of the
+// administrator, whether a reset revokes the access tokens, and its
+// lifetime.
+type codeRequest struct {
+	user     localuser.User
+	purpose  localuser.Purpose
+	reason   string
+	lifetime time.Duration
+	revoke   bool
+}
+
+// createCode stores a new code of in for its user and returns it.
+func (s *Service) createCode(ctx context.Context, a Actor, in codeRequest) (Code, error) {
+	u, purpose, reason, revoke, lifetime := in.user, in.purpose, in.reason, in.revoke, in.lifetime
+
+	text, err := newCode()
+	if err != nil {
+		return Code{}, err
+	}
+
+	id, err := newResetID()
+	if err != nil {
+		return Code{}, err
+	}
+
+	at := s.Now()
+	r := localuser.Reset{
+		CreatedAt: at, ExpiresAt: at.Add(lifetime), ID: id, UserID: u.ID, CreatedBy: a.Entry.Subject,
+		Reason: reason, Purpose: purpose, RevokeAccessTokens: revoke,
+	}
+
+	object := UserObject(u.ID)
+	e := s.entry(a.Entry, ActionResetCreated, object, audit.OutcomeSuccess, reason)
+
+	if createErr := s.store.CreateReset(ctx, r, localuser.DigestOf(text), e); createErr != nil {
+		if errors.Is(createErr, localuser.ErrBreakGlass) || errors.Is(createErr, localuser.ErrDemoFixed) {
+			return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "account cannot have a password",
+				createErr)
+		}
+
+		return Code{}, fmt.Errorf("create the reset code: %w", createErr)
+	}
+
+	return Code{ExpiresAt: r.ExpiresAt, Text: text}, nil
+}
+
+// Redeem uses a set-up code or a reset code: it checks the new password
+// against the rules, and then stores it, deletes the code and ends every
+// session of the person in one transaction. A password that a rule refuses
+// never uses up the code.
+//
+// It returns localuser.ErrPasswordSignInOff while the password sign-in is
+// off, localuser.ErrNotFound for a code that is not valid, unknown, used or
+// expired, the error of the rule that refuses the password, and
+// localuser.ErrBreakGlass for a break-glass person. base is the entry of the
+// caller.
+func (s *Service) Redeem(ctx context.Context, base audit.Entry, code, password string) error {
+	base.Subject = "sign-in:" + localuser.ProviderID
+
+	p, err := s.requireEnabled(ctx)
+	if err != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "password sign-in is off", err)
+	}
+
+	if !validCode(code) {
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "code not valid", localuser.ErrNotFound)
+	}
+
+	d := localuser.DigestOf(code)
+
+	u, err := s.store.UserOfReset(ctx, d, s.Now())
+	if err != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, unknownObject), "code unknown, used or expired", err)
+	}
+
+	object := UserObject(u.ID)
+	base.Subject = principal.LocalSubjectPrefix + u.ID
+
+	words := []string{u.UserName}
+	if pr, prErr := s.principals.GetPrincipal(ctx, u.PrincipalID); prErr == nil {
+		words = contextWords(u.UserName, pr.DisplayName)
+	}
+
+	nfc, err := s.checkNew(ctx, password, p, words)
+	if err != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "password refused by a rule", err)
+	}
+
+	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
+	if err != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "hasher cannot answer", hashError(err))
+	}
+
+	e := s.entry(base, ActionResetUsed, object, audit.OutcomeSuccess, "")
+	rd := localuser.Redeem{
+		At:     s.Now(),
+		Hash:   h,
+		Change: localuser.PasswordChange{ChangeRequired: false, FromGeneration: 0},
+		Digest: d,
+	}
+
+	if _, redeemErr := s.store.RedeemReset(ctx, rd, e); redeemErr != nil {
+		return s.refuse(ctx, base, on(ActionResetRefused, object), "redeem refused", redeemErr)
+	}
+
+	return nil
+}
+
+// hashError returns ErrHashBusy as it is, and ErrUnavailable for each other
+// error of the hasher.
+func hashError(err error) error {
+	if errors.Is(err, localuser.ErrHashBusy) {
+		return localuser.ErrHashBusy
+	}
+
+	return fmt.Errorf("%w: hash the password", localuser.ErrUnavailable)
+}
+
+// ChangeInput names a change of the own password: the current password, or
+// a session with a fresh authentication, the new password, and the session
+// generation of the session of the change.
+type ChangeInput struct {
+	Current string
+	New     string
+	// Generation is the session generation of the session of the change.
+	// The change is a compare-and-swap on it: a session that another
+	// change ended cannot set the password. 0 fails closed.
+	Generation uint64
+	// Fresh reports that the session of the change has a fresh
+	// authentication. With it, the change needs no current password.
+	Fresh bool
+}
+
+// ChangePassword changes the password of the local user of the caller, and
+// returns the new session generation. It ends every session of the person;
+// the HTTP adapter then starts a new session for the caller with the new
+// generation.
+//
+// It returns localuser.ErrNotFound for a caller with no local user,
+// localuser.ErrDemoFixed for the demo person,
+// localuser.ErrGenerationChanged for a session whose generation is not the
+// stored one, localuser.ErrCurrentPasswordRequired with no current password
+// and no fresh authentication, localuser.ErrWrongPassword for a wrong
+// current password, localuser.ErrHashBusy or localuser.ErrUnavailable when
+// the hasher cannot answer, and the error of the rule that refuses the new
+// password.
+func (s *Service) ChangePassword(ctx context.Context, a Actor, in ChangeInput) (uint64, error) {
+	object := principal.Ref(a.PrincipalID)
+
+	// Defense in depth: the HTTP adapter passes the generation of the
+	// authenticated session, and the store does the compare-and-swap. This
+	// check stays so that a caller with no generation never makes an
+	// unconditional write.
+	if in.Generation == 0 {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no session generation",
+			localuser.ErrGenerationChanged)
+	}
+
+	u, err := s.store.UserByPrincipal(ctx, a.PrincipalID)
+	if err != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no local user", err)
+	}
+
+	object = UserObject(u.ID)
+
+	if u.Demo {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "demo user", localuser.ErrDemoFixed)
+	}
+
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	if currentErr := s.checkCurrent(ctx, a, u, in); currentErr != nil {
+		return 0, currentErr
+	}
+
+	words := []string{u.UserName}
+	if pr, prErr := s.principals.GetPrincipal(ctx, u.PrincipalID); prErr == nil {
+		words = contextWords(u.UserName, pr.DisplayName)
+	}
+
+	nfc, err := s.checkNew(ctx, in.New, p, words)
+	if err != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "password refused by a rule", err)
+	}
+
+	h, err := s.hasher.Hash(ctx, nfc, localuser.DefaultHashParams())
+	if err != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
+	}
+
+	e := s.entry(a.Entry, ActionPasswordChanged, object, audit.OutcomeSuccess, "")
+
+	change := localuser.PasswordChange{ChangeRequired: false, FromGeneration: in.Generation}
+
+	g, setErr := s.store.SetPassword(ctx, u.ID, h, change, e)
+	if setErr != nil {
+		return 0, s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "store refused the password", setErr)
+	}
+
+	return g, nil
+}
+
+// checkCurrent checks the current password of the change in, unless the
+// session of the change has a fresh authentication.
+func (s *Service) checkCurrent(ctx context.Context, a Actor, u localuser.User, in ChangeInput) error {
+	object := UserObject(u.ID)
+
+	if in.Current == "" {
+		if in.Fresh {
+			return nil
+		}
+
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "no current password",
+			localuser.ErrCurrentPasswordRequired)
+	}
+
+	nfc, err := checkForm(in.Current)
+	if err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), ReasonPasswordForm, localuser.ErrWrongPassword)
+	}
+
+	cred, err := s.store.UserByName(ctx, u.UserName)
+	if err != nil || cred.User.ID != u.ID || cred.Hash == "" {
+		// A user with no password has no current password to check: only a
+		// fresh authentication can set the first one.
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), ReasonNoPassword,
+			localuser.ErrCurrentPasswordRequired)
+	}
+
+	res, err := s.hasher.Reserve(ctx, cred.Hash)
+	if err != nil || res == nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRefused, object), "hasher cannot answer", hashError(err))
+	}
+
+	// A wrong current password counts in the lockout by name, after the hash
+	// has its budget and before the compare.
+	keys, countErr := s.countCurrent(ctx, a, object, u)
+	if countErr != nil {
+		res.Release()
+
+		return countErr
+	}
+
+	_, err = res.Verify(nfc, localuser.DefaultHashParams())
+	res.Release()
+
+	if refusal := s.currentRefusal(ctx, a, object, err); refusal != nil {
+		return refusal
+	}
+
+	// A good current password ends the failures in a row of this check, so
+	// only consecutive failures lock the name.
+	s.clearCurrent(ctx, a, object, keys)
+
+	return nil
+}
+
+// clearCurrent clears the counts that the good check of a current password
+// added to, as a full sign-in does. A failed clear leaves the counts, which
+// is the safe direction, so the change goes on, and a failure entry of
+// ActionNameCountsKept records it.
+func (s *Service) clearCurrent(ctx context.Context, a Actor, object string, keys lockKeys) {
+	err := s.ClearLocks(ctx, SignedIn{
+		Assertion: session.Assertion{
+			AuthTime: time.Time{}, ProviderID: "", PrincipalID: "", Subject: "", UserName: "", Email: "", Method: "",
+			Names: nil, Groups: nil, Factors: nil, EmailVerified: false, GroupsPresent: false, AuthTimeKnown: false,
+		},
+		PrincipalID: "", UserID: "", locks: keys, SessionGeneration: 0, ChangeRequired: false,
+	})
+	if err == nil {
+		return
+	}
+
+	e := s.entry(a.Entry, ActionNameCountsKept, object, audit.OutcomeFailure, "")
+	e.Changes = []audit.Change{
+		{Key: "cause", Old: nil, New: "counts of the name cannot be cleared", Layer: "", TakesEffect: ""},
+	}
+
+	if _, appendErr := s.audit.AppendServer(ctx, e); appendErr != nil {
+		return
+	}
+}
+
+// currentRefusal returns the answer of the check of a current password that
+// ended with err. Only a password that does not match, a password over the
+// maximum length and a stored hash that does not parse are a wrong password.
+// Any other error of the hasher answers that it cannot answer, so that a
+// person never reads a busy server as a wrong password.
+func (s *Service) currentRefusal(ctx context.Context, a Actor, object string, err error) error {
+	tg := on(ActionPasswordRefused, object)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, localuser.ErrWrongPassword), errors.Is(err, localuser.ErrPasswordTooLong):
+		return s.refuse(ctx, a.Entry, tg, ReasonWrongPassword, localuser.ErrWrongPassword)
+	case errors.Is(err, localuser.ErrInvalid):
+		return s.refuse(ctx, a.Entry, tg, ReasonStoredHash, localuser.ErrWrongPassword)
+	default:
+		return s.refuse(ctx, a.Entry, tg, "hasher cannot answer", hashError(err))
+	}
+}
+
+// RemovePassword removes the password of the local user of the person
+// principalID. It returns localuser.ErrLastCredential when the person keeps
+// no other credential, localuser.ErrOwnAccount for the own account,
+// localuser.ErrReasonRequired for no reason, and localuser.ErrNotFound for a
+// person with no local user.
+func (s *Service) RemovePassword(ctx context.Context, a Actor, principalID, reason string) error {
+	object := principal.Ref(principalID)
+
+	// Defense in depth: the route refuses the own account too. This check
+	// stays so that a new caller of the service cannot skip it.
+	if a.PrincipalID == "" || a.PrincipalID == principalID {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "own account", localuser.ErrOwnAccount)
+	}
+
+	if err := validReason(reason); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "no reason", err)
+	}
+
+	u, err := s.store.UserByPrincipal(ctx, principalID)
+	if err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "no local user", err)
+	}
+
+	object = UserObject(u.ID)
+	e := s.entry(a.Entry, ActionPasswordRemoved, object, audit.OutcomeSuccess, reason)
+
+	if err := s.store.RemovePassword(ctx, u.ID, e); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "store refused the removal", err)
+	}
+
+	return nil
+}
+
+// User returns the local user of the person principalID, or
+// localuser.ErrNotFound.
+func (s *Service) User(ctx context.Context, principalID string) (localuser.User, error) {
+	u, err := s.store.UserByPrincipal(ctx, principalID)
+	if err != nil {
+		return localuser.User{}, fmt.Errorf("read the local user: %w", err)
+	}
+
+	return u, nil
+}
+
+// countCurrent adds the check of the current password of u to the counts of
+// its name, and returns the keys of the counts. A lock refuses the change
+// with ErrWrongPassword, and a count that cannot be written refuses it with
+// ErrUnavailable.
+func (s *Service) countCurrent(ctx context.Context, a Actor, object string, u localuser.User) (lockKeys, error) {
+	tg := on(ActionPasswordRefused, object)
+
+	name, err := s.nameDigest(ctx, u.UserName)
+	if err != nil {
+		return lockKeys{name: "", sub: ""}, s.refuse(ctx, a.Entry, tg, "key of the names cannot be read", err)
+	}
+
+	keys := lockKeys{name: name, sub: SourcePrefix(a.Entry.SourceIP)}
+
+	err = s.countFailure(ctx, a.Entry, object, keys)
+
+	switch {
+	case errors.Is(err, authgate.ErrNameLocked):
+		return keys, s.refuse(ctx, a.Entry, tg, ReasonNameLocked, localuser.ErrWrongPassword)
+	case err != nil:
+		return keys, s.refuse(ctx, a.Entry, tg, "count of the name cannot be written", err)
+	default:
+		return keys, nil
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -24,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -128,8 +130,9 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	blobs := openBenchBlobs(b)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		ManualLocks: nil,
-		Updates:     s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
+		Sealer:      secrettest.NewMemorySealer(),
+		ManualLocks: nil, BlobGuard: blobguardtest.None{},
+		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
 		Replayer: nil, Refusals: stacktest.NewRefusals(),
 	})

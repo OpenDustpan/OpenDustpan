@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 )
 
@@ -22,6 +23,7 @@ func TestRoutesReturnsACopy(t *testing.T) {
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

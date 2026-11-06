@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -160,6 +161,76 @@ func (s *ItemKeySealer) OpenContent(
 	}
 
 	return openStreamWith(key, ref, binding, r, true), nil
+}
+
+// SealContents implements ItemSealer. It checks every binding before it reads
+// the key.
+func (s *ItemKeySealer) SealContents(ctx context.Context, ref ItemRef, parts []ContentPart) ([][]byte, error) {
+	for i := range parts {
+		if err := checkBinding(parts[i].Binding); err != nil {
+			return nil, fmt.Errorf("part %d: %w", i, err)
+		}
+	}
+
+	key, err := s.openItemKey(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	defer clear(key)
+
+	out := make([][]byte, 0, len(parts))
+
+	for i := range parts {
+		r, err := sealStreamWith(key, ref, parts[i].Binding, bytes.NewReader(parts[i].Data))
+		if err != nil {
+			return nil, fmt.Errorf("seal part %d: %w", i, err)
+		}
+
+		sealed, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("seal part %d: %w", i, err)
+		}
+
+		out = append(out, sealed)
+	}
+
+	return out, nil
+}
+
+// OpenContents implements ItemSealer. It reads the record before any blob, so
+// a shredded key answers ErrShredded at once. It reads each part to its end,
+// and clears the key after the last part.
+func (s *ItemKeySealer) OpenContents(ctx context.Context, ref ItemRef, parts []ContentPart) ([][]byte, error) {
+	for i := range parts {
+		if err := checkBinding(parts[i].Binding); err != nil {
+			return nil, fmt.Errorf("part %d: %w", i, err)
+		}
+	}
+
+	key, err := s.openItemKey(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	defer clear(key)
+
+	out := make([][]byte, 0, len(parts))
+
+	for i := range parts {
+		// The reader clears the key that it gets after the header, so each
+		// part gets its own copy.
+		plain, err := io.ReadAll(
+			openStreamWith(bytes.Clone(key), ref, parts[i].Binding, bytes.NewReader(parts[i].Data), true),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("open part %d: %w", i, err)
+		}
+
+		out = append(out, plain)
+	}
+
+	return out, nil
 }
 
 // openItemKey returns the raw item key of ref. The caller clears it. It reads

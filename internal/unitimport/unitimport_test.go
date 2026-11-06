@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/unitimport"
+	"opendustpan.org/opendustpan/pkg/blob"
 )
 
 const canary = "canary-source-token-7f3a"
@@ -142,6 +143,31 @@ func TestCheckAddress(t *testing.T) {
 
 		if err != nil && strings.Contains(err.Error(), "pass") {
 			t.Errorf("CheckAddress(%q) error holds the address: %v", tt.addr, err)
+		}
+	}
+}
+
+func TestUploadAttemptFollowsTheSharedRule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{"deadline", unitimport.UploadAttemptDeadline == blob.AttemptDeadline, true},
+		{"skew", unitimport.UploadAttemptSkew == blob.AttemptSkew, true},
+		{"error wraps the shared error", errors.Is(unitimport.ErrAttemptExpired, blob.ErrAttemptExpired), true},
+		{
+			"wrapped upload error",
+			errors.Is(fmt.Errorf("commit: %w", unitimport.ErrAttemptExpired), blob.ErrAttemptExpired), true,
+		},
+		{"other error", errors.Is(unitimport.ErrUploadExists, blob.ErrAttemptExpired), false},
+	}
+
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, tt.got, tt.want)
 		}
 	}
 }

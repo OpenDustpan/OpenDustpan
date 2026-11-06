@@ -346,7 +346,13 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 		return nil, err
 	}
 
-	objects, err := v.List(ctx, v.Prefix()+itemKeyDir+string(id)+"/")
+	var objects []blob.Object
+
+	err = blob.Walk(ctx, v, v.Prefix()+itemKeyDir+string(id)+"/", func(o blob.Object) error {
+		objects = append(objects, o)
+
+		return nil
+	})
 	if err != nil {
 		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), scopeaudit.OutsideNamespace)
 	}
@@ -443,7 +449,13 @@ func (b *ItemKeyBlobs) Garbage(
 		return nil, b.refuse(ctx, ns, "put", fmt.Errorf("put the clock probe: %w", err), scopeaudit.OutsideNamespace)
 	}
 
-	objects, listErr := v.List(ctx, v.Prefix()+itemKeyDir)
+	var objects []blob.Object
+
+	listErr := blob.Walk(ctx, v, v.Prefix()+itemKeyDir, func(o blob.Object) error {
+		objects = append(objects, o)
+
+		return nil
+	})
 
 	// The probe goes in every case. A failed delete fails the run, and a later
 	// run finds the probe as garbage.

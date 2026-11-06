@@ -22,8 +22,21 @@ func TestLogReaderKeepsTheHashError(t *testing.T) {
 	var ref secret.ItemRef
 
 	r := &logReader{
-		ctx: t.Context(), blobs: nil, sealer: nil, ns: "", job: "", ref: ref, log: log, cur: nil, closer: nil,
-		next: 0, sum: sha256.New(), done: false, check: true, end: nil,
+		ctx:    t.Context(),
+		blobs:  nil,
+		sealer: nil,
+		ns:     "",
+		job:    "",
+		ref:    ref,
+		log:    log,
+		keys:   nil,
+		cur:    nil,
+		closer: nil,
+		next:   0,
+		sum:    sha256.New(),
+		done:   false,
+		check:  true,
+		end:    nil,
 	}
 
 	buf := make([]byte, 8)

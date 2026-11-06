@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -662,7 +663,7 @@ func pendingTestEntry() audit.Entry {
 func checkpointCount(t *testing.T, blobs *fs.Store) int {
 	t.Helper()
 
-	objects, err := blobs.List(t.Context(), audit.CheckpointPrefix+"/")
+	objects, err := blobtest.ListAll(t.Context(), blobs, audit.CheckpointPrefix+"/")
 	if err != nil {
 		t.Fatalf("list checkpoints: %v", err)
 	}

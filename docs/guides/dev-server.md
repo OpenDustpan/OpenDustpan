@@ -273,6 +273,64 @@ A production server refuses to restore a backup of a dev installation, unless yo
 Also then, the restore deletes the person `dev:admin` and all other data of dev people.
 The [backup guide](backup-restore-upgrade.md#restore-a-backup-of-a-dev-installation) shows the steps.
 
+## Start again after a schema change
+
+Until the first release, a new build of OpenDustpan can change the database schema.
+`dev` then refuses the database of an earlier build and names the command that helps:
+
+```text
+opendustpan: the schema changed: run opendustpan dev reset to start again. That command moves the old data aside as dev.db.reset.bak in the data directory: ...
+```
+
+`dev` never resets a database on its own. To start again on an empty database, stop `dev` and run:
+
+```sh
+opendustpan dev reset
+```
+
+Add `--data-dir` when `dev` runs with `--data-dir`.
+The command does these steps:
+
+1. It refuses the directory when it is not a data directory of `dev`, or when it is a symbolic link. It also refuses it when a `dev` server or another process holds the database.
+2. It refuses a database that is not a regular file or that has a second name (a hard link). It refuses a `blobs` directory that is a symbolic link, that another user owns, or that the group or others can access.
+3. It reads the installation kind of the database. It refuses a database of `serve`, a database with no kind and a database with a kind that it does not know. It then changes nothing.
+4. It refuses the directory when it holds a copy with the suffix `.old`, such as `dev.db.reset.bak.old`. It names each copy and changes nothing. See [Keep a copy of a reset](#keep-a-copy-of-a-reset).
+5. It moves `dev.db`, its log files and the `blobs` directory aside, as `dev.db.reset.bak` and `blobs.reset.bak`. It keeps the copies of the reset before until the new `dev.db` exists. Then it deletes them, so the directory keeps the data of one reset only.
+6. It writes a log line that names the copies, makes the schema of the binary on a new `dev.db`, and claims the kind `dev`.
+7. It writes an audit entry that names the copies.
+
+The key file, the token and the certificate stay. The next `dev` starts on the new database.
+To look at the old data, open `dev.db.reset.bak` with an earlier build.
+
+### Keep a copy of a reset
+
+A reset that does not finish can leave a copy with the suffix `.old` in the data directory. The copy can hold the last good backup. `dev reset` refuses the directory while the copy is there, and the error names each copy.
+
+To keep the copy and run the reset again:
+
+1. Stop `dev`.
+2. Move each named copy out of the data directory. Keep it. Do not delete it.
+3. Run `opendustpan dev reset` again.
+
+If the reset stops after it moved the data aside, the error names the copies it kept and the paths it moved. Use the same steps.
+
+### Put a backup back
+
+To put back the data of the last reset, use the copies that the reset kept:
+
+1. Stop `dev`.
+2. Move the current `dev.db` and the `blobs` directory to another directory. Keep them.
+3. Rename the copies back:
+
+```sh
+mv dev.db.reset.bak dev.db
+mv blobs.reset.bak blobs
+```
+
+If the files `dev.db.reset.bak-wal` and `dev.db.reset.bak-shm` exist, rename them to `dev.db-wal` and `dev.db-shm` the same way. The next `dev` starts on the restored database.
+
+`serve` never offers a reset. It refuses a database with another schema. It says to restore a backup of the same build, or to set `--database` to a new database.
+
 ## Keep the stacks and workspaces of a trial
 
 No command and no flag turns a dev installation into a production installation.

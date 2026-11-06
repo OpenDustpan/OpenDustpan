@@ -4,7 +4,8 @@ A job is work that the server asks an executor to do on one stack or workspace: 
 apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, read a job, its phases and the records of its phases.
 
-This version starts plan jobs of OpenTofu workspaces on runners. No route
+This version starts plan jobs of OpenTofu workspaces on runners. The server defines the plan
+step of a Pulumi stack too, but no runner runs it yet. No route
 cancels, approves or lists jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
@@ -41,7 +42,7 @@ steps or the profile of a job. The server sets them.
 | `unit` | `tool` (`opentofu`) and `name`: the workspace to plan. The name has no control character. |
 | `operation` | `plan`. Any other operation fails with 422 and the code `job.unsupported`. |
 | `pool` | Optional. The name of a runner pool of the namespace. The pool runs jobs, not sweeps. With no pool, the server uses the only pool of the namespace that runs jobs. A namespace with no such pool, or with more than one, fails the start with 422 and the code `job.unsupported`. A request that names a pool also needs `namespace:manage-runners` on the namespace. |
-| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
+| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. The host of the URL is a DNS name. An IP address such as `10.0.0.5` or `[fd00::1]`, a number such as `2130706433`, and `localhost` are refused. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
 | `reason` | Optional text for the audit entry. It has at most 500 characters and no control character. |
 
 The job service does these checks in this order, and fails closed at each one:
@@ -60,6 +61,10 @@ The job service does these checks in this order, and fails closed at each one:
    The server cannot evaluate these gates for a job yet, so it refuses the
    start with 403 and the code `job.gate-enforced`, and never skips a gate. The
    message names the gate. A gate in evaluate mode does not stop the start.
+   The server checks these gates again at each claim of a phase by a runner,
+   also at a takeover. A gate saved after the start fails the job at the
+   claim, with a reason that names the gate (see the poll in
+   [the runner API](runner-api.md)).
 5. The approval defaults of the namespace, the collection and the workspace.
    A plan changes nothing, so it gets no approval gate.
 6. The change freezes, the manual locks and the limits of open jobs. A manual
@@ -81,8 +86,12 @@ API can set them.
 
 The server does not decide the steps from the request. For an OpenTofu
 workspace, the plan steps are `tofu init -input=false` and
-`tofu plan -input=false -out=tfplan`. A job starts with no profile, so a
-runner gives it no secrets of a profile.
+`tofu plan -input=false -out=tfplan`. For a Pulumi stack, the plan step is
+`pulumi preview --non-interactive --stack=<namespace>/<project>/<stack>`. It
+changes no resource. A Pulumi job has no stored plan, so `job:read-plans` shows
+nothing for it. The preview is in the log of the step, and the Pulumi CLI masks
+it only. A caller reads the log with `job:read-logs`. A job starts with
+no profile, so a runner gives it no secrets of a profile.
 
 ### Retry a start
 

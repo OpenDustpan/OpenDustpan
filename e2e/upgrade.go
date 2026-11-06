@@ -164,10 +164,12 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		rec:               rec,
 		deltaCutoff:       0,
 		sinkSenders:       nil,
+		issuer:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 	}
@@ -195,6 +197,7 @@ func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert
 		auditChain:        "",
 		components:        "",
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 }
 
@@ -272,6 +275,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		certBundle:    "",
 		dbProxy:       nil,
 		signIn:        nil,
+		claimers:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {

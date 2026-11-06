@@ -1,6 +1,6 @@
 # Architecture and sizing
 
-This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. No measured numbers exist yet.
+This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. The [measured sizing page](measured-sizing.md) shows one load run of one to three instances.
 
 ## One instance with SQLite and a local blob directory
 
@@ -33,11 +33,11 @@ Back up this layout the same way as any installation. The [backup guide](backup-
 
 ## Several instances behind a load balancer with PostgreSQL and S3-compatible storage
 
-This layout is the target design. It is not supported yet. The README gives the current status: the server runs on one node. Do not use this layout in an installation yet. The plan is that several `opendustpan serve` processes form one installation. A load balancer receives each request. It passes each request to one healthy instance. All instances share one PostgreSQL database, one S3-compatible bucket, one key-encryption key, and one backup target.
+This layout is supported. The [high availability guide](high-availability.md) gives the supported layout and its limits. Several `opendustpan serve` processes form one installation. A load balancer receives each request. It passes each request to one healthy instance. All instances share one PostgreSQL database, one S3-compatible bucket, one key-encryption key, and one backup target.
 
 ### What runs where
 
-In the target design:
+In this design:
 
 - Each instance would run the same server binary with the same flags. Each instance would serve every API.
 - The load balancer would receive each request. It would pass each request to one healthy instance.
@@ -52,7 +52,7 @@ In the target design, each instance would share the SQL store, the blob store, t
 
 ### What stops when one part stops
 
-In the target design:
+In this design:
 
 - If one instance stopped, the load balancer would pass requests to the healthy instances. Requests in flight to the stopped instance would fail.
 - If PostgreSQL stopped, all reads and writes would fail on each instance.
@@ -66,7 +66,7 @@ In the target design, you would back up this layout the same way as any installa
 
 ## Sizing
 
-No measured numbers exist yet. Size each installation from a load run, not from guesses. The [load harness guide](load.md) shows how to run the harness and how to read its report. Each table below gains one row per release, with the hardware and the date of the run.
+Size each installation from a load run, not from guesses. The [measured sizing page](measured-sizing.md) gives the numbers of one run of one to three instances on one host. The [load harness guide](load.md) shows how to run the harness and how to read its report. Each table below gains one row per release, with the hardware and the date of the run.
 
 ### Memory per instance
 

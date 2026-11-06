@@ -3,8 +3,10 @@
 // kinds app (a GitHub App installation) and token (a fine-grained
 // personal access token).
 //
-// The adapter does Check now. Each other method returns forge.ErrUnsupported,
-// and Capabilities does not list it, until the method lands. Every request
+// The adapter does Check, Head, ReadFile, Commit, FindCommit, OpenReview,
+// ReadReview, CloseReview and DeleteBranch now. Each other
+// method returns forge.ErrUnsupported, and Capabilities does not list it, until
+// the method lands. Every request
 // goes through the egress rules: the address of the API passes the URL
 // check when a connection opens and the address check when the network
 // connection opens, and the adapter follows no redirect.
@@ -21,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
@@ -38,6 +41,11 @@ type Config struct {
 	RootCAs *x509.CertPool
 	// Now returns the time. Nil means time.Now.
 	Now func() time.Time
+	// Prover seals the proof that Commit adds to a commit, and opens the proof
+	// that FindCommit reads. Nil, or a Prover that is not Ready, means that the
+	// adapter cannot prove a commit: Capabilities then does not list
+	// forge.CapCommit, and Commit and FindCommit return forge.ErrUnsupported.
+	Prover Prover
 }
 
 // Opener makes a forge.Forge for a GitHub connection. It implements
@@ -46,6 +54,7 @@ type Opener struct {
 	rules  egress.Rules
 	client *http.Client
 	now    func() time.Time
+	prover Prover
 }
 
 var _ forge.Opener = (*Opener)(nil)
@@ -70,7 +79,45 @@ func NewOpener(cfg Config) (*Opener, error) {
 		egresshttp.Options{RootCAs: cfg.RootCAs, Resolver: nil},
 	)
 
-	return &Opener{rules: cfg.Rules, client: client, now: now}, nil
+	keepRedirectStatus(client)
+
+	return &Opener{rules: cfg.Rules, client: client, now: now, prover: cfg.Prover}, nil
+}
+
+// redirectError is the error of a redirect that the rules refuse. It keeps
+// the status of the redirect, so that a read can tell a repository that has
+// a new name from any other redirect. The adapter still follows none.
+type redirectError struct {
+	status int
+	err    error
+}
+
+func (e *redirectError) Error() string { return e.err.Error() }
+
+func (e *redirectError) Unwrap() error { return e.err }
+
+// keepRedirectStatus wraps the redirect check of client, which refuses every
+// redirect, so that its error carries the status of the redirect.
+func keepRedirectStatus(client *http.Client) {
+	inner := client.CheckRedirect
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		var err error
+		if inner != nil {
+			err = inner(req, via)
+		}
+
+		if err != nil && req.Response != nil {
+			return &redirectError{status: req.Response.StatusCode, err: err}
+		}
+
+		return err
+	}
+}
+
+// canProve reports whether p is a Prover that has its key.
+func canProve(p Prover) bool {
+	return p != nil && p.Ready()
 }
 
 // CloseIdleConnections closes the idle network connections of the adapter.
@@ -102,7 +149,11 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 		return nil, err
 	}
 
-	f := &gitHub{o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil}
+	f := &gitHub{
+		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
+		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
+		writes: contentsUnknown, pulls: contentsUnknown, identity: "",
+	}
 
 	switch c.Auth {
 	case forge.AuthApp:
@@ -153,15 +204,67 @@ type gitHub struct {
 	installationID string
 	token          string
 	push           bool
+
+	// mu guards the fields below. readTokens holds the installation tokens
+	// of an app connection for reads: a token reads one repository, and the
+	// adapter keeps it in memory only. owner is the login of the account of
+	// the installation. contents says whether the installation has the
+	// permission to read the contents, and writes whether it has the
+	// permission to write them. Check and the first read set them.
+	mu         sync.Mutex
+	readTokens map[string]readToken
+	owner      string
+	contents   contentsAccess
+	writes     contentsAccess
+	pulls      contentsAccess
+	// identity is the login that the connection commits as. FindCommit reads
+	// it once, see commitIdentity.
+	identity string
 }
 
+// contentsAccess says whether an installation has the permission to read
+// the contents of its repositories.
+type contentsAccess int
+
+const (
+	// contentsUnknown is the state before any call has shown the permissions.
+	contentsUnknown contentsAccess = iota
+	contentsGranted
+	contentsMissing
+)
+
 // Capabilities lists what the adapter does for this connection, with no
-// call to GitHub. It lists no capability yet: each other method returns
-// forge.ErrUnsupported until it lands. A method that lands adds its
-// capability here, and a connection with no push access gets neither
+// call to GitHub. Each method that is not in the adapter returns
+// forge.ErrUnsupported and has no capability here. A method that lands adds
+// its capability here, and a connection with no push access gets neither
 // forge.CapCommit nor forge.CapReview.
+//
+// It lists forge.CapFiles unless the last Check showed an installation
+// without the permission to read the contents. It lists forge.CapCommit for a
+// connection with push access and a Prover in the Config, unless the last Check showed an installation
+// without the permission to write the contents. Before a Check, the
+// permissions are not known, and the capabilities are listed. A token
+// connection always lists them, because a token shows no permissions.
 func (f *gitHub) Capabilities() forge.Capabilities {
-	return forge.Capabilities{}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	app := f.auth == forge.AuthApp
+	caps := forge.Capabilities{}
+
+	if !app || f.contents != contentsMissing {
+		caps = append(caps, forge.CapFiles)
+	}
+
+	if f.push && canProve(f.o.prover) && (!app || f.writes != contentsMissing) {
+		caps = append(caps, forge.CapCommit)
+	}
+
+	if f.push && (!app || (f.writes != contentsMissing && f.pulls != contentsMissing)) {
+		caps = append(caps, forge.CapReview)
+	}
+
+	return caps
 }
 
 // unsupported returns the error of a method that the adapter does not have.
@@ -169,44 +272,9 @@ func unsupported(method string) error {
 	return fmt.Errorf("%w: GitHub %s is not available yet", forge.ErrUnsupported, method)
 }
 
-// Head returns forge.ErrUnsupported.
-func (*gitHub) Head(context.Context, string, string) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("Head")
-}
-
-// ReadFile returns forge.ErrUnsupported.
-func (*gitHub) ReadFile(context.Context, string, string, string, int64) (forge.File, error) {
-	return forge.File{}, unsupported("ReadFile")
-}
-
 // Compare returns forge.ErrUnsupported.
 func (*gitHub) Compare(context.Context, string, string, string, int64) (forge.Comparison, error) {
 	return forge.Comparison{}, unsupported("Compare")
-}
-
-// Commit returns forge.ErrUnsupported.
-func (*gitHub) Commit(context.Context, string, forge.CommitRequest) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("Commit")
-}
-
-// FindCommit returns forge.ErrUnsupported.
-func (*gitHub) FindCommit(context.Context, string, string, string, time.Time) (forge.Commit, error) {
-	return forge.Commit{}, unsupported("FindCommit")
-}
-
-// OpenReview returns forge.ErrUnsupported.
-func (*gitHub) OpenReview(context.Context, string, forge.ReviewRequest) (forge.Review, error) {
-	return forge.Review{}, unsupported("OpenReview")
-}
-
-// ReadReview returns forge.ErrUnsupported.
-func (*gitHub) ReadReview(context.Context, string, string) (forge.Review, error) {
-	return forge.Review{}, unsupported("ReadReview")
-}
-
-// CloseReview returns forge.ErrUnsupported.
-func (*gitHub) CloseReview(context.Context, string, string) error {
-	return unsupported("CloseReview")
 }
 
 // RepoToken returns forge.ErrUnsupported.

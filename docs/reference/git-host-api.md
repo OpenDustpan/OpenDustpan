@@ -29,8 +29,13 @@ answers 412.
 | `POST /namespaces/{namespace}/git-host-connections/{id}/check` | `namespace:manage-git-host-connections` | the namespace | The account, the capabilities and what each feature misses |
 
 The role installation operator has the two actions of the installation. The role
-admin has the two actions of a namespace. The role maintainer has
-`namespace:read-git-host-connections`.
+admin has the actions of a namespace. The role maintainer has
+`namespace:read-git-host-connections` and `namespace:use-git-host-connection`.
+
+The action `namespace:use-git-host-connection` lets a person name a connection
+in the settings of a unit, in addition to the action on the unit. It lets the
+person point a unit at the credentials of the connection. See the
+[unit settings API](unit-settings-api.md).
 
 ## Documents
 
@@ -72,13 +77,20 @@ A check:
 {
   "account": {"id": "99", "login": "acme-org", "expiresAt": null, "noExpiry": false,
               "scopes": ["contents:read", "metadata:read"]},
-  "capabilities": [],
-  "missing": {"write-back": ["files", "compare", "commit"], "catalog": ["files"]}
+  "capabilities": ["files"],
+  "missing": {"write-back": ["compare", "commit"], "catalog": []}
 }
 ```
 
 `missing` has one list for each of the features `write-back`,
-`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`.
+`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`. The list
+of a feature that the connection can serve is empty.
+
+For an app, `scopes` lists the permissions of the installation, for example
+`contents:write`, `metadata:read` and `pull_requests:write`. The capability
+`commit` needs `contents:write`. The capability `review` needs `contents:write`
+and `pull_requests:write`. See the guide "Connect GitHub" for the permissions of
+the app.
 
 ## Errors
 

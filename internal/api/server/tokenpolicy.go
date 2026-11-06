@@ -48,6 +48,9 @@ type tokenPolicyResponse struct {
 	DisableAccounts    bool    `json:"disableAccounts"`
 	// DisableBreakGlass is deprecated and always false.
 	DisableBreakGlass bool `json:"disableBreakGlass"`
+	// ExchangeLifetimeSeconds is the lifetime of the access token that a
+	// workload gets in a token exchange. The maximum lifetime bounds it too.
+	ExchangeLifetimeSeconds int64 `json:"exchangeLifetimeSeconds"`
 }
 
 // tokenPolicyRequest is the body of a policy change. A missing field keeps
@@ -58,7 +61,8 @@ type tokenPolicyRequest struct {
 	DisableTokens      *bool  `json:"disableTokens"`
 	DisableAccounts    *bool  `json:"disableAccounts"`
 	// DisableBreakGlass is deprecated: only false is accepted.
-	DisableBreakGlass *bool `json:"disableBreakGlass"`
+	DisableBreakGlass       *bool  `json:"disableBreakGlass"`
+	ExchangeLifetimeSeconds *int64 `json:"exchangeLifetimeSeconds"`
 }
 
 // sweepResponse names the tokens and the principals that a sweep disabled.
@@ -85,6 +89,8 @@ func tokenPolicyOf(p accesstoken.Policy) tokenPolicyResponse {
 		DisableTokens:      p.DisableTokens,
 		DisableAccounts:    p.DisableAccounts,
 		DisableBreakGlass:  false,
+
+		ExchangeLifetimeSeconds: int64(p.ExchangeLifetime / time.Second),
 	}
 }
 
@@ -145,7 +151,7 @@ func changeTokenPolicy(
 
 	empty := func() bool {
 		return req.MaxLifetimeSeconds == nil && req.InactivitySeconds == nil && req.DisableTokens == nil &&
-			req.DisableAccounts == nil && req.DisableBreakGlass == nil
+			req.DisableAccounts == nil && req.DisableBreakGlass == nil && req.ExchangeLifetimeSeconds == nil
 	}
 
 	if err := decodeChange(w, r, &req, errPolicyBody, empty); err != nil {
@@ -156,19 +162,15 @@ func changeTokenPolicy(
 		return failed(accesstoken.PolicyRef), errBreakGlassGone
 	}
 
-	maxLifetime, err := secondsOf(req.MaxLifetimeSeconds)
-	if err != nil {
-		return failed(accesstoken.PolicyRef), err
-	}
-
-	inactivity, err := secondsOf(req.InactivitySeconds)
+	d, err := policyDurationsOf(&req)
 	if err != nil {
 		return failed(accesstoken.PolicyRef), err
 	}
 
 	p, err := svc.SetPolicy(r.Context(), e, accesstoken.PolicyChange{
-		MaxLifetime:       maxLifetime,
-		Inactivity:        inactivity,
+		ExchangeLifetime:  d.exchangeLifetime,
+		MaxLifetime:       d.maxLifetime,
+		Inactivity:        d.inactivity,
 		DisableTokens:     req.DisableTokens,
 		DisableAccounts:   req.DisableAccounts,
 		DisableBreakGlass: req.DisableBreakGlass,
@@ -218,4 +220,33 @@ func sweepInactive(
 	}
 
 	return ok(http.StatusOK, body, accesstoken.PolicyRef), nil
+}
+
+// policyDurations are the periods of a policy change; nil keeps a period.
+type policyDurations struct {
+	maxLifetime      *time.Duration
+	inactivity       *time.Duration
+	exchangeLifetime *time.Duration
+}
+
+// policyDurationsOf reads the periods of req, in seconds.
+func policyDurationsOf(req *tokenPolicyRequest) (policyDurations, error) {
+	var (
+		out policyDurations
+		err error
+	)
+
+	if out.maxLifetime, err = secondsOf(req.MaxLifetimeSeconds); err != nil {
+		return policyDurations{maxLifetime: nil, inactivity: nil, exchangeLifetime: nil}, err
+	}
+
+	if out.inactivity, err = secondsOf(req.InactivitySeconds); err != nil {
+		return policyDurations{maxLifetime: nil, inactivity: nil, exchangeLifetime: nil}, err
+	}
+
+	if out.exchangeLifetime, err = secondsOf(req.ExchangeLifetimeSeconds); err != nil {
+		return policyDurations{maxLifetime: nil, inactivity: nil, exchangeLifetime: nil}, err
+	}
+
+	return out, nil
 }

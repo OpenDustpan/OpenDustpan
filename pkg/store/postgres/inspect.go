@@ -17,16 +17,12 @@ import (
 func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error) {
 	//nolint:exhaustruct_v5 // A read-only inspection sets only the access mode.
 	// Isolation, deferrability and begin text stay at the pgx defaults.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := s.txs.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("begin read-only transaction: %w", err)
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	var exists bool
 
@@ -59,7 +55,8 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 	for rows.Next() {
 		var applied schema.AppliedMigration
 
-		if scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion); scanErr != nil {
+		scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion, &applied.SHA256)
+		if scanErr != nil {
 			rows.Close()
 
 			return nil, fmt.Errorf("read schema migrations: %w", scanErr)

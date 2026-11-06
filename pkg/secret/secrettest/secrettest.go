@@ -429,6 +429,7 @@ func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Revision:    1,

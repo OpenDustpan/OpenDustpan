@@ -38,14 +38,16 @@ func aliceMatch() session.Match {
 		Session: session.Session{
 			CreatedAt: time.Time{}, LastSeenAt: time.Time{}, AuthTime: time.Time{}, EndedAt: time.Time{},
 			ID: "ses-1", PrincipalID: "prn-1", Provider: "corp", EndReason: "", SourceIP: "", UserAgent: "",
+			Generation: 1,
 		},
 		Owner: session.Owner{
 			ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:alice", DisplayName: "Alice",
 			Kind: principal.KindPerson, BreakGlass: false,
 		},
-		Digest:   session.Digest{},
-		Policy:   session.DefaultPolicy(),
-		Accounts: session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
+		Digest:     session.Digest{},
+		Policy:     session.DefaultPolicy(),
+		Accounts:   session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
+		Generation: 1,
 	}
 }
 

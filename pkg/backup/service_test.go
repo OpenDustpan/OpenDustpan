@@ -102,10 +102,32 @@ func (m *memStore) Delete(ctx context.Context, key blob.Key) error {
 	return nil
 }
 
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (m *memStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := m.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
+
+// Ping implements blob.Store: the in-memory store always answers.
+func (m *memStore) Ping(_ context.Context) error {
+	return nil
+}
+
 // List implements blob.Store: it returns the objects under the key directory
 // prefix, ordered by key. A prefix that is a name start only, such as
 // "backups/bkp-a", does not match "backups/bkp-ab/...".
-func (m *memStore) List(_ context.Context, prefix string) ([]blob.Object, error) {
+func (m *memStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
 	dir := strings.TrimSuffix(prefix, "/") + "/"
 
 	m.mu.Lock()
@@ -129,11 +151,6 @@ func (m *memStore) List(_ context.Context, prefix string) ([]blob.Object, error)
 	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 
 	return out, nil
-}
-
-// Ping implements blob.Store: the in-memory store always answers.
-func (m *memStore) Ping(_ context.Context) error {
-	return nil
 }
 
 func (m *memStore) readObject(t *testing.T, key string) []byte {
@@ -356,6 +373,29 @@ func (f *fakeRegistry) StartBackup(ctx context.Context, r backup.Record, start d
 	}
 
 	return nil
+}
+
+// StartBackupClaimed starts r as StartBackup does, and claims the new
+// operation for claim in the same write.
+func (f *fakeRegistry) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	r.State = backup.StateRunning
+
+	op, err := f.mem.StartClaimedWith(ctx, start, claim, durabletest.Hooks{
+		Before: nil,
+		After: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+
+			return f.insertLocked(r)
+		},
+	})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup %s: %w", r.ID, err)
+	}
+
+	return op, nil
 }
 
 // FinishBackup checks the fence first, as the port documents: the store
@@ -729,6 +769,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
+		Damaged:          nil,
 	}
 }
 

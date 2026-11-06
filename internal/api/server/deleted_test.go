@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -48,11 +49,14 @@ func newSweepHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -81,6 +85,7 @@ func newSweepHandler(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -143,6 +148,7 @@ func TestSweepDeletedUnitsAnswersTheOutcome(t *testing.T) {
 			DeletedAt: at, PurgeAfter: at, Namespace: "acme", Tool: "pulumi", UnitID: "stk-1", Name: "web/prod",
 		}},
 		Failed: 1, Skipped: 2, FinishedBlobPurges: 3, PendingBlobPurges: 4,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}}
 	handler := newSweepHandler(t, sweeper, map[identity.Action]bool{})
 
@@ -173,9 +179,11 @@ func TestSweepDeletedUnitsRefusals(t *testing.T) {
 
 	running := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
 		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, err: inventory.ErrSweepRunning}
 	failing := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
 		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, err: errSweepRead}
 
 	cases := []struct {

@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-11. Decision 2 superseded in part by ADR 212. Decision 8 (the Helm chart) decided by ADR 246
 
+Changed by:
+
+- ADR 212 changes decision 2: trusted proxies replace never trust X-Forwarded
+  headers.
+- ADR 246 extends decision 8: decides the Helm chart item.
+- ADR 278 changes decision 6: only Linux and macOS archives, no zip archive.
+- ADR 283 changes decision 8: no ACME, OS packages, signing or SBOM in v0.1.0.
+- ADR 283 extends decision 7: the owner says yes to buildx and QEMU actions.
+
 ## Context
 
 [RFC 35](../rfc/0035-packaging.md) asks where TLS ends and how the project

@@ -15,9 +15,9 @@ import (
 
 // pulumiDir is the directory of the stack blobs inside the blob scope of a
 // namespace: checkpoints and journal batches. The full keys are
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence> and
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID> and
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
-// sequence ID>.
+// sequence ID>-<attempt ID>.
 const pulumiDir = "pulumi/"
 
 // BlobFamily is the family of the Pulumi checkpoint and journal blobs in
@@ -140,33 +140,44 @@ func (b *scopedBlobs) Delete(ctx context.Context, key blob.Key) error {
 	return b.refuse(ctx, "delete", err)
 }
 
-// List implements blob.Store. It returns blob.ErrOutOfScope when prefix is not
-// a directory inside the directory of the stack, and when the store returns a
-// key outside that directory. In the second case it returns no key, so a
-// caller that deletes what it lists deletes nothing.
+// ListPage implements blob.Store. It returns blob.ErrOutOfScope when the
+// prefix is not a directory inside the directory of the stack, and when the
+// store returns a key outside that directory. In the second case it returns no
+// key, so a caller that deletes what it lists deletes nothing.
 //
 // Defense in depth: the store lists by prefix. This check stays so that a
 // fault of an adapter that lists more than the prefix never reaches the delete
 // of a sweep, and it does not rely on the adapter.
-func (b *scopedBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	dir := strings.TrimSuffix(prefix, "/") + "/"
+func (b *scopedBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	dir := strings.TrimSuffix(req.Prefix, "/") + "/"
 
 	if !strings.HasPrefix(dir, b.allowed) {
-		return nil, b.refusePrefix(ctx, prefix)
+		return blob.Page{}, b.refusePrefix(ctx, req.Prefix)
 	}
 
-	objects, err := b.view.List(ctx, prefix)
+	// Defense in depth: the view checks the position too. This check stays so
+	// that a list never starts from a key outside the directory of the stack,
+	// whatever the view and the store under it do.
+	if req.After != "" && !strings.HasPrefix(req.After.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(req.After))
+	}
+
+	page, err := b.view.ListPage(ctx, req)
 	if err != nil {
-		return nil, b.refuse(ctx, "list", err)
+		return blob.Page{}, b.refuse(ctx, "list", err)
 	}
 
-	for i := range objects {
-		if !strings.HasPrefix(objects[i].Key.String(), b.allowed) {
-			return nil, b.record(ctx, "list", b.whereOf(objects[i].Key))
+	if page.Next != "" && !strings.HasPrefix(page.Next.String(), b.allowed) {
+		return blob.Page{}, b.record(ctx, "list", b.whereOf(page.Next))
+	}
+
+	for i := range page.Objects {
+		if !strings.HasPrefix(page.Objects[i].Key.String(), b.allowed) {
+			return blob.Page{}, b.record(ctx, "list", b.whereOf(page.Objects[i].Key))
 		}
 	}
 
-	return objects, nil
+	return page, nil
 }
 
 // Ping implements blob.Store. It takes no key, so the scope does not apply.
@@ -176,6 +187,26 @@ func (b *scopedBlobs) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// listAll walks every page under prefix and returns the objects. Only a
+// caller that lists the directory of one update uses it: that directory holds
+// the saves and the journal batches of one update, and the sweep that runs
+// after each save keeps it small. A caller that lists a stack acts on each page
+// as it arrives with blob.WalkPages.
+func (b *scopedBlobs) listAll(ctx context.Context, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, b, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 // narrow returns the access that is limited to the directory prefix inside the
@@ -301,32 +332,55 @@ func (b *scopedBlobs) record(ctx context.Context, op string, where scopeaudit.Wh
 // a key by other means cannot store a row that names a foreign blob, and it
 // does not rely on the service.
 func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key blob.Key) error {
-	if _, err := namespace.ParseID(ns.String()); err != nil {
-		return fmt.Errorf("%w: namespace ID", ErrCheckpointKey)
+	return checkAttemptKey(
+		attemptKeyScope{ns: ns, stackID: stackID, update: update, dir: "", refusal: ErrCheckpointKey}, key,
+	)
+}
+
+// Attempt ID bounds of the last part of a checkpoint or a journal batch key.
+const (
+	minAttemptIDLength = 8
+	maxAttemptIDLength = 64
+)
+
+// checkpointName is the last part of a checkpoint blob key or of a journal
+// batch blob key: "<n>-<attempt ID>", a number and the ID of the write attempt.
+type checkpointName struct {
+	number  uint64
+	attempt string
+}
+
+// parseCheckpointName splits the last part of a checkpoint blob key. It
+// accepts only decimal digits for the number and lowercase letters and
+// digits for the attempt ID, and it reports false for any other text,
+// also for a name without an attempt ID.
+func parseCheckpointName(name string) (checkpointName, bool) {
+	none := checkpointName{number: 0, attempt: ""}
+
+	numPart, attempt, hasAttempt := strings.Cut(name, "-")
+
+	number, err := strconv.ParseUint(numPart, 10, 63)
+	if err != nil || strconv.FormatUint(number, 10) != numPart || !hasAttempt {
+		return none, false
 	}
 
-	want := "namespaces/" + ns.String() + "/" + pulumiDir + stackID.String() + "/" + update.String() + "/"
-
-	num, ok := strings.CutPrefix(key.String(), want)
-	if !ok || num == "" || strings.Contains(num, "/") {
-		return fmt.Errorf("%w: key is not a save of the update in the namespace", ErrCheckpointKey)
+	if len(attempt) < minAttemptIDLength || len(attempt) > maxAttemptIDLength {
+		return none, false
 	}
 
-	if _, err := strconv.ParseUint(num, 10, 63); err != nil {
-		return fmt.Errorf("%w: key does not end in a number", ErrCheckpointKey)
+	for _, r := range attempt {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return none, false
+		}
 	}
 
-	if _, err := blob.ParseKey(key.String()); err != nil {
-		return fmt.Errorf("%w: key is not valid", ErrCheckpointKey)
-	}
-
-	return nil
+	return checkpointName{number: number, attempt: attempt}, true
 }
 
 // CheckJournalBlobKey returns nil when key is the blob key of a journal batch
 // of the update in the stack stackID of the namespace ns:
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/journal/<lowest
-// sequence ID>. Otherwise it returns ErrJournalKey. The row stores call it
+// sequence ID>-<attempt ID>. Otherwise it returns ErrJournalKey. The row stores call it
 // before they write a row, so a row never names a blob of another stack, of
 // another update, or outside the scope of a namespace. The error never holds
 // the key.
@@ -336,19 +390,44 @@ func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key bl
 // that builds a key by other means cannot store a row that names a foreign
 // blob, and it does not rely on the writer.
 func CheckJournalBlobKey(ns namespace.ID, stackID ID, update UpdateID, key blob.Key) error {
+	return checkAttemptKey(
+		attemptKeyScope{ns: ns, stackID: stackID, update: update, dir: "journal/", refusal: ErrJournalKey}, key,
+	)
+}
+
+// attemptKeyScope is where a blob key must be: the update, the directory below
+// it ("" or "journal/") and the error that wraps each refusal.
+type attemptKeyScope struct {
+	ns      namespace.ID
+	stackID ID
+	update  UpdateID
+	dir     string
+	refusal error
+}
+
+// checkAttemptKey returns nil when key is namespaces/<namespace ID>/pulumi/<stack
+// ID>/<update ID>/<dir><number>-<attempt ID>, and otherwise an error that wraps
+// the refusal of where. The error never holds the key.
+func checkAttemptKey(where attemptKeyScope, key blob.Key) error {
+	ns, stackID, update, dir, refusal := where.ns, where.stackID, where.update, where.dir, where.refusal
+
 	if _, err := namespace.ParseID(ns.String()); err != nil {
-		return fmt.Errorf("%w: namespace ID", ErrJournalKey)
+		return fmt.Errorf("%w: namespace ID", refusal)
 	}
 
-	want := "namespaces/" + ns.String() + "/" + pulumiDir + stackID.String() + "/" + update.String() + "/journal/"
+	want := "namespaces/" + ns.String() + "/" + pulumiDir + stackID.String() + "/" + update.String() + "/" + dir
 
-	low, ok := strings.CutPrefix(key.String(), want)
-	if !ok || low == "" || strings.Contains(low, "/") {
-		return fmt.Errorf("%w: key is not a journal batch of the update in the namespace", ErrJournalKey)
+	name, ok := strings.CutPrefix(key.String(), want)
+	if !ok || name == "" || strings.Contains(name, "/") {
+		return fmt.Errorf("%w: key is not a blob of the update in the namespace", refusal)
+	}
+
+	if _, named := parseCheckpointName(name); !named {
+		return fmt.Errorf("%w: key does not end in a number and an attempt ID", refusal)
 	}
 
 	if _, err := blob.ParseKey(key.String()); err != nil {
-		return fmt.Errorf("%w: key is not valid", ErrJournalKey)
+		return fmt.Errorf("%w: key is not valid", refusal)
 	}
 
 	return nil

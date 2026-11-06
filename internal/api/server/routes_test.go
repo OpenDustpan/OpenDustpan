@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,12 +13,16 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -29,11 +34,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -65,7 +75,9 @@ func wantPublicStatus(route apiserver.Route) int {
 
 // publicPatterns lists the routes that need no sign-in: the start and the
 // callback of a sign-in, which run before the person has a session, the
-// sign-in with the one-time code of the dev command, and the capabilities
+// sign-in with the one-time code of the dev command, the password sign-in of a
+// local user and the use of a set-up code or a reset code, which run before
+// the person has a session and whose credential is the body, the capabilities
 // document, which answers the API version to every caller, and the
 // description of the API, which a generator reads before it has a token. The
 // description names routes, actions and shapes. It holds no data of a
@@ -75,6 +87,10 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}",
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
+		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/passkey/begin",
+		"POST /api/dustpan/v1/sign-in/passkey/finish",
+		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
 	}
@@ -223,6 +239,12 @@ const testNamespace = "routes"
 // manifest read that only succeeded rows need.
 const testRestoreID = backup.RestoreID("rst-testaaaaaaaaaaaaaaaa")
 
+// testStoreCheckID is the failed store check the handler builders seed, so the
+// GET-by-id route answers 200 in the generic enforcement tests. The seed ended
+// long ago and is not running, so the POST route answers 202 in the same
+// tests instead of 409.
+const testStoreCheckID = storecheck.ID("chk-routetestaaaaaaaaaaaa")
+
 // failedSeed returns a failed backup row, so the GET-by-id route answers 200
 // in the generic enforcement tests. The seed is failed, never running, so the
 // POST route answers 202 in the same tests instead of 409: one backup runs at
@@ -270,6 +292,7 @@ func newServiceBackedHandlerOf(
 	target := openRouteTestBlobs(t)
 	service := newRouteTestBackups(t, st, live, target)
 	restores := newRouteTestRestores(t, st, service, live, target)
+	checks := newRouteTestStoreChecks(t, st, live, target)
 	seedRouteTestRows(t, st, seeds)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -291,6 +314,8 @@ func newServiceBackedHandlerOf(
 		t.Fatalf("session policy service: %v", err)
 	}
 
+	routePrincipals := seedRoutePrincipals(t, st)
+
 	sessions, err := session.NewSessions(
 		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
@@ -306,6 +331,7 @@ func newServiceBackedHandlerOf(
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -319,7 +345,7 @@ func newServiceBackedHandlerOf(
 		Version:          "test",
 		Schema:           st,
 		Journal:          st,
-		Principals:       seedRoutePrincipals(t, st),
+		Principals:       routePrincipals,
 		Tokens:           seedRouteTokens(t, st),
 		Access:           seedRouteAccess(t, st),
 		Audit:            st,
@@ -331,16 +357,18 @@ func newServiceBackedHandlerOf(
 		Gates:            nil,
 		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, st, sessions, routePrincipals),
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
+			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
-					Client:      stubOIDC{},
+					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),
 					ID:          testProvider,
 					DisplayName: "Corp",
 					AutoCreate:  true,
 					Stored:      false,
-					Source:      principal.SourceOIDC,
 				},
 			},
 			DevCode:  devCode,
@@ -349,9 +377,12 @@ func newServiceBackedHandlerOf(
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
 		Preferences:      preferences.NewService(st, st, nil),
+		LocalUsers:       newRouteLocalUsers(t, st),
+		Settings:         newRouteTestSettings(st),
 		GitHost:          nil,
 		Idempotency:      nil,
 		Instances:        nil,
+		StoreChecks:      checks,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -699,6 +730,9 @@ var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
 	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
+	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
+	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
+	"POST /api/dustpan/v1/local-users/unlock":                  `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
@@ -727,6 +761,8 @@ var routeBodies = map[string]string{
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 	"PATCH /api/dustpan/v1/me/preferences":                                    `{"theme":"terminal"}`,
+	"PATCH /api/dustpan/v1/settings":                                          `{"test.label":"blue"}`,
+	"PATCH /api/dustpan/v1/namespaces/{namespace}/settings":                   `{"test.nsLimit":9}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
@@ -785,6 +821,24 @@ func newRouteTestBackups(
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
+	}
+
+	return service
+}
+
+// newRouteTestStoreChecks builds the store check service of one route test.
+func newRouteTestStoreChecks(
+	t *testing.T, st *sqlite.Store, live, target *blobfs.Store,
+) *storecheck.Service {
+	t.Helper()
+
+	service, err := storecheck.NewService(storecheck.Config{
+		Records: st, Operations: st.DurableOperationsPort(), Blobs: live, Backup: target, Audit: st, Admit: nil,
+		Limits: storecheck.Limits{MaxObjects: 0, MaxTotalBytes: 0, MaxObjectBytes: 0, Timeout: 0, Cooldown: 0},
+		Now:    nil, Owner: "", Lease: 0, Logger: nil,
+	})
+	if err != nil {
+		t.Fatalf("new store check service: %v", err)
 	}
 
 	return service
@@ -871,6 +925,8 @@ func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 	if _, err := st.FailEndedRestores(t.Context(), ended, false); err != nil {
 		t.Fatalf("fail seed restore %s: %v", testRestoreID, err)
 	}
+
+	seedRouteStoreCheck(t, st, ended)
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -1013,6 +1069,19 @@ func probeRoute(t *testing.T, handler testHandler, route apiserver.Route) {
 	}
 }
 
+// seededOperationID returns the ID of the seeded restore or the seeded store
+// check for a route of that family, and an empty text for any other route.
+func seededOperationID(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/api/server/restores"):
+		return string(testRestoreID)
+	case strings.HasPrefix(path, "/api/dustpan/v1/store-checks"):
+		return string(testStoreCheckID)
+	default:
+		return ""
+	}
+}
+
 // routeRequest builds a valid request for route: the {id} placeholder holds
 // the seeded running backup or the seeded checking restore, so the GET-by-id
 // routes answer 200 when allowed, and the namespace create route carries a
@@ -1027,8 +1096,8 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	switch {
 	case owner.ofOne:
 		id = owner.id
-	case strings.HasPrefix(route.Path, "/api/server/restores"):
-		id = string(testRestoreID)
+	case seededOperationID(route.Path) != "":
+		id = seededOperationID(route.Path)
 	case strings.HasPrefix(route.Path, "/api/server/principals"):
 		id = testPrincipalID
 	case strings.HasPrefix(route.Path, "/api/server/groups"):
@@ -1080,8 +1149,17 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 // setRouteContentType gives the PATCH of the preferences the merge patch
 // type, which the route requires.
 func setRouteContentType(req *http.Request, route apiserver.Route) {
-	if route.Method == http.MethodPatch && route.Path == "/api/dustpan/v1/me/preferences" {
+	if route.Method != http.MethodPatch {
+		return
+	}
+
+	switch route.Path {
+	case "/api/dustpan/v1/me/preferences":
 		req.Header.Set("Content-Type", "application/merge-patch+json")
+	case "/api/dustpan/v1/settings", "/api/dustpan/v1/namespaces/{namespace}/settings":
+		req.Header.Set("Content-Type", "application/merge-patch+json")
+		req.Header.Set("If-Match", `"0"`)
+	default:
 	}
 }
 
@@ -1125,6 +1203,8 @@ func routeQuery(path string) string {
 		return "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
 	case path == "/api/server/caller/access":
 		return "?object=" + testNamespace
+	case path == "/api/dustpan/v1/local-users/locks":
+		return "?principal=" + testPrincipalID
 	default:
 		return ""
 	}
@@ -1154,7 +1234,7 @@ func createsRecord(path string) bool {
 	created := []string{
 		"/api/server/namespaces", "/api/server/principals", "/api/server/groups",
 		"/api/server/groups/{id}/members", "/api/server/roles", "/api/server/namespaces/{namespace}/principals",
-		"/api/server/audit/checkpoint-epochs",
+		"/api/server/audit/checkpoint-epochs", "/api/dustpan/v1/local-users",
 	}
 
 	return slices.Contains(created, path) ||
@@ -1194,6 +1274,8 @@ func freshAuthRoutes() []string {
 		"POST /api/server/audit/chain",
 		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
 		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
+		"POST /api/dustpan/v1/local-users/reset",
+		"POST /api/dustpan/v1/me/password",
 	}
 }
 
@@ -1212,12 +1294,19 @@ func wantSuccessStatus(route apiserver.Route) int {
 	return wantOtherSuccessStatus(route)
 }
 
+// startsInBackground reports whether a POST to path starts work that runs in
+// the background and answers 202.
+func startsInBackground(path string) bool {
+	return slices.Contains([]string{
+		"/api/server/backups", "/api/server/restores", "/api/server/restores/{id}/cancel",
+		"/api/dustpan/v1/store-checks",
+	}, path)
+}
+
 // wantOtherSuccessStatus answers the success status of a route that needs no
 // fresh authentication.
 func wantOtherSuccessStatus(route apiserver.Route) int {
-	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
-			route.Path == "/api/server/restores/{id}/cancel") {
+	if route.Method == http.MethodPost && startsInBackground(route.Path) {
 		return http.StatusAccepted
 	}
 
@@ -1527,10 +1616,13 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 
 	full := apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1559,6 +1651,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	}
 
 	cases := []struct {
@@ -1627,6 +1720,14 @@ func (stubBackupRegistry) StartBackup(_ context.Context, _ backup.Record, _ dura
 	return nil
 }
 
+func (stubBackupRegistry) StartBackupClaimed(
+	_ context.Context, _ backup.Record, _ durable.StartRequest, _ durable.StartClaim,
+) (durable.Operation, error) {
+	var none durable.Operation
+
+	return none, nil
+}
+
 func (stubBackupRegistry) FailEndedBackups(_ context.Context, _ time.Time) (int, error) {
 	return 0, nil
 }
@@ -1688,10 +1789,13 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1720,6 +1824,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1731,10 +1836,13 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	without, err := newCheckedHandler(t, apiserver.Config{
 		Preferences:      nil,
+		LocalUsers:       nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1763,6 +1871,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
@@ -1795,6 +1904,7 @@ func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, e
 	return inventory.SweepResult{
 		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
 		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+		WaitingBlobPurges: 0, WaitingFor: "",
 	}, nil
 }
 
@@ -1805,4 +1915,121 @@ type productionKind struct{}
 // ReadKind implements backup.KindReader.
 func (productionKind) ReadKind(_ context.Context) (installation.Kind, error) {
 	return installation.KindProduction, nil
+}
+
+// newRouteTestSettings returns the settings service of the route tests: the
+// registry of the settings conformance suite over the store st.
+func newRouteTestSettings(st *sqlite.Store) *setting.Service {
+	return setting.NewService(st.SettingStore(), settingtest.Registry(), nil, st, nil)
+}
+
+// seedRouteStoreCheck seeds one store check that ended failed long ago.
+func seedRouteStoreCheck(t *testing.T, st *sqlite.Store, ended time.Time) {
+	t.Helper()
+
+	row := storecheck.Record{
+		StartedAt: ended.Add(-time.Hour), EndedAt: time.Time{}, ID: testStoreCheckID, Target: storecheck.TargetBlobs,
+		State: storecheck.StateRunning, RequestedBy: "tester", Error: "", Report: nil,
+	}
+
+	start := durable.StartRequest{
+		Key: storecheck.OperationKey(testStoreCheckID), Kind: storecheck.OperationKind,
+		Version: storecheck.OperationVersion, Input: []byte("{}"),
+	}
+	if err := st.StartCheck(t.Context(), row, start, time.Time{}); err != nil {
+		t.Fatalf("seed store check %s: %v", testStoreCheckID, err)
+	}
+
+	ops, err := st.DurableOperations().
+		List(t.Context(), durable.Filter{Kind: storecheck.OperationKind, States: nil, Limit: 0})
+	if err != nil {
+		t.Fatalf("list store check operations: %v", err)
+	}
+
+	for i := range ops {
+		if err := st.DurableOperations().Cancel(t.Context(), ops[i].ID); err != nil {
+			t.Fatalf("cancel seed store check operation: %v", err)
+		}
+	}
+
+	if _, err := st.FailEndedChecks(t.Context(), ended); err != nil {
+		t.Fatalf("fail seed store check %s: %v", testStoreCheckID, err)
+	}
+}
+
+// newRouteLocalUsers returns the local user service of the route tests, over
+// st.
+func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
+	t.Helper()
+
+	principals, err := principal.NewService(principal.Config{
+		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil, Now: nil,
+		NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
+	if err != nil {
+		t.Fatalf("hash budget: %v", err)
+	}
+
+	hasher, err := argon2id.New(budget)
+	if err != nil {
+		t.Fatalf("hasher: %v", err)
+	}
+
+	seedRouteLocalUser(t, st)
+
+	svc, err := localusersvc.New(localusersvc.Config{
+		Log:        nil,
+		Store:      st,
+		Principals: principals,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      st,
+		Locks:      st,
+		Keys:       st,
+		Settings:   nil,
+		SSO:        nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+		},
+		Subjects: st,
+		Kind:     installation.KindProduction,
+		Now:      nil,
+	})
+	if err != nil {
+		t.Fatalf("local user service: %v", err)
+	}
+
+	return svc
+}
+
+// seedRouteLocalUser gives the seeded person testPrincipalID a local user
+// record with no password, when the store holds that person, so the routes
+// that read or unlock the counts of a local user find one.
+func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	u := localuser.User{
+		CreatedAt: at, PasswordSetAt: time.Time{}, ID: "lus-route", PrincipalID: testPrincipalID,
+		UserName: "routealice", CreatedBy: "seed", ChangeRequired: false, Demo: false,
+	}
+	e := audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "seed", IDPSubject: "", TokenID: "",
+		Action: "local-user.created", Object: "local-user:lus-route", Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
+
+	// A store of another fixture holds no person testPrincipalID: it gets no
+	// local user record.
+	err := st.CreateUser(t.Context(), u, e)
+	if err != nil && !errors.Is(err, localuser.ErrAlreadyExists) && !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("seed the local user: %v", err)
+	}
 }

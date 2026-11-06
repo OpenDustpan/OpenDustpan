@@ -26,6 +26,17 @@ func (namedCollections) CollectionID(_ context.Context, col identity.Object) (st
 	return "col-" + col.CollectionName(), true, nil
 }
 
+// missingCollections finds no collection.
+type missingCollections struct{}
+
+func (missingCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {
+	return "", false, nil
+}
+
+func (missingCollections) CollectionID(context.Context, identity.Object) (string, bool, error) {
+	return "", false, nil
+}
+
 // fixedCollections gives every collection one stable ID, as a port that holds
 // a single generation of the collection answers.
 type fixedCollections struct {
@@ -61,6 +72,7 @@ func moveCases() []struct {
 		name string
 	}{
 		{name: "a move keeps the escalation check of the target's grants", test: testMoveEscalation},
+		{name: "a move names a missing unit or collection with its own error", test: testMoveMissingTarget},
 		{name: "a collection grant with an old stable ID gives nothing", test: testRenamedCollectionGrants},
 		{name: "deleting a collection revokes its grants", test: testCollectionDeleteRevokes},
 	}
@@ -192,6 +204,53 @@ func testMoveEscalation(t *testing.T, s access.Store) {
 
 	if _, err := svc.CheckMove(t.Context(), mallory, unit, lab); err != nil {
 		t.Fatalf("move into lab = %v, want nil: the target gives only what the caller holds", err)
+	}
+}
+
+// testMoveMissingTarget runs the case of a move check for a unit or a target
+// collection that does not exist. The error wraps ErrNotFound and the sentinel
+// that names the missing object, so a caller can tell the two apart.
+func testMoveMissingTarget(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ms, ok := s.(moveStore)
+	if !ok {
+		t.Skip("the store keeps no units, roles and principals")
+	}
+
+	seedStack(t, s)
+
+	caller := seedPrincipal(t, ms, "prn-mallory", "mallory")
+	unit := unitRef(t, "pulumi", "web/prod")
+	gone := unitRef(t, "pulumi", "web/gone")
+	sandbox := identity.CollectionObject("acme", "sandbox")
+
+	cases := []struct {
+		name       string
+		port       access.UnitCollections
+		unit       identity.Object
+		target     identity.Object
+		wantMissed error
+		notMissed  error
+	}{
+		{
+			name: "missing target collection", port: missingCollections{}, unit: unit, target: sandbox,
+			wantMissed: access.ErrCollectionMissing, notMissed: access.ErrUnitMissing,
+		},
+		{
+			name: "missing unit", port: namedCollections{}, unit: gone, target: sandbox,
+			wantMissed: access.ErrUnitMissing, notMissed: access.ErrCollectionMissing,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+		_, svc := authorizerOver(t, ms, tc.port)
+
+		_, err := svc.CheckMove(t.Context(), caller, tc.unit, tc.target)
+		if !errors.Is(err, access.ErrNotFound) || !errors.Is(err, tc.wantMissed) || errors.Is(err, tc.notMissed) {
+			t.Errorf("%s: CheckMove = %v, want ErrNotFound wrapping only %v", tc.name, err, tc.wantMissed)
+		}
 	}
 }
 

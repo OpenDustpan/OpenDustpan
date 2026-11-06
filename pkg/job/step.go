@@ -108,6 +108,13 @@ type StepRecord struct {
 	Log *LogRef
 }
 
+// ValidStepName reports whether name is a valid name of a step: 1 to
+// MaxStepName lowercase letters, digits and '-', with a letter or a digit at
+// each end.
+func ValidStepName(name string) bool {
+	return len(name) <= MaxStepName && stepNamePattern.MatchString(name)
+}
+
 var (
 	stepNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	envNamePattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

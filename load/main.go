@@ -90,6 +90,7 @@ type harnessFlags struct {
 	probe       bool
 	maxDuration time.Duration
 	blobCfg     BlobFlowConfig
+	scale       scaleFlags
 }
 
 // parseHarnessFlags parses and checks args.
@@ -99,15 +100,34 @@ func parseHarnessFlags(args []string) (harnessFlags, error) {
 	f := harnessFlags{
 		out: "", units: 0, ns: "", flows: "", blobs: "", probe: false, maxDuration: 0,
 		blobCfg: DefaultBlobFlowConfig(),
+		scale: scaleFlags{
+			binary: "", instances: 1, clients: defaultScaleClients, duration: defaultScaleDuration,
+			warmup: defaultScaleWarmup, think: 0, restart: false, restartTail: defaultScaleTail, storePID: 0,
+		},
 	}
 
 	flags.StringVar(&f.out, "out", "load-report.json", "write the JSON report to `path`")
 	flags.IntVar(&f.units, "units", defaultUnits, "build `n` units, half stacks and half workspaces")
 	flags.StringVar(&f.ns, "namespace", "load", "measure in namespace `name`")
-	flags.StringVar(&f.flows, "flows", flowsAll, "run `set` all (the nightly report) or blobs (the blob flow report)")
+	flags.StringVar(
+		&f.flows,
+		"flows",
+		flowsAll,
+		"run `set` all (the nightly report), blobs (the blob flow report) or scale (several server processes behind a balancer)",
+	)
 	flags.StringVar(&f.blobs, "blobs", blobsFS, "live blob store `kind`: fs (a directory) or s3 (DUSTPAN_TEST_S3_*)")
 	flags.BoolVar(&f.probe, "s3-probe", true, "open the S3 store with the conditional-write probe, as the server does")
 	flags.DurationVar(&f.maxDuration, "max-duration", 0, "stop the run after `duration`; 0 sets no bound")
+	flags.StringVar(&f.scale.binary, "binary", "", "scale: the `path` of the opendustpan binary that serves")
+	flags.IntVar(&f.scale.instances, "instances", f.scale.instances, "scale: run `n` server processes")
+	flags.IntVar(&f.scale.clients, "clients", f.scale.clients, "scale: run `n` simulated users")
+	flags.DurationVar(&f.scale.duration, "duration", f.scale.duration, "scale: measure for `duration`")
+	flags.DurationVar(&f.scale.warmup, "warmup", f.scale.warmup, "scale: run `duration` before the measurement")
+	flags.DurationVar(&f.scale.think, "think", f.scale.think, "scale: each user waits `duration` between cycles")
+	flags.BoolVar(&f.scale.restart, "restart", f.scale.restart, "scale: restart instance 0 after the measurement")
+	flags.DurationVar(&f.scale.restartTail, "restart-tail", f.scale.restartTail,
+		"scale: keep the load `duration` after the restarted instance is ready")
+	flags.IntVar(&f.scale.storePID, "store-pid", 0, "scale: the `pid` of the object store, to measure its CPU")
 	flags.IntVar(&f.blobCfg.Reps, "reps", f.blobCfg.Reps, "blobs: time `n` state uploads and n checkpoint saves")
 	flags.IntVar(&f.blobCfg.StateBytes, "state-bytes", f.blobCfg.StateBytes, "blobs: state size in `bytes`")
 	flags.IntVar(&f.blobCfg.CheckpointBytes, "checkpoint-bytes", f.blobCfg.CheckpointBytes,
@@ -128,7 +148,7 @@ func parseHarnessFlags(args []string) (harnessFlags, error) {
 // check refuses flag values the harness cannot run.
 func (f harnessFlags) check() error {
 	switch {
-	case f.flows != flowsAll && f.flows != flowsBlobs:
+	case f.flows != flowsAll && f.flows != flowsBlobs && f.flows != flowsScale:
 		return errBadFlows
 	case f.flows == flowsBlobs && (f.blobCfg.Reps < 1 || f.blobCfg.DatasetUnits < 0 || f.blobCfg.HTTPTimeoutSecs < 1):
 		return errBadReps
@@ -194,6 +214,10 @@ func runHarness(ctx context.Context, args []string) error {
 
 // execute starts the servers in dir and runs the flows of f.
 func (f harnessFlags) execute(ctx context.Context, logger *slog.Logger, dir string) (any, error) {
+	if f.flows == flowsScale {
+		return executeScale(ctx, logger, f, dir)
+	}
+
 	settings, err := newBlobSettings(f.blobs, f.probe, dir)
 	if err != nil {
 		return nil, err
@@ -488,7 +512,7 @@ const (
 )
 
 // errBadFlows reports a -flows value that names no run set.
-var errBadFlows = errors.New("-flows must be all or blobs")
+var errBadFlows = errors.New("-flows must be all, blobs or scale")
 
 // errBadDuration reports a negative -max-duration.
 var errBadDuration = errors.New("-max-duration must not be negative")
@@ -759,7 +783,10 @@ func runInstance(
 		stop()
 
 		select {
-		case <-done:
+		case runErr := <-done:
+			if runErr != nil {
+				logger.ErrorContext(stopCtx, "stop instance", slog.String("error", runErr.Error()))
+			}
 		case <-time.After(runStopTimeout):
 			logger.ErrorContext(stopCtx, "stop instance", slog.String("error", errRunStopped.Error()))
 		}

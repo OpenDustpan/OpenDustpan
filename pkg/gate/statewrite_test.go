@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -16,8 +17,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // swUnits gives the collection and the labels of the units of a test.
@@ -26,16 +29,8 @@ type swUnits struct {
 	labels      map[string][]string
 }
 
-func (u swUnits) Collection(_ context.Context, unit identity.Object) (collection.Name, error) {
-	if c, ok := u.collections[unit.String()]; ok {
-		return c, nil
-	}
-
-	return "", gate.ErrNotFound
-}
-
-func (u swUnits) Labels(_ context.Context, unit identity.Object) ([]string, error) {
-	return u.labels[unit.String()], nil
+func (u swUnits) Unit(_ context.Context, unit identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: u.collections[unit.String()], Labels: u.labels[unit.String()]}, nil
 }
 
 // swSubjects gives the Subject of a principal by its subject: "alice" is a
@@ -110,13 +105,17 @@ type swEnv struct {
 	fence namespace.Fence
 }
 
-// swFacts gives the collection and the labels of the units of a test.
-type swFacts interface {
-	gate.Membership
-	gate.UnitSource
+func newSWEnv(t *testing.T, units gate.UnitSource, engineErr error) swEnv {
+	t.Helper()
+
+	return newWrappedSWEnv(t, units, engineErr, nil)
 }
 
-func newSWEnv(t *testing.T, units swFacts, engineErr error) swEnv {
+// newWrappedSWEnv is newSWEnv with a gate store that wrap makes from the real
+// store, or the real store when wrap is nil.
+func newWrappedSWEnv(
+	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store,
+) swEnv {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -144,11 +143,29 @@ func newSWEnv(t *testing.T, units swFacts, engineErr error) swEnv {
 		t.Fatal(err)
 	}
 
+	// The gates of a unit belong to the unit, so the units of the tests exist.
+	for _, name := range []workspace.Name{"web", "other"} {
+		w := workspace.Workspace{
+			NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(), ID: workspace.ID("ws-test-" + string(name)),
+			Ref:       workspace.Ref{Namespace: "acme", Name: name},
+			Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		}
+		if err = st.CreateWorkspace(t.Context(), w, fence); err != nil {
+			t.Fatalf("create workspace %s: %v", name, err)
+		}
+	}
+
+	var gates gate.Store = st
+	if wrap != nil {
+		gates = wrap(st)
+	}
+
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store:     st,
+		Store:     gates,
 		Engine:    swEngine{Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")), fail: engineErr},
 		Producers: nil,
-		Members:   units,
 		Units:     units,
 		Subjects:  swSubjects{},
 		Fences:    swFences{nss: nss},
@@ -310,7 +327,7 @@ func swWrite(t *testing.T, subject, unit string, op gate.OperationKind) gate.Sta
 
 	return gate.StateWrite{
 		Principal: principal(subject, false), Unit: swUnit(t, unit), Operation: op,
-		Action: identity.ActionUnitWrite, Source: gate.SourceCLI, PlanLock: false,
+		Action: identity.ActionUnitWrite, Source: gate.SourceCLI, PlanLock: false, State: nil,
 	}
 }
 
@@ -618,7 +635,7 @@ func swChange(t *testing.T, fence namespace.Fence) gate.Change {
 		},
 		Source: gate.SourceCLI, Author: "alice", Operation: gate.OperationLock,
 		Units:   []identity.Object{swUnit(t, "web")},
-		Holders: nil, PlanLock: false, BreakGlass: "", Fence: fence,
+		Holders: nil, PlanLock: false, BreakGlass: "", Fence: fence, State: nil,
 	}
 }
 
@@ -843,31 +860,22 @@ func TestMessageTemplateNeverRendersEmpty(t *testing.T) {
 type countingUnits struct {
 	swUnits
 
-	mu          sync.Mutex
-	collections int
-	labels      int
+	mu    sync.Mutex
+	reads int
 }
 
-func (c *countingUnits) Collection(ctx context.Context, unit identity.Object) (collection.Name, error) {
+func (c *countingUnits) Unit(ctx context.Context, unit identity.Object) (gate.UnitInfo, error) {
 	c.mu.Lock()
-	c.collections++
+	c.reads++
 	c.mu.Unlock()
 
-	return c.swUnits.Collection(ctx, unit)
-}
-
-func (c *countingUnits) Labels(ctx context.Context, unit identity.Object) ([]string, error) {
-	c.mu.Lock()
-	c.labels++
-	c.mu.Unlock()
-
-	return c.swUnits.Labels(ctx, unit)
+	return c.swUnits.Unit(ctx, unit)
 }
 
 func TestGuardReadsTheUnitFactsOnce(t *testing.T) {
 	t.Parallel()
 
-	units := &countingUnits{swUnits: swUnitsOfTests(), mu: sync.Mutex{}, collections: 0, labels: 0}
+	units := &countingUnits{swUnits: swUnitsOfTests(), mu: sync.Mutex{}, reads: 0}
 	e := newSWEnv(t, units, nil)
 	e.putLimit(t, swUnitScope(t, "web"), "limit-1", forbidServices)
 	e.putGate(t, newSWGate(atUnit, "watch", "", gate.OutcomeWarn, "careful"))
@@ -879,9 +887,135 @@ func TestGuardReadsTheUnitFactsOnce(t *testing.T) {
 	units.mu.Lock()
 	defer units.mu.Unlock()
 
-	if units.collections != 1 || units.labels != 1 {
-		t.Fatalf("reads = %d collections and %d labels, want 1 and 1 for one check of the limits and the gates",
-			units.collections, units.labels)
+	if units.reads != 1 {
+		t.Fatalf("reads = %d, want 1 for one check of the limits and the gates", units.reads)
+	}
+}
+
+// countingStore counts the reads of the gate configuration, and fails each
+// read with fail when fail is set.
+type countingStore struct {
+	*sqlite.Store
+
+	mu        sync.Mutex
+	snapshots int
+	fail      error
+}
+
+func (c *countingStore) Snapshot(ctx context.Context, scopes []gate.Scope) (gate.Config, error) {
+	c.mu.Lock()
+	c.snapshots++
+	fail := c.fail
+	c.mu.Unlock()
+
+	if fail != nil {
+		return gate.Config{}, fail
+	}
+
+	return c.Store.Snapshot(ctx, scopes)
+}
+
+// newCountingSWEnv returns an env whose gate store counts its reads.
+func newCountingSWEnv(t *testing.T, fail error) (swEnv, *countingStore) {
+	t.Helper()
+
+	counting := &countingStore{Store: nil, mu: sync.Mutex{}, snapshots: 0, fail: fail}
+
+	e := newWrappedSWEnv(t, swUnitsOfTests(), nil, func(st *sqlite.Store) gate.Store {
+		counting.Store = st
+
+		return counting
+	})
+
+	return e, counting
+}
+
+// TestGuardReadsTheGateConfigurationOnce checks that one guard call reads the
+// configuration of the unit once for the access limits and the gates, and
+// that both checks still decide on it: the limit refuses a service, and the
+// gate denies a person.
+func TestGuardReadsTheGateConfigurationOnce(t *testing.T) {
+	t.Parallel()
+
+	e, counting := newCountingSWEnv(t, nil)
+	e.putLimit(t, swUnitScope(t, "web"), "limit-1", forbidServices)
+	e.putGate(t, newSWGate(atUnit, "no-person", `context.principal.kind == "person"`, gate.OutcomeDeny, "no"))
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "ci", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrLimited) {
+		t.Fatalf("GuardStateWrite(service) = %v, want ErrLimited by the access limit", err)
+	}
+
+	_, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite(person) = %v, want ErrDenied by the gate", err)
+	}
+
+	counting.mu.Lock()
+	defer counting.mu.Unlock()
+
+	// The service stops at the limit, before the gates: 1 read. The person
+	// passes the limit and meets the gate with the same read: 1 read.
+	if counting.snapshots != 2 {
+		t.Fatalf("configuration reads = %d, want 1 for each of the 2 guard calls", counting.snapshots)
+	}
+}
+
+// errSnapshotDown is the error of a gate store that cannot read the
+// configuration.
+var errSnapshotDown = errors.New("snapshot down")
+
+// TestGuardFailsClosedWhenTheConfigurationCannotBeRead checks that a store
+// that cannot read the configuration refuses the write, at the access limits
+// and, for a break-glass account that skips the limits, at the gates.
+func TestGuardFailsClosedWhenTheConfigurationCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"alice", "glass"} {
+		e, counting := newCountingSWEnv(t, errSnapshotDown)
+
+		_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, subject, "web", gate.OperationLock))
+		if !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errSnapshotDown) {
+			t.Fatalf("GuardStateWrite(%s) = %v, want ErrUnavailable with the store error", subject, err)
+		}
+
+		counting.mu.Lock()
+		reads := counting.snapshots
+		counting.mu.Unlock()
+
+		if reads != 1 {
+			t.Fatalf("configuration reads of %s = %d, want 1: a failed read is not read again", subject, reads)
+		}
+
+		if rs := e.records(t); len(rs) != 0 {
+			t.Fatalf("records = %d after a failed read, want none: no decision was made", len(rs))
+		}
+	}
+}
+
+// errUnitsDown is the error of a unit source that does not answer.
+var errUnitsDown = errors.New("units down")
+
+// swFailingUnits is a unit source that does not answer.
+type swFailingUnits struct{}
+
+func (swFailingUnits) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: "", Labels: nil}, errUnitsDown
+}
+
+// TestGuardFailsClosedWhenTheUnitFactsCannotBeRead checks that a unit source
+// that does not answer refuses the write, at the access limits and, for a
+// break-glass account that skips the limits, at the gates.
+func TestGuardFailsClosedWhenTheUnitFactsCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"alice", "glass"} {
+		e := newSWEnv(t, swFailingUnits{}, nil)
+
+		_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, subject, "web", gate.OperationLock))
+		if !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errUnitsDown) {
+			t.Fatalf("GuardStateWrite(%s) = %v, want ErrUnavailable with the source error", subject, err)
+		}
 	}
 }
 
@@ -904,13 +1038,13 @@ func TestHugeLabelSetIsTruncatedInTheFactDocument(t *testing.T) {
 	}
 }
 
-// swUnknownUnits knows no unit: its labels are not found.
+// swUnknownUnits knows no unit.
 type swUnknownUnits struct {
 	swUnits
 }
 
-func (swUnknownUnits) Labels(context.Context, identity.Object) ([]string, error) {
-	return nil, gate.ErrNotFound
+func (swUnknownUnits) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: "", Labels: nil}, gate.ErrNotFound
 }
 
 // A unit reference that resolves to nothing fails closed at state.write. The
@@ -925,5 +1059,165 @@ func TestUnknownUnitFailsClosedAtStateWrite(t *testing.T) {
 	_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
 	if !errors.Is(err, gate.ErrUnavailable) {
 		t.Fatalf("GuardStateWrite(unknown unit) = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestStateWriteGateStaysWithTheUnit checks that the admission of a state
+// write finds the gates of the unit by its stable ID: an enforced deny of the
+// workspace web refuses its writes, and a new workspace web, made after the
+// delete of the old one, starts with no gate.
+func TestStateWriteGateStaysWithTheUnit(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putGate(t, newSWGate(atUnit, "no-writes", "", gate.OutcomeDeny, "frozen"))
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite(web) = %v, want ErrDenied: the gate of the unit holds", err)
+	}
+
+	ref := workspace.Ref{Namespace: "acme", Name: "web"}
+	del := inventory.Deletion{Entry: swEntry(), PurgeAfter: time.Now().Add(time.Hour)}
+
+	if err = e.store.DeleteWorkspace(t.Context(), ref, e.fence, del); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), ID: "ws-test-web-again", Ref: ref,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+	if err = e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
+		t.Fatalf("create workspace again: %v", err)
+	}
+
+	if _, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
+		t.Fatalf("GuardStateWrite(new web) = %v, want nil: a new unit with a used name starts clean", err)
+	}
+}
+
+// deleteSWWeb deletes the workspace web of e.
+func (e swEnv) deleteSWWeb(t *testing.T) {
+	t.Helper()
+
+	ref := workspace.Ref{Namespace: "acme", Name: "web"}
+	del := inventory.Deletion{Entry: swEntry(), PurgeAfter: time.Now().Add(time.Hour)}
+
+	if err := e.store.DeleteWorkspace(t.Context(), ref, e.fence, del); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+}
+
+// reuseSWWeb makes a new workspace web, after the delete of the old one, with
+// a deny gate and an access limit of its own.
+func (e swEnv) reuseSWWeb(t *testing.T) {
+	t.Helper()
+
+	w := workspace.Workspace{
+		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), ID: "ws-test-web-new", Ref: workspace.Ref{Namespace: "acme", Name: "web"},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+	if err := e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
+		t.Fatalf("create workspace again: %v", err)
+	}
+
+	e.putGate(t, newSWGate(atUnit, "new-deny", "", gate.OutcomeDeny, "new unit"))
+	e.putLimit(t, swUnitScope(t, "web"), "new-limit", forbidServices)
+}
+
+// swDeletedWeb returns a state write of the deleted workspace web, named by
+// its stable ID, as the restore and the purge of a deleted unit name it.
+func swDeletedWeb(t *testing.T, subject string, op gate.OperationKind) gate.StateWrite {
+	t.Helper()
+
+	w := swWrite(t, subject, "web", op)
+	w.Unit = w.Unit.WithUnitID("ws-test-web")
+
+	return w
+}
+
+// swDeletedCase is one case of TestDeletedUnitWriteChecksItsOwnGates.
+type swDeletedCase struct {
+	op gate.OperationKind
+	// reuse makes a new live workspace web after the delete.
+	reuse bool
+}
+
+// TestDeletedUnitWriteChecksItsOwnGates checks that the restore and the purge
+// of a deleted unit, which name it by its stable ID, check the gates and the
+// access limits of that unit: with no live unit of its name, and with a new
+// live unit of its name, whose gates and limits do not hold.
+func TestDeletedUnitWriteChecksItsOwnGates(t *testing.T) {
+	t.Parallel()
+
+	for _, op := range []gate.OperationKind{gate.OperationRollback, gate.OperationDelete} {
+		for _, reuse := range []bool{false, true} {
+			tc := swDeletedCase{op: op, reuse: reuse}
+			name := fmt.Sprintf("%s with a new unit of the name: %v", op, reuse)
+
+			t.Run(name+"/gate", func(t *testing.T) {
+				t.Parallel()
+				tc.checkGate(t)
+			})
+
+			t.Run(name+"/limit", func(t *testing.T) {
+				t.Parallel()
+				tc.checkLimit(t)
+			})
+		}
+	}
+}
+
+// checkGate checks that the deleted unit's deny gate refuses the write, and
+// that no gate of a new unit with its name is in the refusal.
+func (tc swDeletedCase) checkGate(t *testing.T) {
+	t.Helper()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putGate(t, newSWGate(atUnit, "old-deny", "", gate.OutcomeDeny, "old unit"))
+	e.deleteSWWeb(t)
+
+	if tc.reuse {
+		e.reuseSWWeb(t)
+	}
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swDeletedWeb(t, "alice", tc.op))
+
+	refusal, ok := errors.AsType[*gate.RefusalError](err)
+	if !ok || !errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite(deleted web) = %v, want ErrDenied by the deleted unit's gate", err)
+	}
+
+	if !slices.Contains(refusal.Messages, "old unit") || slices.Contains(refusal.Messages, "new unit") {
+		t.Fatalf("messages = %q, want the deleted unit's gate only", refusal.Messages)
+	}
+}
+
+// checkLimit checks that the deleted unit's access limit refuses the write,
+// and that the access limit of a new unit with its name does not.
+func (tc swDeletedCase) checkLimit(t *testing.T) {
+	t.Helper()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	if !tc.reuse {
+		e.putLimit(t, swUnitScope(t, "web"), "old-limit", forbidServices)
+	}
+
+	e.deleteSWWeb(t)
+
+	if tc.reuse {
+		e.reuseSWWeb(t)
+	}
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swDeletedWeb(t, "ci", tc.op))
+
+	if limited := errors.Is(err, gate.ErrLimited); limited == tc.reuse {
+		t.Fatalf("GuardStateWrite(deleted web) = %v, want ErrLimited only by the deleted unit's own limit", err)
 	}
 }

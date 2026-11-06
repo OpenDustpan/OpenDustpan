@@ -86,10 +86,11 @@ func (e *GateError) Error() string {
 func (*GateError) Unwrap() error { return ErrGateEnforced }
 
 // GateGuard tells which enforced gates cover a unit. A start meets the gates
-// of change.propose and state.write for the unit. The gate service does not
-// evaluate change.propose yet, and the job token passes state.write with no
-// evaluation, so the start refuses when such a gate covers the unit and never
-// skips it.
+// of change.propose and state.write for the unit, and so does each claim of a
+// phase of the job (DurableClaimer). The gate service does not evaluate
+// change.propose yet, and the job token passes state.write with no
+// evaluation, so the start and the claim refuse when such a gate covers the
+// unit and never skip it.
 type GateGuard interface {
 	// Enforced returns the gates in enforce mode at change.propose or
 	// state.write on the scope chain of unit: the installation, the

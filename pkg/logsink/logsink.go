@@ -4,7 +4,7 @@
 // record holds a time, a level, a message and named attributes.
 //
 // Adapters live in subpackages (logsink/file, logsink/syslog,
-// logsink/webhook, logsink/objectstore) or in user code.
+// logsink/webhook, logsink/otlp, logsink/objectstore) or in user code.
 // logsink/logsinktest is the conformance suite every adapter must pass.
 package logsink
 

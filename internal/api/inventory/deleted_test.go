@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -37,6 +38,37 @@ const deletedNowUnix = 1_800_000_000
 // memDeleted is an in-memory inventory.DeletedReader.
 type memDeleted struct {
 	entries []coreinventory.DeletedEntry
+}
+
+// countingDeleted is an inventory.DeletedReader that counts the calls it passes
+// to inner, so a test can prove that the store was not read.
+type countingDeleted struct {
+	inner coreinventory.DeletedReader
+	reads int
+}
+
+func (c *countingDeleted) ListDeletedUnits(
+	ctx context.Context, ns namespace.Name,
+) ([]coreinventory.DeletedEntry, error) {
+	c.reads++
+
+	return c.inner.ListDeletedUnits(ctx, ns)
+}
+
+func (c *countingDeleted) QueryDeletedUnits(
+	ctx context.Context, q coreinventory.DeletedQuery,
+) (coreinventory.DeletedPage, error) {
+	c.reads++
+
+	return c.inner.QueryDeletedUnits(ctx, q)
+}
+
+func (c *countingDeleted) GetDeletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (coreinventory.DeletedEntry, error) {
+	c.reads++
+
+	return c.inner.GetDeletedUnit(ctx, ns, tool, unitID)
 }
 
 func (m *memDeleted) ListDeletedUnits(
@@ -149,6 +181,7 @@ func testLifecycles() map[string]coreinventory.Lifecycle {
 type deletedFixture struct {
 	handler testHandler
 	pulumi  *memLifecycle
+	deleted *countingDeleted
 }
 
 // newDeletedFixture builds a deletedFixture with the deleted units entries.
@@ -171,7 +204,11 @@ func buildDeletedFixture(
 	t.Helper()
 
 	return buildGuardedFixture(t, guardSpec{
-		entries: entries, authz: authz, lifecycleErr: lifecycleErr, scope: scope, guard: nil,
+		entries:      entries,
+		authz:        authz,
+		lifecycleErr: lifecycleErr,
+		scope:        scope,
+		guard:        stategate.Off("the test keeps no gates"),
 	})
 }
 
@@ -181,11 +218,29 @@ type guardSpec struct {
 	authz        identity.Authorizer
 	lifecycleErr error
 	scope        apiinventory.DeletedReadScope
-	guard        apiinventory.StateGuard
+	guard        stategate.Guard
 }
 
 // buildGuardedFixture is buildDeletedFixture with the state guard of spec.
 func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
+	t.Helper()
+
+	cfg, pulumi := guardedConfig(t, spec)
+
+	deleted := &countingDeleted{inner: cfg.Deleted, reads: 0}
+	cfg.Deleted = deleted
+
+	handler, err := newCheckedHandler(t, cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return deletedFixture{handler: handler, pulumi: pulumi, deleted: deleted}
+}
+
+// guardedConfig returns the config of a handler over the deleted units of
+// spec, with the state guard of spec, and the lifecycle of the Pulumi units.
+func guardedConfig(t *testing.T, spec guardSpec) (apiinventory.Config, *memLifecycle) {
 	t.Helper()
 
 	entries, authz, lifecycleErr, scope, guard := spec.entries, spec.authz, spec.lifecycleErr, spec.scope, spec.guard
@@ -200,7 +255,8 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
-	handler, err := newCheckedHandler(t, apiinventory.Config{
+	return apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,
@@ -223,12 +279,7 @@ func buildGuardedFixture(t *testing.T, spec guardSpec) deletedFixture {
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 		DenialLimiter: nil,
 		StateGuard:    guard,
-	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-
-	return deletedFixture{handler: handler, pulumi: pulumi}
+	}, pulumi
 }
 
 // serve sends one signed-in request and returns the recorder.
@@ -452,6 +503,183 @@ func (f fixedScope) ReadableUnits(
 	_ context.Context, _ identity.Principal, _ namespace.Name,
 ) (bool, []string, error) {
 	return f.all, f.ids, f.err
+}
+
+// firstPageToken returns the nextPageToken of the first page of one deleted
+// unit per page.
+func firstPageToken(t *testing.T, f deletedFixture) string {
+	t.Helper()
+
+	page := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"1"}}), ""))
+	if page.NextPageToken == "" {
+		t.Fatal("first page has no nextPageToken")
+	}
+
+	return page.NextPageToken
+}
+
+// rewriteToken decodes token, applies change to its JSON object, and encodes
+// the result again as a page token.
+func rewriteToken(t *testing.T, token string, change func(m map[string]any)) string {
+	t.Helper()
+
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+
+	var wire map[string]any
+	if err = json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("token is not one JSON object: %v", err)
+	}
+
+	change(wire)
+
+	out, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("encode changed token: %v", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(out)
+}
+
+// TestListDeletedUnitsHostileCursor proves that a cursor which is not
+// well-formed, or which another query made, answers 400 at the boundary, before
+// the store reads it. The unchanged cursor and a cursor with a normal name
+// answer 200.
+func TestListDeletedUnitsHostileCursor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		raw    string
+		change func(m map[string]any)
+		want   int
+	}{
+		{
+			name:   "unknown member",
+			raw:    "",
+			change: func(m map[string]any) { m["x"] = 1 },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "unknown tool",
+			raw:    "",
+			change: func(m map[string]any) { m["t"] = "terraform" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "empty name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "control character in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\nprod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "long unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = strings.Repeat("a", 1025) },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "long name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = strings.Repeat("a", 1025) },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "bell character U+0007 in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\x07prod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "right-to-left override U+202E in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\u202eprod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "line separator U+2028 in unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = "stk\u20281" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "paragraph separator U+2029 in name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web\u2029prod" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "normal name",
+			raw:    "",
+			change: func(m map[string]any) { m["n"] = "web/staging" },
+			want:   http.StatusOK,
+		},
+		{
+			name:   "empty unit ID",
+			raw:    "",
+			change: func(m map[string]any) { m["u"] = "" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "other fingerprint",
+			raw:    "",
+			change: func(m map[string]any) { m["f"] = "0000000000000000" },
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "token over the length limit",
+			raw:    strings.Repeat("A", 4097),
+			change: nil,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "unchanged cursor",
+			raw:    "",
+			change: nil,
+			want:   http.StatusOK,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDeletedFixture(t, fiveDeleted(), selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
+
+			token := tc.raw
+			switch {
+			case tc.raw != "":
+			case tc.change != nil:
+				token = rewriteToken(t, firstPageToken(t, f), tc.change)
+			default:
+				token = firstPageToken(t, f)
+			}
+
+			// The first page above reads the store once. Count only the reads of the request.
+			f.deleted.reads = 0
+
+			rec := f.serve(t, http.MethodGet, listTarget(url.Values{"pageSize": {"1"}, "pageToken": {token}}), "")
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
+			}
+
+			if tc.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "request.invalid-query") {
+				t.Fatalf("body does not hold request.invalid-query: %s", rec.Body.String())
+			}
+
+			if tc.want == http.StatusBadRequest && f.deleted.reads != 0 {
+				t.Fatalf("store was called %d times for a hostile cursor, want 0", f.deleted.reads)
+			}
+		})
+	}
 }
 
 // TestListDeletedUnitsReadScope proves that the list holds only the units

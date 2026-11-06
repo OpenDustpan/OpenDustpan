@@ -57,6 +57,10 @@ func ValidProviderID(id string) bool {
 // provider cannot compose the subject of the dev person ("dev:admin").
 const DevProviderID = "dev"
 
+// LocalProviderID is the provider ID that the password sign-in of a local
+// user records. No identity provider can take it.
+const LocalProviderID = "local"
+
 // SubjectPrefix returns the prefix of the subject of each person who signs
 // in with the provider id: the subject is "<provider ID>:<sub>".
 func SubjectPrefix(id string) string {
@@ -124,6 +128,10 @@ func (p ProviderConfig) validateNames() error {
 		return fmt.Errorf("%w: the provider ID %q is reserved for the dev sign-in", ErrInvalidProvider, p.ID)
 	}
 
+	if p.ID == LocalProviderID {
+		return fmt.Errorf("%w: the provider ID %q is reserved for the local users", ErrInvalidProvider, p.ID)
+	}
+
 	if err := p.validateMode(); err != nil {
 		return err
 	}
@@ -162,6 +170,11 @@ func (p ProviderConfig) validateMode() error {
 		}
 
 		return p.OAuth.validate()
+	case ModeSAML, ModeCAS, ModeLDAP, ModeHeader:
+		// Fail closed: the mode has no settings and no method yet, so a
+		// stored provider of the mode could sign no person in.
+		return fmt.Errorf("%w: the mode %q has no sign-in method in this version; the mode must be %q or %q",
+			ErrInvalidProvider, p.Mode, ModeOIDC, ModeOAuth)
 	default:
 		return fmt.Errorf("%w: the mode must be %q or %q", ErrInvalidProvider, ModeOIDC, ModeOAuth)
 	}
