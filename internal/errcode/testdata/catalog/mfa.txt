@@ -1,0 +1,13 @@
+mfa.break-glass-reason-required
+mfa.ceremony-failed
+mfa.ceremony-not-open
+mfa.ceremony-wrong-person
+mfa.passkey-exists
+mfa.passkey-invalid
+mfa.passkey-limit limit:quantity
+mfa.passkey-not-found
+mfa.passkey-suspended
+mfa.rate-limited
+mfa.session-required
+mfa.sign-in-failed
+mfa.unavailable

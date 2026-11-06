@@ -100,7 +100,7 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: store, Engine: newGateEngine(), Producers: nil,
-		Members: facts, Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
+		Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
 		Now: cfg.now, Log: log,
 	})
 	if err != nil {
@@ -159,13 +159,19 @@ func (f inventoryFacts) Collection(ctx context.Context, unit identity.Object) (c
 	return collection.Name(e.Collection), nil
 }
 
-// Labels implements gate.UnitSource. The labels are sorted key=value strings.
-func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]string, error) {
+// Unit implements gate.UnitSource: the collection and the labels of unit
+// from one read of its inventory entry.
+func (f inventoryFacts) Unit(ctx context.Context, unit identity.Object) (gate.UnitInfo, error) {
 	e, err := f.entry(ctx, unit)
 	if err != nil {
-		return nil, err
+		return gate.UnitInfo{Collection: "", Labels: nil}, err
 	}
 
+	return gate.UnitInfo{Collection: collection.Name(e.Collection), Labels: entryLabels(e)}, nil
+}
+
+// entryLabels returns the labels of e as sorted key=value strings.
+func entryLabels(e inventory.Entry) []string {
 	labels := make([]string, 0, len(e.Labels))
 	for k, v := range e.Labels {
 		labels = append(labels, k+"="+v)
@@ -173,7 +179,7 @@ func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]str
 
 	slices.Sort(labels)
 
-	return labels, nil
+	return labels
 }
 
 // entry returns the inventory entry of unit. A unit that is not in the

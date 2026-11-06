@@ -154,6 +154,12 @@ type Tx interface {
 	// InsertRecord stores a record of the namespace ns, where ns is
 	// audit.ServerScope for a record of the installation.
 	InsertRecord(ctx context.Context, ns namespace.Name, r RecordRow) error
+	// InsertNewRecord stores a record of the namespace ns with one statement
+	// that also checks the ID and finds the namespace. It returns false, and
+	// stores nothing, when no namespace has the name ns or when a record has
+	// the ID. It returns gate.ErrInvalid for audit.ServerScope and for the
+	// empty name: a record of the installation goes through InsertRecord.
+	InsertNewRecord(ctx context.Context, ns namespace.Name, r RecordRow) (bool, error)
 	// Record returns the body of the record id of ns, and false for none.
 	Record(ctx context.Context, ns namespace.Name, id string) (string, bool, error)
 	// RecordsByChange returns the bodies of the records of one change,

@@ -188,3 +188,62 @@ func TestCostModelFitsMeasuredHistory(t *testing.T) {
 		})
 	}
 }
+
+// swapAttempt returns the round trips of one attempt of the swap step: its
+// first statement, then n more.
+func swapAttempt(n int) []roundTrip {
+	return slices.Concat([]roundTrip{queryTrip(swapStartSQL)}, perRowTrips("swap statement", n))
+}
+
+// TestWithoutSwapRetries checks that the count keeps the last attempt of the
+// swap step and the round trips around it, and nothing else.
+func TestWithoutSwapRetries(t *testing.T) {
+	t.Parallel()
+
+	before := perRowTrips("before", 3)
+	after := perRowTrips("after", 2)
+
+	cases := []struct {
+		name string
+		in   []roundTrip
+		want []roundTrip
+	}{
+		{"no swap", slices.Concat(before, after), slices.Concat(before, after)},
+		{"one attempt", slices.Concat(before, swapAttempt(4), after), slices.Concat(before, swapAttempt(4), after)},
+		{
+			"one failed attempt",
+			slices.Concat(before, swapAttempt(7), perRowTrips("claim end", 6), swapAttempt(4), after),
+			slices.Concat(before, swapAttempt(4), after),
+		},
+		{
+			"two failed attempts",
+			slices.Concat(before, swapAttempt(7), swapAttempt(2), swapAttempt(4), after),
+			slices.Concat(before, swapAttempt(4), after),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := withoutSwapRetries(tc.in); !slices.Equal(got, tc.want) {
+				t.Errorf("withoutSwapRetries gives %d round trips, want %d\n%s", len(got), len(tc.want), listTrips(got))
+			}
+		})
+	}
+}
+
+// TestWithoutSwapRetriesKeepsOtherExtraWork is the mutation check of the
+// filter: a statement that a change adds to the restore, outside of a failed
+// attempt, must stay in the count.
+func TestWithoutSwapRetriesKeepsOtherExtraWork(t *testing.T) {
+	t.Parallel()
+
+	in := slices.Concat(
+		perRowTrips("before", 3), swapAttempt(4), perRowTrips("new statement", 1), perRowTrips("after", 2),
+	)
+
+	if got := len(withoutSwapRetries(in)); got != len(in) {
+		t.Errorf("withoutSwapRetries gives %d round trips, want %d: an added statement was dropped", got, len(in))
+	}
+}

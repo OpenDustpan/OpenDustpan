@@ -108,6 +108,14 @@ func (d *runnerDomain) Takeover(ctx context.Context, c durable.Claim) (durable.C
 	return taken.Claim, nil
 }
 
+func (d *runnerDomain) Cancel(ctx context.Context, c durable.Claim) error {
+	if err := d.s.DurableOperations().Cancel(ctx, c.Operation); err != nil {
+		return fmt.Errorf("cancel operation: %w", err)
+	}
+
+	return nil
+}
+
 func (d *runnerDomain) End(ctx context.Context, c durable.Claim) error {
 	if err := d.s.DurableOperations().Complete(ctx, c); err != nil {
 		return fmt.Errorf("complete operation: %w", err)
@@ -159,8 +167,10 @@ func TestRunnersConformance(t *testing.T) {
 		s := open(t)
 		r := s.Runners()
 
+		domain := &runnerDomain{t: t, s: s, counter: atomic.Int64{}}
+
 		return runnertest.Harness{
-			Pools: r, Members: r, Sessions: r, Domain: &runnerDomain{t: t, s: s, counter: atomic.Int64{}},
+			Pools: r, Members: r, Sessions: r, Domain: domain, Canceler: domain,
 		}
 	})
 }

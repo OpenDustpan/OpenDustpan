@@ -736,6 +736,15 @@ func (h *rtHarness) newStack() {
 	h.createStack(h.stack)
 }
 
+// measureStackCall measures one call of the admin to the stack of the harness,
+// at the path of the stack with suffix.
+func (h *rtHarness) measureStackCall(method, suffix, body string, want int) {
+	h.t.Helper()
+
+	path := "/api/stacks/acme/web/" + h.stack + suffix
+	h.measure(func() { h.call(method, path, body, want) })
+}
+
 // requestFlow is one request flow and its budget. The run measures its body
 // only: the setup and the cleanup of a flow do not count.
 type requestFlow struct {
@@ -747,10 +756,12 @@ type requestFlow struct {
 // requestFlows returns the request flows and their budgets, in the order that
 // they run.
 //
-// A lock reads the gate rows of its unit in two read transactions. Each one
-// first reads the stable ID of the unit from the inventory, because the gate
-// rows of a unit key on that ID and not on its name. So "lock" and "lock,
-// upload and unlock" each hold 2 round trips for those reads.
+// A lock reads the facts of its unit in one read transaction and the gate
+// rows of its unit in a second one, one time for the access limits and the
+// gates together. Both key on the stable ID of the unit and not on its name:
+// the read of the facts first reads that ID from the inventory, and the read
+// of the gate rows finds it in its transaction. So "lock" and "lock, upload
+// and unlock" each hold 2 round trips for those reads.
 //
 // Each save of a workspace lock also writes the last released lock of the
 // workspace to its inventory row, with one update in the same transaction.
@@ -763,7 +774,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 45, func(h *rtHarness) {
+		{"lock", 31, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -771,7 +782,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 101, func(h *rtHarness) {
+		{"lock, upload and unlock", 87, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -809,6 +820,37 @@ func requestFlows() []requestFlow {
 			run := h.startUpdate()
 			h.measure(func() { h.events(run, eventBatchSize) })
 			h.complete(run)
+		}},
+		// The stack rm, import, restore, rename and cancel each meet the gates
+		// of state.write before the write: one read of the unit facts, one read
+		// of the gate configuration for the access limits and the gates
+		// together, and the write of the decision record with one statement in
+		// its own fenced transaction are part of each budget.
+		{"pulumi stack rm", 37, func(h *rtHarness) {
+			h.newStack()
+			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
+		}},
+		{"pulumi stack import", 64, func(h *rtHarness) {
+			h.newStack()
+			body := `{"version":3,"deployment":` + deployment(3) + `}`
+			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
+		}},
+		{"pulumi stack restore", 65, func(h *rtHarness) {
+			h.newStack()
+			run := h.startUpdate()
+			h.save(run, 1)
+			h.complete(run)
+			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
+		}},
+		{"pulumi stack rename", 34, func(h *rtHarness) {
+			h.newStack()
+			body := `{"newName":"` + h.stack + `-renamed"}`
+			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
+		}},
+		{"pulumi cancel", 30, func(h *rtHarness) {
+			h.newStack()
+			run := h.startUpdate()
+			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
 		}},
 	}
 }
@@ -959,6 +1001,15 @@ type measuredRun struct {
 func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.t.Helper()
 
+	return h.runBackupAndRestoreWith(nil)
+}
+
+// runBackupAndRestoreWith runs a backup, then a restore of it. When
+// beforeRestore is set, the restore starts after it, and the function that it
+// returns runs after the restore ends, outside of the count.
+func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupRun {
+	h.t.Helper()
+
 	var out backupRun
 
 	h.tracer.begin(traceBackup)
@@ -973,6 +1024,11 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 
 	out.backup = h.tracer.end()
 
+	finish := func() {}
+	if beforeRestore != nil {
+		finish = beforeRestore()
+	}
+
 	h.tracer.begin(traceBackup)
 
 	var restore struct {
@@ -985,6 +1041,8 @@ func (h *rtHarness) runBackupAndRestore() backupRun {
 	h.settleOperations()
 
 	out.restore = h.tracer.end()
+
+	finish()
 
 	return out
 }
@@ -1042,7 +1100,7 @@ func TestRoundTripsOfBackup(t *testing.T) {
 				backup:        counted(run.backup),
 				restore:       counted(run.restore),
 				backupGrowth:  withoutTimerLoops(withoutPrepares(run.backup)),
-				restoreGrowth: withoutTimerLoops(withoutPrepares(run.restore)),
+				restoreGrowth: withoutSwapRetries(withoutTimerLoops(withoutPrepares(run.restore))),
 			}
 		})
 	}
@@ -1089,7 +1147,38 @@ func checkBackupRuns(t *testing.T, sizes []backupSize, runs []measuredRun) {
 // counted returns the round trips of a backup or a restore that depend on its
 // work and not on the clock.
 func counted(trips []roundTrip) []roundTrip {
-	return withoutTimerReads(withoutPrepares(trips))
+	return withoutSwapRetries(withoutTimerReads(withoutPrepares(trips)))
+}
+
+// swapStartSQL is the first statement of each attempt of the swap step of a
+// restore: the read that checks that the staged schema exists.
+const swapStartSQL = "SELECT count(*) FROM pg_namespace WHERE nspname = $1"
+
+// withoutSwapRetries returns the round trips of the last attempt of the swap
+// step of a restore, and drops each earlier attempt. The swap transaction
+// rolls back when PostgreSQL ends it to break a deadlock with another
+// transaction on the durable tables, and the runner of durable operations
+// then ends the claim of the step and runs the step again. Whether a
+// transaction of the runner overlaps the swap depends on the timing of the
+// machine, so a failed attempt is not work of the restore. An attempt runs
+// from its first statement to the first statement of the next attempt, so
+// the end of the claim after a failed attempt goes with it.
+func withoutSwapRetries(trips []roundTrip) []roundTrip {
+	var starts []int
+
+	for i, trip := range trips {
+		if strings.HasPrefix(trip.sql, swapStartSQL) {
+			starts = append(starts, i)
+		}
+	}
+
+	if len(starts) < 2 {
+		return trips
+	}
+
+	last := starts[len(starts)-1]
+
+	return slices.Concat(trips[:starts[0]], trips[last:])
 }
 
 // schemaCounts holds the sizes that the cost of a backup and of a restore
@@ -1171,9 +1260,14 @@ func backupModel() costModel {
 // round trips for the name locks: the restore keeps the name_locks and
 // name_lock_key tables of the installation, so that a restore cannot clear a
 // lockout, and each kept table costs one delete and one copy.
+//
+// perOther counts 2 round trips for each table that a backup leaves out. An
+// emptied table that the restore only reads for its column check costs 1. So
+// the fixed part takes 1 off for passkey_challenges, the table of the open
+// passkey ceremonies, which a restore leaves empty.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        332,
+		fixed:        331,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,

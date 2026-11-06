@@ -1,6 +1,6 @@
 {
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": false
+    "gopls-lsp@claude-plugins-official": true
   },
   "permissions": {
     "allow": [
@@ -49,7 +49,6 @@
     ]
   },
   "attribution": {
-    "commits": false,
-    "pullRequests": false
+    "sessionUrl": false
   }
 }

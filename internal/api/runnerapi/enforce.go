@@ -34,7 +34,14 @@ type call struct {
 	runner    runner.Runner
 	signer    runner.Key
 	proof     runner.Proof
-	body      []byte
+	// session is the job session of a route of ScopeSessionKey, and handoff
+	// the checked request of the route of ScopeHandoffToken.
+	session runner.Session
+	handoff protocol.SessionRequest
+	// contentSHA256 is the signed hash of the body of an upload. The handler
+	// compares it with the hash of the bytes that it got.
+	contentSHA256 []byte
+	body          []byte
 }
 
 // routeHandler serves a route after the registration wrapper has
@@ -54,9 +61,13 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		case ScopeAuthorized:
 			r, err = h.checkAuthorized(r, rt, c)
 		case ScopeJoinToken:
-			err = h.checkProtocol(r, c, maxProtocolBody)
+			err = h.checkProtocol(r, c)
 		case ScopeRunnerKey:
 			err = h.checkRunner(r, rt, c)
+		case ScopeHandoffToken:
+			err = h.checkHandoff(r, c)
+		case ScopeSessionKey:
+			err = h.checkSession(r, rt, c)
 		default:
 			err = fmt.Errorf("%w: route %s has no scope", errNotFound, rt.Path)
 		}
@@ -173,7 +184,21 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 const maxProtocolBody = protocol.MaxBody
 
 // checkProtocol checks the release of the sender and reads the body.
-func (h *Handler) checkProtocol(r *http.Request, c *call, limit int64) error {
+func (h *Handler) checkProtocol(r *http.Request, c *call) error {
+	if err := h.checkRelease(r); err != nil {
+		return err
+	}
+
+	var err error
+
+	c.body, err = readBody(r, maxProtocolBody)
+
+	return err
+}
+
+// checkRelease checks the release of the sender against the skew that this
+// server accepts.
+func (h *Handler) checkRelease(r *http.Request) error {
 	raw := r.Header.Get(protocol.HeaderRelease)
 	if raw == "" {
 		return fmt.Errorf("%w: the request has no %s header", runner.ErrInvalid, protocol.HeaderRelease)
@@ -188,16 +213,14 @@ func (h *Handler) checkProtocol(r *http.Request, c *call, limit int64) error {
 		return fmt.Errorf("check release: %w", err)
 	}
 
-	c.body, err = readBody(r, limit)
-
-	return err
+	return nil
 }
 
 // checkRunner checks the release, reads the body, and checks the proof of
 // the runner key. On the paths that are not safe to repeat, it keeps the
 // nonce of the proof.
 func (h *Handler) checkRunner(r *http.Request, rt Route, c *call) error {
-	if err := h.checkProtocol(r, c, maxProtocolBody); err != nil {
+	if err := h.checkProtocol(r, c); err != nil {
 		return err
 	}
 

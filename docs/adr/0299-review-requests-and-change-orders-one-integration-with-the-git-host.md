@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-01. Decided by the project owner on 31 October and 1 November 2026. The design details are decisions of the PM under the owner's delegation, marked (PM), and the owner accepts them with the merge. Accepts RFC 114. This pull request holds design only: the ADR, the ports and their conformance suites, and the glossary terms
 
+Changed by:
+
+- ADR 328 extends decision 1: modes 2 and 4 in milestone 5, modes 1 and 3
+  in milestone 6.
+
 Changes:
 
 - Supersedes ADR 103 decision 3: the four review modes replace "OpenDustpan

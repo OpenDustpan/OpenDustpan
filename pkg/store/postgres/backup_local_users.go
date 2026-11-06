@@ -1,7 +1,8 @@
 package postgres
 
-// pgCopyLocalUserTables holds the COPY columns of the table of local users
-// and of the table of session generations, in the order of backup.Tables.
+// pgCopyLocalUserTables holds the COPY columns of the table of local users,
+// of the table of session generations and of the table of passkeys, in the
+// order of backup.Tables.
 func pgCopyLocalUserTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
@@ -17,6 +18,22 @@ func pgCopyLocalUserTables() []pgCopyTable {
 			columns: []string{pgColPrincipalID, "generation"},
 			orderBy: []string{pgColPrincipalID},
 		},
+		{
+			table: "passkeys",
+			columns: []string{
+				"id", pgColPrincipalID, pgColName, "credential_id", "public_key", "transports", "aaguid", "sign_count",
+				"backup_eligible", pgColCreatedAtMs, "last_used_at_ms", "suspended_at_ms",
+			},
+			orderBy: []string{"id"},
+		},
+	}
+}
+
+// pgPasskeyChallengeColumns holds the columns of the table of open passkey
+// ceremonies, which a backup leaves out.
+func pgPasskeyChallengeColumns() []string {
+	return []string{
+		pgColDigest, pgColKind, pgColPrincipalID, "pending_id", "session_id", pgColCreatedAtMs, "expires_at_ms",
 	}
 }
 

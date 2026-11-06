@@ -29,7 +29,7 @@ jobs:
   watch:
     # A scheduled run uses the default branch. A run by hand must use it too.
     if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
@@ -45,7 +45,7 @@ jobs:
           # no contract file has no version to compare, so the job does nothing
           # for it.
           newest_known() {
-            ls e2e/contract/"$1"-*.json 2>/dev/null \
+            find e2e/contract -maxdepth 1 -name "$1-*.json" 2>/dev/null \
               | sed -E "s|.*/$1-(.*)\.json|\1|" | sort -V | tail -n 1
           }
 
@@ -74,13 +74,12 @@ jobs:
 
           failed=0
 
-          # Reads the newest stable version of one tool with the command that
-          # follows, and reports it if it is newer than the newest contract file.
-          # A bad answer for one tool sets failed and does not stop the other tool.
+          # Reports the newest stable version of one tool if it is newer than
+          # the newest contract file. An empty or bad version sets failed and
+          # does not stop the other tool.
           check() {
-            local tool=$1 name=$2 changelog=$3 latest known
-            shift 3
-            if ! latest=$("$@") || ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            local tool=$1 name=$2 changelog=$3 latest=$4 known
+            if ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "$name: no usable version from the version list" >&2
               failed=1
               return
@@ -99,8 +98,11 @@ jobs:
               | jq -r '.versions[].id | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' | sort -V | tail -n 1
           }
 
-          check pulumi "Pulumi CLI" "https://github.com/pulumi/pulumi/blob/vVERSION/CHANGELOG.md" pulumi_version
-          check tofu "OpenTofu" "https://github.com/opentofu/opentofu/releases/tag/vVERSION" tofu_version
+          # A failed version request gives an empty version, which check refuses.
+          pulumi_latest=$(pulumi_version) || pulumi_latest=
+          tofu_latest=$(tofu_version) || tofu_latest=
+          check pulumi "Pulumi CLI" "https://github.com/pulumi/pulumi/blob/vVERSION/CHANGELOG.md" "$pulumi_latest"
+          check tofu "OpenTofu" "https://github.com/opentofu/opentofu/releases/tag/vVERSION" "$tofu_latest"
 
           # Fail at the end, so the failure shows after both tools were checked.
           exit "$failed"

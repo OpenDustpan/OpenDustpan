@@ -19,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -77,7 +76,10 @@ func hasStaticSignIn(cfg *settings) bool {
 // The sign-in runs when cfg names a provider, or when the store keeps the
 // providers of the API and cfg has an HTTPS public URL. With a store that
 // keeps them, the API manages the providers in addition to those of cfg.
-func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
+// gates are the failure gates that gatedAuthenticator built for tokens.
+func newSignIn(
+	cfg *settings, policies *session.Policies, tokens *accesstoken.Service, gates signInGates,
+) (*serverapi.SignIn, error) {
 	stores, stored := cfg.namespaceStore.(providerStores)
 	if !hasStaticSignIn(cfg) && (!stored || !storedSignInReady(cfg, policies)) {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
@@ -106,16 +108,33 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 	}
 
 	in := &serverapi.SignIn{
-		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, DevCode: nil,
-		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
+		Service:   nil,
+		Sessions:  sessions,
+		Limiter:   nil,
+		Stored:    nil,
+		Admin:     nil,
+		Providers: providers,
+		Origins: append(
+			[]string{origin},
+			cfg.allowedOrigins...,
+		),
+		PasswordLimiter:     nil,
+		Passkeys:            nil,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
+		DevCode:             nil,
+		DevAdmin:            noDevAdmin,
+		OnDevRefused:        devRefusalAudit(cfg),
 	}
 
 	if cfg.devSignIn != nil {
 		in.DevCode, in.DevAdmin = cfg.devSignIn.Code, cfg.devSignIn.Admin
 	}
 
-	setSignInLimiters(cfg, in)
+	if err := setSignInLimiters(gates, tokens, in); err != nil {
+		return nil, err
+	}
 
 	if stored {
 		admin, adminErr := newProviderAdmin(cfg, stores)
@@ -199,15 +218,18 @@ func storedSignInReady(cfg *settings, policies *session.Policies) bool {
 // newConsoleSignIn builds the session policy service and the console
 // sign-in of cfg, and sets the session cookie check of cfg for the APIs
 // other than the installation API. A session applies the account
-// inactivity rule of tokens, when tokens is not nil. Each result is nil
+// inactivity rule of tokens, when tokens is not nil. gates are the failure
+// gates of the sign-in routes and of the password routes. Each result is nil
 // when cfg has none.
-func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Policies, *serverapi.SignIn, error) {
+func newConsoleSignIn(
+	cfg *settings, tokens *accesstoken.Service, gates signInGates,
+) (*session.Policies, *serverapi.SignIn, error) {
 	policies, err := newSessionPolicyService(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	signIn, err := newSignIn(cfg, policies, tokens)
+	signIn, err := newSignIn(cfg, policies, tokens, gates)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -402,27 +424,57 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, err)
 	}
 
+	method, err := redirectMethod(client, p.ID, session.MethodOIDC, configuredProviderOn, now)
+	if err != nil {
+		return none, fmt.Errorf("%w: %w", errSignInSetup, err)
+	}
+
 	displayName := p.DisplayName
 	if displayName == "" {
 		displayName = p.ID
 	}
 
 	return serverapi.SignInProvider{
-		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
-		Source: principal.SourceOIDC,
+		Method: method, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
 	}, nil
 }
 
+// errSignInUngated reports a console sign-in with access tokens and with no
+// failure gate.
+var errSignInUngated = errors.New(
+	"console sign-in: the store keeps access tokens, but a sign-in failure gate is missing",
+)
+
 // setSignInLimiters sets the budgets of the sign-in routes and of the
-// password routes of in. A gate that wireTokens did not make stays nil in
-// in: a nil gate in a non-nil interface would pass the nil checks of the
-// handler.
-func setSignInLimiters(cfg *settings, in *serverapi.SignIn) {
-	if cfg.signInGates.signInGate != nil {
-		in.Limiter = cfg.signInGates.signInGate
+// password routes of in from gates. A gate that gatedAuthenticator did not
+// make stays nil in in: a nil gate in a non-nil interface would pass the nil
+// checks of the handler. A nil limit means no failure limit, so with tokens
+// it refuses a missing gate, and the server does not start.
+func setSignInLimiters(gates signInGates, tokens *accesstoken.Service, in *serverapi.SignIn) error {
+	// Defense in depth: gatedAuthenticator makes all three gates when the
+	// store keeps tokens, and the assembly passes them here. This check stays
+	// so that a new order of the assembly or a new caller cannot start the
+	// sign-in routes with no failure limit.
+	if tokens != nil && (gates.signInGate == nil || gates.passwordGate == nil || gates.passkeyGate == nil ||
+		gates.passkeyBeginGate == nil) {
+		return errSignInUngated
 	}
 
-	if cfg.signInGates.passwordGate != nil {
-		in.PasswordLimiter = cfg.signInGates.passwordGate
+	if gates.signInGate != nil {
+		in.Limiter = gates.signInGate
 	}
+
+	if gates.passwordGate != nil {
+		in.PasswordLimiter = gates.passwordGate
+	}
+
+	if gates.passkeyGate != nil {
+		in.PasskeyLimiter = gates.passkeyGate
+	}
+
+	if gates.passkeyBeginGate != nil {
+		in.PasskeyBeginLimiter = gates.passkeyBeginGate
+	}
+
+	return nil
 }

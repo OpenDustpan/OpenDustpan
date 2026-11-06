@@ -125,6 +125,13 @@ func gatePrincipal(subject string, kind identity.Kind, credential identity.Crede
 	}
 }
 
+// unitLabels returns the labels that Unit gives for unit.
+func unitLabels(ctx context.Context, f inventoryFacts, unit identity.Object) ([]string, error) {
+	info, err := f.Unit(ctx, unit)
+
+	return info.Labels, err
+}
+
 func TestInventoryFactsGiveCollectionAndSortedLabels(t *testing.T) {
 	t.Parallel()
 
@@ -136,7 +143,7 @@ func TestInventoryFactsGiveCollectionAndSortedLabels(t *testing.T) {
 			t.Fatalf("Collection(mode %d) = %q, %v, want prod", mode, coll, err)
 		}
 
-		labels, err := f.Labels(t.Context(), gateTestUnit(t, mode))
+		labels, err := unitLabels(t.Context(), f, gateTestUnit(t, mode))
 		if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
 			t.Fatalf("Labels(mode %d) = %v, %v, want the sorted labels", mode, labels, err)
 		}
@@ -160,7 +167,7 @@ func TestInventoryFactsOfAnUnknownUnit(t *testing.T) {
 
 		for name, read := range map[string]func() error{
 			"Collection": func() error { _, err := f.Collection(t.Context(), gateTestUnit(t, mode)); return err },
-			"Labels":     func() error { _, err := f.Labels(t.Context(), gateTestUnit(t, mode)); return err },
+			"Labels":     func() error { _, err := unitLabels(t.Context(), f, gateTestUnit(t, mode)); return err },
 		} {
 			if err := read(); errors.Is(err, gate.ErrNotFound) != wantNotFound || err == nil && !wantNotFound {
 				t.Fatalf("%s(mode %d) = %v, want gate.ErrNotFound: %v", name, mode, err, wantNotFound)
@@ -179,6 +186,13 @@ func TestInventoryFactsOfAUnitInNoCollection(t *testing.T) {
 	if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, gate.ErrNotFound) {
 		t.Fatalf("Collection() = %v, want gate.ErrNotFound", err)
 	}
+
+	// Unit reads a known unit: the unit is in no collection, and it is not
+	// a unit that the inventory does not know.
+	info, err := f.Unit(t.Context(), gateTestUnit(t, byStableID))
+	if err != nil || info.Collection != "" || !slices.Equal(info.Labels, []string{"env=prod", "team=core"}) {
+		t.Fatalf("Unit() = %+v, %v, want no collection and the sorted labels", info, err)
+	}
 }
 
 func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
@@ -192,7 +206,7 @@ func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
 			f.ids = &fakeUnitIDs{calls: 0}
 		}
 
-		_, err := f.Labels(t.Context(), gateTestUnit(t, mode))
+		_, err := unitLabels(t.Context(), f, gateTestUnit(t, mode))
 		if !errors.Is(err, errReaderDown) || errors.Is(err, gate.ErrNotFound) {
 			t.Fatalf("Labels(mode %d) = %v, want the reader error and no ErrNotFound", mode, err)
 		}
@@ -402,7 +416,7 @@ func TestInventoryFactsOfAnUnknownUnitByIndexedLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err = f.Labels(t.Context(), u); !errors.Is(err, gate.ErrNotFound) || lookup.calls != 1 {
+	if _, err = unitLabels(t.Context(), f, u); !errors.Is(err, gate.ErrNotFound) || lookup.calls != 1 {
 		t.Fatalf(
 			"Labels(unit the store does not know) = %v after %d lookups, want gate.ErrNotFound after 1",
 			err,
@@ -450,7 +464,7 @@ func TestInventoryFactsOfADeletedUnitGiveItsRealCollectionAndLabels(t *testing.T
 		t.Fatalf("Collection(deleted unit) = %q, %v, want prod", coll, err)
 	}
 
-	labels, err := f.Labels(t.Context(), gateTestUnit(t, byStableID))
+	labels, err := unitLabels(t.Context(), f, gateTestUnit(t, byStableID))
 	if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
 		t.Fatalf("Labels(deleted unit) = %v, %v, want the sorted labels", labels, err)
 	}
@@ -482,7 +496,7 @@ func TestInventoryFactsOfAUnitThatIsNeitherLiveNorDeletedFailClosed(t *testing.T
 				t.Fatalf("Collection() = %v, want an error that is not gate.ErrNotFound", err)
 			}
 
-			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); err == nil ||
+			if _, err := unitLabels(t.Context(), f, gateTestUnit(t, byStableID)); err == nil ||
 				errors.Is(err, gate.ErrNotFound) {
 				t.Fatalf("Labels() = %v, want an error that is not gate.ErrNotFound", err)
 			}
@@ -517,7 +531,7 @@ func TestInventoryFactsRefuseAnEntryOfAnotherNamespaceOrTool(t *testing.T) {
 				t.Fatalf("Collection() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
 			}
 
-			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
+			if _, err := unitLabels(t.Context(), f, gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
 				errors.Is(err, gate.ErrNotFound) {
 				t.Fatalf("Labels() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
 			}

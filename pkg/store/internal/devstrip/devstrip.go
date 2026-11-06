@@ -147,6 +147,7 @@ var classes = []class{
 		name: backup.RemovedSessionGenerations, table: backup.TableSessionGenerations, link: colPrincipalID,
 		only: "", extra: nil,
 	},
+	{name: backup.RemovedPasskeys, table: backup.TablePasskeys, link: colPrincipalID, only: "", extra: nil},
 }
 
 // where returns the SQL condition of the rows of c that the strip removes.

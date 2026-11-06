@@ -33,7 +33,7 @@ func newStoreCheckService(cfg *settings, maint *maintenance.Service) (*storechec
 		return nil, false, nil
 	}
 
-	ops, err := backupOperations(cfg)
+	ops, err := backupOperations(cfg.namespaceStore, cfg.watch)
 	if err != nil {
 		return nil, false, err
 	}

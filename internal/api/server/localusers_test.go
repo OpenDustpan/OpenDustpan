@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -416,7 +418,7 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 
 	_, secret, err := f.sessions.Start(t.Context(), e, session.Start{
 		AuthTime: now.Add(-24 * time.Hour), PrincipalID: "prn-admin", Provider: localuser.ProviderID,
-		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false,
+		SourceIP: "192.0.2.1", UserAgent: "test", Generation: 0, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		t.Fatalf("start the session: %v", err)
@@ -438,4 +440,124 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "with the password") {
 		t.Fatalf("stale password session = %d %s, want 401 with no start link", rec.Code, rec.Body)
 	}
+}
+
+// localSignedIn returns the result of a good password sign-in of the
+// principal principalID with a valid Assertion.
+func localSignedIn(principalID string) localusersvc.SignedIn {
+	return localusersvc.SignedIn{
+		Assertion: session.Assertion{
+			AuthTime: time.Now(), ProviderID: session.LocalProviderID, PrincipalID: principalID, Subject: "usr-carol",
+			UserName: "carol", Email: "", Method: session.MethodLocalPassword, Names: nil, Groups: nil,
+			Factors: []session.Factor{session.FactorPassword}, EmailVerified: false, GroupsPresent: false,
+			AuthTimeKnown: true,
+		},
+		PrincipalID: principalID, UserID: "usr-carol", SessionGeneration: 1, ChangeRequired: false,
+	}
+}
+
+// TestPasswordSignInRefusesAHostileAssertion sends a hostile Assertion of a
+// password sign-in straight to the check of the password route, as if the
+// service had made it. The route refuses it with 401 and the answer of a
+// wrong password, writes the refusal with the reason of an Assertion that is
+// not valid, counts one failure of the password budget, and sets no session
+// cookie. A valid Assertion passes, so the check is not vacuous.
+func TestPasswordSignInRefusesAHostileAssertion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		change func(in *localusersvc.SignedIn)
+		name   string
+		ok     bool
+	}{
+		{func(*localusersvc.SignedIn) {}, "valid", true},
+		{func(in *localusersvc.SignedIn) { in.Assertion.Subject = "" }, "empty subject", false},
+		{
+			func(in *localusersvc.SignedIn) { in.Assertion.AuthTime = time.Now().Add(24 * time.Hour) },
+			"future auth time", false,
+		},
+		{func(in *localusersvc.SignedIn) { in.Assertion.PrincipalID = "prn-other" }, "other principal", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			principalID := createRouteLocalUser(t, f)
+			in := localSignedIn(principalID)
+
+			// The session of a valid sign-in carries the generation of the record.
+			state, err := f.store.PrincipalState(t.Context(), principalID)
+			if err != nil {
+				t.Fatalf("principal state: %v", err)
+			}
+
+			in.SessionGeneration = state.Generation
+			tc.change(&in)
+
+			failures := f.passwords.count()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/sign-in/password",
+				http.NoBody)
+			rec := httptest.NewRecorder()
+
+			if got := f.handler.CompleteLocalForTest(rec, req, in); got != tc.ok {
+				t.Fatalf("accepted = %v, want %v", got, tc.ok)
+			}
+
+			if tc.ok {
+				return
+			}
+
+			checkLocalRefusal(t, f, rec, failures)
+		})
+	}
+}
+
+// checkLocalRefusal fails unless rec is the 401 of a wrong password with no
+// cookie, the password budget counts one more failure than before, and the
+// last refused sign-in entry has the reason of an Assertion that is not
+// valid.
+func checkLocalRefusal(t *testing.T, f accessFixture, rec *httptest.ResponseRecorder, before int) {
+	t.Helper()
+
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "local-user.sign-in-failed") {
+		t.Fatalf("answer = %d %s, want 401 local-user.sign-in-failed", rec.Code, rec.Body.String())
+	}
+
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("the refusal sets cookies: %v", rec.Result().Cookies())
+	}
+
+	if got := f.passwords.count(); got != before+1 {
+		t.Fatalf("password failures = %d, want %d", got, before+1)
+	}
+
+	reason, found := lastRefusalReason(serverEntries(t, f.store))
+	if !found {
+		t.Fatal("no refused sign-in entry")
+	}
+
+	if reason != "sign-in assertion is not valid" {
+		t.Fatalf("audit reason = %q, want the reason of an Assertion that is not valid", reason)
+	}
+}
+
+// lastRefusalReason returns the reason of the last refused sign-in entry of
+// entries, and false when there is none.
+func lastRefusalReason(entries []audit.Entry) (string, bool) {
+	for i := range slices.Backward(entries) {
+		en := &entries[i]
+		if en.Action != session.ActionSignIn || en.Outcome == audit.OutcomeSuccess {
+			continue
+		}
+
+		for _, c := range en.Changes {
+			if c.Key == "reason" {
+				return c.New, true
+			}
+		}
+	}
+
+	return "", false
 }

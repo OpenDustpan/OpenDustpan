@@ -81,7 +81,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -235,9 +234,6 @@ type settings struct {
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
-	// signInGates holds the failure gates of the token lookups, the sign-in
-	// routes and the password routes. See signInGateSettings.
-	signInGates signInGateSettings
 	// sessionCookies checks the console session cookie on the inventory,
 	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
 	// means no console sign-in.
@@ -276,6 +272,9 @@ type settings struct {
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
+	// jobRecorder records the steps and the log chunks of the launchers of
+	// the runner protocol, or is nil. See WithJobRecorder.
+	jobRecorder job.CheckedRecorder
 	// components are the components this process runs. See WithComponents.
 	components Components
 	// operationLease is the lease period of a claim on a durable operation,
@@ -284,14 +283,6 @@ type settings struct {
 	// watch reads the worker state. assemble sets it before it builds the
 	// adapters.
 	watch *workerWatch
-}
-
-// ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
-// exemption switch and the list store (ADR 55, decision 8).
-type ipAllowlistSettings struct {
-	store            ipallow.Store
-	enabled          bool
-	includeBootstrap bool
 }
 
 // Option configures a Server.
@@ -470,30 +461,6 @@ func WithBeforeServe(fn func(ctx context.Context) error) Option {
 	return func(o *settings) { o.beforeServe = fn }
 }
 
-// proxySettings holds the trusted proxy settings of the client address
-// (internal/clientip): the proxies and the forwarding header they set.
-type proxySettings struct {
-	prefixes []netip.Prefix
-	header   string
-}
-
-// WithTrustedProxies names the proxies whose forwarding headers the server
-// trusts. Empty means none: every request reads as its TCP peer. List a proxy
-// only when it always overwrites or appends the header named by
-// WithTrustedProxyHeader, so a client cannot name any address. NewServer
-// refuses a list that covers every address or holds host bits.
-func WithTrustedProxies(prefixes ...netip.Prefix) Option {
-	return func(o *settings) { o.proxies.prefixes = prefixes }
-}
-
-// WithTrustedProxyHeader names the one forwarding header the server reads
-// from trusted proxies: "x-forwarded-for" (the default) or "forwarded". The
-// match ignores case and "" means the default. The server never reads the
-// other header. NewServer refuses an unknown value.
-func WithTrustedProxyHeader(h string) Option {
-	return func(o *settings) { o.proxies.header = h }
-}
-
 // WithClock overrides the time source, for tests.
 func WithClock(now func() time.Time) Option {
 	return func(o *settings) { o.now = now }
@@ -549,37 +516,6 @@ func WithCheckpointDeltaCutoff(n int) Option {
 	return func(o *settings) { o.checkpointDeltaCutoff = n }
 }
 
-// WithIPAllowlists turns IP allowlists on when on is true. A namespace
-// that has a list then refuses requests from addresses outside it
-// (ADR 55, decision 8). Off by default.
-func WithIPAllowlists(on bool) Option {
-	return func(o *settings) { ipAllowlistConfig(o).enabled = on }
-}
-
-// WithIPAllowlistsIncludeBootstrap applies IP allowlists to the bootstrap
-// admin token too when on is true. Off by default: the bootstrap admin token
-// is exempt, so an administrator cannot lock themselves out.
-func WithIPAllowlistsIncludeBootstrap(on bool) Option {
-	return func(o *settings) { ipAllowlistConfig(o).includeBootstrap = on }
-}
-
-// WithIPAllowlistStore sets the IP allowlist persistence port. Required when
-// IP allowlists are on: every SQL adapter serves it from the same database
-// connection as the other ports.
-func WithIPAllowlistStore(s ipallow.Store) Option {
-	return func(o *settings) { ipAllowlistConfig(o).store = s }
-}
-
-// ipAllowlistConfig returns the mutable allowlist settings of o, creating
-// them when an Option runs on zero settings.
-func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
-	if o.ipAllowlists == nil {
-		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
-	}
-
-	return o.ipAllowlists
-}
-
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
@@ -601,6 +537,7 @@ type Server struct {
 	secretKeys    secret.KeyStore
 	secretWrapper secret.Wrapper
 	workspaces    *workspace.Service
+	manualLocks   *manuallock.Service // Only the tests read it.
 	backups       *backup.Service
 	restores      *backup.RestoreService
 	storeChecks   *storecheck.Service
@@ -767,13 +704,12 @@ func defaultSettings() *settings {
 		consoleDir:              "",
 		allowedOrigins:          nil,
 		consoleHeaders:          noConsoleHeaders(),
-		proxies:                 proxySettings{prefixes: nil, header: ""},
+		proxies:                 defaultProxySettings(),
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
 		signInHTTPClient:        nil,
-		signInGates:             defaultSignInGateSettings(),
 		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
@@ -791,7 +727,7 @@ func defaultSettings() *settings {
 		auditChain:              audit.ChainOn,
 		auditChainInterval:      auditChainCheckInterval,
 		drainPeriod:             0,
-		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
+		ipAllowlists:            defaultIPAllowlistSettings(),
 		auditSinks:              nil,
 		instanceID:              "",
 		auditShipper:            nil,
@@ -801,6 +737,7 @@ func defaultSettings() *settings {
 		sourceFilters:           nil,
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
 		jobClaimer:              nil,
+		jobRecorder:             nil,
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
@@ -840,7 +777,24 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc, err := newServices(cfg, tokens)
+	// The auth ports need only the token service, so they exist before the
+	// services. From the write below, each later reader of cfg.authenticator
+	// and cfg.authorizer gets the chain, and no constructor after this point
+	// can read the bare configured port. The bare port is visible only to
+	// newIdentityServices above (the access service and the token service),
+	// which are the named exceptions in bareAuthorizerCallers
+	// (authchain_internal_test.go). This is the one write of the chain into
+	// cfg: an area constructor takes the ports as arguments instead, and
+	// newServices gets the authorizer as an argument for the manual lock
+	// service.
+	ports, err := newAuthPorts(cfg, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
+
+	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
 		return nil, err
 	}
@@ -852,106 +806,131 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	backups, err := newBackupService(cfg, svc)
+	// The worker watch does not exist yet: prepareBackground makes it in
+	// assemble. So the claims of the backup service do not go through the
+	// claim recorder of the watch. The restore service and the store checks
+	// get the watch.
+	backups, err := newBackupService(backupInputs{
+		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, workspaces: svc.workspaces,
+		watch: nil, owner: durableOwner(cfg), lease: cfg.operationLease, version: cfg.version,
+		now: cfg.now, logger: cfg.logger,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	if tokensErr := wireTokens(cfg, svc.tokens); tokensErr != nil {
-		return nil, tokensErr
-	}
-
-	if tempErr := wireTempAdmins(cfg); tempErr != nil {
-		return nil, tempErr
-	}
-
-	wireDevGuard(cfg)
-	wireNamespaceServiceGuard(cfg)
 
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return assemble(cfg, base, svc, backups)
+	return assemble(cfg, base, svc, earlyParts{backups: backups, gates: ports.gates})
 }
 
-// wireTokens puts the stored access tokens behind the configured
-// authenticator, and lets every authenticated person list and revoke its
-// own personal tokens with no grant. The namespace service rule decides the
-// principals that the server builds before the self actions and the
-// configured authorizer, so no authorizer of an embedder can widen them.
-func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
-	authn, err := gatedAuthenticator(cfg, tokens)
+// earlyParts holds what NewServer builds before assemble: the installation
+// backup service, or nil when no backup target is configured, and the failure
+// gates of the console sign-in.
+type earlyParts struct {
+	backups *backup.Service
+	gates   signInGates
+}
+
+// authPorts holds what newAuthPorts builds: the authenticator and the
+// authorizer of the adapters, and the failure gates of the console sign-in.
+type authPorts struct {
+	authenticator identity.Authenticator
+	authorizer    identity.Authorizer
+	gates         signInGates
+}
+
+// newAuthPorts builds the authenticator chain and the authorizer chain of the
+// adapters from the configured ports. The authenticator chain, from the
+// inside out, is:
+//
+//  1. the configured authenticator, then the stored access tokens behind
+//     their failure gate;
+//  2. the marks of the temporary administrators;
+//  3. the refusal of dev subjects on an installation that is not dev;
+//  4. the refusal of the subjects of namespace service principals.
+//
+// The authorizer chain, from the inside out, is the configured authorizer,
+// the self actions, the namespace service rule and the IP allowlist gate.
+// Each step is one statement here, in this order.
+func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error) {
+	var none authPorts
+
+	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
 	if err != nil {
-		return err
+		return none, err
 	}
 
-	cfg.authenticator = authn
-	cfg.authorizer = allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
+	// The namespace service rule decides the principals that the server
+	// builds before the self actions and the configured authorizer, so no
+	// authorizer of an embedder can widen them. Every authenticated person
+	// lists and revokes its own personal tokens with no grant.
+	authz := allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 		},
 	}}, cfg.ipAllowlists)
 
-	return nil
+	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
+	if err != nil {
+		return none, err
+	}
+
+	if marked {
+		authn = marks
+	}
+
+	// Only opendustpan dev makes a person with a dev subject (a subject that
+	// starts with principal.DevSubjectPrefix), so one on another
+	// installation comes from a restored dev backup.
+	if cfg.installationKind != installation.KindDev && authn != nil {
+		authn = principal.RefuseDevSubjects(authn).OnRefused(devRefusalAudit(cfg))
+	}
+
+	// The server builds the namespace service principals itself, so no
+	// authenticator gives one, on every kind of installation.
+	if authn != nil {
+		authn = principal.RefuseNamespaceServiceSubjects(authn)
+	}
+
+	return authPorts{authenticator: authn, authorizer: authz, gates: gates}, nil
 }
 
-// wireTempAdmins marks the temporary administrators among the callers that
-// the configured authenticator resolves, with a sign-in entry for each use
-// and an expiry entry at the first use after the expiry. Without a store
-// that keeps the records, or without an audit store for the entries, the
-// authenticator stays as it is.
-func wireTempAdmins(cfg *settings) error {
-	store, ok := cfg.namespaceStore.(tempadmin.Store)
+// tempAdminDecorator marks the temporary administrators among the callers
+// that next resolves, with a sign-in entry for each use and an expiry entry
+// at the first use after the expiry. The second result is false when the
+// store keeps no records or no principals: then next stays as it is. A store
+// with records and no audit entries is an error.
+func tempAdminDecorator(
+	next identity.Authenticator, store namespace.Store, now func() time.Time, logger *slog.Logger,
+) (*tempadmin.Decorator, bool, error) {
+	records, ok := store.(tempadmin.Store)
 	if !ok {
-		return nil
+		return nil, false, nil
 	}
 
-	principals, ok := cfg.namespaceStore.(tempadmin.Principals)
+	principals, ok := store.(tempadmin.Principals)
 	if !ok {
-		return nil
+		return nil, false, nil
 	}
 
-	entries, err := serverAuditOf(cfg.namespaceStore)
+	entries, err := serverAuditOf(store)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-		Next: cfg.authenticator, Records: store, Principals: principals, Request: requestOf,
-		Expirer: store, Audit: entries, Now: cfg.now, Logger: cfg.logger,
+		Next: next, Records: records, Principals: principals, Request: requestOf,
+		Expirer: records, Audit: entries, Now: now, Logger: logger,
 	})
 	if err != nil {
-		return fmt.Errorf("temporary administrator authenticator: %w", err)
+		return nil, false, fmt.Errorf("temporary administrator authenticator: %w", err)
 	}
 
-	cfg.authenticator = dec
-
-	return nil
-}
-
-// wireDevGuard makes the authenticator refuse a caller with a dev subject
-// (a subject that starts with principal.DevSubjectPrefix) on a server that
-// is not of the kind dev. Only opendustpan dev makes such a person, so one
-// on another installation comes from a restored dev backup.
-func wireDevGuard(cfg *settings) {
-	if cfg.installationKind == installation.KindDev || cfg.authenticator == nil {
-		return
-	}
-
-	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
-}
-
-// wireNamespaceServiceGuard makes the authenticator refuse a caller with the
-// subject of a namespace service principal, on every kind of installation.
-// The server builds that principal itself, so no authenticator gives it.
-func wireNamespaceServiceGuard(cfg *settings) {
-	if cfg.authenticator == nil {
-		return
-	}
-
-	cfg.authenticator = principal.RefuseNamespaceServiceSubjects(cfg.authenticator)
+	return dec, true, nil
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -982,43 +961,6 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 	return svc, nil
 }
 
-// allowlistGate wraps next in the IP allowlist gate when the feature is on.
-// The gate is the outermost authorizer, so it runs in the authorization step
-// of every adapter. When the feature is off it returns next with no
-// decorator, so the default path has zero cost and zero risk.
-//
-//nolint:ireturn // The adapters take the port.
-func allowlistGate(next identity.Authorizer, allow *ipAllowlistSettings) identity.Authorizer {
-	if allow == nil || !allow.enabled {
-		return next
-	}
-
-	return ipallow.Gate{
-		Next: next, Rules: allow.store,
-		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
-	}
-}
-
-// allowlistAddressGate returns the address-only gate for the capability
-// routes of the tool adapters when the feature is on, else nil. It holds
-// only the list rules: capability routes have no principal, so there is no
-// bootstrap exemption to carry. A nil interface (not a typed nil) reports
-// off, so the adapters skip the check.
-//
-//nolint:ireturn // The adapters take the port.
-func allowlistAddressGate(allow *ipAllowlistSettings) interface {
-	CheckAddress(ctx context.Context, ns namespace.Name) error
-} {
-	if allow == nil || !allow.enabled {
-		return nil
-	}
-
-	return ipallow.Gate{
-		Next: nil, Rules: allow.store,
-		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
-	}
-}
-
 // newServerMetrics returns the metrics of the server, and gives the recorder of
 // the refused dev sign-ins the namespace reader and the failure counter.
 func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, error) {
@@ -1032,16 +974,15 @@ func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, erro
 	return observed, nil
 }
 
-// assemble mounts the adapters and routes around the services. backups is
-// the installation backup service, or nil when no backup target is
-// configured.
-func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
+// assemble mounts the adapters and routes around the services and the parts
+// that NewServer built before it.
+func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyParts) (*Server, error) {
 	observed, shipper, err := prepareBackground(cfg, &svc)
 	if err != nil {
 		return nil, err
 	}
 
-	mount, err := newAdapters(svc, cfg, base, backups, observed)
+	mount, err := newAdapters(svc, cfg, base, early, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -1067,7 +1008,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		flushDenials: flushDenials,
 		handler:      withStartGate(handlers.served, started, cfg.logger),
 		started:      started,
-		ungated:      handlers.ungated, mounted: &mount, root: handlers.root,
+		ungated:      handlers.ungated, mounted: &mount, root: handlers.root, manualLocks: svc.manualLocks,
 		logger:        cfg.logger,
 		listenAddr:    cfg.listenAddr,
 		listener:      cfg.listener,
@@ -1075,7 +1016,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		secretKeys:    cfg.secretKeys,
 		secretWrapper: cfg.secretWrapper,
 		workspaces:    svc.workspaces,
-		backups:       backups,
+		backups:       early.backups,
 		restores:      mount.restores,
 		storeChecks:   mount.storeChecks,
 		now:           cfg.now,
@@ -1179,7 +1120,7 @@ func newAdapters(
 	svc services,
 	cfg *settings,
 	base baseurl.Resolver,
-	backups *backup.Service,
+	early earlyParts,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
 	chain, err := newAuditChain(cfg, observed)
@@ -1194,7 +1135,7 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
-	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens)
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens, early.gates)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1220,8 +1161,8 @@ func newAdapters(
 	}
 
 	parts, err := newInstallationAPI(cfg, installationDeps{
-		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
-		signIn: signIn,
+		services: svc, backups: early.backups, maint: maint, observed: observed, chain: chain,
+		policies: sessionPolicies, signIn: signIn,
 	})
 	if err != nil {
 		return adapters{}, err
@@ -1364,7 +1305,17 @@ type profileAPIs struct {
 func newProfileAPIs(
 	svc services, cfg *settings, onFailure func(), policies *session.Policies,
 ) (profileAPIs, error) {
-	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return profileAPIs{}, err
+	}
+
+	profiles, err := newProfileHandler(profileInputs{
+		store: cfg.profiles.store, entries: cfg.namespaceStore, namespaces: svc.namespaces, sealer: svc.secrets,
+		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
+		sessions: cfg.sessionCookies, policies: policies, idempotency: idem,
+		denialLimiter: cfg.denialLimiter, onFailure: onFailure, logger: cfg.logger, now: cfg.now,
+	})
 	if err != nil {
 		return profileAPIs{}, err
 	}
@@ -1868,7 +1819,11 @@ func checkTLSAndAllowlist(cfg *settings) error {
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
+//
+// The authorizer is the wrapped authorizer of the one chain (newAuthPorts).
+// The manual lock service gets it, so its lock, unlock and manage checks pass
+// the IP allowlist gate and the namespace service rule too.
+func newServices(cfg *settings, tokens *accesstoken.Service, authz identity.Authorizer) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Installation: cfg.installation},
 	)
@@ -1885,7 +1840,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	manual, err := newManualLockService(cfg)
+	manual, err := newManualLockService(cfg.namespaceStore, cfg.jobStore, cfg.now, authz)
 	if err != nil {
 		return services{}, err
 	}
@@ -1934,25 +1889,6 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		tokens:      nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
 		stateWrite: stateWriteGates{svc: nil, guard: nil}, issuer: nil,
 	}, nil
-}
-
-// newIPAllowlistService builds the IP allowlist service from validated
-// settings, or nil when no allowlist store is configured: an SDK user who
-// did not pass WithIPAllowlistStore gets no allowlist routes.
-func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipallow.Service, error) {
-	allow := cfg.ipAllowlists
-	if allow == nil || allow.store == nil {
-		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
-	}
-
-	svc, err := ipallow.NewService(ipallow.Config{
-		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ip allowlist service: %w", err)
-	}
-
-	return svc, nil
 }
 
 // newSessionPolicyService returns the session policy service over the
@@ -2849,24 +2785,63 @@ type installationDeps struct {
 	signIn   *serverapi.SignIn
 }
 
-// newInstallationAPI builds the restore service and the tool-neutral
-// installation API from the backup service and the maintenance service.
+// newInstallationAPI builds the restore service, the store check service, the
+// parts of the installation API that need the principals, and the
+// tool-neutral installation API, in this order. It is assembly: it calls the
+// constructors of the backup area and of the installation area.
 func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts, error) {
-	restores, err := newRestoreService(cfg, deps, deps.maint)
+	none := installationParts{handler: nil, restores: nil, storeChecks: nil}
+
+	restores, err := newRestoreService(restoreInputs{
+		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, watch: cfg.watch,
+		backups: deps.backups, maint: deps.maint, chain: deps.chain, key: cfg.secretWrapper,
+		installation: cfg.installation.String(), owner: durableOwner(cfg), lease: cfg.operationLease,
+		now: cfg.now, logger: cfg.logger,
+	})
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
 	}
 
 	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
 	checks, _, err := newStoreCheckService(cfg, deps.maint)
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, deps, restores, checks)
+	principals, err := newPrincipalService(cfg, deps.services.access)
 	if err != nil {
-		return installationParts{handler: nil, restores: nil, storeChecks: nil}, err
+		return none, err
+	}
+
+	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
+	if err != nil {
+		return none, err
+	}
+
+	gitHost, idem, err := newGitHostParts(cfg, deps)
+	if err != nil {
+		return none, err
+	}
+
+	extras, err := newServerExtras(cfg, deps, principals)
+	if err != nil {
+		return none, err
+	}
+
+	serverAPI, err := newServerHandler(serverHandlerInputs{
+		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
+		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
+		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
+		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
+		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
+		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
+		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
+		version: cfg.version, logger: cfg.logger, now: cfg.now,
+	})
+	if err != nil {
+		return none, err
 	}
 
 	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks}, nil
@@ -3039,38 +3014,6 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 	}
 
 	return authz, nil
-}
-
-// newManualLockService builds the manual lock service on the namespace store
-// when that store also holds manual locks. A custom store without them gets no
-// service: the lock routes are not served and the tools take their own locks
-// as before.
-func newManualLockService(cfg *settings) (*manuallock.Service, error) {
-	store, ok := cfg.namespaceStore.(manuallock.Store)
-	if !ok {
-		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
-	}
-
-	// The clock of the job store lets a tool lock request with the job token of
-	// a phase that started before a manual lock pass that lock. Without a job
-	// store the clock stays nil, and no job token passes any lock.
-	var phases manuallock.PhaseClock
-	if cfg.jobStore != nil {
-		phases = job.PhaseClock{Jobs: cfg.jobStore}
-	}
-
-	svc, err := manuallock.NewService(manuallock.Config{
-		Store:      store,
-		Namespaces: cfg.namespaceStore,
-		Authorizer: cfg.authorizer,
-		Now:        cfg.now,
-		Phases:     phases,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("manual lock service: %w", err)
-	}
-
-	return svc, nil
 }
 
 // newCollectionService builds the collection service on the namespace store
@@ -3784,7 +3727,7 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 		return routeHandlers{}, err
 	}
 
-	resolver, err := newClientIPResolver(cfg)
+	resolver, err := newClientIPResolver(cfg.proxies)
 	if err != nil {
 		return routeHandlers{}, err
 	}
@@ -3800,21 +3743,4 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 		ungated: gated,
 		root:    mux,
 	}, nil
-}
-
-// newClientIPResolver builds the client address resolver of the server from
-// the trusted proxy settings. An unknown header or a refused proxy list
-// fails the build, so the server never starts with them.
-func newClientIPResolver(cfg *settings) (*clientip.Resolver, error) {
-	header, err := clientip.ParseHeader(cfg.proxies.header)
-	if err != nil {
-		return nil, fmt.Errorf("trusted proxy header: %w", err)
-	}
-
-	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
-	if err != nil {
-		return nil, fmt.Errorf("trusted proxies: %w", err)
-	}
-
-	return resolver, nil
 }

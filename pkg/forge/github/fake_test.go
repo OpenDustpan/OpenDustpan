@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forge/forgetest"
 )
 
 const (
@@ -152,11 +153,43 @@ func (f *fake) Push(context.Context, string, map[string][]byte) (forge.Commit, e
 	return forge.Commit{}, errNotImplemented
 }
 
+func (f *fake) Rewrite(context.Context, string, map[string][]byte) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
+func (f *fake) PushAs(context.Context, string, map[string][]byte, string, forgetest.Origin) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
+func (f *fake) CommitMessage(context.Context, string, string) (string, error) {
+	return "", errNotImplemented
+}
+
+func (f *fake) Clone(context.Context) (string, error) { return "", errNotImplemented }
+
+func (f *fake) PushEntry(context.Context, string, string, forgetest.EntryKind, string) (forge.Commit, error) {
+	return forge.Commit{}, errNotImplemented
+}
+
 func (f *fake) Tag(context.Context, string, string) error { return errNotImplemented }
 
 func (f *fake) Protect(context.Context, string) error { return errNotImplemented }
 
 func (f *fake) Merge(context.Context, string) error { return errNotImplemented }
+
+func (f *fake) Close(context.Context, string) error { return errNotImplemented }
+
+func (f *fake) Branch(context.Context, string) error { return errNotImplemented }
+
+func (f *fake) SetDefaultBranch(context.Context, string) error { return errNotImplemented }
+
+func (f *fake) ForkReview(context.Context, string, string) (string, error) {
+	return "", errNotImplemented
+}
+
+func (f *fake) SetMergeState(context.Context, string, string) error { return errNotImplemented }
+
+func (f *fake) Oversize(context.Context) (func(), error) { return nil, errNotImplemented }
 
 func (f *fake) Event(context.Context, forge.EventKind, []byte) (forge.EventRequest, error) {
 	return forge.EventRequest{}, errNotImplemented

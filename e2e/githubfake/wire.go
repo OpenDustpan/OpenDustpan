@@ -26,9 +26,10 @@ type wirePerson struct {
 }
 
 type wireCommitBody struct {
-	Message   string     `json:"message"`
-	Author    wirePerson `json:"author"`
-	Committer wirePerson `json:"committer"`
+	Message      string           `json:"message"`
+	Author       wirePerson       `json:"author"`
+	Committer    wirePerson       `json:"committer"`
+	Verification wireVerification `json:"verification"`
 }
 
 type wireParent struct {
@@ -39,6 +40,38 @@ type wireCommit struct {
 	SHA     string         `json:"sha"`
 	Commit  wireCommitBody `json:"commit"`
 	Parents []wireParent   `json:"parents"`
+	// Author and Committer are the accounts of GitHub, or null for an email
+	// that no account has.
+	Author    *wireLogin `json:"author"`
+	Committer *wireLogin `json:"committer"`
+}
+
+type wireLogin struct {
+	Login string `json:"login"`
+}
+
+type wireVerification struct {
+	Verified bool   `json:"verified"`
+	Reason   string `json:"reason"`
+}
+
+// wireTree is the answer of the call that reads a tree.
+type wireTree struct {
+	SHA       string          `json:"sha"`
+	Tree      []wireTreeEntry `json:"tree"`
+	Truncated bool            `json:"truncated"`
+}
+
+type wireTreeEntry struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
+}
+
+type wireApp struct {
+	ID   json.Number `json:"id"`
+	Slug string      `json:"slug"`
 }
 
 // wireEntry is a file or a directory in the answer of the contents call.
@@ -58,6 +91,17 @@ type wireBlob struct {
 	Size     int    `json:"size"`
 	Encoding string `json:"encoding"`
 	Content  string `json:"content"`
+}
+
+// wireRef is a branch in the answer of the calls that read or make a ref.
+type wireRef struct {
+	Ref    string        `json:"ref"`
+	Object wireRefObject `json:"object"`
+}
+
+type wireRefObject struct {
+	SHA  string `json:"sha"`
+	Type string `json:"type"`
 }
 
 type wireGQLError struct {
@@ -90,4 +134,24 @@ type wireErrorCode struct {
 type wireTooLarge struct {
 	Message string          `json:"message"`
 	Errors  []wireErrorCode `json:"errors"`
+}
+
+// wireValidation is the answer for a request that GitHub does not accept.
+type wireValidation struct {
+	Message string                `json:"message"`
+	Errors  []wireValidationError `json:"errors"`
+}
+
+type wireValidationError struct {
+	Resource string `json:"resource"`
+	Field    string `json:"field,omitempty"`
+	Code     string `json:"code"`
+	Message  string `json:"message,omitempty"`
+}
+
+// wireBranch is the answer for one branch.
+type wireBranch struct {
+	Name      string     `json:"name"`
+	Protected bool       `json:"protected"`
+	Commit    wireParent `json:"commit"`
 }
