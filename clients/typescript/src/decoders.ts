@@ -55,6 +55,7 @@ import type {
   CreateLocalUserRequest,
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
+  CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -113,7 +114,9 @@ import type {
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
+  ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
+  ListNotificationSubscriptionsResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -146,8 +149,12 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NotificationDelivery,
+  NotificationFilter,
+  NotificationFilterRequest,
   NotificationSink,
   NotificationSinkTest,
+  NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
   Passkey,
@@ -179,6 +186,7 @@ import type {
   RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
+  ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
   RequestBodyTooLargeErrorArgs,
   RequestIdempotencyKeyReplayedSecretError,
@@ -536,6 +544,12 @@ export const decodeCreateNotificationSinkRequest: Decoder<CreateNotificationSink
   platform: optional(string),
   target: optional(string),
   url: optional(string),
+});
+
+/** The validator of CreateNotificationSubscriptionRequest. */
+export const decodeCreateNotificationSubscriptionRequest: Decoder<CreateNotificationSubscriptionRequest> = object<CreateNotificationSubscriptionRequest>("CreateNotificationSubscriptionRequest", {
+  filter: optional(ref(() => decodeNotificationFilterRequest)),
+  sink: string,
 });
 
 /** The validator of CreateProfileRequest. */
@@ -1043,9 +1057,20 @@ export const decodeListModuleReleasesResponse: Decoder<ListModuleReleasesRespons
   releases: array(ref(() => decodeModuleRelease)),
 });
 
+/** The validator of ListNotificationDeliveriesResponse. */
+export const decodeListNotificationDeliveriesResponse: Decoder<ListNotificationDeliveriesResponse> = object<ListNotificationDeliveriesResponse>("ListNotificationDeliveriesResponse", {
+  deliveries: array(ref(() => decodeNotificationDelivery)),
+  nextPageToken: string,
+});
+
 /** The validator of ListNotificationSinksResponse. */
 export const decodeListNotificationSinksResponse: Decoder<ListNotificationSinksResponse> = object<ListNotificationSinksResponse>("ListNotificationSinksResponse", {
   sinks: array(ref(() => decodeNotificationSink)),
+});
+
+/** The validator of ListNotificationSubscriptionsResponse. */
+export const decodeListNotificationSubscriptionsResponse: Decoder<ListNotificationSubscriptionsResponse> = object<ListNotificationSubscriptionsResponse>("ListNotificationSubscriptionsResponse", {
+  subscriptions: array(ref(() => decodeNotificationSubscription)),
 });
 
 /** The validator of ListPasskeysResponse. */
@@ -1270,6 +1295,36 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
   promoted: boolean,
 });
 
+/** The validator of NotificationDelivery. */
+export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
+  attempts: int64,
+  contact: optional(string),
+  deliveredAt: optional(dateTime),
+  id: string,
+  lastError: optional(string),
+  nextAt: dateTime,
+  notification: string,
+  principal: string,
+  sink: string,
+  state: string,
+  subscription: string,
+  version: int64,
+});
+
+/** The validator of NotificationFilter. */
+export const decodeNotificationFilter: Decoder<NotificationFilter> = object<NotificationFilter>("NotificationFilter", {
+  minSeverity: optional(string),
+  objects: optional(array(string)),
+  types: optional(array(string)),
+});
+
+/** The validator of NotificationFilterRequest. */
+export const decodeNotificationFilterRequest: Decoder<NotificationFilterRequest> = object<NotificationFilterRequest>("NotificationFilterRequest", {
+  minSeverity: optional(string),
+  objects: optional(array(string)),
+  types: optional(array(string)),
+});
+
 /** The validator of NotificationSink. */
 export const decodeNotificationSink: Decoder<NotificationSink> = object<NotificationSink>("NotificationSink", {
   createdBy: string,
@@ -1289,6 +1344,18 @@ export const decodeNotificationSinkTest: Decoder<NotificationSinkTest> = object<
   class: optional(string),
   delivered: boolean,
   message: string,
+});
+
+/** The validator of NotificationSubscription. */
+export const decodeNotificationSubscription: Decoder<NotificationSubscription> = object<NotificationSubscription>("NotificationSubscription", {
+  createdBy: string,
+  filter: ref(() => decodeNotificationFilter),
+  id: string,
+  namespace: string,
+  reason: optional(string),
+  sink: string,
+  state: string,
+  version: int64,
 });
 
 /** The validator of OutputSharing. */
@@ -1536,6 +1603,14 @@ export const decodeReplaceNotificationSinkRequest: Decoder<ReplaceNotificationSi
   name: string,
   target: optional(string),
   url: optional(string),
+  version: int64,
+});
+
+/** The validator of ReplaceNotificationSubscriptionRequest. */
+export const decodeReplaceNotificationSubscriptionRequest: Decoder<ReplaceNotificationSubscriptionRequest> = object<ReplaceNotificationSubscriptionRequest>("ReplaceNotificationSubscriptionRequest", {
+  filter: optional(ref(() => decodeNotificationFilterRequest)),
+  sink: string,
+  state: string,
   version: int64,
 });
 

@@ -1,5 +1,5 @@
 // Package notifications serves the tool-neutral REST API of notification
-// sinks under /api/dustpan/v1/namespaces/{namespace}/sinks. It is an HTTP
+// sinks, subscriptions and deliveries under /api/dustpan/v1/namespaces/{namespace}. It is an HTTP
 // adapter with its own route table. It never imports another API adapter:
 // tools share concepts through the core alone.
 package notifications
@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -39,7 +40,9 @@ const (
 // Namespaces, OnAuditFailure, DenialLimiter, Sessions and Idempotency is
 // required.
 type Config struct {
-	Sinks         *sinks.Service
+	Sinks *sinks.Service
+	// Subscriptions serves the subscription and delivery routes.
+	Subscriptions *subscriptionsvc.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
@@ -65,15 +68,16 @@ type Config struct {
 
 // Handler serves the sink API.
 type Handler struct {
-	sinks    *sinks.Service
-	authn    identity.Authenticator
-	authz    identity.Authorizer
-	guard    *refusal.Recorder
-	sessions *sessionauth.Checker
-	idem     *idempotent.Middleware
-	logger   *slog.Logger
-	mux      *route.Mux
-	routes   []Route
+	sinks         *sinks.Service
+	subscriptions *subscriptionsvc.Service
+	authn         identity.Authenticator
+	authz         identity.Authorizer
+	guard         *refusal.Recorder
+	sessions      *sessionauth.Checker
+	idem          *idempotent.Middleware
+	logger        *slog.Logger
+	mux           *route.Mux
+	routes        []Route
 }
 
 // NewHandler returns a Handler.
@@ -83,6 +87,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Sinks == nil:
 		return nil, fmt.Errorf("%w: sink service", ErrMissingDependency)
+	case cfg.Subscriptions == nil:
+		return nil, fmt.Errorf("%w: subscription service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
@@ -97,15 +103,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		sinks:    cfg.Sinks,
-		authn:    cfg.Authenticator,
-		authz:    cfg.Authorizer,
-		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("sinks"),
-		sessions: cfg.Sessions,
-		idem:     cfg.Idempotency,
-		logger:   cfg.Logger,
-		mux:      route.NewMux(),
-		routes:   nil,
+		sinks:         cfg.Sinks,
+		subscriptions: cfg.Subscriptions,
+		authn:         cfg.Authenticator,
+		authz:         cfg.Authorizer,
+		guard:         recorder.WithLimiter(cfg.DenialLimiter).WithSurface("sinks"),
+		sessions:      cfg.Sessions,
+		idem:          cfg.Idempotency,
+		logger:        cfg.Logger,
+		mux:           route.NewMux(),
+		routes:        nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -213,6 +220,7 @@ func invalidText(err error) string {
 	return "the notification destination is not valid: check the kind, the platform, the name and the target"
 }
 
-func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
-	problem.WriteJSON(ctx, h.logger, w, status, body)
+// writeJSON answers 200 with body as JSON.
+func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, body any) {
+	problem.WriteJSON(ctx, h.logger, w, http.StatusOK, body)
 }

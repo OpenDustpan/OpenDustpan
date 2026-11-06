@@ -857,6 +857,20 @@
         ],
         "type": "object"
       },
+      "CreateNotificationSubscriptionRequest": {
+        "properties": {
+          "filter": {
+            "$ref": "#/components/schemas/NotificationFilterRequest"
+          },
+          "sink": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sink"
+        ],
+        "type": "object"
+      },
       "CreateProfileRequest": {
         "properties": {
           "document": {
@@ -1433,11 +1447,17 @@
           "sign-in.refused",
           "sink.access-token",
           "sink.conflict",
+          "sink.delivery-not-found",
+          "sink.delivery-not-redeliverable",
           "sink.invalid",
           "sink.no-sender",
           "sink.no-url",
           "sink.not-found",
           "sink.platform-host",
+          "sink.subscription-conflict",
+          "sink.subscription-invalid",
+          "sink.subscription-not-found",
+          "sink.subscription-sink-not-found",
           "sink.test-limit-unavailable",
           "sink.test-rate-limited",
           "source.filter-invalid",
@@ -2757,6 +2777,24 @@
         ],
         "type": "object"
       },
+      "ListNotificationDeliveriesResponse": {
+        "properties": {
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationDelivery"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliveries",
+          "nextPageToken"
+        ],
+        "type": "object"
+      },
       "ListNotificationSinksResponse": {
         "properties": {
           "sinks": {
@@ -2768,6 +2806,20 @@
         },
         "required": [
           "sinks"
+        ],
+        "type": "object"
+      },
+      "ListNotificationSubscriptionsResponse": {
+        "properties": {
+          "subscriptions": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscription"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "subscriptions"
         ],
         "type": "object"
       },
@@ -3466,6 +3518,102 @@
         ],
         "type": "object"
       },
+      "NotificationDelivery": {
+        "properties": {
+          "attempts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "contact": {
+            "type": "string"
+          },
+          "deliveredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastError": {
+            "type": "string"
+          },
+          "nextAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "notification": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "subscription": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempts",
+          "id",
+          "nextAt",
+          "notification",
+          "principal",
+          "sink",
+          "state",
+          "subscription",
+          "version"
+        ],
+        "type": "object"
+      },
+      "NotificationFilter": {
+        "properties": {
+          "minSeverity": {
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NotificationFilterRequest": {
+        "properties": {
+          "minSeverity": {
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "NotificationSink": {
         "properties": {
           "createdBy": {
@@ -3527,6 +3675,45 @@
         "required": [
           "delivered",
           "message"
+        ],
+        "type": "object"
+      },
+      "NotificationSubscription": {
+        "properties": {
+          "createdBy": {
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/NotificationFilter"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdBy",
+          "filter",
+          "id",
+          "namespace",
+          "sink",
+          "state",
+          "version"
         ],
         "type": "object"
       },
@@ -4308,6 +4495,29 @@
         },
         "required": [
           "name",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ReplaceNotificationSubscriptionRequest": {
+        "properties": {
+          "filter": {
+            "$ref": "#/components/schemas/NotificationFilterRequest"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sink",
+          "state",
           "version"
         ],
         "type": "object"
@@ -9443,6 +9653,56 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/deliveries/{delivery_id}/redeliver": {
+      "post": {
+        "operationId": "redeliverNotification",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/gates": {
       "get": {
         "operationId": "listGates",
@@ -12867,6 +13127,349 @@
           },
           {
             "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/subscriptions": {
+      "get": {
+        "operationId": "listNotificationSubscriptions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListNotificationSubscriptionsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createNotificationSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNotificationSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSubscription"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}": {
+      "delete": {
+        "operationId": "deleteNotificationSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getNotificationSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSubscription"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "replaceNotificationSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceNotificationSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSubscription"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-notifications",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}/deliveries": {
+      "get": {
+        "operationId": "listNotificationDeliveries",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of deliveries on the page, from 1 to 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same subscription.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListNotificationDeliveriesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "notification-sinks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
             "object": "namespace"
           }
         ]

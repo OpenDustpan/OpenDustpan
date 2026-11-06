@@ -37,6 +37,7 @@ import {
   decodeCreateLocalUserRequest,
   decodeCreateLocalUserResponse,
   decodeCreateNotificationSinkRequest,
+  decodeCreateNotificationSubscriptionRequest,
   decodeCreateProfileRequest,
   decodeCreateProfileRevisionRequest,
   decodeCreateTrustRuleRequest,
@@ -95,7 +96,9 @@ import {
   decodeListGitHostConnectionsResponse,
   decodeListGitHostInstallationsResponse,
   decodeListModuleReleasesResponse,
+  decodeListNotificationDeliveriesResponse,
   decodeListNotificationSinksResponse,
+  decodeListNotificationSubscriptionsResponse,
   decodeListPasskeysResponse,
   decodeListPlacementRulesResponse,
   decodeListProfileRevisionsResponse,
@@ -128,8 +131,12 @@ import {
   decodeNamespaceIssuerExport,
   decodeNamespaceIssuerKeys,
   decodeNamespaceIssuerRotation,
+  decodeNotificationDelivery,
+  decodeNotificationFilter,
+  decodeNotificationFilterRequest,
   decodeNotificationSink,
   decodeNotificationSinkTest,
+  decodeNotificationSubscription,
   decodeOutputSharing,
   decodeOutputSharingRequest,
   decodePasskey,
@@ -161,6 +168,7 @@ import {
   decodeRegistryModule,
   decodeRegistryProvider,
   decodeReplaceNotificationSinkRequest,
+  decodeReplaceNotificationSubscriptionRequest,
   decodeRequestBodyTooLargeError,
   decodeRequestBodyTooLargeErrorArgs,
   decodeRequestIdempotencyKeyReplayedSecretError,
@@ -298,6 +306,7 @@ import type {
   CreateLocalUserRequest,
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
+  CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -356,7 +365,9 @@ import type {
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
+  ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
+  ListNotificationSubscriptionsResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -389,8 +400,12 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NotificationDelivery,
+  NotificationFilter,
+  NotificationFilterRequest,
   NotificationSink,
   NotificationSinkTest,
+  NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
   Passkey,
@@ -422,6 +437,7 @@ import type {
   RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
+  ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
   RequestBodyTooLargeErrorArgs,
   RequestIdempotencyKeyReplayedSecretError,
@@ -618,6 +634,17 @@ export interface CreateNotificationSinkInput {
     readonly namespace: string;
   };
   readonly body: CreateNotificationSinkRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation createNotificationSubscription. */
+export interface CreateNotificationSubscriptionInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: CreateNotificationSubscriptionRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
@@ -821,6 +848,17 @@ export interface DeleteNotificationSinkInput {
   readonly path: {
     readonly namespace: string;
     readonly sink_id: string;
+  };
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation deleteNotificationSubscription. */
+export interface DeleteNotificationSubscriptionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly subscription_id: string;
   };
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
@@ -1168,6 +1206,15 @@ export interface GetNotificationSinkInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getNotificationSubscription. */
+export interface GetNotificationSubscriptionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly subscription_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getOutputSharing. */
 export interface GetOutputSharingInput {
   readonly path: {
@@ -1448,8 +1495,31 @@ export interface ListModuleReleasesInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listNotificationDeliveries. */
+export interface ListNotificationDeliveriesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly subscription_id: string;
+  };
+  readonly query?: {
+    /** The largest number of deliveries on the page, from 1 to 200. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before, for the same subscription. */
+    readonly pageToken?: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listNotificationSinks. */
 export interface ListNotificationSinksInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listNotificationSubscriptions. */
+export interface ListNotificationSubscriptionsInput {
   readonly path: {
     readonly namespace: string;
   };
@@ -1723,6 +1793,17 @@ export interface RedeemLocalUserCodeInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation redeliverNotification. */
+export interface RedeliverNotificationInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly delivery_id: string;
+  };
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation removePasskey. */
 export interface RemovePasskeyInput {
   readonly path: {
@@ -1749,6 +1830,18 @@ export interface ReplaceNotificationSinkInput {
     readonly sink_id: string;
   };
   readonly body: ReplaceNotificationSinkRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation replaceNotificationSubscription. */
+export interface ReplaceNotificationSubscriptionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly subscription_id: string;
+  };
+  readonly body: ReplaceNotificationSubscriptionRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
@@ -2287,6 +2380,23 @@ export const operations = {
     },
     ref(() => decodeCreatedNotificationSink),
   ),
+  createNotificationSubscription: operation<NotificationSubscription>(
+    {
+      id: "createNotificationSubscription",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeNotificationSubscription),
+  ),
   createPlacementRule: operation<PlacementRule>(
     {
       id: "createPlacementRule",
@@ -2582,6 +2692,23 @@ export const operations = {
       method: "DELETE",
       path: "/api/dustpan/v1/namespaces/{namespace}/sinks/{sink_id}",
       pathParameters: ["namespace", "sink_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  deleteNotificationSubscription: operation<void>(
+    {
+      id: "deleteNotificationSubscription",
+      method: "DELETE",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}",
+      pathParameters: ["namespace", "subscription_id"],
       queryParameters: [],
       security: "caller",
       idempotencyKey: "optional",
@@ -3222,6 +3349,23 @@ export const operations = {
     },
     ref(() => decodeNotificationSink),
   ),
+  getNotificationSubscription: operation<NotificationSubscription>(
+    {
+      id: "getNotificationSubscription",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}",
+      pathParameters: ["namespace", "subscription_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeNotificationSubscription),
+  ),
   getOutputSharing: operation<OutputSharing>(
     {
       id: "getOutputSharing",
@@ -3732,6 +3876,23 @@ export const operations = {
     },
     ref(() => decodeListModuleReleasesResponse),
   ),
+  listNotificationDeliveries: operation<ListNotificationDeliveriesResponse>(
+    {
+      id: "listNotificationDeliveries",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}/deliveries",
+      pathParameters: ["namespace", "subscription_id"],
+      queryParameters: ["pageSize", "pageToken"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListNotificationDeliveriesResponse),
+  ),
   listNotificationSinks: operation<ListNotificationSinksResponse>(
     {
       id: "listNotificationSinks",
@@ -3748,6 +3909,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListNotificationSinksResponse),
+  ),
+  listNotificationSubscriptions: operation<ListNotificationSubscriptionsResponse>(
+    {
+      id: "listNotificationSubscriptions",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListNotificationSubscriptionsResponse),
   ),
   listPasskeys: operation<ListPasskeysResponse>(
     {
@@ -4157,6 +4335,23 @@ export const operations = {
     },
     undefined,
   ),
+  redeliverNotification: operation<void>(
+    {
+      id: "redeliverNotification",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/deliveries/{delivery_id}/redeliver",
+      pathParameters: ["namespace", "delivery_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
   removePasskey: operation<void>(
     {
       id: "removePasskey",
@@ -4207,6 +4402,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNotificationSink),
+  ),
+  replaceNotificationSubscription: operation<NotificationSubscription>(
+    {
+      id: "replaceNotificationSubscription",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/subscriptions/{subscription_id}",
+      pathParameters: ["namespace", "subscription_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeNotificationSubscription),
   ),
   replaceTrigger: operation<Trigger>(
     {
