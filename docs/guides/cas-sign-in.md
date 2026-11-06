@@ -62,7 +62,8 @@ holds a proxy-granting ticket or a list of proxies.
 The server uses each ticket one time. It records the ticket before it sends
 the ticket to the CAS server. A second use of the same ticket fails, also
 when the CAS server would accept it again. The record of a used ticket
-stays for 1 hour.
+stays for 1 hour. The server keeps the records of each provider apart, so
+the same ticket of two CAS servers counts as two tickets.
 
 ## The subject, the names and the groups
 

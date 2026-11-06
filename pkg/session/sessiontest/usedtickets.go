@@ -18,7 +18,7 @@ import (
 // use.
 type MemoryTickets struct {
 	now   func() time.Time
-	used  map[string]time.Time
+	used  map[ticketKey]time.Time
 	mu    sync.Mutex
 	err   error
 	calls atomic.Int64
@@ -33,16 +33,24 @@ func NewMemoryTickets(now func() time.Time) *MemoryTickets {
 		now = time.Now
 	}
 
-	return &MemoryTickets{now: now, used: map[string]time.Time{}, mu: sync.Mutex{}, err: nil, calls: atomic.Int64{}}
+	return &MemoryTickets{now: now, used: map[ticketKey]time.Time{}, mu: sync.Mutex{}, err: nil, calls: atomic.Int64{}}
+}
+
+// ticketKey is the key of a record of MemoryTickets.
+type ticketKey struct {
+	providerID string
+	ticket     string
 }
 
 // Use implements session.UsedTickets.
-func (m *MemoryTickets) Use(_ context.Context, ticket string, until time.Time) error {
+func (m *MemoryTickets) Use(_ context.Context, providerID, ticket string, until time.Time) error {
 	m.calls.Add(1)
 
-	if ticket == "" || until.IsZero() {
-		return fmt.Errorf("%w: the ticket and the until time are required", session.ErrMethodInput)
+	if providerID == "" || ticket == "" || until.IsZero() {
+		return fmt.Errorf("%w: the provider ID, the ticket and the until time are required", session.ErrMethodInput)
 	}
+
+	key := ticketKey{providerID: providerID, ticket: ticket}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,11 +67,11 @@ func (m *MemoryTickets) Use(_ context.Context, ticket string, until time.Time) e
 		}
 	}
 
-	if _, ok := m.used[ticket]; ok {
+	if _, ok := m.used[key]; ok {
 		return session.ErrReplay
 	}
 
-	m.used[ticket] = until
+	m.used[key] = until
 
 	return nil
 }
@@ -104,9 +112,10 @@ func RunUsedTickets(t *testing.T, factory func(t *testing.T) TicketsFixture) {
 		{name: "TheFirstUseIsNil", run: utTheFirstUseIsNil},
 		{name: "ASecondUseIsErrReplay", run: utASecondUseIsErrReplay},
 		{name: "OtherTicketsAreIndependent", run: utOtherTicketsAreIndependent},
+		{name: "TheSameTicketOfAnotherProviderIsIndependent", run: utTheSameTicketOfAnotherProviderIsIndependent},
 		{name: "ARecordEndsAtItsUntil", run: utARecordEndsAtItsUntil},
 		{name: "ConcurrentUsesOfOneTicketPassOnce", run: utConcurrentUsesOfOneTicketPassOnce},
-		{name: "AnEmptyTicketOrAZeroUntilIsErrMethodInput", run: utAnEmptyTicketOrAZeroUntilIsErrMethodInput},
+		{name: "AnEmptyValueOrAZeroUntilIsErrMethodInput", run: utAnEmptyValueOrAZeroUntilIsErrMethodInput},
 	}
 
 	for _, c := range cases {
@@ -117,14 +126,18 @@ func RunUsedTickets(t *testing.T, factory func(t *testing.T) TicketsFixture) {
 	}
 }
 
-// suiteTicket is the ticket of most cases.
-const suiteTicket = "ST-1-c3VpdGUtdGlja2V0"
+// suiteTicket and suiteProvider are the ticket and the provider of most
+// cases.
+const (
+	suiteTicket   = "ST-1-c3VpdGUtdGlja2V0"
+	suiteProvider = "corp"
+)
 
 // utTheFirstUseIsNil is the case TheFirstUseIsNil.
 func utTheFirstUseIsNil(t *testing.T, f TicketsFixture) {
 	t.Helper()
 
-	if err := f.Tickets.Use(t.Context(), suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
+	if err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
 		t.Fatalf("Use() = %v, want nil", err)
 	}
 }
@@ -134,14 +147,14 @@ func utASecondUseIsErrReplay(t *testing.T, f TicketsFixture) {
 	t.Helper()
 
 	until := f.Now().Add(session.UsedTicketTTL)
-	if err := f.Tickets.Use(t.Context(), suiteTicket, until); err != nil {
+	if err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, until); err != nil {
 		t.Fatalf("Use() = %v, want nil", err)
 	}
 
 	f.Advance(session.UsedTicketTTL - time.Minute)
 
-	if err := f.Tickets.Use(t.Context(), suiteTicket, f.Now().Add(session.UsedTicketTTL)); !errors.Is(err,
-		session.ErrReplay) {
+	err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, f.Now().Add(session.UsedTicketTTL))
+	if !errors.Is(err, session.ErrReplay) {
 		t.Fatalf("second Use() = %v, want ErrReplay", err)
 	}
 }
@@ -153,9 +166,27 @@ func utOtherTicketsAreIndependent(t *testing.T, f TicketsFixture) {
 	until := f.Now().Add(session.UsedTicketTTL)
 
 	for i := range 3 {
-		if err := f.Tickets.Use(t.Context(), suiteTicket+"-"+strconv.Itoa(i), until); err != nil {
+		if err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket+"-"+strconv.Itoa(i), until); err != nil {
 			t.Fatalf("Use(%d) = %v, want nil", i, err)
 		}
+	}
+}
+
+// utTheSameTicketOfAnotherProviderIsIndependent is the case
+// TheSameTicketOfAnotherProviderIsIndependent.
+func utTheSameTicketOfAnotherProviderIsIndependent(t *testing.T, f TicketsFixture) {
+	t.Helper()
+
+	until := f.Now().Add(session.UsedTicketTTL)
+
+	for _, provider := range []string{suiteProvider, "other"} {
+		if err := f.Tickets.Use(t.Context(), provider, suiteTicket, until); err != nil {
+			t.Fatalf("Use(%q) = %v, want nil", provider, err)
+		}
+	}
+
+	if err := f.Tickets.Use(t.Context(), "other", suiteTicket, until); !errors.Is(err, session.ErrReplay) {
+		t.Fatalf("second Use(other) = %v, want ErrReplay", err)
 	}
 }
 
@@ -163,13 +194,13 @@ func utOtherTicketsAreIndependent(t *testing.T, f TicketsFixture) {
 func utARecordEndsAtItsUntil(t *testing.T, f TicketsFixture) {
 	t.Helper()
 
-	if err := f.Tickets.Use(t.Context(), suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
+	if err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
 		t.Fatalf("Use() = %v, want nil", err)
 	}
 
 	f.Advance(session.UsedTicketTTL + time.Second)
 
-	if err := f.Tickets.Use(t.Context(), suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
+	if err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, f.Now().Add(session.UsedTicketTTL)); err != nil {
 		t.Fatalf("Use() after until = %v, want nil", err)
 	}
 }
@@ -190,7 +221,7 @@ func utConcurrentUsesOfOneTicketPassOnce(t *testing.T, f TicketsFixture) {
 
 	for range n {
 		wg.Go(func() {
-			switch err := f.Tickets.Use(t.Context(), suiteTicket, until); {
+			switch err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, until); {
 			case err == nil:
 				passed.Add(1)
 			case errors.Is(err, session.ErrReplay):
@@ -208,15 +239,22 @@ func utConcurrentUsesOfOneTicketPassOnce(t *testing.T, f TicketsFixture) {
 	}
 }
 
-// utAnEmptyTicketOrAZeroUntilIsErrMethodInput is the case AnEmptyTicketOrAZeroUntilIsErrMethodInput.
-func utAnEmptyTicketOrAZeroUntilIsErrMethodInput(t *testing.T, f TicketsFixture) {
+// utAnEmptyValueOrAZeroUntilIsErrMethodInput is the case AnEmptyValueOrAZeroUntilIsErrMethodInput.
+func utAnEmptyValueOrAZeroUntilIsErrMethodInput(t *testing.T, f TicketsFixture) {
 	t.Helper()
 
-	if err := f.Tickets.Use(t.Context(), "", f.Now().Add(time.Hour)); !errors.Is(err, session.ErrMethodInput) {
+	if err := f.Tickets.Use(t.Context(), suiteProvider, "", f.Now().Add(time.Hour)); !errors.Is(err,
+		session.ErrMethodInput) {
 		t.Fatalf("Use(empty ticket) = %v, want ErrMethodInput", err)
 	}
 
-	if err := f.Tickets.Use(t.Context(), suiteTicket, time.Time{}); !errors.Is(err, session.ErrMethodInput) {
+	if err := f.Tickets.Use(t.Context(), "", suiteTicket, f.Now().Add(time.Hour)); !errors.Is(err,
+		session.ErrMethodInput) {
+		t.Fatalf("Use(empty provider ID) = %v, want ErrMethodInput", err)
+	}
+
+	err := f.Tickets.Use(t.Context(), suiteProvider, suiteTicket, time.Time{})
+	if !errors.Is(err, session.ErrMethodInput) {
 		t.Fatalf("Use(zero until) = %v, want ErrMethodInput", err)
 	}
 }
