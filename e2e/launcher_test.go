@@ -265,8 +265,8 @@ func waitLauncher(t *testing.T, cmd *exec.Cmd) int {
 			t.Errorf("kill the launcher: %v", err)
 		}
 
-		<-done
-		t.Fatalf("the launcher did not end in %v", launcherLimit)
+		waitErr := <-done
+		t.Fatalf("the launcher did not end in %v: %v", launcherLimit, waitErr)
 	}
 
 	return cmd.ProcessState.ExitCode()
