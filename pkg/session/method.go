@@ -464,11 +464,11 @@ const AssertionSkew = time.Minute
 //   - a local password or a passkey has the provider ID "local" and a
 //     principal ID; each other method has a valid provider ID that is not
 //     "local" or "dev", and no principal ID;
-//   - the subject has 1 to MaxAssertionSubject bytes of SafeText;
+//   - the subject has 1 to MaxAssertionSubject bytes of IsSafeText;
 //   - the user name, the email and each name have at most MaxAssertionName
-//     bytes of SafeText, and a verified email is not empty;
+//     bytes of IsDisplayText, and a verified email is not empty;
 //   - groups only with GroupsPresent, at most MaxAssertionGroups of them,
-//     each of 1 to MaxAssertionGroup bytes of SafeText;
+//     each of 1 to MaxAssertionGroup bytes of IsSafeText;
 //   - the factors are known: none for a redirect method or a request
 //     method, the password for a password method and a local password, and
 //     the passkey for a passkey sign-in;
@@ -537,9 +537,10 @@ func checkAssertionPerson(a Assertion, _ time.Time) error {
 	}
 
 	for _, v := range append([]string{a.UserName, a.Email}, a.Names...) {
-		if !validAssertionText(v, 0, MaxAssertionName) {
+		if !validDisplayText(v, 0, MaxAssertionName) {
 			return invalidAssertion(fmt.Sprintf(
-				"a name, a user name or an email must have at most %d bytes of UTF-8 with graphic characters only",
+				"a name, a user name or an email must have at most %d bytes of UTF-8 with no control, "+
+					"format or line separator character",
 				MaxAssertionName,
 			))
 		}
@@ -631,20 +632,26 @@ func checkAssertionAuthTime(a Assertion, now time.Time) error {
 	}
 }
 
-// validAssertionText reports whether s is SafeText and has minLen to maxLen
-// bytes.
+// validAssertionText reports whether s is IsSafeText and has minLen to
+// maxLen bytes. It is the rule of a subject and a group.
 func validAssertionText(s string, minLen, maxLen int) bool {
-	return len(s) >= minLen && len(s) <= maxLen && SafeText(s)
+	return len(s) >= minLen && len(s) <= maxLen && IsSafeText(s)
 }
 
-// SafeText reports whether s is UTF-8 whose each character is graphic, and
-// whose only space is the ASCII space. It refuses control characters (C0
-// and C1), format characters such as the bidirectional overrides and the
-// zero-width characters, the line and paragraph separators, private-use and
-// unassigned code points, and each other space. Such a character can make
-// a name look like another name in the console or the audit log, or break
-// a line of a log.
-func SafeText(s string) bool {
+// validDisplayText reports whether s is IsDisplayText and has minLen to
+// maxLen bytes. It is the rule of a name, a user name and an email.
+func validDisplayText(s string, minLen, maxLen int) bool {
+	return len(s) >= minLen && len(s) <= maxLen && IsDisplayText(s)
+}
+
+// IsSafeText reports whether s is UTF-8 whose each character is graphic,
+// and whose only space is the ASCII space. It refuses control characters
+// (C0 and C1), format characters such as the bidirectional overrides and
+// the zero-width characters, the line and paragraph separators,
+// private-use and unassigned code points, and each other space. It is the
+// rule of a value that names a person or a group: two such values that look
+// the same are the same bytes.
+func IsSafeText(s string) bool {
 	if !utf8.ValidString(s) {
 		return false
 	}
@@ -652,4 +659,49 @@ func SafeText(s string) bool {
 	return !strings.ContainsFunc(s, func(r rune) bool {
 		return !unicode.IsGraphic(r) || (unicode.Is(unicode.Zs, r) && r != ' ')
 	})
+}
+
+// Format characters that a display text can hold.
+const (
+	softHyphen    = '\u00ad'
+	zeroWidthNJ   = '\u200c'
+	zeroWidthJoin = '\u200d'
+)
+
+// IsDisplayText reports whether s is UTF-8 that a person can read as it
+// is: the rule of a display name, a user name and an email. It refuses
+// control characters (C0 and C1), the line and paragraph separators, and
+// each format character, except the soft hyphen, and the zero-width joiner
+// and non-joiner between two letters, marks or symbols. Names in Persian
+// and in the Indic scripts, and emoji sequences, use the joiners there. So
+// it refuses the bidirectional overrides, embeddings, isolates and marks,
+// the zero-width space and the byte order mark. It allows each space, for
+// example the no-break space.
+func IsDisplayText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+
+	runes := []rune(s)
+
+	for i, r := range runes {
+		switch {
+		case r == softHyphen:
+		case r == zeroWidthNJ || r == zeroWidthJoin:
+			if i == 0 || i == len(runes)-1 || !joinable(runes[i-1]) || !joinable(runes[i+1]) {
+				return false
+			}
+		case unicode.IsControl(r), unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf):
+			return false
+		default:
+		}
+	}
+
+	return true
+}
+
+// joinable reports whether a joiner can stand next to r: a letter, a mark
+// or a symbol.
+func joinable(r rune) bool {
+	return unicode.In(r, unicode.L, unicode.M, unicode.S)
 }
