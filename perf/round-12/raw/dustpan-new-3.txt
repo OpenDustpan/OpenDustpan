@@ -1,0 +1,9 @@
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.349 p95=0.683 p99=1.584
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.347 p95=0.681 p99=1.554
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40296
+--- PASS: TestPerf12ManualLockService (1.96s)
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.804 p95=1.142 p99=2.407
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.767 p95=1.206 p99=1.959
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=67233
+--- PASS: TestPerf12ManualLockRequest (0.99s)
+ok  	opendustpan.org/opendustpan/pkg/dustpan	2.964s

@@ -1,0 +1,57 @@
+metric                                                         old        new   change  n
+backuprestore total_ms                                    2906.000   2949.000    +1.5%  10/10
+lock p50                                                     4.614      4.604    -0.2%  5/5
+lock p95                                                     6.260      6.359    +1.6%  5/5
+lock p99                                                     7.968      8.235    +3.4%  5/5
+lockunlock allocs/pair                                    1817.000   1817.000    +0.0%  5/5
+manuallock-delete p50                                        0.726      0.724    -0.3%  13/13
+manuallock-delete p95                                        1.133      1.142    +0.8%  13/13
+manuallock-delete p99                                        1.828      1.768    -3.3%  13/13
+manuallock-pair allocs/pair                               1218.000   1218.000    +0.0%  13/13
+manuallock-pair bytes/pair                               66991.000  67041.000    +0.1%  13/13
+manuallock-put p50                                           0.776      0.772    -0.5%  13/13
+manuallock-put p95                                           1.209      1.169    -3.3%  13/13
+manuallock-put p99                                           2.070      2.317   +11.9%  13/13
+manuallock-svc-lock p50                                        nan      0.327    +nan%  0/5
+manuallock-svc-lock p95                                        nan      0.656    +nan%  0/5
+manuallock-svc-lock p99                                        nan      1.328    +nan%  0/5
+manuallock-svc-pair allocs/pair                                nan    895.000    +nan%  0/5
+manuallock-svc-pair bytes/pair                                 nan  40302.000    +nan%  0/5
+manuallock-svc-unlock p50                                      nan      0.325    +nan%  0/5
+manuallock-svc-unlock p95                                      nan      0.630    +nan%  0/5
+manuallock-svc-unlock p99                                      nan      1.294    +nan%  0/5
+oidc-callback allocs/op                                    933.000    951.000    +1.9%  5/5
+oidc-callback bytes/op                                   66229.000  67249.000    +1.5%  5/5
+oidc-callback p50                                            2.581      2.596    +0.6%  5/5
+oidc-callback p95                                            3.697      3.679    -0.5%  5/5
+oidc-callback p99                                           10.314      6.266   -39.2%  5/5
+passkey-begin allocs/op                                        nan    456.000    +nan%  0/5
+passkey-begin bytes/op                                         nan  32694.000    +nan%  0/5
+passkey-begin p50                                              nan      0.558    +nan%  0/5
+passkey-begin p95                                              nan      0.817    +nan%  0/5
+passkey-begin p99                                              nan      1.078    +nan%  0/5
+passkey-finish allocs/op                                       nan    807.000    +nan%  0/5
+passkey-finish bytes/op                                        nan  54623.000    +nan%  0/5
+passkey-finish p50                                             nan      0.982    +nan%  0/5
+passkey-finish p95                                             nan      1.594    +nan%  0/5
+passkey-finish p99                                             nan      2.164    +nan%  0/5
+passkey-service-pg begin_allocs                                nan    207.000    +nan%  0/25
+passkey-service-pg begin_ms                                    nan      1.000    +nan%  0/25
+passkey-service-pg begin_trips                                 nan      5.000    +nan%  0/25
+passkey-service-pg finish_allocs                               nan    615.000    +nan%  0/25
+passkey-service-pg finish_ms                                   nan      2.380    +nan%  0/25
+passkey-service-pg finish_trips                                nan     13.000    +nan%  0/25
+password allocs/op                                        1028.000   1051.000    +2.2%  5/5
+password bytes/op                                       19978625.000 19980548.000    +0.0%  5/5
+password p50                                                29.030     28.790    -0.8%  5/5
+password p95                                                37.060     36.040    -2.8%  5/5
+password p99                                                40.270     40.010    -0.6%  5/5
+pgopen fresh max                                           247.200    258.700    +4.7%  5/5
+pgopen fresh p50                                           229.200    218.800    -4.5%  5/5
+pgopen fresh p95                                           233.500    242.500    +3.9%  5/5
+pgopen migrated max                                         24.700     24.600    -0.4%  5/5
+pgopen migrated p50                                         18.600     18.800    +1.1%  5/5
+pgopen migrated p95                                         22.800     22.800    +0.0%  5/5
+unlock p50                                                   1.857      1.856    -0.1%  5/5
+unlock p95                                                   2.649      2.661    +0.5%  5/5
+unlock p99                                                   3.447      3.322    -3.6%  5/5

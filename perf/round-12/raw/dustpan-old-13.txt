@@ -1,0 +1,5 @@
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.747 p95=1.235 p99=2.016
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.715 p95=1.157 p99=1.658
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66951
+--- PASS: TestPerf12ManualLockRequest (0.94s)
+ok  	opendustpan.org/opendustpan/pkg/dustpan	0.957s

@@ -1,0 +1,11 @@
+    perf12_servertest_test.go:56: PERF12 lock p50=4.604 p95=6.155 p99=7.600
+    perf12_servertest_test.go:57: PERF12 unlock p50=1.856 p95=2.522 p99=3.237
+    perf12_servertest_test.go:58: PERF12 lockunlock allocs/pair=1819
+--- PASS: TestPerf12LockLatency (7.28s)
+    perf12_servertest_test.go:75: PERF12 backuprestore units=3 total_ms=2942
+    perf12_servertest_test.go:75: PERF12 backuprestore units=30 total_ms=2956
+--- PASS: TestPerf12BackupRestoreTime (8.16s)
+    perf12_servertest_test.go:145: PERF12 pgopen fresh p50=203.6 p95=205.8 max=229.1
+    perf12_servertest_test.go:146: PERF12 pgopen migrated p50=18.3 p95=22.0 max=24.7
+--- PASS: TestPerf12PostgresOpen (2.04s)
+ok  	opendustpan.org/opendustpan/internal/servertest	17.495s

@@ -1,0 +1,7 @@
+    perf12_mfa_pg_test.go:170: PERF12 passkey-service-pg run=0 begin_trips=5 finish_trips=13 begin_ms=0.99 finish_ms=2.59 begin_allocs=207 finish_allocs=607
+    perf12_mfa_pg_test.go:170: PERF12 passkey-service-pg run=1 begin_trips=5 finish_trips=13 begin_ms=1.35 finish_ms=2.32 begin_allocs=214 finish_allocs=635
+    perf12_mfa_pg_test.go:170: PERF12 passkey-service-pg run=2 begin_trips=5 finish_trips=13 begin_ms=1.10 finish_ms=2.23 begin_allocs=213 finish_allocs=616
+    perf12_mfa_pg_test.go:170: PERF12 passkey-service-pg run=3 begin_trips=5 finish_trips=13 begin_ms=1.20 finish_ms=4.03 begin_allocs=207 finish_allocs=643
+    perf12_mfa_pg_test.go:170: PERF12 passkey-service-pg run=4 begin_trips=5 finish_trips=13 begin_ms=1.09 finish_ms=2.38 begin_allocs=207 finish_allocs=621
+--- PASS: TestPerf12PasskeyRoundTripsPostgres (0.47s)
+ok  	opendustpan.org/opendustpan/internal/mfasvc	0.481s

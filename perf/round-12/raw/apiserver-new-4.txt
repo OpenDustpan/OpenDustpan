@@ -1,0 +1,8 @@
+    perf12_passkey_test.go:61: PERF12 passkey-begin n=288 p50=0.539 p95=0.817 p99=1.134 allocs/op=456 bytes/op=32680
+    perf12_passkey_test.go:63: PERF12 passkey-finish n=288 p50=0.966 p95=1.572 p99=2.078 allocs/op=807 bytes/op=54571
+--- PASS: TestPerf12PasskeyRegister (0.79s)
+    perf12_signin_test.go:62: PERF12 password n=100 p50=28.12 p95=36.04 p99=37.08 allocs/op=1050 bytes/op=19980040
+--- PASS: TestPerf12PasswordSignIn (3.13s)
+    perf12_signin_test.go:101: PERF12 oidc-callback n=300 p50=2.497 p95=3.628 p99=10.036 allocs/op=951 bytes/op=67249
+--- PASS: TestPerf12OIDCCallback (1.20s)
+ok  	opendustpan.org/opendustpan/internal/api/server	5.128s

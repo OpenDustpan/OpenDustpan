@@ -1,0 +1,5 @@
+    perf12_signin_test.go:62: PERF12 password n=100 p50=29.64 p95=35.51 p99=39.24 allocs/op=1030 bytes/op=19979191
+--- PASS: TestPerf12PasswordSignIn (3.33s)
+    perf12_signin_test.go:101: PERF12 oidc-callback n=300 p50=2.593 p95=3.697 p99=4.475 allocs/op=934 bytes/op=66692
+--- PASS: TestPerf12OIDCCallback (1.23s)
+ok  	opendustpan.org/opendustpan/internal/api/server	4.573s
