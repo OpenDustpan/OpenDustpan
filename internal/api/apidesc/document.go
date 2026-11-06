@@ -17,7 +17,7 @@ import (
 // while the description changes, and the test of openapi.pin is disabled.
 // From the first release, it changes when the description changes. It is valid in SemVer and in
 // PEP 440, so each SDK can carry it.
-const DocumentVersion = "0.38.0"
+const DocumentVersion = "0.36.0"
 
 // OpenAPIVersion is the version of the OpenAPI format. The document uses the
 // part of 3.1.0 that maps one to one to 3.0.3: a nullable type is
