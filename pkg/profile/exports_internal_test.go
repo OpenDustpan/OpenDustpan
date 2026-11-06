@@ -53,6 +53,8 @@ func secretTargetDoc(t *testing.T, head string) *Document {
   rotator: "${ rotators.db.password }"
   other: '${ profiles["shared/keys"].values.k }'
   imported: '${ imports["shared/keys"].values.k }'
+  undeclared: '${ imports["other/keys"].values.k }'
+  taggedImport: '${ imports["shared/keys@stable"].values.k }'
   chain: "${ values.chainEntry }"
   chainEntry: { $value: "${ values.s }" }
   env: "${ $env.TOKEN }"
@@ -90,9 +92,9 @@ func TestCheckSecretTarget(t *testing.T) {
 	refused := []string{
 		"plain", "literal", "dollar", "escaped", "entry", "bearer", "env", "loopA", "list", "ternary",
 		"compare", "replaced", "indexed", "sliced", "prefixed", "twoParts", "quotedProvider", "quotedImport",
-		"coalesce", "suffixed", "inside",
+		"coalesce", "suffixed", "inside", "undeclared", "taggedImport",
 	}
-	accepted := []string{"s", "provider", "rotator", "other", "imported", "chain"}
+	accepted := []string{"s", "provider", "rotator", "other", "chain"}
 
 	type targetCase struct {
 		name    string
@@ -101,10 +103,12 @@ func TestCheckSecretTarget(t *testing.T) {
 		ok      bool
 	}
 
-	tests := make([]targetCase, 0, 2+2*(len(refused)+len(accepted)))
+	tests := make([]targetCase, 0, 4+2*(len(refused)+len(accepted)))
 	tests = append(tests,
 		targetCase{"missing path with no imports", false, "missing", false},
 		targetCase{"missing path with imports", true, "missing", true},
+		targetCase{"declared import with no imports", false, "imported", false},
+		targetCase{"declared import", true, "imported", true},
 	)
 
 	for _, imports := range []bool{false, true} {
