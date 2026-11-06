@@ -204,11 +204,14 @@ The rules of a block:
 - The server refuses an audience that names a host of this server, so that a
   token of a profile can never be used against the API of the server.
 - A block has a deadline of 10 seconds by default, and at most 30 seconds.
-  When the deadline ends, the block fails and gives no value.
+  All the provider blocks of one open have at most 60 seconds together.
+  When a deadline ends, the block fails and gives no value.
 - An error of a block never holds the token or a secret input. The server
   replaces each such value with `[secret]`.
 - When one block fails, the open gives no value of any block.
+- Each token that the issuer signs for a block has an audit entry, also when
+  the block fails after it got the token.
 
-Delivery of the token to a job comes with runs. This version checks a
-`login/oidc` block and runs it in the server, but no job step reads its
-value yet.
+A `login/oidc` block is not active yet: the server does not run provider
+blocks in this version, and no job step reads their values. Delivery of the
+token to a job comes with runs.

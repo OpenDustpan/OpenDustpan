@@ -133,7 +133,7 @@ func login(name string) provider.Block {
 	}
 }
 
-func noCall() provider.Call { return provider.Call{Claims: nil, Tokens: nil} }
+func noCall() provider.Call { return provider.Call{Claims: nil, Tokens: nil, Limit: 0} }
 
 func TestRunOpensEachBlockInOrderAfterEveryCheck(t *testing.T) {
 	t.Parallel()
@@ -178,7 +178,7 @@ func TestRunOpensEachBlockInOrderAfterEveryCheck(t *testing.T) {
 		t.Errorf("the secrets block got the login %v", gotLogin)
 	}
 
-	if got["a"].Value["token"].Value != "tok-value" || got["b"].Value["value"].Value != "v" {
+	if got.Results["a"].Value["token"].Value != "tok-value" || got.Results["b"].Value["value"].Value != "v" {
 		t.Errorf("results = %v", got)
 	}
 }
@@ -297,7 +297,7 @@ func TestRunGivesTokensOnlyToAnAdapterThatMints(t *testing.T) {
 			reg := registry(t, f)
 
 			_, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{
-				Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) },
+				Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) }, Limit: 0,
 			})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
@@ -344,7 +344,7 @@ func TestRunDeadline(t *testing.T) {
 			b.Timeout = 50 * time.Millisecond
 
 			got, err := reg.Run(t.Context(), []provider.Block{b}, noCall())
-			if !errors.Is(err, provider.ErrUnavailable) || got != nil {
+			if !errors.Is(err, provider.ErrUnavailable) || got.Results != nil {
 				t.Fatalf("Run = %v, %v, want provider.ErrUnavailable and no result", got, err)
 			}
 
@@ -500,7 +500,7 @@ func runWithSecrets(t *testing.T, key string, msg func(tok string) string) error
 	b.Inputs["key"] = provider.Leaf{Value: key, Secret: true}
 
 	_, err := reg.Run(t.Context(), []provider.Block{b}, provider.Call{
-		Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) },
+		Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) }, Limit: 0,
 	})
 
 	return err
@@ -586,7 +586,7 @@ func TestRunChecksEachResult(t *testing.T) {
 			}))
 
 			got, err := reg.Run(t.Context(), []provider.Block{login("a")}, noCall())
-			if !errors.Is(err, tc.want) || got != nil {
+			if !errors.Is(err, tc.want) || got.Results != nil {
 				t.Fatalf("Run = %v, %v, want %v and no result", got, err, tc.want)
 			}
 
@@ -607,7 +607,7 @@ func TestRunGivesACopyOfTheClaims(t *testing.T) {
 	}))
 	claims := provider.Claims{"access": "read"}
 
-	_, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{Claims: claims, Tokens: nil})
+	_, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{Claims: claims, Tokens: nil, Limit: 0})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
