@@ -1,5 +1,5 @@
 // Package jobproxytest is the conformance suite of the RuleStore port of
-// package jobproxy. A new adapter runs RunRuleStore with a Factory.
+// package rulestore. A new adapter runs RunRuleStore with a Factory.
 //
 // Each case states one rule of the port.
 package jobproxytest
@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/jobproxy"
+	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -19,7 +20,7 @@ import (
 // namespace called name and returns its current fence. Audit returns the
 // audit entries of a namespace, oldest first.
 type Harness struct {
-	Store     jobproxy.RuleStore
+	Store     rulestore.RuleStore
 	Namespace func(t *testing.T, name string) namespace.Fence
 	Audit     func(t *testing.T, ns string) []audit.Entry
 }
@@ -99,22 +100,22 @@ func entry(ns string) audit.Entry {
 }
 
 // unit returns the scope of the unit id in ns.
-func unit(ns, id string) jobproxy.Scope {
-	return jobproxy.Scope{Namespace: namespace.Name(ns), UnitID: id}
+func unit(ns, id string) rulestore.Scope {
+	return rulestore.Scope{Namespace: namespace.Name(ns), UnitID: id}
 }
 
 // change returns the write of doc at scope with expected.
-func change(scope jobproxy.Scope, doc []byte, expected int64) jobproxy.Change {
-	return jobproxy.Change{Scope: scope, Document: doc, Expected: expected}
+func change(scope rulestore.Scope, doc []byte, expected int64) rulestore.Change {
+	return rulestore.Change{Scope: scope, Document: doc, Expected: expected}
 }
 
 // nsScope returns the scope of the namespace ns.
-func nsScope(ns string) jobproxy.Scope {
-	return jobproxy.Scope{Namespace: namespace.Name(ns), UnitID: ""}
+func nsScope(ns string) rulestore.Scope {
+	return rulestore.Scope{Namespace: namespace.Name(ns), UnitID: ""}
 }
 
 // put stores doc at scope with expected and fails the test on an error.
-func put(t *testing.T, h Harness, scope jobproxy.Scope, doc []byte, expected int64) jobproxy.Stored {
+func put(t *testing.T, h Harness, scope rulestore.Scope, doc []byte, expected int64) rulestore.Stored {
 	t.Helper()
 
 	fence := h.Namespace(t, string(scope.Namespace))
@@ -128,10 +129,10 @@ func put(t *testing.T, h Harness, scope jobproxy.Scope, doc []byte, expected int
 }
 
 // wantNotFound fails the test unless scope has no proxy rule set.
-func wantNotFound(t *testing.T, h Harness, scope jobproxy.Scope) {
+func wantNotFound(t *testing.T, h Harness, scope rulestore.Scope) {
 	t.Helper()
 
-	if _, err := h.Store.Get(t.Context(), scope); !errors.Is(err, jobproxy.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), scope); !errors.Is(err, rulestore.ErrNotFound) {
 		t.Fatalf("Get: got %v, want ErrNotFound", err)
 	}
 }
@@ -172,8 +173,8 @@ func putThenGet(t *testing.T, h Harness) {
 	switch {
 	case !bytes.Equal(got.Document, docA()):
 		t.Fatalf("Document %q, want %q", got.Document, docA())
-	case got.Digest != jobproxy.DocumentDigest(docA()):
-		t.Fatalf("Digest %q, want %q", got.Digest, jobproxy.DocumentDigest(docA()))
+	case got.Digest != rulestore.DocumentDigest(docA()):
+		t.Fatalf("Digest %q, want %q", got.Digest, rulestore.DocumentDigest(docA()))
 	case got.Version != 1 || stored.Version != 1:
 		t.Fatalf("Version %d and %d, want 1", got.Version, stored.Version)
 	case got.UpdatedAt != at().UnixMilli():
@@ -191,7 +192,7 @@ func putTwice(t *testing.T, h Harness) {
 	first := put(t, h, nsScope(nsAcme), docA(), 0)
 	second := put(t, h, nsScope(nsAcme), docB(), first.Version)
 
-	if second.Version != 2 || second.Digest != jobproxy.DocumentDigest(docB()) {
+	if second.Version != 2 || second.Digest != rulestore.DocumentDigest(docB()) {
 		t.Fatalf("second put: version %d, digest %q", second.Version, second.Digest)
 	}
 }
@@ -204,7 +205,7 @@ func putCreateConflict(t *testing.T, h Harness) {
 	fence := h.Namespace(t, nsAcme)
 
 	_, err := h.Store.Put(t.Context(), change(unit(nsAcme, unitA), docB(), 0), fence, entry(nsAcme))
-	if !errors.Is(err, jobproxy.ErrConflict) {
+	if !errors.Is(err, rulestore.ErrConflict) {
 		t.Fatalf("Put: got %v, want ErrConflict", err)
 	}
 }
@@ -217,7 +218,7 @@ func putStaleConflict(t *testing.T, h Harness) {
 	fence := h.Namespace(t, nsAcme)
 
 	_, err := h.Store.Put(t.Context(), change(unit(nsAcme, unitA), docB(), staleVersion), fence, entry(nsAcme))
-	if !errors.Is(err, jobproxy.ErrConflict) {
+	if !errors.Is(err, rulestore.ErrConflict) {
 		t.Fatalf("Put: got %v, want ErrConflict", err)
 	}
 
@@ -289,7 +290,7 @@ func putInvalidScope(t *testing.T, h Harness) {
 
 	fence := h.Namespace(t, nsAcme)
 
-	for _, scope := range []jobproxy.Scope{unit("", unitA), unit(nsAcme, "u/1"), unit(nsAcme, "u 1")} {
+	for _, scope := range []rulestore.Scope{unit("", unitA), unit(nsAcme, "u/1"), unit(nsAcme, "u 1")} {
 		_, err := h.Store.Put(t.Context(), change(scope, docA(), 0), fence, entry(nsAcme))
 		if !errors.Is(err, jobproxy.ErrInvalid) {
 			t.Fatalf("Put at %+v: got %v, want ErrInvalid", scope, err)
@@ -382,7 +383,7 @@ func deleteMissing(t *testing.T, h Harness) {
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Store.Delete(t.Context(), unit(nsAcme, unitA), 1, fence, entry(nsAcme))
-	if !errors.Is(err, jobproxy.ErrNotFound) {
+	if !errors.Is(err, rulestore.ErrNotFound) {
 		t.Fatalf("Delete: got %v, want ErrNotFound", err)
 	}
 }
@@ -394,7 +395,7 @@ func deleteStale(t *testing.T, h Harness) {
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Store.Delete(t.Context(), unit(nsAcme, unitA), stored.Version+1, fence, entry(nsAcme))
-	if !errors.Is(err, jobproxy.ErrConflict) {
+	if !errors.Is(err, rulestore.ErrConflict) {
 		t.Fatalf("Delete: got %v, want ErrConflict", err)
 	}
 
@@ -431,7 +432,7 @@ func storedIsACopy(t *testing.T, h Harness) {
 }
 
 // wantFirstVersion fails the test unless scope holds doc at version 1.
-func wantFirstVersion(t *testing.T, h Harness, scope jobproxy.Scope, doc []byte) {
+func wantFirstVersion(t *testing.T, h Harness, scope rulestore.Scope, doc []byte) {
 	t.Helper()
 
 	const version = 1

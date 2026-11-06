@@ -1,14 +1,33 @@
-package jobproxy
+// Package rulestore holds the RuleStore port of the job proxy: the store of
+// the proxy rule set of each namespace and each unit. It is a package of its
+// own, so the launcher, which links package jobproxy, links no store, no
+// namespace and no audit code.
+package rulestore
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"regexp"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/jobproxy"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
+
+// Errors of the port. A document that Parse refuses gives jobproxy.ErrInvalid.
+var (
+	// ErrNotFound is the error for a scope that has no stored proxy rule set.
+	ErrNotFound = errors.New("the scope has no proxy rule set")
+	// ErrConflict is the error for a write that names a version that is not
+	// the stored version.
+	ErrConflict = errors.New("the proxy rule set changed since it was read")
+)
+
+// unitIDPattern is the shape of a stable unit ID in a scope.
+var unitIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // Scope names the owner of a stored proxy rule set: a namespace, or one unit
 // of the namespace by its stable unit ID. A blueprint version holds its
@@ -55,11 +74,11 @@ func DocumentDigest(doc []byte) string {
 // empty or from 1 to 64 letters, digits, _ or -.
 func ValidScope(s Scope) error {
 	if _, err := namespace.ParseName(string(s.Namespace)); err != nil {
-		return fmt.Errorf("%w: the scope names no valid namespace", ErrInvalid)
+		return fmt.Errorf("%w: the scope names no valid namespace", jobproxy.ErrInvalid)
 	}
 
-	if s.UnitID != "" && !namePattern.MatchString(s.UnitID) {
-		return fmt.Errorf("%w: the scope names no valid unit ID", ErrInvalid)
+	if s.UnitID != "" && !unitIDPattern.MatchString(s.UnitID) {
+		return fmt.Errorf("%w: the scope names no valid unit ID", jobproxy.ErrInvalid)
 	}
 
 	return nil
@@ -80,15 +99,15 @@ func ValidScope(s Scope) error {
 // transaction of the write, so two writers with one version cannot both win.
 type RuleStore interface {
 	// Get returns the proxy rule set of scope. It returns ErrNotFound when
-	// the scope has none, and ErrInvalid for a scope that fails ValidScope.
+	// the scope has none, and jobproxy.ErrInvalid for a scope that fails ValidScope.
 	// A unit scope never returns the set of its namespace, and a scope of one
 	// namespace never returns a set of another namespace.
 	Get(ctx context.Context, scope Scope) (Stored, error)
 	// Put stores c.Document as the proxy rule set of c.Scope and returns the
 	// stored set, with Version one above the stored one, Digest of the
 	// document and UpdatedAt set to e.At. It returns:
-	//   - ErrInvalid when the scope fails ValidScope, when the document fails
-	//     Parse with no allowed range, or when e names another namespace than
+	//   - jobproxy.ErrInvalid when the scope fails ValidScope, when the
+	//     document fails jobproxy.Parse with no allowed range, or when e names another namespace than
 	//     the scope.
 	//   - ErrConflict when c.Expected is not the stored version (0 when the
 	//     scope has a set already).
@@ -96,7 +115,7 @@ type RuleStore interface {
 	//     namespace than the scope.
 	Put(ctx context.Context, c Change, fence namespace.Fence, e audit.Entry) (Stored, error)
 	// Delete removes the proxy rule set of scope. It returns ErrNotFound
-	// when the scope has none, and ErrInvalid, ErrConflict and
+	// when the scope has none, and jobproxy.ErrInvalid, ErrConflict and
 	// namespace.ErrFenced as Put does. On an error it changes nothing.
 	Delete(ctx context.Context, scope Scope, expected int64, fence namespace.Fence, e audit.Entry) error
 }

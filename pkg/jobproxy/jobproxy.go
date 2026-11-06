@@ -7,8 +7,9 @@
 // not canonical is refused, so each allowed path has one spelling and the
 // job proxy sends the path that it checked with no change.
 //
-// The runner links this package, so it imports no internal package, no SQL
-// driver and no forge client.
+// The launcher links this package, so it links no internal package, no SQL
+// driver, no forge client and no other package of the server. The store port
+// is in package rulestore.
 package jobproxy
 
 import (
@@ -29,11 +30,6 @@ var (
 	// client certificate or a CA that no profile of the unit gives. The start
 	// of the job fails with it.
 	ErrCredential = errors.New("the proxy rule names an export that no profile of the unit gives")
-	// ErrNotFound is the error for a scope that has no stored proxy rule set.
-	ErrNotFound = errors.New("the scope has no proxy rule set")
-	// ErrConflict is the error for a write that names a version that is not
-	// the stored version.
-	ErrConflict = errors.New("the proxy rule set changed since it was read")
 )
 
 // Limits of a proxy rule set.
