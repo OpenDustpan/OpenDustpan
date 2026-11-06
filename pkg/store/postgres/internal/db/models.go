@@ -224,8 +224,7 @@ type GateObject struct {
 	Kind        string
 	ID          string
 	Level       string
-	Tool        string
-	UnitName    string
+	UnitID      string
 	Version     int64
 	Body        string
 	UpdatedAtMs int64
@@ -426,17 +425,22 @@ type InstanceVersion struct {
 }
 
 type Inventory struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
+	Namespace         string
+	Tool              string
+	Name              string
+	UnitID            string
+	DisplayName       string
+	LastChangedMs     int64
+	Status            string
+	ResourceCount     pgtype.Int8
+	LockHolder        pgtype.Text
+	LockSinceMs       pgtype.Int8
+	LockOperation     pgtype.Text
+	LastReleaseLockID string
+	LastReleaseHolder string
+	LastReleaseBy     string
+	LastReleaseKind   string
+	LastReleaseAtMs   int64
 }
 
 type InventoryChange struct {
@@ -760,6 +764,31 @@ type OidcProvider struct {
 	CreatedAtMs int64
 }
 
+type Passkey struct {
+	ID             string
+	PrincipalID    string
+	Name           string
+	CredentialID   []byte
+	PublicKey      []byte
+	Transports     string
+	Aaguid         []byte
+	SignCount      int64
+	BackupEligible bool
+	CreatedAtMs    int64
+	LastUsedAtMs   int64
+	SuspendedAtMs  int64
+}
+
+type PasskeyChallenge struct {
+	Digest      string
+	Kind        string
+	PrincipalID string
+	PendingID   string
+	SessionID   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
 type PersonPreference struct {
 	PrincipalID string
 	Document    string
@@ -978,6 +1007,7 @@ type SchemaMigration struct {
 	Version          int64
 	Name             string
 	MinBinaryVersion string
+	Sha256           string
 }
 
 type SecretKey struct {

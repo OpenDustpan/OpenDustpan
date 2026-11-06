@@ -538,6 +538,15 @@ UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
 WHERE namespace = $4 AND tool = $5 AND name = $6;
 
+-- name: UpdateInventoryLastRelease :exec
+-- Publishes the last released lock of one workspace unit. The caller writes it
+-- in the same transaction as the record on the workspace. An empty kind, empty
+-- text and the time 0 mean no record.
+UPDATE inventory
+SET last_release_lock_id = $1, last_release_holder = $2, last_release_by = $3,
+    last_release_kind = $4, last_release_at_ms = $5
+WHERE namespace = $6 AND tool = $7 AND name = $8;
+
 -- name: InsertDeletedInventory :exec
 -- Records a deleted unit (ADR 47). The delete transaction removes the live
 -- entry of the unit with DeleteInventory.
@@ -724,6 +733,8 @@ ORDER BY seq;
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -744,6 +755,8 @@ ORDER BY i.tool, i.name;
 -- One live unit by its stable ID, which is unique in the installation.
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
+       i.last_release_lock_id, i.last_release_holder, i.last_release_by, i.last_release_kind,
+       i.last_release_at_ms,
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
@@ -2819,6 +2832,22 @@ WHERE o.id = pick.id
 RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
+-- name: ClaimStartedDurableOperation :one
+-- Claims the pending operation id that the transaction started, for the
+-- starter: the claim of a durable.StartClaim. The expiry is the database
+-- clock plus the lease.
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+)
+UPDATE durable_operations o
+SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  claim_owner = sqlc.arg('owner')::text, claim_expires_at_ms = c.now_ms + sqlc.arg('lease_ms')::bigint,
+  updated_at_ms = c.now_ms
+FROM c
+WHERE o.id = sqlc.arg('id')::text AND o.state = 'pending'
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
+
 -- name: ExtendDurableClaim :exec
 UPDATE durable_operations
 SET claim_expires_at_ms = sqlc.arg('expires_at_ms')::bigint, updated_at_ms = sqlc.arg('now_ms')::bigint
@@ -3194,9 +3223,9 @@ FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind);
 
 -- name: InsertGateObject :exec
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
-VALUES (sqlc.arg(namespace_id), sqlc.arg(scope_key), sqlc.arg(kind), sqlc.arg(id), sqlc.arg(level), sqlc.arg(tool),
-        sqlc.arg(unit_name), sqlc.arg(version), sqlc.arg(body), sqlc.arg(updated_at_ms));
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(scope_key), sqlc.arg(kind), sqlc.arg(id), sqlc.arg(level), sqlc.arg(unit_id),
+        sqlc.arg(version), sqlc.arg(body), sqlc.arg(updated_at_ms));
 
 -- name: UpdateGateObject :execrows
 -- Replaces an object when its version is the expected one.
@@ -3226,9 +3255,10 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
 -- The objects of one kind and ID in the scope and in the scopes after it: for
 -- the installation, every scope; for a namespace, every scope of the
 -- namespace; for a collection, the collection and the units that it holds
--- now; for a unit, the unit. level, namespace_id, scope_key and
--- collection_key describe the scope.
-SELECT o.scope_key, o.version, o.body
+-- now, by the stable ID of the unit; for a unit, the unit. level,
+-- namespace_id, scope_key and collection_key describe the scope. The
+-- namespace_id and the unit_id of a row name the unit of a unit row.
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.version, o.body
 FROM gate_objects AS o
 WHERE o.kind = sqlc.arg(kind) AND o.id = sqlc.arg(id)
   AND (
@@ -3239,9 +3269,8 @@ WHERE o.kind = sqlc.arg(kind) AND o.id = sqlc.arg(id)
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = sqlc.arg(collection_key)))
   )
 ORDER BY o.scope_key COLLATE "C";
@@ -3249,7 +3278,7 @@ ORDER BY o.scope_key COLLATE "C";
 -- name: ListGateReferrers :many
 -- The objects, in the scope and in the scopes after it (see
 -- ListNarrowerGateObjects), that name the approval rule or the path set.
-SELECT o.scope_key, o.kind, o.id, o.version, o.body
+SELECT o.scope_key, o.namespace_id, o.unit_id, o.kind, o.id, o.version, o.body
 FROM gate_references AS r
 JOIN gate_objects AS o
     ON o.namespace_id = r.namespace_id AND o.scope_key = r.scope_key AND o.kind = r.owner_kind AND o.id = r.owner_id
@@ -3262,29 +3291,42 @@ WHERE r.ref_kind = sqlc.arg(ref_kind) AND r.ref_id = sqlc.arg(ref_id)
           AND EXISTS (
               SELECT 1
               FROM namespaces AS n
-              JOIN inventory AS i ON i.namespace = n.name
-              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+              JOIN collection_members AS m ON m.namespace = n.name
+              WHERE n.id = o.namespace_id AND m.unit_id = o.unit_id
                 AND m.collection_key = sqlc.arg(collection_key)))
   )
 ORDER BY o.scope_key COLLATE "C", o.kind COLLATE "C", o.id COLLATE "C";
 
 -- name: GateUnitCollection :one
--- The key of the collection that holds a unit now. A unit in no collection has
--- no row.
+-- The key of the collection that holds the unit of a stable ID. A unit in no
+-- collection has no row.
 SELECT m.collection_key
 FROM namespaces AS n
+JOIN collection_members AS m ON m.namespace = n.name
+WHERE n.id = sqlc.arg(namespace_id) AND m.unit_id = sqlc.arg(unit_id);
+
+-- name: GetGateLiveUnit :one
+-- The namespace, the tool and the name of the live unit of a stable ID. A gate
+-- row of a unit names the unit by its ID only, and a check that names the
+-- scope of the row reads the name here.
+SELECT n.name AS namespace, i.tool, i.name
+FROM namespaces AS n
 JOIN inventory AS i ON i.namespace = n.name
-JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
-WHERE n.id = sqlc.arg(namespace_id) AND i.tool = sqlc.arg(tool) AND i.name = sqlc.arg(unit_name);
+WHERE n.id = sqlc.arg(namespace_id) AND i.unit_id = sqlc.arg(unit_id);
+
+-- name: GetGateDeletedUnit :one
+-- The namespace, the tool and the name of the deleted unit of a stable ID.
+SELECT n.name AS namespace, d.tool, d.name
+FROM namespaces AS n
+JOIN inventory_deleted AS d ON d.namespace = n.name
+WHERE n.id = sqlc.arg(namespace_id) AND d.unit_id = sqlc.arg(unit_id);
 
 -- name: ListUnitGateObjectKeys :many
--- The kind, ID and scope key of the configuration of a unit that a purge
--- removes, for the audit entry of the purge.
-SELECT kind, id, scope_key
+-- The kind and ID of the configuration of a unit that a purge removes, for
+-- the audit entry of the purge.
+SELECT kind, id
 FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name)
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND unit_id = sqlc.arg(unit_id)
 ORDER BY kind, id;
 
 -- name: ListScopeGateObjectKeys :many
@@ -3295,37 +3337,11 @@ FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
 ORDER BY kind, id;
 
--- name: CountUnitGateObjects :one
--- The count of configuration objects that the unit called unit_name holds.
-SELECT COUNT(*)
-FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name);
-
--- name: CopyUnitGateObjects :exec
--- Copies the configuration of a unit to the scope of its new name, in the
--- transaction of a rename.
-INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
-SELECT o.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), o.kind, o.id, o.level, o.tool,
-       CAST(sqlc.arg(new_unit_name) AS TEXT), o.version, o.body, o.updated_at_ms
-FROM gate_objects AS o
-WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.level = 'unit' AND o.tool = sqlc.arg(tool)
-  AND o.unit_name = sqlc.arg(old_unit_name);
-
--- name: CopyUnitGateReferences :exec
--- Copies the references of the configuration of a unit to the scope of its
--- new name, in the transaction of a rename.
-INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
-SELECT r.ref_kind, r.ref_id, r.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), r.owner_kind, r.owner_id
-FROM gate_references AS r
-WHERE r.namespace_id = sqlc.arg(namespace_id) AND r.scope_key = sqlc.arg(old_scope_key);
-
 -- name: DeleteUnitGateObjects :exec
 -- Deletes the configuration of a unit that a purge removes. The references go
 -- with it.
 DELETE FROM gate_objects
-WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
-  AND unit_name = sqlc.arg(unit_name);
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND unit_id = sqlc.arg(unit_id);
 
 -- name: DeleteScopeGateObjects :exec
 -- Deletes the configuration of one scope, for example a collection that a
@@ -3337,6 +3353,17 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key);
 INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
 VALUES (sqlc.arg(id), sqlc.arg(namespace_id), sqlc.arg(point), sqlc.arg(change_kind), sqlc.arg(change_id),
         sqlc.arg(at_ms), sqlc.arg(last_at_ms), sqlc.arg(count), sqlc.arg(refusal_key), sqlc.arg(body));
+
+-- name: InsertGateRecordInNamespace :execrows
+-- The insert of a record of the namespace with the name, in one statement. It
+-- inserts no row when no namespace has the name or when a record has the ID.
+INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
+SELECT sqlc.arg(id)::text, n.id, sqlc.arg(point)::text, sqlc.arg(change_kind)::text, sqlc.arg(change_id)::text,
+       sqlc.arg(at_ms)::bigint, sqlc.arg(last_at_ms)::bigint, sqlc.arg(count)::bigint, sqlc.arg(refusal_key)::text,
+       sqlc.arg(body)::text
+FROM namespaces n
+WHERE n.name = sqlc.arg(namespace)::text
+  AND NOT EXISTS (SELECT 1 FROM gate_records r WHERE r.id = sqlc.arg(id)::text);
 
 -- name: GetGateRecord :one
 SELECT body
@@ -5390,6 +5417,65 @@ DELETE FROM local_user_resets WHERE digest = sqlc.arg('digest') AND expires_at_m
 -- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= $1;
 
+-- name: CountLivePasskeys :one
+-- The passkeys of a person that are not suspended, read under the lock of the
+-- principal. A suspended passkey cannot sign in, so the rule of the last
+-- credential counts only these.
+SELECT COUNT(*) FROM passkeys WHERE principal_id = $1 AND suspended_at_ms = 0;
+
+-- name: CountOpenPasskeyChallenges :one
+-- The challenges of one kind that have not expired at the given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND expires_at_ms > $2;
+
+-- name: CountPasskeys :one
+-- The passkeys of a person, read under the lock of the principal.
+SELECT COUNT(*) FROM passkeys WHERE principal_id = $1;
+
+-- name: CreatePasskey :execrows
+INSERT INTO passkeys (id, principal_id, name, credential_id, public_key, transports, aaguid, sign_count,
+                      backup_eligible, created_at_ms, last_used_at_ms, suspended_at_ms)
+VALUES (sqlc.arg('id'), sqlc.arg('principal_id'), sqlc.arg('name'), sqlc.arg('credential_id'), sqlc.arg('public_key'),
+        sqlc.arg('transports'), sqlc.arg('aaguid'), sqlc.arg('sign_count'), sqlc.arg('backup_eligible'),
+        sqlc.arg('created_at_ms'), 0, 0)
+ON CONFLICT DO NOTHING;
+
+-- name: CreatePasskeyChallenge :execrows
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteExpiredPasskeyChallenges :execrows
+DELETE FROM passkey_challenges WHERE expires_at_ms <= $1;
+
+-- name: DeletePasskey :execrows
+DELETE FROM passkeys WHERE id = sqlc.arg('id') AND principal_id = sqlc.arg('principal_id');
+
+-- name: GetPasskey :one
+SELECT * FROM passkeys WHERE id = $1;
+
+-- name: GetPasskeyByCredentialID :one
+SELECT * FROM passkeys WHERE credential_id = $1;
+
+-- name: ListPasskeys :many
+SELECT * FROM passkeys WHERE principal_id = $1 ORDER BY created_at_ms, id COLLATE "C";
+
+-- name: RecordPasskeyUse :execrows
+-- The use of a passkey that is not suspended, when the new counter is above
+-- the stored counter or both are 0. A use that changes no row is a
+-- regression, a suspended passkey or no passkey. The update takes the lock of
+-- the row, so of two uses with one counter, one passes.
+UPDATE passkeys SET sign_count = sqlc.arg('sign_count'), last_used_at_ms = sqlc.arg('at_ms')
+WHERE id = sqlc.arg('id') AND suspended_at_ms = 0
+  AND (sign_count < sqlc.arg('sign_count') OR (sign_count = 0 AND sqlc.arg('sign_count')::bigint = 0));
+
+-- name: SuspendPasskey :execrows
+UPDATE passkeys SET suspended_at_ms = sqlc.arg('at_ms') WHERE id = sqlc.arg('id') AND suspended_at_ms = 0;
+
+-- name: TakePasskeyChallenge :one
+-- The delete of a challenge returns it, so that a challenge works once,
+-- also after its expiry: the caller checks the expiry.
+DELETE FROM passkey_challenges WHERE digest = $1 RETURNING *;
+
 -- name: EnsureNameLock :exec
 -- Makes the count of a name and a sub-key in a scope when it does not exist,
 -- so the locked read that follows finds a row.
@@ -5419,20 +5505,43 @@ UPDATE name_locks SET failures = 0, locked_until_ms = 0 WHERE scope = $1 AND nam
 SELECT sub, failures, locked_until_ms, level, last_failure_ms, last_lock_end_ms, reset_after_ms
 FROM name_locks WHERE scope = $1 AND name = $2 ORDER BY sub;
 
--- name: PruneNameLocks :execrows
+-- name: PruneEndedNameLocks :many
 -- Deletes at most max_rows counts whose last failure is at or before
--- before_ms, whose lock ended at now_ms, and whose level is 0 or past its
--- reset time. The select skips a row that a failure locks now, and the
--- delete checks the conditions again on the row that it deletes.
+-- before_ms, whose lock ended at now_ms and that no attempt saw (their
+-- locked_until_ms is not 0), and whose level is 0 or past its reset time. The
+-- select skips a row that a failure locks now, and the delete checks the
+-- conditions again on the row that it deletes. It returns the scope and the
+-- end of the lock of each deleted count.
 DELETE FROM name_locks
 WHERE (scope, name, sub) IN (
     SELECT p.scope, p.name, p.sub FROM name_locks p
-    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms <= sqlc.arg('now_ms')::bigint
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms <> 0
+      AND p.locked_until_ms <= sqlc.arg('now_ms')::bigint
       AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms')::bigint)
     LIMIT sqlc.arg('max_rows')::bigint
     FOR UPDATE SKIP LOCKED
 )
-  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <= sqlc.arg('now_ms')::bigint
+  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms <> 0
+  AND locked_until_ms <= sqlc.arg('now_ms')::bigint
+  AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint)
+RETURNING scope, locked_until_ms;
+
+-- name: PruneNameLocks :execrows
+-- Deletes at most max_rows counts with no lock (locked_until_ms is 0) whose
+-- last failure is at or before before_ms and whose level is 0 or past its
+-- reset time. A count whose lock ended and that no attempt saw goes through
+-- PruneEndedNameLocks, so the end of its lock has an entry. The select skips
+-- a row that a failure locks now, and the delete checks the conditions again
+-- on the row that it deletes.
+DELETE FROM name_locks
+WHERE (scope, name, sub) IN (
+    SELECT p.scope, p.name, p.sub FROM name_locks p
+    WHERE p.last_failure_ms <= sqlc.arg('before_ms')::bigint AND p.locked_until_ms = 0
+      AND (p.level = 0 OR p.last_lock_end_ms + p.reset_after_ms <= sqlc.arg('now_ms')::bigint)
+    LIMIT sqlc.arg('max_rows')::bigint
+    FOR UPDATE SKIP LOCKED
+)
+  AND last_failure_ms <= sqlc.arg('before_ms')::bigint AND locked_until_ms = 0
   AND (level = 0 OR last_lock_end_ms + reset_after_ms <= sqlc.arg('now_ms')::bigint);
 
 -- name: InsertNameLockKey :exec

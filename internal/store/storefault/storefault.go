@@ -732,6 +732,19 @@ func (s *Store) FinalizeStateVersion(
 	return s.inner.FinalizeStateVersion(ctx, sv, fence)
 }
 
+// FinalizeStateVersionExpecting finalizes as FinalizeStateVersion does and
+// also checks the current version, unless a fault fires first. The fault name
+// is the one of FinalizeStateVersion.
+func (s *Store) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	if err := s.before(ctx, "FinalizeStateVersion"); err != nil {
+		return err
+	}
+
+	return s.inner.FinalizeStateVersionExpecting(ctx, sv, fence, expect)
+}
+
 // FenceAndUnlock releases the lock and makes the fence version current,
 // unless a fault fires first.
 //

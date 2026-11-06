@@ -1,6 +1,6 @@
 # Backup, restore and upgrade
 
-This guide shows how to back up a whole installation, check the backup, restore it, and upgrade the server. It follows ADR 30, ADR 33, ADR 38, ADR 39 and ADR 42. The end-to-end suite ran each command in this guide on SQLite and on PostgreSQL.
+This guide shows how to back up a whole installation, check the backup, restore it, and upgrade the server. The end-to-end suite ran each command in this guide on SQLite and on PostgreSQL.
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
 
@@ -85,7 +85,7 @@ installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
-and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9).
+and a backup of PostgreSQL restores into SQLite.
 
 Run the restore command. It calls the server and waits until the restore
 leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from
@@ -114,18 +114,34 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-Before the restore changes data, it takes a backup of the live data, the backup before restore. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest, with the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). For damaged bytes, the entry also holds the size and the MD5 of the live bytes. The backup holds no copy of these blobs. Every other read error stops the backup and the restore. Sealed OpenTofu state that does not open is such an error, because a key or a key provider can cause it too. For each entry, the audit log holds an entry that names the key.
+The worker that runs a restore renews the claim of the restore while it works. During the swap on PostgreSQL, a renewal waits from the copy of the durable control tables to the end of the swap. That time grows with the size of the installation. On SQLite, a renewal waits for the whole swap. A renewal can fail, for example when the database does not answer. Then the worker stops the step and gives the claim back before the lease ends. The worker log then has a WARN entry `durable operation claim renewal failed`, with the operation ID, the kind `restore`, the attempt and the owner. When another worker took the claim, the entry is `durable operation claim lost; another instance can own the operation`. The restore keeps its state, for example `applying`, and `GET /api/server/restores/{id}` shows it. A worker then claims the restore again and runs the stopped step again from its start. The swap is one database transaction, so a stopped swap changes no data. Do not start the restore again.
+
+Before the restore changes data, it takes a backup of the live data, the backup before restore. The worker that runs the restore also runs this backup, under a claim that the start of the backup takes. Another worker continues this backup only when that claim ends or expires. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest. Each entry has the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). It also has the size and MD5 of the live row. The backup holds no copy of these blobs. Sealed OpenTofu state that does not open goes in the list too, with the reason `unopened`. Damaged bytes cause it, and so does a wrong key-encryption key. Every other read error stops the backup and the restore. When the backup finds missing or damaged blobs, the audit log holds one entry with the counts and the first keys.
+
+Blobs are write-once. A restore adds keys and never writes over a live blob. So the restore stops before it changes any live data in these cases:
+
+- The backup before restore found a live blob whose bytes do not match its record or do not open. The text names the count and the first keys. It says that the restore changed no live data. Check also that the server runs with the key-encryption key that wrote the data. Put the good bytes back at these keys from a copy of the blob store. A snapshot of the volume or of the bucket is such a copy. Then run `opendustpan restore` again.
+- The backup before restore found more live blobs missing than the bound allows. The bound is more than 10 blobs. It is also more than 20 percent of the blobs that the live data names, when more than 1 blob is missing. So one missing blob never stops a restore. A store with every blob missing stops it when the live data names more than 1 blob. When the live data names 1 blob and it is missing, the restore goes on and writes it. Many missing blobs point to a blob store setting that names another directory, bucket or prefix, not to lost blobs. The text names the count and the bound. Check the blob store setting of the server with `opendustpan store check --target blobs`, then run `opendustpan restore` again.
+
+`opendustpan restore` prints this text and the next step. It does not tell you to run the same restore again before you put the good bytes back or change the blob store setting.
+
+When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/server/restores/{id}`.
+
+Each of these stops has an error code in the restore answer (`errorCode`): `restore.live-blobs-damaged` or `restore.live-blobs-missing`. `opendustpan restore` chooses its next step from the code.
+
+A restore always takes a new backup before restore. A pre-backup ID can name a backup that exists, or a backup that another restore started. Then the restore stops before any live change with the code `restore.pre-backup-foreign`. Run the restore again.
+
+No setting changes the bound. The answers of `POST /api/server/restores` and `GET /api/server/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
 
 For each blob of the backup, the restore does one of these:
 
 - The key is absent from the blob store of the server: the restore writes the blob.
 - The key holds the bytes of the manifest: the blob stays as it is.
-- The key holds the damaged bytes that the backup before restore recorded: the restore replaces them with the bytes of the backup. It does this only when this restore took that backup and its manifest did not change after the restore read it. Before the replacement, the restore reads the live row again and checks that the live bytes still do not match it. It then copies the damaged bytes to `backups/<backup before restore>/damaged/<key>` in the backup target, and writes an audit entry, `replaced damaged live blob <key>: live bytes did not match their record, damaged bytes copied to <path>`. When one of these steps fails, the restore stops and the live key keeps its bytes.
 - The key holds other bytes: the restore stops and writes nothing over them. These bytes matched their live row, so they are live data that is newer or different. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. `--force` does not change this.
 
-A restore that wrote or replaced a missing or damaged blob succeeds with the warning `damaged-live-blobs`.
+A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/server/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
 
-A backup before restore that has a `damaged` list is not complete. `opendustpan backup check` reports it as corrupt, and a restore of it stops with the text `backup data is corrupt`.
+A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. Only a backup that a restore of this installation started can have this list. `opendustpan backup check` and a restore refuse any other backup with a `damaged` list as corrupt. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
 
 The restore does not rely on the conditional writes of the blob store. It reads the key again just before it writes. It also reads the staged copy of the blob and checks it against the manifest before it writes the live key. A staged copy that differs stops the restore, and the live key stays absent. Before each write of a blob, the restore checks that its worker still holds the claim on the restore.
 
@@ -213,7 +229,7 @@ The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
 the server instead.
 
-The command also refuses a backup with a schema version below 100, the
+The command also refuses a backup with a schema version below 168, the
 baseline schema version. The baseline migration replaced every migration
 before it, so no binary can restore such a backup. The error names the
 baseline.
@@ -249,14 +265,22 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/server/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
 
 Each cancel of a known restore writes an audit entry. A canceled restore
 leaves the live data unchanged, and leaves the maintenance mode that it
-entered. The server increments the failover version of every namespace after
+entered. The audit log of a restore that stopped before the swap holds an
+entry with the outcome `failure` and the text `canceled before the swap` (or
+`failed before the swap`, or `stopped before the swap` for a restore that
+ended with no end write). The text says that the live state, history and
+access tables did not change. The entry that the
+server writes when it accepts the start says `requested`, with the outcome
+`success`, because it records the accepted request only. A restore that fails
+after the swap writes an entry with the outcome `failure` and the text
+`failed after the swap`. The server increments the failover version of every namespace after
 a restore that stopped with no end, also after a cancel.
 
 ### Staging areas and temporary blobs
@@ -270,20 +294,19 @@ a temporary key under `restore-tmp/` in the live blob store.
 
 The last steps of a restore drop its staging areas and delete its temporary
 keys. A restore that fails drops them too. A restore that stopped with no end
-can leave them: the next restore drops them. If you take your own dump of a
+can leave them: the next restore drops them. A restore that you cancel counts
+as a restore that stopped with no end. A cancel in the check step can leave the
+PostgreSQL schemas `restore_stage_<id>_<n>` and `restore_stage_<id>_<n>_control`
+until the next restore drops them. If you take your own dump of a
 PostgreSQL database, leave out these schemas:
 
 ```sh
 pg_dump --exclude-schema='restore_*' "$DATABASE_URL"
 ```
 
-The restore deletes a live blob only when the backup before restore recorded
-its bytes as damaged, the key still holds those bytes, and a check against the
-live row shows the damage. It copies the damaged bytes to the backup target and
-writes the audit entry first, and then writes the bytes of the backup to the
-key. When a live
-blob has other bytes that differ from the backup, the restore stops and writes
-nothing over them. See [Restore a backup](#restore-a-backup).
+The restore never deletes a live blob and never writes over one. When a live
+blob is damaged, or has other bytes that differ from the backup, the restore
+stops and writes nothing over it. See [Restore a backup](#restore-a-backup).
 
 ### Blob keys that a restore refuses
 
@@ -441,7 +464,9 @@ The command prints the binary version, the schema version of the database and th
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 
-`serve` refuses a database that records a schema version below 100, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
+`serve` refuses a database that records a schema version below 168, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
+
+The database records the SHA-256 of each migration. Until the first tag, a change to the schema edits the baseline in place. A build with another version of the baseline refuses the database at start, and names both values. `serve` says to restore a backup of the same build, or to set `--database` to a new database. It never offers a reset. An untagged build has no upgrade path. The upgrade check cannot see an edit of the baseline, because the name of the file does not change. For a dev data directory, run `opendustpan dev reset`, as the [dev server guide](dev-server.md#start-again-after-a-schema-change) shows.
 
 ### Minimum binary version
 

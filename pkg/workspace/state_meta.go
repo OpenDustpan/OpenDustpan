@@ -122,7 +122,7 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 const topLevelKeyCount = 4
 
 func topLevelKeys() [topLevelKeyCount]string {
-	return [topLevelKeyCount]string{"serial", "lineage", "outputs", encryptedStateKey}
+	return [topLevelKeyCount]string{stateKeySerial, stateKeyLineage, "outputs", encryptedStateKey}
 }
 
 // checkTopLevelKey refuses a key that folds to one of topLevelKeys without being

@@ -10,6 +10,7 @@ Changed by:
 - ADR 224 changes: the policy check on every change.
 - ADR 266 extends: the saved view API.
 - ADR 305 extends: the operator uses only the REST API.
+- ADR 326 extends: one route test reads the routes of the built server and holds one public list for the whole server.
 
 ## Context
 

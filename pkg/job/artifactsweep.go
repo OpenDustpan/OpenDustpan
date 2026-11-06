@@ -126,6 +126,10 @@ type ArtifactSweepResult struct {
 	// Truncated is true when the run deleted more than MaxSweptKeys blobs, so
 	// DeletedKeys does not list all of them.
 	Truncated bool `json:"truncated"`
+	// Capped is true when a pass of the run read maxArtifactSweepPages pages
+	// of jobs and more jobs were left. The next run starts again from the
+	// newest jobs, so the jobs after the cap wait for a later run.
+	Capped bool `json:"capped"`
 }
 
 // add counts one more deleted key, and lists it while the list has room.
@@ -229,7 +233,7 @@ const heldReason = "a backup or a restore runs, or the read of the backups regis
 func (s *ArtifactSweeper) Sweep(ctx context.Context) (ArtifactSweepResult, error) {
 	res := ArtifactSweepResult{
 		Skipped: "", DeletedKeys: []string{}, Jobs: 0, Deleted: 0, Unknown: 0, Failed: 0, Held: false,
-		Truncated: false,
+		Truncated: false, Capped: false,
 	}
 
 	at := s.now()
@@ -325,12 +329,29 @@ func (s *ArtifactSweeper) sweepOne(ctx context.Context, j *Job, now time.Time, r
 // pages of them.
 func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter, res *ArtifactSweepResult) error {
 	for range maxArtifactSweepPages {
-		jobs, err := s.jobs.List(ctx, f)
+		// The query reads one row more than a page. That row tells whether a
+		// job is left after this page, so no second query is needed.
+		read := f
+		read.Limit = f.Limit + 1
+
+		jobs, err := s.jobs.List(ctx, read)
 		if err != nil {
 			return fmt.Errorf("list jobs: %w", err)
 		}
 
+		more := len(jobs) > f.Limit
+
+		// last is the ID of the last job of this page: the next page starts
+		// after it.
+		var last ID
+
 		for i := range jobs {
+			if i == f.Limit {
+				break
+			}
+
+			last = jobs[i].ID
+
 			var one ArtifactSweepResult
 
 			sweepErr := s.sweepOne(ctx, &jobs[i], now, &one)
@@ -349,12 +370,16 @@ func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter
 			}
 		}
 
-		if len(jobs) < f.Limit {
+		if !more {
 			return nil
 		}
 
-		f.After = jobs[len(jobs)-1].ID
+		f.After = last
 	}
+
+	// The pass stopped at the page cap and the last read held a row after the
+	// page, so the result reports that jobs are left.
+	res.Capped = true
 
 	return nil
 }
@@ -493,6 +518,10 @@ func (s *ArtifactSweeper) record(ctx context.Context, at time.Time, res *Artifac
 		ArtifactSweepReason, res.Jobs, res.Deleted, res.Unknown, res.Failed)
 	if res.Skipped != "" {
 		reason = "deleted nothing: " + res.Skipped
+	}
+
+	if res.Skipped == "" && res.Capped {
+		reason += ", capped at the page limit"
 	}
 
 	if len([]rune(reason)) > audit.MaxReasonLen {

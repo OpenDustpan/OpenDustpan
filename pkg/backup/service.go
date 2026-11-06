@@ -85,8 +85,10 @@ type Manifest struct {
 	// omits it.
 	Unverified []string `json:"unverified,omitempty"`
 	// Damaged holds the live blobs that a backup before a restore found
-	// missing or damaged, ordered by key. The backup holds no copy of them,
-	// so a restore of this backup refuses. The key is optional: a backup
+	// missing or damaged, ordered by key, with the reference of the live row
+	// of each. The backup holds no copy of them. A restore of this backup
+	// leaves those keys as they are, so it brings back the state from before
+	// the restore, and its answer names them. The key is optional: a backup
 	// with no such blob omits it. Only a backup before a restore records
 	// damage; every other backup fails at the first damaged blob.
 	Damaged []DamagedBlob `json:"damaged,omitempty"`
@@ -293,31 +295,15 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 // the ID.
 func (s *Service) Await(ctx context.Context, id ID) (Record, error) {
 	for {
-		// An operation that ended with no finish write (a step that
-		// panicked, too many holders) leaves its row running. When no worker
-		// runs, nothing else marks it failed, so the loop does it before it
-		// reads the row.
-		if _, err := s.registry.FailEndedBackups(ctx, s.now().UTC()); err != nil {
-			if ctx.Err() != nil {
-				return Record{}, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
-			}
-
-			return Record{}, fmt.Errorf("fail ended backups while backup %s runs: %w", id, err)
+		row, ended, err := s.readEnd(ctx, id)
+		if ended || err != nil {
+			return row, err
 		}
 
-		row, err := s.registry.GetBackup(ctx, id)
-		if err != nil {
-			return Record{}, fmt.Errorf("read backup %s: %w", id, err)
-		}
-
-		switch row.State {
-		case StateSucceeded:
-			return row, nil
-		case StateFailed:
-			return Record{}, fmt.Errorf("%w: %s", ErrFailed, row.Error)
-		case StateRunning:
-		default:
-			return Record{}, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
+		// A caller that stopped claims nothing: a claim would only end in a
+		// release.
+		if err := ctx.Err(); err != nil {
+			return Record{}, fmt.Errorf("wait for backup %s: %w", id, err)
 		}
 
 		runErr := s.runner.RunOnce(ctx)
@@ -364,18 +350,56 @@ func (s *Service) Start(ctx context.Context, id ID) error {
 // StartBeforeRestore starts backup id as Start does, for the backup of the
 // live data before a restore. This backup does not stop at a live blob that
 // is missing or that does not match its own live row: it records the blob in
-// the Damaged list of its manifest and goes on, so the restore can repair it.
-// Every other read error still stops the backup.
+// the Damaged list of its manifest and goes on, so that the restore can name
+// every such blob before it changes live data, and so that this backup can
+// still undo the restore. Every other read error still stops the backup.
 //
-// The operation input names restore, so a takeover of the restore can tell the
-// backup that it started from a backup that another restore started. See
-// StartedForRestore.
+// The operation input names restore, so the record of the operation tells
+// which restore started the backup. See StartedForRestore.
 func (s *Service) StartBeforeRestore(ctx context.Context, id ID, restore RestoreID) error {
 	if _, err := ParseRestoreID(restore.String()); err != nil {
 		return fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	return s.begin(ctx, id, recordDamage, restore)
+}
+
+// RunBeforeRestore starts backup id for restore as StartBeforeRestore does,
+// and runs it on the goroutine of the caller. The start claims the operation
+// for the runner of this service in its own transaction, so no worker can
+// take it while the caller runs it: the backup before a restore always runs
+// on the restore that starts it. When the caller stops before the end, the
+// claim ends or expires, and a worker or a later Await continues the backup.
+// The result lands in the registry row, where Await reads it. It returns
+// ErrAlreadyExists when the ID is taken, and then runs nothing.
+func (s *Service) RunBeforeRestore(ctx context.Context, id ID, restore RestoreID) error {
+	if _, err := ParseRestoreID(restore.String()); err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	// The local deadline of the claim counts from before the start, so it
+	// ends before the expiry that the store sets.
+	claimedAt := time.Now()
+
+	create, start, err := s.request(ctx, id, recordDamage, restore)
+	if err != nil {
+		return err
+	}
+
+	op, err := s.registry.StartBackupClaimed(ctx, create, start, s.runner.StartClaim())
+	if err != nil {
+		return fmt.Errorf("create backup %s: %w", id, err)
+	}
+
+	// The outcome of the operation is in the store. A claim that the runner
+	// lost, or a stop of ctx, leaves the operation to the next claimer, and
+	// Await reads the row.
+	if runErr := s.runner.RunClaimed(ctx, op, claimedAt); runErr != nil && ctx.Err() == nil {
+		s.logger.WarnContext(ctx, "the backup before a restore did not run to its end on the restore",
+			slog.String("backup", id.String()), slog.String("error", durable.ErrorClass(runErr)))
+	}
+
+	return nil
 }
 
 // Work claims and runs backup operations until ctx ends, and marks failed
@@ -460,6 +484,15 @@ func (s *Service) Check(ctx context.Context, id ID) error {
 		return fmt.Errorf("check backup %s: %w", id, err)
 	}
 
+	manifest, err := readManifest(ctx, s.target, id)
+	if err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	if err := checkDamagedOrigin(ctx, s, manifest); err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
 	return nil
 }
 
@@ -499,7 +532,7 @@ func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
 }
 
 // StartedForRestore returns the restore that started backup id with
-// StartBeforeRestore, as the input of its durable operation names it. It
+// StartBeforeRestore or RunBeforeRestore, as the input of its durable operation names it. It
 // returns an empty ID when no operation of backup id exists, when the input
 // names no restore, or when the input does not decode or names an ID that is
 // not valid: the caller then treats the backup as one that it did not start.
@@ -518,6 +551,41 @@ func (s *Service) StartedForRestore(ctx context.Context, id ID) (RestoreID, erro
 	}
 
 	return "", nil
+}
+
+// readEnd reads the row of backup id for Await. ended is true, with the
+// result of Await, when the backup ended or the row cannot be read. It is
+// false while the backup runs.
+func (s *Service) readEnd(ctx context.Context, id ID) (Record, bool, error) {
+	// An operation that ended with no finish write (a step that panicked,
+	// too many holders) leaves its row running. When no worker runs,
+	// nothing else marks it failed, so the wait does it before it reads the
+	// row.
+	if _, err := s.registry.FailEndedBackups(ctx, s.now().UTC()); err != nil {
+		if ctx.Err() != nil {
+			return Record{}, true, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
+		}
+
+		return Record{}, true, fmt.Errorf("fail ended backups while backup %s runs: %w", id, err)
+	}
+
+	row, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return Record{}, true, fmt.Errorf("read backup %s: %w", id, err)
+	}
+
+	switch row.State {
+	case StateSucceeded:
+		return row, true, nil
+	case StateFailed:
+		return Record{}, true, fmt.Errorf("%w: %s", ErrFailed, row.Error)
+	case StateRunning:
+		var running Record
+
+		return running, false, nil
+	default:
+		return Record{}, true, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
+	}
 }
 
 // restoreOfInput returns the restore that the operation input raw of backup id
@@ -542,13 +610,35 @@ func restoreOfInput(raw []byte, id ID) RestoreID {
 // begin stores id as a running row and starts its durable operation. See
 // Start and StartBeforeRestore.
 func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore RestoreID) error {
+	create, start, err := s.request(ctx, id, policy, restore)
+	if err != nil {
+		return err
+	}
+
+	if err := s.registry.StartBackup(ctx, create, start); err != nil {
+		return fmt.Errorf("create backup %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// request returns the running row and the operation start of backup id,
+// with policy and the restore that starts it, if any.
+func (s *Service) request(
+	ctx context.Context, id ID, policy damagePolicy, restore RestoreID,
+) (Record, durable.StartRequest, error) {
+	var (
+		none      Record
+		noneStart durable.StartRequest
+	)
+
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	id, err := ParseID(id.String())
 	if err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	startedAt := s.now().UTC()
@@ -557,12 +647,12 @@ func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore
 		ID: id, StartedAt: startedAt, RecordDamaged: policy == recordDamage, Restore: restore,
 	})
 	if err != nil {
-		return fmt.Errorf("encode input of backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("encode input of backup %s: %w", id, err)
 	}
 
 	start, err := s.runner.StartRequest(OperationKind, OperationKey(id), input)
 	if err != nil {
-		return fmt.Errorf("begin backup %s: %w", id, err)
+		return none, noneStart, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	create := Record{
@@ -574,11 +664,7 @@ func (s *Service) begin(ctx context.Context, id ID, policy damagePolicy, restore
 		State:     StateRunning,
 	}
 
-	if err := s.registry.StartBackup(ctx, create, start); err != nil {
-		return fmt.Errorf("create backup %s: %w", id, err)
-	}
-
-	return nil
+	return create, start, nil
 }
 
 // newRunner builds the runner that claims and runs the backup operations.
@@ -1208,7 +1294,7 @@ func (s *Service) copyPlainBlob(
 	copied, err := s.streamCopy(ctx, dest, source, ref)
 	if err != nil {
 		if sourceMissing(err) {
-			return ManifestBlob{}, missingDamage(ref.Key, err)
+			return ManifestBlob{}, missingDamage(ref, err)
 		}
 
 		return ManifestBlob{}, err
@@ -1216,7 +1302,7 @@ func (s *Service) copyPlainBlob(
 
 	if copied.size != ref.Size || !bytes.Equal(copied.sum, ref.MD5[:]) {
 		corrupt := corruptBlobError(ref.Key, copied.size, copied.sum, ref)
-		damage := mismatchDamage(ref.Key, plainDamageReason(copied.size, ref), copied.size, copied.sum, corrupt)
+		damage := mismatchDamage(ref, plainDamageReason(copied.size, ref), corrupt)
 
 		if copied.kept {
 			return ManifestBlob{}, damage
@@ -1262,13 +1348,13 @@ func (s *Service) copySealedBlob(
 
 	size, sum, err := s.hashPlainCopy(ctx, source, ref)
 	if err != nil {
-		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, err)
+		return ManifestBlob{}, sealedDamage(ref, err)
 	}
 
 	if size != ref.Size || !bytes.Equal(sum, ref.MD5[:]) {
 		mismatch := fmt.Errorf("%w: %w", ErrLiveBlobDamaged, corruptBlobError(ref.Key, size, sum, ref))
 
-		return ManifestBlob{}, s.sealedDamage(ctx, source, ref, mismatch)
+		return ManifestBlob{}, sealedDamage(ref, mismatch)
 	}
 
 	copied, err := s.streamCopy(ctx, dest, source, ref)
@@ -1287,29 +1373,21 @@ func (s *Service) copySealedBlob(
 // sealedDamage classifies the error of the check of one sealed blob. A
 // missing live object is missing damage. Plain bytes that opened and do not
 // match the size or the MD5 of the row are damaged: the error wraps
-// ErrLiveBlobDamaged, and the entry names the size and the MD5 of the stored
-// sealed bytes, read again here. Any other error, for example sealed bytes
-// that do not open or a row that cannot be read, returns as it is: the code
-// cannot tell damage from it, so the backup stops.
-func (s *Service) sealedDamage(ctx context.Context, source blob.Key, ref BlobRef, cause error) error {
-	if sourceMissing(cause) {
-		return missingDamage(ref.Key, cause)
-	}
-
-	if !errors.Is(cause, ErrLiveBlobDamaged) {
+// ErrLiveBlobDamaged. Sealed bytes that do not open are damaged with the
+// reason unopened: the error wraps ErrLiveBlobUnopened. A restore stops at
+// both and writes over neither. Any other error, for example a row that
+// cannot be read, returns as it is, so the backup stops.
+func sealedDamage(ref BlobRef, cause error) error {
+	switch {
+	case sourceMissing(cause):
+		return missingDamage(ref, cause)
+	case errors.Is(cause, ErrLiveBlobDamaged):
+		return mismatchDamage(ref, ReasonSealed, cause)
+	case errors.Is(cause, ErrLiveBlobUnopened):
+		return mismatchDamage(ref, ReasonUnopened, cause)
+	default:
 		return cause
 	}
-
-	size, sum, err := s.hashStoredBlob(ctx, source, ref)
-	if err != nil {
-		if sourceMissing(err) {
-			return missingDamage(ref.Key, errors.Join(cause, err))
-		}
-
-		return errors.Join(cause, err)
-	}
-
-	return mismatchDamage(ref.Key, ReasonSealed, size, sum, cause)
 }
 
 // copyResult holds the size and MD5 of one streamed blob copy. Kept reports
@@ -1542,10 +1620,6 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 		return err
 	}
 
-	if err := refuseDamagedBackup(manifest); err != nil {
-		return err
-	}
-
 	for _, file := range manifest.SQLFiles {
 		key, err := blob.ParseKey("backups/" + id.String() + "/" + file.Path)
 		if err != nil {
@@ -1653,6 +1727,10 @@ func parseManifest(id ID, data []byte) (Manifest, error) {
 	}
 
 	if err := validDamaged(manifest.Damaged); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+	}
+
+	if err := damagedOnce(manifest); err != nil {
 		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
 	}
 

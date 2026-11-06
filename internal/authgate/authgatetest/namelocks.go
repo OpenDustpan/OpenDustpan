@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // NameLockHarness opens handles on one store that counts the failures of
@@ -22,6 +23,9 @@ type NameLockHarness struct {
 	// Entries returns the audit entries of the installation that the store
 	// of the harness holds, in the order of the append.
 	Entries func(t *testing.T) []audit.Entry
+	// Notices returns the notifications of the server scope that the store
+	// of the harness holds, in the order of the append.
+	Notices func(t *testing.T) []notify.Notification
 }
 
 // NameLockFactory returns a fresh harness on an empty store for one subtest.
@@ -63,6 +67,12 @@ type nameCase struct {
 
 // nameCases returns the cases of the suite, in the order of the run.
 func nameCases() []nameCase {
+	return slices.Concat(countCases(), recordCases())
+}
+
+// countCases returns the cases of the counts, the locks, the clear and the
+// prune.
+func countCases() []nameCase {
 	return []nameCase{
 		{name: "a first failure counts 1 and sets no lock", test: testFirstFailure},
 		{name: "the failure that reaches the limit passes and sets the lock", test: testReachLimit},
@@ -129,6 +139,56 @@ func nameCases() []nameCase {
 	}
 }
 
+// recordCases returns the cases of the records that an add writes.
+func recordCases() []nameCase {
+	return []nameCase{
+		{
+			name: "the add that sets a lock appends the entry and the alert of the lock in its transaction",
+			test: testLockRecords,
+		},
+		{name: "an add that sets no lock, or that finds a lock, appends no record", test: testNoRecord},
+		{
+			name: "the first add after a lock ended appends the entry of the end, and the next add appends none",
+			test: testEndRecord,
+		},
+		{
+			name: "an entry of a lock that cannot be appended fails the add and changes nothing",
+			test: testLockRecordFails,
+		},
+		{
+			name: "events that miss an action or a type fail with ErrInvalidLock and change nothing",
+			test: testEventsInvalid,
+		},
+		{
+			name: "one name gets at most one alert of a lock by source prefix in one hour, and one at once for " +
+				"each lock of the name from every source",
+			test: testAlertBound,
+		},
+		{
+			name: "a prune writes one entry for each lock that ended with no add to see it, and counts them in " +
+				"its entry",
+			test: testPruneEndedLocks,
+		},
+		{
+			name: "a prune deletes no more counts with an ended lock than its limit, so each one has its entry",
+			test: testPruneEndedBound,
+		},
+		{
+			name: "a prune with an ended limit above its limit fails with ErrInvalidLock and deletes nothing, so a " +
+				"run never deletes more counts than its limit",
+			test: testPruneEndedAboveLimit,
+		},
+		{
+			name: "an alert that cannot be appended fails the add and changes nothing",
+			test: testAlertAppendFails,
+		},
+		{
+			name: "an entry of the end of a lock that cannot be appended fails the add and changes nothing",
+			test: testEndRecordFails,
+		},
+	}
+}
+
 // NameLockCaseNames returns the names of the cases of the suite of
 // authgate.NameLockCounter, in the order of the run.
 func NameLockCaseNames() []string {
@@ -185,7 +245,7 @@ func key(scope, name, sub string) countKey {
 func add(t *testing.T, c authgate.NameLockCounter, k countKey, r authgate.LockRule, want error) authgate.NameLock {
 	t.Helper()
 
-	got, err := c.AddNameFailure(t.Context(), k.scope, k.name, k.sub, r)
+	got, err := c.AddNameFailure(t.Context(), failure(k, r))
 	if !errors.Is(err, want) || (want == nil && err != nil) {
 		t.Fatalf("add %s/%s/%s = %v, want %v", k.scope, k.name, k.sub, err, want)
 	}
@@ -399,7 +459,7 @@ func testClearName(t *testing.T, h NameLockHarness) {
 	add(t, c, key(authgate.ScopePasswordName, "n1", ""), rule(1, longLock), nil)
 	add(t, c, key(authgate.ScopePassword, "n2", "a"), rule(1, longLock), nil)
 
-	before := len(h.Entries(t))
+	before := count(actions(h.Entries(t)), clearAction)
 
 	n, err := c.ClearName(t.Context(), clearScopes(), "n1", clearEntry())
 	if err != nil || n != limitThree+1 {
@@ -414,8 +474,8 @@ func testClearName(t *testing.T, h NameLockHarness) {
 	add(t, c, key(authgate.ScopePassword, "n2", "a"), rule(1, longLock), authgate.ErrNameLocked)
 
 	entries := h.Entries(t)
-	if len(entries) != before+1 {
-		t.Fatalf("entries after a clear = %d, want %d", len(entries), before+1)
+	if got := count(actions(entries), clearAction); got != before+1 {
+		t.Fatalf("entries of the clear after a clear = %d, want %d", got, before+1)
 	}
 
 	var cleared []string
@@ -466,7 +526,7 @@ func testClearNameBadEntry(t *testing.T, h NameLockHarness) {
 	before := len(h.Entries(t))
 
 	bad := clearEntry()
-	bad.Namespace = "acme"
+	bad.Namespace = otherScope
 
 	if _, err := c.ClearName(t.Context(), clearScopes(), "n1", bad); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("clear with an entry of a namespace = %v, want audit.ErrInvalidEntry", err)
@@ -571,7 +631,10 @@ func testConcurrent(t *testing.T, h NameLockHarness) {
 
 	for range concurrentAdds {
 		wg.Go(func() {
-			_, err := c.AddNameFailure(t.Context(), authgate.ScopePassword, "n1", "s", rule(limit, longLock))
+			_, err := c.AddNameFailure(
+				t.Context(),
+				failure(key(authgate.ScopePassword, "n1", "s"), rule(limit, longLock)),
+			)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -630,7 +693,13 @@ func testPrune(t *testing.T, h NameLockHarness) {
 
 	before := len(h.Entries(t))
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
+	n, err := c.PruneNameLocks(
+		t.Context(),
+		shortLock,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1", n, err)
 	}
@@ -676,12 +745,18 @@ func testPruneBound(t *testing.T, h NameLockHarness) {
 
 	pause(t, doubleLock)
 
-	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, pruneEntry())
+	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, limitTwo, pruneEntry())
 	if err != nil || n != limitTwo {
 		t.Fatalf("prune with a limit of 2 = %d, %v; want 2", n, err)
 	}
 
-	n, err = c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, pruneEntry())
+	n, err = c.PruneNameLocks(
+		t.Context(),
+		shortLock,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
 	if err != nil || n != pruneRows-limitTwo {
 		t.Fatalf("second prune = %d, %v; want %d", n, err, pruneRows-limitTwo)
 	}
@@ -708,16 +783,21 @@ func testPruneInvalid(t *testing.T, h NameLockHarness) {
 		name  string
 		age   time.Duration
 		limit int
+		ended int
 	}{
-		{name: "an age of 0", age: 0, limit: 1},
-		{name: "a negative age", age: -longLock, limit: 1},
-		{name: "a limit of 0", age: shortLock, limit: 0},
-		{name: "a negative limit", age: shortLock, limit: -1},
-		{name: "a limit above the maximum", age: shortLock, limit: authgate.MaxNamePruneRows + 1},
+		{name: "an age of 0", age: 0, limit: 1, ended: 1},
+		{name: "a negative age", age: -longLock, limit: 1, ended: 1},
+		{name: "a limit of 0", age: shortLock, limit: 0, ended: 1},
+		{name: "a negative limit", age: shortLock, limit: -1, ended: 1},
+		{name: "a limit above the maximum", age: shortLock, limit: authgate.MaxNamePruneRows + 1, ended: 1},
+		{name: "an ended limit of 0", age: shortLock, limit: 1, ended: 0},
+		{name: "a negative ended limit", age: shortLock, limit: 1, ended: -1},
+		{name: "an ended limit above the maximum", age: shortLock, limit: 1, ended: authgate.MaxNamePruneEnded + 1},
+		{name: "an ended limit above the limit", age: shortLock, limit: 1, ended: limitTwo},
 	}
 
 	for _, tc := range cases {
-		if _, err := c.PruneNameLocks(t.Context(), tc.age, tc.limit, pruneEntry()); !errors.Is(
+		if _, err := c.PruneNameLocks(t.Context(), tc.age, tc.limit, tc.ended, pruneEntry()); !errors.Is(
 			err, authgate.ErrInvalidLock,
 		) {
 			t.Fatalf("%s: prune = %v, want ErrInvalidLock", tc.name, err)
@@ -745,9 +825,9 @@ func testPruneBadEntry(t *testing.T, h NameLockHarness) {
 	before := len(h.Entries(t))
 
 	bad := pruneEntry()
-	bad.Namespace = "acme"
+	bad.Namespace = otherScope
 
-	if _, err := c.PruneNameLocks(t.Context(), shortLock, 1, bad); !errors.Is(err, audit.ErrInvalidEntry) {
+	if _, err := c.PruneNameLocks(t.Context(), shortLock, 1, 1, bad); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("prune with an entry of a namespace = %v, want audit.ErrInvalidEntry", err)
 	}
 
@@ -767,7 +847,7 @@ const pruneAction = "sign-in.name-locks-pruned"
 // pruneEntry returns a valid entry of the installation for a prune.
 func pruneEntry() audit.Entry {
 	e := clearEntry()
-	e.Subject, e.Action, e.Object, e.SourceIP, e.UserAgent = "server", pruneAction, "name-locks", "", ""
+	e.Subject, e.Action, e.Object, e.SourceIP, e.UserAgent = serverSubject, pruneAction, "name-locks", "", ""
 	e.Channel, e.PrincipalKind, e.Reason = audit.ChannelAPI, audit.PrincipalKindService, "counts past their age"
 
 	return e
@@ -796,7 +876,8 @@ func prunedCounts(entries []audit.Entry) []string {
 func testBroken(t *testing.T, h NameLockHarness) {
 	t.Helper()
 
-	_, err := h.Broken(t).AddNameFailure(t.Context(), authgate.ScopePassword, "n1", "s", rule(1, longLock))
+	_, err := h.Broken(t).
+		AddNameFailure(t.Context(), failure(key(authgate.ScopePassword, "n1", "s"), rule(1, longLock)))
 	if err == nil || errors.Is(err, authgate.ErrNameLocked) {
 		t.Fatalf("add on a broken store = %v, want an error that is not ErrNameLocked", err)
 	}
@@ -843,7 +924,7 @@ func testInvalid(t *testing.T, h NameLockHarness) {
 		tc := &cases[i]
 		sub := tc.sub + strconv.Itoa(i)
 
-		_, err := c.AddNameFailure(t.Context(), tc.scope, tc.key, sub, tc.r)
+		_, err := c.AddNameFailure(t.Context(), failure(key(tc.scope, tc.key, sub), tc.r))
 		if !errors.Is(err, authgate.ErrInvalidLock) {
 			t.Fatalf("%s: add = %v, want ErrInvalidLock", tc.name, err)
 		}

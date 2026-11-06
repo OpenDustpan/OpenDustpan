@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // mustUnit returns the scope of a unit of acme, or fails the test.
@@ -221,5 +222,69 @@ func TestScopeAccessorsWideLevels(t *testing.T) {
 	var zero gate.Scope
 	if !zero.IsZero() || zero.Key() != "" {
 		t.Fatalf("zero scope: key %q", zero.Key())
+	}
+}
+
+func TestScopeWithUnitID(t *testing.T) {
+	t.Parallel()
+
+	unit, err := gate.UnitScope("acme", "opentofu", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		scope gate.Scope
+		id    string
+		want  error
+	}{
+		{"a stack ID", unit, "stk-01HZX2", nil},
+		{"a workspace ID with an underscore", unit, "ws-a_b", nil},
+		{"an empty ID", unit, "", gate.ErrInvalid},
+		{"an ID with a slash", unit, "ws/../x", gate.ErrInvalid},
+		{"an ID with a quote", unit, "ws-'x", gate.ErrInvalid},
+		{"an ID of 129 bytes", unit, strings.Repeat("a", 129), gate.ErrInvalid},
+		{"a namespace scope", gate.NamespaceScope("acme"), "ws-x", gate.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tt.scope.WithUnitID(tt.id)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("WithUnitID(%q) = %v, want %v", tt.id, err, tt.want)
+			}
+
+			if err == nil && (got.UnitID() != tt.id || got.Key() != tt.scope.Key()) {
+				t.Fatalf("WithUnitID(%q) = %s with ID %q, want the same key with the ID", tt.id, got, got.UnitID())
+			}
+		})
+	}
+}
+
+func TestUnitChainCarriesTheUnitID(t *testing.T) {
+	t.Parallel()
+
+	obj, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"", "ws-1"} {
+		chain, cerr := gate.UnitChain(obj.WithUnitID(id), "")
+		if cerr != nil {
+			t.Fatalf("UnitChain(%q) = %v", id, cerr)
+		}
+
+		u := chain[len(chain)-1]
+		if u.UnitID() != id || u.Key() != "unit/acme/opentofu/web" {
+			t.Fatalf("UnitChain(%q) unit scope = %s with ID %q", id, u, u.UnitID())
+		}
+	}
+
+	if _, err = gate.UnitChain(obj.WithUnitID("ws/1"), ""); !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("UnitChain(bad ID) = %v, want ErrInvalid", err)
 	}
 }

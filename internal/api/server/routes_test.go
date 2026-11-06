@@ -18,6 +18,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/oauth"
@@ -87,6 +88,8 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/passkey/begin",
+		"POST /api/dustpan/v1/sign-in/passkey/finish",
 		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
@@ -311,6 +314,8 @@ func newServiceBackedHandlerOf(
 		t.Fatalf("session policy service: %v", err)
 	}
 
+	routePrincipals := seedRoutePrincipals(t, st)
+
 	sessions, err := session.NewSessions(
 		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
@@ -326,6 +331,7 @@ func newServiceBackedHandlerOf(
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -339,7 +345,7 @@ func newServiceBackedHandlerOf(
 		Version:          "test",
 		Schema:           st,
 		Journal:          st,
-		Principals:       seedRoutePrincipals(t, st),
+		Principals:       routePrincipals,
 		Tokens:           seedRouteTokens(t, st),
 		Access:           seedRouteAccess(t, st),
 		Audit:            st,
@@ -351,17 +357,18 @@ func newServiceBackedHandlerOf(
 		Gates:            nil,
 		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, st, sessions, routePrincipals),
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
-					Client:      stubOIDC{},
+					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),
 					ID:          testProvider,
 					DisplayName: "Corp",
 					AutoCreate:  true,
 					Stored:      false,
-					Source:      principal.SourceOIDC,
 				},
 			},
 			DevCode:  devCode,
@@ -1615,6 +1622,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1712,6 +1720,14 @@ func (stubBackupRegistry) StartBackup(_ context.Context, _ backup.Record, _ dura
 	return nil
 }
 
+func (stubBackupRegistry) StartBackupClaimed(
+	_ context.Context, _ backup.Record, _ durable.StartRequest, _ durable.StartClaim,
+) (durable.Operation, error) {
+	var none durable.Operation
+
+	return none, nil
+}
+
 func (stubBackupRegistry) FailEndedBackups(_ context.Context, _ time.Time) (int, error) {
 	return 0, nil
 }
@@ -1779,6 +1795,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1825,6 +1842,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1965,6 +1983,7 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 	seedRouteLocalUser(t, st)
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:        nil,
 		Store:      st,
 		Principals: principals,
 		Hasher:     hasher,

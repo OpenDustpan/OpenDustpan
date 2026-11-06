@@ -14,6 +14,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -154,6 +155,7 @@ func newRestoreFixtureWorkers(
 		Idempotency:      nil,
 		Workers:          workers,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -623,6 +625,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -839,6 +842,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -902,11 +906,11 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables will be replaced"},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables kept",
+			want: "access tables will be kept",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -982,6 +986,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,
@@ -1116,6 +1121,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,

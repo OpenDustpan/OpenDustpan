@@ -3,10 +3,12 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"time"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -14,24 +16,27 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // serverExtras holds the parts of the installation API that newServerHandler
 // builds after the principals: the IP allowlists, the audit store of the
-// installation, the settings service and the local user service.
+// installation, the settings service, the local user service and the
+// passkey service. passkeys is nil when the server keeps no passkeys.
 type serverExtras struct {
 	allow      *ipallow.Service
 	audit      audit.ServerStore
 	settings   *setting.Service
 	localUsers *localusersvc.Service
+	passkeys   *mfasvc.Service
 }
 
 // newServerExtras builds the serverExtras of cfg.
 func newServerExtras(cfg *settings, deps installationDeps, principals *principal.Service) (serverExtras, error) {
-	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil}
+	none := serverExtras{allow: nil, audit: nil, settings: nil, localUsers: nil, passkeys: nil}
 
-	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	allow, err := newIPAllowlistService(cfg.ipAllowlists, deps.services.namespaces, cfg.now)
 	if err != nil {
 		return none, err
 	}
@@ -43,12 +48,48 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 
 	settingsSvc := newSettingService(cfg, cfg.namespaceStore)
 
+	if deps.signIn != nil && settingsSvc != nil {
+		deps.signIn.Sessions.SetBreakGlassLimit(breakGlassLimitOf(settingsSvc))
+	}
+
 	localUsers, err := newLocalUserService(cfg, principals, settingsSvc, deps.signIn)
 	if err != nil {
 		return none, err
 	}
 
-	return serverExtras{allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service}, nil
+	if deps.signIn != nil {
+		deps.signIn.Service, err = newSignInService(signInServiceInputs{
+			principals: principals, store: cfg.namespaceStore, sessions: deps.signIn.Sessions, audit: serverAudit,
+			logger: cfg.logger, onAuditFailure: deps.observed.IncAuditAppendFailure,
+		})
+		if err != nil {
+			return none, err
+		}
+	}
+
+	passkeys, err := newPasskeyService(cfg.namespaceStore, cfg.publicURL, serverAudit, cfg.now, cfg.logger)
+	if err != nil {
+		return none, err
+	}
+
+	return serverExtras{
+		allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service,
+		passkeys: passkeys.service,
+	}, nil
+}
+
+// breakGlassLimitOf returns the reader of the limit of a break-glass session
+// from the settings service: the effective value of the setting, whatever
+// layer holds it. A reader that fails makes the sessions use the default.
+func breakGlassLimitOf(settingsSvc *setting.Service) session.BreakGlassLimit {
+	return func(ctx context.Context) (time.Duration, error) {
+		item, err := settingsSvc.Effective(ctx, setting.InstallationScope(), session.SettingBreakGlassMaxLength)
+		if err != nil {
+			return 0, fmt.Errorf("read the break-glass session limit: %w", err)
+		}
+
+		return session.ParseBreakGlassMaxLength(item.Value)
+	}
 }
 
 // localUserWiring holds the service of the local users. The service is nil
@@ -127,6 +168,7 @@ func newLocalUserService(
 		SSO:        identityProviders(cfg, signIn), Reach: reach, Subjects: subjects,
 		Kind: cfg.installationKind,
 		Now:  cfg.now,
+		Log:  cfg.logger,
 	})
 	if err != nil {
 		return none, fmt.Errorf("local users: %w", err)

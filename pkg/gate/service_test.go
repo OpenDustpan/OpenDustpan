@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -20,12 +19,6 @@ type stubStore struct{ gate.Store }
 
 type stubEngine struct{ gate.Engine }
 
-type stubMembership struct{}
-
-func (stubMembership) Collection(context.Context, identity.Object) (collection.Name, error) {
-	return "", gate.ErrNotFound
-}
-
 type stubFences struct{}
 
 func (stubFences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
@@ -34,7 +27,9 @@ func (stubFences) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, 
 
 type stubUnits struct{}
 
-func (stubUnits) Labels(context.Context, identity.Object) ([]string, error) { return nil, nil }
+func (stubUnits) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
+	return gate.UnitInfo{Collection: "", Labels: nil}, nil
+}
 
 // subjects gives the Subject of each principal by its subject, with the
 // break-glass flag for the subject "breakglass".
@@ -51,8 +46,8 @@ func newService(t *testing.T) *gate.Service {
 	t.Helper()
 
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Members: stubMembership{},
-		Units: stubUnits{}, Subjects: subjects{}, Fences: stubFences{}, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
+		Subjects: subjects{}, Fences: stubFences{}, Now: nil, Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +63,6 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 		Store:     nil,
 		Engine:    nil,
 		Producers: nil,
-		Members:   nil,
 		Units:     nil,
 		Subjects:  nil,
 		Fences:    nil,
@@ -108,7 +102,7 @@ func jobWrite(t *testing.T, unit string, passedApply, planLock bool) gate.Change
 		},
 		Author: "alice", Operation: gate.OperationLock, Units: []identity.Object{unitObject(t, unit)},
 		Holders: nil, PlanLock: planLock, BreakGlass: "",
-		Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		Fence: namespace.Fence{Namespace: "acme", FailoverVersion: 1}, State: nil,
 	}
 }
 

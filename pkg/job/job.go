@@ -52,6 +52,10 @@ var (
 	// ErrConflict reports a write that read an older version of the job.
 	// The caller reads the job again and decides again.
 	ErrConflict = errors.New("job changed since it was read")
+	// ErrLogDiffers reports the end of a step whose log is not the log that
+	// the caller says it sent. It is an ErrConflict (errors.Is is true for
+	// both), with a text that names the cause.
+	ErrLogDiffers error = logDiffersError{}
 	// ErrUnsupported reports an operation that the executor of the job
 	// cannot do, for example a destroy through write-back.
 	ErrUnsupported = errors.New("executor does not support this operation")
@@ -68,6 +72,10 @@ var (
 	// the lock (manuallock.LockedError), which names the holder and the
 	// reason. A phase that runs already is not affected.
 	ErrLocked = errors.New("a manual lock covers the unit")
+	// ErrUnitGone reports a dispatch of a job whose unit is not in the
+	// inventory: no manual lock of the unit can be read, so the dispatch
+	// fails closed. The job stays queued.
+	ErrUnitGone = errors.New("the unit of the job is not in the inventory")
 	// ErrPolicyDenied reports a start that the policy decision denied.
 	ErrPolicyDenied = errors.New("policy denied the job")
 	// ErrGateEnforced reports a start on a unit that an enforced gate at
@@ -654,3 +662,12 @@ func (d *DeliveryResult) validateReview() error {
 		return nil
 	}
 }
+
+// logDiffersError is the type of ErrLogDiffers.
+type logDiffersError struct{}
+
+// Error implements error.
+func (logDiffersError) Error() string { return "the log differs from the stored chunks" }
+
+// Is makes ErrLogDiffers an ErrConflict.
+func (logDiffersError) Is(target error) bool { return target == ErrConflict }

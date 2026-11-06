@@ -184,6 +184,29 @@ type ClaimRequest struct {
 	TakeCanceled bool
 }
 
+// StartClaim asks a start for the claim of the operation that it creates, in
+// the transaction of the start, so that no other claimer can take the new
+// operation before its starter runs it. Owner and Lease are as in
+// ClaimRequest. A store method of another port that takes a StartClaim
+// claims only an operation that its start created, as Claim does: the state
+// becomes running, the attempt 1, the token grows, and the expiry is now plus
+// Lease on the clock of the store. After the expiry, any claimer can take the
+// operation, as with any claim.
+type StartClaim struct {
+	Owner string
+	Lease time.Duration
+}
+
+// Validate returns ErrInvalid when c has no owner or a lease that is not
+// positive.
+func (c StartClaim) Validate() error {
+	if c.Owner == "" || c.Lease <= 0 {
+		return ErrInvalid
+	}
+
+	return nil
+}
+
 // Failure ends one attempt of an operation that failed. When Final is true,
 // the operation ends failed. Otherwise it returns to pending, and no instance
 // can claim it before RetryAfter passes on the clock of the store.

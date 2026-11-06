@@ -9,6 +9,8 @@ Changed by:
   more methods.
 - ADR 312 changes decision 29: the action of a change of the own credentials
   is `caller:manage-sign-in`.
+- ADR 320 extends decision 21: the rule of the fresh step of a password
+  applies to LDAP too.
 
 ## Context
 

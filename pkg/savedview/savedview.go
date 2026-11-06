@@ -147,10 +147,10 @@ func validateReferences(refs []string, ns namespace.Name) error {
 
 	for i, ref := range refs {
 		// Defense in depth: the parser of the core keeps a unit name opaque and
-		// accepts a control character. A view is stored text that the server
-		// later logs and shows, so this check stays and does not rely on the
-		// parser.
-		if !utf8.ValidString(ref) || inventory.HasControl(ref) {
+		// accepts a hidden character (control, format, line or paragraph
+		// separator). A view is stored text that the server later logs and
+		// shows, so this check stays and does not rely on the parser.
+		if !utf8.ValidString(ref) || hasHidden(ref) {
 			return fmt.Errorf("%w: reference %d: use a unit reference", ErrInvalid, i+1)
 		}
 

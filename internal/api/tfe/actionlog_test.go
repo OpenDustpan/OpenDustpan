@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -50,7 +51,7 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -202,6 +203,72 @@ func TestForceUnlockLogsAction(t *testing.T) {
 		principal: "tester",
 		released:  "alice",
 	})
+}
+
+// TestForceUnlockLogsARepeat proves a force-unlock on a unit with no lock
+// writes a repeat line without a released holder, and a release of a held
+// lock keeps the released holder.
+func TestForceUnlockLogsARepeat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		store        tfe.WorkspaceService
+		wantMessage  string
+		wantReleased string
+	}{
+		{
+			name:         "release of a held lock",
+			store:        lockedActionWorkspaces{stubWorkspaces: stubWorkspaces{}},
+			wantMessage:  "force-unlock completed",
+			wantReleased: "alice",
+		},
+		{
+			name:         "repeat with no lock",
+			store:        stubWorkspaces{},
+			wantMessage:  "force-unlock repeated with no change",
+			wantReleased: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			handler := loggedTFEHandler(t, tc.store, &buf)
+
+			req := httptest.NewRequestWithContext(
+				t.Context(), http.MethodPost, "/api/v2/workspaces/ws-test123/actions/force-unlock", http.NoBody,
+			)
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("request answers %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			entry := decodeActionLog(t, &buf)
+
+			checkActionLog(t, entry, wantActionLog{
+				action:    "force-unlock",
+				object:    "opentofu:acme/web",
+				principal: "tester",
+				released:  tc.wantReleased,
+			})
+
+			if entry.Message != tc.wantMessage {
+				t.Fatalf("log message = %q, want %q", entry.Message, tc.wantMessage)
+			}
+
+			if tc.wantReleased == "" && strings.Contains(buf.String(), `"released"`) {
+				t.Fatalf("repeat log line holds a released attribute: %q", buf.String())
+			}
+		})
+	}
 }
 
 // TestTFERestoreLogsAction proves a restore writes one info line with the

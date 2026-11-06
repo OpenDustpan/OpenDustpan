@@ -146,6 +146,8 @@ type faults struct {
 	statusHdr   map[string]string
 	redirectTo  string
 	expiry      time.Time
+	// oversize is the number of bytes that a pull request answer adds.
+	oversize int
 }
 
 // faultResponse answers a request with the fault that a test turned on, and

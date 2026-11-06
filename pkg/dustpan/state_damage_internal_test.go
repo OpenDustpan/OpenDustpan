@@ -15,31 +15,35 @@ import (
 // errDatabaseDown is a read error that is not damage.
 var errDatabaseDown = errors.New("database is down")
 
-// TestStateDamageMapsOnlyContentErrors proves that the state opener of the
-// backup marks as damage only plain content that does not match the size and
-// the MD5 of its row. Sealed content that does not open, a key or a key
-// provider that fails, a missing blob, a row that cannot be read and any
-// other error keep their class, so the backup before a restore stops at them.
+// TestStateDamageMapsOnlyContentErrors proves the classes that the state
+// opener of the backup gives. Plain content that does not match the size and
+// the MD5 of its row is damaged. Sealed content that does not open, and a key
+// or a key provider that fails, do not open: a restore stops at them and
+// names the key. A missing blob, a row that cannot be read and any other
+// error keep their class, so the backup before a restore stops at them.
 func TestStateDamageMapsOnlyContentErrors(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		err    error
-		damage bool
+		err      error
+		damage   bool
+		unopened bool
 	}{
-		{err: workspace.ErrStoredContentMismatch, damage: true},
-		{err: workspace.ErrSealedContent, damage: false},
-		{err: secret.ErrDecrypt, damage: false},
-		{err: errors.Join(workspace.ErrStoredContentMismatch, workspace.ErrSealedContent), damage: false},
-		{err: errors.Join(workspace.ErrStoredContentMismatch, secret.ErrDecrypt), damage: false},
-		{err: blob.ErrNotFound, damage: false},
-		{err: workspace.ErrNotFound, damage: false},
-		{err: blob.ErrOutOfScope, damage: false},
-		{err: errDatabaseDown, damage: false},
+		{err: workspace.ErrStoredContentMismatch, damage: true, unopened: false},
+		{err: workspace.ErrSealedContent, damage: false, unopened: true},
+		{err: secret.ErrDecrypt, damage: false, unopened: true},
+		{err: errors.Join(workspace.ErrStoredContentMismatch, workspace.ErrSealedContent), damage: false, unopened: true},
+		{err: errors.Join(workspace.ErrStoredContentMismatch, secret.ErrDecrypt), damage: false, unopened: true},
+		{err: blob.ErrNotFound, damage: false, unopened: false},
+		{err: workspace.ErrNotFound, damage: false, unopened: false},
+		{err: blob.ErrOutOfScope, damage: false, unopened: false},
+		{err: errDatabaseDown, damage: false, unopened: false},
 	} {
 		got := stateDamage(tc.err)
-		if errors.Is(got, backup.ErrLiveBlobDamaged) != tc.damage || !errors.Is(got, tc.err) {
-			t.Errorf("stateDamage(%v) = %v, want damage %v and the first error kept", tc.err, got, tc.damage)
+		if errors.Is(got, backup.ErrLiveBlobDamaged) != tc.damage ||
+			errors.Is(got, backup.ErrLiveBlobUnopened) != tc.unopened || !errors.Is(got, tc.err) {
+			t.Errorf("stateDamage(%v) = %v, want damage %v, unopened %v and the first error kept",
+				tc.err, got, tc.damage, tc.unopened)
 		}
 	}
 }

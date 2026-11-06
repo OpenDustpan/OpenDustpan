@@ -25,8 +25,8 @@ one audit entry with the action `namespace:manage-runners`. The entry has one
 change with the key `sourceFilter`. Its old and new values are the text of the
 filter before and after the change.
 
-A new filter applies to the fetches that start later. It changes no snapshot
-that exists.
+The server stores the filter. No fetch reads it yet. A change of the filter
+changes no snapshot that exists.
 
 ## The filter
 

@@ -3,6 +3,8 @@
 package migrate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,12 +80,54 @@ func UnknownRecorded(recorded []int64, embedded []Migration) []int64 {
 // binary version that the migration sets, from its header line
 // "-- minimum-binary-version: vMAJOR.MINOR.PATCH", or "" when it sets none.
 // A contract migration sets it: a step that deletes or narrows something
-// that older binaries still use.
+// that older binaries still use. SHA256 is the SHA-256 of SQL as lowercase
+// hex. The store records it with the migration, and Check refuses a database
+// that records another value for the same version.
 type Migration struct {
 	Name             string
 	SQL              string
 	MinBinaryVersion string
+	SHA256           string
 	Version          int64
+}
+
+// sum returns the SHA-256 of sql as lowercase hex.
+func sum(sql string) string {
+	digest := sha256.Sum256([]byte(sql))
+
+	return hex.EncodeToString(digest[:])
+}
+
+// checkRecordedSums refuses a recorded migration whose version the binary
+// embeds under another name or another SHA-256 of its SQL. Another build of
+// the schema made such a database, and no migration can change it to the
+// schema of this binary. A recorded value that is not a SHA-256 in lowercase
+// hex fails too, so the check fails closed on a damaged row.
+func checkRecordedSums(recorded []schema.AppliedMigration, embedded []Migration) error {
+	byVersion := make(map[int64]Migration, len(embedded))
+	for _, m := range embedded {
+		byVersion[m.Version] = m
+	}
+
+	for _, r := range recorded {
+		m, ok := byVersion[r.Version]
+		if !ok {
+			continue
+		}
+
+		if !schema.ValidSHA256(r.SHA256) {
+			return fmt.Errorf("%w: migration %d records the SHA-256 %q, which is not 64 lowercase hex digits",
+				schema.ErrSchemaDiverged, r.Version, r.SHA256)
+		}
+
+		if r.Name != m.Name || r.SHA256 != m.SHA256 {
+			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
+				"with SHA-256 %s: another build of the schema made the database",
+				schema.ErrSchemaDiverged, r.Name, r.SHA256, m.Name, m.SHA256)
+		}
+	}
+
+	return nil
 }
 
 // minimumToken names the header that declares the minimum binary version a
@@ -104,7 +148,8 @@ type Plan struct {
 // migrations the binary does not embed gets no pending migrations: the
 // binary starts on the newer schema and applies nothing. A database that
 // records unknown migrations and lacks embedded ones fails with
-// schema.ErrSchemaDiverged.
+// schema.ErrSchemaDiverged. A database that records an embedded version
+// under another name or another SHA-256 fails with schema.ErrSchemaDiverged.
 func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersion string) (Plan, error) {
 	minimums := make([]string, 0, len(recorded))
 	versions := make([]int64, 0, len(recorded))
@@ -123,18 +168,11 @@ func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersi
 		return Plan{Pending: nil, Minimum: minimum}, err
 	}
 
-	done := make(map[int64]bool, len(versions))
-	for _, v := range versions {
-		done[v] = true
+	if err := checkRecordedSums(recorded, embedded); err != nil {
+		return Plan{Pending: nil, Minimum: minimum}, err
 	}
 
-	var pending []Migration
-
-	for _, m := range embedded {
-		if !done[m.Version] {
-			pending = append(pending, m)
-		}
-	}
+	pending := pendingOf(versions, embedded)
 
 	if err := checkPendingMinimums(pending, binaryVersion); err != nil {
 		return Plan{Pending: nil, Minimum: minimum}, err
@@ -154,6 +192,25 @@ func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersi
 	default:
 		return Plan{Pending: pending, Minimum: minimum}, nil
 	}
+}
+
+// pendingOf returns the embedded migrations whose version the database does
+// not record, in the order of embedded.
+func pendingOf(versions []int64, embedded []Migration) []Migration {
+	done := make(map[int64]bool, len(versions))
+	for _, v := range versions {
+		done[v] = true
+	}
+
+	var pending []Migration
+
+	for _, m := range embedded {
+		if !done[m.Version] {
+			pending = append(pending, m)
+		}
+	}
+
+	return pending
 }
 
 // Load reads every *.sql file in dir of fsys, ordered by version.
@@ -215,7 +272,13 @@ func loadFile(fsys fs.FS, dir, name string) (Migration, error) {
 		return Migration{}, fmt.Errorf("migration %s: %w", name, err)
 	}
 
-	return Migration{Name: name, SQL: string(data), MinBinaryVersion: minimum, Version: version}, nil
+	return Migration{
+		Name:             name,
+		SQL:              string(data),
+		MinBinaryVersion: minimum,
+		SHA256:           sum(string(data)),
+		Version:          version,
+	}, nil
 }
 
 // checkPendingMinimums refuses to apply a migration whose declared minimum

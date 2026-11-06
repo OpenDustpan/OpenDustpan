@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -127,6 +128,7 @@ func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localuser
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
+		Log:        nil,
 		Store:      f.store,
 		Principals: f.principals,
 		Hasher:     f.hasher,
@@ -270,7 +272,14 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 		{name: "wrong password", user: "alice", password: otherPassword, reason: localusersvc.ReasonWrongPassword},
 		{name: "no password", user: "nopass", password: goodPassword, reason: localusersvc.ReasonNoPassword},
 		{name: "disabled", user: "bob", password: goodPassword, reason: localusersvc.ReasonDisabled},
-		{name: "name with a newline", user: "alice\r\nx", password: goodPassword, reason: localusersvc.ReasonNameForm},
+		{name: "name with a newline", user: "alice\r\nx", password: goodPassword, reason: localusersvc.ReasonBoundary},
+		{name: "empty name", user: "", password: goodPassword, reason: localusersvc.ReasonBoundary},
+		{
+			name: "name over the boundary", user: strings.Repeat("a", session.MaxUserName+1), password: goodPassword,
+			reason: localusersvc.ReasonBoundary,
+		},
+		{name: "name not UTF-8", user: "al\xffce", password: goodPassword, reason: localusersvc.ReasonBoundary},
+		{name: "empty password", user: "alice", password: "", reason: localusersvc.ReasonBoundary},
 		{
 			name:     "name too long",
 			user:     strings.Repeat("a", 65),
@@ -291,7 +300,8 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 			t.Fatalf("%s: sign in = %v, want ErrSignInFailed", tc.name, err)
 		}
 
-		if err != nil && (strings.Contains(err.Error(), tc.password) || strings.Contains(err.Error(), "alice")) {
+		if err != nil && ((tc.password != "" && strings.Contains(err.Error(), tc.password)) ||
+			strings.Contains(err.Error(), "alice")) {
 			t.Fatalf("%s: the error holds the password or the name: %q", tc.name, err)
 		}
 	}

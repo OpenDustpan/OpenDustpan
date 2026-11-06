@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
-	"opendustpan.org/opendustpan/internal/launcher"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/launcher"
 )
 
 // envPattern finds environment names in Go string literals: a DUSTPAN_

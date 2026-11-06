@@ -74,6 +74,7 @@ func restoreWorkerCases() []restoreCase {
 	}
 
 	cases = append(cases, restoreCrashCases()...)
+	cases = append(cases, restoreEndAuditCases()...)
 	cases = append(cases, restoreDamagedCases()...)
 
 	return append(cases, []restoreCase{

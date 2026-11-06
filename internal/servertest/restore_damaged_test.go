@@ -3,11 +3,13 @@ package servertest_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -104,14 +106,31 @@ type restoreWarningDoc struct {
 	Code string `json:"code"`
 }
 
+// findingsDoc is what the backup before a restore found at the live blobs.
+type findingsDoc struct {
+	Named   int      `json:"named"`
+	Missing int      `json:"missing"`
+	Damaged int      `json:"damaged"`
+	Keys    []string `json:"keys"`
+}
+
+// limitDoc is the bound on missing live blobs in a restore answer.
+type limitDoc struct {
+	Count        int `json:"count"`
+	Percent      int `json:"percent"`
+	PercentAbove int `json:"percentAbove"`
+}
+
 // restoreDoc is the part of the answer of GET /api/server/restores/{id} that
 // these tests read.
 type restoreDoc struct {
-	ID          string              `json:"id"`
-	State       string              `json:"state"`
-	PreBackupID string              `json:"preBackupID"`
-	Error       string              `json:"error"`
-	Warnings    []restoreWarningDoc `json:"warnings"`
+	ID               string              `json:"id"`
+	State            string              `json:"state"`
+	PreBackupID      string              `json:"preBackupID"`
+	Error            string              `json:"error"`
+	Warnings         []restoreWarningDoc `json:"warnings"`
+	PreBackupFound   *findingsDoc        `json:"preBackupFound"`
+	MissingBlobLimit limitDoc            `json:"missingBlobLimit"`
 }
 
 // startRestore starts a restore of backupID on server 0 and returns its ID.
@@ -162,7 +181,10 @@ func runRestore(t *testing.T, c *servertest.Cluster, backupID string) restoreDoc
 
 	t.Fatalf("restore %s did not end in time", id)
 
-	return restoreDoc{ID: id, State: "", PreBackupID: "", Error: "", Warnings: nil}
+	return restoreDoc{
+		ID: id, State: "", PreBackupID: "", Error: "", Warnings: nil, PreBackupFound: nil,
+		MissingBlobLimit: limitDoc{Count: 0, Percent: 0, PercentAbove: 0},
+	}
 }
 
 // readFile reads the file of key under root.
@@ -177,7 +199,7 @@ func readFile(t *testing.T, root *os.Root, key string) []byte {
 	return data
 }
 
-// damagedRig is a server with two OpenTofu workspaces and a backup of them.
+// damagedRig is a server with OpenTofu workspaces and a backup of them.
 type damagedRig struct {
 	c        *servertest.Cluster
 	root     *os.Root
@@ -185,11 +207,12 @@ type damagedRig struct {
 	victim   string
 	first    []byte
 	other    []byte
+	names    []string
 }
 
-// newDamagedRig starts a server, writes the workspaces w1 and w2, and takes
-// a backup.
-func newDamagedRig(t *testing.T) damagedRig {
+// newDamagedRig starts a server, writes the workspaces w1 to wn, and takes a
+// backup. Each workspace has one state blob.
+func newDamagedRig(t *testing.T, n int) damagedRig {
 	t.Helper()
 
 	target, err := blobfs.Open(t.TempDir())
@@ -204,8 +227,13 @@ func newDamagedRig(t *testing.T) damagedRig {
 		t.Fatalf("create namespace: status %d, body %s", status, body)
 	}
 
-	writeWorkspace(t, c, "w1")
-	writeWorkspace(t, c, "w2")
+	names := make([]string, 0, n)
+
+	for i := range n {
+		name := "w" + strconv.Itoa(i+1)
+		writeWorkspace(t, c, name)
+		names = append(names, name)
+	}
 
 	backupID := startBackup(t, c, 0)
 	if got := waitBackup(t, c, 0, backupID, restoreLimit); got.State != string(backup.StateSucceeded) {
@@ -224,36 +252,22 @@ func newDamagedRig(t *testing.T) damagedRig {
 	})
 
 	blobs := stateBlobs(t, root)
-	if len(blobs) != 2 {
-		t.Fatalf("state blobs = %v, want 2", blobs)
+	if len(blobs) != n {
+		t.Fatalf("state blobs = %v, want %d", blobs, n)
 	}
 
 	return damagedRig{
 		c: c, root: root, backupID: backupID, victim: blobs[0],
-		first: readFile(t, root, blobs[0]), other: readFile(t, root, blobs[1]),
+		first: readFile(t, root, blobs[0]), other: readFile(t, root, blobs[1]), names: names,
 	}
 }
 
-// mustRepaired restores the backup and checks that the restore succeeded with
-// the warning of damaged live blobs, that the live blob holds its first
-// bytes, and that both states read back.
-func (r damagedRig) mustRepaired(t *testing.T, name string) {
+// mustStatesRead checks that the state of each workspace of the rig reads
+// back.
+func (r damagedRig) mustStatesRead(t *testing.T, name string) {
 	t.Helper()
 
-	doc := runRestore(t, r.c, r.backupID)
-	if doc.State != string(backup.RestoreSucceeded) {
-		t.Fatalf("%s: restore = %q (%s), want succeeded", name, doc.State, doc.Error)
-	}
-
-	if !slices.Contains(doc.Warnings, restoreWarningDoc{Code: string(backup.WarnDamagedLiveBlobs)}) {
-		t.Fatalf("%s: warnings = %+v, want %q", name, doc.Warnings, backup.WarnDamagedLiveBlobs)
-	}
-
-	if got := readFile(t, r.root, r.victim); !bytes.Equal(got, r.first) {
-		t.Fatalf("%s: live blob after the restore = %d bytes, want its first bytes", name, len(got))
-	}
-
-	for _, ws := range []string{"w1", "w2"} {
+	for _, ws := range r.names {
 		status, body := tofuDo(t, r.c, http.MethodGet, "/tofu/state/acme/"+ws, "")
 		if status != http.StatusOK || !strings.Contains(body, `"lineage":"`+ws+`"`) {
 			t.Fatalf("%s: read state %s: status %d, body %.200s", name, ws, status, body)
@@ -261,38 +275,100 @@ func (r damagedRig) mustRepaired(t *testing.T, name string) {
 	}
 }
 
-// TestRestoreRepairsAMissingStateBlob runs the reproduction of a restore
-// over a lost live state blob: two workspaces, a backup, then a live blob
-// that is deleted. The restore succeeds with the warning of damaged live
-// blobs, the live blob holds its first bytes again, and both states read
-// back.
-func TestRestoreRepairsAMissingStateBlob(t *testing.T) {
+// TestRestoreWritesAMissingStateBlob runs the reproduction of a restore over
+// a lost live state blob: two workspaces, a backup, then one live blob that
+// is deleted. One missing blob is within the bound at every size, so the
+// restore writes the blob of the backup at the absent key: that adds a key
+// and changes none. The answer names the missing blob and the bound, and
+// every state reads back.
+func TestRestoreWritesAMissingStateBlob(t *testing.T) {
 	t.Parallel()
 
-	r := newDamagedRig(t)
+	r := newDamagedRig(t, 2)
 
 	if err := r.root.Remove(r.victim); err != nil {
 		t.Fatalf("delete the live blob: %v", err)
 	}
 
-	r.mustRepaired(t, "a live blob that is absent")
+	doc := runRestore(t, r.c, r.backupID)
+	if doc.State != string(backup.RestoreSucceeded) {
+		t.Fatalf("restore = %q (%s), want succeeded", doc.State, doc.Error)
+	}
+
+	if !slices.Contains(doc.Warnings, restoreWarningDoc{Code: string(backup.WarnMissingLiveBlobs)}) {
+		t.Fatalf("warnings = %+v, want %q", doc.Warnings, backup.WarnMissingLiveBlobs)
+	}
+
+	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 1 || doc.PreBackupFound.Named != 2 ||
+		doc.PreBackupFound.Damaged != 0 || !slices.Contains(doc.PreBackupFound.Keys, r.victim) {
+		t.Fatalf("preBackupFound = %+v, want 1 missing of 2 with the key %s", doc.PreBackupFound, r.victim)
+	}
+
+	if doc.MissingBlobLimit != (limitDoc{Count: 10, Percent: 20, PercentAbove: 1}) {
+		t.Fatalf("missingBlobLimit = %+v, want 10 blobs, or 20 percent when more than 1", doc.MissingBlobLimit)
+	}
+
+	if got := readFile(t, r.root, r.victim); !bytes.Equal(got, r.first) {
+		t.Fatalf("live blob after the restore = %d bytes, want its first bytes", len(got))
+	}
+
+	r.mustStatesRead(t, "a live blob that is absent")
+}
+
+// TestRestoreStopsWhenTooManyStateBlobsAreMissing deletes both live state
+// blobs, as a blob store setting that names another store does: 2 of 2 is
+// above the bound. The restore stops before any change of the live data with
+// the text that names the count and the next step, and the keys stay absent.
+func TestRestoreStopsWhenTooManyStateBlobsAreMissing(t *testing.T) {
+	t.Parallel()
+
+	r := newDamagedRig(t, 2)
+	blobs := stateBlobs(t, r.root)
+
+	for _, key := range blobs {
+		if err := r.root.Remove(key); err != nil {
+			t.Fatalf("delete the live blob: %v", err)
+		}
+	}
+
+	doc := runRestore(t, r.c, r.backupID)
+	if doc.State != string(backup.RestoreFailed) || !strings.Contains(doc.Error, "found 2 of 2 live blobs missing") ||
+		!strings.Contains(doc.Error, "store check --target blobs") {
+		t.Fatalf("restore = %q (%s), want failed at the bound", doc.State, doc.Error)
+	}
+
+	if doc.PreBackupFound == nil || doc.PreBackupFound.Missing != 2 {
+		t.Fatalf("preBackupFound = %+v, want 2 missing", doc.PreBackupFound)
+	}
+
+	for _, key := range blobs {
+		if _, err := r.root.Stat(key); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stat the live blob %s = %v, want absent", key, err)
+		}
+	}
 }
 
 // TestRestoreStopsAtSealedStateThatDoesNotOpen runs the reproduction of a
-// restore over a live state blob whose sealed bytes do not open: bytes that
-// are not sealed, and the sealed bytes of the other workspace. A key or a key
-// provider can cause the same error, so the backup before the restore stops,
-// the restore fails, and the live blob keeps its bytes.
+// restore over a live state blob whose sealed bytes do not open or do not
+// match: bytes that are not sealed, a flipped byte, a truncated blob, and the
+// sealed bytes of the other workspace. The restore stops before any change of
+// the live data, the error of the restore answer names the key and the next
+// step, and the live blob keeps its bytes.
 func TestRestoreStopsAtSealedStateThatDoesNotOpen(t *testing.T) {
 	t.Parallel()
 
-	r := newDamagedRig(t)
+	r := newDamagedRig(t, 2)
+
+	flipped := bytes.Clone(r.first)
+	flipped[len(flipped)/2] ^= 0xff
 
 	for _, tc := range []struct {
 		name  string
 		bytes []byte
 	}{
 		{name: "a live blob that holds other bytes", bytes: []byte("tampered")},
+		{name: "a live blob with one flipped byte", bytes: flipped},
+		{name: "a live blob that is truncated", bytes: r.first[:len(r.first)/2]},
 		{name: "a live blob that holds the sealed bytes of the other workspace", bytes: r.other},
 	} {
 		if err := r.root.WriteFile(r.victim, tc.bytes, 0o600); err != nil {
@@ -300,8 +376,16 @@ func TestRestoreStopsAtSealedStateThatDoesNotOpen(t *testing.T) {
 		}
 
 		doc := runRestore(t, r.c, r.backupID)
-		if doc.State != string(backup.RestoreFailed) {
-			t.Fatalf("%s: restore = %q, want failed", tc.name, doc.State)
+		if doc.State != string(backup.RestoreFailed) || !strings.Contains(doc.Error, strconv.Quote(r.victim)) ||
+			!strings.Contains(
+				doc.Error,
+				"changed no live data",
+			) || !strings.Contains(doc.Error, "opendustpan restore") {
+			t.Fatalf("%s: restore = %q (%s), want failed with the key and the next step", tc.name, doc.State, doc.Error)
+		}
+
+		if doc.PreBackupFound == nil || doc.PreBackupFound.Damaged != 1 {
+			t.Fatalf("%s: preBackupFound = %+v, want 1 damaged", tc.name, doc.PreBackupFound)
 		}
 
 		if got := readFile(t, r.root, r.victim); !bytes.Equal(got, tc.bytes) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -293,7 +294,7 @@ func newBehaviorHandlerWith(
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -394,6 +395,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -408,6 +410,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -422,6 +425,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
@@ -659,6 +663,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
@@ -717,6 +722,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
@@ -772,6 +778,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					LastRelease:   nil,
 					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
@@ -989,7 +996,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	}
 
 	cases := []struct {

@@ -172,7 +172,7 @@ func TestSignInEachAlgorithm(t *testing.T) {
 
 			want := oauth.Identity{
 				AuthTime: s.clock.Now().Truncate(time.Second), Subject: "248289761001", Name: "Alice Doe",
-				PreferredUsername: "alice", Email: "alice@example.com",
+				PreferredUsername: "alice", Email: "alice@example.com", AuthTimeKnown: true,
 			}
 			if !got.AuthTime.Equal(want.AuthTime) {
 				t.Errorf("AuthTime = %v, want %v", got.AuthTime, want.AuthTime)

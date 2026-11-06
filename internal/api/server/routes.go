@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -99,6 +100,8 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.tokenPolicyRoutes()...)
 	routes = append(routes, h.sessionPolicyRoutes()...)
 	routes = append(routes, h.localUserRoutes()...)
+	routes = append(routes, h.passkeyRoutes()...)
+	routes = append(routes, h.passkeySignInRoutes()...)
 	routes = append(routes, h.auditSinkRoutes()...)
 	routes = append(routes, h.checkpointRoutes()...)
 	routes = append(routes, h.instanceRoutes()...)
@@ -323,13 +326,13 @@ func newPatternMux() *patternMux {
 // Handle registers pattern and records it.
 func (m *patternMux) Handle(pattern string, handler http.Handler) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.Handle(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, handler))
 }
 
 // HandleFunc registers pattern and records it.
 func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
 }
 
 // ServeHTTP implements http.Handler.

@@ -12,7 +12,6 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/oauth"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -209,18 +208,26 @@ func sameSettings(a, b *session.ProviderConfig) bool {
 func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) (serverapi.SignInProvider, error) {
 	var none serverapi.SignInProvider
 
+	// Defense in depth: the validation of a stored provider refuses each
+	// mode with no method. This check stays so that a row of another version
+	// never signs a person in through the client of another mode. It comes
+	// before the read of the client secret, so such a row opens no secret.
+	if p.Mode != session.ModeOIDC && p.Mode != session.ModeOAuth {
+		return none, fmt.Errorf("sign-in provider %s: %w: the mode %q has no sign-in method", p.ID,
+			session.ErrInvalidProvider, p.Mode)
+	}
+
 	clientSecret, err := s.admin.ClientSecret(ctx, *p)
 	if err != nil {
 		return none, fmt.Errorf("sign-in provider %s: %w", p.ID, err)
 	}
 
-	var client serverapi.OIDCClient
+	var client oauth.MethodClient
 
-	source := principal.SourceOIDC
-
+	kind := session.MethodOIDC
 	if p.Mode == session.ModeOAuth {
 		client, err = s.plainClient(p, clientSecret)
-		source = principal.SourceOAuth
+		kind = session.MethodOAuth
 	} else {
 		client, err = s.openIDClient(p, clientSecret)
 	}
@@ -229,8 +236,30 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 		return none, fmt.Errorf("sign-in provider %s: %w", p.ID, err)
 	}
 
+	method, err := redirectMethod(client, p.ID, kind, s.enabled(p.ID), s.now)
+	if err != nil {
+		return none, err
+	}
+
 	return serverapi.SignInProvider{
-		Client: client, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate, Stored: true,
-		Source: source,
+		Method: method, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate, Stored: true,
 	}, nil
+}
+
+// enabled returns the switch of the stored provider id: it reads the
+// provider at each call, so a disable applies to a sign-in that started
+// before it. A provider that is gone is off.
+func (s *storedProviders) enabled(id string) func(ctx context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		p, err := s.admin.Get(ctx, id)
+		if errors.Is(err, session.ErrProviderNotFound) {
+			return false, nil
+		}
+
+		if err != nil {
+			return false, fmt.Errorf("read sign-in provider: %w", err)
+		}
+
+		return p.Enabled, nil
+	}
 }

@@ -25,8 +25,10 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -151,6 +153,52 @@ type localUserPolicyResponse struct {
 	// LockPrune is the effective schedule of the prune of the counts of the
 	// lockout by name.
 	LockPrune localUserLockPruneBody `json:"lockPrune"`
+	// LockRules is the effective set of rules of the lockout by name.
+	LockRules localUserLockRulesBody `json:"lockRules"`
+}
+
+// localUserLockRulesBody is the effective set of rules of the lockout by
+// name. The password rule counts the failures of one user name from one
+// source prefix. The password name rule counts the failures of one user name
+// from every source, and its lock holds for every source.
+//
+// Contract: never remove or rename these fields.
+type localUserLockRulesBody struct {
+	Password     localUserLockRuleBody     `json:"password"`
+	PasswordName localUserLockRuleBody     `json:"passwordName"`
+	SourcePrefix localUserSourcePrefixBody `json:"sourcePrefix"`
+}
+
+// localUserLockRuleBody is one rule of the lockout by name. The failure that
+// takes a count to Limit sets a lock of LockSeconds. Each new lock of the
+// same name, less than ResetSeconds after the earlier lock ended, lasts
+// twice the lock before, up to MaxLockSeconds. A rule with MaxLockSeconds
+// equal to LockSeconds never doubles.
+//
+// Contract: never remove or rename these fields.
+type localUserLockRuleBody struct {
+	Limit          int   `json:"limit"`
+	LockSeconds    int64 `json:"lockSeconds"`
+	MaxLockSeconds int64 `json:"maxLockSeconds"`
+	ResetSeconds   int64 `json:"resetSeconds"`
+}
+
+// localUserSourcePrefixBody is the length of the source prefix of the
+// password rule, in bits: the whole IPv4 address, and the first bits of an
+// IPv6 address.
+//
+// Contract: never remove or rename these fields.
+type localUserSourcePrefixBody struct {
+	IPv4Bits int `json:"ipv4Bits"`
+	IPv6Bits int `json:"ipv6Bits"`
+}
+
+// lockRuleBody returns the body of the rule r.
+func lockRuleBody(r authgate.LockRule) localUserLockRuleBody {
+	return localUserLockRuleBody{
+		Limit: r.Limit, LockSeconds: int64(r.LockFor / time.Second), MaxLockSeconds: int64(r.MaxLockFor / time.Second),
+		ResetSeconds: int64(r.ResetAfter / time.Second),
+	}
 }
 
 // localUserLockPruneBody is the effective schedule of the prune of the
@@ -163,6 +211,7 @@ type localUserLockPruneBody struct {
 	IntervalSeconds int64 `json:"intervalSeconds"`
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
+	MaxEndedLocks   int   `json:"maxEndedLocks"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -312,7 +361,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+	base := signInEntry(r, passwordSignInAuditActor, session.ActionSignIn)
 
 	in, err := h.localUsers.SignIn(ctx, base, req.UserName, req.Password)
 	if err != nil {
@@ -325,39 +374,56 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	e := signInEntry(r, principal.LocalSubjectPrefix+in.UserID, "", session.ActionSignIn)
-
-	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
-		AuthTime: h.signIn.sessions.Now(), PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: in.SessionGeneration, Stored: false,
-	})
-	if err != nil {
-		// A reset, a password change or a disable after the check of the
-		// password changed the generation or the principal: the sign-in fails
-		// closed with the answer of a wrong password.
-		if errors.Is(err, session.ErrGenerationChanged) || errors.Is(err, session.ErrPrincipalDisabled) ||
-			errors.Is(err, session.ErrPrincipalNotFound) {
-			h.failPassword(ctx)
-			h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
-
-			return
-		}
-
-		h.writeError(ctx, w, err)
-
+	res, ok := h.completeLocal(w, r, in)
+	if !ok {
 		return
 	}
 
-	// Only the end of a full sign-in clears the counts of the name, after the
-	// commit of the session. A failed clear leaves the counts, which is the
-	// safe direction, so the sign-in still succeeds.
+	h.clearNameCounts(ctx, in)
+
+	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// completeLocal gives the password sign-in in to the sign-in service. It
+// returns false after it answered a refusal or an error. A refusal has its
+// audit entry already. A failed Assertion, a reset, a password change or a
+// disable after the check of the password fails closed with the answer of a
+// wrong password.
+func (h *Handler) completeLocal(
+	w http.ResponseWriter, r *http.Request, in localusersvc.SignedIn,
+) (signinsvc.Result, bool) {
+	ctx := r.Context()
+
+	res, err := h.signIn.service.CompleteLocal(ctx, &signinsvc.LocalRequest{
+		Entry: signInEntry(r, "", session.ActionSignIn), PrincipalID: in.PrincipalID, UserID: in.UserID,
+		Assertion: in.Assertion, Generation: in.SessionGeneration, ChangeRequired: in.ChangeRequired,
+	})
+	if err == nil {
+		return res, true
+	}
+
+	if signinsvc.IsRefusal(err) {
+		h.failPassword(ctx)
+		h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
+
+		return res, false
+	}
+
+	h.writeError(ctx, w, err)
+
+	return res, false
+}
+
+// clearNameCounts clears the counts of the name of the password sign-in in.
+// Only the end of a full sign-in clears them, after the commit of the
+// session. A failed clear leaves the counts, which is the safe direction, so
+// the sign-in still succeeds.
+func (h *Handler) clearNameCounts(ctx context.Context, in localusersvc.SignedIn) {
 	if clearErr := h.localUsers.ClearLocks(ctx, in); clearErr != nil {
 		h.logger.WarnContext(ctx, "the counts of a user name were not cleared after a sign-in",
 			slog.String("cause", causeType(clearErr)))
 	}
-
-	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // redeemLocalUserCode sets a password with a set-up code or a reset code. It
@@ -381,7 +447,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 
-	base := signInEntry(r, passwordSignInAuditActor, "", session.ActionSignIn)
+	base := signInEntry(r, passwordSignInAuditActor, session.ActionSignIn)
 
 	if err := h.localUsers.Redeem(ctx, base, req.OneTimeCode, req.Password); err != nil {
 		if errors.Is(err, localuser.ErrNotFound) {
@@ -458,6 +524,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 	}
 
 	prune := localusersvc.Prune()
+	rules := localusersvc.Rules()
 
 	h.writeJSON(ctx, w, http.StatusOK, localUserPolicyResponse{
 		Enabled: p.Enabled, EnabledSource: string(p.EnabledSource), IdentityProvider: p.SSO, MinLength: p.MinLength,
@@ -465,7 +532,11 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		ResetLifetimeSeconds: int64(p.ResetLifetime / time.Second),
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
-			MaxRows: prune.MaxRows,
+			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
+		},
+		LockRules: localUserLockRulesBody{
+			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),
+			SourcePrefix: localUserSourcePrefixBody{IPv4Bits: rules.IPv4PrefixBits, IPv6Bits: rules.IPv6PrefixBits},
 		},
 	})
 }
@@ -639,11 +710,11 @@ func (h *Handler) renewSession(
 	}
 
 	old := caller.Match.Session
-	e := signInEntry(r, caller.Match.Owner.Subject, "", session.ActionSignIn)
+	e := signInEntry(r, caller.Match.Owner.Subject, session.ActionSignIn)
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: old.AuthTime, PrincipalID: old.PrincipalID, Provider: old.Provider, SourceIP: e.SourceIP,
-		UserAgent: e.UserAgent, Generation: g, Stored: false,
+		UserAgent: e.UserAgent, Generation: g, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		return
