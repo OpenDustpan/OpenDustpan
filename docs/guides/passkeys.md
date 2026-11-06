@@ -85,7 +85,8 @@ challenge.
   code `mfa.passkey-limit`.
 - A person can start 10 register ceremonies in 5 minutes. The next start
   answers 429 with the error code `mfa.rate-limited` and the header
-  `Retry-After`. Each server process counts for itself, so a database with
+  `Retry-After`. The server writes one audit entry for the refusals of a
+  person in one window. Each server process counts for itself, so a database with
   several instances gives a person that many budgets.
 - The body of the second request has at most 68 KiB. A larger body answers 413
   with the error code `request.body-too-large`.

@@ -37,6 +37,8 @@ func newPasskeyService(
 
 	passkeys, ok := store.(mfa.PasskeyStore)
 	if !ok {
+		log.Info("passkeys are off: the store keeps no passkeys")
+
 		return none, nil
 	}
 

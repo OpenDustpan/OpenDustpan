@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -746,8 +747,82 @@ func TestPasskeyBeginIsRateLimited(t *testing.T) {
 		t.Fatalf("the service ran %d times, want %d", fake.calls, apiserver.PasskeyBeginLimitForTest)
 	}
 
+	// More begins in the same window are refused too, with no new entry.
+	for range 2 {
+		expectPasskeyStatus(t, alice.do(http.MethodPost, beginTarget, nil), http.StatusTooManyRequests)
+	}
+
 	expectPasskeyStatus(t, bob.do(http.MethodPost, beginTarget, nil), http.StatusOK)
 	expectRefusals(t, f.store, mfasvc.ActionAddRefused, 1)
+}
+
+// recordingAudit keeps the entries that the adapter appends in @server.
+type recordingAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (r *recordingAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.entries = append(r.entries, e)
+
+	return e, nil
+}
+
+// TestPasskeyRefusesASessionThatIsNoPerson proves the check of the session
+// owner in the adapter, with the layers around it out of the way: a session
+// of a service principal and a session with an empty owner ID are refused on
+// each route with mfa.session-required, write one denied audit entry, and
+// never reach the service.
+func TestPasskeyRefusesASessionThatIsNoPerson(t *testing.T) {
+	t.Parallel()
+
+	owners := []struct {
+		name string
+		kind principal.Kind
+		id   string
+	}{
+		{"service principal", principal.KindService, "prn-service"},
+		{"empty owner ID", principal.KindPerson, ""},
+	}
+
+	routes := []struct {
+		name   string
+		action string
+	}{
+		{"begin", mfasvc.ActionAddRefused},
+		{"finish", mfasvc.ActionAddRefused},
+		{"list", mfasvc.ActionListRefused},
+		{"remove", mfasvc.ActionRemoveRefused},
+	}
+
+	for _, o := range owners {
+		for _, r := range routes {
+			t.Run(o.name+" on "+r.name, func(t *testing.T) {
+				t.Parallel()
+
+				fake := newFakePasskeys(nil)
+				entries := &recordingAudit{mu: sync.Mutex{}, entries: nil}
+
+				rec := apiserver.ServePasskeyAsOwnerForTest(
+					t, apiserver.PasskeyOwnerForTest{Route: r.name, Kind: o.kind, ID: o.id}, entries, fake,
+				)
+
+				refusal := expectPasskeyStatus(t, rec, http.StatusForbidden)
+				if refusal.ErrorCode != errcode.MFASessionRequired || fake.calls != 0 {
+					t.Fatalf("error code = %q with %d calls, want %s and 0", refusal.ErrorCode, fake.calls,
+						errcode.MFASessionRequired)
+				}
+
+				if len(entries.entries) != 1 || entries.entries[0].Action != r.action ||
+					entries.entries[0].Outcome != audit.OutcomeDenied {
+					t.Fatalf("entries = %+v, want one denied %s", entries.entries, r.action)
+				}
+			})
+		}
+	}
 }
 
 // limiterAt returns the time d after the start of the limiter tests.
