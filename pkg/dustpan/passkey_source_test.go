@@ -105,13 +105,8 @@ func TestWebauthnGatesUseTheResolvedSourceAddress(t *testing.T) {
 				{"another address", "198.51.100.8:4000", "203.0.113.1"},
 				{"a client behind a trusted proxy", "10.1.2.3:4000", "192.0.2.77"},
 			} {
-				if got := webauthnPost(
-					t,
-					h,
-					tc.target,
-					other.remote,
-					other.forwarded,
-				); got.Code == http.StatusTooManyRequests {
+				got := webauthnPost(t, h, tc.target, other.remote, other.forwarded)
+				if got.Code == http.StatusTooManyRequests {
 					t.Fatalf("%s was refused: %s", other.name, got.Body)
 				}
 			}

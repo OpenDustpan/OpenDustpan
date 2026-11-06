@@ -283,13 +283,20 @@ func TestCompletePasskeyBreakGlassRaisesTheAlert(t *testing.T) {
 		t.Fatalf("starts = %+v, want one session with the alert of a break-glass use", w.starts)
 	}
 
-	n := w.starts[0].Alert
+	checkBreakGlassStart(t, w.starts[0].Alert, &w.startEntries[0])
+}
+
+// checkBreakGlassStart fails unless n is the critical alert of a break-glass
+// use for the administrators, and e is the entry of the session with the
+// trimmed reason and the break-glass mark.
+func checkBreakGlassStart(t *testing.T, n *notify.Notification, e *audit.Entry) {
+	t.Helper()
+
 	if n.Type != notify.BreakGlassUsed || n.Scope != audit.ServerScope || n.Severity != notify.SeverityCritical ||
 		len(n.Recipients) != 1 || !n.Recipients[0].Admins {
 		t.Errorf("alert = %+v, want critical break-glass.used for the administrators in the server scope", n)
 	}
 
-	e := &w.startEntries[0]
 	if e.Reason != "the identity provider is down" || changeOf(e, "breakGlass") != "true" ||
 		e.Subject != "break-glass:ana" {
 		t.Errorf("entry = %+v, want the trimmed reason and the break-glass mark", e)
