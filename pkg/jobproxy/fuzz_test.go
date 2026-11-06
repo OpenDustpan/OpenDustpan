@@ -2,6 +2,7 @@ package jobproxy_test
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -43,7 +44,13 @@ func FuzzParse(f *testing.F) {
 // empty segment, no encoded slash or backslash, no NUL and is valid UTF-8,
 // and that CanonicalPath never changes it.
 func FuzzCanonicalPath(f *testing.F) {
-	for _, s := range []string{"/", "/api/x", "/a/../b", "/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "//a", "/a/", "/a%00"} {
+	seeds := []string{
+		"/", "/api/x", "/a/../b", "/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "//a", "/a/", "/a%00",
+		"/a/x%EF%BC%8F..%EF%BC%8Fb", "/a/%EF%BC%8E%EF%BC%8E", "/a/%E2%88%95", "/a/%EF%BC%BC",
+		"/a/%E2%88%96", "/a/%E2%80%A4", "/a/%E2%80%A5",
+	}
+
+	for _, s := range seeds {
 		f.Add(s)
 	}
 
@@ -63,11 +70,19 @@ func FuzzCanonicalPath(f *testing.F) {
 	})
 }
 
+// lookAlikeText holds characters that look like "/", "\\" or ".".
+const lookAlikeText = "\uFF0F\uFF3C\u2215\u2216\uFF0E\u2024\u2025"
+
 // notCanonical returns why p is not canonical, or "". It is a second,
 // simpler statement of the rules of CanonicalPath.
 func notCanonical(p string) string {
 	if !utf8.ValidString(p) || strings.Contains(p, "\x00") {
 		return "not UTF-8 or holds NUL"
+	}
+
+	decoded, err := url.PathUnescape(p)
+	if err == nil && strings.ContainsAny(decoded, lookAlikeText) {
+		return "holds a character that looks like /, \\ or ."
 	}
 
 	lower := strings.ToLower(p)

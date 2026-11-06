@@ -1,6 +1,7 @@
 package jobproxy
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -58,7 +59,8 @@ type segment struct {
 //   - has no "?", "#", ";", NUL, control character or "\",
 //   - encodes no "/" (%2F), no "\" (%5C), no NUL (%00), no "%" (%25) and no
 //     control character,
-//   - percent-encodes only a byte that needs it, with uppercase hex digits.
+//   - percent-encodes only a byte that needs it, with uppercase hex digits,
+//   - holds no character that looks like "/", "\\" or "." (see lookAlikes).
 //
 // A case of the path is never changed: "/API" and "/api" are two paths.
 func CanonicalPath(p string) (string, bool) {
@@ -121,7 +123,44 @@ func canonicalSegment(s string) bool {
 		i += 2
 	}
 
-	return utf8.Valid(decoded)
+	return utf8.Valid(decoded) && !hasLookAlike(decoded)
+}
+
+// lookAlikes are characters that look like "/", "\" or "." and that a
+// server can fold to them, for example with Unicode NFKC normalization or a
+// best-fit code page. After the check of the job proxy, such a server could
+// read a segment border or a dot segment, so a canonical segment holds none
+// of them, also when it is percent-encoded.
+func lookAlikes() []rune {
+	return []rune{
+		'\uFF0F', // fullwidth solidus
+		'\uFF3C', // fullwidth reverse solidus
+		'\u2215', // division slash
+		'\u2216', // set minus
+		'\u2044', // fraction slash
+		'\u29F8', // big solidus
+		'\u29F9', // big reverse solidus
+		'\uFE68', // small reverse solidus
+		'\uFF0E', // fullwidth full stop
+		'\uFE52', // small full stop
+		'\u2024', // one dot leader
+		'\u2025', // two dot leader
+		'\u2026', // horizontal ellipsis
+	}
+}
+
+// hasLookAlike reports whether the decoded bytes of a segment hold a
+// character of lookAlikes.
+func hasLookAlike(decoded []byte) bool {
+	look := lookAlikes()
+
+	for _, r := range string(decoded) {
+		if slices.Contains(look, r) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // segmentByte reports whether c can stand as it is in a canonical segment:

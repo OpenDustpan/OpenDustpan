@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/jobproxy"
 	"opendustpan.org/opendustpan/pkg/jobproxy/jobproxytest"
+	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -19,7 +20,7 @@ import (
 type fakeStore struct {
 	mu         sync.Mutex
 	namespaces map[namespace.Name]int64
-	sets       map[jobproxy.Scope]jobproxy.Stored
+	sets       map[rulestore.Scope]rulestore.Stored
 	audit      map[namespace.Name][]audit.Entry
 }
 
@@ -27,21 +28,21 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		mu:         sync.Mutex{},
 		namespaces: map[namespace.Name]int64{},
-		sets:       map[jobproxy.Scope]jobproxy.Stored{},
+		sets:       map[rulestore.Scope]rulestore.Stored{},
 		audit:      map[namespace.Name][]audit.Entry{},
 	}
 }
 
 // copyStored returns s with a copy of its document.
-func copyStored(s jobproxy.Stored) jobproxy.Stored {
+func copyStored(s rulestore.Stored) rulestore.Stored {
 	s.Document = bytes.Clone(s.Document)
 
 	return s
 }
 
-func (f *fakeStore) Get(_ context.Context, scope jobproxy.Scope) (jobproxy.Stored, error) {
-	if err := jobproxy.ValidScope(scope); err != nil {
-		return jobproxy.Stored{}, err
+func (f *fakeStore) Get(_ context.Context, scope rulestore.Scope) (rulestore.Stored, error) {
+	if err := rulestore.ValidScope(scope); err != nil {
+		return rulestore.Stored{}, err
 	}
 
 	f.mu.Lock()
@@ -49,34 +50,34 @@ func (f *fakeStore) Get(_ context.Context, scope jobproxy.Scope) (jobproxy.Store
 
 	s, ok := f.sets[scope]
 	if !ok {
-		return jobproxy.Stored{}, jobproxy.ErrNotFound
+		return rulestore.Stored{}, rulestore.ErrNotFound
 	}
 
 	return copyStored(s), nil
 }
 
 func (f *fakeStore) Put(
-	_ context.Context, c jobproxy.Change, fence namespace.Fence, e audit.Entry,
-) (jobproxy.Stored, error) {
+	_ context.Context, c rulestore.Change, fence namespace.Fence, e audit.Entry,
+) (rulestore.Stored, error) {
 	scope, doc, expected := c.Scope, c.Document, c.Expected
 
 	// Defense in depth: the handler parses the document too; the store parses
 	// it again so that a caller that skips that check stores nothing.
 	if _, err := jobproxy.Parse(doc); err != nil {
-		return jobproxy.Stored{}, err
+		return rulestore.Stored{}, err
 	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if err := f.check(scope, expected, fence, e); err != nil {
-		return jobproxy.Stored{}, err
+		return rulestore.Stored{}, err
 	}
 
-	s := jobproxy.Stored{
+	s := rulestore.Stored{
 		Scope:     scope,
 		Document:  bytes.Clone(doc),
-		Digest:    jobproxy.DocumentDigest(doc),
+		Digest:    rulestore.DocumentDigest(doc),
 		Version:   expected + 1,
 		UpdatedAt: e.At.UnixMilli(),
 	}
@@ -87,17 +88,17 @@ func (f *fakeStore) Put(
 }
 
 func (f *fakeStore) Delete(
-	_ context.Context, scope jobproxy.Scope, expected int64, fence namespace.Fence, e audit.Entry,
+	_ context.Context, scope rulestore.Scope, expected int64, fence namespace.Fence, e audit.Entry,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if err := jobproxy.ValidScope(scope); err != nil {
+	if err := rulestore.ValidScope(scope); err != nil {
 		return err
 	}
 
 	if _, ok := f.sets[scope]; !ok {
-		return jobproxy.ErrNotFound
+		return rulestore.ErrNotFound
 	}
 
 	if err := f.check(scope, expected, fence, e); err != nil {
@@ -111,8 +112,8 @@ func (f *fakeStore) Delete(
 }
 
 // check runs the checks that each write shares, with f.mu held.
-func (f *fakeStore) check(scope jobproxy.Scope, expected int64, fence namespace.Fence, e audit.Entry) error {
-	if err := jobproxy.ValidScope(scope); err != nil {
+func (f *fakeStore) check(scope rulestore.Scope, expected int64, fence namespace.Fence, e audit.Entry) error {
+	if err := rulestore.ValidScope(scope); err != nil {
 		return err
 	}
 
@@ -126,7 +127,7 @@ func (f *fakeStore) check(scope jobproxy.Scope, expected int64, fence namespace.
 	}
 
 	if f.sets[scope].Version != expected {
-		return jobproxy.ErrConflict
+		return rulestore.ErrConflict
 	}
 
 	return nil

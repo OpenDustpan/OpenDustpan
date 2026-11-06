@@ -100,6 +100,10 @@ func TestMatch(t *testing.T) {
 		{"encoded slash", req("/api/folders/team-a%2F..%2Fteam-b/x"), "", jobproxy.ReasonPathNotCanonical},
 		{"empty segment", req("/api//search"), "", jobproxy.ReasonPathNotCanonical},
 		{"query in the path", req("/api/search?x=1"), "", jobproxy.ReasonPathNotCanonical},
+		{
+			"encoded fullwidth solidus", req("/api/folders/team-a%EF%BC%8F..%EF%BC%8Fteam-b/x"),
+			"", jobproxy.ReasonPathNotCanonical,
+		},
 		{"empty path on an inspect host", req(""), "", jobproxy.ReasonPathNotCanonical},
 
 		{
