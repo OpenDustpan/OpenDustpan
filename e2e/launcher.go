@@ -7,10 +7,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	iofs "io/fs"
@@ -23,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -36,8 +35,41 @@ import (
 // the releases 0.0.x.
 const launcherRelease = "0.0.1"
 
-// nonceBytes is the length of the nonce of a proof, in bytes.
-const nonceBytes = 16
+// envTransport sends the requests of the runner protocol through the HTTP
+// client of the harness, which trusts the certificate of the server.
+type envTransport struct {
+	env *Env
+}
+
+// Do implements session.Transport.
+func (t envTransport) Do(ctx context.Context, req *session.Request) (*session.Response, error) {
+	hr, err := http.NewRequestWithContext(ctx, req.Method, t.env.URL+req.Path, bytes.NewReader(req.Body))
+	if err != nil {
+		return nil, fmt.Errorf("build %s %s: %w", req.Method, req.Path, err)
+	}
+
+	for k, v := range req.Header {
+		hr.Header.Set(k, v)
+	}
+
+	resp, err := t.env.client.Do(hr)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", req.Method, req.Path, err)
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if err = errors.Join(readErr, resp.Body.Close()); err != nil {
+		return nil, fmt.Errorf("read %s %s: %w", req.Method, req.Path, err)
+	}
+
+	return &session.Response{Status: resp.StatusCode, Body: body, RetryAfter: 0}, nil
+}
+
+// protocolClient returns the client of the runner protocol of the harness:
+// the runner and the launcher sign their calls through it.
+func (e *Env) protocolClient() *session.Client {
+	return &session.Client{Server: e.URL, Transport: envTransport{env: e}, Release: launcherRelease, Now: nil}
+}
 
 // FakeRunner is a runner that joined a pool and claims phases over the runner
 // protocol, with its own key pair. It stands in for the runner of a pool.
@@ -76,19 +108,19 @@ func (e *Env) JoinFakeRunner(ctx context.Context, tb testing.TB, ns, poolID, nam
 		tb.Fatalf("encode the join request: %v", err)
 	}
 
-	status, body := e.launcherSend(ctx, tb, launcherRequest{
-		Method: http.MethodPost, Path: protocol.PathJoin, Body: raw, Proof: "", Extra: nil,
+	resp, err := e.protocolClient().Send(ctx, &session.Request{
+		Method: http.MethodPost, Path: protocol.PathJoin, Body: raw, Header: nil,
 	})
-	if status != http.StatusOK {
-		tb.Fatalf("join = %d %s, want 200", status, body)
+	if err != nil || resp.Status != http.StatusOK {
+		tb.Fatalf("join = %+v, %v; want 200", resp, err)
 	}
 
-	var resp protocol.JoinResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	var joined protocol.JoinResponse
+	if err := json.Unmarshal(resp.Body, &joined); err != nil {
 		tb.Fatalf("decode the join answer: %v", err)
 	}
 
-	return &FakeRunner{env: e, pool: poolID, id: resp.Runner, priv: priv}
+	return &FakeRunner{env: e, pool: poolID, id: joined.Runner, priv: priv}
 }
 
 // apiCreated sends an authenticated request as the administrator, wants the
@@ -120,81 +152,6 @@ func (e *Env) apiCreated(ctx context.Context, tb testing.TB, method, path string
 	if err := json.Unmarshal(body, out); err != nil {
 		tb.Fatalf("decode %s %s: %v", method, path, err)
 	}
-}
-
-// launcherRequest is one request of the runner protocol. A non-empty Proof goes
-// in the proof header, and a non-nil Extra map adds headers.
-type launcherRequest struct {
-	Method string
-	Path   string
-	Body   []byte
-	Proof  string
-	Extra  map[string]string
-}
-
-// launcherSend sends one request of the runner protocol and returns the status
-// and the body.
-func (e *Env) launcherSend(ctx context.Context, tb testing.TB, lr launcherRequest) (int, []byte) {
-	tb.Helper()
-
-	method, path, proof, extra := lr.Method, lr.Path, lr.Proof, lr.Extra
-
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, bytes.NewReader(lr.Body))
-	if err != nil {
-		tb.Fatalf("build %s %s: %v", method, path, err)
-	}
-
-	req.Header.Set(protocol.HeaderRelease, launcherRelease)
-
-	if proof != "" {
-		req.Header.Set(protocol.HeaderProof, proof)
-	}
-
-	for k, v := range extra {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := e.client.Do(req)
-	if err != nil {
-		tb.Fatalf("%s %s: %v", method, path, err)
-	}
-
-	body, readErr := io.ReadAll(resp.Body)
-	if closeErr := resp.Body.Close(); closeErr != nil || readErr != nil {
-		tb.Fatalf("read %s %s: %v %v", method, path, readErr, closeErr)
-	}
-
-	return resp.StatusCode, body
-}
-
-// signedCall names what a proof signs besides the body: the subject that signs
-// and the method and the path of the request.
-type signedCall struct {
-	Subject string
-	Method  string
-	Path    string
-}
-
-// signProof returns the proof header of a request: the subject signs the
-// method, the path and the hash of the signed body with key.
-func signProof(tb testing.TB, key ed25519.PrivateKey, call signedCall, signedBody []byte) string {
-	tb.Helper()
-
-	subject, method, path := call.Subject, call.Method, call.Path
-
-	nonce := make([]byte, nonceBytes)
-	if _, err := rand.Read(nonce); err != nil {
-		tb.Fatalf("nonce: %v", err)
-	}
-
-	sum := sha256.Sum256(signedBody)
-	proof := runner.Proof{Subject: subject, At: time.Now(), Nonce: hex.EncodeToString(nonce), Signature: nil}
-	proof.Signature = ed25519.Sign(key, runner.ProofInput(proof, runner.Signed{
-		Method: method, PathQuery: path, BodySHA256: sum[:],
-	}))
-
-	return fmt.Sprintf("v1 sub=%s t=%d n=%s sig=%s", subject, proof.At.UnixMilli(), proof.Nonce,
-		base64.RawURLEncoding.EncodeToString(proof.Signature))
 }
 
 // Poll long-polls for one phase and returns it, or nil when the poll answers 204.
@@ -241,18 +198,9 @@ func (r *FakeRunner) Handoff(ctx context.Context, tb testing.TB, operation strin
 	return resp.HandoffToken
 }
 
-// call sends a signed POST of the runner with a JSON body (nil sends none).
+// call sends a POST of the runner with a JSON body (nil sends none), signed
+// with the key of the runner, and returns the status and the body.
 func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
-	tb.Helper()
-
-	return r.env.signedPost(ctx, tb, r.priv, signedCall{Subject: r.id, Method: "", Path: path}, body)
-}
-
-// signedPost sends a POST with a JSON body (nil sends none) to the path of
-// who, signed by the subject of who with key.
-func (e *Env) signedPost(
-	ctx context.Context, tb testing.TB, key ed25519.PrivateKey, who signedCall, body any,
-) (int, []byte) {
 	tb.Helper()
 
 	var raw []byte
@@ -261,67 +209,40 @@ func (e *Env) signedPost(
 		var err error
 
 		if raw, err = json.Marshal(body); err != nil {
-			tb.Fatalf("encode the body of %s: %v", who.Path, err)
+			tb.Fatalf("encode the body of %s: %v", path, err)
 		}
 	}
 
-	who.Method = http.MethodPost
+	resp, err := r.env.protocolClient().Signed(ctx, r.priv, r.id, &session.Request{
+		Method: http.MethodPost, Path: path, Body: raw, Header: map[string]string{"Content-Type": "application/json"},
+	}, nil)
+	if err != nil {
+		tb.Fatalf("POST %s: %v", path, err)
+	}
 
-	return e.launcherSend(ctx, tb, launcherRequest{
-		Method: who.Method, Path: who.Path, Body: raw, Extra: nil,
-		Proof: signProof(tb, key, who, raw),
-	})
+	return resp.Status, resp.Body
 }
 
-// FakeLauncher is the launcher of a claim: it holds the key of its job
-// session and signs each call with it.
+// FakeLauncher is the launcher of a claim: it holds the job session that the
+// session client of the launcher opened, and signs each call with its key.
 type FakeLauncher struct {
-	env  *Env
+	sess *session.Session
 	ID   string
-	priv ed25519.PrivateKey
 	// Assignment is what the server answered to the exchange.
 	Assignment protocol.Assignment
 }
 
-// OpenSession exchanges the handoff token for a job session as the launcher
-// does. It fails the test when the exchange does not answer 200.
+// OpenSession exchanges the handoff token for a job session with the session
+// client of the launcher. It fails the test when the exchange fails.
 func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *FakeLauncher {
 	tb.Helper()
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	sess, err := session.Open(ctx, e.protocolClient(), handoff)
 	if err != nil {
-		tb.Fatalf("generate the session key: %v", err)
+		tb.Fatalf("session exchange: %v", err)
 	}
 
-	raw, err := json.Marshal(protocol.SessionRequest{
-		HandoffToken: handoff, PublicKey: pub, Release: launcherRelease,
-		Proof: ed25519.Sign(
-			priv, runner.SessionChallenge(e.URL, handoff, runner.Key{Public: pub, CreatedAt: time.Time{}}),
-		),
-	})
-	if err != nil {
-		tb.Fatalf("encode the exchange: %v", err)
-	}
-
-	token := sha256.Sum256([]byte(handoff))
-	subject := hex.EncodeToString(token[:])
-
-	status, body := e.launcherSend(ctx, tb, launcherRequest{
-		Method: http.MethodPost, Path: protocol.PathSession, Body: raw, Extra: nil,
-		Proof: signProof(tb, priv, signedCall{
-			Subject: subject, Method: http.MethodPost, Path: protocol.PathSession,
-		}, raw),
-	})
-	if status != http.StatusOK {
-		tb.Fatalf("session exchange = %d %s, want 200", status, body)
-	}
-
-	var resp protocol.SessionResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		tb.Fatalf("decode the session: %v", err)
-	}
-
-	return &FakeLauncher{env: e, ID: resp.Session, priv: priv, Assignment: resp.Assignment}
+	return &FakeLauncher{sess: sess, ID: sess.ID, Assignment: sess.Assignment}
 }
 
 // Post sends a signed POST of the session with a JSON body (nil sends none)
@@ -329,7 +250,12 @@ func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *F
 func (l *FakeLauncher) Post(ctx context.Context, tb testing.TB, path string, body any) (int, []byte) {
 	tb.Helper()
 
-	return l.env.signedPost(ctx, tb, l.priv, signedCall{Subject: l.ID, Method: "", Path: path}, body)
+	resp, err := l.sess.Post(ctx, path, body)
+	if err != nil {
+		tb.Fatalf("POST %s: %v", path, err)
+	}
+
+	return resp.Status, resp.Body
 }
 
 // PutLog uploads one chunk of a log. The header and the proof carry the hash
@@ -337,13 +263,12 @@ func (l *FakeLauncher) Post(ctx context.Context, tb testing.TB, path string, bod
 func (l *FakeLauncher) PutLog(ctx context.Context, tb testing.TB, path string, chunk []byte) (int, []byte) {
 	tb.Helper()
 
-	sum := sha256.Sum256(chunk)
+	resp, err := l.sess.PutLogChunk(ctx, path, chunk)
+	if err != nil {
+		tb.Fatalf("PUT %s: %v", path, err)
+	}
 
-	return l.env.launcherSend(ctx, tb, launcherRequest{
-		Method: http.MethodPut, Path: path, Body: chunk,
-		Proof: signProof(tb, l.priv, signedCall{Subject: l.ID, Method: http.MethodPut, Path: path}, chunk),
-		Extra: map[string]string{protocol.HeaderContentSHA256: hex.EncodeToString(sum[:])},
-	})
+	return resp.Status, resp.Body
 }
 
 // ServerLogHolds reports which of the secrets the output of the stopped or

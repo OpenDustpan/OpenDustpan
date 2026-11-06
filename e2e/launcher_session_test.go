@@ -74,9 +74,30 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	}
 }
 
-// openLaunchedSession makes the unit and the pool, starts a job, joins a fake
-// runner, claims the phase and opens the session of the claim.
+// openLaunchedSession claims a phase and opens the session of the claim.
 func openLaunchedSession(t *testing.T, env *e2e.Env) *launched {
+	t.Helper()
+
+	c := claimAPhase(t, env)
+	launcher := env.OpenSession(t.Context(), t, c.handoff)
+
+	if launcher.Assignment.Job != c.job || len(launcher.Assignment.Steps) == 0 {
+		t.Fatalf("assignment = %+v, want the steps of the job %s", launcher.Assignment, c.job)
+	}
+
+	return &launched{env: env, job: c.job, handoff: c.handoff, launcher: launcher}
+}
+
+// claimed is a phase that the fake runner claimed: its job and the handoff
+// token of the claim.
+type claimed struct {
+	job     string
+	handoff string
+}
+
+// claimAPhase makes the unit and the pool, starts a job, joins a fake runner,
+// claims the phase and asks for the handoff token of the claim.
+func claimAPhase(t *testing.T, env *e2e.Env) claimed {
 	t.Helper()
 
 	ctx := t.Context()
@@ -116,14 +137,7 @@ func openLaunchedSession(t *testing.T, env *e2e.Env) *launched {
 		t.Fatalf("poll = %+v, want the phase of the job %s", work, started.ID)
 	}
 
-	handoff := fake.Handoff(ctx, t, work.Operation)
-	launcher := env.OpenSession(ctx, t, handoff)
-
-	if launcher.Assignment.Job != started.ID || len(launcher.Assignment.Steps) == 0 {
-		t.Fatalf("assignment = %+v, want the steps of the job %s", launcher.Assignment, started.ID)
-	}
-
-	return &launched{env: env, job: started.ID, handoff: handoff, launcher: launcher}
+	return claimed{job: started.ID, handoff: fake.Handoff(ctx, t, work.Operation)}
 }
 
 // pathOf returns the path of a step route with the step and the chunk number
