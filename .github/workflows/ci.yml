@@ -41,9 +41,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each job has its own GitHub-hosted runner (ubuntu-latest), so the jobs share
-# no disk and no port. The Go setup action keeps the Go build cache and the Go
-# module cache between runs with the GitHub Actions cache. The key holds the
-# hash of go.sum.
+# no disk and no port. The Go build cache (with the test results) and the Go
+# module cache are kept with the GitHub Actions cache, one entry for each job
+# and commit. A cache key can be written only once, so the key holds the
+# commit, and a job restores the newest entry of its own job. Only push and
+# scheduled runs on main save an entry. Pull requests and merge groups only
+# restore, so they cannot change the cache that main uses. GitHub removes the
+# least recently used entries when the repository is above its cache limit.
 
 jobs:
   # The checks that need no database. They run apart from the tests.
@@ -55,7 +59,21 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      # The job index keeps the two store jobs apart. go.mod holds the Go
+      # version, so a new toolchain starts from a new prefix.
+      - &go-cache-restore
+        name: Restore the Go caches
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
@@ -114,6 +132,17 @@ jobs:
         run: make docs-lint
       - name: The release record checks pass
         run: make release-record-check
+      # A failed job saves too: its build cache is still valid. The key is the
+      # one that the restore step computed.
+      - &go-cache-save
+        name: Save the Go caches
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
@@ -141,7 +170,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       # Pushes and pull requests use the test cache. The schedule runs every
       # package again (GO_TEST_COUNT=-count=1). The two store packages run in
       # the store job.
@@ -153,6 +183,7 @@ jobs:
         run: make bench
       - name: Build
         run: go build ./cmd/opendustpan
+      - *go-cache-save
 
   # The tests of the journal recording build. This build has its own tag, so
   # the go job does not run these tests. The make target holds the tag.
@@ -165,9 +196,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       - name: Journal route tests of the recording build
         run: make journal-test
+      - *go-cache-save
 
   # The SQLite and PostgreSQL store packages are the two longest test
   # packages, and both are CPU-bound. Each one runs in a job of its own, so
@@ -197,7 +230,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       # The runner throws the service container away after the job, so its
       # data needs no durability. Without fsync, each checkpoint of a store
       # test run needs less disk time. These settings change only what
@@ -222,6 +256,7 @@ jobs:
           DUSTPAN_TEST_POSTGRES_URL: ${{ matrix.store == 'postgres' && format('postgres://postgres:postgres@localhost:{0}/postgres?sslmode=disable', job.services.postgres.ports['5432']) || '' }}
           DUSTPAN_TEST_SKIP_FINAL_DROP: ${{ matrix.store == 'postgres' && '1' || '' }}
         run: make test-ci-store STORE=${{ matrix.store }} ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
+      - *go-cache-save
 
   # Trivy and TruffleHog (make trivy, make trufflehog). The binaries come from
   # the upstream releases, and each archive is checked against the SHA-256
@@ -244,7 +279,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       - name: Install Trivy and TruffleHog
         run: |
           set -euo pipefail
@@ -263,6 +299,7 @@ jobs:
         run: make trivy
       - name: TruffleHog scan
         run: make trufflehog
+      - *go-cache-save
 
   # The Helm chart (make chart-lint): helm lint, helm template and kubeconform.
   # The runner image has Helm. kubeconform is built from the pinned version of
@@ -275,13 +312,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       - name: Install kubeconform
         run: |
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Lint and render the Helm chart
         run: make chart-lint
+      - *go-cache-save
 
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
@@ -312,7 +351,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - &cache-clis
@@ -332,6 +372,7 @@ jobs:
           if [ -f e2e/report/summary.md ]; then
             cat e2e/report/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - *go-cache-save
 
   # The shorter tests that drive the server binary: the journal route, an
   # upgrade, a crash and network faults. Each one uses little CPU, so they
@@ -376,7 +417,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - *go-cache-restore
       - *cache-clis
       - name: Journal end-to-end tests
         env:
@@ -400,3 +442,4 @@ jobs:
           TOXIPROXY_UPSTREAM_HOST: host.docker.internal
         run: make faults
       - *show-report
+      - *go-cache-save
