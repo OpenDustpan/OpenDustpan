@@ -29,9 +29,6 @@ These are the project owner's own instructions. They hold until the owner change
   image build), so every worker prompt says: if `psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select 1"` is refused, run
   `service postgresql start` and check again. No Docker steps. Sessions started before 2026-10-16 22:30 UTC still need
   the old Docker recipe (mirror.gcr.io/library/postgres:18, --shm-size=1g, port 55432).
-- CI runners are the owner's bare-metal machines without sudo. CI changes must not use sudo. The owner installs system
-  packages on them (postgresql-client 18 installed 2026-10-16); ask the owner for any new package.
-
 - Keep the pipeline full (owner, 2026-10-16). On every wake: list open ready-for-agent issues and open PRs in BOTH
   repositories, OpenDustpan/OpenDustpan and OpenDustpan/console (owner, 2026-10-17); every unblocked issue and every
   open PR without a live worker gets a Haiku worker now. Do not wait to be asked.
@@ -40,8 +37,8 @@ These are the project owner's own instructions. They hold until the owner change
   report arrives, act on it, then archive that watchdog session at once.
 
 - mergiraf is installed in all new sessions (owner, 2026-10-16). It resolves many list and import conflicts on merge,
-  but its result can be wrong: it once kept a migration twice in schema.go. A worker still runs make generate, make
-  check and make e2e after every merge. Workers started before this date may not have it.
+  but its result can be wrong: it once kept a migration twice in schema.go. A worker still runs make generate and the
+  local gates after every merge. Workers started before this date may not have it.
 
 - Repowise (owner, 2026-10-17): every session has the read-only Repowise tools (mcp__Repowise_OpenDustpan__*; see `docs/agents/local-setup.md` for the local setup) over both
   repositories. Worker and reviewer prompts say: use get_context, search_codebase and get_symbol to find code before
@@ -65,34 +62,45 @@ These are the project owner's own instructions. They hold until the owner change
 - Keep each session title as "<role>: PR N (state)" or "<role>: #N (state)". Rename a session when its work changes.
 - Check-in (owner, 2026-10-17): scheduled task trig_0197R4UtyxPRKvTpmfzPAySj fires into this session at :15 every hour.
   Its steps are in docs/agents/lead-checkin.md: check
-  every session, give work to every open PR and unblocked issue, close issues whose work is merged, merge PRs that meet
-  the merge rule, tell the owner in 3 lines or fewer. One reminder only (owner: "one reminder is enough"). Do not add a
+  every session, give work to every open PR and unblocked issue, close issues whose work is merged, report PRs that
+  are ready for auto-merge, tell the owner in 3 lines or fewer. One reminder only (owner: "one reminder is enough"). Do not add a
   send_later.
 
 ## Owner-merged PRs
 
 - Changes to process or agent rules (`.claude/rules/`, `docs/agents/`, CLAUDE.md): open the PR and leave it for the
-  owner. The owner reviews and merges it. Do not merge it myself.
+  owner. The owner reviews it and enables auto-merge. Do not enable auto-merge myself.
 
 ## Timers
 
 - Workers do not schedule check-ins. Delete any check-in a worker makes. PR events and messages wake sessions; idle
   timers cost money. The hourly lead check-in above is the owner's timer and is the only one.
 
-## Merging
+## Pull request flow
 
-- Why: CI is often a bottleneck because of the volume of code we generate while we bootstrap the project.
-- Merge without waiting for CI when the worker reports a full `make check` (with PostgreSQL) and `make e2e` on that
-  exact head, the review is done, and, when ovcheck reports OVERLAP, a worker has merged current main into the branch
-  and reported make check and make e2e on that merged head.
-- Main health (owner, approved 2026-10-17): after each server merge, one worker runs make check (with PostgreSQL) and
-  make e2e on the new main head and reports. Do not merge the next server PR until that report is green, or until the
-  next PR's worker has run the checks on a head that already contains that main. A red main gets a fix worker at once.
-  Why: PRs that each passed alone broke main together about 10 times from 2026-10-11 to 2026-10-17.
-- I do not run tests, merges, conflict fixes or code fixes myself (owner, 2026-10-16: "you know the rule"). Running
-  ovcheck, reading a diff, and the merge button are mine; everything that runs the build or changes code goes to a
-  worker.
-- Still check every PR body for closing keywords before the merge.
+Every pull request follows these steps. The maintainer owns the merge. The lead and the workers never merge.
+
+1. The author branches from the current GitHub `main` (`git fetch origin main`) and opens the pull request ready for
+   review, not as a draft. CI runs on it.
+2. Before each push, the author runs the local gates:
+   - `golangci-lint run` on the touched packages, then `golangci-lint run ./...`.
+   - `go test -race` of every touched package. When a store changes, run both stores (SQLite and PostgreSQL).
+   - `sqlc diff` when `queries.sql` changes.
+   - `make clients-check` when `openapi.json` changes.
+   - `make docs-lint` when docs change.
+
+   CI runs the rest: nilaway, semgrep, vuln, trivy, trufflehog, licenses, the full race suite and the e2e jobs.
+3. A review gives CLEAN or CHANGES. The author fixes CHANGES in new commits. Nobody amends, rebases or force-pushes.
+   To update a branch from `main`, merge `main` into the branch.
+4. After a CLEAN review and green pull request CI, the maintainer enables auto-merge (method REBASE). The merge queue
+   tests the pull request on top of `main` and merges it. A failed queue run removes the pull request from the queue.
+   The author fixes it with new commits, and the pull request is queued again.
+5. A stacked pull request targets the branch of the previous pull request. After the previous pull request merges, move
+   the base of the stacked pull request to `main`.
+
+- Check every pull request body for closing keywords before the maintainer enables auto-merge.
+- The lead does not run tests, conflict fixes or code fixes (owner, 2026-10-16: "you know the rule"). Reading a diff
+  and reporting to the maintainer are the lead's work. Everything that runs the build or changes code goes to a worker.
 
 ## Nightly architecture review
 
