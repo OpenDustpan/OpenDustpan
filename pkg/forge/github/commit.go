@@ -224,7 +224,7 @@ func (f *gitHub) requireAncestor(ctx context.Context, r repoName, bearer, base, 
 	// Defense in depth: "ahead" and "identical" say that the base is an
 	// ancestor. The merge base must be the base too, so that an answer for
 	// other commits never passes.
-	if (status != "ahead" && status != "identical") || mergeBase.SHA != base {
+	if (status != compareAhead && status != compareIdentical) || mergeBase.SHA != base {
 		return conflict
 	}
 

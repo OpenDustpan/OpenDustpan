@@ -95,6 +95,22 @@ func (x *hostFixture) PushEntry(
 	return commitOf(c), nil
 }
 
+func (x *hostFixture) Statuses(_ context.Context, commitID string) ([]forge.Status, error) {
+	shown, err := x.host.Statuses(x.repo, commitID)
+	if err != nil {
+		return nil, fmt.Errorf("read the statuses of the fake: %w", err)
+	}
+
+	out := make([]forge.Status, 0, len(shown))
+	for _, s := range shown {
+		out = append(out, forge.Status{
+			State: forge.StatusState(s.State), Context: s.Context, Description: s.Description, TargetURL: s.TargetURL,
+		})
+	}
+
+	return out, nil
+}
+
 func commitOf(c githubfake.Commit) forge.Commit {
 	return forge.Commit{ID: c.ID, Time: c.Time}
 }
@@ -268,7 +284,9 @@ func newHost(t *testing.T) *githubfake.Fake {
 	t.Helper()
 
 	return newHostWith(t, func(c *githubfake.Config) {
-		c.Permissions = map[string]string{"contents": "write", "metadata": "read", "pull_requests": "write"}
+		c.Permissions = map[string]string{
+			"contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write",
+		}
 	})
 }
 
