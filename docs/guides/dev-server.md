@@ -89,6 +89,10 @@ The person has these grants, and no other:
 Each grant has the creator `system`.
 The audit entry of each change gives the reason "demo user of opendustpan dev".
 The person does not hold the site-administrator role.
+At each start, `dev` revokes every other grant of the person, for example a role that someone added after the last start.
+The audit entry of each revoke names the grant and gives the reason "demo reset".
+If the grant is the last site-administrator grant of the installation, the revoke fails and `dev` does not start.
+Give the role to a second person first, or start `dev` without `--demo`.
 It reads the namespaces and works in them, but it cannot change an installation setting.
 The server refuses each change of its password, its user name and its factors with the error code `local-user.demo-fixed`.
 
