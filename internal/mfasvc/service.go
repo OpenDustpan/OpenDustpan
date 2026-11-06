@@ -152,7 +152,7 @@ func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) 
 
 	c, err := s.newChallenge(ctx, &mfa.Challenge{
 		CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: mfa.CeremonyRegister, PersonID: p.ID, PendingID: "",
-		SessionID: a.SessionID, Source: "",
+		SessionID: a.SessionID, Source: "", SourceGroup: "",
 	})
 	if err != nil {
 		return nil, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "challenge cannot be stored", err)
@@ -273,9 +273,11 @@ func (s *Service) BeginAssertion(ctx context.Context, a Actor, k mfa.Ceremony, b
 		allow = keys
 	}
 
+	keys := challengeSource(k, a.Entry.SourceIP)
+
 	c, err := s.newChallenge(ctx, &mfa.Challenge{
 		CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: personID, PendingID: pendingID,
-		SessionID: sessionID, Source: challengeSource(k, a.Entry.SourceIP),
+		SessionID: sessionID, Source: keys.source, SourceGroup: keys.group,
 	})
 	if errors.Is(err, mfa.ErrSourceChallengeLimit) {
 		return nil, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
@@ -308,14 +310,16 @@ func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 			PendingID: "",
 			SessionID: "",
 			Source:    "",
+
+			SourceGroup: "",
 		},
 		mfa.CeremonySecondFactor: {
 			CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: b.PersonID, PendingID: b.PendingID,
-			SessionID: "", Source: "",
+			SessionID: "", Source: "", SourceGroup: "",
 		},
 		mfa.CeremonyFresh: {
 			CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: a.PrincipalID, PendingID: "",
-			SessionID: a.SessionID, Source: "",
+			SessionID: a.SessionID, Source: "", SourceGroup: "",
 		},
 	}
 
@@ -622,27 +626,36 @@ func (s *Service) refuse(ctx context.Context, base audit.Entry, tg target, cause
 	return err
 }
 
-// challengeSource returns the budget key of the source of a challenge of the
-// kind k that starts from the address address, which the HTTP adapter took
-// with the trusted-proxy rules. Only a sign-in has a source: its start is
-// public, so its open challenges are counted for each source. An address that
-// is empty, or is not valid text of at most mfa.MaxSourceBytes bytes, gets
-// mfa.UnknownSource, which has one shared budget, so a request that hides its
-// address is limited and never free.
+// challengeSource returns the budget key of the source and the key of the site
+// group of a challenge of the kind k that starts from the address address,
+// which the HTTP adapter took with the trusted-proxy rules. Only a sign-in has
+// them: its start is public, so its open challenges are counted for each
+// source (an IPv4 address or the /64 of an IPv6 address) and for each site
+// group (the /48 of an IPv6 address). An address that is empty, or is not
+// valid text of at most mfa.MaxSourceBytes bytes, gets mfa.UnknownSource for
+// both, which has one shared budget, so a request that hides its address is
+// limited and never free.
 //
-// Defense in depth: the store checks the source of the challenge again.
-func challengeSource(k mfa.Ceremony, address string) string {
+// Defense in depth: the store checks both keys of the challenge again.
+func challengeSource(k mfa.Ceremony, address string) sourceKeys {
 	if k != mfa.CeremonySignIn {
-		return ""
+		return sourceKeys{source: "", group: ""}
 	}
 
-	key := authgate.SourceKey(address)
+	keys := sourceKeys{source: authgate.SourceKey(address), group: authgate.SourceGroupKey(address)}
 
-	if !mfa.ValidSource(key) {
-		return mfa.UnknownSource
+	if !mfa.ValidSource(keys.source) || !mfa.ValidSource(keys.group) {
+		return sourceKeys{source: mfa.UnknownSource, group: mfa.UnknownSource}
 	}
 
-	return key
+	return keys
+}
+
+// sourceKeys are the budget key of the source of a sign-in start and the key
+// of its site group.
+type sourceKeys struct {
+	source string
+	group  string
 }
 
 // newChallenge stores a new challenge for the kind, the person, the pending

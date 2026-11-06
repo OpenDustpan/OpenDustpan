@@ -174,7 +174,12 @@ is the client address that the server resolves: a forwarding header counts only
 when a trusted proxy sent it.
 
 Each source address also holds at most 20 open sign-in challenges. An IPv6
-source is its /64 range. Over that count a start answers 429 with the error
+source is its /64 range. A site group holds at most 80 open sign-in
+challenges, which is 4 times the count of one source. A site group is the /48
+of an IPv6 address, and an IPv4 address is its own group. One /48 holds 65,536
+ranges of /64, so without the group count one allocation could fill the
+10,000 challenges of the installation. With it, a sender needs 125 /48 ranges.
+Over either count a start answers 429 with the error
 code `mfa.sign-in-source-limit`, stores no row, and writes an audit entry. The
 limit keeps one source from using the whole budget of the installation, so a
 sign-in from another address, a break-glass sign-in included, still works

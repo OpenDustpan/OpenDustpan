@@ -118,7 +118,7 @@ type emptyStore struct {
 func (emptyStore) TakeChallenge(context.Context, mfa.Digest, time.Time) (mfa.Challenge, error) {
 	return mfa.Challenge{
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute), Kind: mfa.CeremonyRegister,
-		PersonID: "", PendingID: "", SessionID: "", Source: "",
+		PersonID: "", PendingID: "", SessionID: "", Source: "", SourceGroup: "",
 	}, nil
 }
 

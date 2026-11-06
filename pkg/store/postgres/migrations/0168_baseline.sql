@@ -820,17 +820,20 @@ CREATE TABLE passkey_challenges (
     pending_id text DEFAULT ''::text NOT NULL,
     session_id text DEFAULT ''::text NOT NULL,
     source text DEFAULT ''::text NOT NULL,
+    source_group text DEFAULT ''::text NOT NULL,
     created_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
     CONSTRAINT passkey_challenges_check CHECK (((expires_at_ms > created_at_ms) AND ((expires_at_ms - created_at_ms) <= 300000))),
     CONSTRAINT passkey_challenges_check1 CHECK (((kind = 'sign-in'::text) = (principal_id = ''::text))),
     CONSTRAINT passkey_challenges_check2 CHECK (((kind = 'sign-in'::text) = (source <> ''::text))),
+    CONSTRAINT passkey_challenges_check3 CHECK (((kind = 'sign-in'::text) = (source_group <> ''::text))),
     CONSTRAINT passkey_challenges_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT passkey_challenges_kind_check CHECK ((kind = ANY (ARRAY['register'::text, 'sign-in'::text, 'second-factor'::text, 'fresh'::text]))),
     CONSTRAINT passkey_challenges_pending_id_check CHECK ((length(pending_id) <= 128)),
     CONSTRAINT passkey_challenges_principal_id_check CHECK ((length(principal_id) <= 128)),
     CONSTRAINT passkey_challenges_session_id_check CHECK ((length(session_id) <= 128)),
-    CONSTRAINT passkey_challenges_source_check CHECK (((length(source) <= 64) AND (source ~ '^[ -~]*$'::text)))
+    CONSTRAINT passkey_challenges_source_check CHECK (((length(source) <= 64) AND (source ~ '^[ -~]*$'::text))),
+    CONSTRAINT passkey_challenges_source_group_check CHECK (((length(source_group) <= 64) AND (source_group ~ '^[ -~]*$'::text)))
 );
 
 CREATE TABLE passkeys (
@@ -1917,6 +1920,8 @@ CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (n
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 
 CREATE INDEX passkey_challenges_source ON passkey_challenges USING btree (source, expires_at_ms);
+
+CREATE INDEX passkey_challenges_source_group ON passkey_challenges USING btree (source_group, expires_at_ms);
 
 CREATE INDEX passkeys_principal ON passkeys USING btree (principal_id, created_at_ms, id COLLATE "C");
 

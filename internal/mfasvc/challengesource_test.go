@@ -45,16 +45,17 @@ func TestSignInChallengeSource(t *testing.T) {
 		name    string
 		address string
 		want    string
+		group   string
 	}{
-		{"IPv4 address", "198.51.100.7", "198.51.100.7"},
-		{"IPv6 address is its /64", "2001:db8:0:1:ffff::2", "2001:db8:0:1::/64"},
-		{"IPv4-mapped IPv6 address is the IPv4 address", "::ffff:198.51.100.7", "198.51.100.7"},
-		{"empty", "", mfa.UnknownSource},
-		{"line break", "198.51.100.7\r\nX-Injected: 1", mfa.UnknownSource},
-		{"control character", "198.51.100.7\x00", mfa.UnknownSource},
-		{"non-ASCII", "198.51.100.é", mfa.UnknownSource},
-		{"over the length", strings.Repeat("a", mfa.MaxSourceBytes+1), mfa.UnknownSource},
-		{"scope separator", "a|b", "|"},
+		{"IPv4 address", "198.51.100.7", "198.51.100.7", "198.51.100.7"},
+		{"IPv6 address is its /64 and /48", "2001:db8:0:1:ffff::2", "2001:db8:0:1::/64", "2001:db8::/48"},
+		{"IPv4-mapped IPv6 address is the IPv4 address", "::ffff:198.51.100.7", "198.51.100.7", "198.51.100.7"},
+		{"empty", "", mfa.UnknownSource, mfa.UnknownSource},
+		{"line break", "198.51.100.7\r\nX-Injected: 1", mfa.UnknownSource, mfa.UnknownSource},
+		{"control character", "198.51.100.7\x00", mfa.UnknownSource, mfa.UnknownSource},
+		{"non-ASCII", "198.51.100.é", mfa.UnknownSource, mfa.UnknownSource},
+		{"over the length", strings.Repeat("a", mfa.MaxSourceBytes+1), mfa.UnknownSource, mfa.UnknownSource},
+		{"scope separator", "a|b", "|", "|"},
 	}
 
 	for _, tc := range cases {
@@ -82,8 +83,13 @@ func TestSignInChallengeSource(t *testing.T) {
 				t.Fatalf("begin: %v", err)
 			}
 
-			if len(rec.seen) != 1 || rec.seen[0].Source != tc.want {
-				t.Fatalf("stored challenges = %+v, want one with the source %q", rec.seen, tc.want)
+			if len(rec.seen) != 1 || rec.seen[0].Source != tc.want || rec.seen[0].SourceGroup != tc.group {
+				t.Fatalf(
+					"stored challenges = %+v, want one with the source %q and the group %q",
+					rec.seen,
+					tc.want,
+					tc.group,
+				)
 			}
 		})
 	}

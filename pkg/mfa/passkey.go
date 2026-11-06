@@ -212,11 +212,11 @@ func ValidSource(source string) bool {
 // source goes to a count by source and to the audit log, so it holds no line
 // break and no control character.
 func (c Challenge) validateSource() error {
-	if (c.Kind == CeremonySignIn) != (c.Source != "") {
-		return fmt.Errorf("%w: only a %s ceremony has a source", ErrInvalid, CeremonySignIn)
+	if (c.Kind == CeremonySignIn) != (c.Source != "") || (c.Kind == CeremonySignIn) != (c.SourceGroup != "") {
+		return fmt.Errorf("%w: only a %s ceremony has a source and a source group", ErrInvalid, CeremonySignIn)
 	}
 
-	if c.Source != "" && !ValidSource(c.Source) {
+	if (c.Source != "" && !ValidSource(c.Source)) || (c.SourceGroup != "" && !ValidSource(c.SourceGroup)) {
 		return fmt.Errorf("%w: challenge source is not %d printable ASCII bytes or fewer", ErrInvalid, MaxSourceBytes)
 	}
 

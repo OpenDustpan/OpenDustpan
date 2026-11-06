@@ -69,6 +69,7 @@ type ChallengeRow struct {
 	PendingID   string
 	SessionID   string
 	Source      string
+	SourceGroup string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
@@ -123,6 +124,9 @@ type ChallengeWrites interface {
 	// CountOpenChallengesBySource counts the challenges of the kind from the
 	// source that have not expired at atMs.
 	CountOpenChallengesBySource(ctx context.Context, kind, source string, atMs int64) (int64, error)
+	// CountOpenChallengesBySourceGroup counts the challenges of the kind from
+	// the site group that have not expired at atMs.
+	CountOpenChallengesBySourceGroup(ctx context.Context, kind, group string, atMs int64) (int64, error)
 	// TakeChallenge deletes the challenge digest and returns it.
 	TakeChallenge(ctx context.Context, digest string) (ChallengeRow, error)
 }
@@ -483,6 +487,7 @@ func ChallengeRowOf(c mfa.Challenge, d mfa.Digest) ChallengeRow {
 		PendingID:   c.PendingID,
 		SessionID:   c.SessionID,
 		Source:      c.Source,
+		SourceGroup: c.SourceGroup,
 		CreatedAtMs: codec.Millis(c.CreatedAt),
 		ExpiresAtMs: codec.Millis(c.ExpiresAt),
 	}
@@ -492,13 +497,14 @@ func ChallengeRowOf(c mfa.Challenge, d mfa.Digest) ChallengeRow {
 // for a row that fails the checks of a challenge.
 func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 	c := mfa.Challenge{
-		CreatedAt: codec.FromMillis(r.CreatedAtMs),
-		ExpiresAt: codec.FromMillis(r.ExpiresAtMs),
-		Kind:      mfa.Ceremony(r.Kind),
-		PersonID:  r.PrincipalID,
-		PendingID: r.PendingID,
-		SessionID: r.SessionID,
-		Source:    r.Source,
+		CreatedAt:   codec.FromMillis(r.CreatedAtMs),
+		ExpiresAt:   codec.FromMillis(r.ExpiresAtMs),
+		Kind:        mfa.Ceremony(r.Kind),
+		PersonID:    r.PrincipalID,
+		PendingID:   r.PendingID,
+		SessionID:   r.SessionID,
+		Source:      r.Source,
+		SourceGroup: r.SourceGroup,
 	}
 
 	// Defense in depth: each write checks the challenge, and the CHECK
@@ -550,8 +556,8 @@ func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) 
 	return nil
 }
 
-// checkSignInCaps returns mfa.ErrSourceChallengeLimit when the source of the
-// sign-in challenge c holds the most open ones, and mfa.ErrChallengeLimit when
+// checkSignInCaps returns mfa.ErrSourceChallengeLimit when the source or the
+// site group of the sign-in challenge c holds the most open ones, and mfa.ErrChallengeLimit when
 // the installation holds the most open ones.
 func checkSignInCaps(ctx context.Context, tx Tx, c mfa.Challenge) error {
 	bySource, err := tx.CountOpenChallengesBySource(ctx, string(c.Kind), c.Source, codec.Millis(c.CreatedAt))
@@ -560,6 +566,15 @@ func checkSignInCaps(ctx context.Context, tx Tx, c mfa.Challenge) error {
 	}
 
 	if bySource >= mfa.MaxOpenSignInChallengesPerSource {
+		return mfa.ErrSourceChallengeLimit
+	}
+
+	byGroup, err := tx.CountOpenChallengesBySourceGroup(ctx, string(c.Kind), c.SourceGroup, codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges of a source group: %w", err)
+	}
+
+	if byGroup >= mfa.MaxOpenSignInChallengesPerSourceGroup {
 		return mfa.ErrSourceChallengeLimit
 	}
 

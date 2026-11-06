@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -112,6 +113,31 @@ func TestPasskeySignInSourceIPv6Range(t *testing.T) {
 
 	if got := e.floodBegins(t, "[2001:db8:0:2::1]:4000", 1, nil); got != http.StatusOK {
 		t.Errorf("begin of the next range = %d, want 200", got)
+	}
+}
+
+// TestPasskeySignInSourceGroupCap checks the count of a site group. Several
+// /64 ranges of one /48 each stay under their own count, and together reach
+// the count of the group. The next start from a new /64 of that /48 is refused
+// with 429 and the code of the cap, and a start from another /48 works.
+func TestPasskeySignInSourceGroupCap(t *testing.T) {
+	t.Parallel()
+
+	e := newPasskeySignInEnv(t)
+
+	ranges := mfa.MaxOpenSignInChallengesPerSourceGroup / mfa.MaxOpenSignInChallengesPerSource
+	for i := range ranges {
+		e.fillSource(t, fmt.Sprintf("[2001:db8:0:%x::1]:4000", i+1))
+	}
+
+	e.remote = "[2001:db8:0:ffff::1]:4000"
+	over := e.post(t, signInBeginTarget, "", nil)
+	e.remote = ""
+
+	want(t, "begin of a new range of a full /48", over, http.StatusTooManyRequests, errcode.MFASignInSourceLimit)
+
+	if got := e.floodBegins(t, "[2001:db9:0:1::1]:4000", 1, nil); got != http.StatusOK {
+		t.Errorf("begin of another /48 = %d, want 200", got)
 	}
 }
 

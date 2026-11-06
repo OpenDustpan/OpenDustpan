@@ -215,7 +215,7 @@ client selects its text from `errorCode`.
 | 409 | `local-user.demo-fixed` | The person is the demo user of a dev installation |
 | 413 | `request.body-too-large` | The body is longer than `errorArgs.maxBytes` bytes |
 | 429 | `mfa.rate-limited` | The person started too many ceremonies. The header `Retry-After` holds the wait in seconds |
-| 429 | `mfa.sign-in-source-limit` | The source address holds 20 open sign-in challenges. A challenge ends after 5 minutes |
+| 429 | `mfa.sign-in-source-limit` | The source address holds 20 open sign-in challenges, or its site group (the /48 of an IPv6 address) holds 80. A challenge ends after 5 minutes |
 | 429 | `auth.rate-limited` | The source address used the budget of the starts or of the failed responses of the sign-in with a passkey |
 | 503 | `mfa.unavailable` | The store of the passkeys cannot answer |
 

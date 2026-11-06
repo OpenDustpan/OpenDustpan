@@ -5440,6 +5440,11 @@ SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND expires_at_ms > $2;
 -- given time.
 SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source = $2 AND expires_at_ms > $3;
 
+-- name: CountOpenPasskeyChallengesBySourceGroup :one
+-- The challenges of one kind from one site group that have not expired at the
+-- given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source_group = $2 AND expires_at_ms > $3;
+
 -- name: CountPasskeys :one
 -- The passkeys of a person, read under the lock of the principal.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1;
@@ -5453,9 +5458,9 @@ VALUES (sqlc.arg('id'), sqlc.arg('principal_id'), sqlc.arg('name'), sqlc.arg('cr
 ON CONFLICT DO NOTHING;
 
 -- name: CreatePasskeyChallenge :execrows
-INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, created_at_ms,
-                                expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, source_group,
+                                created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING;
 
 -- name: DeleteExpiredPasskeyChallenges :execrows

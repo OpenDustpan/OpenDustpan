@@ -97,6 +97,10 @@ func passkeyCases() []passkeyCase {
 		},
 		{name: "a challenge with a hostile source fails with ErrInvalid", test: testChallengeSourceChecks},
 		{
+			name: "a site group over its cap of open sign-in challenges stores no row, and another group still works",
+			test: testSourceGroupCap,
+		},
+		{
 			name: "starts of one source at the same time: exactly the cap succeeds and the others get " +
 				"ErrSourceChallengeLimit",
 			test: testSourceCapRace,
@@ -997,9 +1001,16 @@ const defaultSource = "192.0.2.1"
 
 // challengeFrom returns a sign-in challenge from the source that starts at
 // second sec.
+// Its site group is its source, so that each source is its own group.
 func challengeFrom(source string, sec int) mfa.Challenge {
+	return challengeIn(source, source, sec)
+}
+
+// challengeIn returns a sign-in challenge from the source in the site group
+// that starts at second sec.
+func challengeIn(source, group string, sec int) mfa.Challenge {
 	c := challengeOf(mfa.CeremonySignIn, sec)
-	c.Source = source
+	c.Source, c.SourceGroup = source, group
 
 	return c
 }
@@ -1014,10 +1025,12 @@ func challengeOf(k mfa.Ceremony, sec int) mfa.Challenge {
 		PendingID: "",
 		SessionID: "",
 		Source:    "",
+
+		SourceGroup: "",
 	}
 
 	if k == mfa.CeremonySignIn {
-		c.Source = defaultSource
+		c.Source, c.SourceGroup = defaultSource, defaultSource
 	}
 
 	if k == mfa.CeremonyRegister || k == mfa.CeremonyFresh {
@@ -1123,6 +1136,54 @@ func testSignInSourceCap(t *testing.T, s PasskeyStore) {
 	testSourceRecovers(t, s, flood, over)
 }
 
+// testSourceGroupCap fills one site group (the /48 of an IPv6 address) with
+// the most open sign-in challenges that one group can hold, from several
+// sources (the /64 ranges) that each stay under their own count. The next
+// challenge of the group is refused with ErrSourceChallengeLimit, from a new
+// source too, and stores no row. Another group still works, and the group
+// works again when one challenge ends.
+func testSourceGroupCap(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	ctx := t.Context()
+	group := "2001:db8::/48"
+	perGroup := mfa.MaxOpenSignInChallengesPerSourceGroup
+	n := 0
+
+	for n < perGroup {
+		source := "2001:db8:0:" + strconv.Itoa(n/mfa.MaxOpenSignInChallengesPerSource) + "::/64"
+
+		if err := s.CreateChallenge(ctx, challengeIn(source, group, 0), digest(n)); err != nil {
+			t.Fatalf("challenge %d of the group: %v", n, err)
+		}
+
+		n++
+	}
+
+	over := digest(n)
+
+	err := s.CreateChallenge(ctx, challengeIn("2001:db8:0:ffff::/64", group, 1), over)
+	if !errors.Is(err, mfa.ErrSourceChallengeLimit) || errors.Is(err, mfa.ErrUnavailable) {
+		t.Fatalf("challenge over the count of a group = %v, want ErrSourceChallengeLimit", err)
+	}
+
+	if _, err := s.TakeChallenge(ctx, over, at(2)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("take of the refused challenge = %v, want ErrNotFound: the refusal stored a row", err)
+	}
+
+	if err := s.CreateChallenge(ctx, challengeIn("2001:db9:0:1::/64", "2001:db9::/48", 1), digest(n+1)); err != nil {
+		t.Fatalf("challenge of another group: %v", err)
+	}
+
+	if _, err := s.TakeChallenge(ctx, digest(0), at(2)); err != nil {
+		t.Fatalf("take of an open challenge: %v", err)
+	}
+
+	if err := s.CreateChallenge(ctx, challengeIn("2001:db8:0:ffff::/64", group, 2), over); err != nil {
+		t.Fatalf("challenge after one of the group ended: %v", err)
+	}
+}
+
 // testSourceCapRace sends twice the count of one source at the same time. The
 // count and the insert of a start are one step, so exactly the count succeeds
 // and each other start gets ErrSourceChallengeLimit. The same step covers the
@@ -1195,7 +1256,10 @@ func testChallengeSourceChecks(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
 	onFresh := challengeOf(mfa.CeremonyFresh, 0)
-	onFresh.Source = "198.51.100.7"
+	onFresh.Source, onFresh.SourceGroup = "198.51.100.7", "198.51.100.7"
+
+	onFreshGroup := challengeOf(mfa.CeremonyFresh, 0)
+	onFreshGroup.SourceGroup = "198.51.100.7"
 
 	cases := [...]struct {
 		name string
@@ -1206,6 +1270,10 @@ func testChallengeSourceChecks(t *testing.T, s PasskeyStore) {
 		{"source with a non-ASCII character", challengeFrom("198.51.100.\u00e9", 0)},
 		{"source over the length", challengeFrom(strings.Repeat("a", mfa.MaxSourceBytes+1), 0)},
 		{"source on a fresh challenge", onFresh},
+		{"source group on a fresh challenge", onFreshGroup},
+		{"sign-in without a source group", challengeIn("198.51.100.7", "", 0)},
+		{"source group with a line break", challengeIn("198.51.100.7", "198.51.100.7\r\nX: 1", 0)},
+		{"source group over the length", challengeIn("198.51.100.7", strings.Repeat("a", mfa.MaxSourceBytes+1), 0)},
 	}
 
 	for i := range cases {

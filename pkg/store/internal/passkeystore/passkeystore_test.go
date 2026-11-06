@@ -77,7 +77,7 @@ func TestChallengeOfRefusesAChangedRow(t *testing.T) {
 
 	good := passkeystore.ChallengeRow{
 		Digest: strings.Repeat("a", 64), Kind: "fresh", PrincipalID: "prn-1", PendingID: "", SessionID: "ses-1",
-		Source: "", CreatedAtMs: 1_000, ExpiresAtMs: 2_000,
+		Source: "", SourceGroup: "", CreatedAtMs: 1_000, ExpiresAtMs: 2_000,
 	}
 
 	if _, err := passkeystore.ChallengeOf(good); err != nil {
@@ -158,6 +158,10 @@ func (looseTx) DeleteExpiredChallenges(context.Context, int64) (int64, error) { 
 func (looseTx) CountOpenChallenges(context.Context, string, int64) (int64, error) { return 0, nil }
 
 func (looseTx) LockSignInChallenges(context.Context) error { return nil }
+
+func (looseTx) CountOpenChallengesBySourceGroup(context.Context, string, string, int64) (int64, error) {
+	return 0, nil
+}
 
 func (looseTx) CountOpenChallengesBySource(context.Context, string, string, int64) (int64, error) {
 	return 0, nil

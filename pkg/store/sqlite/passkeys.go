@@ -275,6 +275,7 @@ func (t passkeyTx) CreateChallenge(ctx context.Context, r passkeystore.Challenge
 		PendingID:   r.PendingID,
 		SessionID:   r.SessionID,
 		Source:      r.Source,
+		SourceGroup: r.SourceGroup,
 		CreatedAtMs: r.CreatedAtMs,
 		ExpiresAtMs: r.ExpiresAtMs,
 	})
@@ -302,6 +303,16 @@ func (t passkeyTx) CountOpenChallengesBySource(
 // one at a time, so a count and the insert after it are one step.
 func (t passkeyTx) LockSignInChallenges(context.Context) error { return nil }
 
+func (t passkeyTx) CountOpenChallengesBySourceGroup(
+	ctx context.Context, kind, group string, atMs int64,
+) (int64, error) {
+	n, err := t.q.CountOpenPasskeyChallengesBySourceGroup(ctx, db.CountOpenPasskeyChallengesBySourceGroupParams{
+		Kind: kind, SourceGroup: group, ExpiresAtMs: atMs,
+	})
+
+	return n, passkeyErr(err)
+}
+
 func (t passkeyTx) DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error) {
 	n, err := t.q.DeleteExpiredPasskeyChallenges(ctx, atMs)
 
@@ -321,6 +332,7 @@ func (t passkeyTx) TakeChallenge(ctx context.Context, digest string) (passkeysto
 		PendingID:   r.PendingID,
 		SessionID:   r.SessionID,
 		Source:      r.Source,
+		SourceGroup: r.SourceGroup,
 		CreatedAtMs: r.CreatedAtMs,
 		ExpiresAtMs: r.ExpiresAtMs,
 	}, nil
