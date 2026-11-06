@@ -102,6 +102,12 @@ type Claims map[string]any
 // server binds it to the open, the block and the subject. Token returns
 // profile.ErrInvalid for an audience or a lifetime that the issuer refuses,
 // and the other errors of profile.Issuer.Login.
+//
+// A source does not commit the audit entry of a token (profile.Token.Entry).
+// Run collects the entry of each token that it gives to an adapter in
+// Outcome.Tokens, and the caller of Run commits it in the transaction that
+// records the open, before any value leaves. So an adapter that drops the
+// entry cannot make a token with no audit record.
 type TokenSource interface {
 	Token(ctx context.Context, audience string, lifetime time.Duration) (profile.Token, error)
 }
