@@ -432,7 +432,13 @@ func rqControlCharacters(t *testing.T, f RequestFixture) {
 
 	for _, bad := range []string{"\r\nX-Admin: 1", "\x00", "\x7f", "\t"} {
 		facts := f.Facts(t, carol())
-		facts.Headers[f.UserHeader] = []string{facts.Headers[f.UserHeader][0] + bad}
+
+		users := facts.Headers[f.UserHeader]
+		if len(users) != 1 {
+			t.Fatalf("the request of the proxy carries %d values of %q, want one", len(users), f.UserHeader)
+		}
+
+		facts.Headers[f.UserHeader] = []string{users[0] + bad}
 		requestRefused(t, f.Method, facts, session.ErrMethodInput)
 	}
 }
@@ -663,7 +669,12 @@ func rqNoSecret(t *testing.T, f RequestFixture) {
 func rqWrongSecret(t *testing.T, f RequestFixture) {
 	t.Helper()
 
-	good := f.Facts(t, carol()).Headers[f.SecretHeader][0]
+	secrets := f.Facts(t, carol()).Headers[f.SecretHeader]
+	if len(secrets) != 1 || secrets[0] == "" {
+		t.Fatalf("the request of the proxy carries %d values of %q, want one secret", len(secrets), f.SecretHeader)
+	}
+
+	good := secrets[0]
 
 	for _, v := range [][]string{
 		{good[:len(good)-1]},
