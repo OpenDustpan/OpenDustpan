@@ -318,11 +318,11 @@ func (k PublicKey) checkECDSA() error {
 		return fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
 	}
 
-	// Defense in depth: parseECDSAKey parses the point with a check of the
-	// curve too, and VerifyASN1 refuses a point that is not on the curve; this
-	// check stays so that a key that a caller builds by hand, with no
-	// coordinates, with the point at infinity or with a point off the curve,
-	// never reaches Marshal or the verifier.
+	// Defense in depth: parseECDSAKey parses the point on P-256 and VerifyASN1
+	// refuses a point that is not on the curve; this check stays so that a key
+	// that a caller builds by hand, with no coordinates, with the point at
+	// infinity, with a point off the curve or on another curve, never reaches
+	// Marshal or the verifier. ecdsaPoint checks the curve itself.
 	if _, err := ecdsaPoint(k.ECDSA); err != nil {
 		return err
 	}
@@ -334,17 +334,23 @@ func (k PublicKey) checkECDSA() error {
 	return nil
 }
 
-// ecdsaPoint returns the uncompressed encoding of the point of pub. It is the
-// one encoder of the package: Marshal, checkECDSA and verifyECDSA all use it.
-// It fails closed: it returns an error for no key, for a key without
-// coordinates (Bytes panics on it), for the point at infinity and for a point
-// that is not on P-256. It never panics.
+// ecdsaPoint returns the uncompressed encoding of the point of pub, on P-256.
+// It is the one encoder of the package: Marshal, checkECDSA and verifyECDSA
+// all use it. It fails closed: it returns an error for no key, for a key on
+// another curve, for a key without coordinates (Bytes panics on it), for the
+// point at infinity and for a point that is not on P-256. It never panics.
 func ecdsaPoint(pub *ecdsa.PublicKey) ([]byte, error) {
 	if pub == nil {
 		return nil, fmt.Errorf("%w: ECDSA key without a point", ErrMalformed)
 	}
 
-	point := make([]byte, 0, ecdsaPointSize)
+	// Defense in depth: the callers check the curve too; this check stays so
+	// that a new caller of the encoder cannot encode a point on another curve.
+	if pub.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
+	}
+
+	var point []byte
 
 	encoded := false
 
