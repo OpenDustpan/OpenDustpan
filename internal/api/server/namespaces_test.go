@@ -31,7 +31,7 @@ type namespaceDoc struct {
 func newNamespaceHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

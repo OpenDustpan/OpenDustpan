@@ -82,7 +82,7 @@ type serverHandlerInputs struct {
 // the upgrade check reads, and the principal service when the store keeps
 // principals.
 func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
-	handler, err := serverapi.NewHandler(serverapi.Config{
+	handler, err := serverapi.NewHandler(&serverapi.Config{
 		GitHost:          in.forgeService,
 		Idempotency:      in.idempotency,
 		Authenticator:    in.authenticator,

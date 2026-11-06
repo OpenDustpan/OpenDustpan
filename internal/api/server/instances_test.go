@@ -31,7 +31,7 @@ func newInstanceHandler(
 		denied[action] = true
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

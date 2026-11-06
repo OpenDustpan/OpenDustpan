@@ -57,7 +57,7 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 		denied[action] = true
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHost:          nil,
@@ -95,6 +95,7 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 		Instances:        nil,
 		StoreChecks:      svc,
 		Settings:         nil,
+		GitHostLinks:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

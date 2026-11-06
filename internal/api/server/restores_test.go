@@ -147,7 +147,7 @@ func newRestoreFixtureWorkers(
 
 	aud := newTestAudit()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -618,7 +618,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		)
 	}
 
-	denied, err := newCheckedHandler(t, apiserver.Config{
+	denied, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -836,7 +836,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -981,7 +981,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1117,7 +1117,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

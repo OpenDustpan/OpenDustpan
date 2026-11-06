@@ -78,7 +78,7 @@ func newFakeMaintenance(state maintenance.State) *fakeMaintenance {
 func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) testHandler {
 	t.Helper()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -479,7 +479,7 @@ func TestMaintenanceUnavailableAnswersWithoutDriverText(t *testing.T) {
 func TestNewHandlerRequiresMaintenance(t *testing.T) {
 	t.Parallel()
 
-	_, err := apiserver.NewHandler(apiserver.Config{
+	_, err := apiserver.NewHandler(&apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

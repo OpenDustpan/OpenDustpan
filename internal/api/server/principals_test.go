@@ -124,7 +124,7 @@ func newAuditedPrincipalHandler(
 		signIn = stored.signIn()
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1001,7 +1001,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 
 	svc := newTestPrincipals(t)
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1096,7 +1096,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 
 	records := []tempadmin.TempAdmin{}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

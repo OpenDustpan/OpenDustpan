@@ -255,8 +255,15 @@ type Handler struct {
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
-// means no backup target is configured.
-func NewHandler(cfg Config) (*Handler, error) {
+// means no backup target is configured. A nil cfg is the zero Config, so it
+// fails with the first missing required dependency.
+func NewHandler(cfg *Config) (*Handler, error) {
+	if cfg == nil {
+		var zero Config
+
+		cfg = &zero
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -271,6 +278,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	h := newHandlerFields(cfg, signIn, guard)
+	h.routes = h.buildRoutes()
+	for _, route := range h.routes {
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	}
+
+	return h, nil
+}
+
+// newHandlerFields returns a Handler with the dependencies of cfg. The caller
+// has validated cfg.
+func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder) *Handler {
 	h := &Handler{
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
@@ -322,19 +341,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		h.passkeys = signIn.passkeys
 	}
 
-	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
-		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
-	}
-
-	return h, nil
+	return h
 }
 
 // newGuard returns the recorder of the refused requests of the installation
 // API. The audit store must keep the entries of refused requests too, so it
 // must also keep the entries of each namespace. A store that does not gives
 // no handler: a refusal must never go without an entry.
-func newGuard(cfg Config) (*denials.Recorder, error) {
+func newGuard(cfg *Config) (*denials.Recorder, error) {
 	denialStore, ok := cfg.Audit.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -353,7 +367,7 @@ func newGuard(cfg Config) (*denials.Recorder, error) {
 
 // validate returns ErrMissingDependency when cfg lacks a required
 // dependency.
-func (cfg Config) validate() error {
+func (cfg *Config) validate() error {
 	switch {
 	case cfg.Audit == nil:
 		return fmt.Errorf("%w: audit store", ErrMissingDependency)

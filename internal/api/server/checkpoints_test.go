@@ -52,7 +52,7 @@ func (c *clockEpochs) Now() time.Time {
 func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite.Store) testHandler {
 	t.Helper()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

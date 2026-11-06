@@ -328,7 +328,7 @@ func newServiceBackedHandlerOf(
 		t.Fatalf("make dev sign-in code: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		Workers:          nil,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -1615,7 +1615,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	full := apiserver.Config{
+	full := &apiserver.Config{
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,
@@ -1672,10 +1672,10 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := full
+			cfg := *full
 			tc.drop(&cfg)
 
-			if _, err := apiserver.NewHandler(cfg); err == nil {
+			if _, err := apiserver.NewHandler(&cfg); err == nil {
 				t.Fatalf("NewHandler without %s succeeded", tc.name)
 			}
 		})
@@ -1789,7 +1789,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,
@@ -1837,7 +1837,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatal("handler keeps another backup service, want the configured one")
 	}
 
-	without, err := newCheckedHandler(t, apiserver.Config{
+	without, err := newCheckedHandler(t, &apiserver.Config{
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,

@@ -807,7 +807,7 @@ func TestPreferencesUnavailable(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	h, err := newCheckedHandler(t, apiserver.Config{
+	h, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

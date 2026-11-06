@@ -383,7 +383,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		}
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -509,7 +509,7 @@ func TestNamespaceListBadQuery(t *testing.T) {
 func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

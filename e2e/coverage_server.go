@@ -37,7 +37,7 @@ func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigr
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
-	handler, err := serverapi.NewHandler(serverapi.Config{
+	handler, err := serverapi.NewHandler(&serverapi.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

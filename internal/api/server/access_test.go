@@ -230,7 +230,7 @@ func newAccessFixtureAll(
 		tweak(signIn, st)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		GitHostLinks:     links(st),

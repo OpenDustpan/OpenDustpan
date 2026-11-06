@@ -328,7 +328,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	// session with a recent sign-in: an access token never gives one.
 	signIn, sessions := signInOf(t, st)
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

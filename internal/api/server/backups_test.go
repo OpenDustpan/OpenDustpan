@@ -188,7 +188,7 @@ func newBackupFixtureWorkers(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -621,7 +621,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
