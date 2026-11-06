@@ -341,6 +341,8 @@ import type {
   Settings,
   SettingsLockedError,
   SettingsLockedErrorArgs,
+  SettingsRetentionInvalidError,
+  SettingsRetentionInvalidErrorArgs,
   SettingsStaticOnlyError,
   SettingsStaticOnlyErrorArgs,
   SettingsValueInvalidError,
