@@ -75,9 +75,12 @@ jobs:
         run: sqlc diff
       - name: Generated TypeScript client is up to date
         run: make clients-check
+      # A runner with no lint cache needs more than the 5 minutes that
+      # .golangci.yml gives a local run.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
+          args: --timeout=15m
       - name: No check reads a variable that a parallel subtest writes
         run: make subtestcheck
       # The journal recording build needs a second lint run, because some
@@ -92,7 +95,7 @@ jobs:
           install-only: true
           skip-cache: true
       - name: Lint the journal recording build
-        run: make lint-journal-build
+        run: make lint-journal-build LINT_FLAGS=--timeout=15m
       - name: No release path uses the journal recording build
         run: make journal-guard
       - name: Nil-panic analysis

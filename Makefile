@@ -30,8 +30,11 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
 
+# Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
+LINT_FLAGS ?=
+
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
