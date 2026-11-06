@@ -76,6 +76,16 @@ func TestCause(t *testing.T) {
 			&url.Error{Op: "Get", URL: "http://x.invalid", Err: errUnknown},
 			faultlog.CauseUnclassified,
 		},
+		{
+			"ENOENT in a net.OpError",
+			&net.OpError{Op: "dial", Net: "unix", Source: nil, Addr: nil, Err: syscall.ENOENT},
+			faultlog.CauseNetwork,
+		},
+		{
+			"EPERM in a net.OpError",
+			&net.OpError{Op: "dial", Net: "unix", Source: nil, Addr: nil, Err: syscall.EPERM},
+			faultlog.CauseNetwork,
+		},
 		{"ECONNREFUSED alone", syscall.ECONNREFUSED, faultlog.CauseUnclassified},
 		{"EMFILE alone", syscall.EMFILE, faultlog.CauseUnclassified},
 	}
