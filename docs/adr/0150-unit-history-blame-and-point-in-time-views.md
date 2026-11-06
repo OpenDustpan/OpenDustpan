@@ -2,6 +2,16 @@
 
 Status: accepted · 2026-10-17. Supersedes part of ADR 13 (see "What this ADR replaces"). Decisions 14, 15 and 16 superseded in part by ADR 154. ADR 199 changes decision 1. Route paths superseded in part by ADR 210. Decision 3 extended by ADR 242
 
+Changed by:
+
+- ADR 154 changes decisions 14, 15 and 16: the per-namespace sequence and the
+  by-ID view route.
+- ADR 154 extends: open work item 5 gets its conformance suite.
+- ADR 199 changes decision 1: the history item kind file-set.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 242 extends decision 3: the actor gets sourceActor, importID and
+  sourceVersion.
+
 ## Context
 
 The project owner asked for four features with one design, for both tools:

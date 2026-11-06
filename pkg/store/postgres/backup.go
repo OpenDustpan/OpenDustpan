@@ -13,7 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -46,6 +45,7 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
 	pgColName        = "name"
+	pgColKey         = "key"
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
@@ -71,6 +71,8 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColPosition    = "position"
+	pgColProject     = "project"
 	pgColJobID       = "job_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
@@ -118,13 +120,16 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
+	tables = append(tables, pgCopyUnitSettingsTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
 	tables = append(tables, pgCopyTriggerTables()...)
 	tables = append(tables, pgCopyItemKeyTables()...)
+	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopyCatalogTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 
@@ -147,10 +152,10 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColNamespace, pgColProject, pgColName, "id", pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs, pgColDeletedName,
 			},
-			orderBy: []string{pgColNamespace, "project", pgColName},
+			orderBy: []string{pgColNamespace, pgColProject, pgColName},
 		},
 		{
 			table:   "stack_tags",
@@ -160,7 +165,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
+				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
 				"journal_records_changed",
@@ -240,6 +245,8 @@ func pgCopyScopeTables() []pgCopyTable {
 				pgColNamespace, pgColTool, pgColName, pgColUnitID, pgColDisplayName,
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{pgColNamespace, pgColTool, pgColName},
 		},
@@ -273,6 +280,14 @@ func pgCopyCollectionTables() []pgCopyTable {
 				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
+		},
+		{
+			table: "placement_rules",
+			columns: []string{
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, pgColPosition, "id"},
 		},
 		{
 			table: "object_context",
@@ -323,9 +338,11 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "workspaces",
 			columns: []string{
-				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
+				"id", pgColNamespace, pgColName, pgColRevision, "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
+				"last_release_lock_id", "last_release_holder", "last_release_by", "last_release_kind",
+				"last_release_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -433,7 +450,27 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables())
+	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+}
+
+// pgNameLockControlTables holds the COPY columns of the counts of the
+// lockout by name and of the key of their names.
+func pgNameLockControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				sinkColScope, pgColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+			orderBy: []string{sinkColScope, pgColName, "sub"},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", pgColKey},
+			orderBy: []string{"id"},
+		},
+	}
 }
 
 // pgStoreCheckControlTables lists the column list of the store check rows,
@@ -473,6 +510,16 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: []string{pgColOwner, pgColAtMs, "lease_ms"},
 			orderBy: []string{pgColOwner},
 		},
+		{
+			table:   backup.TableLocalUserResets,
+			columns: pgLocalUserResetColumns(),
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: pgPasskeyChallengeColumns(),
+			orderBy: []string{pgColDigest},
+		},
 	}
 }
 
@@ -484,7 +531,7 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sessions",
 			columns: []string{
 				"id", pgColPrincipalID, pgColDigest, "provider", pgColCreatedAtMs, "last_seen_at_ms", "auth_time_ms",
-				"ended_at_ms", "end_reason", "source_ip", "user_agent",
+				"ended_at_ms", "end_reason", "source_ip", "user_agent", "generation",
 			},
 			orderBy: []string{"id"},
 		},
@@ -611,7 +658,7 @@ func pgCopyGrantTables() []pgCopyTable {
 			table: "access_token_policy",
 			columns: []string{
 				"id", "max_lifetime_ms", "inactivity_ms", "disable_tokens", "disable_accounts",
-				"disable_break_glass", pgColUpdatedAtMs,
+				"disable_break_glass", pgColUpdatedAtMs, "exchange_lifetime_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -758,7 +805,7 @@ func (s *Store) checkPortableColumns(ctx context.Context) error {
 // schema, in ordinal order. The control schema appends _control to the
 // current schema, so each live schema keeps its own control tables.
 func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.reads.Query(ctx,
 		`SELECT column_name FROM information_schema.columns`+
 			` WHERE table_schema IN (current_schema(), current_schema() || '_control')`+
 			` AND table_name = $1 ORDER BY ordinal_position`,
@@ -812,37 +859,6 @@ var plainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func checkIdent(name string) error {
 	if !plainIdent.MatchString(name) {
 		return errIdentifier
-	}
-
-	return nil
-}
-
-// inBackupTx runs fn in one transaction with opts, committing on success and
-// rolling back on failure. Callers pass explicit isolation and access mode
-// for the capture, and the defaults for the load.
-func inBackupTx(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, fn func(tx pgx.Tx) error) error {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire backup connection: %w", err)
-	}
-
-	defer conn.Release()
-
-	tx, err := conn.BeginTx(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("begin backup transaction: %w", err)
-	}
-
-	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return errors.Join(err, fmt.Errorf("roll back backup transaction: %w", rbErr))
-		}
-
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit backup transaction: %w", err)
 	}
 
 	return nil
@@ -999,20 +1015,11 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, loadErr
 	}
 
-	if sealedErr := checkStagedSealedState(ctx, s.pool, in.staging); sealedErr != nil {
-		return backup.Summary{}, sealedErr
-	}
-
-	if idsErr := checkStagedNamespaceIDs(ctx, s.pool, in.staging); idsErr != nil {
-		return backup.Summary{}, idsErr
-	}
-
-	if ownedErr := checkStagedOwnedRows(ctx, s.pool, in.staging); ownedErr != nil {
-		return backup.Summary{}, ownedErr
-	}
-
-	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
-		return backup.Summary{}, featureErr
+	checkErr := s.inLongTx(ctx, backupBound(), defaultTx(), func(tx pgx.Tx) error {
+		return checkStaged(ctx, tx, in.staging)
+	})
+	if checkErr != nil {
+		return backup.Summary{}, checkErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
@@ -1029,6 +1036,24 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 	return sum, nil
 }
 
+// checkStaged runs the checks of the staged rows in q: the sealed state, the
+// namespace IDs, the owned rows and the feature rows.
+func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
+	if sealedErr := checkStagedSealedState(ctx, q, staging); sealedErr != nil {
+		return sealedErr
+	}
+
+	if idsErr := checkStagedNamespaceIDs(ctx, q, staging); idsErr != nil {
+		return idsErr
+	}
+
+	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
+		return ownedErr
+	}
+
+	return checkStagedFeatureRows(ctx, q, staging)
+}
+
 // summarizeStaging reads the summary of the staging schema: the dialect, the
 // schema version the staging schema_migrations records, the primary installations, the
 // wrapper IDs, the row count of each table, and the blob references. The live
@@ -1037,12 +1062,32 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 func (s *Store) summarizeStaging(
 	ctx context.Context, staging string, want backup.Summary,
 ) (backup.Summary, error) {
-	installations, err := stagingStrings(ctx, s.pool, staging, "namespaces", "primary_installation")
+	var sum backup.Summary
+
+	err := s.inLongTx(ctx, backupBound(), defaultTx(), func(tx pgx.Tx) error {
+		var readErr error
+
+		sum, readErr = summarizeStagingIn(ctx, tx, staging, want)
+
+		return readErr
+	})
 	if err != nil {
 		return backup.Summary{}, err
 	}
 
-	wrappers, err := stagingWrapperIDs(ctx, s.pool, staging)
+	return sum, nil
+}
+
+// summarizeStagingIn is summarizeStaging in q.
+func summarizeStagingIn(
+	ctx context.Context, q pgQuerier, staging string, want backup.Summary,
+) (backup.Summary, error) {
+	installations, err := stagingStrings(ctx, q, staging, "namespaces", "primary_installation")
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	wrappers, err := stagingWrapperIDs(ctx, q, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1050,7 +1095,7 @@ func (s *Store) summarizeStaging(
 	counts := make(map[string]int64, len(backup.Tables))
 
 	for _, table := range backup.Tables {
-		count, countErr := stagingCount(ctx, s.pool, staging, table)
+		count, countErr := stagingCount(ctx, q, staging, table)
 		if countErr != nil {
 			return backup.Summary{}, countErr
 		}
@@ -1058,7 +1103,7 @@ func (s *Store) summarizeStaging(
 		counts[table] = count
 	}
 
-	blobs, err := stagingBlobRefs(ctx, s.pool, staging)
+	blobs, err := stagingBlobRefs(ctx, q, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1066,13 +1111,13 @@ func (s *Store) summarizeStaging(
 	stagedTable := func(table string) string { return stagingTable(staging, table) }
 
 	collector := &blobrefs.Collector{}
-	if addErr := addStoredBlobRefs(ctx, s.pool, stagedTable, collector); addErr != nil {
+	if addErr := addStoredBlobRefs(ctx, q, stagedTable, collector); addErr != nil {
 		return backup.Summary{}, addErr
 	}
 
 	blobs = append(blobs, collector.Refs()...)
 
-	version, err := stagingSchemaVersion(ctx, s.pool, staging)
+	version, err := stagingSchemaVersion(ctx, q, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1147,7 +1192,7 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 		return err
 	}
 
-	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+pgIdent(staging)); err != nil {
+	if err := s.createSchema(ctx, staging); err != nil {
 		return fmt.Errorf("create staging schema: %w", err)
 	}
 
@@ -1159,7 +1204,7 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 		CommitQuery:    "",
 	}
 
-	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+	return s.inLongTx(ctx, backupBound(), opts, func(tx pgx.Tx) error {
 		// The control schema of the staging schema comes second. The migration
 		// that moves the installation table makes it, and a later migration
 		// that changes a control table finds the table through it.
@@ -1195,7 +1240,7 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 
 // stagingSchemaVersion returns the highest migration version the staging
 // schema records in its own schema_migrations.
-func stagingSchemaVersion(ctx context.Context, pool *pgxpool.Pool, staging string) (int, error) {
+func stagingSchemaVersion(ctx context.Context, pool pgQuerier, staging string) (int, error) {
 	var version int64
 
 	query := "SELECT COALESCE(MAX(version), 0) FROM " + stagingTable(staging, "schema_migrations")
@@ -1216,7 +1261,7 @@ func stagingTable(staging, table string) string {
 // checkStagedSealedState refuses a staged backup with a state version that
 // is not sealed: every stored version is sealed, so an import with a plain
 // row fails instead of serving plain state.
-func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedSealedState(ctx context.Context, pool pgQuerier, staging string) error {
 	var unsealed bool
 
 	query := "SELECT EXISTS(SELECT 1 FROM " + stagingTable(staging, "state_versions") + " WHERE NOT sealed)"
@@ -1233,7 +1278,7 @@ func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging str
 
 // checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
 // not a valid namespace ID. It returns ErrCorrupt.
-func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedNamespaceIDs(ctx context.Context, pool pgQuerier, staging string) error {
 	rows, err := pool.Query(ctx, "SELECT name, id FROM "+stagingTable(staging, "namespaces"))
 	if err != nil {
 		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
@@ -1263,7 +1308,7 @@ func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging st
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
 // of the installation keys and the item keys that are not shredded in the staging
 // schema, ordered, never nil.
-func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
+func stagingWrapperIDs(ctx context.Context, pool pgQuerier, staging string) ([]string, error) {
 	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", pgColWrapperID)
 	if err != nil {
 		return nil, err
@@ -1288,7 +1333,7 @@ func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) 
 // stagingStrings returns the distinct values of column in the staging table,
 // ordered, never nil.
 func stagingStrings(
-	ctx context.Context, pool *pgxpool.Pool, staging, table, column string,
+	ctx context.Context, pool pgQuerier, staging, table, column string,
 ) ([]string, error) {
 	return queryStrings(
 		ctx,
@@ -1300,7 +1345,7 @@ func stagingStrings(
 // stagingItemKeyWrapperIDs returns the distinct wrapper IDs of the item keys
 // in the staging schema that are not shredded, ordered, never nil. A shredded
 // key has no key blob left to open, so its wrapper does not count.
-func stagingItemKeyWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
+func stagingItemKeyWrapperIDs(ctx context.Context, pool pgQuerier, staging string) ([]string, error) {
 	return queryStrings(
 		ctx, pool, "SELECT DISTINCT wrapper_id FROM "+stagingTable(staging, "item_keys")+
 			" WHERE shredded_at_ms = 0 ORDER BY wrapper_id",
@@ -1310,7 +1355,7 @@ func stagingItemKeyWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging s
 // queryStrings runs a query that returns one text column, and returns the
 // values, never nil. The query text comes from this package, never from the
 // network.
-func queryStrings(ctx context.Context, pool *pgxpool.Pool, query string) ([]string, error) {
+func queryStrings(ctx context.Context, pool pgQuerier, query string) ([]string, error) {
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read staged backup summary: %w", err)
@@ -1339,7 +1384,7 @@ func queryStrings(ctx context.Context, pool *pgxpool.Pool, query string) ([]stri
 
 // stagingCount returns the row count of the staging table. The table name
 // comes from the allowlist backup.Tables, never from the network.
-func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string) (int64, error) {
+func stagingCount(ctx context.Context, pool pgQuerier, staging, table string) (int64, error) {
 	var count int64
 
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM "+stagingTable(staging, table)).Scan(&count); err != nil {
@@ -1357,7 +1402,7 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 // blobs are never sealed. A pending version has no committed content, so the
 // backup leaves pending rows out. It matches BackupBlobs, so the staged summary
 // compares equal with the manifest.
-func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
+func stagingBlobRefs(ctx context.Context, pool pgQuerier, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
 		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
@@ -1462,6 +1507,18 @@ func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	return nil
 }
 
+// createSchema creates the schema name in a short transaction with the bounds
+// of a schema change.
+func (s *Store) createSchema(ctx context.Context, name string) error {
+	return s.inLongTx(ctx, schemaBound(), defaultTx(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "CREATE SCHEMA "+pgIdent(name)); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // dropStagingSchema removes the staging schema with its tables and the
 // control schema that its migration made. The name comes from
 // newStagingSchema, never from the network; the prefix check keeps a
@@ -1471,15 +1528,17 @@ func (s *Store) dropStagingSchema(ctx context.Context, staging string) error {
 		return fmt.Errorf("drop staging schema %q: %w", staging, backup.ErrCorrupt)
 	}
 
-	if _, err := s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging)+" CASCADE"); err != nil {
-		return fmt.Errorf("drop staging schema: %w", err)
-	}
+	return s.inLongTx(ctx, schemaBound(), defaultTx(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging)+" CASCADE"); err != nil {
+			return fmt.Errorf("drop staging schema: %w", err)
+		}
 
-	if _, err := s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
-		return fmt.Errorf("drop staging control schema: %w", err)
-	}
+		if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
+			return fmt.Errorf("drop staging control schema: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // PeekPortableKey implements backup.KeyPeeker: it reads one data key of
@@ -1505,7 +1564,7 @@ func (s *Store) schemaVersion(ctx context.Context) (int, error) {
 
 	const selectVersion = `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`
 
-	if err := s.pool.QueryRow(ctx, selectVersion).Scan(&version); err != nil {
+	if err := s.reads.QueryRow(ctx, selectVersion).Scan(&version); err != nil {
 		return 0, fmt.Errorf("read schema version: %w", err)
 	}
 
@@ -1539,6 +1598,65 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 // when the ID is taken, and ErrAlreadyRunning when the unique index on
 // running backups refuses the row. A failed start changes nothing.
 func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	if err := checkBackupStart(r, start); err != nil {
+		return err
+	}
+
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		_, err := startBackupTx(ctx, q, r, start)
+
+		return err
+	})
+}
+
+// StartBackupClaimed implements backup.Registry: it starts backup r as
+// StartBackup does, and claims the new operation for claim in the same
+// transaction. It returns the claimed operation.
+func (s *Store) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	if err := claim.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	if err := checkBackupStart(r, start); err != nil {
+		return durable.Operation{}, err
+	}
+
+	var op durable.Operation
+
+	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		started, err := startBackupTx(ctx, q, r, start)
+		if err != nil {
+			return err
+		}
+
+		row, err := q.ClaimStartedDurableOperation(ctx, db.ClaimStartedDurableOperationParams{
+			Owner: claim.Owner, LeaseMs: claim.Lease.Milliseconds(), ID: string(started.ID),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The start created the operation in this transaction, so it is
+			// pending: no row means that the claim cannot be taken.
+			return fmt.Errorf("claim the started backup operation %s: %w", started.ID, durable.ErrClaimLost)
+		}
+
+		if err != nil {
+			return fmt.Errorf("claim the started backup operation %s: %w", started.ID, translate(err))
+		}
+
+		op = operationFromRow(row, nil)
+
+		return nil
+	})
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	return op, nil
+}
+
+// checkBackupStart checks the operation start of backup r before a start.
+func checkBackupStart(r backup.Record, start durable.StartRequest) error {
 	if err := start.Validate(); err != nil {
 		return err
 	}
@@ -1551,36 +1669,42 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
 	}
 
-	return s.inMinimumTx(ctx, func(q *db.Queries) error {
-		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
-			ID:          r.ID.String(),
-			State:       string(backup.StateRunning),
-			StartedAtMs: codec.Millis(r.StartedAt),
-			EndedAtMs:   backupEndedAt(time.Time{}),
-			Target:      r.Target,
-			Error:       "",
-		})
-		if err != nil {
-			return fmt.Errorf("insert backup: %w", err)
-		}
+	return nil
+}
 
-		if n == 0 {
-			return backupConflict(ctx, q, r.ID)
-		}
-
-		_, created, err := startOperation(ctx, q, start)
-		if err != nil {
-			return err
-		}
-
-		if !created {
-			// A new row needs a new operation: a taken key is a start of
-			// another backup.
-			return fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
-		}
-
-		return nil
+// startBackupTx stores r as a running backup and starts the operation start,
+// in the transaction of q, and returns the new operation.
+func startBackupTx(
+	ctx context.Context, q *db.Queries, r backup.Record, start durable.StartRequest,
+) (durable.Operation, error) {
+	n, err := q.CreateBackup(ctx, db.CreateBackupParams{
+		ID:          r.ID.String(),
+		State:       string(backup.StateRunning),
+		StartedAtMs: codec.Millis(r.StartedAt),
+		EndedAtMs:   backupEndedAt(time.Time{}),
+		Target:      r.Target,
+		Error:       "",
 	})
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("insert backup: %w", err)
+	}
+
+	if n == 0 {
+		return durable.Operation{}, backupConflict(ctx, q, r.ID)
+	}
+
+	op, created, err := startOperation(ctx, q, start)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	if !created {
+		// A new row needs a new operation: a taken key is a start of
+		// another backup.
+		return durable.Operation{}, fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
+	}
+
+	return op, nil
 }
 
 // FinishBackup implements backup.Registry: it checks the fence f, records
@@ -1757,7 +1881,7 @@ func backupEndedAt(endedAt time.Time) pgtype.Int8 {
 // (schema_migrations, and audit_chain_state, the chain state of this
 // installation) is not data and stays out.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables`+
+	rows, err := s.reads.Query(ctx, `SELECT table_name FROM information_schema.tables`+
 		` WHERE table_schema IN (current_schema(), current_schema() || '_control')`+
 		` AND table_type = 'BASE TABLE'`+
 		` AND table_name NOT IN ('schema_migrations', 'audit_chain_state') ORDER BY table_name`)
@@ -1808,10 +1932,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the drift results, the registry, the Git host connections,
+// of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the catalog blueprints and the trust rules.
-func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedUnitSettings(ctx, pool, staging); err != nil {
 		return err
 	}
 

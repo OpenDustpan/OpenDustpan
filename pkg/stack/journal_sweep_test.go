@@ -199,6 +199,8 @@ func (f *buildFixture) putJournalRows(t *testing.T, u stack.Update, dir string, 
 			OperationIDs: nil,
 			HasRebuild:   false,
 			Verify:       func([]int64, bool) (bool, error) { return false, nil },
+
+			AttemptStartedAt: time.Now(),
 		}
 		fence := namespace.Fence{Namespace: f.ref.Namespace, FailoverVersion: 1}
 		if _, err := f.store.PutJournalRow(t.Context(), row, fence); err != nil {

@@ -23,9 +23,20 @@
 //	POST   /app/installations/{id}/access_tokens       an installation token (JWT)
 //	DELETE /installation/token                         revoke an installation token
 //	GET    /user                                       the user of a token
+//	GET    /repos/{owner}/{repo}/commits?sha=&since=   the commits of a ref, newest first, with page and per_page
 //	GET    /repos/{owner}/{repo}/commits/{ref}         one commit by branch, tag or ID
+//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base
+//	GET    /repos/{owner}/{repo}/git/ref/heads/{name}  one branch
+//	POST   /repos/{owner}/{repo}/git/refs              a new branch at a commit
 //	GET    /repos/{owner}/{repo}/contents/{path}?ref=  a file, or a directory listing
 //	GET    /repos/{owner}/{repo}/git/blobs/{sha}       a blob
+//	GET    /repos/{owner}/{repo}                       the repository, with its ID and default branch
+//	GET    /repos/{owner}/{repo}/branches/{name}       one branch, with its protection flag
+//	POST   /repos/{owner}/{repo}/pulls                 a pull request from a branch of the repository
+//	GET    /repos/{owner}/{repo}/pulls?state=&head=&base= the pull requests, with per_page
+//	GET    /repos/{owner}/{repo}/pulls/{number}        one pull request, with its mergeable state
+//	PATCH  /repos/{owner}/{repo}/pulls/{number}        close a pull request
+//	DELETE /repos/{owner}/{repo}/git/refs/heads/{name} delete a branch
 //	POST   /graphql                                    the mutation createCommitOnBranch
 //
 // A call that the fake does not have answers 404. A test adds a call to the
@@ -55,6 +66,7 @@ func Epoch() time.Time {
 // The defaults of Config.
 const (
 	DefaultAppID          = "4242"
+	DefaultAppSlug        = "dustpan-sync"
 	DefaultInstallationID = "9001"
 	DefaultUserToken      = ""
 	rsaBits               = 2048
@@ -78,6 +90,9 @@ type Config struct {
 	// InstallationID is the ID of the one installation that the fake knows
 	// (DefaultInstallationID).
 	InstallationID string
+	// AppSlug is the slug of the app. The bot account of the app has the login
+	// slug + "[bot]" (DefaultAppSlug).
+	AppSlug string
 	// Owner is the account of the installation (ID 99, login "acme-org").
 	Owner Account
 	// User is the account that the user token belongs to (ID 777, login
@@ -123,6 +138,7 @@ type Fake struct {
 	faults     faults
 	tick       int64
 	counter    uint64
+	repoSeq    int64
 }
 
 // New starts a fake. It stops when the test ends.
@@ -160,6 +176,10 @@ func withDefaults(cfg Config) Config {
 		cfg.AppID = DefaultAppID
 	}
 
+	if cfg.AppSlug == "" {
+		cfg.AppSlug = DefaultAppSlug
+	}
+
 	if cfg.InstallationID == "" {
 		cfg.InstallationID = DefaultInstallationID
 	}
@@ -188,6 +208,14 @@ func (f *Fake) URL() string { return f.srv.URL }
 
 // AppID is the ID of the app that the fake knows.
 func (f *Fake) AppID() string { return f.cfg.AppID }
+
+// AppLogin is the login of the bot account of the app: the author of a commit
+// that an installation token makes.
+func (f *Fake) AppLogin() string { return f.cfg.AppSlug + "[bot]" }
+
+// UserLogin is the login of the user of the token: the author of a commit that
+// the token makes.
+func (f *Fake) UserLogin() string { return f.cfg.User.Login }
 
 // InstallationID is the ID of the installation that the fake knows.
 func (f *Fake) InstallationID() string { return f.cfg.InstallationID }

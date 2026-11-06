@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,8 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -121,9 +122,9 @@ type DeletedReadScope interface {
 func toolCode(s string) string {
 	switch s {
 	case "Pulumi":
-		return "pulumi"
+		return toolCodePulumi
 	case "OpenTofu":
-		return "opentofu"
+		return toolCodeOpenTofu
 	default:
 		return s
 	}
@@ -147,6 +148,15 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// maxCursorFieldLen bounds the name and the unit ID that a cursor holds.
+const maxCursorFieldLen = 1024
+
+// The stored tool codes of the deleted units.
+const (
+	toolCodePulumi   = "pulumi"
+	toolCodeOpenTofu = "opentofu"
+)
+
 // encodeCursor returns the opaque form of c for the query with the
 // fingerprint fingerprint, or "" for no cursor.
 func encodeCursor(c *coreinventory.DeletedCursor, fingerprint string) string {
@@ -154,12 +164,12 @@ func encodeCursor(c *coreinventory.DeletedCursor, fingerprint string) string {
 		return ""
 	}
 
-	raw, err := json.Marshal(cursorWire{Tool: c.Tool, Name: c.Name, UnitID: c.UnitID, Fingerprint: fingerprint})
+	token, err := pagetoken.Encode(cursorWire{Tool: c.Tool, Name: c.Name, UnitID: c.UnitID, Fingerprint: fingerprint})
 	if err != nil {
 		return ""
 	}
 
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return token
 }
 
 // decodeCursor parses an opaque cursor of the query with the fingerprint
@@ -170,21 +180,33 @@ func decodeCursor(s, fingerprint string) (*coreinventory.DeletedCursor, error) {
 		return nil, nil //nolint:nilnil // No cursor is a valid answer: the first page.
 	}
 
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
-	}
-
 	var w cursorWire
-	if err := json.Unmarshal(raw, &w); err != nil {
+	if err := pagetoken.Decode(s, &w); err != nil {
 		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
 	}
 
-	if w.Fingerprint != fingerprint {
+	if !pagetoken.SameFingerprint(w.Fingerprint, fingerprint) {
 		return nil, errPageToken
 	}
 
+	// Defense in depth: the fingerprint ties the cursor to its query, and the
+	// store reads the cursor with placeholders. These checks stay so that a
+	// cursor that is not well-formed never reaches the store as a range
+	// start.
+	if (w.Tool != toolCodePulumi && w.Tool != toolCodeOpenTofu) ||
+		!validCursorField(w.Name) || !validCursorField(w.UnitID) {
+		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
+	}
+
 	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
+}
+
+// validCursorField reports whether s can be the name or the unit ID of a
+// deleted unit in a cursor: not empty, at most maxCursorFieldLen bytes, valid
+// UTF-8, and without a hidden character, see audit.IsHiddenRune.
+func validCursorField(s string) bool {
+	return s != "" && len(s) <= maxCursorFieldLen && utf8.ValidString(s) &&
+		!strings.ContainsFunc(s, audit.IsHiddenRune)
 }
 
 // intQuery parses the query value raw of the parameter name as an int from low

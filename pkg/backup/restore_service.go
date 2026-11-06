@@ -3,6 +3,8 @@ package backup
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -236,6 +238,10 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 	warnings, err := s.admitStart(ctx, id, req)
 	if err != nil {
 		return err
+	}
+
+	if refused := s.checkPreBackupFree(ctx, req.PreBackupID); refused != nil {
+		return refused
 	}
 
 	input, err := startInput(id, req)
@@ -690,7 +696,7 @@ func (s *RestoreService) fenceEnded(ctx context.Context, ops map[string]durable.
 // touchedLive reports whether the restore id of op can have changed the
 // installation: it recorded enter-maintenance, or its row holds the
 // maintenance flag of an enter that it did not confirm, or it stored audit
-// events, which it stores before each forced cancel and each repair.
+// events, which it stores before each forced cancel and each refusal to overwrite a live blob.
 func (s *RestoreService) touchedLive(ctx context.Context, op durable.Operation, id RestoreID) (bool, error) {
 	if _, entered := op.Step(RestoreStepEnterMaintenance); entered {
 		return true, nil
@@ -727,7 +733,12 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 	_, applied := op.Step(RestoreStepAfterApply)
 
 	if !swapped {
-		s.appendEvents(ctx, in)
+		end := restoreEndStopped
+		if op.State == durable.StateCanceled {
+			end = restoreEndCanceled
+		}
+
+		s.appendEvents(ctx, in, end)
 
 		return
 	}
@@ -741,7 +752,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 		return
 	}
 
-	entries, err := s.afterApplyEntries(ctx, op, in)
+	entries, err := s.afterApplyEntries(ctx, op, in, swappedFailed)
 	if err != nil {
 		s.logger.ErrorContext(
 			ctx,
@@ -764,8 +775,18 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 //
 //nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
 var storedRestoreSentinels = []error{
-	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrCorrupt,
-	ErrSchemaBeforeBaseline, ErrSchemaMismatch, ErrNotFound, ErrRestoreNotFound,
+	ErrPreBackupForeign,
+	ErrManifestKindInvalid,
+	ErrDevStripIncomplete,
+	ErrRestoreRunning,
+	ErrRestoreAccessMismatch,
+	ErrProtectedKey,
+	ErrConflictingBlob,
+	ErrCorrupt,
+	ErrSchemaBeforeBaseline,
+	ErrSchemaMismatch,
+	ErrNotFound,
+	ErrRestoreNotFound,
 }
 
 // restoreOutcome carries one finished restore to the log line.
@@ -804,6 +825,10 @@ type pinnedManifest struct {
 	dialect  Dialect
 	kind     installation.Kind
 	wrappers []string
+	// digest is the SHA-256 of the whole manifest, in hex: the blob list, the
+	// row counts and every other field. A manifest that a person swapped in
+	// the target after the stage has another digest.
+	digest string
 }
 
 // sanitizeRestoreError maps a restore failure to the stable text stored in
@@ -837,6 +862,10 @@ func sanitizeRestoreError(err error) string {
 		return notBacked.Error()
 	}
 
+	if text, ok := liveBlobsRestoreMessage(err); ok {
+		return text
+	}
+
 	for _, sentinel := range storedRestoreSentinels {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -844,6 +873,23 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	return "restore failed"
+}
+
+// liveBlobsRestoreMessage answers the stored text of a refusal at the live
+// blobs, which names the counts and the keys, and of a damaged list in a
+// backup that no restore started. That text ends with the corrupt sentinel,
+// as backup check reports it, so a client gives the help of a corrupt
+// backup. It reports whether err is one of them.
+func liveBlobsRestoreMessage(err error) (string, bool) {
+	if refused, ok := errors.AsType[*LiveBlobsError](err); ok && refused != nil {
+		return refused.Error(), true
+	}
+
+	if errors.Is(err, ErrDamagedListForeign) {
+		return ErrDamagedListForeign.Error() + ": " + ErrCorrupt.Error(), true
+	}
+
+	return "", false
 }
 
 // activeWorkMessage answers the stored text for a refused maintenance
@@ -1087,6 +1133,20 @@ func (s *RestoreService) devFlagText() string {
 	return ""
 }
 
+// manifestDigest returns the SHA-256 of the manifest in hex. It encodes the
+// parsed manifest, so two reads of one manifest give one digest, and a change
+// to any field, the blob list included, gives another.
+func manifestDigest(manifest Manifest) (string, error) {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return "", fmt.Errorf("encode manifest of backup %s: %w", manifest.ID, err)
+	}
+
+	sum := sha256.Sum256(raw)
+
+	return hex.EncodeToString(sum[:]), nil
+}
+
 // pinManifest reads the manifest of id before the checks.
 func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest, error) {
 	manifest, err := readManifest(ctx, s.target, id)
@@ -1099,6 +1159,11 @@ func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest
 		return pinnedManifest{}, parseErr
 	}
 
+	digest, err := manifestDigest(manifest)
+	if err != nil {
+		return pinnedManifest{}, err
+	}
+
 	return pinnedManifest{
 		sqlSize:  manifest.SQLSize,
 		sqlSHA:   string(sha),
@@ -1106,25 +1171,48 @@ func (s *RestoreService) pinManifest(ctx context.Context, id ID) (pinnedManifest
 		dialect:  manifest.Dialect,
 		kind:     manifest.InstallationKind,
 		wrappers: append([]string{}, manifest.WrapperIDs...),
+		digest:   digest,
 	}, nil
 }
 
-// repinManifest rereads the manifest after the pre-backup and refuses to
-// apply when it changed since the checks: fail closed on target mutation.
-func (s *RestoreService) repinManifest(ctx context.Context, id ID, pinned pinnedManifest) error {
+// readPinnedManifest reads the manifest of id once and refuses it when it is
+// not the manifest that the stage pinned: fail closed on a change of the
+// target. A step uses the manifest that this call returns and reads no
+// second copy, so no swap can fall between the check and the use.
+func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned pinnedManifest) (Manifest, error) {
 	manifest, err := readManifest(ctx, s.target, id)
 	if err != nil {
-		return err
+		return Manifest{}, err
 	}
 
+	if err := checkPinnedManifest(manifest, id, pinned); err != nil {
+		return Manifest{}, err
+	}
+
+	if err := checkDamagedOrigin(ctx, s.backups, manifest); err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
+}
+
+// checkPinnedManifest refuses a manifest that differs from the pinned one in
+// the SQL part, the schema, the dialect, the kind, or in any other field: the
+// digest covers the whole manifest.
+func checkPinnedManifest(manifest Manifest, id ID, pinned pinnedManifest) error {
 	sha, parseErr := parseSQLSHA(manifest, id)
 	if parseErr != nil {
 		return parseErr
 	}
 
+	digest, err := manifestDigest(manifest)
+	if err != nil {
+		return err
+	}
+
 	if manifest.SQLSize != pinned.sqlSize || string(sha) != pinned.sqlSHA ||
 		manifest.SchemaVersion != pinned.schema || manifest.Dialect != pinned.dialect ||
-		manifest.InstallationKind != pinned.kind {
+		manifest.InstallationKind != pinned.kind || digest != pinned.digest {
 		return fmt.Errorf("%w: backup %s changed after the checks", ErrCorrupt, id)
 	}
 
@@ -1134,34 +1222,42 @@ func (s *RestoreService) repinManifest(ctx context.Context, id ID, pinned pinned
 // verifyLiveBlob checks that the live store already holds ref with the size
 // and checksum of the manifest. It writes nothing.
 func (s *RestoreService) verifyLiveBlob(ctx context.Context, ref ManifestBlob) error {
-	check, err := newObjectCheck(ref.Key, blobWant(ref))
-	if err != nil {
-		return err
-	}
-
 	key, err := blob.ParseKey(ref.Key)
 	if err != nil {
 		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
 	}
 
+	return s.verifyObject(ctx, key, ref, "live blob")
+}
+
+// verifyObject checks that the live store holds the object at key with the size
+// and checksum that the manifest names for ref. what names the object in the
+// error text. It writes nothing. A mismatch wraps ErrCorrupt. A read error does
+// not.
+func (s *RestoreService) verifyObject(ctx context.Context, key blob.Key, ref ManifestBlob, what string) error {
+	check, err := newObjectCheck(ref.Key, blobWant(ref))
+	if err != nil {
+		return err
+	}
+
 	reader, err := s.blobs.Get(ctx, key)
 	if err != nil {
-		return fmt.Errorf("read live blob %q: %w", ref.Key, err)
+		return fmt.Errorf("read %s %q: %w", what, ref.Key, err)
 	}
 
 	_, copyErr := io.Copy(check, reader)
 	closeErr := reader.Close()
 
 	if copyErr != nil {
-		return fmt.Errorf("read live blob %q: %w", ref.Key, copyErr)
+		return fmt.Errorf("read %s %q: %w", what, ref.Key, copyErr)
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("close live blob %q: %w", ref.Key, closeErr)
+		return fmt.Errorf("close %s %q: %w", what, ref.Key, closeErr)
 	}
 
 	if verifyErr := check.verify(ref.Key); verifyErr != nil {
-		return fmt.Errorf("live blob: %w", verifyErr)
+		return fmt.Errorf("%s: %w", what, verifyErr)
 	}
 
 	return nil

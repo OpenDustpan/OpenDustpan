@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes the builtin list of ADR 112 decision 12, and ADR 114 decision 5. Supersedes ADR 201 decisions 4 and 8 in part. Extends ADR 112 decisions 9 and 11
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 Expr runs in two roles. As a value, it computes a profile value in `${ }`

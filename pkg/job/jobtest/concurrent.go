@@ -3,6 +3,7 @@ package jobtest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,11 @@ const racers = 4
 // lockRaceRounds is the number of rounds of the case that races a dispatch
 // with a manual lock.
 const lockRaceRounds = 10
+
+// oneNamespaceCreators is the number of goroutines that each create one job
+// in one namespace at the same time. It stays at job.MaxOpenPerUnit or
+// below, because all the jobs are on one unit.
+const oneNamespaceCreators = 16
 
 // race runs fn on racers goroutines at the same time and returns the error of
 // each one.
@@ -254,5 +260,60 @@ func cancelJobs(t *testing.T, h Harness, f fixture, ids ...job.ID) {
 		}
 
 		apply(t, h, f, change(&open, job.EventCancel))
+	}
+}
+
+// testParallelCreatesOneNamespace creates jobs in one namespace at the same
+// time. The jobs of a namespace get their sequence numbers from one counter,
+// and the unique index on (namespace, seq) refuses a duplicate, so each
+// parallel create succeeds only with its own number. Paging then returns each
+// job once.
+func testParallelCreatesOneNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	var (
+		wg     sync.WaitGroup
+		start  = make(chan struct{})
+		stored = make([]job.ID, oneNamespaceCreators)
+		errs   = make([]error, oneNamespaceCreators)
+	)
+
+	for i := range oneNamespaceCreators {
+		wg.Go(func() {
+			<-start
+
+			j, created, err := h.Jobs.Create(t.Context(), *newJob(f.unit, job.OperationPlan, ""), nil, f.fence,
+				[]audit.Entry{entry(f.unit, job.ActionUnitRunApply)})
+			if err != nil || !created {
+				errs[i] = fmt.Errorf("create %d: created %v: %w", i, created, err)
+
+				return
+			}
+
+			stored[i] = j.ID
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("parallel creates in one namespace: %v", err)
+	}
+
+	want := map[job.ID]bool{}
+	for _, id := range stored {
+		want[id] = true
+	}
+
+	got := pageAll(t, h, job.Filter{
+		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: nsPageSize, After: "",
+		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
+	})
+	if len(got) != oneNamespaceCreators || !sameSet(got, want) {
+		t.Fatalf("paging in %s returned %d jobs (%d distinct), want %d", f.fence.Namespace,
+			len(got), len(slices.Compact(sortedIDs(got))), oneNamespaceCreators)
 	}
 }

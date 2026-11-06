@@ -70,38 +70,105 @@ const MaxScopeKeyLength = len("unit/") + 100 + len("/") + 100 + len("/") + 3*300
 // The Pulumi stack web/prod of acme has the key unit/acme/pulumi/web%2Fprod.
 // The key is a one-way door: stored policy IDs, records and requirement
 // names hold it.
+//
+// The key of a unit scope names the unit by its name, as the routes do. The
+// configuration of a unit keys on the stable ID of the unit: a store finds the
+// live unit that has the name at the time of the read or the write. So the
+// configuration stays with the unit through a rename and a move between
+// collections, and a new unit with the name of a deleted unit has none.
+//
+// A unit scope can also carry the stable ID of its unit (see WithUnitID).
+// The ID is not part of the key. A store then reads the configuration of the
+// unit of that ID, live or deleted, and not of the live unit of the name.
 type Scope struct {
 	level Level
 	// seg holds the decoded variable segments, in key order.
 	seg [3]string
+	// unitID is the stable ID of the unit of a unit scope, or empty.
+	unitID string
 }
 
 // InstallationScope returns the scope of the installation.
 func InstallationScope() Scope {
-	return Scope{level: LevelInstallation, seg: [3]string{}}
+	return Scope{level: LevelInstallation, seg: [3]string{}, unitID: ""}
 }
 
 // NamespaceScope returns the scope of the namespace ns.
 func NamespaceScope(ns namespace.Name) Scope {
-	return Scope{level: LevelNamespace, seg: [3]string{ns.String(), "", ""}}
+	return Scope{level: LevelNamespace, seg: [3]string{ns.String(), "", ""}, unitID: ""}
 }
 
 // CollectionScope returns the scope of the collection c of ns. Collection
 // names compare without case, so the scope holds the key of the name: two
 // spellings of one collection give one scope.
 func CollectionScope(ns namespace.Name, c collection.Name) Scope {
-	return Scope{level: LevelCollection, seg: [3]string{ns.String(), c.Key(), ""}}
+	return Scope{level: LevelCollection, seg: [3]string{ns.String(), c.Key(), ""}, unitID: ""}
 }
 
 // UnitScope returns the scope of one unit: the tool code, the namespace ns
 // and the name that the tool gives the unit. The tool and the name follow
-// the rules of a unit reference. The name is opaque and keeps its case.
+// the rules of a unit reference. The name is opaque and keeps its case. The
+// scope reaches the configuration of the live unit that has the name.
 func UnitScope(ns namespace.Name, tool, name string) (Scope, error) {
 	if _, err := identity.UnitObject(tool, ns, name); err != nil {
 		return Scope{}, fmt.Errorf("%w: unit scope: %w", ErrInvalid, err)
 	}
 
-	return Scope{level: LevelUnit, seg: [3]string{ns.String(), tool, name}}, nil
+	return Scope{level: LevelUnit, seg: [3]string{ns.String(), tool, name}, unitID: ""}, nil
+}
+
+// maxUnitIDLength bounds the stable ID of a unit that a scope carries.
+const maxUnitIDLength = 128
+
+// WithUnitID returns the unit scope s with the stable ID id of its unit. The
+// key does not change. A store reads the configuration of the unit of that ID,
+// live or deleted, so the check of a deleted unit reads its own gates and never
+// the gates of a new unit with its name. The ID is 1 to 128 bytes of letters,
+// digits, '-' and '_'. It returns ErrInvalid for another ID, and for a scope
+// that is not a unit scope.
+func (s Scope) WithUnitID(id string) (Scope, error) {
+	if s.level != LevelUnit {
+		return Scope{}, fmt.Errorf("%w: %s is not a unit scope", ErrInvalid, s)
+	}
+
+	if !validUnitID(id) {
+		return Scope{}, fmt.Errorf("%w: unit ID %q", ErrInvalid, id)
+	}
+
+	s.unitID = id
+
+	return s, nil
+}
+
+// UnitID returns the stable ID that a unit scope carries, or the empty string.
+func (s Scope) UnitID() string {
+	return s.unitID
+}
+
+// validUnitID reports whether id can be the stable ID of a unit in a scope.
+func validUnitID(id string) bool {
+	if id == "" || len(id) > maxUnitIDLength {
+		return false
+	}
+
+	for i := range len(id) {
+		if !unitIDByte(id[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// unitIDByte reports whether c can be a byte of the stable ID of a unit: a
+// letter, a digit, '-' or '_'.
+func unitIDByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	default:
+		return c == '-' || c == '_'
+	}
 }
 
 // BlueprintScope returns the scope of one blueprint version: the blueprint
@@ -113,7 +180,7 @@ func BlueprintScope(name string, version int) (Scope, error) {
 		return Scope{}, fmt.Errorf("%w: blueprint scope %q version %d", ErrInvalid, name, version)
 	}
 
-	return Scope{level: LevelBlueprint, seg: [3]string{name, strconv.Itoa(version), ""}}, nil
+	return Scope{level: LevelBlueprint, seg: [3]string{name, strconv.Itoa(version), ""}, unitID: ""}, nil
 }
 
 // ProfileScope returns the scope of the profile name of ns. No owner package
@@ -124,7 +191,7 @@ func ProfileScope(ns namespace.Name, name string) (Scope, error) {
 		return Scope{}, fmt.Errorf("%w: profile scope %q", ErrInvalid, name)
 	}
 
-	return Scope{level: LevelProfile, seg: [3]string{ns.String(), name, ""}}, nil
+	return Scope{level: LevelProfile, seg: [3]string{ns.String(), name, ""}, unitID: ""}, nil
 }
 
 // validSegment reports whether s can be a profile segment: 1 to 300 bytes of
@@ -173,6 +240,10 @@ func (s Scope) Unit() (identity.Object, bool) {
 	obj, err := identity.UnitObject(s.seg[1], namespace.Name(s.seg[0]), s.seg[2])
 	if err != nil {
 		return identity.Object{}, false
+	}
+
+	if s.unitID != "" {
+		obj = obj.WithUnitID(s.unitID)
 	}
 
 	return obj, true
@@ -256,7 +327,7 @@ func (s Scope) MarshalText() ([]byte, error) {
 // zero Scope.
 func (s *Scope) UnmarshalText(text []byte) error {
 	if len(text) == 0 {
-		*s = Scope{level: "", seg: [3]string{}}
+		*s = Scope{level: "", seg: [3]string{}, unitID: ""}
 
 		return nil
 	}
@@ -382,8 +453,9 @@ func parseBlueprintScope(name, version string) (Scope, error) {
 // UnitChain returns the scopes whose configuration holds for unit, widest
 // first: the installation, the namespace of the unit, the collection of the
 // unit when it has one, and the unit. Give the empty collection name for a
-// unit in no collection. It returns ErrInvalid for an object that is not a
-// unit.
+// unit in no collection. When unit carries its stable ID, the unit scope
+// carries it too, so a store reads the configuration of that unit, live or
+// deleted. It returns ErrInvalid for an object that is not a unit.
 func UnitChain(unit identity.Object, c collection.Name) ([]Scope, error) {
 	if !unit.IsUnit() {
 		return nil, fmt.Errorf("%w: %q is not a unit", ErrInvalid, unit.String())
@@ -392,6 +464,12 @@ func UnitChain(unit identity.Object, c collection.Name) ([]Scope, error) {
 	u, err := UnitScope(unit.Namespace(), unit.Tool(), unit.UnitName())
 	if err != nil {
 		return nil, err
+	}
+
+	if id := unit.UnitID(); id != "" {
+		if u, err = u.WithUnitID(id); err != nil {
+			return nil, err
+		}
 	}
 
 	chain := []Scope{InstallationScope(), NamespaceScope(unit.Namespace())}

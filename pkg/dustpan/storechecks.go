@@ -33,7 +33,7 @@ func newStoreCheckService(cfg *settings, maint *maintenance.Service) (*storechec
 		return nil, false, nil
 	}
 
-	ops, err := backupOperations(cfg)
+	ops, err := backupOperations(cfg.namespaceStore, cfg.watch)
 	if err != nil {
 		return nil, false, err
 	}
@@ -47,7 +47,7 @@ func newStoreCheckService(cfg *settings, maint *maintenance.Service) (*storechec
 		Records:    records,
 		Operations: ops,
 		Blobs:      cfg.blobStore,
-		Backup:     cfg.backupTarget,
+		Backup:     cfg.backup.target,
 		Audit:      serverAudit,
 		Admit:      storeCheckAdmit(cfg, maint),
 		Limits:     storecheck.Limits{MaxObjects: 0, MaxTotalBytes: 0, MaxObjectBytes: 0, Timeout: 0, Cooldown: 0},

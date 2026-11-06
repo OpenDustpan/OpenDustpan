@@ -588,6 +588,15 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 		)
 	}
 
+	// Defense in depth: Validate refuses the subject too, but only for a
+	// principal that this call makes. This check runs before the read, so a
+	// provider that composes a subject with the local prefix never reaches
+	// the person of a local user. The provider configuration refuses the
+	// provider ID of the local users too, and this check does not rely on it.
+	if IsLocalSubject(in.Subject) {
+		return Principal{}, false, errLocalSubject(in.Subject)
+	}
+
 	// Defense in depth: Validate refuses the subject of the namespace service
 	// principal too, but only for a principal that this call makes. This
 	// check runs before the read, so a record of another version never signs
@@ -597,6 +606,42 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 	}
 
 	return s.signIn(ctx, e, in, Principal.Validate)
+}
+
+// CreateLocalPerson makes the person of the local user userID, with the
+// subject LocalSubjectPrefix and userID, and the entry e. An empty display
+// name takes the subject. It is the only path that makes a principal with a
+// subject that starts with LocalSubjectPrefix. It returns ErrReservedSubject
+// for a subject that is not the one of userID, ErrInvalid for a value that
+// is not valid, and the errors of RecordStore.CreatePrincipal.
+func (s *Service) CreateLocalPerson(ctx context.Context, e audit.Entry, userID, displayName string) (Principal, error) {
+	subject := LocalSubjectPrefix + userID
+	if displayName == "" {
+		displayName = subject
+	}
+
+	at := s.Now()
+	p := Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          s.newID(principalIDPrefix),
+		Subject:     subject,
+		DisplayName: displayName,
+		Kind:        KindPerson,
+		Source:      SourceLocal,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := p.validateLocalPerson(userID); err != nil {
+		return Principal{}, err
+	}
+
+	if err := s.store.CreatePrincipal(ctx, p, change(e, at, Ref(p.ID))); err != nil {
+		return Principal{}, fmt.Errorf("create principal %q: %w", subject, err)
+	}
+
+	return p, nil
 }
 
 // SignInDevAdministrator returns the person DevAdminSubject for the dev

@@ -58,11 +58,12 @@ func contextUnit(t *testing.T, s *postgres.Store, u graph.Unit) {
 	w := workspace.Workspace{
 		NamespaceID: "",
 		CreatedAt:   n.CreatedAt, UpdatedAt: n.CreatedAt,
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(u.ID),
-		Ref:       workspace.Ref{Namespace: n.Name, Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:  1,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(u.ID),
+		Ref:         workspace.Ref{Namespace: n.Name, Name: name},
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:    1,
 	}
 
 	if err = s.CreateWorkspace(t.Context(), w, n.Fence()); err != nil {

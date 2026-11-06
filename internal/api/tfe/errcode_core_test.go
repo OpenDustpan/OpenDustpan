@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -159,13 +160,25 @@ func TestLockRoutesAnswerCodes(t *testing.T) {
 	}
 
 	manual, err := tfe.NewHandler(tfe.Config{
-		Registry: nil, Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t),
+		Registry:      nil,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		AddressGate:   nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
 		Workspaces: manualLockedWorkspaces{
 			conflictWorkspaces: conflictWorkspaces{stubWorkspaces: stubWorkspaces{}}, lock: lock,
 		},
-		OutputChecker: nil, BaseURL: baseurl.Resolver{}, Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0,
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+		OutputChecker:  nil,
+		BaseURL:        baseurl.Resolver{},
+		Audit:          newTestAudit(),
+		Gate:           nil,
+		MaxStateBytes:  0,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

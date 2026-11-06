@@ -127,7 +127,7 @@ var Settings = []*Setting{
 		"DUSTPAN_DATABASE",
 		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
-		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The URL can set `target_session_attrs`, `pool_max_conn_lifetime` and `pool_health_check_period` for a failover: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
+		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
 	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
@@ -249,6 +249,13 @@ var Settings = []*Setting{
 			"has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and "+
 			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
+	stringSetting(
+		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
+		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",
+		"(none: the console shows its standard palette). A name of lower-case letters, digits and hyphens, "+
+			"at most 32 characters. The settings resource also holds it, and a value from a flag, a variable or "+
+			"this file locks it",
+	).WithFile("branding.preset"),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
@@ -395,7 +402,7 @@ var Settings = []*Setting{
 		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
 		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
 			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
-			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
+			"webhook:<https URL>, otlp:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	).WithFile("audit-sink").WithSensitive(),
 	stringSetting(
@@ -533,6 +540,25 @@ var Settings = []*Setting{
 		"DUSTPAN_LOG_WEBHOOK_SECRET_FILE",
 		"A file that holds the log webhook secret. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins.",
+	),
+	envSetting(
+		"DUSTPAN_AUDIT_OTLP_HEADERS",
+		"Extra headers of each request of an `otlp:` audit sink, as `Name=Value` items separated by "+
+			"commas or line breaks. Percent-encode a value. Optional.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_AUDIT_OTLP_HEADERS_FILE",
+		"A file that holds those headers. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_AUDIT_OTLP_HEADERS` wins.",
+	),
+	envSetting(
+		"DUSTPAN_LOG_OTLP_HEADERS",
+		"Extra headers of each request of an `otlp:` log sink, in the same form. Optional.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LOG_OTLP_HEADERS_FILE",
+		"A file that holds those headers. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_LOG_OTLP_HEADERS` wins.",
 	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",

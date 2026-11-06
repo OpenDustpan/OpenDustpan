@@ -16,8 +16,8 @@ These are the project owner's own instructions. They hold until the owner change
 - A worker that refuses the lead's direction is fired (owner, 2026-10-17): archive it and start a new worker with the full task in its first prompt. Do not argue with it, and do not ask the owner to step in. Put every change of direction in a new session's first prompt, not in a message to a running session.
 - **Do not run implementation or review work in my own subagents (the Agent tool).** They die when the owner interrupts
   me, and they are expensive. Put reviews into sessions too.
-- Why: Muse costs about $0.20 per million output tokens. That price is what makes the project financially viable. Spend
-  Claude tokens on coordination, not on code.
+- Why: Muse is a much cheaper model than Claude per output token. That is what makes the project financially viable.
+  Spend Claude tokens on coordination, not on code.
 - Expensive models (owner, 2026-10-16): a Sonnet or Opus session is allowed with discretion for architecture or security
   review, research (for example academic literature), design, or a task the cheap path failed twice. Tell the owner the
   reason and the expected cost first, and archive the session when it is done.
@@ -41,12 +41,12 @@ These are the project owner's own instructions. They hold until the owner change
   but its result can be wrong: it once kept a migration twice in schema.go. A worker still runs make generate, make
   check and make e2e after every merge. Workers started before this date may not have it.
 
-- Repowise (owner, 2026-10-17): every session has the read-only Repowise tools (mcp__Repowise_OpenDustpan__*) over both
+- Repowise (owner, 2026-10-17): every session has the read-only Repowise tools (mcp__Repowise_OpenDustpan__*; see `docs/agents/local-setup.md` for the local setup) over both
   repositories. Worker and reviewer prompts say: use get_context, search_codebase and get_symbol to find code before
   grepping, and get_blast_radius before changing a public function, a store method or an API route; say in the final
   report whether it helped. I use get_blast_radius and get_change_risk before merges. Trial (owner, 2026-10-17): 10
   days, ends 2026-10-27. Log each worker's and reviewer's answer, and each time a Repowise result changed one of my
-  merge decisions, in /tmp/claude-0/-home-user/1af56df4-3646-52a3-8de1-76f258ff07e4/scratchpad/repowise-log.md (date,
+  merge decisions, in repowise-log.md in the scratchpad directory of the session (date,
   session or PR, tool, helped yes/no, what it found that grep would not). On 2026-10-26, give the owner a verdict from
   that log: keep or drop.
 

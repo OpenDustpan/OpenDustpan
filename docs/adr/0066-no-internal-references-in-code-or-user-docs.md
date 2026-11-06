@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-14
 
+Changed by:
+
+- ADR 251 extends: the words that copy uses.
+
 ## Context
 
 Code comments, test names, error text and user documentation often cite

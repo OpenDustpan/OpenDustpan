@@ -171,14 +171,27 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 	}
 
 	_, gates, err := newCollectionAndGateServices(cfg, namespaces)
-	if err != nil || gates == nil {
-		t.Fatalf("gate service: %v, %v", gates, err)
+	if err != nil || gates.svc == nil {
+		t.Fatalf("gate service: %v, %v", gates.svc, err)
 	}
 
 	// The job service reads the namespace service and the gate service only.
 	svc := services{
-		namespaces: namespaces, stacks: nil, updates: nil, secrets: nil, workspaces: nil, manualLocks: nil,
-		tokens: nil, collections: nil, gates: gates, deleted: nil, access: nil, tempAdmins: nil, issuer: nil,
+		namespaces:  namespaces,
+		stacks:      nil,
+		updates:     nil,
+		secrets:     nil,
+		workspaces:  nil,
+		manualLocks: nil,
+		tokens:      nil,
+		collections: nil,
+		placements:  nil,
+		gates:       gates.svc,
+		stateWrite:  gates,
+		deleted:     nil,
+		access:      nil,
+		tempAdmins:  nil,
+		issuer:      nil,
 	}
 
 	starter, err := newJobService(svc, cfg)
@@ -243,8 +256,9 @@ func seedUnit(t *testing.T, st checkerStore, ns namespace.Namespace, tool, name 
 
 	w := workspace.Workspace{
 		CreatedAt: ns.CreatedAt, UpdatedAt: ns.CreatedAt,
-		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: ns.Name, Name: wsName},
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: ns.Name, Name: wsName},
 		NamespaceID: ns.ID, Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
 	}
 	if createErr := st.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {

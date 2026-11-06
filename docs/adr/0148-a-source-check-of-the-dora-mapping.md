@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18. Supersedes ADR 147 in part. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 149 extends decision 13: a cyber threat record of another namespace is
+  404.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 ADR 147 designs incident records, change records and reviews against DORA,

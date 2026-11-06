@@ -2,6 +2,24 @@
 
 Status: accepted · 2026-10-11. Superseded in part by ADR 38 (restore) and ADR 39 (`backup check`). Decision 8 superseded in part by ADR 151. Route paths and `server:` action names superseded in part by ADR 210. The backup of one namespace added by ADR 218. The home region of a restore amended by ADR 248 (primary installation). The invariant "keys are never reused" of decision 2 made true by construction by ADR 281
 
+Changed by:
+
+- ADR 35 changes decision 9: the package path of the installation API adapter.
+- ADR 38 changes decisions 8 and 10: the offline restore, the empty
+  destination and the failover version.
+- ADR 38 extends decision 9: restore routes in the installation API.
+- ADR 39 changes decision 10: backup check reads the target without a server.
+- ADR 41 changes decision 7: a backup holds sealed OpenTofu state.
+- ADR 42 changes decisions 1, 3, 4, 6 and 8: the SQL part of a backup, its
+  manifest and the same-dialect rule.
+- ADR 151 changes decision 8: redacted and purged blobs are expected gaps in a
+  restore.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 218 extends decision 1: the backup of one namespace.
+- ADR 248 changes decisions 1, 6 and 8: a restore keeps the primary
+  installation, restore into another region moot.
+- ADR 281 changes decision 2: keys are never reused, by construction.
+
 ## Context
 
 [RFC 8](../rfc/0008-backups-and-restore.md) proposes backups as a feature of

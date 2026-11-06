@@ -9,9 +9,9 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent agent-preflight clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent agent-preflight clients-conformance clients-generate clients-check clients-ts-test
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -31,8 +31,11 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
 
+# Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
+LINT_FLAGS ?=
+
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -103,8 +106,9 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
 # file looks like a credential to a detector, two API reference pages, and
-# twelve test files whose fake URLs with a user name and a password test the
-# refusal or the masking of credentials.
+# test files whose fake URLs with a user name and a password test the refusal
+# or the masking of credentials. Four of these files no longer exist, but
+# their history still holds a fake credential.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
@@ -125,10 +129,32 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
 
+# The change links between ADRs and the generated docs/adr/INDEX.md. ADR 296
+# is the first ADR with a "Changes:" list. The older ADRs have only the
+# "Changed by:" items of their links.
+ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 296
+
 docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
+	python3 -I scripts/adr-index.py --selftest
+	$(ADR_INDEX) --check
+
+# With no VERSION there is no tag to check, so the target runs the cases that
+# exist without one: the script against an empty record, a record of another
+# version, a record with a CR or a NUL byte, and a missing record. With
+# VERSION=vX.Y.Z on the command line it checks the record for that tag, as a
+# release does. A VERSION in the environment does not change the mode.
+release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
+ifeq ($(origin VERSION),command line)
+	./scripts/check-release-record.sh '$(VERSION)'
+else
+	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
+endif
+
+adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
+	$(ADR_INDEX)
 
 chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
 	./scripts/chart-lint.sh
@@ -136,6 +162,16 @@ chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubecon
 # The store packages run for more than 10 minutes, the default limit of go test,
 # on a CI runner with 4 cores. GO_TEST_TIMEOUT is the limit for each package.
 GO_TEST_TIMEOUT := 20m
+
+# TEST_TIMEOUT is the limit for each package in test, test-nocache,
+# test-postgres, journal-test, bench and test-s3: each target that runs whole
+# packages. A target that runs one named test keeps the go test default. The
+# first three targets run the store packages together with all other
+# packages. In a session container with 4 CPUs and 15 GB, pkg/dustpan took
+# 1371 s, pkg/store/sqlite 1721 s and pkg/store/postgres 1405 s, each one
+# alone, so 20m failed every run. The CI targets keep GO_TEST_TIMEOUT and
+# STORE_TEST_TIMEOUT. Set TEST_TIMEOUT to change the limit.
+TEST_TIMEOUT ?= 45m
 
 # With -race the compiler also adds checkptr checks to every package. In the
 # SQLite engine, which is C translated to Go with much unsafe pointer
@@ -150,10 +186,10 @@ GO_TEST_TIMEOUT := 20m
 RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
-	go test $(RACE_TEST_FLAGS) -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -timeout $(TEST_TIMEOUT) ./...
 
 test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
-	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # CI runs the two store packages in jobs of their own, one for each package, so
 # that they do not share the 4 cores of a runner with each other or with the
@@ -165,7 +201,7 @@ GO_TEST_COUNT ?=
 # STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
 # package on a CI runner: pkg/store/postgres alone took more than 20 minutes
 # there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
-# every other target.
+# test-ci-other.
 STORE_TEST_TIMEOUT := 30m
 
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
@@ -178,10 +214,10 @@ test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres;
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(GO_TEST_TIMEOUT) ./pkg/store/postgres/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
-	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
+	go test -run '^$$' -bench . -benchtime 1x -timeout $(TEST_TIMEOUT) ./pkg/stack/ ./pkg/store/sqlite/
 
 load: ## Run the load harness against a self-started server and write load-report.json (SQLite default; set DUSTPAN_TEST_POSTGRES_URL for PostgreSQL). Not part of check.
 	go run ./load -out load-report.json
@@ -191,7 +227,7 @@ bench-s3: ## S3 latency benchmark: MinIO, Garage, PostgreSQL 18 and Toxiproxy in
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 ./pkg/blob/s3/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/blob/s3/...
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
@@ -261,7 +297,7 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
-	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
+	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./internal/api/pulumi/ ./pkg/dustpan/
 
 journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
 	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \

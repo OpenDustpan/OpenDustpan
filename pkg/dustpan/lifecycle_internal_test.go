@@ -1,16 +1,19 @@
 package dustpan
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -145,7 +148,7 @@ func TestDeletedReadScope(t *testing.T) {
 		{name: "no grant", subject: "nobody", ns: "acme", wantIDs: []string{}, wantAll: false},
 	}
 
-	scope := deletedReadScope{authz: f.authz}
+	scope := deletedReadScope{authz: f.authz, units: nil}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,7 +183,7 @@ func TestDeletedReadScope(t *testing.T) {
 func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	scope := deletedReadScope{authz: identity.AdminOnly{}}
+	scope := deletedReadScope{authz: identity.AdminOnly{}, units: nil}
 
 	for _, admin := range []bool{true, false} {
 		p := identity.Principal{
@@ -238,3 +241,31 @@ func TestBlobPurgerOutlivesTheRequest(t *testing.T) {
 
 // errNoDeadline reports a blob context without a deadline.
 var errNoDeadline = errors.New("blob context has no deadline")
+
+// TestBlobPurgerLogsAWaitAsInfo proves that a delete of the blobs of a purged
+// unit that waits for a running backup or restore logs one INFO line that
+// names the tool, the unit and the work, and no warning: the record stays for
+// the sweep.
+func TestBlobPurgerLogsAWaitAsInfo(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	purger := blobPurger{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	work := blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}
+
+	purger.deleteBlobs(t.Context(), "pulumi", "stk-1", func(context.Context) error {
+		return fmt.Errorf("delete blobs: %w", &blobguard.WaitError{Work: work})
+	})
+
+	got := logs.String()
+	for _, want := range []string{"level=INFO", "tool=pulumi", "unit_id=stk-1", "running=\"backup bkp-1\""} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log = %q, want it to contain %q", got, want)
+		}
+	}
+
+	if strings.Contains(got, "level=WARN") {
+		t.Fatalf("log = %q, want no warning for a wait", got)
+	}
+}

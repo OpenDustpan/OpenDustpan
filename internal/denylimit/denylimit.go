@@ -211,6 +211,35 @@ func (l *Limiter) AllowWindow(key Key, window time.Duration) Decision {
 	return d
 }
 
+// Release gives back the write of d, the decision of Allow for key, when the
+// caller could not write its entry. The denial of d and the count that d
+// carried stay in the table, and the next denial of key writes an entry
+// that carries them. A window whose entry failed so never hides the next
+// denial. Release does nothing for a decision that did not write.
+func (l *Limiter) Release(key Key, d Decision) {
+	if !d.Write {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	s := &l.overflow
+
+	if !d.Overflow {
+		var ok bool
+
+		if s, ok = l.keys[key]; !ok {
+			if s, ok = l.keys[aggregateKey(key.Principal)]; !ok {
+				return
+			}
+		}
+	}
+
+	s.start = time.Time{}
+	s.suppressed += d.Suppressed + 1
+}
+
 // aggregateKey returns the key that holds the denials of a principal beyond its
 // bound of keys.
 func aggregateKey(principal string) Key {

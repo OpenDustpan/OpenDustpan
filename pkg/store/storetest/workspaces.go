@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -97,6 +98,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{
 			name: "finalize of a duplicate restore is ErrAlreadyRestored and writes nothing",
 			test: testFinalizeDuplicateRestore,
+		},
+		{
+			name: "finalize that expects a current version refuses another one and writes nothing",
+			test: testFinalizeExpectingCurrent,
 		},
 		{name: "a fenced finalize leaves the old state current", test: testFencedFinalizeKeepsCurrent},
 		{
@@ -326,7 +331,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 	}
 
-	for _, tc := range slices.Concat(cases, releaseAuditCases(), workspacePageCases()) {
+	for _, tc := range slices.Concat(cases, releaseAuditCases(), lastReleaseCases(), workspacePageCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -369,6 +374,7 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 		Lock:        clearedLock(),
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		NamespaceID: ns.ID,
@@ -524,11 +530,22 @@ func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	same := got.Ref == want.Ref && got.NamespaceID == want.NamespaceID && got.ID == want.ID &&
 		got.Revision == want.Revision && got.Overrides == want.Overrides &&
 		got.CreatedAt.Equal(want.CreatedAt) && got.UpdatedAt.Equal(want.UpdatedAt) &&
-		got.Lock.ID == want.Lock.ID && got.Lock.Holder == want.Lock.Holder &&
-		got.Lock.Reason == want.Lock.Reason && got.Lock.LockedAt.Equal(want.Lock.LockedAt)
+		sameLock(got.Lock, want.Lock) && sameRelease(got.LastRelease, want.LastRelease)
 	if !same {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
+}
+
+// sameLock reports whether two locks are the same.
+func sameLock(got, want workspace.Lock) bool {
+	return got.ID == want.ID && got.Holder == want.Holder && got.Reason == want.Reason &&
+		got.LockedAt.Equal(want.LockedAt)
+}
+
+// sameRelease reports whether two records of a release are the same.
+func sameRelease(got, want workspace.Release) bool {
+	return got.At.Equal(want.At) && got.LockID == want.LockID && got.Holder == want.Holder &&
+		got.By == want.By && got.Kind == want.Kind
 }
 
 func sameStateReference(got, want workspace.StateVersion) bool {
@@ -2101,6 +2118,137 @@ func testFinalizeDuplicateRestore(t *testing.T, s WorkspaceStore) {
 
 	if err := finalizeRecorded(t, s, ns.Fence(), restores[2]); err != nil {
 		t.Fatalf("finalize restore of another version: %v", err)
+	}
+}
+
+// finalizeExpecting records the attempt key of sv and finalizes it only if the
+// current state version is expect, returning the error of either step.
+func finalizeExpecting(
+	t *testing.T, s WorkspaceStore, fence namespace.Fence, sv workspace.StateVersion, expect workspace.StateVersionID,
+) error {
+	t.Helper()
+
+	if _, err := s.RecordUploadAttempt(t.Context(), sv.ID, sv.Content, fence); err != nil {
+		return err
+	}
+
+	return s.FinalizeStateVersionExpecting(t.Context(), sv, fence, expect)
+}
+
+// testFinalizeExpectingCurrent proves a finalize that names the current state
+// version it expects checks it in the finalize transaction: another current
+// version, also one that the same holder wrote under the same lock after the
+// caller read it, gives ErrConcurrentModification and writes nothing. An empty
+// expected version means the workspace has no state. The expected version
+// does not replace the other checks of the finalize.
+func testFinalizeExpectingCurrent(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	sources := make([]workspace.StateVersion, 3)
+
+	for i := range sources {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", int64(i+1)),
+		))
+		sources[i] = finalizedVersion(pending, now().Add(time.Duration(i+1)*time.Hour), "v1")
+	}
+
+	restore := newPendingVersion(t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1))
+	restore.RestoredFrom = sources[0].ID
+	createPendingVersion(t, s, ns, restore)
+	restored := finalizedVersion(restore, now().Add(10*time.Hour), "v1")
+
+	// The workspace has no state: only the empty expected version matches.
+	if err := finalizeExpecting(t, s, ns.Fence(), sources[0], sources[1].ID); !errors.Is(
+		err, workspace.ErrConcurrentModification,
+	) {
+		t.Fatalf(
+			"finalize expecting a version of a workspace with no state: err = %v, want ErrConcurrentModification",
+			err,
+		)
+	}
+
+	assertPendingAndNoCurrent(t, s, w.ID, sources[0].ID)
+
+	if err := finalizeExpecting(t, s, ns.Fence(), sources[0], ""); err != nil {
+		t.Fatalf("finalize expecting no state: %v", err)
+	}
+
+	if err := finalizeExpecting(t, s, ns.Fence(), sources[1], sources[0].ID); err != nil {
+		t.Fatalf("finalize expecting the current version: %v", err)
+	}
+
+	// The caller read sources[1] as current. The same holder then wrote
+	// sources[2] under the same lock, so the restore must not finalize.
+	if err := finalizeRecorded(t, s, ns.Fence(), sources[2]); err != nil {
+		t.Fatalf("finalize the later write: %v", err)
+	}
+
+	for _, expect := range []workspace.StateVersionID{sources[1].ID, ""} {
+		err := finalizeExpecting(t, s, ns.Fence(), restored, expect)
+		if !errors.Is(err, workspace.ErrConcurrentModification) {
+			t.Fatalf("finalize expecting %q: err = %v, want ErrConcurrentModification", expect, err)
+		}
+
+		stored, getErr := s.GetStateVersion(t.Context(), restored.ID)
+		if getErr != nil || stored.Status != workspace.StatusPending {
+			t.Fatalf("restore after the refusal: status %v, err %v; want pending", stored.Status, getErr)
+		}
+
+		current, curErr := s.CurrentStateVersion(t.Context(), w.ID)
+		if curErr != nil {
+			t.Fatalf("current state after the refusal: %v", curErr)
+		}
+
+		assertStateVersion(t, current, sources[2])
+	}
+
+	finishExpectingRestore(t, s, ns, restored, sources[2])
+}
+
+// finishExpectingRestore proves that a stale fence still refuses a finalize
+// that expects a current version, and that the finalize then succeeds against
+// the real current version: the expected version adds a check and removes none.
+func finishExpectingRestore(
+	t *testing.T, s WorkspaceStore, ns namespace.Namespace, restored, current workspace.StateVersion,
+) {
+	t.Helper()
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	err := s.FinalizeStateVersionExpecting(t.Context(), restored, stale, current.ID)
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("finalize expecting with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if err = finalizeExpecting(t, s, ns.Fence(), restored, current.ID); err != nil {
+		t.Fatalf("finalize expecting the current version: %v", err)
+	}
+
+	now, err := s.CurrentStateVersion(t.Context(), restored.Workspace)
+	if err != nil {
+		t.Fatalf("current state after the restore: %v", err)
+	}
+
+	assertStateVersion(t, now, restored)
+}
+
+// assertPendingAndNoCurrent fails t unless version id is still pending and the
+// workspace has no current state.
+func assertPendingAndNoCurrent(t *testing.T, s WorkspaceStore, w workspace.ID, id workspace.StateVersionID) {
+	t.Helper()
+
+	stored, err := s.GetStateVersion(t.Context(), id)
+	if err != nil || stored.Status != workspace.StatusPending {
+		t.Fatalf("version after the refusal: status %v, err %v; want pending", stored.Status, err)
+	}
+
+	if _, err = s.CurrentStateVersion(t.Context(), w); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("current state after the refusal: err = %v, want ErrNoState", err)
 	}
 }
 
@@ -4070,6 +4218,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
 			ManualLocks:        nil,
+			BlobGuard:          blobguardtest.None{},
 			Workspaces:         s,
 			States:             s,
 			Blobs:              blobs,

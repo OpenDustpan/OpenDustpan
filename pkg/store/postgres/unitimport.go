@@ -232,6 +232,11 @@ func (i *Imports) Purge(ctx context.Context, fence namespace.Fence, id string, e
 			return fmt.Errorf("delete import units: %w", err)
 		}
 
+		commits := db.DeleteImportUploadCommitsParams{NamespaceID: nsID, ImportID: id}
+		if err := q.DeleteImportUploadCommits(ctx, commits); err != nil {
+			return fmt.Errorf("delete upload commits: %w", err)
+		}
+
 		if err := q.DeleteImport(ctx, db.DeleteImportParams{NamespaceID: nsID, ID: id}); err != nil {
 			return fmt.Errorf("delete import: %w", err)
 		}

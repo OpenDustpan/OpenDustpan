@@ -403,3 +403,14 @@ func b64Fixed(name, s string, size int) ([]byte, error) {
 
 	return b, nil
 }
+
+// Has reports whether s holds a key with the ID kid.
+func (s KeySet) Has(kid string) bool {
+	for _, k := range s.keys {
+		if k.ID == kid {
+			return true
+		}
+	}
+
+	return false
+}

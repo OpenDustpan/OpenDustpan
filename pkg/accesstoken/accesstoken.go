@@ -69,6 +69,10 @@ const (
 	// KindService is a token of a service principal, for a machine that
 	// cannot sign in to the console.
 	KindService Kind = "service"
+	// KindTrust is a token that a workload got in a token exchange through
+	// a trust rule. It belongs to a service principal, lives one exchange
+	// lifetime, and no rotation renews it.
+	KindTrust Kind = "trust"
 )
 
 // KindFor returns the kind of the token of a principal of kind k, or

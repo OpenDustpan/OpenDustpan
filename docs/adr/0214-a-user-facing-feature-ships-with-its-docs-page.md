@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18. Accepts part of RFC 57
 
+Changed by:
+
+- ADR 315 extends: who owns the pages of the docs site.
+
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

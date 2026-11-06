@@ -843,6 +843,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestBlobDeleteDuringBackup(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL blob delete suite", envURL)
+	}
+
+	storetest.RunBlobDelete(t, func(t *testing.T) storetest.BlobDeleteStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 func TestPortableExportConformance(t *testing.T) {
 	t.Parallel()
 
@@ -1337,7 +1352,55 @@ type sqlUpdatesStore struct {
 var (
 	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
+	_ storetest.UpdateLocker = (*sqlUpdatesStore)(nil)
 )
+
+// HoldUpdate implements storetest.UpdateLocker: it locks the row of the
+// update FOR UPDATE in a transaction of its own connection, which release
+// commits.
+func (s *sqlUpdatesStore) HoldUpdate(ctx context.Context, stackID stack.ID, id stack.UpdateID) (func(), error) {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+
+	bg := context.WithoutCancel(ctx)
+	closeConn := func() {
+		if closeErr := conn.Close(bg); closeErr != nil {
+			s.t.Errorf("close the lock connection: %v", closeErr)
+		}
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		closeConn()
+
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+
+	const lock = "SELECT 1 FROM updates WHERE stack_id = $1 AND id = $2 FOR UPDATE"
+
+	_, err = tx.Exec(ctx, lock, stackID.String(), id.String())
+	if err != nil {
+		closeConn()
+
+		return nil, fmt.Errorf("lock the update: %w", err)
+	}
+
+	release := func() {
+		if commitErr := tx.Commit(bg); commitErr != nil {
+			s.t.Errorf("release the lock of the update: %v", commitErr)
+		}
+
+		closeConn()
+	}
+
+	return release, nil
+}
+
+// errNoDatabaseClock reports a wrapped store that does not read the clock of
+// the database.
+var errNoDatabaseClock = errors.New("wrapped store does not read the clock of the database")
 
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
@@ -1357,6 +1420,22 @@ func openSQLUpdates(t *testing.T, base string) *sqlUpdatesStore {
 	t.Cleanup(s.Close)
 
 	return &sqlUpdatesStore{UpdatesStore: s, url: schemaURL, t: t}
+}
+
+// DatabaseNow forwards to the wrapped store, whose method the embedded
+// UpdatesStore interface hides.
+func (s *sqlUpdatesStore) DatabaseNow(ctx context.Context) (time.Time, error) {
+	clock, ok := s.UpdatesStore.(blob.DatabaseClock)
+	if !ok {
+		return time.Time{}, fmt.Errorf("database now: %w", errNoDatabaseClock)
+	}
+
+	now, err := clock.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("database now: %w", err)
+	}
+
+	return now, nil
 }
 
 // CountRunningJournaledUpdates forwards to the wrapped store, whose method

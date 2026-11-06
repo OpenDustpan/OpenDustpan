@@ -36,7 +36,7 @@ func (s *Store) DropStagedIssuerKeys(
 
 	var dropped []backup.IssuerKeysDropped
 
-	err = inBackupTx(ctx, s.pool, readWriteOpts(), func(tx pgx.Tx) error {
+	err = s.inLongTx(ctx, backupBound(), readWriteOpts(), func(tx pgx.Tx) error {
 		if _, pathErr := setSearchPath(ctx, tx, staging); pathErr != nil {
 			return pathErr
 		}

@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18 · adds to ADR 58 decision 9 · decisions 1 to 3 extended by ADRs 231 and 236
 
+Changed by:
+
+- ADR 231 extends decision 3: the axe gate also runs right to left.
+- ADR 236 extends decisions 1, 2 and 3: an axe gate in the console checks and
+  for every language.
+
 ## Context
 
 ADR 58 keeps these console rules: jsx-a11y strict, visible labels and

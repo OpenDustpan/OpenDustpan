@@ -109,6 +109,7 @@ type Inner interface {
 	inventory.BlobPurgeCounter
 	inventory.SweepLocker
 	maintenance.Store
+	blob.DatabaseClock
 
 	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
@@ -299,12 +300,14 @@ func (s *Store) RenameStack(
 }
 
 // CreateUpdate persists a new update, unless a fault fires first.
-func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
+func (s *Store) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
 	if err := s.before(ctx, "CreateUpdate"); err != nil {
 		return err
 	}
 
-	return s.inner.CreateUpdate(ctx, u, fence)
+	return s.inner.CreateUpdate(ctx, u, key, fence)
 }
 
 // GetUpdate returns one update, unless a fault fires first.
@@ -352,10 +355,19 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	return s.inner.ListUpdates(ctx, ref, page)
 }
 
+// DatabaseNow returns the clock of the database, unless a fault fires first.
+func (s *Store) DatabaseNow(ctx context.Context) (time.Time, error) {
+	if err := s.before(ctx, "DatabaseNow"); err != nil {
+		return time.Time{}, err
+	}
+
+	return s.inner.DatabaseNow(ctx)
+}
+
 // PutCheckpoint saves cp as the state of its update, unless a fault fires first.
-func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	if err := s.before(ctx, "PutCheckpoint"); err != nil {
-		return err
+		return false, err
 	}
 
 	return s.inner.PutCheckpoint(ctx, cp, fence)
@@ -441,6 +453,17 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	}
 
 	return s.inner.JournalKeys(ctx, stackID, update)
+}
+
+// JournalBatches returns the references of the update's batches, unless a fault fires first.
+func (s *Store) JournalBatches(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalBatchRef, error) {
+	if err := s.before(ctx, "JournalBatches"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalBatches(ctx, stackID, update)
 }
 
 // JournalSweepable reports whether the journal may be swept, unless a fault fires first.
@@ -707,6 +730,19 @@ func (s *Store) FinalizeStateVersion(
 	}
 
 	return s.inner.FinalizeStateVersion(ctx, sv, fence)
+}
+
+// FinalizeStateVersionExpecting finalizes as FinalizeStateVersion does and
+// also checks the current version, unless a fault fires first. The fault name
+// is the one of FinalizeStateVersion.
+func (s *Store) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	if err := s.before(ctx, "FinalizeStateVersion"); err != nil {
+		return err
+	}
+
+	return s.inner.FinalizeStateVersionExpecting(ctx, sv, fence, expect)
 }
 
 // FenceAndUnlock releases the lock and makes the fence version current,

@@ -2,6 +2,25 @@
 
 Status: accepted · 2026-10-18. Supersedes in part ADR 100 decision 20. Extends ADR 103 decisions 1 and 8, ADR 135 decision 6, ADR 153 decision 4, ADR 20 and ADR 25. Answers an open question of ADR 103, ADR 117 and ADR 141. Accepts part of RFC 18. Decision 4 read by ADR 226 decision 6. Decision 7 amended by ADR 271. Decision 9 superseded in part by ADR 265. Decision 10 superseded in part by ADRs 241 and 244 for the manual lock of an import
 
+Changed by:
+
+- ADR 241 changes decision 10: only the import ends the manual lock of an
+  import.
+- ADR 244 changes decision 10: a preview passes the manual lock of an import.
+- ADR 265 changes decision 9: the vocabulary now holds locked, derived from
+  the lock flag.
+- ADR 267 extends decision 1: the principal of check 2 for a trigger start.
+- ADR 271 changes decisions 7 and 8: one installation-level GitHub App, the
+  metric name, the default connection.
+- ADR 273 changes decision 1: check 2 needs unit:read-outputs in place of
+  unit:read.
+- ADR 273 extends: the open item on a rule naming another namespace.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+- ADR 300 changes decision 2: a plan that starts from the Git host never gets the secrets of the first bullet.
+- ADR 300 changes decision 10: a manual lock can cover the whole installation.
+- ADR 309 extends decision 5: the batch record and the first bulk actions.
+
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

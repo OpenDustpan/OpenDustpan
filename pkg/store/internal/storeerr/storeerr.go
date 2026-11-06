@@ -29,7 +29,16 @@ const (
 	Capacity Class = "database has no free session"
 	// Busy means that the database file stayed locked for the whole busy bound.
 	Busy Class = "database is busy"
+	// StatementTimeout means that the server ended a statement at its
+	// statement timeout.
+	StatementTimeout Class = "statement timeout"
 )
+
+// Unreachable reports whether class means that the database cannot be
+// reached, not that it is slow or full.
+func (c Class) Unreachable() bool {
+	return c == ConnectionFailed || c == Shutdown || c == ReadOnly
+}
 
 // Error is a database that does not answer.
 type Error struct {
@@ -53,8 +62,14 @@ func (e *Error) Class() Class {
 	return e.class
 }
 
-// Unwrap returns namespace.ErrUnavailable and the driver error.
+// Unwrap returns namespace.ErrUnavailable and the driver error, and also
+// namespace.ErrUnreachable for a class that means that the database cannot be
+// reached.
 func (e *Error) Unwrap() []error {
+	if e.class.Unreachable() {
+		return []error{namespace.ErrUnavailable, namespace.ErrUnreachable, e.cause}
+	}
+
 	return []error{namespace.ErrUnavailable, e.cause}
 }
 

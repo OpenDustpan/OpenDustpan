@@ -1262,7 +1262,7 @@ func (s *Service) existingObject(ctx context.Context, obj identity.Object) (iden
 // ErrNotFound.
 func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (identity.Object, error) {
 	if s.authz.collections == nil {
-		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+		return obj, fmt.Errorf("%w: %w: collection %q does not exist", ErrNotFound, ErrCollectionMissing, obj.String())
 	}
 
 	id, found, err := s.authz.collections.CollectionID(ctx, obj)
@@ -1271,7 +1271,7 @@ func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (
 	}
 
 	if !found {
-		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+		return obj, fmt.Errorf("%w: %w: collection %q does not exist", ErrNotFound, ErrCollectionMissing, obj.String())
 	}
 
 	return obj.WithCollectionID(id), nil
@@ -1292,7 +1292,7 @@ func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identi
 	}
 
 	if withID.UnitID() == "" {
-		return obj, fmt.Errorf("%w: unit %q does not exist", ErrNotFound, obj.String())
+		return obj, fmt.Errorf("%w: %w: unit %q does not exist", ErrNotFound, ErrUnitMissing, obj.String())
 	}
 
 	return withID, nil

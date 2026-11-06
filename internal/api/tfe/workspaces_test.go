@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -112,7 +113,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -710,6 +711,7 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 			CreatedAt:   at,
 			UpdatedAt:   at,
 			Lock:        tc.lock,
+			LastRelease: workspace.NoRelease(),
 			ID:          workspace.ID(tc.id),
 			Ref:         workspace.Ref{Namespace: ns, Name: name},
 			Revision:    1,
@@ -843,6 +845,18 @@ func (p pagingWorkspaces) Restore(
 	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	return workspace.RollbackChange{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
 func (p pagingWorkspaces) History(
 	_ context.Context, _ workspace.ID, _ workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
@@ -875,7 +889,7 @@ func newPagingHandlerWith(t *testing.T, authz identity.Authorizer, ws tfe.Worksp
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

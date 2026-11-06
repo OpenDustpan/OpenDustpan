@@ -246,6 +246,9 @@ cut. Each row of the table ships as planned. The owner also decided:
   pre-merge apply, from the branch of the pull request, is an option of a
   unit. It is not the default. The docs say that the project does not
   recommend it.
+- **Review modes 2 and 4 ship in this milestone** (owner, 2026-11-01, ADR
+  328). Mode 2 is "OpenDustpan merges", and mode 4 is "no change orders"
+  (ADR 299). Modes 1 and 3 ship in milestone 6.
 
 **Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
 over TLS, the e2e suite starts a runner pool with real runners of the
@@ -330,6 +333,7 @@ workstations, with no runner.
 | server  | [RFC 5](rfc/0005-profiles.md) Profiles                                      | all                             | discussing; core accepted |
 | server  | [RFC 12](rfc/0012-api-edits-and-write-back.md) API edits and write-back     | all                             | accepted in part |
 | server  | [RFC 13](rfc/0013-policy-and-approvals.md) Policy and approvals             | all: the gates and approvals of ADRs 222 to 230 | accepted |
+| server  | [RFC 114](rfc/0114-review-requests-and-change-orders.md) Review requests and change orders | review modes 2 and 4 | accepted (ADR 299, ADR 328) |
 | server  | [RFC 28](rfc/0028-stored-plans.md) Stored plans                             | all                             | accepted |
 | server  | [RFC 27](rfc/0027-pull-request-automation.md) Pull request automation       | all; first slice: a plan, one status, one summary comment; apply after the merge by default, pre-merge apply as an option | draft; owner direction 2026-10-30; design needed |
 | server  | [RFC 30](rfc/0030-opentofu-remote-execution.md) CLI-driven remote execution | all                             | accepted in part (ADR 254, plans); design needed for the apply |
@@ -344,7 +348,9 @@ workstations, with no runner.
 promote units from them, inside guard rails.
 
 **Scope.** The owner decided on 2026-10-30 that milestone 6 has no scope
-cut. Each row of the table ships as planned.
+cut. Each row of the table ships as planned. Review modes 1 and 3 of ADR 299
+ship in this milestone (owner, 2026-11-01, ADR 328). Mode 1 is "merged
+approvals", and mode 3 is "no review requests".
 
 **Exit test.** On Linux, on SQLite and on PostgreSQL, through the real binary
 over TLS, with the runner pool and the fake GitHub API of the milestone 5
@@ -384,13 +390,15 @@ version in its matrix:
    request on the fake forge that changes the pin. Its plan runs as in
    milestone 5 step 7. Design needed: RFC 56 is a draft. The step proves the
    behavior that the design gives.
-7. **The egress proxy.** A job of a unit with the proxy on can reach only
-   the proxy. A request that an egress rule allows reaches the test endpoint
-   with the credential that the proxy adds. The job never holds that
-   credential, and the job log does not show it. A request that no rule
-   allows is refused, and the refusal writes an audit entry. A plan phase
-   cannot make a write that only the apply rule allows. Design needed:
-   RFC 16 is a draft. The step proves the behavior that the design gives.
+7. **The job proxy.** A job of a unit with proxy rules runs next to its
+   job proxy. The job proxy applies the outbound guard to each rule host. A
+   request that no proxy rule allows is refused, and the job log shows
+   "blocked by the job proxy" with the host and the path. Design needed
+   (RFC 16 P2, P4, P5, P10): the job reaches only the job proxy, the job
+   proxy adds the credential and the job never holds it, the record and
+   the audit entry of a phase, and a plan phase that cannot make a write
+   that only the proxy rule of the apply allows. The step proves the
+   behavior that the design gives.
 8. **Console.** The browser tests of the console repository run against the
    server of the suite. They open the catalog, fill the create form of a
    blueprint, see the error of a bad input, and make a unit.
@@ -404,7 +412,8 @@ The full Pulumi and OpenTofu scenarios of milestones 1 to 5 still pass.
 | server  | [RFC 55](rfc/0055-environment-promotion.md) Environment promotion               | all                     | draft; design needed |
 | server  | [RFC 10](rfc/0010-artifact-registry-and-curated-upstreams.md) Artifact registry | all, with curated upstreams | accepted in part (ADR 257); providers done; design needed for curation |
 | server  | [RFC 56](rfc/0056-upgrade-pull-requests.md) Upgrade pull requests               | all                     | draft; design needed |
-| server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all: the job proxy      | draft; design needed |
+| server  | [RFC 16](rfc/0016-egress-proxy.md) Job proxy                                    | all                     | discussing; accepted in part (ADR 327); items P1 to P17 and P19 wait for the owner |
+| server  | [RFC 114](rfc/0114-review-requests-and-change-orders.md) Review requests and change orders | review modes 1 and 3 | accepted (ADR 299, ADR 328) |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | accepted; domain core built |
 
 ## Milestone 7. High availability on one database
@@ -544,6 +553,177 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [ ] Release workflows for the binaries, the image and the console tarball
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+- [ ] In the commit that it tags: `make regenerate-baseline`, `DocumentVersion`
+  in `internal/api/apidesc/document.go` set for the release, a new pin of
+  the description, and the lines of the tag in
+  `internal/releaserecord/shipped.txt`. The record turns on the checks of
+  the shipped migrations and of the description version, and the collapse
+  script refuses from then on. `scripts/release-build.sh` refuses a version
+  that the record does not list
+  ([ADR 325](adr/0325-the-release-record-turns-the-shipped-migration-checks-on.md)).
+
+## Milestone 8. Concurrent applies on one state
+
+**Goal.** Two teams can apply to disjoint parts of one workspace at the same
+time, through OpenDustpan runners, and the result is the same as if they had
+applied one after the other. A person who runs the `dustpan` CLI on a laptop
+can take part in the same rules. OpenDustpan builds this feature itself. It
+does not implement the protocol of any other product
+([ADR 302](adr/0302-milestone-8-concurrent-applies-on-one-state.md)).
+
+Milestone 8 comes after milestone 7. It is not in the gate of the first
+release ([ADR 279](adr/0279-no-release-before-milestone-7.md)).
+
+**Design first.** An RFC for concurrent applies comes before any code. Its
+scope is: the change to decision 3 of ADR 26 (the server assigns the serial
+under a claim); a parent pointer and a claim ID for each state version; a
+fence for each claim; one principal for each job on the TFE-compatible path;
+and the change of the rule of ADR 299 that a replacement is never disjoint
+(the RFC proposes a closure test); and the retry interval and the timeout
+of the local wrapper. ADR 302 does not decide these points.
+
+**Scope.**
+
+- A job registers its saved plan as a claim before the apply. The server
+  refuses overlapping claims before anything runs.
+- The server serves each job the state version that its plan was made from,
+  and merges each upload one resource instance at a time.
+- Work that is not provably disjoint takes turns. Six cases from the
+  research keep the whole-unit lock: data sources, providers configured from
+  resources, root outputs, client-encrypted state, a version or lineage
+  mismatch, and a local CLI run without the wrapper. They are the starting
+  set. The RFC may add a case. It may not remove one without a decision of
+  the owner.
+- OpenTofu first. The Pulumi CLI follows after its own spike.
+- The local CLI wrapper: `dustpan` wraps the real `tofu` or `pulumi` CLI on
+  the machine of the user, as the runner wrapper does.
+- Splitting a plan with `-target` comes later, as a speed feature only, on
+  top of the claim model.
+
+**Work items.**
+
+- C1. The pre-flight, and the first task of the milestone: the inventory.
+  It lists each feature that works only inside OpenDustpan runners today
+  because it needs the CLI wrapper. Each entry names the feature, why it
+  needs the wrapper and what a local run lacks now. The inventory can mark
+  an entry that cannot be ported, with the reason. The owner decides what
+  happens to such an entry.
+- C2. The RFC for concurrent applies, then the ADR that accepts it.
+- C3. The claim model and the strict disjointness rules, for OpenTofu.
+- C4. The merge of an upload, one resource instance at a time.
+- C5. The local CLI wrapper for OpenTofu, with claims.
+- C6. The port of each feature in the inventory (C1) to the local wrapper,
+  except an entry that the owner decided not to port.
+- C7. A spike with the Pulumi CLI, then its claim model if the spike passes.
+- C8. Docs: a guide for the wrapper, and an explanation page of the cases
+  that keep the whole-unit lock.
+
+C1, then C2, then C3 is the critical path.
+
+**Exit test.** For a real person: a platform lead has one workspace that
+two teams change, and a third person who applies from a laptop. On Linux, on
+PostgreSQL, with real OpenTofu and a fake cloud provider that logs each call
+with a time, the e2e suite does these steps. Each step passes or fails on the
+fact that it names.
+
+1. **Two disjoint claims.** Team A and team B each change a different
+   resource in the same workspace. Both runner jobs plan and register a
+   claim. Pass: the suite finds two claim records in the state "accepted"
+   and no refusal.
+2. **Concurrent applies.** Both applies run. Pass: the provider log shows
+   that the two apply periods overlap in time, the final state has the
+   change of A and the change of B, and the history shows two new state
+   versions, and the history shows the claim of each state version. Fail: a resource of A or B is
+   lost or reverted.
+3. **A runner job with an overlapping claim is refused.** While the apply
+   of A runs, team C starts a runner job that changes the resource of A.
+   Pass: the server refuses the claim of C, the refusal names the claim of
+   A, the job of C ends as "blocked", and the provider log has no call from
+   the job of C.
+4. **A strict case takes turns.** A change that reads a data source (a case
+   of the strict rules) runs while the apply of A runs. Pass: it holds the
+   whole-unit lock, it starts its apply only after the apply of A ends, and
+   the history names the case.
+5. **A local run, two cases.** A person runs `dustpan` with the wrapper
+   around `tofu apply` from a laptop.
+   - The change overlaps a running claim: the server refuses the claim, and
+     the wrapper tries it again until the blocking claim ends, or until a
+     timeout. Pass when the provider log has no call from the wrapper until
+     the blocking claim ends. After that, the wrapper applies on the new
+     state version. The claim record of the local run shows a start time
+     after the end time of the blocking claim. If the timeout ends first,
+     the wrapper exits with an error and makes no provider call.
+   - The change does not overlap any running claim: pass when its claim
+     is accepted, its apply period overlaps the running apply in the
+     provider log, and the history shows the claim of each state version
+     with no lost resource.
+6. **A local run without the wrapper.** A person runs plain `tofu apply` on
+   the same workspace. Pass: it takes the whole-unit lock, and a runner job
+   that starts meanwhile waits for it. The history shows the lock holder.
+7. **A runner-only feature in a local run.** Secret masking is a feature
+   that works only in runners today: the launcher masks each secret value
+   of a phase in the step log (`Masker` in `pkg/launcher`). Pass: a
+   local wrapper run of a change that prints a secret value of its profile
+   shows the masked value in the log that the server stores, and the
+   plain text appears nowhere in the log. The job token credential of the
+   launcher, which a run uses to call the server, must work from the wrapper
+   in the same step. The inventory (C1) may name more features. Each one
+   that the owner did not exempt gets its own check here.
+
+## Milestone 9. Native run-all: fan-out applies
+
+**Goal.** A team that uses Terragrunt can run `terragrunt run-all` and keep
+one reviewed change for many units. Locally and in the CI of the team, the
+command keeps working unchanged. On OpenDustpan runners, a discovery job finds
+the Terragrunt units, and a shim turns the command into one job for each unit,
+under a change order. No runner applies all the units in one process
+([ADR 304](adr/0304-native-run-all-fan-out-applies-in-milestone-9.md)).
+
+Milestone 9 comes after milestone 8. Profiles and blueprints stay the
+recommended path. OpenDustpan supports Terragrunt for teams that already use
+it.
+
+**Design first.** [RFC 115](rfc/0115-terragrunt-run-all-fan-out-on-runners.md)
+comes before any code. Its scope is: unit discovery, dependency order (ordered
+apply jobs, or a change order that does not order its apply jobs), and a
+failure in one unit. ADR 304 does not decide these points.
+
+**Scope.**
+
+- Locally and in the CI of a team: `terragrunt run-all` works with no change.
+  Each Terragrunt unit talks to its own workspace.
+- On runners: a discovery job and a shim in the runner and the launcher. The
+  shim uses only the change order API. It turns `terragrunt run-all` into one
+  job for each Terragrunt unit, under a change order. The TFE-compatible API
+  adapter has no run-all logic.
+- The documentation: a guide for Terragrunt with OpenDustpan, and a page that
+  says why profiles and blueprints stay the recommended path.
+
+**Exit test.** On Linux, on PostgreSQL, through the real binary over TLS,
+with real OpenTofu, real Terragrunt and a test provider that records each
+call with a time, the e2e suite does these steps. Each step passes or fails on
+the fact that it names.
+
+1. **Local run-all.** `terragrunt run-all apply` on a laptop over 3 units.
+   Pass: 3 workspaces, each with 1 new state version and 1 history entry, and
+   no change order.
+2. **Run-all in the CI of a team.** The same command in a CI job. Pass: the
+   result of step 1.
+3. **Run-all on a runner.** `terragrunt run-all apply` over 3 units on an
+   OpenDustpan runner. Pass: 1 discovery job, 1 change order, 3 plan jobs and
+   3 apply jobs, each on its own unit. Each unit has 1 new state version and
+   1 history entry. The call record of the test provider shows no unit applied
+   by the job of another unit.
+4. **The record names the cause.** Pass: the history entry and the audit
+   entry of each plan job and each apply job name the discovery job, the
+   principal that requested the wrapper job, and the reason "terragrunt
+   run-all fan-out".
+5. **The review holds.** Pass: the apply jobs start only after the apply
+   request of a person, and the call record of the test provider has no apply
+   call before it.
+6. **A failure in one unit.** One of the 3 units fails at the apply. Pass: the
+   failed unit has a failed apply job and no new state version, and the other
+   2 units show the result that RFC 115 decides.
 
 ## Accepted designs that wait for adapters
 
@@ -579,6 +759,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 25](rfc/0025-drift-detection.md) Drift detection                                              | runs (milestone 5)                                              |
 | [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor                                      | runs (milestone 5)                                              |
 | [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                                        | runners (RFC 6)                                                 |
+| [ADR 305](adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md) The Kubernetes operator (RFC 31 phases 3 and 4) | the Catalog (blueprints); not yet placed in a milestone. The current order of the owner puts it after runners scoped to namespaces |
 | [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys                                  | secrets (RFC 3, part 2)                                         |
 | [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for installations |
 | [RFC 39](rfc/0039-reading-state.md) Reading state contents                                         | accepted (ADR 41); a milestone to place it in                   |

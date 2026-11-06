@@ -56,6 +56,7 @@ func checkSweepReason(t *testing.T, tc sweepReasonCase) {
 		DisableTokens:     new(!tc.account),
 		DisableAccounts:   new(tc.account),
 		DisableBreakGlass: nil,
+		ExchangeLifetime:  nil,
 	}
 	if tc.inactivity != 0 {
 		change.Inactivity = new(tc.inactivity)

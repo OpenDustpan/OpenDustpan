@@ -12,9 +12,11 @@ import (
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -146,9 +148,13 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 		BlobKey:       blob.Key(key),
 		BlobSize:      1,
 		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: f.clock.Now(),
 	}
 
-	if err := f.store.PutCheckpoint(t.Context(), row, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if _, err := f.store.PutCheckpoint(t.Context(), row, fence); err != nil {
 		t.Fatalf("store the checkpoint row: %v", err)
 	}
 }
@@ -173,8 +179,8 @@ func blobKeysOf(t *testing.T, store blob.Store) []string {
 
 // TestStackBlobsLiveUnderTheNamespacePrefix saves each kind of checkpoint and
 // checks the layout: every blob key is
-// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>, and the
-// blob store holds no key outside the prefix of the namespace.
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>,
+// and the blob store holds no key outside the prefix of the namespace.
 func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 	t.Parallel()
 
@@ -186,7 +192,7 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 		{"one sequenced save", "1", []int64{1}},
 		{"a sequenced save replaces the one before", "2", []int64{1, 2}},
 		{"an unsequenced save", "0", []int64{0}},
-		{"unsequenced saves mint the next key", "1", []int64{0, 0}},
+		{"unsequenced saves keep one blob", "0", []int64{0, 0}},
 	}
 
 	for _, tc := range tests {
@@ -203,13 +209,22 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 				}
 			}
 
-			got := blobKeysOf(t, f.blobs)
-			want := f.prefix + "stk-test/" + s.Update.ID.String() + "/" + tc.tail
-
-			if len(got) != 1 || got[0] != want {
-				t.Fatalf("blob keys = %v, want [%s]", got, want)
-			}
+			wantAttemptKey(t, blobKeysOf(t, f.blobs), f.prefix+"stk-test/"+s.Update.ID.String()+"/"+tc.tail+"-")
 		})
+	}
+}
+
+// attemptIDLength is the length of the attempt ID that a save writes in its key.
+const attemptIDLength = 20
+
+// wantAttemptKey fails the test unless keys holds one key that is head
+// followed by an attempt ID.
+func wantAttemptKey(t *testing.T, keys []string, head string) {
+	t.Helper()
+
+	if len(keys) != 1 || !strings.HasPrefix(keys[0], head) ||
+		len(strings.TrimPrefix(keys[0], head)) != attemptIDLength {
+		t.Fatalf("blob keys = %v, want one key that starts with %s and ends in an attempt ID", keys, head)
 	}
 }
 
@@ -389,6 +404,7 @@ func checkRefusedJournalOp(t *testing.T, op journalBlobOp, tc journalForeignKey)
 	refusals := stacktest.NewRefusals()
 	rows := newFakeRows()
 	rows.keys = []blob.Key{tc.key}
+	rows.rows = []stack.JournalRow{rowNaming(tc.key, [sha256.Size]byte{}, 0)}
 
 	entries, err := stack.NewJournalEntries(blobs, rows, allowAll{}, 0, refusals)
 	if err != nil {
@@ -450,8 +466,8 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 		ns   namespace.ID
 		want string
 	}{
-		{"the namespace of the tests", journalNS, "namespaces/ns-journal-test/pulumi/stack-1/upd-1/journal/1"},
-		{"another namespace", "ns-second", "namespaces/ns-second/pulumi/stack-1/upd-1/journal/1"},
+		{"the namespace of the tests", journalNS, "namespaces/ns-journal-test/pulumi/stack-1/upd-1/journal/1-"},
+		{"another namespace", "ns-second", "namespaces/ns-second/pulumi/stack-1/upd-1/journal/1-"},
 	}
 
 	for _, tc := range tests {
@@ -468,12 +484,12 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 				t.Fatalf("append: %v", err)
 			}
 
-			if len(rows.rows) != 1 || rows.rows[0].BlobKey.String() != tc.want {
-				t.Fatalf("rows = %+v, want one row with the key %q", rows.rows, tc.want)
+			if len(rows.rows) != 1 || !hasAttemptKey(rows.rows[0].BlobKey, tc.want) {
+				t.Fatalf("rows = %+v, want one row with a key that starts with %q", rows.rows, tc.want)
 			}
 
-			if _, ok := blobs.objects[blob.Key(tc.want)]; !ok {
-				t.Fatalf("blob store holds %v, want the key %q", blobs.objects, tc.want)
+			if _, ok := blobs.objects[rows.rows[0].BlobKey]; !ok {
+				t.Fatalf("blob store holds %v, want the key of the row", blobs.objects)
 			}
 		})
 	}
@@ -483,6 +499,8 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 // stores of f with the given blob store and recorder.
 func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Recorder) stack.UpdatesConfig {
 	return stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		Updates:            f.store,
 		Checkpoints:        f.store,
 		Events:             f.store,

@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
 	"opendustpan.org/opendustpan/internal/store/storefault"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -143,6 +144,7 @@ func newCrashFixture(
 	namespaces := crashNamespaces(t, wrappedSQL)
 
 	service, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         wrappedSQL,
 		States:             wrappedSQL,
