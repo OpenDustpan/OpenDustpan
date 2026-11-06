@@ -119,6 +119,16 @@ def check_url(url):
     return url
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse each redirect. urllib would send the Authorization header to the
+    new host. Defense in depth: check_url() checks only the first URL, so this
+    layer stops a redirect to another host on its own."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
 _last_request = [0.0]
 
 
@@ -134,7 +144,7 @@ def request(key, method, path, body=None, accept="application/json"):
             time.sleep(wait)
         _last_request[0] = time.monotonic()
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            with OPENER.open(req, timeout=TIMEOUT) as resp:
                 raw = resp.read(RESPONSE_MAX + 1)
             break
         except urllib.error.HTTPError as err:
@@ -381,6 +391,10 @@ def selftest():
         assert refuses(check_url, bad), bad
         cases += 1
     assert check_url(API + "/auth/me")
+    # A redirect to another host never carries the key.
+    hostile = urllib.request.Request(API + "/x", headers={"Authorization": "Bearer rw_x"})
+    assert NoRedirect().redirect_request(hostile, None, 302, "Found", {}, "https://evil.example/y") is None
+    cases += 1
     # A request with a bad key fails before any network call.
     assert refuses(request, "", "GET", "/auth/me")
     cases += 1
