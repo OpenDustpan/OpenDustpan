@@ -26,6 +26,13 @@ func TestHostileStepsNeverStart(t *testing.T) {
 		return s
 	}
 
+	withRole := func(role string) protocol.Step {
+		s := step("bad", touch...)
+		s.Role = role
+
+		return s
+	}
+
 	withDir := func(dir string) protocol.Step {
 		s := step("bad", touch...)
 		s.Dir = dir
@@ -42,6 +49,7 @@ func TestHostileStepsNeverStart(t *testing.T) {
 		{"unclean absolute program", step("bad", "/usr/../usr/bin/touch", marker), "not a clean absolute path"},
 		{"NUL in an argument", step("bad", "touch", marker+"\x00x"), "NUL byte"},
 		{"no program", step("bad"), "no program"},
+		{"unknown role", withRole("admin"), "not tool or hook"},
 		{"program not on the PATH", step("bad", "no-such-program-here"), "not on the PATH"},
 		{"step sets PATH", withEnv("PATH", "/tmp"), "environment of the step is not valid"},
 		{"step sets a launcher variable", withEnv("DUSTPAN_JOB_ID", "x"), "environment of the step is not valid"},

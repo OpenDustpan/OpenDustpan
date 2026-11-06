@@ -260,6 +260,11 @@ const (
 	statusOK        = 200
 	statusNoContent = 204
 	statusError     = 400
+	// Statuses of a proxy or a load balancer that a retry can pass.
+	statusTooManyRequests = 429
+	statusBadGateway      = 502
+	statusUnavailable     = 503
+	statusGatewayTimeout  = 504
 )
 
 // jsonHeader returns the content type of a JSON body.
@@ -279,8 +284,16 @@ func check(resp *Response, want int) error {
 		return &Error{Status: resp.Status, Body: body}
 	}
 
+	// A proxy or a load balancer in front of the server answers these
+	// statuses with no protocol body. A retry can succeed.
+	code := ""
+	if resp.Status == statusTooManyRequests || resp.Status == statusBadGateway ||
+		resp.Status == statusUnavailable || resp.Status == statusGatewayTimeout {
+		code = protocol.ErrorUnavailable
+	}
+
 	return &Error{Status: resp.Status, Body: protocol.Error{
-		Code: "", Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
+		Code: code, Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
 	}}
 }
 
