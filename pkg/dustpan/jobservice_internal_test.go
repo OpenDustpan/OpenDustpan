@@ -295,9 +295,8 @@ func TestJobPlannerPools(t *testing.T) {
 
 // TestJobPlannerNoPoolNamesTheNextStep proves that the refusal of a namespace
 // with no runner pool for jobs names the route that makes a pool and the
-// setting that the route needs, and that the drift check answer, which the
-// API cuts at 300 bytes, holds the whole text also for the longest namespace
-// name.
+// setting that the route needs, and that the drift check answer holds the whole
+// text also for the longest namespace name.
 func TestJobPlannerNoPoolNamesTheNextStep(t *testing.T) {
 	t.Parallel()
 

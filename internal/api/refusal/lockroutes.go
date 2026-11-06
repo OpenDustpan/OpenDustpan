@@ -25,8 +25,13 @@ const (
 
 // MaxLockedTextBytes is the most bytes of a refusal text with its removal
 // route. It is the limit of the message of an answer, so that a cut of the
-// message never removes the route.
-const MaxLockedTextBytes = 300
+// message never removes the route. It holds the route sentence of the longest
+// legal unit reference: the lead of the sentence (46 bytes), the unit lock
+// path with "?unit=" (30 bytes), a tool code of 100 bytes, ":", a namespace of
+// 100 bytes, "/", a unit name of 300 bytes in which each byte is written as
+// "%XX" (900 bytes), and the final "." (1 byte). The sum is 1179 bytes. The
+// constant rounds it up to 1280 bytes.
+const MaxLockedTextBytes = 1280
 
 // LockRoutes holds the routes that remove a manual lock. Remove is the route
 // of the holder. Force is the route of a person with unit:manage.
