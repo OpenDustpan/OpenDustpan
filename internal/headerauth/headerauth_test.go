@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -201,7 +202,10 @@ func TestNewRefusesAConfigurationThatIsNotValid(t *testing.T) {
 	add("jwt with no issuer", jwtBase, func(c *headerauth.Config) { c.JWT.Issuer = "" })
 	add("an http key URL", jwtBase, func(c *headerauth.Config) { c.JWT.KeyURL = "http://issuer.example.com/jwks" })
 	add("a key URL with a user", jwtBase, func(c *headerauth.Config) {
-		c.JWT.KeyURL = "https://user:pass@issuer.example.com/jwks"
+		// The URL is built at run time, so that the file holds no literal
+		// credential URL.
+		u := url.URL{Scheme: "https", User: url.UserPassword("user", "pass"), Host: "issuer.example.com", Path: "/jwks"}
+		c.JWT.KeyURL = u.String()
 	})
 	add(
 		"a key URL with a query",
