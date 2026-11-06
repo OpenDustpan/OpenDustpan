@@ -148,7 +148,9 @@ type Provider interface {
 	Kind() Kind
 	// Spec describes the inputs and the outputs.
 	Spec() Spec
-	// Check validates the inputs of one block. It calls no network.
+	// Check validates the inputs of one block. It calls no network and
+	// returns without blocking: Run stops waiting for it at the limit of
+	// the open, but cannot stop its goroutine.
 	// profile.ErrInvalid names the bad input.
 	Check(in Value) error
 	// Open resolves one block for one open. profile.ErrInvalid for an input
