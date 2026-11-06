@@ -20,6 +20,7 @@ package mfa
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -30,6 +31,11 @@ import (
 const (
 	// MaxPasskeys is the most passkeys that one person can hold.
 	MaxPasskeys = 20
+	// MaxOpenSignInChallenges is the most open challenges of passkey sign-ins
+	// that one installation holds. A public route writes one challenge row
+	// for each start, so no limit by source address bounds the table when
+	// many sources send. Over this count, a new start stores no row.
+	MaxOpenSignInChallenges = 10_000
 	// ChallengeBytes is the count of random bytes of a WebAuthn challenge.
 	ChallengeBytes = 32
 	// ChallengeLifetime is the lifetime of a WebAuthn ceremony.
@@ -80,6 +86,10 @@ var (
 	// ErrUnavailable reports that the store cannot answer. Each sign-in
 	// fails closed on it.
 	ErrUnavailable = errors.New("factor store unavailable")
+	// ErrChallengeLimit reports a start of a passkey sign-in over
+	// MaxOpenSignInChallenges. It wraps ErrUnavailable, so the adapters
+	// answer 503. The store wrote no row.
+	ErrChallengeLimit = fmt.Errorf("%w: too many open sign-in challenges", ErrUnavailable)
 )
 
 // Passkey is one stored WebAuthn credential of a person. ID has the prefix

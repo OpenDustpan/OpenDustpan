@@ -236,6 +236,7 @@ func CoverageAllowlist() []AllowEntry {
 		settingsAllowEntries(),
 		localUserAllowEntries(),
 		passkeyAllowEntries(),
+		passkeySignInAllowEntries(),
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
 		registryAllowEntries(),

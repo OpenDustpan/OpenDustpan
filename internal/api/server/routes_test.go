@@ -88,6 +88,8 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/passkey/begin",
+		"POST /api/dustpan/v1/sign-in/passkey/finish",
 		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
@@ -359,7 +361,7 @@ func newServiceBackedHandlerOf(
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
-			Passkeys:        nil,
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),

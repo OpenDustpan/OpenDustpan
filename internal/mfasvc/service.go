@@ -77,6 +77,9 @@ type Service struct {
 	audit Auditor
 	now   func() time.Time
 	log   *slog.Logger
+	// watch counts the failed assertions for break-glass accounts. Nil
+	// counts nothing.
+	watch *breakGlassWatch
 }
 
 // New returns a Service. It returns ErrMissingDependency for a required
@@ -101,7 +104,7 @@ func New(cfg Config) (*Service, error) {
 		log = slog.Default()
 	}
 
-	return &Service{store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log}, nil
+	return &Service{store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log, watch: nil}, nil
 }
 
 // Actor is the caller of a step: the audit entry that the HTTP adapter fills
@@ -326,48 +329,141 @@ func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 func (s *Service) FinishAssertion(
 	ctx context.Context, a Actor, k mfa.Ceremony, b Binding, response []byte,
 ) (mfa.Passkey, error) {
-	var none mfa.Passkey
+	key, _, err := finishCeremony(ctx, s, &finishInput{response: response, bind: b, actor: a, kind: k})
 
-	h, c, err := s.take(ctx, response)
+	return key, err
+}
+
+// SignedIn is the result of a passkey sign-in that passed each check of the
+// service: the passkey with its new counter, and whether the check saw user
+// verification.
+type SignedIn struct {
+	Passkey      mfa.Passkey
+	UserVerified bool
+}
+
+// FinishSignIn ends the sign-in ceremony of the response. It is
+// FinishAssertion for mfa.CeremonySignIn, and it also returns the user
+// verification that the relying party saw, so that the sign-in service can
+// check it again. The person of the passkey is the person of the user handle
+// of the response. Before it makes a session, the caller checks that the
+// principal exists and is not disabled.
+func (s *Service) FinishSignIn(ctx context.Context, a Actor, response []byte) (SignedIn, error) {
+	var none SignedIn
+
+	key, got, err := finishCeremony(ctx, s, &finishInput{
+		response: response, bind: Binding{PersonID: "", PendingID: ""}, actor: a, kind: mfa.CeremonySignIn,
+	})
 	if err != nil {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "no open ceremony", err)
+		return none, err
 	}
 
-	if !bound(k, c, a, b) {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
+	return SignedIn{Passkey: key, UserVerified: got.UserVerified}, nil
+}
+
+// finishInput is what the end of an assertion ceremony needs: the caller, the
+// kind of the ceremony, what the ceremony binds to, and the response.
+type finishInput struct {
+	response []byte
+	bind     Binding
+	actor    Actor
+	kind     mfa.Ceremony
+}
+
+// openCeremony takes the challenge of the response and returns the passkey of
+// the response with the head of the response. It runs the checks that need no
+// signature: the kind, the person and the session of the ceremony, the owner
+// of the passkey and its suspension. It is a function and not a method, so
+// that the exported methods of the service stay before the unexported ones.
+func openCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey, mfa.ResponseHead, error) {
+	var (
+		none   mfa.Passkey
+		noHead mfa.ResponseHead
+	)
+
+	a := in.actor
+
+	h, c, err := s.take(ctx, in.response)
+	if err != nil {
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "no open ceremony", err)
+	}
+
+	if !bound(in.kind, c, a, in.bind) {
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
 			"ceremony of another kind, person or session", mfa.ErrWrongPerson)
 	}
 
 	key, err := s.store.PasskeyByCredentialID(ctx, h.CredentialID)
 	if err != nil {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "unknown passkey", err)
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "unknown passkey", err)
 	}
 
 	object := Object(key.ID)
 
-	if ownErr := owns(k, c, h, key); ownErr != nil {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person", ownErr)
+	// From here the passkey is known. A refusal returns it, so that the caller
+	// can count the failed assertion for the account of the passkey.
+	if ownErr := owns(in.kind, c, h, key); ownErr != nil {
+		return key, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person",
+			ownErr)
 	}
 
 	// Defense in depth: the store refuses the use of a suspended passkey in
 	// the transaction of the use. This check stays so that the relying party
 	// never checks a response of a suspended passkey.
 	if !key.SuspendedAt.IsZero() {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended", mfa.ErrSuspended)
+		return key, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended",
+			mfa.ErrSuspended)
 	}
+
+	return key, h, nil
+}
+
+// finishCeremony is FinishAssertion with the result of the relying party. A
+// failure after the lookup of the passkey is counted for the account of the
+// passkey, when the service watches break-glass accounts.
+func finishCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey, mfa.Assertion, error) {
+	var seen mfa.Passkey
+
+	key, got, err := checkCeremony(ctx, s, in, &seen)
+	if err != nil && seen.ID != "" {
+		s.noteFailure(ctx, in.actor.Entry, &seen)
+	}
+
+	return key, got, err
+}
+
+// checkCeremony runs the checks of finishCeremony. It sets seen to the passkey
+// of the response as soon as it found it, so that the caller can count a
+// failure for its account.
+func checkCeremony(
+	ctx context.Context, s *Service, in *finishInput, seen *mfa.Passkey,
+) (mfa.Passkey, mfa.Assertion, error) {
+	var (
+		none mfa.Passkey
+		zero mfa.Assertion
+	)
+
+	key, h, err := openCeremony(ctx, s, in)
+	*seen = key
+
+	if err != nil {
+		return none, zero, err
+	}
+
+	a, k, object := in.actor, in.kind, Object(key.ID)
 
 	owner := mfa.Person{ID: key.PersonID, Name: key.PersonID, DisplayName: ""}
 
-	got, err := s.rp.VerifyAssertion(k, owner, key, h.Challenge, response)
+	got, err := s.rp.VerifyAssertion(k, owner, key, h.Challenge, in.response)
 	if err != nil {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "response failed a check", err)
+		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "response failed a check", err)
 	}
 
 	// Defense in depth: the relying party adapter requires user
 	// verification of these kinds. This check stays so that a sign-in and a
 	// fresh step never pass without it.
 	if mfa.VerificationOf(k) == mfa.VerificationRequired && !got.UserVerified {
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "no user verification",
+		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "no user verification",
 			mfa.ErrVerification)
 	}
 
@@ -383,16 +479,16 @@ func (s *Service) FinishAssertion(
 			s.log.WarnContext(ctx, "a passkey counter went back; the passkey is suspended",
 				slog.String("passkey", key.ID))
 
-			return none, err
+			return none, zero, err
 		}
 
-		return none, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "store refused the use", err)
+		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "store refused the use", err)
 	}
 
 	key.SignCount = got.SignCount
 	key.LastUsedAt = at
 
-	return key, nil
+	return key, got, nil
 }
 
 // owns returns mfa.ErrWrongPerson unless the passkey key belongs to the

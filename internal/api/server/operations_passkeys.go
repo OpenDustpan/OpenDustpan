@@ -42,5 +42,11 @@ func passkeyOperationLabels() map[string]apidesc.Label {
 		apidesc.Pattern(http.MethodDelete, passkeyPath): apidesc.Name("removePasskey", tagPasskeys).
 			On(apidesc.KindCaller).
 			WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodPost, signInWebauthnBeginPath): apidesc.Name("beginPasskeySignIn", tagPasskeys).
+			WithBodies(apidesc.NoBody, apidesc.Typed[passkeyRequestOptions](
+				"PasskeyRequestOptions", passkeyJSONSchema(),
+			)),
+		apidesc.Pattern(http.MethodPost, signInWebauthnFinishPath): apidesc.Name("finishPasskeySignIn", tagPasskeys).
+			WithBodies(apidesc.Typed[passkeySignInRequest]("PasskeySignInRequest", passkeyJSONSchema()), apidesc.NoBody),
 	}
 }

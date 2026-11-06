@@ -25,8 +25,7 @@ jobs:
   e2e-ha:
     # A scheduled run uses the default branch. A run by hand must use it too.
     if: ${{ github.ref == 'refs/heads/main' }}
-    # The same value as the jobs of ci.yml.
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     services:
       postgres:
@@ -45,10 +44,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The newest Go caches of the e2e job of ci.yml. This run only restores
+      # them and saves no entry of its own.
+      - name: Restore the Go caches
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-e2e-0-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-e2e-0-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-e2e-0-
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - name: Cache the CLI archives
-        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/opendustpan-e2e

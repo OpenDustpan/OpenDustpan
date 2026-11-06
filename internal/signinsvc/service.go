@@ -173,6 +173,9 @@ type Result struct {
 	// ChangeRequired reports that the person must change the password. Only
 	// the local password sets it.
 	ChangeRequired bool
+	// BreakGlass reports a session of a break-glass account. The adapter
+	// limits the cookie of such a session to the break-glass limit.
+	BreakGlass bool
 }
 
 // Principals finds or makes the principal of a sign-in.
@@ -223,6 +226,9 @@ type Config struct {
 	// Groups applies the group claims of an Assertion. Nil means that no
 	// mapping exists, so no sign-in joins a group.
 	Groups principal.GroupClaimApplier
+	// States reads the state of a person for the passkey sign-in. Nil means
+	// that the passkey sign-in refuses every request.
+	States States
 	Logger *slog.Logger
 	// OnAuditFailure is called when an audit entry cannot be written. Nil
 	// means no call.
@@ -348,7 +354,7 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 
 	out := s.startSession(ctx, e, &session.Start{
 		AuthTime: authTime(a, s.cfg.Sessions.Now()), PrincipalID: p.ID, Provider: req.Provider.ID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: 0, Stored: req.Provider.Stored,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: 0, Stored: req.Provider.Stored, Alert: nil,
 	})
 
 	return s.started(ctx, req, a.Subject, &out)
@@ -401,7 +407,7 @@ func (s *Service) CompleteLocal(ctx context.Context, req *LocalRequest) (Result,
 
 	out := s.startSession(ctx, e, &session.Start{
 		AuthTime: a.AuthTime, PrincipalID: a.PrincipalID, Provider: session.LocalProviderID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: req.Generation, Stored: false,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: req.Generation, Stored: false, Alert: nil,
 	})
 
 	if errors.Is(out.err, session.ErrGenerationChanged) {
@@ -501,7 +507,10 @@ func (s *Service) started(ctx context.Context, req *Request, idpSubject string, 
 
 	switch {
 	case out.err == nil:
-		return Result{Session: out.sess, Secret: out.secret, Method: req.Assertion.Method, ChangeRequired: false}, nil
+		return Result{
+			Session: out.sess, Secret: out.secret, Method: req.Assertion.Method, ChangeRequired: false,
+			BreakGlass: false,
+		}, nil
 	case errors.Is(out.err, session.ErrProviderDisabled), errors.Is(out.err, session.ErrProviderNotFound):
 		// The provider was disabled or deleted after the lookup of this
 		// callback. The adapter answers as for an unknown provider.
@@ -647,6 +656,12 @@ func startChanges(a *session.Assertion) []audit.Change {
 		}
 
 		changes = append(changes, change("factors", strings.Join(factors, ",")))
+	}
+
+	if a.Method == session.MethodPasskey {
+		// A passkey sign-in needs user verification, so the passkey is the
+		// possession of the key and the verification on the device.
+		changes = append(changes, change("factorCount", "2"))
 	}
 
 	return changes

@@ -1,6 +1,8 @@
+# a vendored agent skill, where a Markdown link that names a file looks like a credential to a detector
 ^\.agents/skills/setup-matt-pocock-skills/SKILL\.md$
+# test files with a fake URL that holds a user name and a password, to test the refusal or the masking of credentials
 ^pkg/notify/notify_test\.go$
-^cmd/opendustpan/dev_test\.go$
+# files that no longer exist in the tree; an old commit holds a fake credential in each of them
 ^pkg/unitimport/unitimport_test\.go$
 ^pkg/policy/endpoint_test\.go$
 ^pkg/calendar/calendar_test\.go$
