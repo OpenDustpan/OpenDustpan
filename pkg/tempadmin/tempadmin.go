@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -101,7 +100,7 @@ func (r TempAdmin) Validate() error {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
 	}
 
-	if hasHiddenRune(r.CreatedBy) {
+	if strings.ContainsFunc(r.CreatedBy, audit.IsHiddenRune) {
 		return fmt.Errorf("%w: the creator holds a control or format character", ErrInvalid)
 	}
 
@@ -153,14 +152,6 @@ func ValidateReason(reason string) error {
 	}
 
 	return nil
-}
-
-// hasHiddenRune reports whether s holds a control character (Cc) or a
-// format character (Cf).
-func hasHiddenRune(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
-	})
 }
 
 // ReviewUse returns the break-glass use of r that ends at end: the expiry

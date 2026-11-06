@@ -22,6 +22,9 @@ import (
 // errEngineDown is a guard error that is not a decision.
 var errEngineDown = errors.New("engine down")
 
+// errStateDown is the error of a read of a state that fails.
+var errStateDown = errors.New("blob store down")
+
 // errLineBreak is a guard error whose text adds a line.
 var errLineBreak = errors.New("down\r\nFAKE: allowed")
 
@@ -102,6 +105,7 @@ func write(t *testing.T, op gate.OperationKind, p identity.Principal) stategate.
 
 	return stategate.Write{
 		Principal: p, Unit: unit, Operation: op, Action: identity.ActionUnitWrite, Source: gate.SourceCLI,
+		State: nil, StateErr: nil,
 	}
 }
 
@@ -530,6 +534,117 @@ func TestDetailIsOneLine(t *testing.T) {
 			got := stategate.Detail(tc.refused, "gate.denied\n")
 			if strings.ContainsAny(got, "\r\n") {
 				t.Fatalf("Detail = %q, want one line", got)
+			}
+		})
+	}
+}
+
+// TestAdmitRefusesWhenTheStateCannotBeRead proves that a write whose state the
+// adapter could not read is refused before the guard is asked, with the audit
+// entry and a catalog code, and that the guard is never asked.
+func TestAdmitRefusesWhenTheStateCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.StateErr = errStateDown
+
+	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+	checkRefused(t, out, rec, "gate.unavailable")
+
+	if !strings.Contains(out.Detail, stategate.StateUnreadableText) {
+		t.Fatalf("detail = %q, want %q", out.Detail, stategate.StateUnreadableText)
+	}
+
+	if len(guard.asked()) != 0 {
+		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
+	}
+}
+
+// TestStateWriteCarriesTheStateChange proves that the one place that builds the
+// question for the guard passes the state change on.
+func TestStateWriteCarriesTheStateChange(t *testing.T) {
+	t.Parallel()
+
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.State = &gate.StateChange{Current: "sv-1", Resources: 2, Removed: []string{"a.b"}, Unavailable: ""}
+
+	if got := stategate.StateWrite(w); got.State != w.State {
+		t.Fatalf("StateWrite().State = %+v, want %+v", got.State, w.State)
+	}
+}
+
+// TestAdmitRefusesAStateAboveALimitWithTheLimitCode proves that a state read
+// error that wraps gate.ErrLimit gives the code gate.limit, with the audit
+// entry, and that the guard is not asked.
+func TestAdmitRefusesAStateAboveALimitWithTheLimitCode(t *testing.T) {
+	t.Parallel()
+
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+	w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+	w.StateErr = fmt.Errorf("%w: the state is above the limit", gate.ErrLimit)
+
+	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+	checkRefused(t, out, rec, "gate.limit")
+
+	if len(guard.asked()) != 0 {
+		t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
+	}
+}
+
+// TestStateUnreadableLimit proves the refusal of a state read error by its
+// cause. A limit cause refuses with gate.limit and does not wrap
+// gate.ErrUnavailable, because a limit is a refusal and not an outage. Any other
+// cause refuses with gate.unavailable and wraps gate.ErrUnavailable. Both
+// refusals carry the state text, no record, one audit entry, and the guard is
+// not asked.
+func TestStateUnreadableLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		cause       error
+		code        string
+		unavailable bool
+	}{
+		{"limit", gate.ErrLimit, "gate.limit", false},
+		{"wrapped limit", fmt.Errorf("x: %w", gate.ErrLimit), "gate.limit", false},
+		{"other read error", errStateDown, "gate.unavailable", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: nil, got: nil}
+			rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+			w := write(t, gate.OperationRollback, principal(identity.CredentialAccessToken, ""))
+			w.StateErr = tc.cause
+
+			out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)
+
+			checkRefused(t, out, rec, tc.code)
+
+			if !slices.Equal(out.Refusal.Messages, []string{stategate.StateUnreadableText}) {
+				t.Fatalf("messages = %q, want [%q]", out.Refusal.Messages, stategate.StateUnreadableText)
+			}
+
+			if out.Refusal.Record != "" {
+				t.Fatalf("record = %q, want none", out.Refusal.Record)
+			}
+
+			got := errors.Is(out.Refusal, gate.ErrUnavailable)
+			if got != tc.unavailable {
+				t.Fatalf("errors.Is(refusal, gate.ErrUnavailable) = %v, want %v: "+
+					"a limit is a refusal, not an outage", got, tc.unavailable)
+			}
+
+			if len(guard.asked()) != 0 {
+				t.Fatalf("the guard was asked %d times, want 0", len(guard.asked()))
 			}
 		})
 	}

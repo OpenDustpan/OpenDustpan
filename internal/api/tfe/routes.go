@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -442,13 +443,13 @@ func newPatternMux() *patternMux {
 // Handle registers pattern and records it.
 func (m *patternMux) Handle(pattern string, handler http.Handler) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.Handle(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, handler))
 }
 
 // HandleFunc registers pattern and records it.
 func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
 }
 
 // ServeHTTP implements http.Handler.

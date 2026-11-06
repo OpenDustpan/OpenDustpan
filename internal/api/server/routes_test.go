@@ -88,6 +88,8 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/passkey/begin",
+		"POST /api/dustpan/v1/sign-in/passkey/finish",
 		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
@@ -312,6 +314,8 @@ func newServiceBackedHandlerOf(
 		t.Fatalf("session policy service: %v", err)
 	}
 
+	routePrincipals := seedRoutePrincipals(t, st)
+
 	sessions, err := session.NewSessions(
 		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
@@ -341,7 +345,7 @@ func newServiceBackedHandlerOf(
 		Version:          "test",
 		Schema:           st,
 		Journal:          st,
-		Principals:       seedRoutePrincipals(t, st),
+		Principals:       routePrincipals,
 		Tokens:           seedRouteTokens(t, st),
 		Access:           seedRouteAccess(t, st),
 		Audit:            st,
@@ -353,17 +357,18 @@ func newServiceBackedHandlerOf(
 		Gates:            nil,
 		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
+			Service:      newTestSignInService(t, st, sessions, routePrincipals),
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
-					Client:      stubOIDC{},
+					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),
 					ID:          testProvider,
 					DisplayName: "Corp",
 					AutoCreate:  true,
 					Stored:      false,
-					Source:      principal.SourceOIDC,
 				},
 			},
 			DevCode:  devCode,

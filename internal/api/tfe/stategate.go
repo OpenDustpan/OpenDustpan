@@ -2,9 +2,9 @@ package tfe
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -17,6 +17,16 @@ import (
 type stateCheck struct {
 	action identity.Action
 	op     gate.OperationKind
+	// state is what the write changes in the state of the unit, or nil.
+	state *gate.StateChange
+	// stateErr is the error of the read of the state, or nil. The write is
+	// refused when it is set.
+	stateErr error
+}
+
+// newStateCheck returns the check of a write that holds no state change.
+func newStateCheck(action identity.Action, op gate.OperationKind) stateCheck {
+	return stateCheck{action: action, op: op, state: nil, stateErr: nil}
 }
 
 // guardStateWrite asks the state guard before the write of the route. It
@@ -34,6 +44,7 @@ func (h *Handler) guardStateWrite(
 
 	out := h.admit.Admit(ctx, stategate.Write{
 		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI,
+		State: check.state, StateErr: check.stateErr,
 	}, func(ctx context.Context, reason string) {
 		h.guard.Record(ctx, r, p, refusal.Denial{Action: check.action, Object: obj, Reason: reason, Window: 0})
 	})
@@ -51,7 +62,7 @@ func (h *Handler) guardStateWrite(
 
 	answer, err := errcode.New(out.Code)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "error code failed", slog.String("error_code", out.Code))
+		faultlog.LogInternal(ctx, h.logger, "error code failed", faultlog.CauseUnclassified, out.Code)
 		h.writeInternal(ctx, w)
 
 		return false

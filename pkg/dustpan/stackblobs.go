@@ -2,9 +2,11 @@ package dustpan
 
 import (
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -35,7 +37,15 @@ func stackRefusals(cfg *settings) (*scopeaudit.Audit, error) {
 // ErrMissingOption, so the server never starts without a place for the
 // refusals.
 func blobRefusals(cfg *settings, family scopeaudit.Family) (*scopeaudit.Audit, error) {
-	entries, ok := cfg.namespaceStore.(audit.ServerStore)
+	return blobRefusalsOf(cfg.namespaceStore, family, cfg.now)
+}
+
+// blobRefusalsOf is blobRefusals with the namespace store and the clock as
+// arguments.
+func blobRefusalsOf(
+	namespaces namespace.Store, family scopeaudit.Family, now func() time.Time,
+) (*scopeaudit.Audit, error) {
+	entries, ok := namespaces.(audit.ServerStore)
 	if !ok {
 		return nil, fmt.Errorf(
 			"%w: WithNamespaceStore store must also implement audit.ServerStore, for the security entries of blobs",
@@ -43,7 +53,7 @@ func blobRefusals(cfg *settings, family scopeaudit.Family) (*scopeaudit.Audit, e
 		)
 	}
 
-	recorder, err := scopeaudit.New(entries, family, cfg.now)
+	recorder, err := scopeaudit.New(entries, family, now)
 	if err != nil {
 		return nil, fmt.Errorf("blob refusals: %w", err)
 	}

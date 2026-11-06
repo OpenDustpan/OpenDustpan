@@ -237,6 +237,14 @@ _Avoid_: VCS integration, VCS provider, app (alone)
 A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
+**Merge state**:
+What the Git host says about whether a review request can merge now: clean, conflict, blocked, behind, unstable, draft or unknown. Only clean means that the Git host lets the review request merge. Unknown means that the Git host did not compute the merge yet, or that the server does not know the value. A caller treats each state except clean as "not mergeable".
+_Avoid_: Mergeable (alone)
+
+**Test merge commit**:
+The commit that the Git host makes to test the merge of an open review request. It is not on a branch. It changes when the base or the head of the review request moves. The server reads it from the Git host and never makes one.
+_Avoid_: Preview merge
+
 **Forge capability**:
 One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token`. A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
 _Avoid_: Feature (alone), scope (that is a token permission of the forge), permission
@@ -304,6 +312,10 @@ _Avoid_: Partial backup, namespace export
 **Baseline migration**:
 The one migration of each dialect that replaced every migration before it, before the first tag. Until the first tag, a change to the schema edits it in place, and the store refuses a database that another version of it made. Its version is 168. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
 _Avoid_: Squash, initial migration
+
+**Release record**:
+The committed file `internal/releaserecord/shipped.txt` that lists each migration file that a release tag shipped, with its SHA-256 (ADR 325). The release adds its lines in the commit that it tags. It is the one fact in the tree that tells whether a tag shipped. While it lists no file, the checks that hold the shipped migrations and the description version are off, and the baseline collapse can run. From its first line on, the checks run and the collapse is refused.
+_Avoid_: Release marker, tag file
 
 **Portable format**:
 The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
@@ -1081,11 +1093,19 @@ The static binary `dustpan-launcher` that runs the steps of one claim inside the
 _Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
 
 **Job proxy**:
-A proxy between one runner job and the network. RFC 16 proposes it, and the owner has not decided its design. In the proposal, a rule for the unit and the operation must match the host, the method and the path of a request. Else the proxy refuses the request. It may add a credential to an allowed request, so that the job never holds that credential. The proposal has it hold the credentials and run apart from the steps. Its outbound connections may go through the outbound guard, and through an upstream proxy when the team has one.
+A proxy between one runner job and the network (ADR 327). It runs next to each job of a unit with proxy rules. A proxy rule must allow the host, the method and the path of a request. Else the job proxy refuses the request. Only the job proxy holds the key of the CA of the job. It applies the outbound guard to each rule host, also through an upstream proxy. How it adds a credential, so that the job never holds that credential, is a proposal (RFC 16).
 _Avoid_: Egress proxy, egress gateway, sidecar (as the name of the feature), firewall
 
+**Proxy rule**:
+One allow line of the job proxy (ADR 327). It matches the host, the method and the path of a request, with `*` and `**` in a path pattern. A proxy rule only allows. A request that no proxy rule allows is refused. Always write "proxy rule", not "rule" alone.
+_Avoid_: Egress rule (the egress words are for the outbound guard and the egress allowlist), request rule, ACL, network policy (that is Kubernetes' word), permission
+
+**Proxy rule set**:
+The set of proxy rules of a unit (ADR 327). The job start renders their templates once. The document format and the scopes that hold a proxy rule set are a proposal (RFC 16).
+_Avoid_: Egress policy, proxy policy, proxy config
+
 **Upstream proxy**:
-A proxy of the team's network that the job proxy sends its outbound connections through, with CONNECT (RFC 16, a proposal). The team runs it, and OpenDustpan does not configure its rules. The job proxy is its only client in a job: the job itself never reaches it. Its proxy credential is a secret of the job proxy, never of the job.
+A proxy of the team's network that carries the outbound connections of the job proxy (ADR 327). The team runs it, and it applies its own rules. OpenDustpan does not configure them. How the job proxy finds it and its credential is a proposal (RFC 16).
 _Avoid_: Egress proxy, corporate proxy (alone), parent proxy, next hop
 
 **Runner protocol**:
@@ -1442,12 +1462,12 @@ The durable operation that checks a model connection before the document becomes
 _Avoid_: Health check, connection test, ping
 
 **Outbound guard**:
-The rules of the package `pkg/egress` for each outbound request that the server makes to an address that a principal gives. Examples are the delivery of a notification to a webhook and the read of an iCal feed. The rules apply to the URL when a principal saves or tests it. They also apply to the resolved IP address of each connection. So a DNS answer that changes after the check cannot pass them. The adapter `egresshttp` applies them to each connection. The job proxy can use the same rules for its own outbound connections (RFC 16, a proposal).
+The rules of the package `pkg/egress` for each outbound request that the server makes to an address that a principal gives. Examples are the delivery of a notification to a webhook and the read of an iCal feed. The rules apply to the URL when a principal saves or tests it. They also apply to the resolved IP address of each connection. So a DNS answer that changes after the check cannot pass them. The adapter `egresshttp` applies them to each connection. The job proxy uses the same rules for its own outbound connections (ADR 327).
 _Avoid_: Egress proxy, egress filter, SSRF filter, firewall
 
 **Egress allowlist**:
 The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 25). A private address or an IP literal needs a CIDR entry with one port, and `http` needs an entry with `"http": true`. No entry overrides the always-denied list of link-local, metadata, unspecified, broadcast and multicast addresses. With no entry, no model call goes out.
-_Avoid_: Egress rule (that is for a job, RFC 16), firewall, IP allowlist (that is for requests to a namespace)
+_Avoid_: Egress rule, proxy rule (that is for a job), firewall, IP allowlist (that is for requests to a namespace)
 
 **Reaper**:
 The durable operation that ends each agent run whose turn ended with no step that ends the run (ADR 120 decision 10). Its kind is `agent.KindReap`, and it runs every minute on one instance. It first deletes each sealed reveal past its hard expiry. It then ends each such run as canceled, or as failed with the stop reason `turn-failed`.

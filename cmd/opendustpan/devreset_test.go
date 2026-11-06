@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -268,6 +270,299 @@ func TestDevResetKeepsTheOldData(t *testing.T) {
 	}
 }
 
+// TestDevResetRefusesADirectoryWithAnOldCopy leaves a copy under the old suffix
+// in a dev directory. dev reset refuses the directory before it moves any
+// data, names the copy, and keeps the database and the copy.
+func TestDevResetRefusesADirectoryWithAnOldCopy(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		devDBName + devResetSuffix + devResetOldSuffix,
+		devBlobsName + devResetSuffix + devResetOldSuffix,
+	} {
+		dir := resetTestDir(t, installation.KindDev)
+		writeResetFiles(t, dir, map[string]string{name: "last good backup"})
+
+		_, err := runReset(t, dir)
+		if err == nil {
+			t.Fatalf("reset with the copy %s = nil, want a refusal that names it", name)
+		}
+
+		if !errors.Is(err, errDevResetOldCopy) || !strings.Contains(err.Error(), filepath.Join(dir, name)) {
+			t.Fatalf("reset with the copy %s = %v, want a refusal that names it", name, err)
+		}
+
+		const keepText = "Move each copy out of the data directory to keep it, do not delete it. " +
+			"Then run opendustpan dev reset again"
+		if !strings.Contains(err.Error(), keepText) || strings.Contains(err.Error(), "remove") {
+			t.Fatalf("refusal = %q, want the move-out text and no remove", err)
+		}
+
+		if got := readResetFile(t, filepath.Join(dir, name)); got != "last good backup" {
+			t.Fatalf("copy %s = %q after the refusal, want it kept", name, got)
+		}
+
+		if _, statErr := os.Lstat(filepath.Join(dir, devDBName)); statErr != nil {
+			t.Fatalf("database after the refusal: %v, want it in place", statErr)
+		}
+	}
+}
+
+// errInjectedRename is the error of a rename that a test makes fail.
+var errInjectedRename = errors.New("injected rename failure")
+
+// writeResetFiles writes each file of files under dir with its body. A name
+// with a slash is a file in a directory of dir.
+func writeResetFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+
+	for name, body := range files {
+		path := filepath.Join(dir, name)
+
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("make the directory of %s: %v", path, err)
+		}
+
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+}
+
+// readResetFile answers the body of the file at path.
+func readResetFile(t *testing.T, path string) string {
+	t.Helper()
+
+	body, err := fs.ReadFile(os.DirFS(filepath.Dir(path)), filepath.Base(path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	return string(body)
+}
+
+// resetBeforeFiles answers the data of a dev directory: a new database and blob
+// file, and the copies that a reset before kept.
+func resetBeforeFiles() map[string]string {
+	return map[string]string{
+		devDBName:                                 "new db",
+		devBlobsName + "/object":                  "new blob",
+		devDBName + devResetSuffix:                "old db",
+		devBlobsName + devResetSuffix + "/object": "old blob",
+	}
+}
+
+// TestMoveDevDataKeepsTheCopiesUntilTheNewDatabaseExists proves that the copies
+// of the reset before stay under the old suffix while the data moves, and that
+// they are deleted only after the new database exists.
+func TestMoveDevDataKeepsTheCopiesUntilTheNewDatabaseExists(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeResetFiles(t, dir, resetBeforeFiles())
+
+	moved, err := moveDevData(dir, os.Rename)
+	if err != nil {
+		t.Fatalf("move the data aside: %v", err)
+	}
+
+	if len(moved) != 2 {
+		t.Fatalf("moved = %v, want the database and the blobs", moved)
+	}
+
+	oldDB := filepath.Join(dir, devDBName+devResetSuffix+devResetOldSuffix)
+	oldBlobs := filepath.Join(dir, devBlobsName+devResetSuffix+devResetOldSuffix)
+
+	if got := readResetFile(t, oldDB); got != "old db" {
+		t.Fatalf("copy of the reset before = %q, want the old database", got)
+	}
+
+	if err := dropOldDevCopies(dir); err != nil {
+		t.Fatalf("drop the copies: %v", err)
+	}
+
+	for _, path := range []string{oldDB, oldBlobs} {
+		if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s after the drop: %v, want it gone", path, err)
+		}
+	}
+
+	if got := readResetFile(t, filepath.Join(dir, devDBName+devResetSuffix)); got != "new db" {
+		t.Fatalf("kept database = %q, want the data that the reset moved", got)
+	}
+}
+
+// TestMoveDevDataFailedRenameKeepsEveryCopy makes the rename of the blob
+// directory fail. The database moved, and every copy of the reset before stays
+// under the old suffix. The error names the failed path, the moved path and the
+// copies.
+func TestMoveDevDataFailedRenameKeepsEveryCopy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeResetFiles(t, dir, resetBeforeFiles())
+
+	failBlobs := func(from, to string) error {
+		if filepath.Base(from) == devBlobsName {
+			return errInjectedRename
+		}
+
+		return os.Rename(from, to)
+	}
+
+	moved, err := moveDevData(dir, failBlobs)
+	if !errors.Is(err, errInjectedRename) {
+		t.Fatalf("move with a failed rename = %v, want the injected error", err)
+	}
+
+	failed := filepath.Join(dir, devBlobsName)
+	movedDB := filepath.Join(dir, devDBName+devResetSuffix)
+	oldDB := movedDB + devResetOldSuffix
+	oldBlobs := filepath.Join(dir, devBlobsName+devResetSuffix+devResetOldSuffix)
+
+	if len(moved) != 1 || moved[0] != movedDB {
+		t.Fatalf("moved = %v, want %s", moved, movedDB)
+	}
+
+	if got := readResetFile(t, oldBlobs+"/object"); got != "old blob" {
+		t.Fatalf("copy of the blobs of the reset before = %q, want the old blob", got)
+	}
+
+	if got := readResetFile(t, oldDB); got != "old db" {
+		t.Fatalf("copy of the database of the reset before = %q, want the old database", got)
+	}
+
+	const keepText = "Move each copy out of the data directory to keep it, do not delete it. " +
+		"Then run opendustpan dev reset again"
+
+	for _, want := range []string{
+		"Failed path: " + failed, "Moved: " + movedDB, "Copies of the reset before: " + oldDB, keepText,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to contain %q", err, want)
+		}
+	}
+
+	if !strings.Contains(err.Error(), oldBlobs) {
+		t.Fatalf("error = %q, want it to name %s", err, oldBlobs)
+	}
+}
+
+// TestMoveDevDataReplacesAStaleCopy proves that a copy under the old suffix that
+// a reset which stopped left behind is replaced by the copy of the reset before.
+func TestMoveDevDataReplacesAStaleCopy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	files := resetBeforeFiles()
+	files[devDBName+devResetSuffix+devResetOldSuffix] = "stale db"
+	writeResetFiles(t, dir, files)
+
+	if _, err := moveDevData(dir, os.Rename); err != nil {
+		t.Fatalf("move the data aside: %v", err)
+	}
+
+	oldDB := filepath.Join(dir, devDBName+devResetSuffix+devResetOldSuffix)
+	if got := readResetFile(t, oldDB); got != "old db" {
+		t.Fatalf("copy of the reset before = %q, want the old database and not the stale copy", got)
+	}
+}
+
+// TestFailedRemakeKeepsTheCopiesOfTheResetBefore makes the remake of the
+// database fail. The copies of the reset before stay, and the error names them.
+func TestFailedRemakeKeepsTheCopiesOfTheResetBefore(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeResetFiles(t, dir, resetBeforeFiles())
+
+	moved, err := moveDevData(dir, os.Rename)
+	if err != nil {
+		t.Fatalf("move the data aside: %v", err)
+	}
+
+	proc := newDevTestProcess(false).process(t.TempDir(), make(chan string, 1))
+
+	remakeErr := remakeDevDatabase(t.Context(), filepath.Join(dir, "missing", devDBName),
+		slog.New(slog.DiscardHandler), proc, moved)
+	if remakeErr == nil {
+		t.Fatal("remake of a database in a missing directory succeeded")
+	}
+
+	err = keptCopiesError(dir, remakeErr)
+	if !errors.Is(err, remakeErr) {
+		t.Fatalf("error = %v, want it to wrap the remake error", err)
+	}
+
+	for _, name := range []string{devDBName, devBlobsName} {
+		old := filepath.Join(dir, name+devResetSuffix+devResetOldSuffix)
+		if !strings.Contains(err.Error(), old) {
+			t.Fatalf("error = %q, want it to name %s", err, old)
+		}
+
+		if _, statErr := os.Lstat(old); statErr != nil {
+			t.Fatalf("copy %s after the failed remake: %v, want it kept", old, statErr)
+		}
+	}
+}
+
+// errInjectedRemake is the error of a remake that a test makes fail.
+var errInjectedRemake = errors.New("injected remake failure")
+
+// TestFinishDevResetFailedRemakeKeepsCopies makes the remake of the database
+// fail after the data moved aside. The copies of the reset before stay, so that
+// the error names them and wraps the remake error. The copies are deleted only
+// after a successful remake: deleting them first would fail the content check.
+func TestFinishDevResetFailedRemakeKeepsCopies(t *testing.T) {
+	t.Parallel()
+
+	dir := resetTestDir(t, installation.KindDev)
+	writeResetFiles(t, dir, map[string]string{
+		devDBName + devResetSuffix:                "old db",
+		devBlobsName + devResetSuffix + "/object": "old blob",
+	})
+
+	moved, err := moveDevData(dir, os.Rename)
+	if err != nil {
+		t.Fatalf("move the data aside: %v", err)
+	}
+
+	failRemake := func(context.Context, string, *slog.Logger, devProcess, []string) error {
+		return errInjectedRemake
+	}
+
+	proc := newDevTestProcess(false).process(t.TempDir(), make(chan string, 1))
+
+	err = finishDevReset(t.Context(), devFinish{
+		dir: dir, db: filepath.Join(dir, devDBName), moved: moved, stderr: io.Discard,
+		logger: slog.New(slog.DiscardHandler), proc: proc,
+	}, failRemake)
+	if err == nil {
+		t.Fatal("finish with a failed remake = nil, want it to wrap the remake error")
+	}
+
+	if !errors.Is(err, errInjectedRemake) {
+		t.Fatalf("finish with a failed remake = %v, want it to wrap the remake error", err)
+	}
+
+	oldDB := filepath.Join(dir, devDBName+devResetSuffix+devResetOldSuffix)
+	oldBlobs := filepath.Join(dir, devBlobsName+devResetSuffix+devResetOldSuffix)
+
+	for _, want := range []string{oldDB, oldBlobs} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to name %s", err, want)
+		}
+	}
+
+	if got := readResetFile(t, oldDB); got != "old db" {
+		t.Fatalf("copy of the database after the failed remake = %q, want the old database", got)
+	}
+
+	if got := readResetFile(t, oldBlobs+"/object"); got != "old blob" {
+		t.Fatalf("copy of the blobs after the failed remake = %q, want the old blob", got)
+	}
+}
+
 // addNamespace makes the namespace name in the dev database of dir.
 func addNamespace(t *testing.T, dir, name string) {
 	t.Helper()
@@ -401,8 +696,10 @@ func TestSchemaRefusalNamesTheStepOfTheCommand(t *testing.T) {
 	} {
 		dev := schemaRefusal(cause, commandDev, "/tmp/the trial")
 		if !strings.Contains(dev.Error(), "run opendustpan dev reset --data-dir '/tmp/the trial' to start again") ||
-			!strings.Contains(dev.Error(), devDBName+devResetSuffix) || !errors.Is(dev, cause) {
-			t.Fatalf("dev refusal = %q, want the reset command and the kept file", dev)
+			!strings.Contains(dev.Error(), "moves the old data aside") ||
+			!strings.Contains(dev.Error(), devDBName+devResetSuffix) || !errors.Is(dev, cause) ||
+			strings.Contains(dev.Error(), "is kept as") {
+			t.Fatalf("dev refusal = %q, want the reset command and the move of the old data", dev)
 		}
 
 		serve := schemaRefusal(cause, commandServe, "")

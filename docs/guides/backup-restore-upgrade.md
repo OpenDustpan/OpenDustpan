@@ -1,6 +1,6 @@
 # Backup, restore and upgrade
 
-This guide shows how to back up a whole installation, check the backup, restore it, and upgrade the server. It follows ADR 30, ADR 33, ADR 38, ADR 39 and ADR 42. The end-to-end suite ran each command in this guide on SQLite and on PostgreSQL.
+This guide shows how to back up a whole installation, check the backup, restore it, and upgrade the server. The end-to-end suite ran each command in this guide on SQLite and on PostgreSQL.
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
 
@@ -85,7 +85,7 @@ installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
-and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9).
+and a backup of PostgreSQL restores into SQLite.
 
 Run the restore command. It calls the server and waits until the restore
 leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from
@@ -265,14 +265,22 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/server/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
 
 Each cancel of a known restore writes an audit entry. A canceled restore
 leaves the live data unchanged, and leaves the maintenance mode that it
-entered. The server increments the failover version of every namespace after
+entered. The audit log of a restore that stopped before the swap holds an
+entry with the outcome `failure` and the text `canceled before the swap` (or
+`failed before the swap`, or `stopped before the swap` for a restore that
+ended with no end write). The text says that the live state, history and
+access tables did not change. The entry that the
+server writes when it accepts the start says `requested`, with the outcome
+`success`, because it records the accepted request only. A restore that fails
+after the swap writes an entry with the outcome `failure` and the text
+`failed after the swap`. The server increments the failover version of every namespace after
 a restore that stopped with no end, also after a cancel.
 
 ### Staging areas and temporary blobs
@@ -286,7 +294,10 @@ a temporary key under `restore-tmp/` in the live blob store.
 
 The last steps of a restore drop its staging areas and delete its temporary
 keys. A restore that fails drops them too. A restore that stopped with no end
-can leave them: the next restore drops them. If you take your own dump of a
+can leave them: the next restore drops them. A restore that you cancel counts
+as a restore that stopped with no end. A cancel in the check step can leave the
+PostgreSQL schemas `restore_stage_<id>_<n>` and `restore_stage_<id>_<n>_control`
+until the next restore drops them. If you take your own dump of a
 PostgreSQL database, leave out these schemas:
 
 ```sh

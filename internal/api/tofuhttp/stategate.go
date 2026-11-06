@@ -41,6 +41,7 @@ func (h *Handler) guardStateWrite(ctx context.Context, w http.ResponseWriter, c 
 
 	out := h.admit.Admit(ctx, stategate.Write{
 		Principal: c.principal, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI,
+		State: nil, StateErr: nil,
 	}, func(ctx context.Context, reason string) {
 		h.guard.Record(ctx, c.request, c.principal, refusal.Denial{
 			Action: check.action, Object: obj, Reason: reason, Window: 0,

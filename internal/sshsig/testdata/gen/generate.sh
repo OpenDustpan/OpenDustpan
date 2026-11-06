@@ -50,6 +50,7 @@ check() {
 keygen ed25519 ed25519
 keygen ed25519 ed25519-other
 keygen ed25519-sk sk
+keygen ecdsa ecdsa-p256 -b 256
 keygen ecdsa ecdsa-p384 -b 384
 keygen rsa rsa-2048 -b 2048
 keygen rsa rsa-3072 -b 3072
@@ -59,6 +60,8 @@ sign ed25519 "$stepup" ed25519-sha256 -O hashalg=sha256
 sign ed25519 "$keyadd" ed25519-key-add
 sign ed25519 git ed25519-git
 sign ed25519-other "$stepup" ed25519-other
+sign ecdsa-p256 "$stepup" ecdsa-p256
+sign ecdsa-p256 "$stepup" ecdsa-p256-sha256 -O hashalg=sha256
 sign ecdsa-p384 "$stepup" ecdsa-p384
 sign rsa-2048 "$stepup" rsa-2048
 sign rsa-3072 "$stepup" rsa-3072
@@ -83,6 +86,8 @@ check sk "$stepup" sk-verified
 check sk "$stepup" sk-counter-zero
 check sk "$stepup" sk-counter-max
 check sk "$keyadd" sk-key-add
+check ecdsa-p256 "$stepup" ecdsa-p256
+check ecdsa-p256 "$stepup" ecdsa-p256-sha256
 
 # ssh-keygen -Y verify also accepts sk-no-presence: an allowed signers file
 # has no option that requires user presence. Package sshsig refuses it.

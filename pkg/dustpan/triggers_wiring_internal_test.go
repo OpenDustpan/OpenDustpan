@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -133,6 +134,7 @@ func TestNewTriggerManagerReadsFinalVersionFromJobStore(t *testing.T) {
 			cfg.triggerStore = noTriggers{Store: nil}
 			cfg.jobStore = js
 			cfg.authorizer = identity.AdminOnly{}
+			cfg.logger = slog.New(slog.DiscardHandler)
 			ports := &triggerPorts{records: nil, entries: noAudit{Store: nil}}
 
 			var svc services
@@ -207,6 +209,7 @@ func TestTriggerDispatcherReadsFinalVersionFromJobStore(t *testing.T) {
 			cfg := new(settings)
 			cfg.triggerStore = noTriggers{Store: nil}
 			cfg.jobStore = js
+			cfg.logger = slog.New(slog.DiscardHandler)
 			ports := &triggerPorts{records: nil, entries: noAudit{Store: nil}}
 			parts := triggerParts{
 				starter: noStarter{Starter: nil}, savers: doubles, units: doubles, fences: noFences{},

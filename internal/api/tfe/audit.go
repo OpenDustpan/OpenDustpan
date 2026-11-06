@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -75,7 +76,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 // value, and one count on the failure metric through the wired callback. It
 // names no error text: the text may hold driver detail (ADR 32 decision 7).
 func (h *Handler) failAudit(ctx context.Context) {
-	h.logger.ErrorContext(ctx, "audit append failed")
+	faultlog.LogFault(ctx, h.logger, "audit append failed", faultlog.CauseUnclassified, "audit.append")
 
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()

@@ -1,6 +1,7 @@
 // Package stategate is the admission of a write of state at the decision
 // point state.write. Each HTTP adapter that writes state (the OpenTofu HTTP
-// backend, the TFE-compatible API and the tool-neutral inventory API) asks
+// backend, the TFE-compatible API, the Pulumi Cloud-compatible API and the
+// tool-neutral inventory API) asks
 // one Admitter before the write, and keeps only the wire encoding of the
 // answer.
 //
@@ -17,6 +18,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -75,6 +77,11 @@ const (
 	PathHTTPUnlocked     WritePath = "opentofu.http.unlocked-write"
 	PathInventoryRestore WritePath = "inventory.restore"
 	PathInventoryPurge   WritePath = "inventory.purge"
+	PathPulumiImport     WritePath = "pulumi.import"
+	PathPulumiRestore    WritePath = "pulumi.restore"
+	PathPulumiRename     WritePath = "pulumi.rename"
+	PathPulumiDelete     WritePath = "pulumi.delete"
+	PathPulumiCancel     WritePath = "pulumi.cancel"
 )
 
 // The write paths that write state and that no adapter checks at state.write
@@ -82,11 +89,6 @@ const (
 const (
 	PathTFEStateVersionNoLock WritePath = "opentofu.tfe.state-version-without-lock"
 	PathPulumiUpdate          WritePath = "pulumi.update"
-	PathPulumiImport          WritePath = "pulumi.import"
-	PathPulumiRestore         WritePath = "pulumi.restore"
-	PathPulumiRename          WritePath = "pulumi.rename"
-	PathPulumiDelete          WritePath = "pulumi.delete"
-	PathPulumiCancel          WritePath = "pulumi.cancel"
 )
 
 // CheckedPaths returns the write paths that the adapters check at
@@ -97,6 +99,7 @@ func CheckedPaths() []WritePath {
 		PathTFELock, PathTFEForceUnlock, PathTFERollback, PathTFEDelete,
 		PathHTTPLock, PathHTTPForceUnlock, PathHTTPUnlocked,
 		PathInventoryRestore, PathInventoryPurge,
+		PathPulumiImport, PathPulumiRestore, PathPulumiRename, PathPulumiDelete, PathPulumiCancel,
 	}
 }
 
@@ -106,7 +109,7 @@ func CheckedPaths() []WritePath {
 func UncheckedPaths() []WritePath {
 	return []WritePath{
 		PathTFEStateVersionNoLock,
-		PathPulumiUpdate, PathPulumiImport, PathPulumiRestore, PathPulumiRename, PathPulumiDelete, PathPulumiCancel,
+		PathPulumiUpdate,
 	}
 }
 
@@ -195,6 +198,13 @@ type Write struct {
 	Operation gate.OperationKind
 	Action    identity.Action
 	Source    gate.SourceKind
+	// State is what the write changes in the state of the unit, or nil when
+	// the server holds no new state for the write. See gate.StateChange.
+	State *gate.StateChange
+	// StateErr is the error of the adapter when it could not read the state
+	// that the write changes, and the write needs it. The Admitter refuses
+	// the write and writes the audit entry. State must be nil then.
+	StateErr error
 }
 
 // Recorder writes the audit entry of a refused write. The adapter binds it to
@@ -232,6 +242,9 @@ const (
 	// NoRecorderText is the message when the adapter cannot write the audit
 	// entry of a refusal.
 	NoRecorderText = "The server cannot record a refusal of this write, so the write is refused."
+	// StateUnreadableText is the message when the server could not read the
+	// state that the write changes.
+	StateUnreadableText = "The server could not read the state that this write changes, so the write is refused."
 	// DeniedText is the message when the credential may not make the write.
 	DeniedText = "The credential of the caller may not make this write."
 )
@@ -279,6 +292,7 @@ func StateWrite(w Write) gate.StateWrite {
 		// A job token takes the lock of its plan with the operation kind
 		// lock. Every adapter computes the flag here, in the same way.
 		PlanLock: w.Operation == gate.OperationLock && w.Principal.JobTokenID() != "",
+		State:    w.State,
 	}
 }
 
@@ -313,7 +327,13 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 	// caller that skips New, cannot let a write through. It does not rely on
 	// the start check.
 	if a == nil || a.guard == nil {
-		log.ErrorContext(ctx, "state write refused: no state.write guard", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: no state.write guard",
+			faultlog.CauseUnclassified,
+			"stategate.no_guard",
+		)
 
 		return refuse(ctx, log, w, record, unavailable(ErrNoGuard, "", NoGuardText)), true
 	}
@@ -322,12 +342,51 @@ func (a *Admitter) precheck(ctx context.Context, log *slog.Logger, w Write, reco
 	// that a write is never allowed or refused with no audit entry: with no
 	// recorder, the write is refused and the log has the refusal.
 	if record == nil {
-		log.ErrorContext(ctx, "state write refused: no audit recorder", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: no audit recorder",
+			faultlog.CauseUnclassified,
+			"stategate.no_recorder",
+		)
 
 		return refuse(ctx, log, w, nil, unavailable(errNoRecorder, "", NoRecorderText)), true
 	}
 
+	// The adapter could not read the state facts. A gate may read them, so the
+	// write is refused and no gate sees an empty fact. The refusal and the
+	// audit entry name the cause.
+	if w.StateErr != nil {
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state write refused: the state could not be read",
+			faultlog.Cause(w.StateErr),
+			"stategate.state_read",
+		)
+
+		return refuse(ctx, log, w, record, stateUnreadable(w.StateErr)), true
+	}
+
 	return Outcome{Allowed: false, Unavailable: nil, Refusal: nil, Code: "", Detail: ""}, false
+}
+
+// stateUnreadable returns the refusal of a write whose state the adapter could
+// not read. A state above a limit gives gate.limit, because the cause is a
+// limit and not a fault. Any other cause gives gate.unavailable.
+func stateUnreadable(cause error) *gate.RefusalError {
+	// Defense in depth: this branch keeps a limit apart from an outage. A limit
+	// refusal does not wrap gate.ErrUnavailable, because a limit is a refusal
+	// and not an outage. The record and the message are the same as those of
+	// the unavailable refusal below, which gives the same record and message
+	// for any other cause. gate.Code ranks gate.limit first, so the code would
+	// also stay gate.limit without this branch. This branch does not rely on
+	// that ranking.
+	if errors.Is(cause, gate.ErrLimit) {
+		return &gate.RefusalError{Err: cause, Record: "", Messages: []string{StateUnreadableText}}
+	}
+
+	return unavailable(cause, "", StateUnreadableText)
 }
 
 // guardError returns the Outcome of a guard error. Every guard error refuses
@@ -337,7 +396,13 @@ func guardError(ctx context.Context, log *slog.Logger, w Write, record Recorder,
 	// read. The guard gave no decision, so the write is refused before any
 	// read of the chain.
 	if refused, ok := errors.AsType[*gate.RefusalError](err); ok && refused == nil {
-		log.ErrorContext(ctx, "state guard gave a nil refusal", slog.String("object", w.Unit.String()))
+		faultlog.LogFault(
+			ctx,
+			log,
+			"state guard gave a nil refusal",
+			faultlog.CauseUnclassified,
+			"stategate.nil_refusal",
+		)
 
 		return refuse(ctx, log, w, record, unavailable(errNilRefusal, "", GuardFailedText))
 	}
@@ -358,7 +423,7 @@ func guardError(ctx context.Context, log *slog.Logger, w Write, record Recorder,
 
 	refused, ok := errors.AsType[*gate.RefusalError](err)
 	if !ok || refused.Err == nil {
-		refused = notDecided(ctx, log, w, err)
+		refused = notDecided(ctx, log, err)
 	}
 
 	return refuse(ctx, log, w, record, refused)
@@ -378,8 +443,13 @@ func (a *Admitter) admitDecision(
 		return Outcome{Allowed: true, Unavailable: nil, Refusal: nil, Code: "", Detail: ""}
 	}
 
-	log.ErrorContext(ctx, "state guard gave an unknown result",
-		slog.String("object", w.Unit.String()), slog.String("result", oneLine(string(d.Result))))
+	faultlog.LogFault(
+		ctx,
+		log,
+		"state guard gave an unknown result",
+		faultlog.CauseUnclassified,
+		"stategate.unknown_result",
+	)
 
 	return refuse(ctx, log, w, record,
 		unavailable(fmt.Errorf("%w: %q", errUnknownResult, d.Result), d.Record, UnknownResultText))
@@ -388,7 +458,7 @@ func (a *Admitter) admitDecision(
 // notDecided returns the refusal of an error that is not a decision: the guard
 // could not decide (the store, the fence or the decision record failed), or a
 // job token may not make the write.
-func notDecided(ctx context.Context, log *slog.Logger, w Write, err error) *gate.RefusalError {
+func notDecided(ctx context.Context, log *slog.Logger, err error) *gate.RefusalError {
 	if errors.Is(err, identity.ErrDenied) {
 		return &gate.RefusalError{
 			Err:      fmt.Errorf("%w: %w", gate.ErrDenied, err),
@@ -397,7 +467,7 @@ func notDecided(ctx context.Context, log *slog.Logger, w Write, err error) *gate
 		}
 	}
 
-	log.ErrorContext(ctx, "state guard failed", slog.String("object", w.Unit.String()), slog.Any("error", err))
+	faultlog.LogFault(ctx, log, "state guard failed", faultlog.Cause(err), "stategate.guard")
 
 	return unavailable(err, "", GuardFailedText)
 }

@@ -6,20 +6,27 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // SignedIn is the result of a good password sign-in: the person, the local
 // user, and the session generation that the read of the hash returned. The
 // session of the sign-in must carry this generation, never one that a later
-// read returns.
+// read returns. Assertion is the sign-in Assertion of the check: the
+// provider "local", the principal, the ID of the local user as the subject,
+// the factor password and the time of the check.
 type SignedIn struct {
+	Assertion         session.Assertion
 	PrincipalID       string
 	UserID            string
 	locks             lockKeys
@@ -36,7 +43,8 @@ type SignedIn struct {
 // localuser.ErrUnavailable when a store or the hasher cannot answer.
 //
 // base is the entry of the caller: the source address, the user agent and
-// the request ID.
+// the request ID. The caller gives the result to the sign-in service, which
+// starts the session.
 func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, password string) (SignedIn, error) {
 	base.Subject = "sign-in:" + localuser.ProviderID
 
@@ -49,6 +57,14 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 			"password sign-in is off",
 			err,
 		)
+	}
+
+	// The boundary check comes before the read of any record, and no hash
+	// runs for input that no user name or password can match. The checks of
+	// the form below stay as the second layer.
+	if boundaryErr := checkCredentials(userName, password); boundaryErr != nil {
+		return SignedIn{}, s.refuse(ctx, base, on(ActionSignInPasswordFails, unknownObject), ReasonBoundary,
+			localuser.ErrSignInFailed)
 	}
 
 	in := &attempt{
@@ -78,6 +94,26 @@ func (s *Service) SignIn(ctx context.Context, base audit.Entry, userName, passwo
 	}
 
 	return s.verify(ctx, in, nfc, p)
+}
+
+// errBoundary marks the input that fails the boundary check of a sign-in.
+var errBoundary = errors.New("sign-in input fails the boundary check")
+
+// checkCredentials is the boundary check of the user name and the password
+// of a sign-in: a user name of 1 to session.MaxUserName bytes of UTF-8 with
+// no control character, and a password that is not empty. The checks of the
+// form in SignIn stay as a second layer.
+func checkCredentials(userName, password string) error {
+	switch {
+	case userName == "" || len(userName) > session.MaxUserName || !utf8.ValidString(userName) ||
+		strings.ContainsFunc(userName, unicode.IsControl):
+		return fmt.Errorf("%w: the user name must have 1 to %d bytes of UTF-8 and no control character",
+			errBoundary, session.MaxUserName)
+	case password == "":
+		return fmt.Errorf("%w: the password is empty", errBoundary)
+	default:
+		return nil
+	}
 }
 
 // attempt is the state of one password sign-in between its steps.
@@ -162,6 +198,12 @@ func (s *Service) verify(ctx context.Context, in *attempt, nfc string, p Policy)
 	}
 
 	return SignedIn{
+		Assertion: session.Assertion{
+			AuthTime: s.Now(), ProviderID: session.LocalProviderID, PrincipalID: in.cred.User.PrincipalID,
+			Subject: in.cred.User.ID, UserName: in.cred.User.UserName, Email: "", Method: session.MethodLocalPassword,
+			Names: nil, Groups: nil, Factors: []session.Factor{session.FactorPassword}, EmailVerified: false,
+			GroupsPresent: false, AuthTimeKnown: true,
+		},
 		PrincipalID: in.cred.User.PrincipalID, UserID: in.cred.User.ID, locks: keys,
 		SessionGeneration: in.cred.SessionGeneration, ChangeRequired: in.cred.User.ChangeRequired,
 	}, nil

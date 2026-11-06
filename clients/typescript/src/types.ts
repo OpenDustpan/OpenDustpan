@@ -318,6 +318,7 @@ export type ErrorAnswer =
   | GateApproversCountAboveError
   | LockLockedError
   | MaintenanceActiveWorkError
+  | MfaPasskeyLimitError
   | PasswordTooShortError
   | PreferencesFieldInvalidError
   | PreferencesFieldReadOnlyError
@@ -339,7 +340,7 @@ export type ErrorAnswer =
   | ErrorResponse;
 
 /** The known values of ErrorCode. */
-export const ErrorCodeValues = ["access.denied", "access.ip-not-allowed", "access.last-site-administrator", "access.no-action", "audit.entry-not-found", "audit.entry-read-unavailable", "audit.export-not-recorded", "audit.reason-invalid", "auth.rate-limited", "auth.unauthenticated", "backup.corrupt", "collection.already-exists", "collection.changed", "collection.invalid-name", "collection.move-out-locked", "collection.not-empty", "collection.not-found", "context.field-from-code", "context.invalid", "context.not-set", "context.object-not-found", "context.unit-deleted", "context.unknown-section", "drift.start-conflict", "gate.approvers-count-above", "gate.approvers-group-invalid", "gate.approvers-group-missing", "gate.approvers-unmet", "gate.approvers-user-invalid", "gate.denied", "gate.final", "gate.invalid", "gate.limit", "gate.limited", "gate.not-found", "gate.rule-failed", "gate.unavailable", "gate.version-conflict", "git-host.app-not-registered", "git-host.installation-not-assigned", "instance.invalid-id", "instance.not-found", "issuer.conflict", "issuer.invalid", "issuer.key-expired", "issuer.key-missing", "issuer.not-configured", "job.agent-denied", "job.frozen", "job.gate-enforced", "job.invalid", "job.limit", "job.not-found", "job.policy-denied", "job.unsupported", "journal.batch-invalid", "journal.build-timeout", "journal.conflict", "journal.incomplete", "local-user.break-glass", "local-user.code-invalid", "local-user.current-password-required", "local-user.current-password-wrong", "local-user.demo-fixed", "local-user.exists", "local-user.hash-busy", "local-user.last-credential", "local-user.name-invalid", "local-user.not-found", "local-user.outside-reach", "local-user.own-account", "local-user.password-sign-in-off", "local-user.reason-required", "local-user.second-factor-required", "local-user.session-ended", "local-user.sign-in-failed", "local-user.unavailable", "lock.already-locked", "lock.changed", "lock.invalid-target", "lock.locked", "lock.not-holder", "lock.not-locked", "lock.reason-required", "lock.target-not-found", "maintenance.active-work", "maintenance.busy", "maintenance.held", "maintenance.in-maintenance", "maintenance.invalid-state", "maintenance.unavailable", "mfa.fresh-step-required", "namespace.already-exists", "namespace.fenced", "namespace.invalid-name", "namespace.not-found", "namespace.not-home", "namespace.unavailable", "password.blocked", "password.form", "password.letters-and-digits", "password.too-long", "password.too-short", "placement.conflict", "placement.invalid-pattern", "placement.invalid-position", "placement.invalid-tool", "placement.rule-not-found", "placement.too-many-rules", "preferences.body-invalid", "preferences.body-too-large", "preferences.field-invalid", "preferences.field-read-only", "preferences.field-unknown", "preferences.if-match-invalid", "preferences.media-type-unsupported", "preferences.person-not-found", "preferences.person-required", "preferences.precondition-failed", "preferences.unavailable", "principal.already-exists", "principal.disabled", "principal.invalid", "principal.last-break-glass", "principal.managed-by-directory", "principal.not-disabled", "principal.not-found", "principal.reserved-subject", "principal.unsupported", "profile.conflict", "profile.invalid", "profile.limit", "profile.not-found", "profile.routing-change-needs-open", "profile.schema-version", "registry.archive-set-refused", "registry.invalid", "registry.key-exists", "registry.key-invalid", "registry.key-limit", "registry.module-archive-refused", "registry.no-keys", "registry.not-found", "registry.not-staged", "registry.signature-invalid", "registry.signature-untrusted-key", "registry.too-large", "registry.version-exists", "request.body-invalid", "request.body-too-large", "request.content-type-unsupported", "request.idempotency-key-in-progress", "request.idempotency-key-invalid", "request.idempotency-key-lost", "request.idempotency-key-replayed-secret", "request.idempotency-key-required", "request.idempotency-key-reused", "request.idempotency-key-unavailable", "request.idempotency-key-unsupported", "request.if-match-invalid", "request.invalid-object", "request.invalid-path", "request.invalid-query", "request.page-size-invalid", "request.page-token-invalid", "request.precondition-failed", "request.precondition-required", "restore.blobs-missing", "restore.ended", "restore.live-blobs-damaged", "restore.live-blobs-missing", "restore.pre-backup-foreign", "restore.swapped", "runner.immutable", "runner.invalid", "runner.limit", "runner.not-found", "runner.pool-exists", "runner.pool-in-use", "runner.retired", "runner.token-used", "schema.binary-below-minimum", "secret.console-session", "secret.key-not-configured", "secret.not-decrypted", "secret.too-large", "server.component-not-found", "server.internal", "server.method-not-allowed", "server.route-not-found", "session.csrf", "session.other-site", "settings.key-unknown", "settings.locked", "settings.patch-invalid", "settings.static-only", "settings.unavailable", "settings.value-invalid", "sign-in.refused", "sink.access-token", "sink.conflict", "sink.invalid", "sink.no-sender", "sink.no-url", "sink.not-found", "sink.platform-host", "sink.test-limit-unavailable", "sink.test-rate-limited", "source.filter-invalid", "source.filter-unreadable", "stack.already-exists", "stack.has-resources", "stack.invalid-name", "stack.no-state", "stack.no-state-at-time", "stack.not-found", "stack.other-secrets-provider", "stack.resource-not-found", "stack.reveal-path-too-long", "state-version.budget-too-small", "state-version.busy", "state-version.checksum-mismatch", "state-version.invalid", "state-version.lineage-mismatch", "state-version.not-found", "state-version.resource-not-found", "state-version.reveal-path-too-long", "state-version.stale-serial", "state-version.too-large", "state-version.upload-denied", "store.failover-setting-invalid", "storecheck.cooldown", "storecheck.invalid-target", "storecheck.no-target", "storecheck.not-found", "storecheck.refused", "storecheck.running", "token.already-exists", "token.caller-not-person", "token.ended", "token.invalid", "token.kind-has-none", "token.not-found", "token.requires-sign-in", "token.unsupported", "token.wrong-kind", "trigger.cycle", "trigger.disabled", "trigger.fire-conflict", "trigger.invalid", "trigger.not-found", "trigger.saver-denied", "trust-rule.already-exists", "trust-rule.ambiguous", "trust-rule.invalid", "trust-rule.issuer-refused", "trust-rule.limit", "trust-rule.no-match", "trust-rule.not-found", "trust-rule.principal-refused", "trust-rule.sign-in-required", "unit-settings.bulk-size", "unit-settings.connection-lacks-capability", "unit-settings.connection-unknown", "unit-settings.invalid", "unit-settings.not-found", "unit-settings.pool-unknown", "unit.client-encrypted", "unit.deleted-not-found", "unit.history-unavailable", "unit.invalid-name", "unit.name-taken", "unit.no-collection", "unit.no-state", "unit.not-found", "unit.state-moved", "update.attempt-expired", "update.checkpoint-conflict", "update.checkpoint-stale", "update.concurrent-modification", "update.conflict", "update.console-session", "update.delta-invalid", "update.invalid", "update.item-key-unavailable", "update.lease-expired", "update.lease-invalid", "update.not-found", "update.too-large", "update.wrong-state", "view.already-exists", "view.invalid", "view.limit", "view.not-found", "view.not-person", "worker.absent", "workspace.already-exists", "workspace.changed-concurrently", "workspace.client-encrypted", "workspace.invalid-name", "workspace.lock-mismatch", "workspace.locked", "workspace.no-state", "workspace.no-state-at", "workspace.not-found", "workspace.not-locked", "workspace.override-refused", "workspace.pending-state-version", "workspace.too-many-pending"] as const;
+export const ErrorCodeValues = ["access.denied", "access.ip-not-allowed", "access.last-site-administrator", "access.no-action", "audit.entry-not-found", "audit.entry-read-unavailable", "audit.export-not-recorded", "audit.reason-invalid", "auth.rate-limited", "auth.unauthenticated", "backup.corrupt", "collection.already-exists", "collection.changed", "collection.invalid-name", "collection.move-out-locked", "collection.not-empty", "collection.not-found", "context.field-from-code", "context.invalid", "context.not-set", "context.object-not-found", "context.unit-deleted", "context.unknown-section", "drift.start-conflict", "gate.approvers-count-above", "gate.approvers-group-invalid", "gate.approvers-group-missing", "gate.approvers-unmet", "gate.approvers-user-invalid", "gate.denied", "gate.final", "gate.invalid", "gate.limit", "gate.limited", "gate.not-found", "gate.rule-failed", "gate.unavailable", "gate.version-conflict", "git-host.app-not-registered", "git-host.installation-not-assigned", "instance.invalid-id", "instance.not-found", "issuer.conflict", "issuer.invalid", "issuer.key-expired", "issuer.key-missing", "issuer.not-configured", "job.agent-denied", "job.frozen", "job.gate-enforced", "job.invalid", "job.limit", "job.not-found", "job.policy-denied", "job.unsupported", "journal.batch-invalid", "journal.build-timeout", "journal.conflict", "journal.incomplete", "local-user.break-glass", "local-user.code-invalid", "local-user.current-password-required", "local-user.current-password-wrong", "local-user.demo-fixed", "local-user.exists", "local-user.hash-busy", "local-user.last-credential", "local-user.name-invalid", "local-user.not-found", "local-user.outside-reach", "local-user.own-account", "local-user.password-sign-in-off", "local-user.reason-required", "local-user.second-factor-required", "local-user.session-ended", "local-user.sign-in-failed", "local-user.unavailable", "lock.already-locked", "lock.changed", "lock.invalid-target", "lock.locked", "lock.not-holder", "lock.not-locked", "lock.reason-required", "lock.target-not-found", "maintenance.active-work", "maintenance.busy", "maintenance.held", "maintenance.in-maintenance", "maintenance.invalid-state", "maintenance.unavailable", "mfa.break-glass-reason-required", "mfa.ceremony-failed", "mfa.ceremony-not-open", "mfa.ceremony-wrong-person", "mfa.fresh-step-required", "mfa.passkey-exists", "mfa.passkey-invalid", "mfa.passkey-limit", "mfa.passkey-not-found", "mfa.passkey-suspended", "mfa.rate-limited", "mfa.session-required", "mfa.sign-in-failed", "mfa.unavailable", "namespace.already-exists", "namespace.fenced", "namespace.invalid-name", "namespace.not-found", "namespace.not-home", "namespace.unavailable", "password.blocked", "password.form", "password.letters-and-digits", "password.too-long", "password.too-short", "placement.conflict", "placement.invalid-pattern", "placement.invalid-position", "placement.invalid-tool", "placement.rule-not-found", "placement.too-many-rules", "preferences.body-invalid", "preferences.body-too-large", "preferences.field-invalid", "preferences.field-read-only", "preferences.field-unknown", "preferences.if-match-invalid", "preferences.media-type-unsupported", "preferences.person-not-found", "preferences.person-required", "preferences.precondition-failed", "preferences.unavailable", "principal.already-exists", "principal.disabled", "principal.invalid", "principal.last-break-glass", "principal.managed-by-directory", "principal.not-disabled", "principal.not-found", "principal.reserved-subject", "principal.unsupported", "profile.conflict", "profile.invalid", "profile.limit", "profile.not-found", "profile.routing-change-needs-open", "profile.schema-version", "registry.archive-set-refused", "registry.invalid", "registry.key-exists", "registry.key-invalid", "registry.key-limit", "registry.module-archive-refused", "registry.no-keys", "registry.not-found", "registry.not-staged", "registry.signature-invalid", "registry.signature-untrusted-key", "registry.too-large", "registry.version-exists", "request.body-invalid", "request.body-too-large", "request.content-type-unsupported", "request.idempotency-key-in-progress", "request.idempotency-key-invalid", "request.idempotency-key-lost", "request.idempotency-key-replayed-secret", "request.idempotency-key-required", "request.idempotency-key-reused", "request.idempotency-key-unavailable", "request.idempotency-key-unsupported", "request.if-match-invalid", "request.invalid-object", "request.invalid-path", "request.invalid-query", "request.page-size-invalid", "request.page-token-invalid", "request.precondition-failed", "request.precondition-required", "restore.blobs-missing", "restore.ended", "restore.live-blobs-damaged", "restore.live-blobs-missing", "restore.pre-backup-foreign", "restore.swapped", "runner.immutable", "runner.invalid", "runner.limit", "runner.not-found", "runner.pool-exists", "runner.pool-in-use", "runner.retired", "runner.token-used", "schema.binary-below-minimum", "secret.console-session", "secret.key-not-configured", "secret.not-decrypted", "secret.too-large", "server.component-not-found", "server.internal", "server.method-not-allowed", "server.route-not-found", "session.csrf", "session.other-site", "settings.key-unknown", "settings.locked", "settings.patch-invalid", "settings.static-only", "settings.unavailable", "settings.value-invalid", "sign-in.refused", "sink.access-token", "sink.conflict", "sink.invalid", "sink.no-sender", "sink.no-url", "sink.not-found", "sink.platform-host", "sink.test-limit-unavailable", "sink.test-rate-limited", "source.filter-invalid", "source.filter-unreadable", "stack.already-exists", "stack.has-resources", "stack.invalid-name", "stack.no-state", "stack.no-state-at-time", "stack.not-found", "stack.other-secrets-provider", "stack.resource-not-found", "stack.reveal-path-too-long", "state-version.budget-too-small", "state-version.busy", "state-version.checksum-mismatch", "state-version.invalid", "state-version.lineage-mismatch", "state-version.not-found", "state-version.resource-not-found", "state-version.reveal-path-too-long", "state-version.stale-serial", "state-version.too-large", "state-version.upload-denied", "store.failover-setting-invalid", "storecheck.cooldown", "storecheck.invalid-target", "storecheck.no-target", "storecheck.not-found", "storecheck.refused", "storecheck.running", "token.already-exists", "token.caller-not-person", "token.ended", "token.invalid", "token.kind-has-none", "token.not-found", "token.requires-sign-in", "token.unsupported", "token.wrong-kind", "trigger.cycle", "trigger.disabled", "trigger.fire-conflict", "trigger.invalid", "trigger.not-found", "trigger.saver-denied", "trust-rule.already-exists", "trust-rule.ambiguous", "trust-rule.invalid", "trust-rule.issuer-refused", "trust-rule.limit", "trust-rule.no-match", "trust-rule.not-found", "trust-rule.principal-refused", "trust-rule.sign-in-required", "unit-settings.bulk-size", "unit-settings.connection-lacks-capability", "unit-settings.connection-unknown", "unit-settings.invalid", "unit-settings.not-found", "unit-settings.pool-unknown", "unit.client-encrypted", "unit.deleted-not-found", "unit.history-unavailable", "unit.invalid-name", "unit.name-taken", "unit.no-collection", "unit.no-state", "unit.not-found", "unit.state-moved", "update.attempt-expired", "update.checkpoint-conflict", "update.checkpoint-stale", "update.concurrent-modification", "update.conflict", "update.console-session", "update.delta-invalid", "update.invalid", "update.item-key-unavailable", "update.lease-expired", "update.lease-invalid", "update.not-found", "update.too-large", "update.wrong-state", "view.already-exists", "view.invalid", "view.limit", "view.not-found", "view.not-person", "worker.absent", "workspace.already-exists", "workspace.changed-concurrently", "workspace.client-encrypted", "workspace.invalid-name", "workspace.lock-mismatch", "workspace.locked", "workspace.no-state", "workspace.no-state-at", "workspace.not-found", "workspace.not-locked", "workspace.override-refused", "workspace.pending-state-version", "workspace.too-many-pending"] as const;
 
 export type ErrorCode = (typeof ErrorCodeValues)[number] | (string & {});
 
@@ -357,6 +358,12 @@ export interface ErrorResponse {
 export interface ExchangeWorkloadTokenRequest {
   readonly rule?: string;
   readonly token: string;
+}
+
+export interface FinishPasskeyRegistrationRequest {
+  readonly name: string;
+  /** A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name. */
+  readonly response: unknown;
 }
 
 export interface FireTriggerRequest {
@@ -692,6 +699,10 @@ export interface ListNotificationSinksResponse {
   readonly sinks: ReadonlyArray<NotificationSink>;
 }
 
+export interface ListPasskeysResponse {
+  readonly passkeys: ReadonlyArray<Passkey>;
+}
+
 export interface ListPlacementRulesResponse {
   readonly rules: ReadonlyArray<PlacementRule>;
 }
@@ -834,6 +845,21 @@ export interface ManualLock {
   readonly since: string;
 }
 
+/** The error answer with the code mfa.passkey-limit. */
+export interface MfaPasskeyLimitError {
+  /** The HTTP status. */
+  readonly code: number;
+  readonly errorArgs: MfaPasskeyLimitErrorArgs;
+  readonly errorCode: "mfa.passkey-limit";
+  /** A text for a person. */
+  readonly message: string;
+}
+
+/** The arguments of the text of the error with the code mfa.passkey-limit. */
+export interface MfaPasskeyLimitErrorArgs {
+  readonly limit: number;
+}
+
 export interface ModuleRelease {
   readonly archive: ModuleReleaseArchive;
   readonly name: string;
@@ -900,6 +926,32 @@ export interface OutputSharing {
 
 export interface OutputSharingRequest {
   readonly newUnitDefault: string;
+}
+
+export interface Passkey {
+  readonly backupEligible: boolean;
+  readonly createdAt: string;
+  readonly id: string;
+  readonly lastUsedAt: string;
+  readonly name: string;
+  readonly suspendedAt: string;
+  readonly transports: ReadonlyArray<string>;
+}
+
+export interface PasskeyCreationOptions {
+  /** A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name. */
+  readonly publicKey: unknown;
+}
+
+export interface PasskeyRequestOptions {
+  /** A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name. */
+  readonly publicKey: unknown;
+}
+
+export interface PasskeySignInRequest {
+  readonly reason: string;
+  /** A JSON object of the WebAuthn protocol. The members are the ones that the PublicKeyCredentialCreationOptions and the PublicKeyCredential of the protocol name. */
+  readonly response: unknown;
 }
 
 export interface PasswordSignInRequest {
@@ -1390,7 +1442,7 @@ export const StateWriteGatesModeValues = ["on", "off"] as const;
 export type StateWriteGatesMode = (typeof StateWriteGatesModeValues)[number] | (string & {});
 
 /** The known values of StateWritePath. */
-export const StateWritePathValues = ["opentofu.tfe.lock", "opentofu.tfe.force-unlock", "opentofu.tfe.rollback", "opentofu.tfe.delete", "opentofu.http.lock", "opentofu.http.force-unlock", "opentofu.http.unlocked-write", "inventory.restore", "inventory.purge", "opentofu.tfe.state-version-without-lock", "pulumi.update", "pulumi.import", "pulumi.restore", "pulumi.rename", "pulumi.delete", "pulumi.cancel"] as const;
+export const StateWritePathValues = ["opentofu.tfe.lock", "opentofu.tfe.force-unlock", "opentofu.tfe.rollback", "opentofu.tfe.delete", "opentofu.http.lock", "opentofu.http.force-unlock", "opentofu.http.unlocked-write", "inventory.restore", "inventory.purge", "pulumi.import", "pulumi.restore", "pulumi.rename", "pulumi.delete", "pulumi.cancel", "opentofu.tfe.state-version-without-lock", "pulumi.update"] as const;
 
 export type StateWritePath = (typeof StateWritePathValues)[number] | (string & {});
 
