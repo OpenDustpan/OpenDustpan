@@ -115,6 +115,18 @@ func newAccessFixtureFull(
 ) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureSignIn(t, entries, passkeys, nil)
+}
+
+// newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
+// tweak change the console sign-in before the handler reads it. With nil, the
+// sign-in stays as it is.
+func newAccessFixtureSignIn(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+	tweak func(in *apiserver.SignIn, st *sqlite.Store),
+) accessFixture {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	if passkeys == nil {
@@ -177,6 +189,16 @@ func newAccessFixtureFull(
 
 	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
+	signIn := &apiserver.SignIn{
+		Service:      newTestSignInService(t, st, sessions, principals),
+		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
+		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
+		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+	}
+	if tweak != nil {
+		tweak(signIn, st)
+	}
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
@@ -210,12 +232,7 @@ func newAccessFixtureFull(
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn: &apiserver.SignIn{
-			Service:      newTestSignInService(t, st, sessions, principals),
-			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
-			Passkeys: passkeys,
-		},
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
