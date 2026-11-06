@@ -187,6 +187,8 @@ type Gate struct {
 	burst      float64
 	maxWaiting int
 	maxSources int
+	// refuse makes a source over the budget get ErrLimited at once.
+	refuse bool
 	// prunedAt is the time of the last prune of Failures, and warnedAt the
 	// time of the last warning about Failures.
 	prunedAt time.Time
@@ -247,6 +249,7 @@ func New(cfg Config) (*Gate, error) {
 		burst:      float64(burst),
 		maxWaiting: positiveOr(cfg.MaxWaiting, DefaultMaxWaiting),
 		maxSources: positiveOr(cfg.MaxSources, DefaultMaxSources),
+		refuse:     false,
 		prunedAt:   time.Time{},
 		warnedAt:   time.Time{},
 		mu:         sync.Mutex{},
@@ -267,6 +270,21 @@ func New(cfg Config) (*Gate, error) {
 	if g.now == nil {
 		g.now = time.Now
 	}
+
+	return g, nil
+}
+
+// NewRefusing returns a Gate that refuses a source over the budget at once
+// with ErrLimited, where a Gate from New makes it wait the penalty. The sign-in
+// routes that check no token use it: a wait would only hold a connection. The
+// other settings are the ones of New.
+func NewRefusing(cfg Config) (*Gate, error) {
+	g, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	g.refuse = true
 
 	return g, nil
 }
@@ -488,6 +506,11 @@ func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (*hold, e
 			case <-got.resolved:
 				continue
 			}
+		case g.refuse:
+			// A refusing gate has no token to wait for: a source over the
+			// budget gets ErrLimited at once, with no wait and no waiting
+			// place.
+			return nil, ErrLimited
 		default:
 			return nil, g.waitPenalty(ctx, source)
 		}

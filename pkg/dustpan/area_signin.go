@@ -104,16 +104,12 @@ func gatedAuthenticator(
 		return nil, none, fmt.Errorf("password gate: %w", err)
 	}
 
-	passkeyGate, err := authgate.New(authgate.Config{
-		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
-		Failures: failures, Window: 0, CounterErrors: nil, Scope: passkeyGateScope,
-		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
-	})
+	passkeyGate, err := newPasskeyFailureGate(failures, logger, now)
 	if err != nil {
 		return nil, none, fmt.Errorf("passkey gate: %w", err)
 	}
 
-	passkeyBeginGate, err := authgate.New(authgate.Config{
+	passkeyBeginGate, err := authgate.NewRefusing(authgate.Config{
 		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
 		Failures: failures, Window: 0, CounterErrors: nil, Scope: passkeyBeginGateScope,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
@@ -141,6 +137,34 @@ const passwordGateScope = "password"
 // passkeyGateScope names the budget of the failed responses of a passkey
 // sign-in in the shared count.
 const passkeyGateScope = "passkey"
+
+// The failure budget of a passkey sign-in: 20 failed responses of one source
+// address refuse that address for 15 minutes. The window of the shared count
+// is the same 15 minutes. A passkey cannot be guessed, so this limit bounds
+// the load of the route and not the guesses of a secret.
+const (
+	passkeyFailureLimit  = 20
+	passkeyFailureWindow = 15 * time.Minute
+)
+
+// newPasskeyFailureGate returns the gate of the failed responses of a passkey
+// sign-in. It refuses a source over the budget at once, with no wait. The
+// budget refills one unit in the window, so a source that spent it stays
+// refused for the window.
+func newPasskeyFailureGate(
+	failures authgate.FailureCounter, logger *slog.Logger, now func() time.Time,
+) (*authgate.Gate, error) {
+	gate, err := authgate.NewRefusing(authgate.Config{
+		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
+		Failures: failures, Window: passkeyFailureWindow, CounterErrors: nil, Scope: passkeyGateScope,
+		Burst: passkeyFailureLimit, Refill: passkeyFailureWindow, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("passkey failure gate: %w", err)
+	}
+
+	return gate, nil
+}
 
 // passkeyBeginGateScope names the budget of the begins of a passkey sign-in in
 // the shared count.
