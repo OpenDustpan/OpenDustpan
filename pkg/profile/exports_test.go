@@ -14,6 +14,8 @@ import (
 // exports.proxy map body, indented by four spaces.
 func proxyDoc(body string) string {
 	return `schemaVersion: 1
+providers:
+  db: { use: secrets/vault }
 values:
   user: admin
   plain: not-a-secret
@@ -30,6 +32,7 @@ values:
   escaped: "$${ values.grafana.token }"
   bearer: "Bearer ${ values.grafana.token }"
   fromProvider: "${ providers.db.password }"
+  fromUndeclared: "${ providers.nope.password }"
   fromImport: '${ imports["shared/keys"].values.k }'
   envRead: "${ $env.TOKEN }"
   cycleA: "${ values.cycleB }"
@@ -78,6 +81,11 @@ func TestParseProxyExport(t *testing.T) {
 			profile.ErrInvalid,
 		},
 		{"provider output", "    g: { type: header, name: X-Key, value: \"${ values.fromProvider }\" }\n", nil},
+		{
+			"output of a provider that is not declared",
+			"    g: { type: header, name: X-Key, value: \"${ values.fromUndeclared }\" }\n",
+			profile.ErrInvalid,
+		},
 		{
 			"value of an import that is not declared",
 			"    g: { type: header, name: X-Key, value: \"${ values.fromImport }\" }\n",

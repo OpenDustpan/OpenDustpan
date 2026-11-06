@@ -41,7 +41,11 @@ func TestProxyOnlyForJobProxy(t *testing.T) {
 func secretTargetDoc(t *testing.T, head string) *Document {
 	t.Helper()
 
-	text := "schemaVersion: 1\n" + head + `values:
+	text := "schemaVersion: 1\n" + head + `providers:
+  db: { use: secrets/vault }
+rotators:
+  rot: { use: rotate/db }
+values:
   s: { $secret: abc }
   plain: abc
   literal: "${ 'static-key' }"
@@ -50,8 +54,13 @@ func secretTargetDoc(t *testing.T, head string) *Document {
   entry: { $value: "${ 'static' }" }
   bearer: "Bearer ${ values.s }"
   provider: "${ providers.db.password }"
-  rotator: "${ rotators.db.password }"
+  providerQuoted: "${ providers['db'].password }"
+  rotator: "${ rotators.rot.password }"
+  undeclaredProvider: "${ providers.nope.password }"
+  undeclaredRotator: "${ rotators.nope.password }"
   other: '${ profiles["shared/keys"].values.k }'
+  self: '${ profiles["payments/self"].values.plain }'
+  emptyImport: '${ imports[""].values.k }'
   imported: '${ imports["shared/keys"].values.k }'
   undeclared: '${ imports["other/keys"].values.k }'
   taggedImport: '${ imports["shared/keys@stable"].values.k }'
@@ -92,9 +101,9 @@ func TestCheckSecretTarget(t *testing.T) {
 	refused := []string{
 		"plain", "literal", "dollar", "escaped", "entry", "bearer", "env", "loopA", "list", "ternary",
 		"compare", "replaced", "indexed", "sliced", "prefixed", "twoParts", "quotedProvider", "quotedImport",
-		"coalesce", "suffixed", "inside", "undeclared", "taggedImport",
+		"coalesce", "suffixed", "inside", "undeclared", "taggedImport", "self", "emptyImport",
 	}
-	accepted := []string{"s", "provider", "rotator", "other", "chain"}
+	accepted := []string{"s", "provider", "providerQuoted", "rotator", "chain"}
 
 	type targetCase struct {
 		name    string
@@ -103,12 +112,18 @@ func TestCheckSecretTarget(t *testing.T) {
 		ok      bool
 	}
 
-	tests := make([]targetCase, 0, 4+2*(len(refused)+len(accepted)))
+	tests := make([]targetCase, 0, 10+2*(len(refused)+len(accepted)))
 	tests = append(tests,
 		targetCase{"missing path with no imports", false, "missing", false},
 		targetCase{"missing path with imports", true, "missing", true},
 		targetCase{"declared import with no imports", false, "imported", false},
 		targetCase{"declared import", true, "imported", true},
+		targetCase{"profiles read with no imports", false, "other", false},
+		targetCase{"profiles read of an import", true, "other", true},
+		targetCase{"undeclared provider with no imports", false, "undeclaredProvider", false},
+		targetCase{"undeclared provider with imports", true, "undeclaredProvider", true},
+		targetCase{"undeclared rotator with no imports", false, "undeclaredRotator", false},
+		targetCase{"undeclared rotator with imports", true, "undeclaredRotator", true},
 	)
 
 	for _, imports := range []bool{false, true} {
