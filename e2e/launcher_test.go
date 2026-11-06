@@ -114,18 +114,27 @@ func readsThePhase(t *testing.T, env *e2e.Env, jobID string) {
 
 // launcherJob is the part of the job document that the launcher test reads.
 type launcherJob struct {
-	State  string `json:"state"`
-	Phases []struct {
-		Kind       string     `json:"kind"`
-		FinishedAt *time.Time `json:"finishedAt"`
-		Steps      []struct {
-			Name     string `json:"name"`
-			ExitCode int    `json:"exitCode"`
-			Log      *struct {
-				Closed bool `json:"closed"`
-			} `json:"log"`
-		} `json:"steps"`
-	} `json:"phases"`
+	State  string          `json:"state"`
+	Phases []launcherPhase `json:"phases"`
+}
+
+// launcherPhase is a phase of launcherJob.
+type launcherPhase struct {
+	Kind       string         `json:"kind"`
+	FinishedAt *time.Time     `json:"finishedAt"`
+	Steps      []launcherStep `json:"steps"`
+}
+
+// launcherStep is the record of a step of launcherPhase.
+type launcherStep struct {
+	Name     string       `json:"name"`
+	ExitCode int          `json:"exitCode"`
+	Log      *launcherLog `json:"log"`
+}
+
+// launcherLog is the log of launcherStep.
+type launcherLog struct {
+	Closed bool `json:"closed"`
 }
 
 // checkLauncherJob checks that the plan phase ended and that its two steps

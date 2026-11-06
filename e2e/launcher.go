@@ -214,7 +214,7 @@ func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body 
 	}
 
 	resp, err := r.env.protocolClient().Signed(ctx, r.priv, r.id, &session.Request{
-		Method: http.MethodPost, Path: path, Body: raw, Header: map[string]string{"Content-Type": "application/json"},
+		Method: http.MethodPost, Path: path, Body: raw, Header: nil,
 	}, nil)
 	if err != nil {
 		tb.Fatalf("POST %s: %v", path, err)
