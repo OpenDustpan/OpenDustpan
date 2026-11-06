@@ -26,6 +26,9 @@ const (
 	DemoCreator = "system"
 	// DemoReason is the reason that each audit entry of the demo seed gives.
 	DemoReason = "demo user of opendustpan dev"
+	// DemoResetReason is the reason of the entry of a grant that the seed
+	// revokes because it is not in the fixed set of the demo person.
+	DemoResetReason = "demo reset"
 	// DemoDisplayName is the display name of the demo person.
 	DemoDisplayName = "Demo user"
 	// ActionDemoSeeded is the audit action of the password of the demo seed.
@@ -61,6 +64,10 @@ type DemoGrants interface {
 	CreateGrant(
 		ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
 	) error
+	// GrantsOf returns every current grant of subject.
+	GrantsOf(ctx context.Context, subject access.Subject) ([]access.Grant, error)
+	// RevokeGrant ends the current grant id.
+	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck) error
 }
 
 // DemoNamespaces reads the fence of a namespace.
@@ -170,13 +177,63 @@ func (d *DemoSeed) Run(ctx context.Context, namespaces []namespace.Name) (string
 		return "", err
 	}
 
+	fixed := map[string]bool{access.RoleViewer + " " + identity.ServerObject().String(): true}
+
 	for _, name := range namespaces {
-		if err := d.grant(ctx, subject, access.RoleAdmin, identity.NamespaceObject(name)); err != nil {
+		obj := identity.NamespaceObject(name)
+		fixed[access.RoleAdmin+" "+obj.String()] = true
+
+		if err := d.grant(ctx, subject, access.RoleAdmin, obj); err != nil {
 			return "", err
 		}
 	}
 
+	if err := d.revokeExtra(ctx, subject, fixed); err != nil {
+		return "", err
+	}
+
 	return password, nil
+}
+
+// revokeExtra revokes each current grant of the demo person that is not in the
+// fixed set, for example a site-administrator grant that someone added after
+// an earlier start. Each revoke writes an audit entry that names the grant and
+// gives the reason DemoResetReason. A revoke that fails stops the seed: the
+// demo person must not keep a grant outside the fixed set.
+func (d *DemoSeed) revokeExtra(ctx context.Context, subject access.Subject, fixed map[string]bool) error {
+	current, err := d.cfg.Grants.GrantsOf(ctx, subject)
+	if err != nil {
+		return fmt.Errorf("demo seed: read the grants of the demo person: %w", err)
+	}
+
+	for i := range current {
+		g := current[i]
+		if fixed[g.Role+" "+g.Object.String()] {
+			continue
+		}
+
+		var fence namespace.Fence
+
+		scope := audit.ServerScope
+
+		if name := g.Object.Namespace(); name != "" {
+			ns, nsErr := d.cfg.Namespaces.GetNamespace(ctx, name)
+			if nsErr != nil {
+				return fmt.Errorf("demo seed: read the namespace %s: %w", name, nsErr)
+			}
+
+			fence, scope = ns.Fence(), name
+		}
+
+		e := d.entry(scope, string(identity.ActionServerManageAccess), access.GrantRef(g))
+		e.Reason = DemoResetReason
+
+		if err := d.cfg.Grants.RevokeGrant(ctx, g.ID, fence, e, nil); err != nil {
+			return fmt.Errorf("demo seed: revoke the grant %s: %w", g.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // person returns the principal of the demo person and makes it when it does

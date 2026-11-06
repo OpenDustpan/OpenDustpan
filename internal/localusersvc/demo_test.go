@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -79,7 +80,8 @@ func demoGrants(ctx context.Context, t *testing.T, f *fixture) (string, []string
 	got := make([]string, 0, len(grants))
 
 	for i := range grants {
-		if grants[i].CreatedBy != localusersvc.DemoCreator {
+		// A grant that a test adds as "admin" is the extra grant of a test.
+		if grants[i].CreatedBy != localusersvc.DemoCreator && grants[i].CreatedBy != "admin" {
 			t.Errorf(
 				"grant %s has the creator %q, want %q",
 				grants[i].ID,
@@ -343,5 +345,133 @@ func TestDemoPasswordIsInNoAuditEntry(t *testing.T) {
 
 	if seen == 0 {
 		t.Fatal("the seed wrote no audit entry")
+	}
+}
+
+// extraSiteAdministrator gives the site-administrator role on the installation
+// to the principal id, as a person with the right to do so would do between two
+// starts.
+func extraSiteAdministrator(t *testing.T, f *fixture, grantID, principalID string) access.Grant {
+	t.Helper()
+
+	g := access.Grant{
+		CreatedAt: time.Now().UTC().Truncate(time.Millisecond), Condition: nil, Object: identity.ServerObject(),
+		ID: grantID, Role: access.RoleSiteAdministrator, CreatedBy: "admin",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: principalID},
+	}
+	entry := auditEntryOf(access.GrantRef(g))
+	entry.Action = "server:manage-access"
+
+	none := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	err := f.store.CreateGrant(t.Context(), g, none, entry, nil)
+	if err != nil {
+		t.Fatalf("add the grant %s: %v", grantID, err)
+	}
+
+	return g
+}
+
+// TestDemoSeedRevokesAGrantOutsideTheFixedSet proves that a site-administrator
+// grant added between two starts is gone after the second start, with an
+// audit entry that names the grant and gives the reason "demo reset".
+func TestDemoSeedRevokesAGrantOutsideTheFixedSet(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	seed, err := demoSeedFor(t, f, installation.KindDev)
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	names := makeNamespaces(t, f, "dev")
+
+	if _, runErr := seed.Run(t.Context(), names); runErr != nil {
+		t.Fatalf("first run: %v", runErr)
+	}
+
+	personID, before := demoGrants(t.Context(), t, f)
+
+	// A second site administrator, so the revoke does not remove the last one.
+	other, err := f.principals.CreatePrincipal(t.Context(), auditEntryOf("principal:other"), principal.Input{
+		Subject: "other-admin", DisplayName: "Other", Kind: principal.KindPerson,
+	})
+	if err != nil {
+		t.Fatalf("make the second administrator: %v", err)
+	}
+
+	extraSiteAdministrator(t, f, "grt-other-site-admin", other.ID)
+	extra := extraSiteAdministrator(t, f, "grt-extra-site-admin", personID)
+
+	if _, runErr := seed.Run(t.Context(), names); runErr != nil {
+		t.Fatalf("second run: %v", runErr)
+	}
+
+	_, after := demoGrants(t.Context(), t, f)
+	if !slices.Equal(before, after) {
+		t.Fatalf("grants after the second start = %v, want %v", after, before)
+	}
+
+	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	found := false
+
+	for i := range page.Entries {
+		e := page.Entries[i]
+		if e.Reason == localusersvc.DemoResetReason && strings.Contains(e.Object, extra.ID) &&
+			strings.Contains(e.Object, access.RoleSiteAdministrator) {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatal("no audit entry names the revoked grant with the reason demo reset")
+	}
+}
+
+// TestDemoSeedFailsClosedOnTheLastSiteAdministrator proves that the seed stops
+// with access.ErrLastSiteAdministrator, and keeps the grant, when the extra
+// grant is the last site-administrator grant of the installation.
+func TestDemoSeedFailsClosedOnTheLastSiteAdministrator(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	seed, err := demoSeedFor(t, f, installation.KindDev)
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	if _, runErr := seed.Run(t.Context(), nil); runErr != nil {
+		t.Fatalf("first run: %v", runErr)
+	}
+
+	personID, _ := demoGrants(t.Context(), t, f)
+	extraSiteAdministrator(t, f, "grt-last-site-admin", personID)
+
+	if _, runErr := seed.Run(t.Context(), nil); !errors.Is(runErr, access.ErrLastSiteAdministrator) {
+		t.Fatalf("second run = %v, want %v", runErr, access.ErrLastSiteAdministrator)
+	}
+
+	_, got := demoGrants(t.Context(), t, f)
+
+	kept := access.RoleSiteAdministrator + " " + identity.ServerObject().String()
+	if !slices.Contains(got, kept) {
+		t.Fatalf("grants after the refused start = %v, want the site-administrator grant to stay", got)
+	}
+}
+
+// auditEntryOf builds a valid audit entry about object for a test change.
+func auditEntryOf(object string) audit.Entry {
+	return audit.Entry{
+		At: time.Now().UTC().Truncate(time.Millisecond), Namespace: audit.ServerScope, Subject: "admin",
+		IDPSubject: "", TokenID: "", Action: "server:manage-principals", Object: object, Version: "", ValuePath: "",
+		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
 	}
 }
