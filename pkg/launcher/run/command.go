@@ -54,6 +54,16 @@ func (r *phaseRun) command(step *protocol.Step) (*exec.Cmd, error) {
 	// No shell: the program gets the argument list as it is. The path is
 	// absolute, so no lookup runs at the start. The standard input is the
 	// null device.
+	//
+	// The path is not a constant because the launcher exists to run the
+	// program that a step names. Before this point the launcher checked it:
+	// a known role (tool or hook), a clean absolute path or a bare name
+	// found in an absolute directory of the PATH of the image (program,
+	// lookPath), no NUL byte in any argument, a directory inside the
+	// checkout (stepDir), and an environment from BuildEnv. It runs the
+	// argument list with no shell. Each check has a hostile-input test in
+	// refusal_test.go.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-cmd.dangerous-exec-cmd
 	return &exec.Cmd{
 		Path: prog, Args: step.Args, Env: env, Dir: dir, Stdin: nil, Stdout: nil, Stderr: nil, ExtraFiles: nil,
 		SysProcAttr: sysProcAttr(), Process: nil, ProcessState: nil, Err: nil, Cancel: nil, WaitDelay: 0,
