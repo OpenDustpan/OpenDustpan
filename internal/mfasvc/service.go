@@ -35,6 +35,7 @@ const (
 	ActionPasskeySuspended = "passkey.suspended"
 	ActionAddRefused       = "passkey.add-refused"
 	ActionRemoveRefused    = "passkey.remove-refused"
+	ActionListRefused      = "passkey.list-refused"
 	ActionCeremonyRefused  = "passkey.ceremony-refused"
 )
 

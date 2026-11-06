@@ -116,6 +116,11 @@ type SignIn struct {
 	// its own, so these routes never spend the budget of the other sign-ins.
 	// Nil mounts none of these routes.
 	PasswordLimiter SignInLimiter
+	// Passkeys is the service of the passkeys of the caller. A passkey needs
+	// the console session of a person, so it belongs to the console sign-in.
+	// Nil mounts no passkey route: the server keeps no passkeys, or its public
+	// URL gives no relying party.
+	Passkeys PasskeyService
 	// DevCode is the one-time code of opendustpan dev. With it, the handler
 	// mounts the route that signs a browser in as the dev administrator.
 	// Nil mounts no such route.
@@ -143,6 +148,7 @@ type signInState struct {
 	sessions  *session.Sessions
 	limiter   SignInLimiter
 	passwords SignInLimiter
+	passkeys  PasskeyService
 	stored    StoredProviders
 	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
@@ -215,6 +221,7 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		sessions:  cfg.Sessions,
 		limiter:   cfg.Limiter,
 		passwords: cfg.PasswordLimiter,
+		passkeys:  cfg.Passkeys,
 		stored:    cfg.Stored,
 		admin:     cfg.Admin,
 		providers: providers,

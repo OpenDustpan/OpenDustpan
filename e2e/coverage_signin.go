@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
+	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -58,39 +60,41 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		LocalUsers:       coverageLocalUsers(tb, st, principals),
-		Preferences:      nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Instances:        nil,
-		StoreChecks:      nil,
-		Workers:          nil,
-		TempAdmins:       nil,
-		Now:              nil,
-		Authenticator:    coverageAuthenticator{},
-		Authorizer:       coverageAuthorizer{},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       coverageNamespaces(tb),
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      coverageMaintenance{},
-		Metrics:          coverageMetrics{},
-		Version:          "test",
-		Schema:           coverageSchema{},
-		Journal:          nil,
-		Principals:       principals,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            coverageAuditStore{},
-		OnAuditFailure:   nil,
-		DeletedUnits:     nil,
-		AuditSinks:       nil,
-		AuditChain:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		SignIn:           coverageSignIn(coverageSignInService(tb, st, principals, sessions), sessions, admin, code),
+		LocalUsers:     coverageLocalUsers(tb, st, principals),
+		Preferences:    nil,
+		Settings:       nil,
+		GitHost:        nil,
+		Idempotency:    nil,
+		Instances:      nil,
+		StoreChecks:    nil,
+		Workers:        nil,
+		TempAdmins:     nil,
+		Now:            nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     coverageNamespaces(tb),
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    coverageMaintenance{},
+		Metrics:        coverageMetrics{},
+		Version:        "test",
+		Schema:         coverageSchema{},
+		Journal:        nil,
+		Principals:     principals,
+		Access:         nil,
+		Tokens:         nil,
+		Audit:          coverageAuditStore{},
+		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		AuditSinks:     nil,
+		AuditChain:     nil,
+		IPAllowlists:   nil,
+		Gates:          nil,
+		SessionPolicy:  nil,
+		SignIn: coverageSignIn(
+			coverageSignInService(tb, st, principals, sessions), sessions, admin, code, coveragePasskeys(tb, st),
+		),
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -166,6 +170,24 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 	return svc
 }
 
+// coveragePasskeys returns the passkey service over st, so the route table
+// holds the passkey routes.
+func coveragePasskeys(tb testing.TB, st *sqlite.Store) *mfasvc.Service {
+	tb.Helper()
+
+	rp, err := gowebauthn.New("https://dustpan.example.com")
+	if err != nil {
+		tb.Fatalf("relying party: %v", err)
+	}
+
+	svc, err := mfasvc.New(mfasvc.Config{Store: st, RP: rp, Audit: st, Now: nil, Log: nil})
+	if err != nil {
+		tb.Fatalf("passkey service: %v", err)
+	}
+
+	return svc
+}
+
 // signInRows keeps the sign-in rows of the route table of handler.
 func signInRows(handler *serverapi.Handler) []RouteRef {
 	var out []RouteRef
@@ -173,6 +195,7 @@ func signInRows(handler *serverapi.Handler) []RouteRef {
 	for _, ref := range serverRefs(handler.Routes()) {
 		if strings.Contains(ref.Path, "/sign-in/") || strings.HasPrefix(ref.Path, "/api/server/sign-in-providers") ||
 			strings.HasPrefix(ref.Path, "/api/dustpan/v1/local-users") || ref.Path == "/api/dustpan/v1/me/password" ||
+			strings.HasPrefix(ref.Path, "/api/dustpan/v1/me/passkeys") ||
 			ref.Path == "/api/server/session" ||
 			ref.Path == "/api/server/sign-out" {
 			out = append(out, ref)
@@ -232,6 +255,7 @@ func coverageSignInService(
 // password routes.
 func coverageSignIn(
 	service *signinsvc.Service, sessions *session.Sessions, admin *session.ProviderAdmin, code *devcode.Code,
+	passkeys *mfasvc.Service,
 ) *serverapi.SignIn {
 	return &serverapi.SignIn{
 		Service:         service,
@@ -243,6 +267,7 @@ func coverageSignIn(
 		Providers:       nil,
 		Origins:         nil,
 		PasswordLimiter: coveragePasswordLimiter{},
+		Passkeys:        passkeys,
 		DevCode:         code,
 		DevAdmin:        identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 	}

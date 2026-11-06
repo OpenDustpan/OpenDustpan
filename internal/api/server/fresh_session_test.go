@@ -185,6 +185,7 @@ func (s storeSessions) signIn() *apiserver.SignIn {
 		Service:      s.service,
 		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: s.svc, Limiter: nil,
 		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil,
+		Passkeys: nil,
 	}
 }
 

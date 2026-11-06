@@ -109,7 +109,7 @@ func newSignIn(
 
 	in := &serverapi.SignIn{
 		Service: nil, Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, DevCode: nil,
+		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, Passkeys: nil, DevCode: nil,
 		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
 	}
 

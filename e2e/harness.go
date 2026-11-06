@@ -284,6 +284,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -354,6 +355,19 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	return startEnv(ctx, in)
 }
 
+// NewEnvWithPasskeys starts a server as NewEnv does, with a public URL whose
+// host name is localhost, so the server can serve the passkey routes. A
+// passkey relying party ID is a host name and never an IP address. The server
+// still listens on its address, and the public URL names the same port.
+func NewEnvWithPasskeys(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.passkeys = true
+
+	return startEnv(ctx, in)
+}
+
 // journalTestInput returns the input of an env for cli and store with new
 // tokens, a new directory and journaling on, so the journal fault tests only
 // set their own fault.
@@ -368,6 +382,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -428,6 +443,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
