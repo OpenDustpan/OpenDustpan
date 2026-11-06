@@ -23,6 +23,10 @@
 //	POST   /app/installations/{id}/access_tokens       an installation token (JWT)
 //	DELETE /installation/token                         revoke an installation token
 //	GET    /user                                       the user of a token
+//	GET    /users/{login}                              the user of a token, the bot of the app, or the person of
+//
+// AddComment
+//
 //	GET    /repos/{owner}/{repo}/commits?sha=&since=   the commits of a ref, newest first, with page and per_page
 //	GET    /repos/{owner}/{repo}/commits/{ref}         one commit by branch, tag or ID
 //	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base and the changed

@@ -117,7 +117,14 @@ func (f *gitHub) UpsertComment(
 		return forge.Comment{}, f.forget(r, err)
 	}
 
-	cw := commentWrite{repo: r, bearer: bearer, review: reviewID, text: text, marker: marker, own: own}
+	ownID, err := f.commentIdentityID(ctx, own, bearer)
+	if err != nil {
+		return forge.Comment{}, f.forget(r, err)
+	}
+
+	cw := commentWrite{
+		repo: r, bearer: bearer, review: reviewID, text: text, marker: marker, own: own, ownID: ownID,
+	}
 
 	got, err := f.writeComment(ctx, cw)
 	if err != nil {
@@ -137,6 +144,9 @@ type commentWrite struct {
 	text   string
 	marker string
 	own    string
+	// ownID is the numeric ID of the account of the connection. A comment is
+	// the own comment only when the login and the ID both match.
+	ownID string
 }
 
 // writeComment edits the comment of the connection with the marker, or makes it.
@@ -173,7 +183,7 @@ func (f *gitHub) writeComment(ctx context.Context, cw commentWrite) (forge.Comme
 	// Defense in depth: GitHub edits the comment that the ID names, and the
 	// search above chose an own comment. This check stays so that a comment
 	// of another account, or one without the marker, is never the answer.
-	if !strings.EqualFold(login, cw.own) || firstLine(got.Body) != cw.marker || (id != "" && got.ID != id) {
+	if !cw.isOwn(login, got.AuthorID) || firstLine(got.Body) != cw.marker || (id != "" && got.ID != id) {
 		return forge.Comment{}, forge.Unavailable(0, "GitHub gave a comment that does not match the request")
 	}
 
@@ -217,7 +227,9 @@ func (f *gitHub) findOwnComment(ctx context.Context, cw commentWrite) (string, e
 		}
 
 		if errors.Is(err, errPageTooBig) {
-			return "", forge.Unavailable(0, "GitHub gave a comment above the size limit of an answer")
+			return "", forge.Unavailable(
+				0, "no comment of the server was found: GitHub gave a comment above the size limit of an answer",
+			)
 		}
 
 		if err != nil {
@@ -267,7 +279,7 @@ func ownCommentIn(body []byte, cw commentWrite) (string, int, error) {
 		// Defense in depth: looksOwn chose the comment by its author and its
 		// first line. The strict parse checks the same two values again, so that
 		// a comment that only the lenient reader accepts is never edited.
-		if !strings.EqualFold(login, cw.own) || firstLine(got.Body) != cw.marker {
+		if !cw.isOwn(login, got.AuthorID) || firstLine(got.Body) != cw.marker {
 			return "", 0, forge.Unavailable(0, "GitHub gave a comment that the adapter cannot use")
 		}
 
@@ -277,9 +289,16 @@ func ownCommentIn(body []byte, cw commentWrite) (string, int, error) {
 	return "", len(items), nil
 }
 
+// isOwn reports whether the author with the login and the numeric ID is the
+// account of the connection. Both must match: a login can pass to another
+// account, and an ID cannot.
+func (cw commentWrite) isOwn(login, authorID string) bool {
+	return cw.ownID != "" && authorID == cw.ownID && strings.EqualFold(login, cw.own)
+}
+
 // looksOwn reports whether a comment of a page has the connection as its author
-// and the marker as its first line. It reads only these two values, and a
-// comment that it cannot read is not the own comment.
+// (the login and the numeric ID) and the marker as its first line. It reads only
+// these values, and a comment that it cannot read is not the own comment.
 func looksOwn(raw json.RawMessage, cw commentWrite) bool {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
@@ -291,7 +310,58 @@ func looksOwn(raw json.RawMessage, cw commentWrite) bool {
 		return false
 	}
 
-	return strings.EqualFold(textField(user, keyLogin), cw.own) && firstLine(textField(fields, keyBody)) == cw.marker
+	var number wholeNumber
+	if json.Unmarshal(user[keyID], &number) != nil {
+		return false
+	}
+
+	authorID, ok := positiveNumber(number)
+
+	return ok && cw.isOwn(textField(user, keyLogin), authorID) && firstLine(textField(fields, keyBody)) == cw.marker
+}
+
+// commentIdentityID returns the numeric ID of the account of the connection,
+// which is the account with the login. It asks GitHub once and keeps the answer
+// in memory. The call needs no permission, and it works for the bot account of an
+// app and for the user of a token.
+func (f *gitHub) commentIdentityID(ctx context.Context, login, bearer string) (string, error) {
+	f.mu.Lock()
+	known := f.identityID
+	f.mu.Unlock()
+
+	if known != "" {
+		return known, nil
+	}
+
+	resp, err := f.do(ctx, http.MethodGet, "/users/"+url.PathEscape(login), bearer, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var fields map[string]json.RawMessage
+	if decodeErr := decode(resp.body, &fields); decodeErr != nil {
+		return "", decodeErr
+	}
+
+	var number wholeNumber
+
+	id, ok := "", json.Unmarshal(fields[keyID], &number) == nil
+	if ok {
+		id, ok = positiveNumber(number)
+	}
+
+	// Defense in depth: the path names the login. This check stays so that an
+	// answer for another account is never the identity that decides which
+	// comment is edited.
+	if !ok || !strings.EqualFold(textField(fields, keyLogin), login) {
+		return "", forge.Unavailable(0, "GitHub gave an account that does not match the login of the connection")
+	}
+
+	f.mu.Lock()
+	f.identityID = id
+	f.mu.Unlock()
+
+	return id, nil
 }
 
 // ReadComment returns the comment commentID.

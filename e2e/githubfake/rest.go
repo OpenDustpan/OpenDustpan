@@ -29,6 +29,7 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("DELETE /installation/token", f.revokeInstallationToken)
 	mux.HandleFunc("GET /app", f.getApp)
 	mux.HandleFunc("GET /user", f.getUser)
+	mux.HandleFunc("GET /users/{login}", f.getAccount)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/trees/{sha}", f.getTree)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
@@ -242,6 +243,28 @@ func (f *Fake) getUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.writeJSON(w, http.StatusOK, wireAccount{ID: f.cfg.User.ID, Login: f.cfg.User.Login})
+}
+
+// getAccount answers the account with the login: the user of the token, the bot of
+// the app, and the person that AddComment uses. Any other login answers 404.
+func (f *Fake) getAccount(w http.ResponseWriter, r *http.Request) {
+	if !f.authorize(w, r, BearerInstallation, BearerUser) {
+		return
+	}
+
+	login := r.PathValue("login")
+
+	for _, a := range []Account{
+		f.cfg.User, {ID: BotAccountID, Login: f.AppLogin()}, {ID: OtherAccountID, Login: OtherAuthor},
+	} {
+		if a.Login == login {
+			f.writeJSON(w, http.StatusOK, wireAccount(a))
+
+			return
+		}
+	}
+
+	f.message(w, http.StatusNotFound, "Not Found")
 }
 
 // repoOf finds the repository of the path and checks that the credential has the

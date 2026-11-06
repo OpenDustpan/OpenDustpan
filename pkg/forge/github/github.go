@@ -170,6 +170,7 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 		statuses:       contentsUnknown,
 		issues:         contentsUnknown,
 		identity:       "",
+		identityID:     "",
 	}
 
 	switch c.Auth {
@@ -239,6 +240,9 @@ type gitHub struct {
 	// identity is the login that the connection commits as. FindCommit reads
 	// it once, see commitIdentity.
 	identity string
+	// identityID is the numeric ID of the account of identity. UpsertComment
+	// reads it once, see commentIdentity.
+	identityID string
 }
 
 // contentsAccess says whether an installation has the permission to read

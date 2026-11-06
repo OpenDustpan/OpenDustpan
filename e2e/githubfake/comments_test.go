@@ -327,3 +327,39 @@ func TestContentsDirectoryHasTreeIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountByLogin(t *testing.T) {
+	t.Parallel()
+
+	f, _ := newFake(t)
+	c := newClient(t, f)
+
+	tests := []struct {
+		name   string
+		path   string
+		bearer string
+		status int
+		login  string
+	}{
+		{"the user of the token", "/users/acme", userValue, http.StatusOK, "acme"},
+		{"the bot of the app", "/users/" + f.AppLogin(), userValue, http.StatusOK, f.AppLogin()},
+		{"a person of AddComment", "/users/other-dev", userValue, http.StatusOK, "other-dev"},
+		{"a login that is not known", "/users/nobody", userValue, http.StatusNotFound, ""},
+		{"no credential", "/users/acme", "", http.StatusUnauthorized, ""},
+	}
+
+	for _, tt := range tests {
+		a := c.do(http.MethodGet, tt.path, tt.bearer, "")
+		if a.status != tt.status {
+			t.Errorf("%s: status = %d, want %d", tt.name, a.status, tt.status)
+
+			continue
+		}
+
+		if tt.login != "" {
+			if got := decode[map[string]any](t, a.body); got["login"] != tt.login || got["id"] == nil {
+				t.Errorf("%s: the account = %v", tt.name, got)
+			}
+		}
+	}
+}

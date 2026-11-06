@@ -17,6 +17,7 @@ const (
 	cannedLogin    = "dustpan-user"
 	listCommentsAt = "GET /repos/acme/infra/issues/7/comments?per_page=100&page="
 	userPath       = "GET /user"
+	userIDPath     = "GET /users/" + cannedLogin
 	postCommentAt  = "POST /repos/acme/infra/issues/7/comments"
 )
 
@@ -83,7 +84,7 @@ func checkUpsertChoice(t *testing.T, list []any, patch string, created map[strin
 	t.Helper()
 
 	answers := map[string]hostAnswer{
-		userPath:             userAnswer(),
+		userPath: userAnswer(), userIDPath: userAnswer(),
 		listCommentsAt + "1": okAnswer(list),
 		postCommentAt:        {status: http.StatusCreated, body: toJSON(created), header: nil, next: nil},
 	}
@@ -144,7 +145,7 @@ func TestUpsertCommentPages(t *testing.T) {
 		t.Parallel()
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath:             userAnswer(),
+			userPath: userAnswer(), userIDPath: userAnswer(),
 			listCommentsAt + "1": okAnswer(fill(100)),
 			listCommentsAt + "2": okAnswer([]any{commentJSON(300, cannedLogin, 5, markerPlan+"\nOld")}),
 			"PATCH /repos/acme/infra/issues/comments/300": okAnswer(
@@ -160,7 +161,7 @@ func TestUpsertCommentPages(t *testing.T) {
 	t.Run("more comments than the most", func(t *testing.T) {
 		t.Parallel()
 
-		answers := map[string]hostAnswer{userPath: userAnswer()}
+		answers := map[string]hostAnswer{userPath: userAnswer(), userIDPath: userAnswer()}
 		for p := 1; p <= 10; p++ {
 			answers[fmt.Sprintf("%s%d", listCommentsAt, p)] = okAnswer(fill(p * 1000))
 		}
@@ -228,7 +229,10 @@ func TestUpsertCommentRefusesAnAnswer(t *testing.T) {
 			t.Parallel()
 
 			f := cannedForge(t, map[string]hostAnswer{
-				userPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{}), postCommentAt: tt.answer,
+				userPath:             userAnswer(),
+				userIDPath:           userAnswer(),
+				listCommentsAt + "1": okAnswer([]any{}),
+				postCommentAt:        tt.answer,
 			})
 
 			got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
@@ -245,7 +249,7 @@ func TestUpsertCommentRefusesAnAnswer(t *testing.T) {
 		broken["id"] = "x"
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{broken}),
+			userPath: userAnswer(), userIDPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{broken}),
 		})
 
 		_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
@@ -258,8 +262,11 @@ func TestUpsertCommentRefusesAnAnswer(t *testing.T) {
 		t.Parallel()
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath:             userAnswer(),
-			listCommentsAt + "1": okAnswer([]any{commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")}),
+			userPath:   userAnswer(),
+			userIDPath: userAnswer(),
+			listCommentsAt + "1": okAnswer(
+				[]any{commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")},
+			),
 			"PATCH /repos/acme/infra/issues/comments/15": okAnswer(commentJSON(16, cannedLogin, 5, markerPlan+"\nNew")),
 		})
 
@@ -343,7 +350,10 @@ func TestCommentCallsMapTheStatus(t *testing.T) {
 			t.Run(name+" "+tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				f := cannedForge(t, map[string]hostAnswer{userPath: userAnswer(), keys[name]: tt.answer})
+				f := cannedForge(
+					t,
+					map[string]hostAnswer{userPath: userAnswer(), userIDPath: userAnswer(), keys[name]: tt.answer},
+				)
 
 				err := call(f)
 				if !errors.Is(err, tt.want) || err != nil && strings.Contains(err.Error(), cannedPAT) {
@@ -570,7 +580,7 @@ func TestUpsertCommentSkipsHostileComments(t *testing.T) {
 	mine := commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")
 
 	f := cannedForge(t, map[string]hostAnswer{
-		userPath:             userAnswer(),
+		userPath: userAnswer(), userIDPath: userAnswer(),
 		listCommentsAt + "1": okAnswer([]any{huge, noUser, badLogin, textID, notObject, forgedHuge, mine}),
 		"PATCH /repos/acme/infra/issues/comments/15": okAnswer(
 			commentJSON(15, cannedLogin, 5, markerPlan+"\nPlan ready"),
@@ -610,7 +620,11 @@ func TestUpsertCommentSmallerPages(t *testing.T) {
 		t.Parallel()
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath: userAnswer(), at(100, 1): tooBig, at(25, 1): okAnswer([]any{mine}), patch: edited,
+			userPath:   userAnswer(),
+			userIDPath: userAnswer(),
+			at(100, 1): tooBig,
+			at(25, 1):  okAnswer([]any{mine}),
+			patch:      edited,
 		})
 
 		if got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest()); err != nil || got.ID != "15" {
@@ -622,7 +636,7 @@ func TestUpsertCommentSmallerPages(t *testing.T) {
 		t.Parallel()
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath: userAnswer(), at(100, 1): okAnswer(fill(100)), at(100, 2): tooBig,
+			userPath: userAnswer(), userIDPath: userAnswer(), at(100, 1): okAnswer(fill(100)), at(100, 2): tooBig,
 			// The comments 101 to 125 are the pages 5 of 25 comments.
 			at(25, 5): okAnswer([]any{mine}), patch: edited,
 		})
@@ -636,7 +650,12 @@ func TestUpsertCommentSmallerPages(t *testing.T) {
 		t.Parallel()
 
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath: userAnswer(), at(100, 1): tooBig, at(25, 1): tooBig, at(5, 1): tooBig, at(1, 1): tooBig,
+			userPath:   userAnswer(),
+			userIDPath: userAnswer(),
+			at(100, 1): tooBig,
+			at(25, 1):  tooBig,
+			at(5, 1):   tooBig,
+			at(1, 1):   tooBig,
 		})
 
 		_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
@@ -644,4 +663,72 @@ func TestUpsertCommentSmallerPages(t *testing.T) {
 			t.Fatalf("UpsertComment = %v with the calls %v, want ErrUnavailable and no comment", err, f.calls())
 		}
 	})
+}
+
+// TestUpsertCommentMatchesTheAccountID checks that the login alone does not make
+// a comment the own comment: a comment with the login of the connection and the
+// ID of another account is never edited, and an answer for another account is
+// refused.
+func TestUpsertCommentMatchesTheAccountID(t *testing.T) {
+	t.Parallel()
+
+	sameLogin := commentJSON(11, cannedLogin, 99, markerPlan+"\nforged")
+	created := hostAnswer{
+		status: http.StatusCreated, body: toJSON(commentJSON(20, cannedLogin, 5, markerPlan+"\nPlan ready")),
+		header: nil, next: nil,
+	}
+
+	t.Run("the login of the connection and another ID", func(t *testing.T) {
+		t.Parallel()
+
+		f := cannedForge(t, map[string]hostAnswer{
+			userPath: userAnswer(), userIDPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{sameLogin}),
+			postCommentAt: created,
+		})
+
+		got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+		if err != nil || got.ID != "20" || f.sent(http.MethodPatch) {
+			t.Fatalf("UpsertComment = %+v, %v with the calls %v, want a new comment and no edit", got, err, f.calls())
+		}
+	})
+
+	t.Run("an ID that is not a number", func(t *testing.T) {
+		t.Parallel()
+
+		textID := commentJSON(12, cannedLogin, 5, markerPlan+"\nOld")
+		textID["user"] = map[string]any{"id": "5", "login": cannedLogin}
+
+		f := cannedForge(t, map[string]hostAnswer{
+			userPath: userAnswer(), userIDPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{textID}),
+			postCommentAt: created,
+		})
+
+		_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+		if err != nil || f.sent(http.MethodPatch) {
+			t.Fatalf("UpsertComment = %v with the calls %v, want a new comment and no edit", err, f.calls())
+		}
+	})
+
+	for name, answer := range map[string]hostAnswer{
+		"an account with another login": okAnswer(map[string]any{"id": 5, "login": "other-dev"}),
+		"an account with no ID":         okAnswer(map[string]any{"login": cannedLogin}),
+		"an ID of zero":                 okAnswer(map[string]any{"id": 0, "login": cannedLogin}),
+		"a missing account":             statusAnswer(http.StatusNotFound, `{"message":"Not Found"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := cannedForge(t, map[string]hostAnswer{
+				userPath:             userAnswer(),
+				userIDPath:           answer,
+				listCommentsAt + "1": okAnswer([]any{}),
+				postCommentAt:        created,
+			})
+
+			_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+			if err == nil || f.sent(http.MethodPost) || f.sent(http.MethodPatch) {
+				t.Fatalf("UpsertComment = %v with the calls %v, want an error and no write", err, f.calls())
+			}
+		})
+	}
 }
