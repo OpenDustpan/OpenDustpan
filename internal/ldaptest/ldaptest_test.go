@@ -26,7 +26,7 @@ func dial(t *testing.T, s *ldaptest.Server) *ldap.Conn {
 		}
 	})
 
-	if err := conn.Bind(ldaptest.ServiceDN, ldaptest.ServicePassword); err != nil {
+	if err := conn.Bind(ldaptest.ServiceDN, s.ServicePassword()); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 

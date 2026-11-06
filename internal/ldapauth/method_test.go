@@ -70,7 +70,7 @@ func (s setup) baseConfig(ds sessiontest.DirectorySettings) ldapauth.Config {
 		Now:        time.Now, Logger: nil, RootCAs: s.dir.CertPool(), ProviderID: providerID, URL: url,
 		BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN, UserFilter: "(&(objectClass=person)(uid={user}))",
 		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn",
-		BindPassword:   session.NewPassword(ldaptest.ServicePassword),
+		BindPassword:   session.NewPassword(s.dir.ServicePassword()),
 		Subject:        ldapauth.Subject{Kind: subject, Attribute: ""},
 		Disabled:       ldapauth.Disabled{Attribute: "userAccountControl", Values: nil, Mask: 2},
 		Groups:         groups,

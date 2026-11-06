@@ -541,7 +541,7 @@ func TestNoPasswordInAnyErrorOrLog(t *testing.T) {
 			_, err := ldapauth.NewMethod(bad)
 			fmt.Fprintf(&text, "%v\n%s", err, logs.String())
 
-			for _, secret := range []string{wrongPassword, ldaptest.ServicePassword} {
+			for _, secret := range []string{wrongPassword, s.dir.ServicePassword()} {
 				if strings.Contains(text.String(), secret) {
 					t.Fatalf("an error or a log record holds a password:\n%s", text.String())
 				}

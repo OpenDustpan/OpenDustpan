@@ -35,8 +35,6 @@ const (
 	GroupsDN = "ou=groups," + BaseDN
 	// ServiceDN is the DN of the service account.
 	ServiceDN = "cn=service," + BaseDN
-	// ServicePassword is the password of the service account.
-	ServicePassword = "service-account-test-password"
 )
 
 // Fault is a wrong answer that the directory gives.
@@ -103,22 +101,23 @@ type Group struct {
 
 // Server is a running directory. Its methods are safe for concurrent use.
 type Server struct {
-	pool      *x509.CertPool
-	tlsCfg    *tls.Config
-	tlsLn     net.Listener
-	plainLn   net.Listener
-	release   chan struct{}
-	conns     map[net.Conn]struct{}
-	closeErrs []error
-	users     []User
-	groups    []Group
-	binds     []string
-	wg        sync.WaitGroup
-	once      sync.Once
-	mu        sync.Mutex
-	fault     Fault
-	accepts   int
-	stopped   bool
+	pool            *x509.CertPool
+	tlsCfg          *tls.Config
+	tlsLn           net.Listener
+	plainLn         net.Listener
+	release         chan struct{}
+	servicePassword string
+	conns           map[net.Conn]struct{}
+	closeErrs       []error
+	users           []User
+	groups          []Group
+	binds           []string
+	wg              sync.WaitGroup
+	once            sync.Once
+	mu              sync.Mutex
+	fault           Fault
+	accepts         int
+	stopped         bool
 }
 
 // listeners is the count of the listeners of a directory.
@@ -145,24 +144,23 @@ func Start(t *testing.T) *Server {
 	}
 
 	s := &Server{
-		pool:    pool,
-		tlsCfg:  tlsCfg,
-		tlsLn:   tls.NewListener(tlsLn, tlsCfg),
-		plainLn: plainLn,
-		release: make(
-			chan struct{},
-		),
-		conns:     map[net.Conn]struct{}{},
-		closeErrs: nil,
-		users:     nil,
-		groups:    nil,
-		binds:     nil,
-		wg:        sync.WaitGroup{},
-		once:      sync.Once{},
-		mu:        sync.Mutex{},
-		fault:     FaultNone,
-		accepts:   0,
-		stopped:   false,
+		pool:            pool,
+		tlsCfg:          tlsCfg,
+		tlsLn:           tls.NewListener(tlsLn, tlsCfg),
+		plainLn:         plainLn,
+		release:         make(chan struct{}),
+		servicePassword: rand.Text(),
+		conns:           map[net.Conn]struct{}{},
+		closeErrs:       nil,
+		users:           nil,
+		groups:          nil,
+		binds:           nil,
+		wg:              sync.WaitGroup{},
+		once:            sync.Once{},
+		mu:              sync.Mutex{},
+		fault:           FaultNone,
+		accepts:         0,
+		stopped:         false,
 	}
 
 	s.wg.Add(listeners)
@@ -245,6 +243,12 @@ func (s *Server) PlainNameURL() string {
 	}
 
 	return "ldap://localhost:" + strconv.Itoa(addr.Port)
+}
+
+// ServicePassword returns the password of the service account. Each
+// directory makes a new random password when it starts.
+func (s *Server) ServicePassword() string {
+	return s.servicePassword
 }
 
 // CertPool returns a pool that trusts the certificate of the directory.
@@ -433,7 +437,7 @@ func (s *Server) checkPassword(dn, password string) bool {
 	defer s.mu.Unlock()
 
 	if sameDN(dn, ServiceDN) {
-		return password == ServicePassword
+		return password == s.servicePassword
 	}
 
 	for _, u := range s.users {
