@@ -88,6 +88,8 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/passkey/begin",
+		"POST /api/dustpan/v1/sign-in/passkey/finish",
 		"POST /api/dustpan/v1/local-users/redeem",
 		"GET /api/dustpan/v1/capabilities",
 		"GET /api/dustpan/v1/openapi.json",
