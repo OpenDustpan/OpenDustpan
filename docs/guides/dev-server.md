@@ -41,7 +41,7 @@ So no request line, access log or `Referer` header holds the code.
 The code signs one browser in as the person `dev:admin`.
 The bootstrap administrator gives that person the site-administrator role.
 The prefix `dev:` and the provider ID `dev` are reserved.
-No other path makes such a person.
+Only the sign-in link and `--demo` (see "A demo person") make such a person.
 A server that is not a `dev` server refuses their sessions and tokens.
 It works one time, and it stops 10 minutes after the start or when `dev` stops.
 Open the link at once.
@@ -57,6 +57,45 @@ A later start prints no link.
 A start with no terminal, for example in a CI job, prints the path of the token file in place of the link.
 So a log never holds the code.
 To sign in again, sign in to the console with the token in the token file.
+
+## A demo person
+
+Start `dev` with `--demo` to get a person that signs in with a user name and a password:
+
+```sh
+opendustpan dev --demo
+```
+
+At each start, `dev` sets up the person `dev:demo`.
+Its local user name is `demo`.
+`dev` makes a new random password, sets it, and prints it one time to the terminal:
+
+```text
+Demo user: sign in with the user name demo and the password <password> (new at each start)
+```
+
+The password is in no file, no log record and no audit entry.
+A second start sets a new password and keeps the one person.
+To sign in again, read the line of the new start.
+
+`dev` also makes the namespaces `demo-platform` and `demo-data`, so the data of `make demo` has an owner.
+The person has these grants, and no other:
+
+| Role | Object |
+| --- | --- |
+| `admin` | the namespaces `dev`, `demo-platform` and `demo-data` |
+| `viewer` | the installation |
+
+Each grant has the creator `system`.
+The audit entry of each change gives the reason "demo user of opendustpan dev".
+The person does not hold the site-administrator role.
+It reads the namespaces and works in them, but it cannot change an installation setting.
+The server refuses each change of its password, its user name and its factors with the error code `local-user.demo-fixed`.
+
+Only `dev` takes `--demo`.
+`serve` has no flag, variable or key for it.
+The seed and the server refuse a database that is not of the kind `dev`.
+A server of another kind refuses the sessions and the tokens of the person.
 
 ## Use the Pulumi CLI and OpenTofu
 
