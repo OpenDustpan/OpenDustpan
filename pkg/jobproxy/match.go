@@ -32,7 +32,9 @@ type Request struct {
 	Host      string
 	Port      int
 	// Method and Path are empty for a tunnel: the job proxy sees no request
-	// in it.
+	// in it. Path is the path of the request target without the query: the
+	// caller removes "?" and the query before Match. No proxy rule checks the
+	// query. A Path that holds "?" is not canonical, so Match denies it.
 	Method string
 	Path   string
 	// PlainHTTP is true when the job proxy sends the request to the host

@@ -5,9 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
-
-	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
 // The variables of a path pattern.
@@ -91,6 +90,12 @@ func (v Vars) lookup(name string) (Value, bool) {
 	return Value{Text: "", Secret: false}, false
 }
 
+// labelKeyPattern is the shape of a label key: 1 to 128 letters, digits
+// and . _ : / -, the label key rule of the inventory. The package keeps its
+// own copy, so the launcher does not link the inventory. A key with / cannot
+// be in a template, because / ends the segment of the template.
+var labelKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,128}$`)
+
 // validVariable reports whether name is a known variable.
 func validVariable(name string) bool {
 	switch name {
@@ -99,7 +104,7 @@ func validVariable(name string) bool {
 	}
 
 	if key, ok := strings.CutPrefix(name, VarLabelPrefix); ok {
-		return inventory.ValidLabelKey(key)
+		return labelKeyPattern.MatchString(key)
 	}
 
 	if key, ok := strings.CutPrefix(name, VarInputPrefix); ok {

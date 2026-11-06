@@ -55,6 +55,18 @@ func TestCanonicalPath(t *testing.T) {
 		{"backslash", "/api\\x", false},
 		{"space", "/api x", false},
 		{"too long", "/" + strings.Repeat("a", jobproxy.MaxPathBytes), false},
+		{"encoded fullwidth solidus", "/a/x%EF%BC%8F..%EF%BC%8Fb", false},
+		{"encoded fullwidth reverse solidus", "/a/x%EF%BC%BCb", false},
+		{"encoded division slash", "/a/%E2%88%95", false},
+		{"encoded set minus", "/a/%E2%88%96", false},
+		{"encoded fraction slash", "/a/x%E2%81%84b", false},
+		{"encoded big solidus", "/a/x%E2%A7%B8b", false},
+		{"encoded small reverse solidus", "/a/x%EF%B9%A8b", false},
+		{"encoded fullwidth full stops", "/a/%EF%BC%8E%EF%BC%8E", false},
+		{"encoded small full stop", "/a/%EF%B9%92", false},
+		{"encoded one dot leader", "/a/%E2%80%A4", false},
+		{"encoded two dot leader", "/a/%E2%80%A5", false},
+		{"encoded ellipsis", "/a/%E2%80%A6", false},
 	}
 
 	for _, tc := range tests {

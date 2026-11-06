@@ -27,7 +27,7 @@ const (
 	reasonModeTwice       = "an earlier proxy rule gives the same host and port another mode"
 	reasonMethods         = "the methods must list GET, HEAD, POST, PUT, PATCH, DELETE or OPTIONS, each once"
 	reasonPaths           = "the paths must list from 1 to 64 path patterns, each once"
-	reasonTunnelRequest   = "a tunnel proxy rule cannot give methods, paths, a credential or a client certificate"
+	reasonTunnelRequest   = "a tunnel proxy rule cannot give methods, paths, a credential, a client certificate or a serverTrust other than system"
 	reasonExportName      = "an export name must have 1 to 64 letters, digits, _ or -"
 	reasonServerTrust     = "the serverTrust must be system or the name of a CA export"
 	reasonTooManyRules    = "the proxy rule set has more than 256 proxy rules"
@@ -226,7 +226,10 @@ func (r *Rule) check(ranges rangesFor) string {
 	}
 
 	if !r.Mode.checksRequests() {
-		if len(r.Methods) > 0 || len(r.Paths) > 0 || r.Credential != "" || r.ClientCertificate != "" {
+		// A tunnel does not end TLS, so each of these fields would have no
+		// effect. A field with no effect is refused, not ignored.
+		if len(r.Methods) > 0 || len(r.Paths) > 0 || r.Credential != "" || r.ClientCertificate != "" ||
+			r.ServerTrust != ServerTrustSystem {
 			return reasonTunnelRequest
 		}
 

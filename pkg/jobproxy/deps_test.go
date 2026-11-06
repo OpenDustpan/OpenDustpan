@@ -2,15 +2,17 @@ package jobproxy_test
 
 import (
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // TestLinkedDependencies checks the packages that pkg/jobproxy links. The
-// runner module links this package, so it must never pull in a SQL driver
-// or the forge. Defense in depth: the depguard rule for this package also
-// denies these imports; this test stays so that a transitive import is
-// caught even when the rule is changed.
+// launcher links this package, so it must never pull in a SQL driver, the
+// forge, internal code or another package of the server. Of this module it
+// links only itself and the outbound guard. Defense in depth: the depguard
+// rule for this package also denies these imports; this test stays so that
+// a transitive import is caught even when the rule is changed.
 func TestLinkedDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -20,14 +22,17 @@ func TestLinkedDependencies(t *testing.T) {
 		"modernc.org/sqlite",
 		"github.com/mattn/go-sqlite3",
 		"github.com/lib/pq",
-		"opendustpan.org/opendustpan/pkg/forge",
-		"opendustpan.org/opendustpan/pkg/store",
-		"opendustpan.org/opendustpan/internal/api",
+	}
+
+	allowedOwn := []string{
+		"opendustpan.org/opendustpan/pkg/jobproxy",
+		"opendustpan.org/opendustpan/pkg/egress",
 	}
 
 	cmd := exec.CommandContext(
 		t.Context(), "go", "list", "-deps", "opendustpan.org/opendustpan/pkg/jobproxy",
 	)
+
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("go list -deps: %v", err)
@@ -38,6 +43,10 @@ func TestLinkedDependencies(t *testing.T) {
 			if dep == prefix || strings.HasPrefix(dep, prefix+"/") {
 				t.Errorf("pkg/jobproxy links %q, which it must not link", dep)
 			}
+		}
+
+		if strings.HasPrefix(dep, "opendustpan.org/opendustpan/") && !slices.Contains(allowedOwn, dep) {
+			t.Errorf("pkg/jobproxy links %q; of this module it links only %v", dep, allowedOwn)
 		}
 	}
 }

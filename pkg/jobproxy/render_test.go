@@ -19,7 +19,7 @@ func vars() jobproxy.Vars {
 		Name:      "payments",
 		Labels:    map[string]string{"team": "team-a", "tier": "gold", "path": "a/b", "wild": "*", "blank": ""},
 		Operation: jobproxy.OperationPlan,
-		Inputs:    map[string]string{"folder": "f-1", "dotdot": ".."},
+		Inputs:    map[string]string{"folder": "f-1", "dotdot": "..", "wideslash": "a%EF%BC%8Fb"},
 		Profiles: map[string]map[string]jobproxy.Value{
 			"grafana": {
 				"org":   {Text: "42", Secret: false},
@@ -77,6 +77,7 @@ func TestRenderRefusesValues(t *testing.T) {
 		{"missing profile key", "profile.grafana.user"},
 		{"value that is a wildcard", "unit.labels.wild"},
 		{"value that is a dot segment", "inputs.dotdot"},
+		{"value with an encoded fullwidth solidus", "inputs.wideslash"},
 	}
 
 	for _, tc := range tests {

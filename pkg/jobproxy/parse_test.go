@@ -129,6 +129,12 @@ func TestParseRefuses(t *testing.T) {
 			),
 		},
 		{
+			"tunnel with a serverTrust",
+			[]byte(
+				`{"rules":[{"id":"a","operations":["plan"],"host":"a.example.com","mode":"tunnel","serverTrust":"myca"}]}`,
+			),
+		},
+		{
 			"tunnel with a credential",
 			[]byte(
 				`{"rules":[{"id":"a","operations":["plan"],"host":"a.example.com","mode":"tunnel","credential":"t"}]}`,

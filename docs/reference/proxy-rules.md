@@ -59,7 +59,7 @@ document does not give them.
 | Mode | What the job proxy checks |
 | --- | --- |
 | `inspect` | The job proxy ends the TLS connection of the job. It checks the method and the path of each request. It can add a credential. |
-| `tunnel` | The job proxy checks the host and the port only. It cannot see the requests. A `tunnel` proxy rule has no `methods`, `paths`, `credential` or `clientCertificate`. |
+| `tunnel` | The job proxy checks the host and the port only. It cannot see the requests. A `tunnel` proxy rule has no `methods`, `paths`, `credential` or `clientCertificate`, and its `serverTrust` is `system`. |
 | `endpoint` | The job proxy serves the host on a local port of the job. It checks the method and the path of each request. |
 
 One host and port have one mode in all the proxy rule sets of a unit.
@@ -122,7 +122,14 @@ A canonical path:
   character,
 - percent-encodes only a byte that must be encoded, with uppercase hex
   digits. For example, the job proxy refuses `%61` for `a` and `%c3` for
-  `%C3`.
+  `%C3`,
+- has no character that looks like `/`, `\` or `.`, also when encoded. An
+  example is the fullwidth solidus U+FF0F (`%EF%BC%8F`). A server can change
+  such a character to `/`, `\` or `.` after the check of the job proxy.
+
+The path of a request is the part before the query. The job proxy removes
+`?` and the query before the check. No proxy rule checks the query, so a
+proxy rule that allows a path allows each query on that path.
 
 The job proxy compares hosts and paths byte for byte. `API.example.com` and
 `api.example.com.` do not match the host `api.example.com`. The path `/API`
