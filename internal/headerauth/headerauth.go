@@ -117,6 +117,11 @@ type JWTConfig struct {
 	// SignerARN is the ARN of the AWS ALB. The signer field of each JWT
 	// must equal it.
 	SignerARN string
+	// ClientID is the client ID of the authenticate rule of the AWS ALB, or
+	// empty. When it is set, the client field of each JWT must equal it. One
+	// load balancer can have more than one rule with the same identity
+	// provider.
+	ClientID string
 	// GroupsClaim names the claim of the groups, or is empty for no
 	// groups.
 	GroupsClaim string
@@ -171,6 +176,7 @@ type Method struct {
 	issuer       string
 	audience     string
 	signerARN    string
+	albClient    string
 	groupsClaim  string
 	proxies      []netip.Prefix
 }
@@ -184,7 +190,7 @@ func New(cfg Config) (*Method, error) {
 		enabled: cfg.Enabled, now: cfg.Now, providerID: cfg.ProviderID, mode: cfg.Mode,
 		preset: cfg.JWT.Preset, userHeader: cfg.UserHeader, groupsHeader: cfg.GroupsHeader,
 		secretHeader: cfg.SecretHeader, issuer: cfg.JWT.Issuer, audience: cfg.JWT.Audience,
-		signerARN: cfg.JWT.SignerARN, groupsClaim: cfg.JWT.GroupsClaim,
+		signerARN: cfg.JWT.SignerARN, albClient: cfg.JWT.ClientID, groupsClaim: cfg.JWT.GroupsClaim,
 		proxies: slices.Clone(cfg.TrustedProxies), keys: nil, secretSum: [sha256.Size]byte{},
 	}
 
