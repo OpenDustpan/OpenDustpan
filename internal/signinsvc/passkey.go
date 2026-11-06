@@ -142,7 +142,10 @@ func (s *Service) CompletePasskey(ctx context.Context, req *PasskeyRequest) (Res
 		})
 	}
 
-	return s.started(ctx, ref, "", &out)
+	res, err := s.started(ctx, ref, "", &out)
+	res.BreakGlass = err == nil && state.Owner.BreakGlass
+
+	return res, err
 }
 
 // breakGlassStart checks the reason of a break-glass sign-in and puts the
@@ -159,7 +162,12 @@ func (s *Service) breakGlassStart(
 		return s.refuse(ctx, ref, &refusal{
 			reason: ReasonPasskeyNoReason, answer: AnswerRefused, idpSubject: "", cause: ErrReasonRequired,
 		})
-	case !validText(reason, 1, MaxBreakGlassReason):
+	case !validText(reason, 1, MaxBreakGlassReason) || strings.ContainsFunc(reason, audit.IsHiddenRune):
+		// The reason goes to the audit entry and to the alert that the
+		// administrators read. A control, format, line separator or paragraph
+		// separator character (for example U+202E or U+200B) could show text
+		// that differs from the stored text, so the set of the audit log
+		// refuses them.
 		return s.refuse(ctx, ref, &refusal{
 			reason: ReasonPasskeyReasonText, answer: AnswerRefused, idpSubject: "", cause: ErrReasonRequired,
 		})

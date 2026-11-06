@@ -111,6 +111,9 @@ type Writes interface {
 type ChallengeWrites interface {
 	CreateChallenge(ctx context.Context, r ChallengeRow) (int64, error)
 	DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error)
+	// CountOpenChallenges counts the challenges of the kind that have not
+	// expired at atMs.
+	CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error)
 	// TakeChallenge deletes the challenge digest and returns it.
 	TakeChallenge(ctx context.Context, digest string) (ChallengeRow, error)
 }
@@ -498,10 +501,24 @@ func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 }
 
 // CreateChallenge deletes the challenges that expired at the time of c, and
-// stores c with the digest d. The caller checked c with Validate.
+// stores c with the digest d. The caller checked c with Validate. A sign-in
+// challenge over mfa.MaxOpenSignInChallenges open ones stores no row and
+// returns mfa.ErrChallengeLimit: the start of a sign-in is public, and no limit
+// by source address bounds the table when many sources send.
 func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) error {
 	if _, err := tx.DeleteExpiredChallenges(ctx, codec.Millis(c.CreatedAt)); err != nil {
 		return fmt.Errorf("delete expired challenges: %w", err)
+	}
+
+	if c.Kind == mfa.CeremonySignIn {
+		open, err := tx.CountOpenChallenges(ctx, string(c.Kind), codec.Millis(c.CreatedAt))
+		if err != nil {
+			return fmt.Errorf("count open challenges: %w", err)
+		}
+
+		if open >= mfa.MaxOpenSignInChallenges {
+			return mfa.ErrChallengeLimit
+		}
 	}
 
 	n, err := tx.CreateChallenge(ctx, ChallengeRowOf(c, d))

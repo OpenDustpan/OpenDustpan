@@ -261,6 +261,12 @@ func (t passkeyTx) CreateChallenge(ctx context.Context, r passkeystore.Challenge
 	return n, passkeyErr(err)
 }
 
+func (t passkeyTx) CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error) {
+	n, err := t.q.CountOpenPasskeyChallenges(ctx, db.CountOpenPasskeyChallengesParams{Kind: kind, ExpiresAtMs: atMs})
+
+	return n, passkeyErr(err)
+}
+
 func (t passkeyTx) DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error) {
 	n, err := t.q.DeleteExpiredPasskeyChallenges(ctx, atMs)
 

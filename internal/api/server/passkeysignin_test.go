@@ -5,12 +5,14 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/internal/webauthntest"
@@ -58,6 +60,7 @@ func newPasskeySignInEnv(t *testing.T) *passkeySignInEnv {
 	e.f = newAccessFixtureSignIn(t, func(st *sqlite.Store) auditStore { return st }, nil,
 		func(in *apiserver.SignIn, st *sqlite.Store) {
 			e.svc = newRoutePasskeys(t, st)
+			e.svc.WatchBreakGlass(st, st)
 			in.Passkeys, in.PasskeySignIn = e.svc, e.svc
 			in.PasskeyBeginLimiter, in.PasskeyLimiter = e.begins, e.failures
 		},
@@ -273,6 +276,11 @@ func TestPasskeySignInLocalUser(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.f.handler.ServeHTTP(rec, req)
 	want(t, "read the session", rec, http.StatusOK, "")
+
+	// The cookie of a local user keeps the length of the session policy.
+	if cookie.MaxAge <= int(time.Hour/time.Second) {
+		t.Errorf("cookie max age = %d seconds, want the policy length (over 3600)", cookie.MaxAge)
+	}
 
 	if !strings.Contains(rec.Body.String(), "local:lena") {
 		t.Errorf("session = %s, want the subject local:lena", rec.Body)
@@ -646,6 +654,117 @@ func TestPasskeySignInLimits(t *testing.T) {
 	noSession(t, "finish from a source with too many failures", rec)
 }
 
+// TestPasskeySignInChallengeCap fills the installation with the most open
+// sign-in challenges, as many sources would. A begin over the cap answers 503
+// and stores no row: after one open challenge ends, exactly one begin works.
+func TestPasskeySignInChallengeCap(t *testing.T) {
+	t.Parallel()
+
+	e := newPasskeySignInEnv(t)
+	now := time.Now()
+
+	for i := range mfa.MaxOpenSignInChallenges {
+		c := mfa.Challenge{
+			CreatedAt: now, ExpiresAt: mfa.ChallengeExpiry(now), Kind: mfa.CeremonySignIn,
+			PersonID: "", PendingID: "", SessionID: "",
+		}
+
+		if err := e.f.store.CreateChallenge(t.Context(), c, mfa.DigestOf([]byte("fill "+strconv.Itoa(i)))); err != nil {
+			t.Fatalf("fill %d: %v", i, err)
+		}
+	}
+
+	before := len(serverEntries(t, e.f.store))
+	over := e.post(t, signInBeginTarget, "", nil)
+	want(t, "begin over the cap", over, http.StatusServiceUnavailable, errcode.MFAUnavailable)
+
+	if len(serverEntries(t, e.f.store)) <= before {
+		t.Error("the refused begin wrote no audit entry")
+	}
+
+	if _, err := e.f.store.TakeChallenge(t.Context(), mfa.DigestOf([]byte("fill 0")), now); err != nil {
+		t.Fatalf("end one open challenge: %v", err)
+	}
+
+	want(t, "begin after one ended", e.post(t, signInBeginTarget, "", nil), http.StatusOK, "")
+	want(
+		t,
+		"second begin",
+		e.post(t, signInBeginTarget, "", nil),
+		http.StatusServiceUnavailable,
+		errcode.MFAUnavailable,
+	)
+}
+
+// badSignature alters the signature of a response.
+func badSignature(c webauthntest.Ceremony) webauthntest.Ceremony { return c.WithBadSignature() }
+
+// failedAssertionAlerts returns the alerts of failed assertions that the
+// outbox holds.
+func (e *passkeySignInEnv) failedAssertionAlerts(t *testing.T) []notify.Notification {
+	t.Helper()
+
+	var out []notify.Notification
+
+	all := e.alerts(t)
+	for i := range all {
+		if all[i].Type == notify.SignInLocked {
+			out = append(out, all[i])
+		}
+	}
+
+	return out
+}
+
+// TestPasskeySignInBreakGlassFailureAlert checks that 10 failed assertions
+// for the passkey of a break-glass account raise one alert to the
+// administrators, at most once in an hour, and that the alert locks nothing.
+// Failures for a local user raise no alert.
+func TestPasskeySignInBreakGlassFailureAlert(t *testing.T) {
+	t.Parallel()
+
+	e := newPasskeySignInEnv(t)
+
+	for range authgate.BreakGlassAlertLimit {
+		want(t, "failed assertion of a local user", e.signIn(t, e.lena, "", nil, badSignature),
+			http.StatusUnauthorized, errcode.MFASignInFailed)
+	}
+
+	if got := e.failedAssertionAlerts(t); len(got) != 0 {
+		t.Fatalf("alerts for a local user = %+v, want none", got)
+	}
+
+	for i := range authgate.BreakGlassAlertLimit - 1 {
+		want(t, "failed assertion of a break-glass account", e.signIn(t, e.ana, "", nil, badSignature),
+			http.StatusUnauthorized, errcode.MFASignInFailed)
+
+		if got := e.failedAssertionAlerts(t); len(got) != 0 {
+			t.Fatalf("alerts after %d failures = %+v, want none", i+1, got)
+		}
+	}
+
+	want(t, "tenth failed assertion", e.signIn(t, e.ana, "", nil, badSignature),
+		http.StatusUnauthorized, errcode.MFASignInFailed)
+
+	got := e.failedAssertionAlerts(t)
+	if len(got) != 1 || len(got[0].Recipients) != 1 || !got[0].Recipients[0].Admins ||
+		!strings.Contains(got[0].Summary, "prn-ana") || !strings.Contains(got[0].Summary, "not locked") {
+		t.Fatalf("alerts = %+v, want one alert for the administrators about prn-ana", got)
+	}
+
+	// Ten more failures in the same hour raise no second alert.
+	for range authgate.BreakGlassAlertLimit {
+		e.signIn(t, e.ana, "", nil, badSignature)
+	}
+
+	if got := e.failedAssertionAlerts(t); len(got) != 1 {
+		t.Fatalf("alerts after 20 failures = %d, want 1", len(got))
+	}
+
+	// The alert is not a lock: the owner signs in.
+	signedIn(t, "sign-in after the alert", e.signIn(t, e.ana, breakGlassReasonText, nil, nil))
+}
+
 // begin2 makes a challenge while the failure budget refuses the source, by
 // letting it pass for one begin.
 func (e *passkeySignInEnv) begin2(t *testing.T) []byte {
@@ -678,7 +797,12 @@ func TestPasskeySignInBreakGlass(t *testing.T) {
 		t.Errorf("failures = %d, want none: the person only forgot the reason", e.failures.count())
 	}
 
-	signedIn(t, "break-glass sign-in", e.signIn(t, e.ana, breakGlassReasonText, nil, nil))
+	cookie := signedIn(t, "break-glass sign-in", e.signIn(t, e.ana, breakGlassReasonText, nil, nil))
+
+	// The cookie of a break-glass session ends at the limit of 1 hour.
+	if cookie.MaxAge <= 0 || cookie.MaxAge > int(time.Hour/time.Second) {
+		t.Errorf("cookie max age = %d seconds, want 1 to 3600", cookie.MaxAge)
+	}
 
 	checkBreakGlassAlert(t, e.alerts(t))
 	checkBreakGlassEntry(t, serverEntries(t, e.f.store))

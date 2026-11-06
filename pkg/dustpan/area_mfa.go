@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
@@ -18,6 +19,23 @@ import (
 // mounted.
 type passkeyWiring struct {
 	service *mfasvc.Service
+}
+
+// watchBreakGlass makes svc alert the administrators after failed assertions
+// for the passkeys of a break-glass account. The namespace store keeps both
+// the principal records and the counts. A store that keeps either one gets
+// no alert, and the log line says so.
+func watchBreakGlass(svc *mfasvc.Service, store namespace.Store, log *slog.Logger) {
+	principals, hasPrincipals := store.(mfasvc.PrincipalReader)
+
+	counter, hasCounter := store.(authgate.NameLockCounter)
+	if !hasPrincipals || !hasCounter {
+		log.Warn("failed passkey assertions for break-glass accounts raise no alert: the store keeps no counts")
+
+		return
+	}
+
+	svc.WatchBreakGlass(principals, counter)
 }
 
 // newPasskeyService builds the service of the passkeys on the namespace
@@ -60,6 +78,8 @@ func newPasskeyService(
 	if err != nil {
 		return none, fmt.Errorf("passkeys: %w", err)
 	}
+
+	watchBreakGlass(svc, store, log)
 
 	return passkeyWiring{service: svc}, nil
 }
