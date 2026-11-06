@@ -253,8 +253,12 @@ func (s *Server) Services() []string {
 	return slices.Clone(s.services)
 }
 
-// serveLogin issues a ticket to the person of SetLogin and redirects the
-// browser to the service with it.
+// serveLogin issues a ticket to the person of SetLogin for the service of
+// the request. A CAS server redirects the browser to the service with the
+// ticket. The test server writes only the ticket in the body of a 200
+// answer instead, so that it never sends a browser to, and never echoes, a
+// value that a request gives. A test adds the ticket to the service URL of
+// its login URL, as a browser follows the redirect.
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	service := r.URL.Query().Get("service")
 
@@ -269,14 +273,10 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	p, a := s.login, s.loginAnswer
 	s.mu.Unlock()
 
-	q := back.Query()
-	q.Set("ticket", s.Issue(service, r.URL.Query().Get("renew") == "true", p, a))
-	back.RawQuery = q.Encode()
+	ticket := s.Issue(service, r.URL.Query().Get("renew") == "true", p, a)
 
-	// A CAS server sends the browser to the service of the request. The
-	// test server serves tests only.
-	w.Header().Set("Location", back.String())
-	w.WriteHeader(http.StatusFound)
+	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+	write(w, ticket)
 }
 
 // serveValidate answers a service ticket validation of CAS 3.0. A ticket
