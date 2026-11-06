@@ -313,7 +313,11 @@ func (s *Server) answerSearch(c net.Conn, id int64, req searchRequest) error {
 	default:
 	}
 
+	fault := s.currentFault()
+
 	for _, e := range entries[:limit] {
+		e.text = movedDN(fault, e.text, req.scope)
+
 		if err := write(c, id, e.packet(req.attrs)); err != nil {
 			return err
 		}
@@ -473,4 +477,22 @@ func substringMatch(v string, parts []*ber.Packet) bool {
 	}
 
 	return true
+}
+
+// movedDN returns the DN that the directory answers for the entry dn with
+// the fault: a DN below OutsideDN, the DN of another group, or dn.
+func movedDN(fault Fault, dn string, scope int64) string {
+	lower := strings.ToLower(dn)
+	user := strings.HasSuffix(lower, ","+strings.ToLower(PeopleDN))
+	group := strings.HasSuffix(lower, ","+strings.ToLower(GroupsDN))
+	first, _, _ := strings.Cut(dn, ",")
+
+	switch {
+	case fault == FaultUserOutsideBase && user, fault == FaultGroupOutsideBase && group:
+		return first + "," + OutsideDN
+	case fault == FaultGroupOtherEntry && group && scope == ldap.ScopeBaseObject:
+		return first + "-other," + GroupsDN
+	default:
+		return dn
+	}
 }

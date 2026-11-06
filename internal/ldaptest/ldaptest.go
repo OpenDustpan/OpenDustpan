@@ -57,7 +57,20 @@ const (
 	// FaultBindReferral answers each bind that is not the bind of the
 	// service account with the result referral.
 	FaultBindReferral
+	// FaultUserOutsideBase answers each user entry with a DN below
+	// OutsideDN instead of its own DN.
+	FaultUserOutsideBase
+	// FaultGroupOutsideBase answers each group entry with a DN below
+	// OutsideDN instead of its own DN.
+	FaultGroupOutsideBase
+	// FaultGroupOtherEntry answers the read of one group entry with the DN
+	// of another group below GroupsDN.
+	FaultGroupOtherEntry
 )
+
+// OutsideDN is the base of the DNs of FaultUserOutsideBase and
+// FaultGroupOutsideBase. It is outside the tree of the directory.
+const OutsideDN = "ou=elsewhere,dc=other,dc=org"
 
 // Link says where the directory shows the members of a group.
 type Link int

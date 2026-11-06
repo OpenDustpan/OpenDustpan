@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -548,4 +549,77 @@ func TestNoPasswordInAnyErrorOrLog(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAnEntryOutsideTheBaseIsErrMethodAnswer is layer 4 for the DNs of
+// the directory: each check of a DN against its base refuses an entry that
+// the directory answers from another part of the tree, as if the search
+// base did not limit the answer.
+func TestAnEntryOutsideTheBaseIsErrMethodAnswer(t *testing.T) {
+	t.Parallel()
+
+	search := ldapauth.Groups{
+		Source: ldapauth.GroupsSearch, BaseDN: ldaptest.GroupsDN, Filter: "(objectClass=groupOfNames)",
+		MemberAttribute: "member", MemberOfAttribute: "", NameAttribute: "cn",
+	}
+	memberOf := ldapauth.Groups{
+		Source: ldapauth.GroupsMemberOf, BaseDN: ldaptest.GroupsDN, Filter: "", MemberAttribute: "",
+		MemberOfAttribute: "memberOf", NameAttribute: "cn",
+	}
+
+	cases := []struct {
+		name     string
+		groups   ldapauth.Groups
+		fault    ldaptest.Fault
+		userBind bool
+	}{
+		{name: "a user outside the base DN", groups: search, fault: ldaptest.FaultUserOutsideBase, userBind: false},
+		{
+			name:     "a group outside the group base DN",
+			groups:   search,
+			fault:    ldaptest.FaultGroupOutsideBase,
+			userBind: true,
+		},
+		{
+			name:     "the read of a group answers another group",
+			groups:   memberOf,
+			fault:    ldaptest.FaultGroupOtherEntry,
+			userBind: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t)
+			p := testPerson("alice")
+			p.Groups, p.GroupsPresent = []string{"ops"}, true
+			s.addUser(t, p, goodPassword, nil)
+			s.dir.SetFault(tc.fault)
+
+			m := newMethod(t, s.configWith(func(c *ldapauth.Config) { c.Groups = tc.groups }))
+
+			a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
+			if !errors.Is(err, session.ErrMethodAnswer) || a.Subject != "" || a.ProviderID != "" {
+				t.Fatalf("Verify() = %+v, %v, want ErrMethodAnswer and the zero Assertion", a, err)
+			}
+
+			// The groups are read after the bind as the user, so only the
+			// check of the user DN comes before it.
+			if bound := boundAsUser(s.dir.Binds()); bound != tc.userBind {
+				t.Fatalf("binds = %q, want a bind as the user: %v", s.dir.Binds(), tc.userBind)
+			}
+
+			if strings.Contains(err.Error(), ldaptest.OutsideDN) {
+				t.Fatalf("error %q names the DN", err)
+			}
+		})
+	}
+}
+
+// boundAsUser reports whether binds holds a bind that is not the bind of
+// the service account.
+func boundAsUser(binds []string) bool {
+	return slices.ContainsFunc(binds, func(dn string) bool { return !strings.EqualFold(dn, ldaptest.ServiceDN) })
 }
