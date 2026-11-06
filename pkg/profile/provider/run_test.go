@@ -133,7 +133,9 @@ func login(name string) provider.Block {
 	}
 }
 
-func noCall() provider.Call { return provider.Call{Claims: nil, Tokens: nil, Limit: 0} }
+func noCall() provider.Call {
+	return provider.Call{Claims: nil, Tokens: nil, Late: ignoreLate, Limit: 0}
+}
 
 func TestRunOpensEachBlockInOrderAfterEveryCheck(t *testing.T) {
 	t.Parallel()
@@ -297,7 +299,10 @@ func TestRunGivesTokensOnlyToAnAdapterThatMints(t *testing.T) {
 			reg := registry(t, f)
 
 			_, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{
-				Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) }, Limit: 0,
+				Claims: nil,
+				Tokens: func(string) provider.TokenSource { return tokenFunc(nil) },
+				Late:   ignoreLate,
+				Limit:  0,
 			})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
@@ -500,7 +505,7 @@ func runWithSecrets(t *testing.T, key string, msg func(tok string) string) error
 	b.Inputs["key"] = provider.Leaf{Value: key, Secret: true}
 
 	_, err := reg.Run(t.Context(), []provider.Block{b}, provider.Call{
-		Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) }, Limit: 0,
+		Claims: nil, Tokens: func(string) provider.TokenSource { return tokenFunc(nil) }, Late: ignoreLate, Limit: 0,
 	})
 
 	return err
@@ -607,7 +612,11 @@ func TestRunGivesACopyOfTheClaims(t *testing.T) {
 	}))
 	claims := provider.Claims{"access": "read"}
 
-	_, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{Claims: claims, Tokens: nil, Limit: 0})
+	_, err := reg.Run(
+		t.Context(),
+		[]provider.Block{login("a")},
+		provider.Call{Claims: claims, Tokens: nil, Late: ignoreLate, Limit: 0},
+	)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -616,3 +625,6 @@ func TestRunGivesACopyOfTheClaims(t *testing.T) {
 		t.Errorf("the adapter changed the claims of the open: %v", claims)
 	}
 }
+
+// ignoreLate is a receiver of late tokens for a test that expects none.
+func ignoreLate(provider.Issued) {}

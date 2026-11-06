@@ -426,7 +426,7 @@ func TestRunThroughTheRegistry(t *testing.T) {
 			}
 
 			got, err := reg.Run(t.Context(), blocks, provider.Call{
-				Claims: nil, Tokens: func(string) provider.TokenSource { return rec }, Limit: 0,
+				Claims: nil, Tokens: func(string) provider.TokenSource { return rec }, Late: ignoreLate, Limit: 0,
 			})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Run = %v, want %v", err, tc.want)
@@ -478,3 +478,6 @@ func checkRun(t *testing.T, got provider.Outcome, err error, tokens []string) {
 		}
 	}
 }
+
+// ignoreLate is a receiver of late tokens for a test that expects none.
+func ignoreLate(provider.Issued) {}
