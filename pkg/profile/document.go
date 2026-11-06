@@ -268,6 +268,14 @@ func RoutingChanges(before, after *Document) []string {
 		maps.Copy(tainted, reads)
 	}
 
+	// A value that exports.proxy reads goes to the job proxy, so a change of
+	// such a value changes where a secret goes.
+	for _, doc := range []*Document{b, a} {
+		if p := exportsProxy(doc); p != nil {
+			maps.Copy(tainted, doc.taint(p))
+		}
+	}
+
 	for _, k := range slices.Sorted(maps.Keys(tainted)) {
 		p := tainted[k]
 		if nodeText(b.nodeAt(p)) != nodeText(a.nodeAt(p)) {
@@ -340,7 +348,7 @@ func (d *Document) check() error {
 		func() error { return checkImports(seen[topImports]) },
 		func() error { return checkBlocks(seen[topProviders], topProviders, MaxProviderBlocks) },
 		func() error { return checkBlocks(seen[topRotators], topRotators, MaxRotatorBlocks) },
-		func() error { return checkExports(seen[topExports]) },
+		func() error { return d.checkExports(seen[topExports]) },
 		func() error { return checkChecks(seen[topChecks]) },
 		func() error { return checkNoEntryKeys(seen) },
 		func() error { return d.collectLeaves(seen[topValues]) },
@@ -512,6 +520,15 @@ func mapGet(n *yaml.Node, key string) *yaml.Node {
 		if n.Content[i].Value == key {
 			return n.Content[i+1]
 		}
+	}
+
+	return nil
+}
+
+// exportsProxy returns the node of exports.proxy, or nil.
+func exportsProxy(d *Document) *yaml.Node {
+	if exports := mapGet(d.root, topExports); exports != nil && exports.Kind == yaml.MappingNode {
+		return mapGet(exports, exportProxy)
 	}
 
 	return nil
