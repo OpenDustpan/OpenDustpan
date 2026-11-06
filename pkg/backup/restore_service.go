@@ -240,6 +240,10 @@ func (s *RestoreService) Start(ctx context.Context, id RestoreID, req RestoreReq
 		return err
 	}
 
+	if refused := s.checkPreBackupFree(ctx, req.PreBackupID); refused != nil {
+		return refused
+	}
+
 	input, err := startInput(id, req)
 	if err != nil {
 		return err
@@ -518,7 +522,6 @@ func startInput(id RestoreID, req RestoreRequest) ([]byte, error) {
 	in := restoreInput{
 		ID: id, BackupID: req.BackupID, PreBackupID: req.PreBackupID, CheckOnly: req.CheckOnly, Force: req.Force,
 		RequestedBy: req.RequestedBy, KeepAccessTables: req.KeepAccessTables,
-		evidence: preBackupResult{Digest: "", Damaged: 0, Created: false},
 	}
 
 	if in.PreBackupID == "" {
@@ -730,7 +733,12 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 	_, applied := op.Step(RestoreStepAfterApply)
 
 	if !swapped {
-		s.appendEvents(ctx, in)
+		end := restoreEndStopped
+		if op.State == durable.StateCanceled {
+			end = restoreEndCanceled
+		}
+
+		s.appendEvents(ctx, in, end)
 
 		return
 	}
@@ -744,7 +752,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 		return
 	}
 
-	entries, err := s.afterApplyEntries(ctx, op, in)
+	entries, err := s.afterApplyEntries(ctx, op, in, swappedFailed)
 	if err != nil {
 		s.logger.ErrorContext(
 			ctx,
@@ -767,6 +775,7 @@ func (s *RestoreService) auditEnded(ctx context.Context, op durable.Operation) {
 //
 //nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
 var storedRestoreSentinels = []error{
+	ErrPreBackupForeign,
 	ErrManifestKindInvalid,
 	ErrDevStripIncomplete,
 	ErrRestoreRunning,
@@ -853,6 +862,10 @@ func sanitizeRestoreError(err error) string {
 		return notBacked.Error()
 	}
 
+	if text, ok := liveBlobsRestoreMessage(err); ok {
+		return text
+	}
+
 	for _, sentinel := range storedRestoreSentinels {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -860,6 +873,23 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	return "restore failed"
+}
+
+// liveBlobsRestoreMessage answers the stored text of a refusal at the live
+// blobs, which names the counts and the keys, and of a damaged list in a
+// backup that no restore started. That text ends with the corrupt sentinel,
+// as backup check reports it, so a client gives the help of a corrupt
+// backup. It reports whether err is one of them.
+func liveBlobsRestoreMessage(err error) (string, bool) {
+	if refused, ok := errors.AsType[*LiveBlobsError](err); ok && refused != nil {
+		return refused.Error(), true
+	}
+
+	if errors.Is(err, ErrDamagedListForeign) {
+		return ErrDamagedListForeign.Error() + ": " + ErrCorrupt.Error(), true
+	}
+
+	return "", false
 }
 
 // activeWorkMessage answers the stored text for a refused maintenance
@@ -1159,9 +1189,7 @@ func (s *RestoreService) readPinnedManifest(ctx context.Context, id ID, pinned p
 		return Manifest{}, err
 	}
 
-	// A backup before a restore that found damaged live blobs holds no copy
-	// of them. Restoring it would bring back rows with no content.
-	if err := refuseDamagedBackup(manifest); err != nil {
+	if err := checkDamagedOrigin(ctx, s.backups, manifest); err != nil {
 		return Manifest{}, err
 	}
 

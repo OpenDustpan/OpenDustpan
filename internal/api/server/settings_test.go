@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -73,7 +74,8 @@ func settingsConfig(
 	return apiserver.Config{
 		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
-		TempAdmins: nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:      nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "",
 		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,

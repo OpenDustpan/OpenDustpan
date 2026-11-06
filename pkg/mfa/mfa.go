@@ -7,9 +7,10 @@
 // shares, so its port stays in the step-up package. A recovery code is a
 // one-use code for a person who lost each factor.
 //
-// The package holds types, defaults, sentinel errors and ports only. No
-// adapter and no service implements them yet. Each store adapter runs the
-// suite in package mfatest.
+// The package holds types, defaults, checks, sentinel errors and ports. The
+// SQL adapters implement PasskeyStore, the adapter in package gowebauthn
+// implements RelyingParty, and the service in internal/mfasvc runs the
+// passkey ceremonies. Each store adapter runs the suites in package mfatest.
 //
 // Factors belong to a person, not to a namespace, so no write carries a
 // namespace fence. Each change takes its audit entry, in the scope
@@ -19,6 +20,7 @@ package mfa
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -29,6 +31,11 @@ import (
 const (
 	// MaxPasskeys is the most passkeys that one person can hold.
 	MaxPasskeys = 20
+	// MaxOpenSignInChallenges is the most open challenges of passkey sign-ins
+	// that one installation holds. A public route writes one challenge row
+	// for each start, so no limit by source address bounds the table when
+	// many sources send. Over this count, a new start stores no row.
+	MaxOpenSignInChallenges = 10_000
 	// ChallengeBytes is the count of random bytes of a WebAuthn challenge.
 	ChallengeBytes = 32
 	// ChallengeLifetime is the lifetime of a WebAuthn ceremony.
@@ -79,6 +86,10 @@ var (
 	// ErrUnavailable reports that the store cannot answer. Each sign-in
 	// fails closed on it.
 	ErrUnavailable = errors.New("factor store unavailable")
+	// ErrChallengeLimit reports a start of a passkey sign-in over
+	// MaxOpenSignInChallenges. It wraps ErrUnavailable, so the adapters
+	// answer 503. The store wrote no row.
+	ErrChallengeLimit = fmt.Errorf("%w: too many open sign-in challenges", ErrUnavailable)
 )
 
 // Passkey is one stored WebAuthn credential of a person. ID has the prefix
@@ -150,9 +161,11 @@ type PasskeyUse struct {
 // removal of the last passkey at the same time cannot both pass.
 type PasskeyStore interface {
 	// AddPasskey stores p and appends e, in one transaction. It returns
-	// ErrInvalid for an empty field or a name that the rules of a principal
-	// name refuse, ErrAlreadyExists for a credential ID that any person
-	// holds, and ErrLimit when the person holds MaxPasskeys passkeys.
+	// ErrInvalid for a value that Passkey.Validate refuses, a use or a
+	// suspension already set, or a principal that is not a person that
+	// exists, ErrAlreadyExists for a passkey ID or a credential ID that any
+	// person holds, ErrLimit when the person holds MaxPasskeys passkeys, and
+	// localuser.ErrDemoFixed for the demo person.
 	AddPasskey(ctx context.Context, p Passkey, e audit.Entry) error
 	// Passkeys returns the passkeys of the person personID in the order of
 	// the add.
@@ -167,16 +180,20 @@ type PasskeyStore interface {
 	// suspended passkey and ErrNotFound for no such passkey.
 	RecordUse(ctx context.Context, u PasskeyUse, regressed audit.Entry) error
 	// RemovePasskey deletes the passkey id of the person personID and
-	// appends e, in one transaction. A local user with no password keeps at
-	// least one passkey: the store returns ErrLastCredential for the last
-	// one. It returns ErrNotFound for a passkey of another person.
+	// appends e, in one transaction. A local user with no password, and a
+	// break-glass person, keep at least one passkey that is not suspended:
+	// the store returns ErrLastCredential for a removal that leaves none, and
+	// for each removal when none is left. It returns ErrNotFound for a
+	// passkey of another person, and localuser.ErrDemoFixed for the demo
+	// person.
 	RemovePasskey(ctx context.Context, personID, id string, e audit.Entry) error
-	// CreateChallenge stores c keyed by d. It returns ErrInvalid for a
-	// value that fails a check, and ErrAlreadyExists when d is taken.
+	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
+	// stores c keyed by d. It returns ErrInvalid for a value that
+	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken.
 	CreateChallenge(ctx context.Context, c Challenge, d Digest) error
 	// TakeChallenge deletes the challenge d and returns it, so that a
 	// challenge works once. It returns ErrNotFound when no challenge has the
-	// digest or when it expired at or before at.
+	// digest or when it expired at or before at, and deletes it then too.
 	TakeChallenge(ctx context.Context, d Digest, at time.Time) (Challenge, error)
 }
 

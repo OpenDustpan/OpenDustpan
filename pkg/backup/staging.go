@@ -141,18 +141,19 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 		return checkPlan{}, err
 	}
 
-	// A backup before a restore that found damaged live blobs holds no copy
-	// of them. Restoring it would bring back rows with no content.
-	if damagedErr := refuseDamagedBackup(manifest); damagedErr != nil {
-		return checkPlan{}, damagedErr
-	}
-
 	wantSHA, err := parseSQLSHA(manifest, id)
 	if err != nil {
 		return checkPlan{}, err
 	}
 
-	wantBlobs, err := parseManifestBlobs(manifest, id)
+	// This check reads no record of operations, so it cannot prove that a
+	// restore of this installation took a backup with a damaged list. It
+	// refuses such a backup: fail closed.
+	if len(manifest.Damaged) > 0 {
+		return checkPlan{}, fmt.Errorf("backup %s: %w: %w", id, ErrDamagedListForeign, ErrCorrupt)
+	}
+
+	wantBlobs, err := restoreWantBlobs(manifest, id)
 	if err != nil {
 		return checkPlan{}, err
 	}

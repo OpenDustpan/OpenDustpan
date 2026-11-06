@@ -44,6 +44,10 @@ func TestVerifyVectors(t *testing.T) {
 		{"sk", "sk-flag-0x02", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
 		{"sk", "sk-flag-0x40", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
 		{"sk", "sk-flag-0x80", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrFlags},
+		{"ecdsa-p256", "ecdsa-p256", sshsig.NamespaceStepUp, result(false, false, 0), nil},
+		{"ecdsa-p256", "ecdsa-p256-sha256", sshsig.NamespaceStepUp, result(false, false, 0), nil},
+		{"ecdsa-p256", "ecdsa-p256", sshsig.NamespaceKeyAdd, result(false, false, 0), sshsig.ErrNamespace},
+		{"ed25519", "ecdsa-p256", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyMismatch},
 		{"ecdsa-p384", "ecdsa-p384", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyType},
 		{"rsa-3072", "rsa-3072", sshsig.NamespaceStepUp, result(false, false, 0), sshsig.ErrKeyType},
 	}
@@ -304,7 +308,11 @@ func TestParsePublicKey(t *testing.T) {
 		{"a key of 33 bytes", build(ssh, append(bytes.Clone(key32), 0)), sshsig.ErrMalformed},
 		{"bytes after the key", append(ed.Marshal(), 0), sshsig.ErrMalformed},
 		{"an RSA key", build([]byte("ssh-rsa"), []byte{1, 0, 1}, make([]byte, 384)), sshsig.ErrKeyType},
-		{"an ECDSA key", build([]byte("ecdsa-sha2-nistp256"), []byte("nistp256"), make([]byte, 65)), sshsig.ErrKeyType},
+		{
+			"an ECDSA key of zero bytes",
+			build([]byte("ecdsa-sha2-nistp256"), []byte("nistp256"), make([]byte, 65)),
+			sshsig.ErrMalformed,
+		},
 		{"a certificate", build([]byte("ssh-ed25519-cert-v01@openssh.com"), key32), sshsig.ErrKeyType},
 		{"a type above the limit", build([]byte(strings.Repeat("t", 65)), key32), sshsig.ErrMalformed},
 		{"a truncated type", ed.Marshal()[:6], sshsig.ErrMalformed},

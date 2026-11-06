@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -142,6 +143,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -562,8 +564,12 @@ func TestRevealAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {
@@ -668,8 +674,12 @@ func TestRevealOtherProviderAuditFailureAnswers500(t *testing.T) {
 		t.Fatalf("log misses the failure line: %q", line)
 	}
 
-	if !strings.Contains(line, path) {
-		t.Fatalf("log misses the path: %q", line)
+	if strings.Contains(line, path) {
+		t.Fatalf("log holds the path, which is request data: %q", line)
+	}
+
+	if !strings.Contains(line, "op=reveal.audit") && !strings.Contains(line, `"op":"reveal.audit"`) {
+		t.Fatalf("log misses the op: %q", line)
 	}
 
 	if strings.Contains(line, revealSecretValue) {

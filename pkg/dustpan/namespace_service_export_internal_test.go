@@ -10,20 +10,21 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// AuthorizeWired runs wireTokens on the default settings, with authz as the
-// configured authorizer and no token store, and then checks the action with
-// the authorizer that the server uses.
+// AuthorizeWired runs newAuthPorts on the default settings, with authz as
+// the configured authorizer and no token store, and then checks the action
+// with the authorizer that the server uses.
 func AuthorizeWired(
 	authz identity.Authorizer, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
 	cfg := defaultSettings()
 	cfg.authorizer = authz
 
-	if err := wireTokens(cfg, nil); err != nil {
+	ports, err := newAuthPorts(cfg, nil)
+	if err != nil {
 		return err
 	}
 
-	return cfg.authorizer.Authorize(context.Background(), p, action, obj)
+	return ports.authorizer.Authorize(context.Background(), p, action, obj)
 }
 
 // AuthorizeWiredAllowlisted is AuthorizeWired with the IP allowlist feature on.
@@ -45,11 +46,12 @@ func AuthorizeWiredAllowlisted(
 		includeBootstrap: false,
 	}
 
-	if err := wireTokens(cfg, nil); err != nil {
+	ports, err := newAuthPorts(cfg, nil)
+	if err != nil {
 		return err
 	}
 
-	return cfg.authorizer.Authorize(ctx, p, action, obj)
+	return ports.authorizer.Authorize(ctx, p, action, obj)
 }
 
 // fixedAllowlists is an ipallow.Store that holds one list per namespace and

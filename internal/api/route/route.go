@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -181,7 +182,7 @@ func NewMux() *Mux {
 // Handle registers pattern and records it.
 func (m *Mux) Handle(pattern string, handler http.Handler) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.Handle(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, handler))
 }
 
 // HandleFunc registers pattern and records it.

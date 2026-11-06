@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -50,6 +51,7 @@ func SettingDeclarations() []setting.Declaration {
 	}
 
 	out = append(out, localuser.SettingDeclarations()...)
+	out = append(out, session.SettingDeclarations()...)
 
 	return append(out, setting.Declaration{
 		Key: brandingPresetKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",

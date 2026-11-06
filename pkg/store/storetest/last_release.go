@@ -1,10 +1,12 @@
 package storetest
 
 import (
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -16,6 +18,7 @@ func lastReleaseCases() []workspaceCase {
 	return []workspaceCase{
 		{name: "the record of the last release round-trips through each read", test: testLastReleaseRoundTrip},
 		{name: "each release write stores the record of the release", test: testLastReleaseReleaseWrites},
+		{name: "the inventory entry shows the last release of the workspace", test: testLastReleaseInventory},
 	}
 }
 
@@ -177,4 +180,119 @@ func forcedRelease(locked workspace.Workspace, at time.Time) workspace.Workspace
 	}
 
 	return released
+}
+
+// inventoryLastRelease returns the last release on the inventory entry of the
+// OpenTofu workspace name in ns, and from both reads of the port: the list and
+// the page. It fails the test when the two reads differ.
+func inventoryLastRelease(t *testing.T, s WorkspaceStore, ns namespace.Name, name string) *inventory.LastRelease {
+	t.Helper()
+
+	var listed *inventory.Entry
+
+	entries, err := s.ListUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list inventory of %q: %v", ns, err)
+	}
+
+	for i := range entries {
+		if entries[i].Tool == workspace.InventoryTool && entries[i].Name == name {
+			listed = &entries[i]
+		}
+	}
+
+	if listed == nil {
+		t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
+	}
+
+	byID, err := s.GetUnit(t.Context(), listed.UnitID)
+	if err != nil {
+		t.Fatalf("get unit %q: %v", listed.UnitID, err)
+	}
+
+	if !reflect.DeepEqual(byID.LastRelease, listed.LastRelease) {
+		t.Fatalf("last release by unit ID = %+v, in the list = %+v", byID.LastRelease, listed.LastRelease)
+	}
+
+	return listed.LastRelease
+}
+
+// testLastReleaseInventory expects the inventory entry of a workspace to show
+// the last release in the same transaction as the write of the workspace. The
+// steps run in order on one workspace: a workspace that never released a lock,
+// a normal release, a repeated read of the same release, and a forced release
+// that replaces the record.
+func testLastReleaseInventory(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "unit")
+	name := w.Ref.Name.String()
+	normalAt := now().Add(2 * time.Hour)
+	forcedAt := now().Add(5 * time.Hour)
+
+	normal := inventory.LastRelease{At: normalAt, LockID: "lock-alice", Holder: "alice", By: "alice", Kind: "normal"}
+	forced := inventory.LastRelease{At: forcedAt, LockID: "lock-alice", Holder: "alice", By: "admin", Kind: "forced"}
+
+	steps := []struct {
+		act  func(t *testing.T)
+		want *inventory.LastRelease
+		name string
+	}{
+		{
+			name: "a lock never released has no record",
+			act:  func(*testing.T) {},
+			want: nil,
+		},
+		{
+			name: "a normal release shows its record",
+			act: func(t *testing.T) {
+				t.Helper()
+
+				locked := lockTestWorkspace(t, s, ns, w, "alice")
+				released := releasedWorkspace(locked, normalAt)
+				released.LastRelease = workspace.Release{
+					At: normalAt, LockID: "lock-alice", Holder: "alice", By: "alice", Kind: workspace.ReleaseNormal,
+				}
+
+				if err := s.SaveReleased(t.Context(), released, ns.Fence(), releaseEntry(ns.Name)); err != nil {
+					t.Fatalf("save released: %v", err)
+				}
+			},
+			want: &normal,
+		},
+		{
+			name: "a repeated read shows the same record",
+			act:  func(*testing.T) {},
+			want: &normal,
+		},
+		{
+			name: "a forced release replaces the record",
+			act: func(t *testing.T) {
+				t.Helper()
+
+				current, err := s.GetWorkspace(t.Context(), w.Ref)
+				if err != nil {
+					t.Fatalf("get workspace: %v", err)
+				}
+
+				locked := lockTestWorkspace(t, s, ns, current, "alice")
+				released := forcedRelease(locked, forcedAt)
+
+				if err := s.SaveReleased(t.Context(), released, ns.Fence(), releaseEntry(ns.Name)); err != nil {
+					t.Fatalf("save released: %v", err)
+				}
+			},
+			want: &forced,
+		},
+	}
+
+	for _, step := range steps {
+		step.act(t)
+
+		got := inventoryLastRelease(t, s, ns.Name, name)
+		if !reflect.DeepEqual(got, step.want) {
+			t.Fatalf("%s: last release = %+v, want %+v", step.name, got, step.want)
+		}
+	}
 }

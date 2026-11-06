@@ -25,11 +25,7 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	q := s.queries.WithTx(tx)
 

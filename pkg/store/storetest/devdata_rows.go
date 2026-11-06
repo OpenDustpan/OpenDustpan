@@ -169,6 +169,15 @@ func DevSessionGenerationRow(principalID string) map[string]any {
 	return map[string]any{"principal_id": principalID, "generation": 3}
 }
 
+// DevPasskeyRow returns a passkeys row.
+func DevPasskeyRow(id, principalID string) map[string]any {
+	return map[string]any{
+		"id": id, "principal_id": principalID, "name": "laptop", "credential_id": []byte("credential-" + id),
+		"public_key": []byte{0xa5, 0x01, 0x02}, "transports": "internal", "aaguid": make([]byte, 16),
+		"sign_count": 0, "backup_eligible": true, "created_at_ms": 1, "last_used_at_ms": 0, "suspended_at_ms": 0,
+	}
+}
+
 // DevGroupRow returns a principal_groups row.
 func DevGroupRow(id string) map[string]any {
 	return map[string]any{
@@ -222,6 +231,6 @@ func DevIssuerRow(id string) map[string]any {
 func DevGateObjectRow(kind, id, body string) map[string]any {
 	return map[string]any{
 		"namespace_id": "", "scope_key": "installation", "kind": kind, "id": id, "level": "installation",
-		"tool": "", "unit_name": "", "version": 1, "body": body, "updated_at_ms": 1,
+		"unit_id": "", "version": 1, "body": body, "updated_at_ms": 1,
 	}
 }

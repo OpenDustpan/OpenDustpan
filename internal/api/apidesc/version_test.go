@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/releaserecord"
 )
 
 // updatePin writes openapi.pin after a change of the description and of its
@@ -30,6 +31,10 @@ var updatePin = flag.Bool(
 // release, a change of the description still compares with this file, and the
 // file moves with each pull request that changes the description.
 const pinFile = "openapi.pin"
+
+// pinCheckEnv names the variable that runs TestVersionFollowsTheDescription
+// on demand before the first tag. After the first tag the test always runs.
+const pinCheckEnv = "DUSTPAN_TEST_DESCRIPTION_PIN"
 
 // errPinStale means that the description and its version both changed, and the
 // version rose: only the pin file is out of date.
@@ -149,6 +154,13 @@ func judge(p pin, version string, doc []byte) error {
 func TestVersionFollowsTheDescription(t *testing.T) {
 	t.Parallel()
 
+	// Off until the release record lists a shipped migration. Until then
+	// info.version stays at one value while the description changes. The
+	// variable runs the check on demand; it cannot turn the check off.
+	if why := currentRecord(t).Off("TestVersionFollowsTheDescription"); why != "" && os.Getenv(pinCheckEnv) == "" {
+		t.Skip(why + "; set " + pinCheckEnv + "=1 to run it")
+	}
+
 	raw, err := os.ReadFile(pinFile)
 	if err != nil {
 		t.Fatalf("read the pin: %v", err)
@@ -175,6 +187,19 @@ func TestVersionFollowsTheDescription(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+// currentRecord returns the release record of the tree. A record that does
+// not parse fails the test: it never counts as "not released".
+func currentRecord(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rec
 }
 
 // TestJudgeSeesEachChange sends each combination of a change of the bytes and

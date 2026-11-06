@@ -1,7 +1,6 @@
 # S3-compatible object storage
 
 This guide shows how to hold state content in S3-compatible storage.
-It follows ADR 31.
 The `blobtest` suite covers the adapter.
 `make test-s3` runs that suite against a live S3-compatible server.
 

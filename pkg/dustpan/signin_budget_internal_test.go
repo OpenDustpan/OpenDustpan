@@ -21,9 +21,11 @@ const budgetAddress = "192.0.2.7"
 // budgetFixture is the gates of gatedAuthenticator over a real token store,
 // and one valid token.
 type budgetFixture struct {
-	cfg   *settings
-	chain identity.Authenticator
-	valid string
+	cfg    *settings
+	tokens *accesstoken.Service
+	chain  identity.Authenticator
+	gates  signInGates
+	valid  string
 }
 
 func newBudgetFixture(t *testing.T) budgetFixture {
@@ -77,12 +79,12 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	cfg.authenticator, cfg.namespaceStore = refuseAll{}, st
 	cfg.logger, cfg.now = slog.New(slog.DiscardHandler), func() time.Time { return now }
 
-	chain, err := gatedAuthenticator(cfg, tokens)
+	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
 	if err != nil {
 		t.Fatalf("gated authenticator: %v", err)
 	}
 
-	return budgetFixture{cfg: cfg, chain: chain, valid: secret.Reveal()}
+	return budgetFixture{cfg: cfg, tokens: tokens, chain: chain, gates: gates, valid: secret.Reveal()}
 }
 
 // guess is a value with the form of a secret that no token holds.
@@ -117,7 +119,7 @@ func (f budgetFixture) spend(t *testing.T, tc budgetCase) {
 	t.Helper()
 
 	for range tc.signIns {
-		f.cfg.signInGate.Fail(authgate.WithRequest(t.Context(), budgetAddress))
+		f.gates.signInGate.Fail(authgate.WithRequest(t.Context(), budgetAddress))
 	}
 
 	for range tc.guesses {
@@ -136,7 +138,7 @@ func (f budgetFixture) spend(t *testing.T, tc budgetCase) {
 func (f budgetFixture) tokenLimited(t *testing.T) bool {
 	t.Helper()
 
-	err := f.cfg.gate.Admit(canceledContext(t))
+	err := f.gates.gate.Admit(canceledContext(t))
 	if err != nil && !errors.Is(err, identity.ErrRateLimited) {
 		t.Fatalf("token admit: err = %v, want nil or ErrRateLimited", err)
 	}
@@ -191,7 +193,7 @@ func TestSignInBudgetIsApartFromTokenLookups(t *testing.T) {
 				}
 			}
 
-			err := f.cfg.signInGate.Admit(canceledContext(t))
+			err := f.gates.signInGate.Admit(canceledContext(t))
 			if limited := errors.Is(err, identity.ErrRateLimited); limited != tc.signInLimited {
 				t.Errorf("sign-in admit: err = %v, want limited = %v", err, tc.signInLimited)
 			}
@@ -216,7 +218,7 @@ func TestSignInRoutesUseTheirOwnGate(t *testing.T) {
 		t.Fatalf("session policies: %v", err)
 	}
 
-	in, err := newSignIn(f.cfg, policies, nil)
+	in, err := newSignIn(f.cfg, policies, nil, f.gates)
 	if err != nil {
 		t.Fatalf("new sign-in: %v", err)
 	}

@@ -643,7 +643,23 @@ func (s *Store) FinalizeStateVersion(
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return finalizeInTx(ctx, q, sv, row)
+		return finalizeInTx(ctx, q, sv, row, nil)
+	})
+}
+
+// FinalizeStateVersionExpecting implements workspace.StateStore. It runs the
+// checks of FinalizeStateVersion and also checks, in the same transaction,
+// that the current state version is expect.
+func (s *Store) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := codec.ToStateVersionRow(sv)
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		return finalizeInTx(ctx, q, sv, row, &expect)
 	})
 }
 
@@ -752,6 +768,10 @@ func publishFencedState(
 		return lockErr
 	}
 
+	if releaseErr := writeWorkspaceLastRelease(ctx, q, w); releaseErr != nil {
+		return releaseErr
+	}
+
 	// The change log row comes last, after every other lock.
 	return appendWorkspaceChange(
 		ctx,
@@ -791,8 +811,9 @@ func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersion
 // finalizeInTx runs the finalize checks and writes in one transaction.
 func finalizeInTx(
 	ctx context.Context, q *db.Queries, sv workspace.StateVersion, row codec.StateVersionRow,
+	expect *workspace.StateVersionID,
 ) error {
-	wrow, err := checkFinalizeGuards(ctx, q, sv, row)
+	wrow, err := checkFinalizeGuards(ctx, q, sv, row, expect)
 	if err != nil {
 		return err
 	}
@@ -804,6 +825,7 @@ func finalizeInTx(
 // workspace row the finalize stamps.
 func checkFinalizeGuards(
 	ctx context.Context, q *db.Queries, sv workspace.StateVersion, row codec.StateVersionRow,
+	expect *workspace.StateVersionID,
 ) (db.Workspace, error) {
 	if pendingErr := checkFinalizePending(ctx, q, row.ID); pendingErr != nil {
 		return db.Workspace{}, pendingErr
@@ -816,6 +838,12 @@ func checkFinalizeGuards(
 
 	if lockErr := checkFinalizeHolder(ctx, q, row, wrow); lockErr != nil {
 		return db.Workspace{}, lockErr
+	}
+
+	// The expected current version is read from the locked workspace row, so
+	// a write by the same holder under the same lock cannot slip in between.
+	if expect != nil && wrow.CurrentStateVersionID != expect.String() {
+		return db.Workspace{}, workspace.ErrConcurrentModification
 	}
 
 	if forcedErr := checkFinalizeForced(ctx, q, sv, wrow); forcedErr != nil {
@@ -1335,13 +1363,18 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 
 		// The lock moves with the write in the same transaction: lock,
 		// unlock and force-unlock all save here.
-		return writeInventoryLock(
+		lockErr := writeInventoryLock(
 			ctx, q, inventoryLockKey{
 				namespace: w.Ref.Namespace.String(),
 				tool:      workspaceInventoryTool,
 				name:      w.Ref.Name.String(),
 			}, workspaceLock(w.Lock),
 		)
+		if lockErr != nil {
+			return lockErr
+		}
+
+		return writeWorkspaceLastRelease(ctx, q, w)
 	}
 
 	_, err = q.GetWorkspaceByID(ctx, row.ID)
@@ -1369,4 +1402,30 @@ func (s *Store) DiscardStateVersion(
 
 		return nil
 	})
+}
+
+// writeWorkspaceLastRelease publishes the last released lock of w to its
+// inventory entry, in the caller's transaction. A workspace with no record
+// publishes empty columns.
+func writeWorkspaceLastRelease(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+	r := w.LastRelease
+	if !r.Recorded() {
+		r = workspace.NoRelease()
+	}
+
+	err := q.UpdateInventoryLastRelease(ctx, db.UpdateInventoryLastReleaseParams{
+		LastReleaseLockID: r.LockID,
+		LastReleaseHolder: r.Holder,
+		LastReleaseBy:     r.By,
+		LastReleaseKind:   string(r.Kind),
+		LastReleaseAtMs:   codec.OptionalMillis(r.At),
+		Namespace:         w.Ref.Namespace.String(),
+		Tool:              workspaceInventoryTool,
+		Name:              w.Ref.Name.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("update inventory last release: %w", err)
+	}
+
+	return nil
 }

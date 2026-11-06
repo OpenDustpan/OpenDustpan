@@ -74,6 +74,25 @@ const restoreForceHelp = "end that work, or run opendustpan restore --server %s 
 const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s to find each missing or bad object, " +
 	"or restore another backup"
 
+// restoreResumeHelp says what to do when the command cannot read a restore
+// that started: the server resumes the restore on its own, for example after
+// the database comes back, so a second run is not needed. The operator reads
+// the state of the restore instead.
+const restoreResumeHelp = "the server resumes restore %s on its own and it needs no second run: " +
+	"read its state with GET %s/api/server/restores/%s"
+
+// restoreDamagedHelp names the one command that helps after a restore that
+// stopped at live blobs whose bytes do not match their records or do not
+// open: the server text names the keys, and the operator puts their good
+// bytes back first.
+const restoreDamagedHelp = "put the good bytes back at the keys above from a copy of the blob store, then " +
+	restoreRerunHelp
+
+// restoreMissingHelp names the one command that helps after a restore that
+// stopped at more missing live blobs than its bound allows.
+const restoreMissingHelp = "run opendustpan store check --server %s --target blobs to check the blob store " +
+	"setting of the server, then " + restoreRerunHelp
+
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
 	server    string
@@ -135,6 +154,7 @@ type RestoreStatusResponse struct {
 	BackupID    string           `json:"backupID"`
 	PreBackupID string           `json:"preBackupID"`
 	Error       string           `json:"error"`
+	ErrorCode   string           `json:"errorCode"`
 	Manifest    *RestoreManifest `json:"manifest"`
 	Warnings    []RestoreWarning `json:"warnings"`
 	DevData     *RestoreDevData  `json:"devData"`
@@ -425,12 +445,13 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return RestoreStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+restoreRerunHelp,
+			"%w %s: %w: "+restoreResumeHelp,
 			ErrRestoreRead,
 			params.restoreID,
 			err,
+			params.restoreID,
 			params.server,
-			params.backupID,
+			params.restoreID,
 		)
 	}
 
@@ -439,12 +460,13 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 	resp, err := params.client.Do(req)
 	if err != nil {
 		return RestoreStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+restoreRerunHelp,
+			"%w %s: %w: "+restoreResumeHelp,
 			ErrRestoreRead,
 			params.restoreID,
 			err,
+			params.restoreID,
 			params.server,
-			params.backupID,
+			params.restoreID,
 		)
 	}
 
@@ -460,12 +482,13 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 
 	if err := decodeCappedJSON(resp.Body, MaxManifestAnswerBytes, &doc); err != nil {
 		return RestoreStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+restoreRerunHelp,
+			"%w %s: %w: "+restoreResumeHelp,
 			ErrRestoreRead,
 			params.restoreID,
 			err,
+			params.restoreID,
 			params.server,
-			params.backupID,
+			params.restoreID,
 		)
 	}
 
@@ -476,7 +499,7 @@ func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 // row wraps ErrRestoreMissing so the wait tells a transient swap gap from
 // other failures; any other status is a plain read failure.
 func restoreStatusError(resp *http.Response, params restoreReadParams) error {
-	hint := fmt.Sprintf(restoreRerunHelp, params.server, params.backupID)
+	hint := fmt.Sprintf(restoreResumeHelp, params.restoreID, params.server, params.restoreID)
 	text := answerText(resp.StatusCode, decodeErrorAnswer(resp), hint)
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -521,11 +544,12 @@ func waitRestore(ctx context.Context, params restoreReadParams) (RestoreStatusRe
 		select {
 		case <-ctx.Done():
 			return RestoreStatusResponse{}, fmt.Errorf(
-				"wait for restore %s: %w: "+restoreRerunHelp,
+				"wait for restore %s: %w: "+restoreResumeHelp,
 				params.restoreID,
 				ctx.Err(),
+				params.restoreID,
 				params.server,
-				doc.BackupID,
+				params.restoreID,
 			)
 		case <-timer.C:
 			timer.Reset(backupPollInterval)
@@ -539,11 +563,12 @@ func waitRestoreMissing(ctx context.Context, timer *time.Timer, params restoreRe
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf(
-			"wait for restore %s: %w: "+restoreRerunHelp,
+			"wait for restore %s: %w: "+restoreResumeHelp,
 			params.restoreID,
 			ctx.Err(),
+			params.restoreID,
 			params.server,
-			params.backupID,
+			params.restoreID,
 		)
 	case <-timer.C:
 		timer.Reset(backupPollInterval)
@@ -564,11 +589,26 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 
 // restoreFailureHelp answers the one command that helps after a failed
 // restore. A restore without --force that active work stopped gets the
-// --force command. A restore of a backup with corrupt data gets the backup
-// check command. Every other failure gets the same restore command again.
+// --force command. A restore that damaged or missing live blobs stopped gets
+// the repair or the check of the blob store first. A restore of a backup with
+// corrupt data gets the backup check command. Every other failure gets the
+// same restore command again.
 func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
 	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
 		return fmt.Sprintf(restoreForceHelp, server, id)
+	}
+
+	// The code of the refusal chooses the help, not the text: the text
+	// holds keys that the code does not depend on.
+	switch backup.RestoreErrorCode(doc.ErrorCode) {
+	case backup.CodeLiveBlobsDamaged:
+		return fmt.Sprintf(restoreDamagedHelp, server, id)
+	case backup.CodeLiveBlobsMissing:
+		return fmt.Sprintf(restoreMissingHelp, server, server, id)
+	case backup.CodeBlobsNotBacked:
+		return fmt.Sprintf(restoreCorruptHelp, server, id)
+	case backup.CodePreBackupForeign:
+		return fmt.Sprintf(restoreRerunHelp, server, id)
 	}
 
 	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {

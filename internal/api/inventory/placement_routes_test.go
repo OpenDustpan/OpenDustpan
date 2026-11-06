@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -188,7 +189,7 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +11,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/namelockstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -47,6 +50,37 @@ func (t nameLockTx) Get(ctx context.Context, scope, name, sub string) (namelocks
 	return namelockstore.Row(r), nil
 }
 
+func (t nameLockTx) AppendAudit(ctx context.Context, e audit.Entry) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
+}
+
+func (t nameLockTx) HasNotification(ctx context.Context, dedupeKey string) (bool, error) {
+	_, err := t.q.GetNotificationIDByDedupe(ctx, db.GetNotificationIDByDedupeParams{
+		Scope: audit.ServerScope.String(), DedupeKey: dedupeKey,
+	})
+
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("select notification by dedupe key: %w", err)
+	}
+}
+
+func (t nameLockTx) AppendNotification(ctx context.Context, n notify.Notification) error {
+	return appendNotifications(ctx, t.q, audit.ServerScope, []notify.Notification{n})
+}
+
 func (t nameLockTx) Set(ctx context.Context, scope, name string, r namelockstore.Row) error {
 	err := t.q.SetNameLock(ctx, db.SetNameLockParams{
 		Failures: r.Failures, LockedUntilMs: r.LockedUntilMs, Level: r.Level, LastFailureMs: r.LastFailureMs,
@@ -62,10 +96,12 @@ func (t nameLockTx) Set(ctx context.Context, scope, name string, r namelockstore
 // AddNameFailure implements authgate.NameLockCounter. The add locks the row
 // of the count in its transaction, so concurrent adds count one after the
 // other.
-func (s *Store) AddNameFailure(
-	ctx context.Context, scope, name, sub string, rule authgate.LockRule,
-) (authgate.NameLock, error) {
-	if err := authgate.CheckLockRequest(scope, name, sub, rule); err != nil {
+func (s *Store) AddNameFailure(ctx context.Context, f authgate.NameFailure) (authgate.NameLock, error) {
+	if err := authgate.CheckLockRequest(f.Scope, f.Name, f.Sub, f.Rule); err != nil {
+		return authgate.NameLock{}, err
+	}
+
+	if err := f.Events.Validate(); err != nil {
 		return authgate.NameLock{}, err
 	}
 
@@ -75,12 +111,7 @@ func (s *Store) AddNameFailure(
 	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		lock, addErr := namelockstore.Add(
-			ctx,
-			nameLockTx{q: q},
-			namelockstore.Key{Scope: scope, Name: name, Sub: sub},
-			rule,
-		)
+		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: q}, f)
 		if errors.Is(addErr, authgate.ErrNameLocked) {
 			// A locked name writes nothing: the transaction commits no change.
 			out, locked = lock, true
@@ -171,10 +202,12 @@ func (s *Store) NameLocks(ctx context.Context, scope, name string) ([]authgate.N
 }
 
 // PruneNameLocks implements authgate.NameLockCounter. It reads the time from
-// the clock of the store. The delete and the append of e run in one
-// transaction.
-func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int, e audit.Entry) (int64, error) {
-	if err := authgate.CheckPruneRequest(age, limit); err != nil {
+// the clock of the store. The delete, the entries of the end of the locks and
+// the append of e run in one transaction.
+func (s *Store) PruneNameLocks(
+	ctx context.Context, age time.Duration, limit, endedLimit int, e audit.Entry,
+) (int64, error) {
+	if err := authgate.CheckPruneRequest(age, limit, endedLimit); err != nil {
 		return 0, err
 	}
 
@@ -190,15 +223,29 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
 
-		deleted, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{
-			BeforeMs: now - age.Milliseconds(), NowMs: now, MaxRows: int64(limit),
+		before := now - age.Milliseconds()
+
+		// Defense in depth: CheckPruneRequest refuses an ended limit above the
+		// limit too. This bound stays so that a change of that check never lets
+		// a run delete more counts than its limit.
+		ended, err := pruneEnded(ctx, q, e, endedPrune{
+			before: before, now: now, limit: int64(min(endedLimit, limit)),
 		})
+		if err != nil {
+			return err
+		}
+
+		rest := max(int64(limit)-ended, 0)
+
+		plain, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: now, MaxRows: rest})
 		if err != nil {
 			return fmt.Errorf("prune name counts: %w", err)
 		}
 
+		deleted := plain + ended
 		entry := e
-		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.PrunedChange(deleted))
+		entry.Changes = append(append([]audit.Change{}, e.Changes...),
+			authgate.PrunedChanges(deleted, ended)...)
 
 		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
 			return fmt.Errorf("append the entry of the prune: %w", err)
@@ -213,6 +260,33 @@ func (s *Store) PruneNameLocks(ctx context.Context, age time.Duration, limit int
 	}
 
 	return n, nil
+}
+
+// endedPrune is the time and the bound of the prune of the counts with an
+// ended lock that no attempt saw.
+type endedPrune struct {
+	before, now, limit int64
+}
+
+// pruneEnded deletes the counts of p and appends the entry of the end of each
+// lock, built from the entry e of the prune, in the transaction of q. It
+// returns how many counts it deleted.
+func pruneEnded(ctx context.Context, q *db.Queries, e audit.Entry, p endedPrune) (int64, error) {
+	ended, err := q.PruneEndedNameLocks(ctx, db.PruneEndedNameLocksParams{
+		BeforeMs: p.before, NowMs: p.now, MaxRows: p.limit,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune name counts with an ended lock: %w", err)
+	}
+
+	for _, row := range ended {
+		end := authgate.PrunedLockEndedEntry(e, row.Scope, codec.FromMillis(row.LockedUntilMs))
+		if _, appendErr := appendAuditEntry(ctx, q, end); appendErr != nil {
+			return 0, fmt.Errorf("append the entry of the end of a lock: %w", appendErr)
+		}
+	}
+
+	return int64(len(ended)), nil
 }
 
 // NameLockKey returns the key of the digests of the names of the lockout by

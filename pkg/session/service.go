@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -64,6 +66,9 @@ type Sessions struct {
 	providers  ProviderSessionStore
 	inactivity InactivityRule
 	now        func() time.Time
+	// breakGlass reads the limit of a break-glass session. Nil means
+	// DefaultBreakGlassMaxLength.
+	breakGlass BreakGlassLimit
 }
 
 // NewSessions returns a Sessions service. It returns ErrMissingDependency
@@ -80,6 +85,7 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 
 	return &Sessions{
 		store: cfg.Store, providers: cfg.Providers, inactivity: cfg.Inactivity, now: now,
+		breakGlass: nil,
 	}, nil
 }
 
@@ -105,6 +111,25 @@ type Start struct {
 	UserAgent   string
 	Generation  uint64
 	Stored      bool
+	// Alert is a notification that the store appends to the outbox of the
+	// installation in the same transaction as the session: both commit, or
+	// neither. Start sets its object, its object ID and its dedupe key from
+	// the new session. Nil means no alert. A Start with an alert and a store
+	// that cannot write one fails with ErrMissingDependency, and writes no
+	// session. It cannot be used with Stored.
+	Alert *notify.Notification
+}
+
+// AlertStore is the part of a Store that starts a session and an alert in one
+// transaction. The stores of SQLite and PostgreSQL meet it.
+type AlertStore interface {
+	// CreateSessionWithAlert is CreateSession, and it appends n to the
+	// outbox of audit.ServerScope in the same transaction. A notification
+	// that fails validation, or that is not in audit.ServerScope, returns
+	// notify.ErrInvalid and changes nothing, no session included. A
+	// notification with the dedupe key of a stored one is skipped, as
+	// everywhere else in the outbox.
+	CreateSessionWithAlert(ctx context.Context, s Session, d Digest, e audit.Entry, n notify.Notification) error
 }
 
 // Start begins a session for in and returns it with its secret. e is the
@@ -168,7 +193,7 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 	}
 
 	now := s.Now()
-	limits := m.Policy.Limits
+	limits := s.limitsFor(ctx, &m.Owner, m.Policy.Limits)
 
 	if status := m.Session.StatusAt(now, limits); status != StatusActive {
 		return Match{}, fmt.Errorf("%w: %s", ErrUnauthenticated, status)
@@ -286,6 +311,10 @@ func entry(e audit.Entry, at time.Time, object string) audit.Entry {
 
 // create stores sess, through the provider session store when in.Stored.
 func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {
+	if in.Alert != nil {
+		return s.createWithAlert(ctx, in, sess, d, e)
+	}
+
 	if !in.Stored {
 		return s.store.CreateSession(ctx, sess, d, e)
 	}
@@ -295,6 +324,31 @@ func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest,
 	}
 
 	return s.providers.CreateProviderSession(ctx, sess, d, e)
+}
+
+// createWithAlert stores sess and the alert of the Start together. It
+// fails closed: a store that cannot write an alert, or a Start with a stored
+// provider, stores no session.
+func (s *Sessions) createWithAlert(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {
+	alerts, ok := s.store.(AlertStore)
+	if !ok || in.Stored {
+		return fmt.Errorf("%w: a store that writes a session and an alert in one transaction", ErrMissingDependency)
+	}
+
+	n := *in.Alert
+	n.ObjectID = sess.ID
+	n.DedupeKey = string(n.Type) + "/" + sess.ID
+
+	// Copy the map: the caller keeps its own notification.
+	n.Attributes = maps.Clone(n.Attributes)
+	if n.Attributes == nil {
+		n.Attributes = map[string]string{}
+	}
+
+	n.Attributes["session"] = sess.ID
+	n.Attributes["principal"] = sess.PrincipalID
+
+	return alerts.CreateSessionWithAlert(ctx, sess, d, e, n.Fit())
 }
 
 // touch records a use of sess at now. A use inside TouchEvery of the last

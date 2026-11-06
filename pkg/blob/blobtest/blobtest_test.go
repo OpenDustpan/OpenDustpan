@@ -11,13 +11,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/testchild"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 )
@@ -158,16 +158,12 @@ func TestListDetectsExtra(t *testing.T) {
 func runSingleCaseAgainstFake(t *testing.T, fake, subtest string) string {
 	t.Helper()
 
-	//nolint:gosec // The child is this test binary with a fixed filter; both come from the test itself.
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$/"+subtest, "-test.v", "-test.count=1")
-	cmd.Env = append(os.Environ(), blobtestFake+"="+fake)
-
-	out, err := cmd.CombinedOutput()
+	out, err := testchild.Run(t, "^"+t.Name()+"$/"+subtest, blobtestFake+"="+fake)
 	if err == nil {
 		t.Fatalf("case matching %q passed against the %s store, want failure", subtest, fake)
 	}
 
-	return string(out)
+	return out
 }
 
 // memObjects holds objects by key for the fake stores below. Fakes hold it

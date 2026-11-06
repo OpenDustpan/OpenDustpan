@@ -13,13 +13,21 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/outputsharesvc"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
+
+// errNewSentinel is a sentinel that package gate does not know.
+var errNewSentinel = errors.New("a sentinel of a later version")
 
 // errGuardDown is the error of a guard that cannot decide.
 var errGuardDown = errors.New("store down")
@@ -31,7 +39,7 @@ type recordingGuard struct {
 	seen []gate.StateWrite
 }
 
-var _ apiinventory.StateGuard = (*recordingGuard)(nil)
+var _ stategate.Guard = (*recordingGuard)(nil)
 
 func newRecordingGuard(err error) *recordingGuard {
 	return &recordingGuard{mu: sync.Mutex{}, err: err, seen: nil}
@@ -109,10 +117,14 @@ func guardRefusals() []guardRefusal {
 			"final gate", refusal(gate.ErrFinal, "gdr-eeeeeeeeeeeeeeeeeeee"), http.StatusForbidden, "gate.final",
 			errcode.GateDenied,
 		},
+		{
+			"unknown sentinel", refusal(errNewSentinel, "gdr-gggggggggggggggggggg"), http.StatusServiceUnavailable,
+			"gate.unavailable", errcode.GateUnavailable,
+		},
 	}
 }
 
-func guardedFixture(t *testing.T, guard apiinventory.StateGuard) deletedFixture {
+func guardedFixture(t *testing.T, guard stategate.Guard) deletedFixture {
 	t.Helper()
 
 	return buildGuardedFixture(t, guardSpec{
@@ -157,7 +169,25 @@ func TestStateGuardSeesTheWrite(t *testing.T) {
 	}
 }
 
-func TestNoGuardChangesNothing(t *testing.T) {
+// TestNilGuardDoesNotStart checks the start-time step: a handler with no
+// state guard is an error, never a handler that checks no write.
+func TestNilGuardDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: nil,
+	})
+
+	h, err := apiinventory.NewHandler(cfg)
+	if h != nil || !errors.Is(err, apiinventory.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
+		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)
+	}
+}
+
+// TestGatesOffChangesNothing checks that the explicit guard of the gates off
+// lets each write go on.
+func TestGatesOffChangesNothing(t *testing.T) {
 	t.Parallel()
 
 	for _, rt := range guardRoutes() {
@@ -358,5 +388,271 @@ func TestStateGuardStoreFaultNamesTheCause(t *testing.T) {
 				checkStoreFault(t, tt, rt)
 			})
 		}
+	}
+}
+
+// resultGuard answers each check with its result and no error.
+type resultGuard struct {
+	result gate.Result
+}
+
+func (g resultGuard) GuardStateWrite(context.Context, gate.StateWrite) (gate.Decision, error) {
+	return gate.Decision{
+		Record: "gdr-ffffffffffffffffffff", Result: g.result, Requirements: nil, Warnings: nil, AutoApply: false,
+	}, nil
+}
+
+// auditedFixture is guardedFixture with the audit store entries.
+func auditedFixture(t *testing.T, guard stategate.Guard, entries *testAudit) deletedFixture {
+	t.Helper()
+
+	cfg, pulumi := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: guard,
+	})
+	cfg.Audit = entries
+
+	handler, err := newCheckedHandler(t, cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return deletedFixture{handler: handler, pulumi: pulumi, deleted: nil}
+}
+
+// checkGuardDenied fails t unless entries holds one denied entry with action.
+func checkGuardDenied(t *testing.T, entries *testAudit, action identity.Action) {
+	t.Helper()
+
+	entries.mu.Lock()
+	got := append([]audit.Entry(nil), entries.entries...)
+	entries.mu.Unlock()
+
+	if len(got) != 1 || got[0].Outcome != audit.OutcomeDenied || got[0].Action != string(action) {
+		t.Fatalf("audit entries = %+v, want one denied entry with the action %s", got, action)
+	}
+}
+
+// TestUnknownResultRefusesAndRecords sends a result that is not allow or
+// warn, with no error, through each write route. Each call is refused with
+// gate.unavailable, reaches no lifecycle and writes one denied audit entry.
+func TestUnknownResultRefusesAndRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, result := range []gate.Result{gate.ResultDeny, gate.ResultError, "", "maybe"} {
+			t.Run(rt.name+"/"+string(result), func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, resultGuard{result: result}, entries)
+
+				rec := serveRoute(t, f, rt)
+				if rec.Code != http.StatusServiceUnavailable ||
+					!strings.Contains(rec.Body.String(), errcode.GateUnavailable) ||
+					!strings.Contains(rec.Body.String(), "gdr-ffffffffffffffffffff") {
+					t.Fatalf(
+						"%s answers %d %s, want 503 with gate.unavailable and the record",
+						rt.name,
+						rec.Code,
+						rec.Body,
+					)
+				}
+
+				if len(f.pulumi.calls) != 0 {
+					t.Fatalf("%d calls reached the lifecycle, want 0", len(f.pulumi.calls))
+				}
+
+				checkGuardDenied(t, entries, rt.action)
+			})
+		}
+	}
+}
+
+// TestEachRefusalIsRecorded checks that each refusal of the guard writes one
+// denied audit entry with the action of the route.
+func TestEachRefusalIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+"/"+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, newRecordingGuard(rf.err), entries)
+
+				if rec := serveRoute(t, f, rt); rec.Code != rf.status {
+					t.Fatalf("%s answers %d, want %d: %s", rt.name, rec.Code, rf.status, rec.Body)
+				}
+
+				checkGuardDenied(t, entries, rt.action)
+			})
+		}
+	}
+}
+
+// TestRefusalSaysOneCode checks that the answer, the detail and the audit
+// entry of each refusal come from the one code of the admission. A refusal
+// with an unknown sentinel says gate.unavailable in all three.
+func TestRefusalSaysOneCode(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+"/"+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				entries := newTestAudit()
+				f := auditedFixture(t, newRecordingGuard(rf.err), entries)
+
+				rec := serveRoute(t, f, rt)
+				checkRefusalBody(t, rec, rf)
+
+				entries.mu.Lock()
+				got := append([]audit.Entry(nil), entries.entries...)
+				entries.mu.Unlock()
+
+				if len(got) != 1 || !strings.Contains(got[0].Reason, "state.write refused with "+rf.code) {
+					t.Fatalf("audit entries = %+v, want one with the code %s", got, rf.code)
+				}
+			})
+		}
+	}
+}
+
+// allRoutesFixture is guardedFixture with every optional service set, so
+// that the handler mounts every route group. The placement service, the
+// manual lock service, the output sharing service and the output reader are
+// zero values: the route test lists the routes and calls none of them. The
+// handler serves no request, so it takes no check of the success statuses.
+func allRoutesFixture(t *testing.T) *apiinventory.Handler {
+	t.Helper()
+
+	cfg, _ := guardedConfig(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: newRecordingGuard(nil),
+	})
+	cfg.Collections = testCollectionService(t, homedNamespaceStore{})
+	cfg.Placements = new(collection.PlacementService)
+	cfg.Locks = new(manuallock.Service)
+	cfg.Views = testViewsConfig(t)
+	cfg.OutputSharing = new(outputsharesvc.Service)
+	cfg.Outputs = new(outputsharesvc.Reader)
+
+	handler, err := apiinventory.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// TestEveryWriteRouteMeetsTheGates fails for a route other than GET that is
+// not a route of guardRoutes and is not on the list of routes that write no
+// state, with the reason. The fixture mounts every optional route group.
+func TestEveryWriteRouteMeetsTheGates(t *testing.T) {
+	t.Parallel()
+
+	gated := map[string]bool{}
+	for _, rt := range guardRoutes() {
+		gated[rt.method+" "+strings.SplitN(rt.target, "?", 2)[0]] = true
+	}
+
+	for _, route := range allRoutesFixture(t).Routes() {
+		if route.Method == http.MethodGet || route.Method == http.MethodHead {
+			continue
+		}
+
+		key := route.Method + " " + route.Path
+		if _, ok := noStateWrite()[key]; ok {
+			continue
+		}
+
+		if !routeIsGated(route.Method, route.Path, gated) {
+			t.Errorf("%s writes and meets no state.write: add its case to guardRoutes, "+
+				"or list it in noStateWrite with the reason", key)
+		}
+	}
+}
+
+// TestNoStateWriteNamesMountedRoutes fails for a route of noStateWrite that
+// the handler does not mount, so that the list stays the list of real routes.
+func TestNoStateWriteNamesMountedRoutes(t *testing.T) {
+	t.Parallel()
+
+	mounted := map[string]bool{}
+	for _, route := range allRoutesFixture(t).Routes() {
+		mounted[route.Method+" "+route.Path] = true
+	}
+
+	for key := range noStateWrite() {
+		if !mounted[key] {
+			t.Errorf("noStateWrite lists %s, which the handler does not mount", key)
+		}
+	}
+}
+
+// routeIsGated reports whether a target of gated matches the pattern of the
+// route. A wildcard of the pattern matches one segment.
+func routeIsGated(method, pattern string, gated map[string]bool) bool {
+	want := strings.Split(pattern, "/")
+
+	for key := range gated {
+		m, target, _ := strings.Cut(key, " ")
+		got := strings.Split(target, "/")
+
+		if m != method || len(got) != len(want) {
+			continue
+		}
+
+		match := true
+
+		for i := range want {
+			if !strings.HasPrefix(want[i], "{") && want[i] != got[i] {
+				match = false
+			}
+		}
+
+		if match {
+			return true
+		}
+	}
+
+	return false
+}
+
+// noStateWrite lists the routes other than GET that write no state, and why.
+// A manual lock is a lock that a person puts on a unit, a collection or a
+// namespace. It is not the state lock of a tool, so its routes write no
+// state and end no state lock.
+func noStateWrite() map[string]string {
+	const (
+		collectionRow = "writes a collection row; the units and their state do not change"
+		placementRow  = "writes a placement rule; the rule places new units and writes no state"
+		manualLock    = "puts or ends a manual lock, which is not the state lock of a tool; it writes no state"
+		savedView     = "writes a saved view, a named query of the unit list"
+		ns            = "/api/dustpan/v1/namespaces/{namespace}"
+	)
+
+	return map[string]string{
+		"POST " + ns + "/collections":                                collectionRow,
+		"DELETE " + ns + "/collections/{collection}":                 collectionRow,
+		"PUT /api/inventory/unit-collection":                         "moves a unit into a collection; the state of the unit does not change",
+		"POST " + ns + "/placement-rules":                            placementRow,
+		"PUT " + ns + "/placement-rules/{rule}":                      placementRow,
+		"DELETE " + ns + "/placement-rules/{rule}":                   placementRow,
+		"PUT /api/inventory/unit-lock":                               manualLock,
+		"DELETE /api/inventory/unit-lock":                            manualLock,
+		"POST /api/inventory/unit-lock/force-unlock":                 manualLock,
+		"PUT " + ns + "/collections/{collection}/lock":               manualLock,
+		"DELETE " + ns + "/collections/{collection}/lock":            manualLock,
+		"POST " + ns + "/collections/{collection}/lock/force-unlock": manualLock,
+		"PUT " + ns + "/lock":                                        manualLock,
+		"DELETE " + ns + "/lock":                                     manualLock,
+		"POST " + ns + "/lock/force-unlock":                          manualLock,
+		"POST " + ns + "/views":                                      savedView,
+		"DELETE " + ns + "/views/{view_id}":                          savedView,
+		"PUT " + ns + "/output-sharing":                              "writes the output sharing setting of a namespace; it writes no state",
 	}
 }

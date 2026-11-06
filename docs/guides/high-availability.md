@@ -190,3 +190,4 @@ See [Back up, restore and upgrade](backup-restore-upgrade.md).
 - [Install with Helm](kubernetes.md) gives the chart.
 - [Observe the server](observe.md) gives the probes and the metrics.
 - [Architecture and sizing](architecture-and-sizing.md) gives the design.
+- [Measured sizing](measured-sizing.md) gives the throughput, the latency, the CPU and the connections of one to three instances. The page also gives the error rate of a rolling restart.

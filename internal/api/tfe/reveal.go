@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -221,7 +222,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 	})
 
 	if err := h.rules().Append(ctx, entry); err != nil {
-		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
+		faultlog.LogFault(ctx, h.logger, "reveal audit append failed", faultlog.Cause(err), "reveal.audit")
 		h.failAudit(ctx)
 
 		return false

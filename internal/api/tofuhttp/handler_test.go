@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -368,7 +369,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Gate:           nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -843,7 +844,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -887,7 +888,7 @@ func TestOverrideRefusalsAreAudited(t *testing.T) {
 		Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -966,7 +967,7 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 				Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
 				Gate: nil, OnAuditFailure: nil,
 				DenialLimiter: nil,
-				StateGuard:    nil,
+				StateGuard:    stategate.Off("the test keeps no gates"),
 			})
 			if err != nil {
 				t.Fatalf("new handler: %v", err)

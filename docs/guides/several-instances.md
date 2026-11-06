@@ -206,6 +206,8 @@ Run the same command again after the database answers. The next `pulumi preview`
 
 A write can commit while its answer does not get to the CLI. OpenTofu then sends the same request again. The server keeps a record of the last released lock of each workspace. The record holds the lock ID, the holder and the principal that released the lock. It also holds the time of the release and the kind of release: normal or forced. The server uses the record for 24 hours after the release.
 
+The unit list and the unit view of the inventory API show the record in the `lastRelease` field. Use it to see why a repeated unlock got success. The TFE-compatible API does not show it.
+
 These repeated requests succeed and change nothing:
 
 - A `LOCK` of the HTTP backend with the same lock ID from the same holder, while the holder still has that lock.

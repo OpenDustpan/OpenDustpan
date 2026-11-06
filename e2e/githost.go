@@ -40,6 +40,7 @@ func NewGitHostFake(tb testing.TB) *GitHostFake {
 
 	return &GitHostFake{fake: githubfake.New(tb, githubfake.Config{
 		AppID:          "",
+		AppSlug:        "",
 		InstallationID: "",
 		Owner:          githubfake.Account{ID: 0, Login: ""},
 		User: githubfake.Account{

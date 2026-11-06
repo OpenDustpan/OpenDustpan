@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
@@ -463,8 +463,8 @@ func (h *Handler) toResponse(
 	if got.Kind == trigger.KindSchedule {
 		expr, err := got.Frequency.Expression(got.Unit)
 		if err != nil {
-			h.logger.ErrorContext(r.Context(), "stored frequency has no expression",
-				slog.String("trigger_id", string(got.ID)))
+			faultlog.LogFault(r.Context(), h.logger, "stored frequency has no expression",
+				faultlog.Cause(err), "trigger.frequency")
 
 			return triggerResponse{}, errBrokenFrequency
 		}
