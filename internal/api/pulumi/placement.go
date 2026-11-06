@@ -66,16 +66,18 @@ func (h *Handler) choosePlacement(
 		return none, true
 	}
 
-	// A namespace that does not exist has no rules. Its error comes first, so
-	// that the CLI gets the hint to set the default organization and not the
-	// error of a missing rule.
-	if _, err := h.namespaces.WritableHere(ctx, ref.Namespace); err != nil {
-		h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, fmt.Errorf("create stack %s: %w", ref, err))
+	rule, err := h.placer.Rules.Place(ctx, ref.Namespace, unitTool, ref.Project.String(), ref.Stack.String())
+	if errors.Is(err, collection.ErrNoPlacement) {
+		// A namespace that does not exist has no rules. Its error comes first,
+		// so that the CLI gets the hint to set the default organization and
+		// not the error of a missing rule.
+		if _, nsErr := h.namespaces.WritableHere(ctx, ref.Namespace); nsErr != nil {
+			h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, fmt.Errorf("create stack %s: %w", ref, nsErr))
 
-		return none, false
+			return none, false
+		}
 	}
 
-	rule, err := h.placer.Rules.Place(ctx, ref.Namespace, unitTool, ref.Project.String(), ref.Stack.String())
 	if err != nil {
 		h.writeError(ctx, w, err)
 

@@ -99,6 +99,26 @@ func TestTableWriterFormsValues(t *testing.T) {
 	}
 }
 
+// TestTableWriterWidensAnInteger proves that an integer column of a dialect
+// that returns int32, such as a PostgreSQL integer, has the same portable form
+// as an int64, and that a narrower or wider type of another kind still fails.
+func TestTableWriterWidensAnInteger(t *testing.T) {
+	t.Parallel()
+
+	text, _, err := writeExample(t, [][]any{{"a", int32(7), true, nil, nil, "{}"}})
+	if err != nil {
+		t.Fatalf("write an int32 count: %v", err)
+	}
+
+	if !strings.Contains(text, `"count":7`) {
+		t.Fatalf("table text = %q, want the count 7", text)
+	}
+
+	if _, _, err := writeExample(t, [][]any{{"a", "7", true, nil, nil, "{}"}}); !errors.Is(err, backup.ErrCoverage) {
+		t.Fatalf("write a text count = %v, want ErrCoverage", err)
+	}
+}
+
 // TestTableWriterIsDeterministic proves that the same rows give the same bytes,
 // and that the descriptor holds the size and the SHA-256 of the file (ADR 42,
 // decision 2).

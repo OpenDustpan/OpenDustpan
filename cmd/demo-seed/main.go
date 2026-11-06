@@ -318,7 +318,54 @@ func (s *seeder) createNamespace(ctx context.Context, name string) error {
 		return err
 	}
 
+	if err := s.placeEveryStack(ctx, name); err != nil {
+		return err
+	}
+
 	return s.announce("created namespace " + name)
+}
+
+// demoCollection is the collection that holds the demo stacks.
+const demoCollection = "demo"
+
+// collectionRequest is the collection create body.
+type collectionRequest struct {
+	Name string `json:"name"`
+}
+
+// placementRuleRequest is the placement rule create body.
+type placementRuleRequest struct {
+	Tool       string `json:"tool"`
+	Project    string `json:"project"`
+	Stack      string `json:"stack"`
+	Collection string `json:"collection"`
+}
+
+// placeEveryStack makes the collection demoCollection and a placement rule
+// that puts every Pulumi stack in it. The server refuses a new stack that no
+// rule places.
+func (s *seeder) placeEveryStack(ctx context.Context, name string) error {
+	base := "/api/dustpan/v1/namespaces/" + name
+
+	for _, call := range []apiCall{
+		{
+			name: "create collection", method: http.MethodPost, path: base + "/collections",
+			auth: bearerAuth(s.token), body: collectionRequest{Name: demoCollection},
+			want: http.StatusCreated, fail: errCreateNamespace,
+		},
+		{
+			name: "create placement rule", method: http.MethodPost, path: base + "/placement-rules",
+			auth: bearerAuth(s.token),
+			body: placementRuleRequest{Tool: "pulumi", Project: "*", Stack: "*", Collection: demoCollection},
+			want: http.StatusCreated, fail: errCreateNamespace,
+		},
+	} {
+		if err := s.call(ctx, call, nil); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // createStack creates stack in projectDemo through the stack API.

@@ -47,9 +47,9 @@ func seedCatchAllPlacement(t *testing.T, store any, ns namespace.Name) {
 	const name = "everything"
 
 	ref := collection.Ref{Namespace: ns, Name: name}
-	if _, createErr := collections.Create(
-		t.Context(), ref, entry(identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+name),
-	); createErr != nil {
+	created := entry(identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+name)
+
+	if _, createErr := collections.Create(t.Context(), ref, created); createErr != nil {
 		t.Fatalf("create collection: %v", createErr)
 	}
 
@@ -59,9 +59,9 @@ func seedCatchAllPlacement(t *testing.T, store any, ns namespace.Name) {
 	}
 
 	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: name, Position: 0}
-	if _, ruleErr := rules.Create(
-		t.Context(), ns, in, entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String()),
-	); ruleErr != nil {
+	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+
+	if _, ruleErr := rules.Create(t.Context(), ns, in, ruled); ruleErr != nil {
 		t.Fatalf("create placement rule: %v", ruleErr)
 	}
 }

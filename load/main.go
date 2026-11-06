@@ -22,7 +22,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -705,7 +707,70 @@ func createLoadNamespace(ctx context.Context, stores namespace.Store, ns string)
 		return fmt.Errorf("create namespace: %w", err)
 	}
 
+	return seedLoadPlacement(ctx, stores, name)
+}
+
+// loadCollection is the collection that the placement rule of the harness
+// namespaces names.
+const loadCollection = "load-everything"
+
+// placementPorts is what the harness needs to make a collection and a
+// placement rule.
+type placementPorts interface {
+	namespace.Store
+	collection.Store
+	collection.PlacementStore
+}
+
+// seedLoadPlacement makes a collection and a placement rule for Pulumi stacks
+// of any project and any name in the namespace ns. The server refuses a new
+// stack that no rule places, and the recorded traffic makes stacks.
+func seedLoadPlacement(ctx context.Context, stores namespace.Store, ns namespace.Name) error {
+	ports, ok := stores.(placementPorts)
+	if !ok {
+		return fmt.Errorf("%w: %T", errLoadPlacement, stores)
+	}
+
+	collections, err := collection.NewService(collection.Config{Store: ports, Namespaces: ports, Now: nil})
+	if err != nil {
+		return fmt.Errorf("collection service: %w", err)
+	}
+
+	rules, err := collection.NewPlacementService(collection.PlacementConfig{Store: ports, Namespaces: ports, Now: nil})
+	if err != nil {
+		return fmt.Errorf("placement service: %w", err)
+	}
+
+	ref := collection.Ref{Namespace: ns, Name: loadCollection}
+	created := loadEntry(ns, identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+loadCollection)
+
+	if _, err = collections.Create(ctx, ref, created); err != nil {
+		return fmt.Errorf("create collection: %w", err)
+	}
+
+	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: loadCollection, Position: 0}
+	ruled := loadEntry(ns, identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+
+	if _, err = rules.Create(ctx, ns, in, ruled); err != nil {
+		return fmt.Errorf("create placement rule: %w", err)
+	}
+
 	return nil
+}
+
+// errLoadPlacement reports a store that keeps no collections or placement rules.
+var errLoadPlacement = errors.New("the store keeps no collections or placement rules")
+
+// loadEntry returns the audit entry of a change that the harness makes while it
+// sets up a namespace.
+func loadEntry(ns namespace.Name, action identity.Action, object string) audit.Entry {
+	return audit.Entry{
+		At: time.Now(), Namespace: ns, Subject: "load-harness", IDPSubject: "", TokenID: "",
+		Action: string(action), Object: object, Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "", UserAgent: "load-harness", Channel: "api", Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
+		PrincipalKind: "", JobID: "", Reason: "",
+	}
 }
 
 // testServerCloser adapts httptest.Server.Close to a context cleanup func.
