@@ -43,8 +43,10 @@ const (
 	serverEnv = "E2E_SERVER"
 	// binaryServer names the proof variant.
 	binaryServer = "binary"
-	// binaryBuildTimeout bounds the `go build` of the server binary.
-	binaryBuildTimeout = 5 * time.Minute
+	// binaryBuildTimeout bounds the `go build` of the server binary. A race
+	// build on a 4-core CI runner, next to 16 parallel tests, can take more
+	// than 5 minutes.
+	binaryBuildTimeout = 15 * time.Minute
 	// binaryStartTimeout bounds the wait for the backend's /health/live.
 	binaryStartTimeout = 30 * time.Second
 	// binaryStartPoll sets how often the wait checks /health/live.

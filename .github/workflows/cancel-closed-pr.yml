@@ -7,14 +7,17 @@ on:
     types: [ closed ]
 
 concurrency:
-  # Keep this equal to the group in ci.yml for a pull request that is not a draft.
+  # Keep this equal to the group in ci.yml for a pull request that is not a
+  # draft. A merge group has its own group in ci.yml, so this run never
+  # cancels a run of the merge queue.
   group: ci-${{ github.event.pull_request.number }}-false
   cancel-in-progress: true
 
 jobs:
   cancel:
-    # This job never runs: the run only has to join the group.
-    if: false
+    # This job never runs: the run only has to join the group. The workflow
+    # starts only for a closed pull request, so this condition is always false.
+    if: ${{ github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     steps:
       - run: "true"
