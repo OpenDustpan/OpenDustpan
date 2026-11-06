@@ -514,6 +514,7 @@ type PolicyChange struct {
 	DisableTokens     *bool
 	DisableAccounts   *bool
 	DisableBreakGlass *bool
+	ExchangeLifetime  *time.Duration
 }
 
 // SetPolicy applies c to the policy, with the entry e, and returns the
@@ -564,6 +565,10 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 
 	if c.DisableBreakGlass != nil {
 		p.DisableBreakGlass = *c.DisableBreakGlass
+	}
+
+	if c.ExchangeLifetime != nil {
+		p.ExchangeLifetime = *c.ExchangeLifetime
 	}
 
 	return p
@@ -668,9 +673,19 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		TokenID:        m.Token.ID,
 		TokenExpiresAt: m.Token.ExpiresAt,
 		Kind:           identity.Kind(m.Owner.Kind),
-		Credential:     identity.CredentialAccessToken,
+		Credential:     credentialOf(m.Token.Kind),
 		JobID:          "",
 	}, nil
+}
+
+// credentialOf returns the credential of a token of the kind k: a token of a
+// trust rule is a trust token, so no check reads it as a token of a person.
+func credentialOf(k Kind) identity.Credential {
+	if k == KindTrust {
+		return identity.CredentialTrustToken
+	}
+
+	return identity.CredentialAccessToken
 }
 
 // AccountInactive reports whether the user account o is past the
@@ -820,6 +835,7 @@ func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
 	}{
 		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
 		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+		{key: "exchangeLifetimeSeconds", old: old.ExchangeLifetime, value: updated.ExchangeLifetime},
 	} {
 		if c.old == c.value {
 			continue

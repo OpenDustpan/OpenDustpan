@@ -215,9 +215,10 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 	return err
 }
 
-// List returns the objects under prefix from the inner store.
-func (s *Store) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return s.inner.List(ctx, prefix)
+// ListPage returns one page of the objects under the prefix from the inner
+// store.
+func (s *Store) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return s.inner.ListPage(ctx, req)
 }
 
 // Ping checks the inner store.

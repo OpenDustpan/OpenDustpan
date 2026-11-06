@@ -163,6 +163,7 @@ func writeRestoreManifest(
 
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
+		Damaged:          nil,
 	}
 
 	data, err := json.Marshal(manifest)

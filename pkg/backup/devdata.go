@@ -119,6 +119,19 @@ const (
 	// RemovedTempAdmins counts temp_admins rows, matched by the principal ID
 	// of a removed principal and by a subject with the reserved prefix.
 	RemovedTempAdmins DevRemovalClass = "temp-admins"
+	// RemovedTrustRules counts the trust rules whose principal is a removed
+	// principal. A rule lets a workload act as its principal, so it goes
+	// with the principal.
+	RemovedTrustRules DevRemovalClass = "trust-rules"
+	// RemovedLocalUsers counts the local user records of a removed
+	// principal, with the user name and the password hash. The demo person
+	// of a dev installation has one.
+	RemovedLocalUsers DevRemovalClass = "local-users"
+	// RemovedSessionGenerations counts the session generation rows of a
+	// removed principal.
+	RemovedSessionGenerations DevRemovalClass = "session-generations"
+	// RemovedPasskeys counts the passkeys of a removed principal.
+	RemovedPasskeys DevRemovalClass = "passkeys"
 	// RemovedApprovers counts dev subjects removed from Approvers.Users of
 	// approval rules, approval defaults and ownership rules. The rule stays.
 	// A rule that loses its last approver gets Users with the value
@@ -126,9 +139,11 @@ const (
 	// that it covers. The report names each such object in
 	// DevStripReport.Approvers.
 	RemovedApprovers DevRemovalClass = "approvers"
-	// RemovedDangling counts grants, group memberships, sessions and tokens
-	// that name a principal that does not exist, or a subject with the
-	// reserved prefix and no principal row. Data that was already wrong
+	// RemovedDangling counts grants, group memberships, sessions, tokens,
+	// preferences, trust rules, local user records, session generations and
+	// passkeys that name a principal
+	// that does not exist, or a subject with the reserved prefix and no
+	// principal row. Data that was already wrong
 	// before the restore is in this class.
 	RemovedDangling DevRemovalClass = "dangling"
 )
@@ -148,8 +163,9 @@ type DevRemoval struct {
 	SubjectCut bool `json:"subjectCut"`
 	// Counts holds the count of removed rows for each class that a principal
 	// owns: RemovedGrants, RemovedGroupMembers, RemovedSessions,
-	// RemovedAccessTokens, RemovedPreferences and RemovedTempAdmins. The other
-	// classes are not in it.
+	// RemovedAccessTokens, RemovedPreferences, RemovedTempAdmins,
+	// RemovedTrustRules, RemovedLocalUsers, RemovedSessionGenerations and
+	// RemovedPasskeys. The other classes are not in it.
 	Counts map[DevRemovalClass]int64 `json:"counts"`
 }
 
@@ -190,6 +206,19 @@ type DevStripReport struct {
 	// Warnings holds the codes of the warnings that the answer of the restore
 	// carries. The restore service sets them. A strip leaves them empty.
 	Warnings []RestoreWarningCode `json:"warnings"`
+	// PreBackupFound is what the backup before the restore found at the live
+	// blobs. It is nil until the restore took that backup, and nil when the
+	// backup found every live blob whole. The restore service sets it.
+	PreBackupFound *BlobFindings `json:"preBackupFound,omitempty"`
+	// NotHeld is the damaged list of the restored backup: the blobs that its
+	// data names and that it holds no copy of. The restore leaves those live
+	// keys as they are. It is nil for a backup with no such blob. The restore
+	// service sets it.
+	NotHeld *BlobFindings `json:"notHeld,omitempty"`
+	// ErrorCode is the catalog code of the refusal that ended the restore,
+	// empty for a restore that succeeded or that ended with an error that
+	// has no code. The restore service sets it.
+	ErrorCode RestoreErrorCode `json:"errorCode,omitempty"`
 }
 
 // HasDev reports whether the report names dev data: a principal, or a class
@@ -278,6 +307,15 @@ const (
 	// WarnAuditAppendFailed says that the restore finished but an audit
 	// entry could not be written. The restore record holds the report.
 	WarnAuditAppendFailed RestoreWarningCode = "audit-append-failed"
+	// WarnMissingLiveBlobs says that the backup before the restore found live
+	// blobs missing, within the bound of the restore. The restore wrote the
+	// checked bytes of the backup at each of those keys that the backup holds.
+	WarnMissingLiveBlobs RestoreWarningCode = "missing-live-blobs"
+	// WarnBlobsNotHeld says that the restored backup holds no copy of some
+	// blobs that its data names: it is a backup before an earlier restore,
+	// and that backup found them missing or damaged. The restore leaves those
+	// live keys as they are.
+	WarnBlobsNotHeld RestoreWarningCode = "blobs-not-held"
 )
 
 // RestoreWarning is a warning in the answer of the restore API. The restore

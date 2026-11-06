@@ -13,6 +13,7 @@ import (
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -58,6 +59,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",
@@ -74,6 +76,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 			Labels:     map[string]string{"team": "payments"},
 		}},
 		"globex": {{
+			LastRelease:   nil,
 			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "globex",
@@ -93,6 +96,15 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	t.Helper()
 
+	return newUnitHandlerWithEntries(t, authz, unitEntries())
+}
+
+// newUnitHandlerWithEntries is newUnitHandler over the live units entries.
+func newUnitHandlerWithEntries(
+	t *testing.T, authz identity.Authorizer, entries map[namespace.Name][]coreinventory.Entry,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -105,13 +117,14 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	}}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
 		Views:         nil,
 		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
-		Units:         &memReader{entries: unitEntries(), err: nil},
+		Units:         &memReader{entries: entries, err: nil},
 		Deleted:       deleted,
 		History:       nil,
 		Lifecycles:    testLifecycles(),
@@ -123,7 +136,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) testHandler {
 		Now:           nil,
 		PublicURL:     "https://dustpan.example.com",
 		DenialLimiter: nil,
-		StateGuard:    nil,
+		StateGuard:    stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

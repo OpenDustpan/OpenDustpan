@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-10 · the home region amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 47 extends: no move of a stack to another namespace.
+- ADR 248 changes: the home region that makes the stack ID reads primary
+  installation.
+
 ## Context
 
 Today the namespace, the Pulumi project and the stack name are the only identity

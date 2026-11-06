@@ -652,8 +652,9 @@ func mustCreateWorkspace(t *testing.T, s access.Store, ws interface {
 	w := workspace.Workspace{
 		NamespaceID: "",
 		CreatedAt:   at(0), UpdatedAt: at(0),
-		Lock: workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
-		ID:   workspace.ID(id), Ref: workspace.Ref{Namespace: "acme", Name: parsed},
+		Lock:        workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(id), Ref: workspace.Ref{Namespace: "acme", Name: parsed},
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
 	}
 

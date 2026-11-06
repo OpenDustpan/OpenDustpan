@@ -228,7 +228,7 @@ func (c *PlainClient) readUserinfo(ctx context.Context, access string) (map[stri
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: user-info answer: status %d", ErrProvider, resp.StatusCode)
+		return nil, refusedError{err: fmt.Errorf("%w: user-info answer: status %d", ErrProvider, resp.StatusCode)}
 	}
 
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
@@ -279,6 +279,7 @@ func (c *PlainClient) identity(info map[string]any) (Identity, error) {
 		Name:              claimText(info[c.claims.Name]),
 		PreferredUsername: claimText(info[c.claims.Username]),
 		Email:             claimText(info[c.claims.Email]),
+		AuthTimeKnown:     false,
 	}, nil
 }
 

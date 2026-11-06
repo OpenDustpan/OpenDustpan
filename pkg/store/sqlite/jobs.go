@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -25,6 +24,8 @@ type JobStore interface {
 	job.Store
 	job.FreezeStore
 	job.RecordStore
+	job.ArtifactKeyStore
+	job.FinalVersionReader
 }
 
 // Jobs returns the stores of jobs and change freezes. Each write checks the
@@ -364,6 +365,11 @@ func listJobsQuery(q jobstore.Query) (string, []any) {
 		args = append(args, q.StateChangedBeforeMs)
 	}
 
+	if q.StateChangedAfterMs > 0 {
+		where = append(where, "j.state_changed_at_ms > ?")
+		args = append(args, q.StateChangedAfterMs)
+	}
+
 	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
 		j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
 		j.state_changed_at_ms
@@ -698,14 +704,24 @@ func (t *jobTx) Log(ctx context.Context, ns namespace.Name, id string) (jobstore
 func (t *jobTx) Chunk(ctx context.Context, ns namespace.Name, log string, seq int) (job.ChunkRow, bool, error) {
 	row, err := t.q.GetJobLogChunk(ctx, db.GetJobLogChunkParams{Namespace: ns.String(), LogID: log, Seq: int64(seq)})
 	if errors.Is(err, sql.ErrNoRows) {
-		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, nil
+		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false, BlobKey: ""}, false, nil
 	}
 
 	if err != nil {
-		return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false}, false, fmt.Errorf("select log chunk: %w", err)
+		return job.ChunkRow{
+			SHA256:    "",
+			Size:      0,
+			Confirmed: false,
+			BlobKey:   "",
+		}, false, fmt.Errorf(
+			"select log chunk: %w",
+			err,
+		)
 	}
 
-	return job.ChunkRow{SHA256: row.Sha256, Size: row.Size, Confirmed: row.Confirmed == 1}, true, nil
+	return job.ChunkRow{
+		SHA256: row.Sha256, Size: row.Size, Confirmed: row.Confirmed == 1, BlobKey: row.BlobKey,
+	}, true, nil
 }
 
 // InsertChunk implements jobstore.Tx.
@@ -722,12 +738,17 @@ func (t *jobTx) InsertChunk(ctx context.Context, ns namespace.Name, log string, 
 
 // ConfirmChunk implements jobstore.Tx.
 func (t *jobTx) ConfirmChunk(
-	ctx context.Context, ns namespace.Name, log string, seq int, stored blob.Digest,
+	ctx context.Context, ns namespace.Name, log string, seq int, stored jobstore.StoredChunk,
 ) error {
 	n, err := t.q.ConfirmJobLogChunk(
 		ctx,
 		db.ConfirmJobLogChunkParams{
-			LogID: log, Seq: int64(seq), Namespace: ns.String(), StoredSize: stored.Size, StoredMd5: stored.MD5[:],
+			LogID:      log,
+			Seq:        int64(seq),
+			Namespace:  ns.String(),
+			StoredSize: stored.Digest.Size,
+			StoredMd5:  stored.Digest.MD5[:],
+			BlobKey:    stored.BlobKey,
 		},
 	)
 	if err != nil {
@@ -739,4 +760,39 @@ func (t *jobTx) ConfirmChunk(
 	}
 
 	return nil
+}
+
+// ChunkKeys implements jobstore.Tx.
+func (t *jobTx) ChunkKeys(ctx context.Context, ns namespace.Name, log string) ([]jobstore.ChunkKey, error) {
+	rows, err := t.q.ListJobLogChunkKeys(ctx, db.ListJobLogChunkKeysParams{Namespace: ns.String(), LogID: log})
+	if err != nil {
+		return nil, fmt.Errorf("select log chunk keys: %w", err)
+	}
+
+	out := make([]jobstore.ChunkKey, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, jobstore.ChunkKey{Seq: int(r.Seq), BlobKey: r.BlobKey})
+	}
+
+	return out, nil
+}
+
+// JobPlanIDs implements jobstore.ChunkTx.
+func (t *jobTx) JobPlanIDs(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error) {
+	ids, err := t.q.ListJobPlanIDs(ctx, db.ListJobPlanIDsParams{Namespace: ns.String(), JobID: string(id)})
+	if err != nil {
+		return nil, fmt.Errorf("select plan IDs of job: %w", err)
+	}
+
+	return ids, nil
+}
+
+// JobChunkKeys implements jobstore.ChunkTx.
+func (t *jobTx) JobChunkKeys(ctx context.Context, ns namespace.Name, id job.ID) ([]string, error) {
+	keys, err := t.q.ListJobChunkBlobKeys(ctx, db.ListJobChunkBlobKeysParams{Namespace: ns.String(), JobID: string(id)})
+	if err != nil {
+		return nil, fmt.Errorf("select chunk keys of job: %w", err)
+	}
+
+	return keys, nil
 }

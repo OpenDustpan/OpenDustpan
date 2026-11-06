@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -22,6 +23,7 @@ const (
 	opPut    = "put"
 	opGet    = "get"
 	opDelete = "delete"
+	opList   = "list"
 )
 
 // PlanPartRef names one part of a stored plan in the blob store.
@@ -38,6 +40,8 @@ type LogChunkRef struct {
 	Job       ID
 	Version   string
 	Seq       int
+	// BlobKey is the key of the blob, as ChunkBlobKey reads it.
+	BlobKey string
 }
 
 // ArtifactBlobFamily is the family of the plan and log blobs, as the audit
@@ -51,8 +55,8 @@ func ArtifactBlobFamily() scopeaudit.Family {
 // that the caller took from the row that it resolved and authorized, never
 // from a request field. Each key is
 // namespaces/<namespace ID>/job/<job ID>/plan/<plan ID>/<part> or
-// namespaces/<namespace ID>/job/<job ID>/log/<version ID>/<chunk>, built from
-// PlanPartKey and LogChunkKey.
+// namespaces/<namespace ID>/job/<job ID>/log/<version ID>/<chunk>-<attempt ID>,
+// built from PlanPartKey and LogChunkAttemptKey.
 //
 // A call whose parts do not make such a key returns ErrInvalid before any
 // call to the store. A key that leaves the namespace returns
@@ -112,7 +116,8 @@ func (b *ArtifactBlobs) OpenPlanPart(ctx context.Context, ref PlanPartRef) (io.R
 }
 
 // PutLogChunk stores r as the chunk ref. It returns blob.ErrExists when the
-// chunk exists already.
+// store refuses a second write of the key. A store may also replace the object
+// with no error: the row of the chunk, not this call, says which attempt won.
 func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.Reader) error {
 	at, err := b.logKey(ref)
 	if err != nil {
@@ -120,6 +125,17 @@ func (b *ArtifactBlobs) PutLogChunk(ctx context.Context, ref LogChunkRef, r io.R
 	}
 
 	return b.refuse(ctx, ref.Namespace, opPut, at.view.Put(ctx, at.key, r), at)
+}
+
+// DeleteLogChunk deletes the blob of one write attempt of a chunk. A blob that
+// does not exist is not an error.
+func (b *ArtifactBlobs) DeleteLogChunk(ctx context.Context, ref LogChunkRef) error {
+	at, err := b.logKey(ref)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ref.Namespace, opDelete, at.view.Delete(ctx, at.key), at)
 }
 
 // OpenLogChunk opens the chunk ref. It returns blob.ErrNotFound for a chunk
@@ -131,6 +147,80 @@ func (b *ArtifactBlobs) OpenLogChunk(ctx context.Context, ref LogChunkRef) (io.R
 	}
 
 	return b.open(ctx, ref.Namespace, at)
+}
+
+// ArtifactBlob is one stored blob in the directory of a job: its key relative to
+// the namespace, as ParseArtifactKey reads it, and when the store last
+// modified it.
+type ArtifactBlob struct {
+	Rel        string
+	ModifiedAt time.Time
+}
+
+// WalkJob calls fn with each page of the blobs in the directory of the job id
+// of the namespace ns, job/<job ID>/, in key order. It never holds more than
+// one page. A key that the store gives outside the directory is
+// blob.ErrOutOfScope, and the walk stops.
+func (b *ArtifactBlobs) WalkJob(ctx context.Context, ns namespace.ID, id ID, fn func([]ArtifactBlob) error) error {
+	if !validIDSegment(string(id), IDPrefix) {
+		return fmt.Errorf("%w: job ID of an artifact blob walk", ErrInvalid)
+	}
+
+	view, err := blob.NewScoped(b.store, ns)
+	if err != nil {
+		return fmt.Errorf("scope of artifact blobs: %w", err)
+	}
+
+	dir := view.Prefix() + artifactDir + "/" + string(id) + "/"
+	at := keyAt{view: view, key: blob.Key(dir)}
+
+	walkErr := blob.WalkPages(ctx, at.view, dir, func(page []blob.Object) error {
+		out := make([]ArtifactBlob, 0, len(page))
+
+		for _, obj := range page {
+			// Defense in depth: the scoped view refuses a key outside the
+			// namespace, and Walk checks each page against its prefix. This
+			// check stays so that a store that answers a key of another job
+			// never gives the sweep a key that it could delete.
+			rel, ok := strings.CutPrefix(obj.Key.String(), view.Prefix())
+			if !ok || !strings.HasPrefix(obj.Key.String(), dir) {
+				return blob.ErrOutOfScope
+			}
+
+			out = append(out, ArtifactBlob{Rel: rel, ModifiedAt: obj.ModifiedAt})
+		}
+
+		return fn(out)
+	})
+
+	return b.refuse(ctx, ns, opList, walkErr, at)
+}
+
+// DeleteJobBlob deletes the blob rel in the directory of the job id of the
+// namespace ns. rel must be a key that ParseArtifactKey reads for id: any
+// other key is ErrInvalid, and the call deletes nothing. It tries a
+// transient failure again (blob.DeleteRetried). A blob that does not exist is
+// not an error.
+func (b *ArtifactBlobs) DeleteJobBlob(ctx context.Context, ns namespace.ID, id ID, rel string) error {
+	// Defense in depth: the sweep parses each key before it asks for a delete,
+	// and the scoped view refuses a key outside the namespace. This check
+	// stays so that a new caller cannot delete a key of another job or a key
+	// that is not an artifact blob.
+	if _, err := ParseArtifactKey(id, rel); err != nil {
+		return err
+	}
+
+	key, err := blob.ParseKey(rel)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	at, err := b.scoped(ns, key)
+	if err != nil {
+		return err
+	}
+
+	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, at.view, at.key), at)
 }
 
 // keyAt is a key and the view of the namespace that it is in.
@@ -205,9 +295,9 @@ func (b *ArtifactBlobs) logKey(ref LogChunkRef) (keyAt, error) {
 		return keyAt{}, fmt.Errorf("%w: log chunk %d", ErrInvalid, ref.Seq)
 	}
 
-	rel, err := LogChunkKey(ref.Job, ref.Version, ref.Seq)
+	rel, err := ChunkBlobKey(ref.Job, ref.Version, ref.Seq, ref.BlobKey)
 	if err != nil {
-		return keyAt{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return keyAt{}, err
 	}
 
 	return b.scoped(ref.Namespace, rel)

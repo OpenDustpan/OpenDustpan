@@ -208,7 +208,9 @@ type Version struct {
 	Namespace   namespace.Name
 	PublishedBy string
 	Number      int
-	Retired     bool
+	// DraftVersion is the version of the draft that this version published.
+	DraftVersion int64
+	Retired      bool
 }
 
 // Ref returns the reference of the blueprint of v.

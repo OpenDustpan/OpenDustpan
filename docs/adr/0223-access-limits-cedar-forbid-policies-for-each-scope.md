@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 52 decision 9. Extends ADR 54 decision 5. Decision 4 superseded in part by ADR 240
 
+Changed by:
+
+- ADR 240 changes decision 4: the principal kind takes person, service and
+  workload.
+- ADR 313 extends: grant conditions.
+
 ## Context
 
 Access is allow-only. A principal can do an action on an object when a

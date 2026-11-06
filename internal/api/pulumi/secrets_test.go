@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -352,6 +353,7 @@ func buildSecretFixture(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1128,6 +1130,7 @@ func TestSecretsMissingKey(t *testing.T) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1562,6 +1565,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1773,6 +1777,7 @@ func newLoggedSecretsHandler(
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1953,6 +1958,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -2006,6 +2012,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,

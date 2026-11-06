@@ -6,8 +6,10 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -76,6 +78,8 @@ func newRealStack(t *testing.T) *realStack {
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:      secrettest.NewMemorySealer(),
+		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Updates: st, Tokens: nil, Checkpoints: st, Events: st, Namespaces: namespaces,
 		Stacks: stacks, Blobs: newTestBlobs(t), Now: nil, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
 		Replayer: nil, Refusals: stacktest.NewRefusals(),
@@ -85,6 +89,7 @@ func newRealStack(t *testing.T) *realStack {
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Workspaces: st, States: st, Blobs: newTestBlobs(t), Namespaces: namespaces,
 		OutOfScope: workspacetest.NewRefusals(),
 		Sealer:     stubSealer{}, Logger: nil, Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0, Retention: 0,

@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-12. Decisions 4 and 6 extended by ADR 239
 
+Changed by:
+
+- ADR 239 extends decisions 4 and 6: a client-encrypted lock release needs the
+  action and the switch.
+
 ## Context
 
 [RFC 63](../rfc/0063-workspace-lock-holder.md) found that an OpenTofu

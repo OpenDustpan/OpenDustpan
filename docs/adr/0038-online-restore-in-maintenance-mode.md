@@ -2,6 +2,21 @@
 
 Status: accepted · 2026-10-11. Superseded in part by ADR 151 (expected gaps). The `server:` action names superseded in part by ADR 210. The restore audit entries decided by ADR 212 decision 5. The home regions of the manifest amended by ADR 248 (primary installations)
 
+Changed by:
+
+- ADR 42 changes decision 3: the same-dialect and same-schema checks of a
+  restore.
+- ADR 48 extends decisions 4 and 6: the wait until every instance sees
+  maintenance mode.
+- ADR 70 changes decision 6: the apply step keeps the access tables without
+  server:restore-access.
+- ADR 151 changes decision 3: the blob check of a restore allows expected
+  gaps.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 212 extends decision 9: the three audit entries of a restore.
+- ADR 248 changes decision 3: the home regions of the manifest read primary
+  installations.
+
 ## Context
 
 ADR 30 makes `opendustpan restore` an offline command. It opens the database

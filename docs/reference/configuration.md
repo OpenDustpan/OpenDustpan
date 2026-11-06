@@ -11,7 +11,7 @@ the same list.
 | Flag | Environment | File key | Default |
 | --- | --- | --- | --- |
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
-| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later |
+| `--database` | `DUSTPAN_DATABASE` | `database` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--installation` | `DUSTPAN_INSTALLATION` | `installation` | `local` |
 | `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
@@ -24,11 +24,13 @@ the same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
+| `--issuer-base-url` | `DUSTPAN_ISSUER_BASE_URL` | `issuer-base-url` | (none: the issuer uses `--public-url`. With neither setting, the issuer is off) |
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
 | `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--ip-allowlists-include-bootstrap` | `DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP` | `ip-allowlists-include-bootstrap` | (none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--git-host-allowed-ranges` | `DUSTPAN_GIT_HOST_ALLOWED_RANGES` | `git-host-allowed-ranges` | (none: a connection reaches public addresses only). Set the range of a GitHub Enterprise Server on a private network, for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, also inside a range. It checks this when a person sets an address and at each call. |
+| `--branding-preset` | `DUSTPAN_BRANDING_PRESET` | `branding.preset` | (none: the console shows its standard palette). A name of lower-case letters, digits and hyphens, at most 32 characters. The settings resource also holds it, and a value from a flag, a variable or this file locks it |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
 | `--log-sink` | `DUSTPAN_LOG_SINK` | `log-sink` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
@@ -165,6 +167,10 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
 | `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. |
 | `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_AUDIT_OTLP_HEADERS` | Extra headers of each request of an `otlp:` audit sink, as `Name=Value` items separated by commas or line breaks. Percent-encode a value. Optional. |
+| `DUSTPAN_AUDIT_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_OTLP_HEADERS` wins. |
+| `DUSTPAN_LOG_OTLP_HEADERS` | Extra headers of each request of an `otlp:` log sink, in the same form. Optional. |
+| `DUSTPAN_LOG_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_LOG_OTLP_HEADERS` wins. |
 
 Make a key-encryption key with this command:
 
@@ -216,6 +222,7 @@ Each client command takes only the flags in its row:
 | `opendustpan backup` | `--server`, `--ca-file` |
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
+| `opendustpan store check --target <blobs|backup>` | `--server`, `--ca-file`, `--target` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
 | `opendustpan audit-chain status` | `--server`, `--ca-file` |
 | `opendustpan audit-chain approve` | (none) |
@@ -281,7 +288,7 @@ the steps.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later |
+| `--database` | `DUSTPAN_DATABASE` | (none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover) |
 | `--reason` | (none) | (none) |
 | `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
 | (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

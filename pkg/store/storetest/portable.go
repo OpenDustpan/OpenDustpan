@@ -169,6 +169,7 @@ func testPortableFiles(t *testing.T, newStore PortableFactory) {
 	checkImportRowCounts(t, s, sum)
 	checkBlameRowCounts(t, s, sum)
 	checkProfileRowCounts(t, s, sum)
+	checkIssuerRowCounts(t, s, sum)
 	checkRunnerRowCounts(t, s, sum)
 	requireSeededGate(t, s, sum)
 

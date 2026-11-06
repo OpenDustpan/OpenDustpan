@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
@@ -504,7 +505,9 @@ func (s *fakeBackupStore) RenameStack(
 }
 
 // CreateUpdate implements stack.UpdateStore.
-func (s *fakeBackupStore) CreateUpdate(_ context.Context, u stack.Update, fence namespace.Fence) error {
+func (s *fakeBackupStore) CreateUpdate(
+	_ context.Context, u stack.Update, _ stack.UpdateKey, fence namespace.Fence,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -728,25 +731,25 @@ func (s *fakeBackupStore) ListUpdates(
 // PutCheckpoint implements stack.CheckpointStore.
 func (s *fakeBackupStore) PutCheckpoint(
 	_ context.Context, cp stack.Checkpoint, fence namespace.Fence,
-) error {
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return errFakeClosed
+		return false, errFakeClosed
 	}
 
 	if err := s.checkFence(fence); err != nil {
-		return err
+		return false, err
 	}
 
 	if err := s.checkRunningUpdate(cp.Ref, cp.Update, cp.Lease); err != nil {
-		return err
+		return false, err
 	}
 
 	stackID, err := s.stackIDOf(cp.Ref)
 	if err != nil {
-		return stack.ErrNoState
+		return false, stack.ErrNoState
 	}
 
 	byStack, ok := s.data.checkpoints[stackID]
@@ -756,9 +759,9 @@ func (s *fakeBackupStore) PutCheckpoint(
 	}
 
 	if retried, err := checkCheckpointSequence(byStack, cp); err != nil {
-		return err
+		return false, err
 	} else if retried {
-		return nil
+		return true, nil
 	}
 
 	if cp.BlobKey != "" {
@@ -769,7 +772,7 @@ func (s *fakeBackupStore) PutCheckpoint(
 
 	byStack[cp.Update.String()] = cp
 
-	return nil
+	return false, nil
 }
 
 // checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp
@@ -916,6 +919,11 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 	slices.Sort(out)
 
 	return out, nil
+}
+
+// JournalBatches implements stack.JournalStore. The backup fake keeps no journal rows.
+func (s *fakeBackupStore) JournalBatches(context.Context, stack.ID, stack.UpdateID) ([]stack.JournalBatchRef, error) {
+	return nil, nil
 }
 
 // JournalKeys implements stack.JournalStore. The backup fake keeps no journal rows.
@@ -1614,6 +1622,20 @@ func (s *fakeBackupStore) FenceAndUnlock(
 func (s *fakeBackupStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	return backupFinalize(s, sv, fence, nil)
+}
+
+// FinalizeStateVersionExpecting implements workspace.StateStore.
+func (s *fakeBackupStore) FinalizeStateVersionExpecting(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	return backupFinalize(s, sv, fence, &expect)
+}
+
+// backupFinalize finalizes sv, and checks the current version when expect is set.
+func backupFinalize(
+	s *fakeBackupStore, sv workspace.StateVersion, fence namespace.Fence, expect *workspace.StateVersionID,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1647,6 +1669,10 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 
 	if err := checkBackupFinalize(s.data, w, sv); err != nil {
 		return err
+	}
+
+	if expect != nil && s.data.current[w.ID.String()] != expect.String() {
+		return workspace.ErrConcurrentModification
 	}
 
 	s.data.states[sv.ID.String()] = sv
@@ -2006,6 +2032,37 @@ func (s *fakeBackupStore) StartBackup(ctx context.Context, r backup.Record, star
 	return nil
 }
 
+// StartBackupClaimed implements backup.Registry as StartBackup does, and
+// claims the new operation for claim in the same write.
+func (s *fakeBackupStore) StartBackupClaimed(
+	ctx context.Context, r backup.Record, start durable.StartRequest, claim durable.StartClaim,
+) (durable.Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return durable.Operation{}, errFakeClosed
+	}
+
+	if err := start.Validate(); err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return durable.Operation{}, fmt.Errorf("start backup %s: operation %q: %w", r.ID, start.Key,
+			durable.ErrKeyConflict)
+	}
+
+	hooks := durabletest.Hooks{Before: nil, After: func() error { return s.createBackupLocked(r) }}
+
+	op, err := s.mem.StartClaimedWith(ctx, start, claim, hooks)
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("start backup operation: %w", err)
+	}
+
+	return op, nil
+}
+
 // FinishBackup implements backup.Registry. The row change runs inside the
 // step write of the durable harness, which checks the claim first and records
 // the step only when the row change succeeds. The ignoreFence knob skips the
@@ -2131,6 +2188,41 @@ func (s *fakeBackupStore) ListBackups(_ context.Context) ([]backup.Record, error
 	})
 
 	return out, nil
+}
+
+// Running implements blobguard.Watch: a running backup first, else a checking
+// or applying restore, the smallest ID first.
+func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return blobguard.Work{Kind: "", ID: ""}, false, errFakeClosed
+	}
+
+	var ids []string
+
+	for id, r := range s.data.backups {
+		if r.State == backup.StateRunning {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Backup, ID: slices.Min(ids)}, true, nil
+	}
+
+	for id := range s.data.restores {
+		if r := s.data.restores[id]; r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		return blobguard.Work{Kind: blobguard.Restore, ID: slices.Min(ids)}, true, nil
+	}
+
+	return blobguard.Work{Kind: "", ID: ""}, false, nil
 }
 
 // FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves
@@ -2936,6 +3028,7 @@ func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
 func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
 	name := ref.Project.String() + "/" + ref.Stack.String()
 	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
@@ -2956,6 +3049,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
 	name := ref.Name.String()
 	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		LastRelease:   nil,
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,

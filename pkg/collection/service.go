@@ -148,6 +148,35 @@ func (s *Service) CollectionOf(ctx context.Context, unit identity.Object) (strin
 	return ref.Name.String(), true, nil
 }
 
+// CollectionUnitIDs returns the stable IDs of the units in the collection obj,
+// deleted units that are not purged included. The object must carry the stable
+// ID of the collection: it returns ErrNotFound when the collection does not
+// exist in the namespace of obj, when it has another ID, or when obj has none.
+// It returns an error for an object that is not a collection.
+func (s *Service) CollectionUnitIDs(ctx context.Context, obj identity.Object) ([]string, error) {
+	if !obj.IsCollection() {
+		return nil, fmt.Errorf("units of %s: %w", obj, identity.ErrInvalidObject)
+	}
+
+	name, err := ParseName(obj.CollectionName())
+	if err != nil {
+		return nil, fmt.Errorf("units of %s: %w", obj, err)
+	}
+
+	// Defense in depth: the store checks the ID in its transaction too. This
+	// check stays so that a caller with no ID never reaches the store.
+	if obj.CollectionID() == "" {
+		return nil, fmt.Errorf("units of %s: %w", obj, ErrNotFound)
+	}
+
+	ids, err := s.store.ListCollectionUnitIDs(ctx, Ref{Namespace: obj.Namespace(), Name: name}, obj.CollectionID())
+	if err != nil {
+		return nil, fmt.Errorf("units of %s: %w", obj, err)
+	}
+
+	return ids, nil
+}
+
 // CollectionID returns the stable ID of the collection obj, with true. It
 // returns false and no error when no such collection exists. A grant on a
 // collection is keyed by this ID, so a deleted and re-created name does not

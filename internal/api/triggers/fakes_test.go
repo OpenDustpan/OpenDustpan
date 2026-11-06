@@ -84,7 +84,8 @@ type fakeInventory struct{ gone map[string]bool }
 func entries() []coreinventory.Entry {
 	mk := func(ns namespace.Name, tool, name, id string) coreinventory.Entry {
 		return coreinventory.Entry{
-			ManualLock: nil, LastChanged: time.Unix(0, 0), Namespace: ns, Tool: tool, Name: name, UnitID: id,
+			LastRelease: nil,
+			ManualLock:  nil, LastChanged: time.Unix(0, 0), Namespace: ns, Tool: tool, Name: name, UnitID: id,
 			DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, Collection: "", Labels: nil,
 		}
 	}

@@ -17,10 +17,13 @@ const (
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
+	backupColError       = "error"
 	backupColName        = "name"
+	backupColIssuer      = "issuer"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
+	backupColBlobKey     = "blob_key"
 	backupColReason      = "reason"
 	backupColWrapperID   = "wrapper_id"
 	backupColSequence    = "sequence"
@@ -38,6 +41,8 @@ const (
 	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
+	backupColPosition    = "position"
+	backupColProject     = "project"
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
@@ -86,7 +91,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "stacks",
 			columns: []string{
 				backupColNamespace,
-				"project",
+				backupColProject,
 				backupColName,
 				backupColVersion,
 				backupColCreatedAtMs,
@@ -113,7 +118,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"dry_run",
 				backupColStatus,
 				backupColVersion,
-				"revision",
+				backupColRevision,
 				"lease_digest",
 				"lease_expires_at_ms",
 				backupColCreatedAtMs,
@@ -139,7 +144,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"invalid",
 				"features_json",
 				"saved_at_ms",
-				"blob_key",
+				backupColBlobKey,
 				backupColSize,
 				"blob_size",
 				"blob_md5",
@@ -161,7 +166,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColStackID,
 				backupColUpdateID,
 				backupColArrival,
-				"blob_key",
+				backupColBlobKey,
 				backupColSHA256,
 				"md5",
 				backupColSize,
@@ -215,6 +220,11 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
+				"last_release_lock_id",
+				"last_release_holder",
+				"last_release_by",
+				"last_release_kind",
+				"last_release_at_ms",
 			},
 		},
 		{
@@ -266,8 +276,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColKind,
 				"id",
 				"level",
-				backupColTool,
-				"unit_name",
+				backupColUnitID,
 				backupColVersion,
 				backupColBody,
 				backupColUpdatedAtMs,
@@ -316,52 +325,9 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"purged_at_ms",
 			},
 		},
-		{
-			table: "workspaces",
-			columns: []string{
-				"id",
-				backupColNamespace,
-				backupColName,
-				"revision",
-				"lock_id",
-				"lock_holder",
-				"lock_reason",
-				"locked_at_ms",
-				"current_state_version_id",
-				backupColCreatedAtMs,
-				backupColUpdatedAtMs,
-				"allow_forced_writes",
-				"allow_unlocked_writes",
-				backupColDeletedAtMs,
-				backupColDeletedName,
-			},
-		},
-		{
-			table: "state_versions",
-			columns: []string{
-				"id",
-				backupColWorkspaceID,
-				backupColStatus,
-				"serial",
-				"lineage",
-				"md5",
-				backupColSize,
-				"content_key",
-				"outputs",
-				"force",
-				"upload_digest",
-				"upload_expires_at_ms",
-				"holder",
-				"lock_id",
-				backupColCreatedAtMs,
-				"finalized_at_ms",
-				"restored_from",
-				"sealed",
-				"sensitive_marks",
-				"fenced_by",
-				"unlocked_write",
-			},
-		},
+	}
+
+	audit := []sqliteBackupTable{
 		{
 			table: "audit_entries",
 			columns: []string{
@@ -394,7 +360,65 @@ func sqliteBackupTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(base, sqliteLaterBackupTables())
+	return slices.Concat(base, sqliteWorkspaceBackupTables(), audit, sqliteLaterBackupTables())
+}
+
+// sqliteWorkspaceBackupTables lists the column lists of the workspace tables,
+// in the order of backup.Tables.
+func sqliteWorkspaceBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "workspaces",
+			columns: []string{
+				"id",
+				backupColNamespace,
+				backupColName,
+				backupColRevision,
+				"lock_id",
+				"lock_holder",
+				"lock_reason",
+				"locked_at_ms",
+				"current_state_version_id",
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				"allow_forced_writes",
+				"allow_unlocked_writes",
+				backupColDeletedAtMs,
+				backupColDeletedName,
+				"last_release_lock_id",
+				"last_release_holder",
+				"last_release_by",
+				"last_release_kind",
+				"last_release_at_ms",
+			},
+		},
+		{
+			table: "state_versions",
+			columns: []string{
+				"id",
+				backupColWorkspaceID,
+				backupColStatus,
+				"serial",
+				"lineage",
+				"md5",
+				backupColSize,
+				"content_key",
+				"outputs",
+				"force",
+				"upload_digest",
+				"upload_expires_at_ms",
+				"holder",
+				"lock_id",
+				backupColCreatedAtMs,
+				"finalized_at_ms",
+				"restored_from",
+				"sealed",
+				"sensitive_marks",
+				"fenced_by",
+				"unlocked_write",
+			},
+		},
+	}
 }
 
 // sqliteLaterBackupTables lists the column lists of the tables that follow the
@@ -410,14 +434,33 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteProfileBackupTables(),
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
+		sqliteLocalUserBackupTables(),
 		sqliteSavedViewBackupTables(),
 		sqliteDriftBackupTables(),
+		sqliteUnitSettingsBackupTables(),
 		sqliteGitHostBackupTables(),
 		sqliteRegistryBackupTables(),
 		sqliteSinkBackupTables(),
 		sqliteTriggerBackupTables(),
 		sqliteItemKeyBackupTables(),
+		sqliteSettingBackupTables(),
+		sqlitePlacementBackupTables(),
+		sqliteCatalogBackupTables(),
+		sqliteTrustRuleBackupTables(),
 	)
+}
+
+// sqlitePlacementBackupTables lists the column list of the placement rules.
+func sqlitePlacementBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "placement_rules",
+			columns: []string{
+				"id", backupColNamespace, backupColPosition, backupColTool, backupColProject, "stack",
+				"collection_key", "created_by", backupColCreatedAtMs,
+			},
+		},
+	}
 }
 
 // sqliteControlTables lists the column list of every table of
@@ -491,7 +534,27 @@ func sqliteControlTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+	return slices.Concat(
+		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+	)
+}
+
+// sqliteNameLockControlTables lists the columns of the counts of the lockout
+// by name and of the key of their names.
+func sqliteNameLockControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableNameLocks,
+			columns: []string{
+				"scope", backupColName, "sub", "failures", "locked_until_ms", "level", "last_failure_ms",
+				"last_lock_end_ms", "reset_after_ms",
+			},
+		},
+		{
+			table:   backup.TableNameLockKey,
+			columns: []string{"id", "key"},
+		},
+	}
 }
 
 // sqliteRevocationControlTables lists the column list of the control table that
@@ -513,6 +576,13 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 		{
 			table:   backup.TableInstanceVersions,
 			columns: []string{"id", "binary_version", backupColStartedAtMs},
+		},
+		{
+			table: backup.TableStoreChecks,
+			columns: []string{
+				"id", backupColTarget, backupColState, "requested_by", backupColStartedAtMs, backupColEndedAtMs,
+				backupColError, "report",
+			},
 		},
 	}
 }
@@ -536,6 +606,14 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TableDurableHeartbeats,
 			columns: []string{"owner", backupColAtMs, "lease_ms"},
 		},
+		{
+			table:   backup.TableLocalUserResets,
+			columns: sqliteLocalUserResetColumns(),
+		},
+		{
+			table:   backup.TablePasskeyChallenges,
+			columns: sqlitePasskeyChallengeColumns(),
+		},
 	}
 }
 
@@ -557,6 +635,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"end_reason",
 				"source_ip",
 				"user_agent",
+				"generation",
 			},
 		},
 		{
@@ -574,11 +653,11 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{backupColProviderID, "issuer", backupColCreatedAtMs},
+			columns: []string{backupColProviderID, backupColIssuer, backupColCreatedAtMs},
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", backupColWrapperID, "ciphertext", backupColCreatedAtMs},
+			columns: []string{backupColScopeID, backupColWrapperID, "ciphertext", backupColCreatedAtMs},
 		},
 		{
 			table: "sign_in_providers",
@@ -749,6 +828,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disable_accounts",
 				"disable_break_glass",
 				backupColUpdatedAtMs,
+				"exchange_lifetime_ms",
 			},
 		},
 		{

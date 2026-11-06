@@ -53,6 +53,8 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 ./bin/opendustpan namespace create --server https://localhost:8080 --ca-file data/cert.pem acme
 ```
 
+Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
+
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
 ## Compose stack with PostgreSQL and S3-compatible storage

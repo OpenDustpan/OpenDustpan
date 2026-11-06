@@ -178,7 +178,7 @@ func testReviewCustomRoles(t *testing.T, s access.Store) {
 	}
 
 	scope := access.ReviewScope{
-		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
+		Namespace: "acme", Object: identity.Object{}, Inside: nil, Containers: []string{"@server"},
 		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}
 

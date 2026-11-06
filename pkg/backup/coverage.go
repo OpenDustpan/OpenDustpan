@@ -25,7 +25,9 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // revocation journal holds the writes that only reduce access and that ran
 // in maintenance mode: the swap keeps it and applies it to the restored
 // access tables. The instance version rows describe the server processes
-// that run now, so the swap keeps them. The schema holds every table of Tables and of ControlTables,
+// that run now, so the swap keeps them. The store check rows describe the
+// store of this installation at the time of a check, so the swap keeps
+// them too. The schema holds every table of Tables and of ControlTables,
 // and no other table (schema_migrations and audit_chain_state aside, which
 // the adapters keep as bookkeeping). Treat the list as a constant and never mutate it.
 //
@@ -35,6 +37,8 @@ var ControlTables = []string{
 	TableDurableSteps,
 	TableDurableSchedules,
 	TableSignInFailures,
+	TableNameLocks,
+	TableNameLockKey,
 	TableAuditChainCheck,
 	TableAuditChainMark,
 	TableBackups,
@@ -42,6 +46,7 @@ var ControlTables = []string{
 	TableInstallation,
 	TableMaintenanceRevocations,
 	TableInstanceVersions,
+	TableStoreChecks,
 	"runner_claims",
 	"runner_handoff_tokens",
 	"runner_sessions",
@@ -50,7 +55,12 @@ var ControlTables = []string{
 
 // EmptiedTables lists the tables of the schema that a backup leaves out and
 // a restore leaves empty: the replay records of the Idempotency-Key header and
-// the server key of their fingerprints, and the heartbeats of the workers. A
+// the server key of their fingerprints, the heartbeats of the workers, the
+// reset codes and set-up codes of local users, and the open passkey
+// ceremonies. A reset code that a restore
+// brought back would set a password that an administrator gave out before
+// the time of the restore. A ceremony lives 300 seconds, and a restore that
+// brought one back would let an old challenge work again. A
 // heartbeat describes the workers that run now, and the next beat of a worker
 // makes its row again. A replay record answers for the state
 // at the time of the first request, so a replay after a restore of older state
@@ -63,6 +73,8 @@ var EmptiedTables = []string{
 	TableIdempotencyRecords,
 	TableIdempotencyServerKey,
 	TableDurableHeartbeats,
+	TableLocalUserResets,
+	TablePasskeyChallenges,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

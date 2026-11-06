@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18 · part of ADR 190. Decisions 1 and 5 superseded in part by ADR 230
 
+Changed by:
+
+- ADR 222 changes decisions 1 and 5: errors, status codes and audit entries of
+  gates.
+- ADR 230 changes decisions 1 and 5: the errors and status codes of gates.
+
 ## Context
 
 CLAUDE.md asks for small ports in the package that consumes them, each

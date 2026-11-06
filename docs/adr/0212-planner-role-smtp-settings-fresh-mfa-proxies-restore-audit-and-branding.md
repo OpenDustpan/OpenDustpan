@@ -2,6 +2,16 @@
 
 Status: accepted · 2026-10-18. Supersedes in part ADR 27 decision 2. Extends ADR 46 decision 8, ADR 52, ADR 56, ADR 103 decision 2 and ADR 180 decision 11. Accepts part of RFC 68. The window and the "set to 0" item of decision 3 superseded by ADR 227. Decision 6 superseded in part by ADRs 232 and 235
 
+Changed by:
+
+- ADR 227 changes decision 3: the window and the set to 0 item.
+- ADR 232 changes decision 6: the public sign-in answer gets
+  translationFeedbackLinks.
+- ADR 235 changes decision 6: the sign-in answer holds the branding, not the
+  preset only.
+- ADR 301 extends decision 2: the SMTP sender of the installation also sends
+  the one-time code of the first enrollment of a factor.
+
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// secretsProvidersMember is the member of a deployment that holds the state of
+// SecretsProvidersMember is the member of a deployment that holds the state of
 // its secrets provider.
-const secretsProvidersMember = "secrets_providers"
+const SecretsProvidersMember = "secrets_providers"
 
 // resourcesMember is the member of a deployment that holds its resources.
 const resourcesMember = "resources"
@@ -26,7 +26,7 @@ const urnMember = "urn"
 // the known one. A member with another type makes the CLI fail to read the
 // whole stack. A null value reads as a missing member.
 func deploymentFieldKind(name string) (string, jsontext.Kind, bool) {
-	for _, known := range []string{"manifest", secretsProvidersMember} {
+	for _, known := range []string{"manifest", SecretsProvidersMember} {
 		if strings.EqualFold(name, known) {
 			return known, jsontext.KindBeginObject, true
 		}

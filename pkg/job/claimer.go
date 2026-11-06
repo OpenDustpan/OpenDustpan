@@ -68,10 +68,18 @@ const reasonNotRunnable = "the job cannot take a claim on its current phase"
 // and ends its phase with the rule of Release: the job ends canceled when no
 // step that changes resources began, and failed when one began. The end of
 // the operation commits with the event, as for a Release of a holder.
+//
+// Each claim meets the gates of the unit again, through the same GateGuard
+// that the start of the job meets. A gate that someone saved after the start
+// covers the job when a runner claims its phase. A claim that an enforced gate
+// covers, or whose gates the guard cannot read, fails the phase in the write
+// that ends the operation, with an audit entry of the refused claim. The
+// runner gets no phase. See gateRefusal.
 type DurableClaimer struct {
 	jobs       Store
 	operations durable.Store
 	namespaces NamespaceReader
+	gates      GateGuard
 	now        func() time.Time
 }
 
@@ -87,11 +95,13 @@ func WithClaimerClock(now func() time.Time) ClaimerOption {
 }
 
 // NewClaimer returns the claimer of the phases of jobs. namespaces gives the
-// current fence of the namespace of a unit.
+// current fence of the namespace of a unit. gates tells which enforced gates
+// cover the unit of a job at each claim. It is required: a claimer with a nil
+// guard refuses every claim, so no phase runs past a gate that nobody checks.
 func NewClaimer(
-	jobs Store, operations durable.Store, namespaces NamespaceReader, opts ...ClaimerOption,
+	jobs Store, operations durable.Store, namespaces NamespaceReader, gates GateGuard, opts ...ClaimerOption,
 ) *DurableClaimer {
-	c := &DurableClaimer{jobs: jobs, operations: operations, namespaces: namespaces, now: time.Now}
+	c := &DurableClaimer{jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now}
 
 	for _, o := range opts {
 		o(c)
@@ -173,7 +183,7 @@ func releaseEnd(j *Job, phase int, claim durable.Claim) phaseEnd {
 
 	if ev == EventPhaseFailed {
 		return phaseEnd{
-			event: ev, reason: why, delivery: nil,
+			event: ev, reason: why, delivery: nil, entries: nil,
 			operation: OperationEnd{
 				Claim: claim, Kind: EndFail, Failure: durable.Failure{Message: why, Final: true, RetryAfter: 0},
 			},
@@ -181,7 +191,7 @@ func releaseEnd(j *Job, phase int, claim durable.Claim) phaseEnd {
 	}
 
 	return phaseEnd{
-		event: ev, reason: why, delivery: nil,
+		event: ev, reason: why, delivery: nil, entries: nil,
 		operation: OperationEnd{Claim: claim, Kind: EndRelease, Failure: noFailure()},
 	}
 }
@@ -211,7 +221,7 @@ func (c *DurableClaimer) Finish(ctx context.Context, pc PhaseClaim, o Outcome) e
 
 		if o.Succeeded {
 			return phaseEnd{
-				event: ev, reason: "", delivery: delivery,
+				event: ev, reason: "", delivery: delivery, entries: nil,
 				operation: OperationEnd{Claim: pc.Claim, Kind: EndComplete, Failure: noFailure()},
 			}, nil
 		}
@@ -222,7 +232,7 @@ func (c *DurableClaimer) Finish(ctx context.Context, pc PhaseClaim, o Outcome) e
 		}
 
 		return phaseEnd{
-			event: ev, reason: reason, delivery: delivery,
+			event: ev, reason: reason, delivery: delivery, entries: nil,
 			operation: OperationEnd{
 				Claim: pc.Claim, Kind: EndFail, Failure: durable.Failure{Message: reason, Final: true, RetryAfter: 0},
 			},
@@ -248,6 +258,8 @@ type phaseEnd struct {
 	reason    string
 	delivery  *DeliveryResult
 	operation OperationEnd
+	// entries are the audit entries that commit with the end, or nil.
+	entries []audit.Entry
 }
 
 // end ends the claim pc in one write. plan returns the end for the job as it
@@ -362,7 +374,7 @@ func (c *DurableClaimer) claimOnce(
 
 	if ev == EventPhaseFailed {
 		pe := phaseEnd{
-			event: ev, reason: why, delivery: nil,
+			event: ev, reason: why, delivery: nil, entries: nil,
 			operation: OperationEnd{
 				Claim: op.Claim, Kind: EndFail, Failure: durable.Failure{Message: why, Final: true, RetryAfter: 0},
 			},
@@ -371,7 +383,74 @@ func (c *DurableClaimer) claimOnce(
 		return none, false, c.endPhase(ctx, op.Claim, &j, fence, pe)
 	}
 
+	if pe, refused := c.gateRefusal(ctx, op, &j); refused {
+		return none, false, c.endPhase(ctx, op.Claim, &j, fence, pe)
+	}
+
 	return c.applyClaim(ctx, op, &j, fence)
+}
+
+// The reasons of a claim that the gates refuse. Each is the reason of the
+// failed phase and of the audit entry of the refused claim.
+const (
+	// reasonNoGateGuard is the reason of a claim on a claimer with no guard.
+	reasonNoGateGuard = "the claim is refused: the server has no gate guard, so it cannot check the gates of the unit"
+	// reasonGatesUnread is the reason of a claim whose gates the guard
+	// cannot read.
+	reasonGatesUnread = "the claim is refused: the gates of the unit cannot be read"
+	// reasonGateCovers starts the reason of a claim that an enforced gate
+	// covers. The text of the GateError follows it.
+	reasonGateCovers = "the claim is refused: "
+)
+
+// gateRefusal checks the gates of the unit of j before the claim op runs its
+// phase. It returns true and the end of the phase, with the audit entry of
+// the refused claim, when an enforced gate at change.propose or state.write covers
+// the unit, when the guard cannot answer, and when the claimer has no guard.
+// The job token of the phase passes state.write with no evaluation, so this
+// check is the only one between a gate saved after the start and the run of
+// the phase. It fails closed: any answer but an empty list refuses.
+//
+// Defense in depth: the start of the job checks the same gates. This check
+// stays so that a gate saved after the start, or a job that some other path
+// stored, still stops at the claim, and it does not rely on the start check.
+func (c *DurableClaimer) gateRefusal(ctx context.Context, op *durable.Operation, j *Job) (phaseEnd, bool) {
+	reason, refused := c.gateReason(ctx, j)
+	if !refused {
+		return phaseEnd{
+			event: "", reason: "", delivery: nil, entries: nil,
+			operation: OperationEnd{Claim: op.Claim, Kind: "", Failure: noFailure()},
+		}, false
+	}
+
+	return phaseEnd{
+		event: EventPhaseFailed, reason: reason, delivery: nil,
+		operation: OperationEnd{
+			Claim: op.Claim, Kind: EndFail, Failure: durable.Failure{Message: reason, Final: true, RetryAfter: 0},
+		},
+		entries: []audit.Entry{c.claimEntry(op, j, audit.OutcomeDenied, reason)},
+	}, true
+}
+
+// gateReason asks the guard for the enforced gates of the unit of j. It
+// returns the reason of the refusal and true when the claim must not run.
+func (c *DurableClaimer) gateReason(ctx context.Context, j *Job) (string, bool) {
+	if c.gates == nil {
+		return reasonNoGateGuard, true
+	}
+
+	enforced, err := c.gates.Enforced(ctx, j.Spec.Unit)
+	if err != nil {
+		// The text of the cause may hold detail of a driver, so the reason,
+		// which the job and the audit entry show, is a fixed text.
+		return reasonGatesUnread, true
+	}
+
+	if len(enforced) > 0 {
+		return reasonGateCovers + (&GateError{Gates: enforced}).Error(), true
+	}
+
+	return "", false
 }
 
 // endUnrunnable ends the claimed operation op of the job j, which cannot take
@@ -468,7 +547,7 @@ func (c *DurableClaimer) endPhase(
 		Job: j.ID, Version: j.Version, Event: pe.event, Wait: WaitNone, Reason: pe.reason, Dispatch: nil,
 		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,
 		End: &pe.operation,
-	}, fence, nil)
+	}, fence, pe.entries)
 
 	switch {
 	case errors.Is(err, durable.ErrClaimLost):
@@ -578,15 +657,22 @@ func (c *DurableClaimer) claimEntries(op *durable.Operation, j *Job) []audit.Ent
 		return nil
 	}
 
+	return []audit.Entry{c.claimEntry(op, j, audit.OutcomeSuccess, "")}
+}
+
+// claimEntry returns the runner:claim entry of the claim op of the current
+// phase of j, with its outcome and reason. A refused claim is an entry of
+// every phase, also one that changes nothing.
+func (c *DurableClaimer) claimEntry(op *durable.Operation, j *Job, outcome audit.Outcome, reason string) audit.Entry {
 	unit := j.Spec.Unit
 
-	return []audit.Entry{{
+	return audit.Entry{
 		At: c.now().UTC(), Namespace: unit.Namespace(), Subject: op.Claim.Owner, IDPSubject: "", TokenID: "",
 		Action: string(ActionRunnerClaim), Object: unit.String(), Version: "", ValuePath: "", ValueCount: nil,
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: "",
-	}}
+		Outcome: outcome, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: reason,
+	}
 }
 
 // claimError wraps the error of the durable store in the error of this

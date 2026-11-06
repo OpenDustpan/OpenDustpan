@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/objectstore"
+	"opendustpan.org/opendustpan/pkg/logsink/otlp"
 	"opendustpan.org/opendustpan/pkg/logsink/syslog"
 	"opendustpan.org/opendustpan/pkg/logsink/webhook"
 )
@@ -33,11 +34,22 @@ const (
 	webhookSecretFileEnvVar = "DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE" //nolint:gosec // The name of a variable, not a credential.
 )
 
+// Environment variables of the OTLP sink headers. They hold the names of
+// the variables, not a value. The headers can hold a credential, so no flag
+// takes them.
+const (
+	otlpHeadersEnvVar        = "DUSTPAN_AUDIT_OTLP_HEADERS"
+	otlpHeadersFileEnvVar    = "DUSTPAN_AUDIT_OTLP_HEADERS_FILE"
+	logOTLPHeadersEnvVar     = "DUSTPAN_LOG_OTLP_HEADERS"
+	logOTLPHeadersFileEnvVar = "DUSTPAN_LOG_OTLP_HEADERS_FILE"
+)
+
 // Kinds of an --audit-sink item: the text before the first ":" or "+".
 const (
 	sinkKindFile    = "file"
 	sinkKindSyslog  = "syslog"
 	sinkKindWebhook = "webhook"
+	sinkKindOTLP    = "otlp"
 	sinkKindBlob    = "blob"
 )
 
@@ -58,25 +70,30 @@ type openedSinks struct {
 
 // sinkConfig holds what openSink needs beyond the spec: the setting that
 // names the sink (for errors), the live blob store (nil refuses blob:), the
-// default syslog facility and the variables of the webhook secret.
+// default syslog facility, the variables of the webhook secret and the
+// variables of the OTLP headers.
 type sinkConfig struct {
-	setting       error
-	blobs         blob.Store
-	lookup        func(string) (string, bool)
-	secretEnv     string
-	secretFileEnv string
-	facility      int
+	setting        error
+	blobs          blob.Store
+	lookup         func(string) (string, bool)
+	secretEnv      string
+	secretFileEnv  string
+	headersEnv     string
+	headersFileEnv string
+	facility       int
 }
 
 // auditSinkConfig answers the sink configuration of --audit-sink.
 func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkConfig {
 	return sinkConfig{
-		setting:       errAuditSink,
-		blobs:         blobs,
-		lookup:        lookup,
-		secretEnv:     webhookSecretEnvVar,
-		secretFileEnv: webhookSecretFileEnvVar,
-		facility:      syslog.FacilityLogAudit,
+		setting:        errAuditSink,
+		blobs:          blobs,
+		lookup:         lookup,
+		secretEnv:      webhookSecretEnvVar,
+		secretFileEnv:  webhookSecretFileEnvVar,
+		headersEnv:     otlpHeadersEnvVar,
+		headersFileEnv: otlpHeadersFileEnvVar,
+		facility:       syslog.FacilityLogAudit,
 	}
 }
 
@@ -166,10 +183,14 @@ func openSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, error) 
 		s, err := openWebhookSink(strings.TrimPrefix(spec, sinkKindWebhook+":"), cfg)
 
 		return s, 0, err
+	case sinkKindOTLP:
+		s, err := openOTLPSink(strings.TrimPrefix(spec, sinkKindOTLP+":"), cfg)
+
+		return s, 0, err
 	case sinkKindBlob:
 		return openBlobSink(spec, cfg)
 	default:
-		return nil, 0, fmt.Errorf("%w %q: unknown sink kind %q: want file, syslog, webhook or blob",
+		return nil, 0, fmt.Errorf("%w %q: unknown sink kind %q: want file, syslog, webhook, otlp or blob",
 			cfg.setting, spec, kind)
 	}
 }
@@ -292,7 +313,7 @@ var (
 	// errNoCertificates reports a CA file with no PEM certificate.
 	errNoCertificates = errors.New("holds no PEM certificate")
 	// errNoBlobSink reports a blob: sink for a setting that has no blob store.
-	errNoBlobSink = errors.New("this setting has no blob store: pick file, syslog or webhook")
+	errNoBlobSink = errors.New("this setting has no blob store: pick file, syslog, webhook or otlp")
 	// errReservedPrefix reports a blob sink prefix that the server owns.
 	errReservedPrefix = errors.New(
 		"the prefixes namespaces, pulumi and audit-checkpoints belong to the server: pick another prefix",
@@ -315,6 +336,80 @@ func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
 	}
 
 	return s, nil
+}
+
+// openOTLPSink opens an otlp:<https URL> sink. The headers come from the
+// variable cfg.headersEnv or from the file that cfg.headersFileEnv names. A
+// sink with no headers is valid, because a collector in a private network
+// can need none.
+func openOTLPSink(rawURL string, cfg sinkConfig) (*otlp.Sink, error) {
+	headers, err := otlpHeadersFrom(cfg.lookup, cfg.headersEnv, cfg.headersFileEnv)
+	if err != nil {
+		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
+	}
+
+	s, err := otlp.New(otlp.Config{
+		Client: nil, Headers: headers, URL: rawURL, ServiceName: "", Timeout: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
+	}
+
+	return s, nil
+}
+
+// Errors of the OTLP header settings. None of them holds a header value.
+var (
+	// errNoOTLPHeaders reports that neither header variable holds a value.
+	errNoOTLPHeaders = errors.New("no OTLP headers are set")
+	// errOTLPHeaderItem reports a header item that is not Name=Value.
+	errOTLPHeaderItem = errors.New("each OTLP header is Name=Value, with the value percent-encoded")
+	// errOTLPHeaderTwice reports a header name that the settings give twice.
+	errOTLPHeaderTwice = errors.New("an OTLP header name is set twice")
+)
+
+// otlpHeadersFrom reads the OTLP headers from the variable env, else from
+// the file that the variable fileEnv names. The file must allow no group or
+// other access. It answers no headers when neither variable holds a value.
+// The text is a list of Name=Value items, separated by commas or line
+// breaks, as OTEL_EXPORTER_OTLP_HEADERS writes it. A value is
+// percent-encoded, so it can hold a comma or an equals sign. The errors name
+// the position of an item, never its text, because a value can be a secret.
+func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (map[string]string, error) {
+	raw, err := secretFrom(lookup, env, fileEnv, errNoOTLPHeaders)
+	if errors.Is(err, errNoOTLPHeaders) {
+		return map[string]string{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	headers := map[string]string{}
+
+	items := strings.FieldsFunc(string(raw), func(r rune) bool { return r == ',' || r == '\n' || r == '\r' })
+	for i, item := range items {
+		name, value, found := strings.Cut(item, "=")
+
+		name = strings.TrimSpace(name)
+		if !found || name == "" {
+			return nil, fmt.Errorf("item %d: %w", i+1, errOTLPHeaderItem)
+		}
+
+		decoded, decodeErr := url.PathUnescape(strings.TrimSpace(value))
+		if decodeErr != nil {
+			// The error of PathUnescape repeats a part of the value.
+			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errOTLPHeaderItem)
+		}
+
+		if _, dup := headers[strings.ToLower(name)]; dup {
+			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errOTLPHeaderTwice)
+		}
+
+		headers[strings.ToLower(name)] = decoded
+	}
+
+	return headers, nil
 }
 
 // errNoWebhookSecret reports a webhook sink without a secret.

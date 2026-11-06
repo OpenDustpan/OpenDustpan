@@ -2,6 +2,20 @@
 
 Status: accepted · 2026-10-18. Decisions 14 and 16 superseded in part by ADR 149. Parts listed in ADR 148 decision 18 superseded by ADR 148. Decision 9 superseded in part by ADR 190. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 148 changes decisions 3 and 6: the Article references, the report kinds,
+  the Article table and two open questions.
+- ADR 148 extends decisions 1, 5, 9, 11 and 14: new incident times, criteria,
+  change fields, export fields and routes.
+- ADR 149 extends decisions 14 and 16: an incident and its notes of another
+  namespace are 404.
+- ADR 190 changes decision 9: the change order and its jobs are the change
+  record.
+- ADR 198 changes decisions 9 and 11: one change record and one export record
+  for each change order.
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 On 17 October 2026 the project owner decided that the project designs the

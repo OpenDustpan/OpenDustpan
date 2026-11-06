@@ -13,11 +13,13 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -214,7 +216,18 @@ type fakeUpdates struct {
 	updates map[stack.UpdateID]stack.Update
 }
 
-func (*fakeUpdates) CreateUpdate(context.Context, stack.Update, namespace.Fence) error { return nil }
+func (*fakeUpdates) CreateUpdate(
+	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
+) error {
+	item, err := key.RefFor(u.Ref.Namespace, "stk-maintenance", u.ID)
+	if err != nil {
+		return err
+	}
+
+	_, err = key.NewKey(ctx, nil, item, fence)
+
+	return err
+}
 
 func (f *fakeUpdates) GetUpdate(_ context.Context, _ stack.Ref, id stack.UpdateID) (stack.Update, error) {
 	u, ok := f.updates[id]
@@ -264,8 +277,8 @@ func (*fakeUpdates) ListUpdates(context.Context, stack.Ref, stack.Page) ([]stack
 // fakeCheckpoints answers no checkpoint. The cancel path writes none.
 type fakeCheckpoints struct{}
 
-func (fakeCheckpoints) PutCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) error {
-	return nil
+func (fakeCheckpoints) PutCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) (bool, error) {
+	return false, nil
 }
 
 func (fakeCheckpoints) LatestCheckpoint(context.Context, stack.Ref) (stack.Checkpoint, error) {
@@ -414,6 +427,12 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 	return nil
 }
 
+func (fakeStates) FinalizeStateVersionExpecting(
+	context.Context, workspace.StateVersion, namespace.Fence, workspace.StateVersionID,
+) error {
+	return nil
+}
+
 func (fakeStates) FenceAndUnlock(
 	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
 	audit.Entry,
@@ -472,9 +491,26 @@ func (fakeBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 
 func (fakeBlobs) Delete(context.Context, blob.Key) error { return nil }
 
-func (fakeBlobs) List(context.Context, string) ([]blob.Object, error) { return nil, nil }
+// ListPage implements blob.Store: it cuts the page that req selects from the
+// objects of list.
+func (x fakeBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	if err := req.Validate(); err != nil {
+		return blob.Page{}, err
+	}
+
+	objects, err := x.list(ctx, req.Prefix)
+	if err != nil {
+		return blob.Page{}, err
+	}
+
+	slices.SortFunc(objects, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return blob.PageOf(objects, req), nil
+}
 
 func (fakeBlobs) Ping(context.Context) error { return nil }
+
+func (fakeBlobs) list(context.Context, string) ([]blob.Object, error) { return nil, nil }
 
 const (
 	testRegion    = namespace.InstallationName("eu-west")
@@ -544,6 +580,8 @@ func newFixtureWith(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
@@ -564,6 +602,7 @@ func newFixtureWith(
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             states,
@@ -672,10 +711,11 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Holder:   "admin",
 			Reason:   "apply",
 		},
-		ID:        "ws-1",
-		Ref:       workspace.Ref{Namespace: testNamespace, Name: parsed},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-1",
+		Ref:         workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }
@@ -700,6 +740,8 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
@@ -720,6 +762,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             fakeStates{},

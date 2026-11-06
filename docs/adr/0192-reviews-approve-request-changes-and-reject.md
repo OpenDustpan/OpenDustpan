@@ -2,6 +2,15 @@
 
 Status: accepted · 2026-10-18 · part of ADR 190. Decisions 4 and 5 superseded by ADR 225. The open questions answered by ADRs 225 and 227
 
+Changed by:
+
+- ADR 222 supersedes decisions 4 and 5: approval defaults replace
+  MinApprovals.
+- ADR 225 changes decisions 4 and 5: MinApprovals and the eligible approvers.
+- ADR 227 extends: answers the open question on fresh authentication of
+  signatures.
+- ADR 299 extends: in mode 1, an approving review on the Git host counts.
+
 ## Context
 
 A change order needs approvals before its apply (ADR 190). The owner gave

@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 )
 
 var _ installation.KindStore = (*Store)(nil)
@@ -25,7 +26,10 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 
 	_, err := s.queries.ClaimInstallationKind(ctx, pgtype.Text{String: kind.String(), Valid: true})
 	if err != nil {
-		return "", fmt.Errorf("store installation kind postgres database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"store installation kind postgres database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	raw, err := s.queries.GetInstallationKind(ctx)
@@ -36,7 +40,10 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("select installation kind postgres database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation kind postgres database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return installation.FromStored(raw.String)
@@ -44,10 +51,23 @@ func (s *Store) ClaimKind(ctx context.Context, kind installation.Kind) (installa
 
 // checkKind compares the kind in the database with the kind of the command
 // before the migrations run. The caller holds the migration lock in tx. It
-// does nothing without a command kind, and when the installation table has
-// no kind column yet: the migrations add the column, and the claim decides.
+// does nothing without a command kind, and on a new database with no
+// installation table: the baseline makes the table, and the claim decides.
+// An installation table without the kind column fails closed with
+// installation.ErrUnavailable: the baseline makes the column, so such a table
+// is damaged, and an unknown kind is never a dev kind.
 func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	if want == "" {
+		return nil
+	}
+
+	var table bool
+
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('installation') IS NOT NULL`).Scan(&table); err != nil {
+		return fmt.Errorf("check installation table: %w", err)
+	}
+
+	if !table {
 		return nil
 	}
 
@@ -62,7 +82,8 @@ func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	}
 
 	if !present {
-		return nil
+		return fmt.Errorf("read installation kind: the installation table has no kind column: %w",
+			installation.ErrUnavailable)
 	}
 
 	var raw pgtype.Text
@@ -73,7 +94,7 @@ func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("read installation kind: %w", installation.ErrUnavailable)
+		return fmt.Errorf("read installation kind: %w", storeerr.Sentinel(installation.ErrUnavailable, err))
 	}
 
 	return installation.Check(raw.String, want)
@@ -94,7 +115,10 @@ func (s *Store) ReadKind(ctx context.Context) (installation.Kind, error) {
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read installation kind postgres database: %w", installation.ErrUnavailable)
+		return "", fmt.Errorf(
+			"read installation kind postgres database: %w",
+			storeerr.Sentinel(installation.ErrUnavailable, err),
+		)
 	}
 
 	return installation.FromStored(raw.String)

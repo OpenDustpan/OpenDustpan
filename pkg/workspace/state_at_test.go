@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -33,6 +34,7 @@ func stateAtService(t *testing.T, f fixture, answer workspace.StateAt, err error
 	t.Helper()
 
 	svc, newErr := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             stateAtStates{memStore: f.store, err: err, answer: answer},
@@ -224,6 +226,7 @@ func namedFixture(t *testing.T, names inventory.Names, logErr error) (*workspace
 	}
 
 	svc, newErr := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             states,

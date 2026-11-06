@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
+	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -316,13 +317,15 @@ func buildFixtureFull(
 		sinkStore = wrap(store, sinkStore)
 	}
 
+	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
+
 	svc, err := sinks.NewService(sinks.Config{
 		Store:      sinkStore,
 		Sealer:     notify.SinkSealer{Namespaces: secrets, Installation: nil},
 		Namespaces: namespaces,
 		Senders:    append([]notify.Sender{hook}, extra...),
 		Ports:      egress.Ports{},
-		Counter:    store,
+		Counter:    authgatetest.NewMemory(clock.Now),
 		Now:        nil,
 	})
 	if err != nil {
@@ -334,7 +337,6 @@ func buildFixtureFull(
 		denied[a] = true
 	}
 
-	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
 	logs := &logBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	cfg := apinotifications.Config{

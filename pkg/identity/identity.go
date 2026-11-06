@@ -228,11 +228,26 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerReadSettings allows reading the settings resource of the
+	// installation: each declared setting with its effective value and its
+	// source. Its object is ServerObject.
+	ActionServerReadSettings Action = "server:read-settings"
+
+	// ActionInstallationStoreCheck allows starting and reading the store checks
+	// of the installation: the deep check of a blob store, which writes
+	// throwaway objects under a prefix of its own. Its object is ServerObject.
+	ActionInstallationStoreCheck Action = "installation:store-check"
 	// ActionServerManageSettings allows changing the installation settings
-	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
-	// settings name it: the start entry and the entry of a reload of the
-	// configuration file. RFC 68 decides the settings API that checks it.
+	// through the settings resource. Its object is ServerObject. The audit
+	// entries of the settings name it: the start entry and the entry of a
+	// reload of the configuration file.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionNamespaceReadSettings allows reading the settings resource of a
+	// namespace. Its object is the namespace.
+	ActionNamespaceReadSettings Action = "namespace:read-settings"
+	// ActionNamespaceManageSettings allows changing the settings resource of
+	// a namespace. Its object is the namespace.
+	ActionNamespaceManageSettings Action = "namespace:manage-settings"
 	// ActionServerSetAuditChain allows approving a change of the audit
 	// chain to the setting of the server, on or off. A change to off also
 	// needs ActionServerDisableAuditChain. Its object is ServerObject.
@@ -297,6 +312,12 @@ const (
 	// namespace. Its object is a namespace. It reaches only the principals
 	// of that namespace, through principal:manage-tokens on each of them.
 	ActionNamespaceManagePrincipalTokens Action = "namespace:manage-principal-tokens"
+	// ActionNamespaceManageTrustRules allows creating and deleting the
+	// workload trust rules of a namespace. Its object is a namespace. A rule
+	// lets a workload act as a principal of the namespace, so a create also
+	// needs principal:manage-tokens on that principal. Reading the rules
+	// needs ActionNamespaceReadAccess.
+	ActionNamespaceManageTrustRules Action = "namespace:manage-trust-rules"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
 	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"
@@ -340,6 +361,12 @@ const (
 	// holds it with no grant. A request that acts as a person acts on its
 	// subject. No agent tool holds it.
 	ActionCallerManagePreferences Action = "caller:manage-preferences"
+	// ActionCallerManageSignIn allows a person to change its own sign-in
+	// credentials, for example the password of its local user. Its object is
+	// CallerObject. Every authenticated person holds it with no grant. A
+	// request that acts as a person acts on its subject. No agent tool holds
+	// it.
+	ActionCallerManageSignIn Action = "caller:manage-sign-in"
 	// ActionCollectionRead allows reading a collection and listing the
 	// collections of a namespace. Its object is a collection, or the namespace
 	// for a list (ADR 51, decision 11).
@@ -357,6 +384,15 @@ const (
 	// moving a unit into it. Its object is the collection. A placement rule
 	// never grants it (ADR 61, decision 4).
 	ActionCollectionCreateUnit Action = "collection:create-unit"
+	// ActionNamespaceReadPlacementRules allows listing and reading the placement
+	// rules of a namespace. Its object is the namespace.
+	ActionNamespaceReadPlacementRules Action = "namespace:read-placement-rules"
+	// ActionNamespaceManagePlacementRules allows making, changing, ordering and
+	// deleting the placement rules of a namespace. A rule only names a
+	// collection for a new unit. It never grants collection:create-unit, so the
+	// caller who makes the unit still needs that right on the collection. Its
+	// object is the namespace.
+	ActionNamespaceManagePlacementRules Action = "namespace:manage-placement-rules"
 	// ActionUnitMove allows moving a unit to another collection. A move needs
 	// exactly these checks: unit:move on the unit (the route), unit:manage-access
 	// on the unit, collection:create-unit on the target, collection:manage-access
@@ -560,6 +596,12 @@ const (
 	// checking a connection of a namespace to a Git host, and making one the
 	// default. Its object is the namespace.
 	ActionNamespaceManageGitHostConnections Action = "namespace:manage-git-host-connections"
+	// ActionNamespaceUseGitHostConnection allows naming a connection of a
+	// namespace to a Git host in a code location, in addition to the action on
+	// the unit. It lets the holder point a unit at the credentials of the
+	// connection, and it answers no setting or credential of the connection.
+	// Its object is the namespace that holds the connection.
+	ActionNamespaceUseGitHostConnection Action = "namespace:use-git-host-connection"
 	// ActionServerReadGitHost allows reading the registration of the GitHub
 	// App of the installation, and the map from its installations to
 	// namespaces. No read answers a key or an event secret. Its object is the
@@ -578,6 +620,10 @@ const (
 	// namespace that holds the registry. No built-in role below the
 	// administrator holds it.
 	ActionRegistryPublish Action = "registry:publish"
+	// ActionNamespaceManageIssuer allows making, rotating and checking the
+	// signing keys of the OIDC issuer of a namespace, changing its settings
+	// and exporting its two files. Its object is a namespace.
+	ActionNamespaceManageIssuer Action = "namespace:manage-issuer"
 	// ActionRegistryManageKeys allows registering and removing the trusted
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.

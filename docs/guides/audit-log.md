@@ -70,9 +70,14 @@ Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
 asOf=<time>`, or `history <from>-<to>`, in Unix milliseconds, followed by
-the subject filter and `expand=members` when the request has them. The export of a namespace or
+the subject filter and `expand=members` when the request has them. The export of a namespace, a collection or
 a unit writes its entry in that namespace, and the export of the
-installation in `@server`. A failed append answers 500 with no rows.
+installation in `@server`.
+The export of a collection holds the grants on the collection, the grants on
+each unit in it now (a deleted unit that is not purged has the state
+`deleted`), and the grants on the namespace and the installation that give
+access to it. It holds no grant on another collection or on a unit of another
+collection. A collection that does not exist answers 404. A failed append answers 500 with no rows.
 
 An entry holds these fields:
 
@@ -296,6 +301,15 @@ The action is `server:manage-settings`, and the kind is `change`.
   No setting applies while the server runs yet, so `takesEffect` is
   `next start`: the entry records a change, and the new value applies at
   the next start.
+
+- A change through the [settings API](../reference/settings-api.md) writes one
+  entry with the channel `api`. The subject is the principal that made the
+  change. The action is `server:manage-settings` for the installation. For a
+  namespace, the entry is in the log of the namespace and the action is
+  `namespace:manage-settings`. One request writes one entry, with one change
+  for each key. The `layer` of a change is the layer of the new value, for
+  example `database`. A request that the server refuses because of its
+  content writes one entry with the outcome `failure`.
 
 No route of the API reads the installation log (`@server`) yet. These entries become
 readable through the API when that route lands.
@@ -717,6 +731,7 @@ Each item is `[<name>=]<sink>`:
 | A file | `file:/var/log/dustpan/audit.jsonl` | One JSON line for each entry. The server syncs the file after each batch. |
 | Syslog | `syslog+tls://logs.example:6514` | One RFC 5424 message for each entry, over `udp`, `tcp` or `tls`. |
 | A webhook | `webhook:https://siem.example/hooks/dustpan` | One HTTPS POST for each batch, with a JSON array of entries. |
+| OTLP logs | `otlp:https://collector.example:4318` | One OTLP/HTTP POST for each batch, with one log record for each entry. |
 | Object storage | `blob:audit` | One gzip file of JSON lines for each batch, in the blob store of the server. |
 
 ```sh
@@ -726,7 +741,7 @@ opendustpan serve \
 ```
 
 The name keys the cursor of the sink in the database.
-Without a name, the kind is the name: `file`, `syslog`, `webhook` or `blob`.
+Without a name, the kind is the name: `file`, `syslog`, `webhook`, `otlp` or `blob`.
 Two sinks of one kind need names.
 Keep the name when you change the address of a sink.
 A new name starts from the first entry and sends every entry again.
@@ -753,7 +768,7 @@ A failed batch stays, and the server sends it again with a longer wait each time
 While its lease holds, one server process ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch for one namespace or the installation that fails does not stop the others.
-The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
+The server sends a batch every 5 seconds to a file, syslog, a webhook or an OTLP receiver, and every minute to object storage.
 
 ### Syslog
 
@@ -797,6 +812,51 @@ The receiver computes the signature with the same key and compares it in constan
 Refuse a request whose timestamp is more than 5 minutes old.
 A 2xx answer means the receiver holds the batch.
 The server does not follow a redirect: a 3xx answer is a failed batch, and the server sends the batch again to the same URL.
+
+### OTLP logs
+
+`otlp:<https URL>` sends the entries to an OpenTelemetry collector or to any receiver of OTLP logs over HTTP with the JSON encoding.
+The URL is the base address of the receiver, for example `otlp:https://collector.example:4318`.
+The server adds the path `/v1/logs`, unless the path of the URL already ends with it.
+A query in the URL stays.
+The URL must use HTTPS and must not hold a user name or a password.
+The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
+Only the operator sets the URL.
+Check it as you check any outbound address of the server.
+
+Each request is one `ExportLogsServiceRequest` with the header `Content-Type: application/json`.
+It holds one resource with the attribute `service.name` set to `opendustpan`, and one log record for each entry:
+
+| OTLP field | Value |
+| --- | --- |
+| `timeUnixNano` | The time of the entry, in nanoseconds, as a string. |
+| `severityNumber`, `severityText` | `9` and `INFO` for an audit entry. |
+| `body` | The message as a `stringValue`: `audit entry`. |
+| `attributes` | The other fields of the entry, in order: `scope`, `sequence`, `atMs`, `subject`, `action`, `object`, `kind`, `outcome`, `prevHash`, `hash`, and the fields that the entry has. A string is a `stringValue`, a whole number is an `intValue`, and `changes` is a `kvlistValue` or an `arrayValue`. |
+
+Each entry carries `scope` and `sequence`, as in the other sinks.
+A receiver can check the chain and drop duplicates with them.
+
+To send a header with each request, for example an API key, set `DUSTPAN_AUDIT_OTLP_HEADERS`, or put the text in a file that `DUSTPAN_AUDIT_OTLP_HEADERS_FILE` names.
+Only the owner of the file can read it.
+No flag takes the headers, because flags show in process lists, and the sink list never shows them.
+The text is a list of `Name=Value` items, separated by commas or line breaks, as `OTEL_EXPORTER_OTLP_HEADERS` writes it.
+Percent-encode a value that holds a comma, a space or an equals sign, for example `Authorization=Bearer%20<token>`.
+The server refuses these headers at start:
+
+- A name that is not a valid header name.
+- A name that the server sets itself, such as `Content-Type`.
+- A name that you give twice.
+- A value with a control character.
+
+An error never shows a header value.
+The headers are optional: a collector in a private network can need none.
+
+A 2xx answer means the receiver holds the batch.
+A 2xx answer with a `partialSuccess` that rejects records counts the rejected records as skipped (`dustpan_audit_sink_skipped_total`), because a new try cannot deliver them.
+Any other answer is a failed batch, and the server sends the batch again with a longer wait each time.
+The server does not follow a redirect, so a header never goes to another host.
+The error text holds the status only, never the answer of the receiver.
 
 ### Object storage
 

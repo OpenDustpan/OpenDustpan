@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-14
 
+Changed by:
+
+- ADR 124 changes decision 1: the secret flag has no environment variable or
+  file entry.
+
 ## Context
 
 [RFC 68](../rfc/0068-installation-settings.md) collects the questions about

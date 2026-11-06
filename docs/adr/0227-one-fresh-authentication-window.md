@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 56 decisions 2 and 3, and ADR 71 decisions 1 and 2. Supersedes the age of a confirmation in ADR 103 decision 2 and ADR 128 decision 7. Supersedes the age of ADR 142 decision 9. Supersedes the window and the "set to 0" item of ADR 212 decision 3. Answers an open question of ADR 191 and ADR 192
 
+Changed by:
+
+- ADR 301 extends decision 1: a passkey or TOTP is the fresh authentication
+  of a person of a plain OAuth 2.0 provider or a trusted header.
+- ADR 320 extends decision 1: the request and the check of a fresh
+  authentication for each method, bound to the person of the session.
+
 ## Context
 
 Five rules ask for a fresh authentication, with different windows and two

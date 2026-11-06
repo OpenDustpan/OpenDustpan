@@ -1,6 +1,10 @@
 # 69. Token lifetime and session defaults
 
-Status: accepted · 2026-10-14
+Status: accepted · 2026-10-14. Decision 4 changed by ADR 297: the server checks the limits from sealed cookies, with no stored session
+
+Changed by:
+
+- ADR 297 changes decision 4: the server checks the limits from sealed cookies.
 
 ## Context
 
