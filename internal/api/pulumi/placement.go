@@ -83,6 +83,13 @@ func (h *Handler) choosePlacement(
 
 			return none, false
 		}
+
+		// A stack that exists is a conflict, whatever the rules say.
+		if _, getErr := h.stacks.Get(ctx, ref); getErr == nil {
+			h.writeError(ctx, w, fmt.Errorf("create stack %s: %w", ref, stack.ErrAlreadyExists))
+
+			return none, false
+		}
 	}
 
 	if err != nil {

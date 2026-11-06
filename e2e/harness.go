@@ -1130,7 +1130,8 @@ func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns strin
 			tb.Fatalf("POST %s: %v", step.path, err)
 		}
 
-		if status != http.StatusCreated {
+		// 409: an earlier call made the collection or the rule, so the call is safe to repeat.
+		if status != http.StatusCreated && status != http.StatusConflict {
 			tb.Fatalf("POST %s answers %d, want %d (%s)", step.path, status, http.StatusCreated, body)
 		}
 	}

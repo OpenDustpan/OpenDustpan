@@ -63,11 +63,11 @@ func (f *fakePlacer) placer() *pulumi.Placer {
 
 // postStack sends the request that "pulumi stack init" sends for the stack
 // "prod" of project in the namespace acme.
-func postStack(t *testing.T, h http.Handler, project string) *httptest.ResponseRecorder {
+func postStack(t *testing.T, h http.Handler, project, stackName string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(
-		t.Context(), http.MethodPost, "/api/stacks/acme/"+project, strings.NewReader(`{"stackName":"prod"}`),
+		t.Context(), http.MethodPost, "/api/stacks/acme/"+project, strings.NewReader(`{"stackName":"`+stackName+`"}`),
 	)
 	req.Header.Set("Authorization", "token test-token")
 
@@ -107,6 +107,7 @@ type placementCase struct {
 	placeErr    error
 	name        string
 	project     string
+	stackName   string
 	wantCode    string
 	wantStatus  int
 	wantCreated int
@@ -125,31 +126,49 @@ func TestCreateStackPlacement(t *testing.T) {
 
 	tests := []placementCase{
 		{
-			name: "a match places the stack", project: "web", authz: allow, placer: newFake().placer(),
-			placeErr: nil, wantStatus: http.StatusOK, wantCode: "", wantCreated: 1,
+			name:        "a match places the stack",
+			project:     "web",
+			stackName:   "prod",
+			authz:       allow,
+			placer:      newFake().placer(),
+			placeErr:    nil,
+			wantStatus:  http.StatusOK,
+			wantCode:    "",
+			wantCreated: 1,
 		},
 		{
-			name: "no match is refused and makes no stack", project: "other", authz: allow,
+			name: "no match is refused and makes no stack", project: "other", stackName: "absent", authz: allow,
 			placer: newFake().placer(), placeErr: nil, wantStatus: http.StatusUnprocessableEntity,
 			wantCode: errcode.PlacementNoMatch, wantCreated: 0,
 		},
 		{
-			name: "a caller without collection:create-unit gets 403", project: "web", authz: denyCreateUnit,
-			placer: newFake().placer(), placeErr: nil, wantStatus: http.StatusForbidden, wantCode: "",
+			name: "a stack that exists is a conflict before a missing rule", project: "other", stackName: "prod",
+			authz: allow, placer: newFake().placer(), placeErr: nil, wantStatus: http.StatusConflict,
+			wantCode: errcode.StackAlreadyExists, wantCreated: 0,
+		},
+		{
+			name:        "a caller without collection:create-unit gets 403",
+			project:     "web",
+			stackName:   "prod",
+			authz:       denyCreateUnit,
+			placer:      newFake().placer(),
+			placeErr:    nil,
+			wantStatus:  http.StatusForbidden,
+			wantCode:    "",
 			wantCreated: 0,
 		},
 		{
-			name: "a missing collection refuses the stack", project: "web", authz: allow,
+			name: "a missing collection refuses the stack", project: "web", stackName: "prod", authz: allow,
 			placer: (&fakePlacer{missing: true}).placer(), placeErr: nil, wantStatus: http.StatusConflict,
 			wantCode: errcode.CollectionNotFound, wantCreated: 0,
 		},
 		{
-			name: "a failed create and placement makes no stack", project: "web", authz: allow,
+			name: "a failed create and placement makes no stack", project: "web", stackName: "prod", authz: allow,
 			placer: newFake().placer(), placeErr: errPlaceFailed, wantStatus: http.StatusInternalServerError,
 			wantCode: "", wantCreated: 0,
 		},
 		{
-			name: "a server with no Placer makes no stack", project: "web", authz: allow,
+			name: "a server with no Placer makes no stack", project: "web", stackName: "prod", authz: allow,
 			placer: nil, placeErr: nil, wantStatus: http.StatusNotImplemented,
 			wantCode: errcode.PlacementUnavailable, wantCreated: 0,
 		},
@@ -162,7 +181,7 @@ func TestCreateStackPlacement(t *testing.T) {
 			h, stores := newPlacingHandler(t, tt.authz, nil, stategate.Off("the test keeps no gates"), tt.placer)
 			stores.placeErr = tt.placeErr
 
-			rec := postStack(t, h, tt.project)
+			rec := postStack(t, h, tt.project, tt.stackName)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
@@ -192,7 +211,7 @@ func TestCreateStackPlacementRecordsRule(t *testing.T) {
 		t, selectiveAuthorizer{deny: nil}, nil, stategate.Off("the test keeps no gates"), newFake().placer(),
 	)
 
-	if rec := postStack(t, h, "web"); rec.Code != http.StatusOK {
+	if rec := postStack(t, h, "web", "prod"); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d %s", rec.Code, rec.Body.String())
 	}
 
