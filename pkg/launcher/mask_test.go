@@ -3,6 +3,7 @@ package launcher_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func maskAll(t *testing.T, secrets []string, parts ...string) string {
 
 	var out bytes.Buffer
 
-	m := launcher.NewMasker(&out)
+	m := launcher.NewMasker(emitTo(&out))
 	for _, s := range secrets {
 		if err := m.Add([]byte(s)); err != nil {
 			t.Fatalf("Add: %v", err)
@@ -25,8 +26,8 @@ func maskAll(t *testing.T, secrets []string, parts ...string) string {
 	}
 
 	for _, p := range parts {
-		if n, err := m.Write([]byte(p)); err != nil || n != len(p) {
-			t.Fatalf("Write(%q) = %d, %v", p, n, err)
+		if err := m.Mask([]byte(p)); err != nil {
+			t.Fatalf("Mask(%q) = %v", p, err)
 		}
 	}
 
@@ -92,7 +93,7 @@ func TestMaskerRefusesAWriteAfterClose(t *testing.T) {
 
 	var out bytes.Buffer
 
-	m := launcher.NewMasker(&out)
+	m := launcher.NewMasker(emitTo(&out))
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -101,8 +102,8 @@ func TestMaskerRefusesAWriteAfterClose(t *testing.T) {
 		t.Fatalf("second Close = %v, want nil", err)
 	}
 
-	if _, err := m.Write([]byte("x")); !errors.Is(err, launcher.ErrMaskerClosed) {
-		t.Fatalf("Write after Close = %v, want ErrMaskerClosed", err)
+	if err := m.Mask([]byte("x")); !errors.Is(err, launcher.ErrMaskerClosed) {
+		t.Fatalf("Mask after Close = %v, want ErrMaskerClosed", err)
 	}
 }
 
@@ -114,7 +115,7 @@ func TestMaskerBounds(t *testing.T) {
 
 	var out bytes.Buffer
 
-	m := launcher.NewMasker(&out)
+	m := launcher.NewMasker(emitTo(&out))
 
 	if err := m.Add(bytes.Repeat([]byte("a"), launcher.MaxMaskLen)); err != nil {
 		t.Fatalf("Add of MaxMaskLen bytes = %v, want nil", err)
@@ -139,8 +140,8 @@ func TestMaskerBounds(t *testing.T) {
 		t.Fatalf("Add of a known value = %v, want nil", err)
 	}
 
-	if _, err := m.Write([]byte("value-7 one-value-too-many")); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := m.Mask([]byte("value-7 one-value-too-many")); err != nil {
+		t.Fatalf("Mask: %v", err)
 	}
 
 	if err := m.Close(); err != nil {
@@ -169,5 +170,16 @@ func TestMaskerLargeWrite(t *testing.T) {
 	got := maskAll(t, []string{value}, text.String())
 	if strings.Contains(got, value) || strings.Count(got, launcher.MaskText) != 5 {
 		t.Fatalf("masked %d values, want 5, and no secret", strings.Count(got, launcher.MaskText))
+	}
+}
+
+// emitTo returns an Emit that appends the masked stream to out.
+func emitTo(out *bytes.Buffer) launcher.Emit {
+	return func(masked []byte) error {
+		if _, err := out.Write(masked); err != nil {
+			return fmt.Errorf("append: %w", err)
+		}
+
+		return nil
 	}
 }
