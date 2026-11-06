@@ -123,7 +123,7 @@ bytes, is valid for 300 seconds and works once.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `response` | object | The credential that the browser made from the request options, as `JSON.stringify` writes it |
-| `reason` | string | The reason of a break-glass sign-in, 1 to 500 characters. A local user can omit it, and the server ignores it |
+| `reason` | string | The reason of a break-glass sign-in, 1 to 500 characters with no control character and no hidden format character. A local user can omit it, and the server ignores it |
 
 The body has at most 69,632 bytes, and the response inside has at most 65,536
 bytes. The server checks the response against the relying party ID and the
@@ -141,11 +141,18 @@ Each source address has two budgets. The address is the client address of the
 request: an IPv4 address, or the first 64 bits of an IPv6 address.
 
 - Each start of a ceremony spends one unit of the budget of the starts,
-  because each start writes a challenge row. A source that used the budget
-  gets 429.
-- Each failed finish spends one unit of the budget of the failures. These are
-  the same windows as the failed password sign-ins have. A source at the limit
-  gets 429 on both routes, and no ceremony starts.
+  because each start writes a challenge row. The budget is 30 starts, and one
+  unit comes back each 2 seconds. A source that used the budget gets 429 at
+  once.
+- Each failed finish spends one unit of the budget of the failures. 20 failures
+  refuse the address for 15 minutes. A source at the limit gets 429 on both
+  routes at once, and no ceremony starts.
+
+The address is the client address that the server resolves, never the value of
+a request header from a peer that is not a trusted proxy.
+
+The installation holds at most 10,000 open sign-in challenges. Over that count
+a start answers 503 with the error code `mfa.unavailable` and stores no row.
 
 The failures count by source address and never by credential. A count by
 credential would let a person who knows a credential ID lock the owner out.
@@ -170,7 +177,8 @@ A good break-glass sign-in does these things in one database transaction:
   attributes `session` and `principal` name the session and the account.
 
 If one of these writes fails, none of them stays, and the person gets no
-session.
+session. The session ends 1 hour after the sign-in, or at the limit of the
+setting `session.breakGlassMaxLength`.
 
 ### Which answer a refusal gets
 

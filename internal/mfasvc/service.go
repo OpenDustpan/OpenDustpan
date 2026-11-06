@@ -77,6 +77,9 @@ type Service struct {
 	audit Auditor
 	now   func() time.Time
 	log   *slog.Logger
+	// watch counts the failed assertions for break-glass accounts. Nil
+	// counts nothing.
+	watch *breakGlassWatch
 }
 
 // New returns a Service. It returns ErrMissingDependency for a required
@@ -101,7 +104,7 @@ func New(cfg Config) (*Service, error) {
 		log = slog.Default()
 	}
 
-	return &Service{store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log}, nil
+	return &Service{store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log, watch: nil}, nil
 }
 
 // Actor is the caller of a step: the audit entry that the HTTP adapter fills
@@ -397,8 +400,10 @@ func openCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey
 
 	object := Object(key.ID)
 
+	// From here the passkey is known. A refusal returns it, so that the caller
+	// can count the failed assertion for the account of the passkey.
 	if ownErr := owns(in.kind, c, h, key); ownErr != nil {
-		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person",
+		return key, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person",
 			ownErr)
 	}
 
@@ -406,21 +411,41 @@ func openCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey
 	// the transaction of the use. This check stays so that the relying party
 	// never checks a response of a suspended passkey.
 	if !key.SuspendedAt.IsZero() {
-		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended",
+		return key, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended",
 			mfa.ErrSuspended)
 	}
 
 	return key, h, nil
 }
 
-// finishCeremony is FinishAssertion with the result of the relying party.
+// finishCeremony is FinishAssertion with the result of the relying party. A
+// failure after the lookup of the passkey is counted for the account of the
+// passkey, when the service watches break-glass accounts.
 func finishCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey, mfa.Assertion, error) {
+	var seen mfa.Passkey
+
+	key, got, err := checkCeremony(ctx, s, in, &seen)
+	if err != nil && seen.ID != "" {
+		s.noteFailure(ctx, in.actor.Entry, &seen)
+	}
+
+	return key, got, err
+}
+
+// checkCeremony runs the checks of finishCeremony. It sets seen to the passkey
+// of the response as soon as it found it, so that the caller can count a
+// failure for its account.
+func checkCeremony(
+	ctx context.Context, s *Service, in *finishInput, seen *mfa.Passkey,
+) (mfa.Passkey, mfa.Assertion, error) {
 	var (
 		none mfa.Passkey
 		zero mfa.Assertion
 	)
 
 	key, h, err := openCeremony(ctx, s, in)
+	*seen = key
+
 	if err != nil {
 		return none, zero, err
 	}

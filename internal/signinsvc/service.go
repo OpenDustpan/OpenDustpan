@@ -173,6 +173,9 @@ type Result struct {
 	// ChangeRequired reports that the person must change the password. Only
 	// the local password sets it.
 	ChangeRequired bool
+	// BreakGlass reports a session of a break-glass account. The adapter
+	// limits the cookie of such a session to the break-glass limit.
+	BreakGlass bool
 }
 
 // Principals finds or makes the principal of a sign-in.
@@ -504,7 +507,10 @@ func (s *Service) started(ctx context.Context, req *Request, idpSubject string, 
 
 	switch {
 	case out.err == nil:
-		return Result{Session: out.sess, Secret: out.secret, Method: req.Assertion.Method, ChangeRequired: false}, nil
+		return Result{
+			Session: out.sess, Secret: out.secret, Method: req.Assertion.Method, ChangeRequired: false,
+			BreakGlass: false,
+		}, nil
 	case errors.Is(out.err, session.ErrProviderDisabled), errors.Is(out.err, session.ErrProviderNotFound):
 		// The provider was disabled or deleted after the lookup of this
 		// callback. The adapter answers as for an unknown provider.

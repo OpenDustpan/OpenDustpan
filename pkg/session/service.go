@@ -66,6 +66,9 @@ type Sessions struct {
 	providers  ProviderSessionStore
 	inactivity InactivityRule
 	now        func() time.Time
+	// breakGlass reads the limit of a break-glass session. Nil means
+	// DefaultBreakGlassMaxLength.
+	breakGlass BreakGlassLimit
 }
 
 // NewSessions returns a Sessions service. It returns ErrMissingDependency
@@ -82,6 +85,7 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 
 	return &Sessions{
 		store: cfg.Store, providers: cfg.Providers, inactivity: cfg.Inactivity, now: now,
+		breakGlass: nil,
 	}, nil
 }
 
@@ -189,7 +193,7 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 	}
 
 	now := s.Now()
-	limits := m.Policy.Limits
+	limits := s.limitsFor(ctx, &m.Owner, m.Policy.Limits)
 
 	if status := m.Session.StatusAt(now, limits); status != StatusActive {
 		return Match{}, fmt.Errorf("%w: %s", ErrUnauthenticated, status)

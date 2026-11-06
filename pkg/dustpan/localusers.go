@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"time"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/authgate"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -46,6 +48,10 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 
 	settingsSvc := newSettingService(cfg, cfg.namespaceStore)
 
+	if deps.signIn != nil && settingsSvc != nil {
+		deps.signIn.Sessions.SetBreakGlassLimit(breakGlassLimitOf(settingsSvc))
+	}
+
 	localUsers, err := newLocalUserService(cfg, principals, settingsSvc, deps.signIn)
 	if err != nil {
 		return none, err
@@ -70,6 +76,20 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 		allow: allow, audit: serverAudit, settings: settingsSvc, localUsers: localUsers.service,
 		passkeys: passkeys.service,
 	}, nil
+}
+
+// breakGlassLimitOf returns the reader of the limit of a break-glass session
+// from the settings service: the effective value of the setting, whatever
+// layer holds it. A reader that fails makes the sessions use the default.
+func breakGlassLimitOf(settingsSvc *setting.Service) session.BreakGlassLimit {
+	return func(ctx context.Context) (time.Duration, error) {
+		item, err := settingsSvc.Effective(ctx, setting.InstallationScope(), session.SettingBreakGlassMaxLength)
+		if err != nil {
+			return 0, fmt.Errorf("read the break-glass session limit: %w", err)
+		}
+
+		return session.ParseBreakGlassMaxLength(item.Value)
+	}
 }
 
 // localUserWiring holds the service of the local users. The service is nil
