@@ -65,15 +65,18 @@ func TestParseProxyExport(t *testing.T) {
 		},
 		{"ca", "    g: { type: ca, certificates: \"${ values.cert }\" }\n", nil},
 		{
-			"secret path from an import",
+			"missing path and no imports",
 			"    g: { type: header, name: X-Key, value: \"${ values.shared.key }\" }\n",
-			nil,
+			profile.ErrInvalid,
 		},
 		{
 			"computed from plain values", "    g: { type: header, name: X-Key, value: \"${ values.computed }\" }\n",
 			profile.ErrInvalid,
 		},
-		{"computed from a secret", "    g: { type: header, name: X-Key, value: \"${ values.bearer }\" }\n", nil},
+		{
+			"computed from a secret", "    g: { type: header, name: X-Key, value: \"${ values.bearer }\" }\n",
+			profile.ErrInvalid,
+		},
 		{"provider output", "    g: { type: header, name: X-Key, value: \"${ values.fromProvider }\" }\n", nil},
 		{"value of an import", "    g: { type: header, name: X-Key, value: \"${ values.fromImport }\" }\n", nil},
 		{
@@ -205,6 +208,45 @@ func TestParseProxyExport(t *testing.T) {
 			t.Parallel()
 
 			_, err := profile.ParseDocument([]byte(proxyDoc(tc.body)))
+			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseProxyExportImportPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want error
+	}{
+		{
+			"path that only an import gives",
+			"schemaVersion: 1\nimports: [shared/keys]\nexports:\n  proxy:\n" +
+				"    g: { type: header, name: X-Key, value: \"${ values.shared.key }\" }\n",
+			nil,
+		},
+		{
+			"same path with no imports",
+			"schemaVersion: 1\nexports:\n  proxy:\n    g: { type: header, name: X-Key, value: \"${ values.shared.key }\" }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"empty imports",
+			"schemaVersion: 1\nimports: []\nexports:\n  proxy:\n" +
+				"    g: { type: header, name: X-Key, value: \"${ values.shared.key }\" }\n",
+			profile.ErrInvalid,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := profile.ParseDocument([]byte(tc.in))
 			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}

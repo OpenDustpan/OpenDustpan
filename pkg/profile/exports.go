@@ -68,6 +68,10 @@ const (
 	proxyFieldCertificates = "certificates"
 )
 
+// pathSegments is one or more segments of a path: ".name", ["name"] or
+// ['name'].
+const pathSegments = `(?:\.` + identifier + `|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])+`
+
 // Limits of exports.proxy.
 const (
 	// MaxProxyExports is the most credentials that exports.proxy holds.
@@ -115,12 +119,14 @@ var (
 	// queryName is the allowlist of a query parameter name: the characters
 	// that a URL never encodes.
 	queryName = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
-	// otherSource matches a read of a provider or rotator output, or of a
-	// value of another profile.
-	otherSource = regexp.MustCompile(`\b(?:providers|rotators)\.` + identifier + `|\b(?:imports|profiles)\s*\[`)
+	// soleSecretRef is a string that is exactly one reference to a value:
+	// a path under values (group 1), an output of a provider or a rotator, or
+	// a value of another profile. Any other shape (an operator, a function,
+	// a literal, text around the reference) does not match.
+	soleSecretRef = regexp.MustCompile(`^\$\{\s*(?:(values` + pathSegments + `)|(?:providers|rotators)` +
+		pathSegments + `|(?:imports|profiles)\[\s*"[^"\\]*"\s*\]\.values` + pathSegments + `)\s*\}$`)
 	// soleValuesRef is a string that is exactly one reference into values.
-	soleValuesRef = regexp.MustCompile(`^\$\{\s*(values(?:\.` + identifier +
-		`|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])+)\s*\}$`)
+	soleValuesRef = regexp.MustCompile(`^\$\{\s*(values` + pathSegments + `)\s*\}$`)
 )
 
 // isForbiddenHeader reports whether name is a header that frames or routes
@@ -408,13 +414,22 @@ func checkProxyName(path string, t ProxyType, name string) error {
 	return nil
 }
 
-// checkTarget checks the node of values that a reference names, when the
-// document holds it. A path that only an import gives is checked when the
-// profile opens.
+// checkTarget checks the node of values that a reference names. A path
+// that the document does not hold passes only when the document has
+// imports, because only an import can give it.
 func (d *Document) checkTarget(path string, t ProxyType, kind proxyFieldKind, ref []string) error {
+	if len(ref) == 0 {
+		return fmt.Errorf("%w: %s must name a path under values", ErrInvalid, path)
+	}
+
 	target := d.nodeAt(ref)
-	if target == nil || len(ref) == 0 {
-		return nil
+	if target == nil {
+		if d.hasImports() {
+			return nil
+		}
+
+		return fmt.Errorf("%w: %s reads a path that is not in values, and the profile has no imports",
+			ErrInvalid, path)
 	}
 
 	if target.Kind != yaml.ScalarNode && !isEntryMap(target) {
@@ -436,25 +451,31 @@ func (d *Document) checkTarget(path string, t ProxyType, kind proxyFieldKind, re
 	return checkTargetText(path, t, target)
 }
 
-// checkSecretTarget refuses the target of a secret field unless it reads a
-// secret source (see readsSecret). A literal, a plain value and an
-// expression that reads only plain values fail, so a static key never sits
-// in plain text in a document.
+// checkSecretTarget refuses the target of a secret field unless it is a
+// secret source or a chain of sole references to one (see readsSecret). A
+// literal, a plain value and each computed expression fail, so a static key
+// never sits in plain text in a document.
 func (d *Document) checkSecretTarget(path string, target *yaml.Node) error {
 	if d.readsSecret(target, map[*yaml.Node]bool{}, 0) {
 		return nil
 	}
 
-	return fmt.Errorf("%w: %s must read a %s value, a provider or rotator output, or a value of another profile",
+	return fmt.Errorf("%w: %s must read a %s value, a provider or rotator output, or a value of another profile, "+
+		"through references only",
 		ErrInvalid, path, keySecret)
 }
 
 // readsSecret reports whether the node n of values is a secret source, or
-// reads one, directly or through other values. A secret source is a $secret
-// or $sealed entry, an output of a provider or a rotator, a value of another
-// profile (imports[...] or profiles[...]), or a path that the document does
-// not hold, which only an import can give. Each other case is false, so an
-// unknown case fails closed.
+// is exactly one reference to one. A secret source is a $secret or $sealed
+// entry, an output of a provider or a rotator, a value of another profile
+// (imports[...] or profiles[...]), or a path under values that the document
+// does not hold when the document has imports. Each step of the chain must
+// be a $secret or $sealed entry, or a value whose whole text is one
+// reference (soleSecretRef). Each other shape is false, so an unknown case
+// fails closed.
+//
+// This check cannot see a value that another profile gives, so it does not
+// check that such a value is a secret. No check at the open exists yet.
 func (d *Document) readsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int) bool {
 	if n == nil || seen[n] || depth > MaxDepth {
 		return false
@@ -462,55 +483,61 @@ func (d *Document) readsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int
 
 	seen[n] = true
 
-	switch {
-	case isEntryMap(n):
-		return d.entryReadsSecret(n, seen, depth)
-	case n.Kind == yaml.ScalarNode:
-		return n.Tag == tagStr && d.textReadsSecret(n.Value, seen, depth)
-	default:
-		return slices.ContainsFunc(n.Content, func(c *yaml.Node) bool { return d.readsSecret(c, seen, depth+1) })
+	if !isEntryMap(n) {
+		return d.refReadsSecret(n, seen, depth)
 	}
-}
 
-// entryReadsSecret reports whether the entry map n is a secret entry, or
-// whether its $value reads a secret source.
-func (d *Document) entryReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int) bool {
 	if mapGet(n, keySecret) != nil || mapGet(n, keySealed) != nil {
 		return true
 	}
 
 	v := mapGet(n, keyValue)
 
-	return v != nil && v.Kind == yaml.ScalarNode && d.textReadsSecret(v.Value, seen, depth)
+	return v != nil && d.refReadsSecret(v, seen, depth)
 }
 
-// textReadsSecret reports whether the expressions in text read a secret
-// source. A "$${" is a literal "${", not an expression. A read of $env
-// fails closed: it can name any key, so the check cannot follow it.
-func (d *Document) textReadsSecret(text string, seen map[*yaml.Node]bool, depth int) bool {
-	text = strings.ReplaceAll(text, "$${", "")
-	if !strings.Contains(text, "${") || strings.Contains(text, "$env") {
+// refReadsSecret reports whether the node n is text that is exactly one
+// reference to a secret source.
+func (d *Document) refReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int) bool {
+	if n.Kind != yaml.ScalarNode || n.Tag != tagStr {
 		return false
 	}
 
-	if otherSource.MatchString(text) {
+	m := soleSecretRef.FindStringSubmatch(n.Value)
+	if m == nil {
+		return false
+	}
+
+	if m[1] == "" {
+		// An output of a provider or a rotator, or a value of another
+		// profile.
 		return true
 	}
 
-	for _, ref := range refsInText(text) {
-		target := d.nodeAt(ref)
-		if target == nil {
-			// The document does not hold the path, so only an import can
-			// give it. The open reads it from that import.
-			return true
-		}
+	var ref []string
 
-		if d.readsSecret(target, seen, depth+1) {
-			return true
-		}
+	for _, seg := range pathSegment.FindAllStringSubmatch(strings.TrimPrefix(m[1], topValues), -1) {
+		ref = append(ref, seg[1]+seg[2]+seg[3])
 	}
 
-	return false
+	target := d.nodeAt(ref)
+	if target == nil {
+		return d.hasImports()
+	}
+
+	// The reference ends inside an entry or a plain value.
+	if len(ref) == 0 || d.nodeAt(ref[:len(ref)-1]) == target {
+		return false
+	}
+
+	return d.readsSecret(target, seen, depth+1)
+}
+
+// hasImports reports whether the document imports at least one profile.
+func (d *Document) hasImports() bool {
+	imports := mapGet(d.root, topImports)
+
+	return imports != nil && imports.Kind == yaml.SequenceNode && len(imports.Content) > 0
 }
 
 // checkTargetText refuses a control character in the plain text of a value
