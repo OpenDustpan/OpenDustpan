@@ -63,6 +63,14 @@ func checkForm(password string) (string, error) {
 // sequence, context words, blocklist. A blocklist that cannot answer refuses
 // the password with ErrUnavailable.
 func (s *Service) checkNew(ctx context.Context, password string, p Policy, words []string) (string, error) {
+	return checkNewPassword(ctx, s.blocklist, password, p, words)
+}
+
+// checkNewPassword is checkNew with the blocklist as an argument, so the demo
+// seed applies the same rules without a Service.
+func checkNewPassword(
+	ctx context.Context, list localuser.Blocklist, password string, p Policy, words []string,
+) (string, error) {
 	nfc, err := checkForm(password)
 	if err != nil {
 		return "", err
@@ -84,7 +92,7 @@ func (s *Service) checkNew(ctx context.Context, password string, p Policy, words
 			localuser.ErrPasswordBlocked)
 	}
 
-	blocked, err := s.blocklist.Blocked(ctx, nfc)
+	blocked, err := list.Blocked(ctx, nfc)
 	if err != nil {
 		// Fail closed: a list that cannot answer refuses each new password.
 		return "", fmt.Errorf("%w: the blocklist cannot answer", localuser.ErrUnavailable)

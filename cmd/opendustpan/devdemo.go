@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/argon2id"
+	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -62,8 +63,15 @@ func (r *devRun) seedDemo(ctx context.Context, st store) error {
 	}
 
 	seed, err := localusersvc.NewDemoSeed(localusersvc.DemoConfig{
-		Passwords: passwords, Principals: principals, Grants: grants,
-		Namespaces: st, Hasher: hasher, Kind: installation.KindDev, Now: r.proc.now, Random: nil,
+		Passwords:  passwords,
+		Principals: principals,
+		Grants:     grants,
+		Namespaces: st,
+		Hasher:     hasher,
+		Blocklist:  blocklist.Embedded(),
+		Kind:       installation.KindDev,
+		Now:        r.proc.now,
+		Random:     nil,
 	})
 	if err != nil {
 		return fmt.Errorf("demo seed: %w", err)

@@ -30,6 +30,7 @@ done
 
 DEMO_TMP="$(mktemp -d)"
 server_pid=""
+reader_pid=""
 SERVER_LOG="$DEMO_TMP/server.log"
 
 cleaned=0
@@ -43,6 +44,10 @@ cleanup() {
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [ -n "$reader_pid" ]; then
+    kill "$reader_pid" 2>/dev/null || true
+    wait "$reader_pid" 2>/dev/null || true
   fi
   if [ "$interrupted" -eq 0 ] && [ "$status" -ne 0 ] && [ -f "$SERVER_LOG" ]; then
     echo "demo: server log (last 60 lines):" >&2
@@ -80,14 +85,29 @@ mkdir -p "$DEMO_TMP/data"
 (umask 077 && printf '%s\n' "$ADMIN_TOKEN" >"$DEMO_TMP/admin.token")
 
 echo "demo: starting the server on $DEMO_URL"
-# dev prints the demo sign-in once to its stderr. The server log holds it, so the
-# script reads it from there and prints it with the URL.
+# dev prints the demo sign-in once to its stderr. No file holds it: dev writes
+# to a named pipe in the private temporary directory, and a reader copies the
+# demo line to the terminal and every other line to the server log. The reader
+# writes only a marker file when it sees the demo line.
+mkfifo "$DEMO_TMP/server.fifo"
+(
+  while IFS= read -r line; do
+    case "$line" in
+      "Demo user: "*)
+        printf '%s\n' "$line" >&2
+        : >"$DEMO_TMP/demo.seen"
+        ;;
+      *) printf '%s\n' "$line" >>"$SERVER_LOG" ;;
+    esac
+  done <"$DEMO_TMP/server.fifo"
+) &
+reader_pid=$!
 ./bin/opendustpan dev --demo \
   --data-dir "$DEMO_TMP/data" \
   --listen "127.0.0.1:$DEMO_PORT" \
   --console-dir "$DEMO_TMP/console/dist" \
   --admin-token-file "$DEMO_TMP/admin.token" \
-  >"$SERVER_LOG" 2>&1 &
+  >"$DEMO_TMP/server.fifo" 2>&1 &
 server_pid=$!
 
 i=0
@@ -138,12 +158,16 @@ echo "demo: checking the console reads"
 check_console_read "/api/dustpan/v1/namespaces/demo-platform/units"
 
 printf 'OpenDustpan demo is ready at %s/\n' "$DEMO_URL"
-demo_line="$(grep -m 1 '^Demo user: ' "$SERVER_LOG" || true)"
-if [ -z "$demo_line" ]; then
+# The demo sign-in went to the terminal when dev printed it. The server log
+# must not hold it: stop when it does.
+if [ ! -f "$DEMO_TMP/demo.seen" ]; then
   echo "demo: the server did not print the demo sign-in: the server log is printed above" >&2
   exit 1
 fi
-printf '%s\n' "$demo_line"
+if grep -q '^Demo user: ' "$SERVER_LOG"; then
+  echo "demo: the server log holds the demo sign-in: this is a fault of make demo" >&2
+  exit 1
+fi
 printf 'Sign-in token for the sign-in page: %s\n' "$ADMIN_TOKEN"
 
 if command -v xdg-open >/dev/null 2>&1; then

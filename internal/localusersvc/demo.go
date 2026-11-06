@@ -3,10 +3,10 @@ package localusersvc
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -30,9 +30,21 @@ const (
 	DemoDisplayName = "Demo user"
 	// ActionDemoSeeded is the audit action of the password of the demo seed.
 	ActionDemoSeeded = "local-user.demo-seeded"
-	// demoPasswordBytes is the count of random bytes of the demo password.
-	demoPasswordBytes = 18
+	// demoPasswordAlphabet holds the characters of the demo password: lowercase
+	// letters and digits.
+	demoPasswordAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	// demoPasswordTries bounds the new passwords that the seed makes when a
+	// password rule refuses one. A password of this form is refused rarely.
+	demoPasswordTries = 100
+	// demoRandomLimit is the first random byte that the seed does not use.
+	// It is the largest multiple of the alphabet length that fits in a byte,
+	// so each character has the same chance.
+	demoRandomLimit = 252
 )
+
+// errDemoPassword reports that the seed could not make a password that the
+// password rules accept.
+var errDemoPassword = errors.New("no demo password passes the password rules")
 
 // DemoPrincipals makes the principal of the demo person. *principal.Service
 // meets it.
@@ -65,6 +77,9 @@ type DemoConfig struct {
 	Grants     DemoGrants
 	Namespaces DemoNamespaces
 	Hasher     localuser.PasswordHasher
+	// Blocklist refuses a common password. The seed checks its password
+	// against the same rules as a password that a person sets.
+	Blocklist localuser.Blocklist
 	// Kind is the installation kind of the server. Defense in depth: the
 	// store reads the kind from its own database again at each seed.
 	Kind installation.Kind
@@ -98,6 +113,8 @@ func NewDemoSeed(cfg DemoConfig) (*DemoSeed, error) {
 		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
 	case cfg.Hasher == nil:
 		return nil, fmt.Errorf("%w: hasher", ErrMissingDependency)
+	case cfg.Blocklist == nil:
+		return nil, fmt.Errorf("%w: blocklist", ErrMissingDependency)
 	case cfg.Kind != installation.KindDev:
 		return nil, fmt.Errorf("demo seed: %w", localuser.ErrDemoOnly)
 	}
@@ -132,7 +149,7 @@ func (d *DemoSeed) Run(ctx context.Context, namespaces []namespace.Name) (string
 		return "", err
 	}
 
-	password, err := d.newPassword()
+	password, err := d.newPassword(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -216,12 +233,58 @@ func (d *DemoSeed) entry(scope namespace.Name, action, object string) audit.Entr
 	}
 }
 
-// newPassword makes a password of random characters.
-func (d *DemoSeed) newPassword() (string, error) {
-	raw := make([]byte, demoPasswordBytes)
-	if _, err := io.ReadFull(d.rnd, raw); err != nil {
-		return "", fmt.Errorf("demo seed: make the password: %w", err)
+// newPassword makes a demo password: DemoPasswordGroups groups of
+// DemoPasswordGroupLength lowercase letters and digits, joined by hyphens. It
+// checks the password against the rules of a password that a person sets, and
+// makes a new one when a rule refuses it.
+func (d *DemoSeed) newPassword(ctx context.Context) (string, error) {
+	policy := Policy{
+		EnabledSource: SourceDefault, ResetLifetime: localuser.DefaultResetLifetime,
+		MinLength: localuser.DefaultMinLength, Enabled: true, SSO: false, RequireLettersAndDigits: true,
+	}
+	words := append(productNames(), localuser.DemoUserName, DemoDisplayName)
+
+	for range demoPasswordTries {
+		password, err := d.randomPassword()
+		if err != nil {
+			return "", err
+		}
+
+		_, err = checkNewPassword(ctx, d.cfg.Blocklist, password, policy, words)
+		if err == nil {
+			return password, nil
+		}
+
+		if !errors.Is(err, localuser.ErrPasswordBlocked) && !errors.Is(err, localuser.ErrPasswordLettersAndDigits) {
+			return "", fmt.Errorf("demo seed: check the password: %w", err)
+		}
 	}
 
-	return base64.RawURLEncoding.EncodeToString(raw), nil
+	return "", fmt.Errorf("demo seed: %w", errDemoPassword)
+}
+
+// randomPassword makes one password from the random source.
+func (d *DemoSeed) randomPassword() (string, error) {
+	groups := make([]string, localuser.DemoPasswordGroups)
+	raw := make([]byte, 1)
+
+	for g := range groups {
+		group := make([]byte, 0, localuser.DemoPasswordGroupLength)
+
+		for len(group) < localuser.DemoPasswordGroupLength {
+			if _, err := io.ReadFull(d.rnd, raw); err != nil {
+				return "", fmt.Errorf("demo seed: make the password: %w", err)
+			}
+
+			if raw[0] >= demoRandomLimit {
+				continue
+			}
+
+			group = append(group, demoPasswordAlphabet[int(raw[0])%len(demoPasswordAlphabet)])
+		}
+
+		groups[g] = string(group)
+	}
+
+	return strings.Join(groups, "-"), nil
 }
