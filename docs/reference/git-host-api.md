@@ -94,7 +94,9 @@ For an app, `scopes` lists the permissions of the installation, for example
 `status` needs `statuses:write`: the app permission "Commit statuses" with the
 access "Read and write". The capability `comment` needs `issues:write`: the app
 permission "Issues" with the access "Read and write". GitHub keeps the comments
-of a pull request in the issues. A connection with no push access has no
+of a pull request in the issues. The server reads up to 1000 comments of a pull
+request to find its own comment, so a pull request with more comments cannot get
+a comment of the server. A connection with no push access has no
 `commit`, no `review`, no `status` and no `comment`. See the guide "Connect
 GitHub" for the permissions of the app.
 

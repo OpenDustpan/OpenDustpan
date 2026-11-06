@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,13 +16,10 @@ import (
 
 // Limits of the comment calls.
 const (
-	// commentsPerPage is the number of comments that the adapter asks for in
-	// one page. It is the most that GitHub gives.
-	commentsPerPage = 100
-	// maxCommentPages is the most pages that UpsertComment reads to find its
-	// comment. A review request with more comments is forge.ErrTooLarge: a
+	// maxSearchedComments is the most comments that UpsertComment reads to find
+	// its comment. A review request with more comments is forge.ErrTooLarge: a
 	// search that stops early would make a second comment.
-	maxCommentPages = 10
+	maxSearchedComments = 1000
 	// maxCommentIDDigits is the most digits in the ID of a comment.
 	maxCommentIDDigits = 19
 )
@@ -182,17 +180,46 @@ func (f *gitHub) writeComment(ctx context.Context, cw commentWrite) (forge.Comme
 	return got, nil
 }
 
+// commentPageSizes returns the page sizes of the search, from the largest. The
+// first is the most that GitHub gives, and each size divides the size before it.
+func commentPageSizes() []int { return []int{100, 25, 5, 1} }
+
+// errPageTooBig is the error of a page of comments above the size limit of an
+// answer. findOwnComment asks again with a smaller page.
+var errPageTooBig = errors.New("a page of comments is above the size limit")
+
 // findOwnComment returns the ID of the oldest comment of the pull request with
 // the marker as its first line and the connection as its author, or an empty
 // text when there is none.
+//
+// The comments of other accounts are untrusted and can be large: a page with
+// many large comments is above the size limit of an answer. Then the search
+// asks for the same comments again with a smaller page, so that no comment of
+// another account stops the search. A page size divides the size before it, so
+// the offset of the next comment is a whole number of pages for each size.
 func (f *gitHub) findOwnComment(ctx context.Context, cw commentWrite) (string, error) {
-	for page := 1; page <= maxCommentPages; page++ {
+	level, offset := 0, 0
+	sizes := commentPageSizes()
+
+	for offset < maxSearchedComments {
+		size := sizes[level]
+
 		resp, err := f.send(ctx, call{
 			method: http.MethodGet, bearer: cw.bearer, body: nil, status: f.commentStatus, target: "",
-			path: cw.repo.path() + "/issues/" + cw.review + "/comments?per_page=" + strconv.Itoa(commentsPerPage) +
-				"&page=" + strconv.Itoa(page),
-			oversize: forge.Unavailable(0, "GitHub gave a page of comments above the size limit"),
+			path: cw.repo.path() + "/issues/" + cw.review + "/comments?per_page=" + strconv.Itoa(size) +
+				"&page=" + strconv.Itoa(offset/size+1),
+			oversize: errPageTooBig,
 		})
+		if errors.Is(err, errPageTooBig) && level+1 < len(sizes) {
+			level++
+
+			continue
+		}
+
+		if errors.Is(err, errPageTooBig) {
+			return "", forge.Unavailable(0, "GitHub gave a comment above the size limit of an answer")
+		}
+
 		if err != nil {
 			return "", err
 		}
@@ -202,19 +229,25 @@ func (f *gitHub) findOwnComment(ctx context.Context, cw commentWrite) (string, e
 			return found, err
 		}
 
-		if count < commentsPerPage {
+		if count < size {
 			return "", nil
 		}
+
+		offset += size
 	}
 
-	return "", fmt.Errorf(
-		"%w: the review request has more than %d comments", forge.ErrTooLarge, maxCommentPages*commentsPerPage,
-	)
+	return "", fmt.Errorf("%w: the review request has more than %d comments", forge.ErrTooLarge, maxSearchedComments)
 }
 
 // ownCommentIn returns the ID of the first comment of a page that has the
 // marker as its first line and the connection as its author, and the number of
 // comments in the page.
+//
+// A comment of another account is untrusted: it can be large, or have a field
+// that fails the strict checks of parseComment. The search reads only the login
+// of the author and the first line of the text, and skips a comment that it
+// cannot read, because such a comment cannot be the own comment. Only the
+// comment that matches goes through parseComment, and it fails closed.
 func ownCommentIn(body []byte, cw commentWrite) (string, int, error) {
 	var items []json.RawMessage
 	if err := decode(body, &items); err != nil {
@@ -222,17 +255,43 @@ func ownCommentIn(body []byte, cw commentWrite) (string, int, error) {
 	}
 
 	for _, raw := range items {
+		if !looksOwn(raw, cw) {
+			continue
+		}
+
 		got, login, err := parseComment(raw)
 		if err != nil {
 			return "", 0, err
 		}
 
-		if strings.EqualFold(login, cw.own) && firstLine(got.Body) == cw.marker {
-			return got.ID, len(items), nil
+		// Defense in depth: looksOwn chose the comment by its author and its
+		// first line. The strict parse checks the same two values again, so that
+		// a comment that only the lenient reader accepts is never edited.
+		if !strings.EqualFold(login, cw.own) || firstLine(got.Body) != cw.marker {
+			return "", 0, forge.Unavailable(0, "GitHub gave a comment that the adapter cannot use")
 		}
+
+		return got.ID, len(items), nil
 	}
 
 	return "", len(items), nil
+}
+
+// looksOwn reports whether a comment of a page has the connection as its author
+// and the marker as its first line. It reads only these two values, and a
+// comment that it cannot read is not the own comment.
+func looksOwn(raw json.RawMessage, cw commentWrite) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+
+	var user map[string]json.RawMessage
+	if json.Unmarshal(fields[keyUser], &user) != nil {
+		return false
+	}
+
+	return strings.EqualFold(textField(user, keyLogin), cw.own) && firstLine(textField(fields, keyBody)) == cw.marker
 }
 
 // ReadComment returns the comment commentID.

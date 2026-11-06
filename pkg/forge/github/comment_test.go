@@ -238,26 +238,19 @@ func TestUpsertCommentRefusesAnAnswer(t *testing.T) {
 		})
 	}
 
-	t.Run("a list item that cannot be used", func(t *testing.T) {
+	t.Run("an own comment with a field that fails the checks", func(t *testing.T) {
 		t.Parallel()
 
+		broken := commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")
+		broken["id"] = "x"
+
 		f := cannedForge(t, map[string]hostAnswer{
-			userPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{map[string]any{"id": "x"}}),
+			userPath: userAnswer(), listCommentsAt + "1": okAnswer([]any{broken}),
 		})
 
-		_, err := f.UpsertComment(
-			t.Context(),
-			"acme/infra",
-			"7",
-			planRequest(),
-		)
-
-		if !errors.Is(
-			err,
-			forge.ErrUnavailable,
-		) ||
-			f.sent(http.MethodPost) {
-			t.Fatalf("UpsertComment = %v with the calls %v, want ErrUnavailable and no comment", err, f.calls())
+		_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+		if !errors.Is(err, forge.ErrUnavailable) || f.sent(http.MethodPost) || f.sent(http.MethodPatch) {
+			t.Fatalf("UpsertComment = %v with the calls %v, want ErrUnavailable and no write", err, f.calls())
 		}
 	})
 
@@ -557,4 +550,98 @@ func TestCommentIsCutBeforeTheCall(t *testing.T) {
 			t.Fatalf("the body of the call has %d bytes, want at most the limit and the field name", len(r.Body))
 		}
 	}
+}
+
+// TestUpsertCommentSkipsHostileComments checks that a comment of another account
+// that is large or malformed does not stop the search: on a public repository,
+// anyone can write such a comment.
+func TestUpsertCommentSkipsHostileComments(t *testing.T) {
+	t.Parallel()
+
+	// 33000 characters of four bytes are a valid comment of GitHub, with more than
+	// 131072 bytes.
+	huge := commentJSON(11, "other-dev", 9, strings.Repeat("\U0001F600", 33000))
+	noUser := map[string]any{"id": 12, "body": "no author", "html_url": "https://github.example/x"}
+	badLogin := commentJSON(13, "not a login", 9, "text")
+	textID := commentJSON(14, "other-dev", 9, "text")
+	textID["id"] = "14"
+	notObject := "a comment that is a text"
+	forgedHuge := commentJSON(16, "other-dev", 9, markerPlan+"\n"+strings.Repeat("\U0001F600", 33000))
+	mine := commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")
+
+	f := cannedForge(t, map[string]hostAnswer{
+		userPath:             userAnswer(),
+		listCommentsAt + "1": okAnswer([]any{huge, noUser, badLogin, textID, notObject, forgedHuge, mine}),
+		"PATCH /repos/acme/infra/issues/comments/15": okAnswer(
+			commentJSON(15, cannedLogin, 5, markerPlan+"\nPlan ready"),
+		),
+	})
+
+	got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+	if err != nil || got.ID != "15" || f.sent(http.MethodPost) {
+		t.Fatalf("UpsertComment = %+v, %v with the calls %v, want an edit of the comment 15", got, err, f.calls())
+	}
+}
+
+// TestUpsertCommentSmallerPages checks that a page above the size limit of an
+// answer does not stop the search: the adapter asks again for the same comments
+// with a smaller page.
+func TestUpsertCommentSmallerPages(t *testing.T) {
+	t.Parallel()
+
+	tooBig := statusAnswer(http.StatusOK, strings.Repeat(" ", 5<<20))
+	mine := commentJSON(15, cannedLogin, 5, markerPlan+"\nOld")
+	patch := "PATCH /repos/acme/infra/issues/comments/15"
+	edited := okAnswer(commentJSON(15, cannedLogin, 5, markerPlan+"\nPlan ready"))
+	at := func(size, page int) string {
+		return fmt.Sprintf("GET /repos/acme/infra/issues/7/comments?per_page=%d&page=%d", size, page)
+	}
+
+	fill := func(from int) []any {
+		items := make([]any, 0, 100)
+		for i := range 100 {
+			items = append(items, commentJSON(from+i, "other-dev", 9, "Comment"))
+		}
+
+		return items
+	}
+
+	t.Run("the first page", func(t *testing.T) {
+		t.Parallel()
+
+		f := cannedForge(t, map[string]hostAnswer{
+			userPath: userAnswer(), at(100, 1): tooBig, at(25, 1): okAnswer([]any{mine}), patch: edited,
+		})
+
+		if got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest()); err != nil || got.ID != "15" {
+			t.Fatalf("UpsertComment = %+v, %v; want an edit of the comment 15", got, err)
+		}
+	})
+
+	t.Run("the second page keeps its offset", func(t *testing.T) {
+		t.Parallel()
+
+		f := cannedForge(t, map[string]hostAnswer{
+			userPath: userAnswer(), at(100, 1): okAnswer(fill(100)), at(100, 2): tooBig,
+			// The comments 101 to 125 are the pages 5 of 25 comments.
+			at(25, 5): okAnswer([]any{mine}), patch: edited,
+		})
+
+		if got, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest()); err != nil || got.ID != "15" {
+			t.Fatalf("UpsertComment = %+v, %v; want an edit of the comment 15", got, err)
+		}
+	})
+
+	t.Run("a comment above the limit with every size", func(t *testing.T) {
+		t.Parallel()
+
+		f := cannedForge(t, map[string]hostAnswer{
+			userPath: userAnswer(), at(100, 1): tooBig, at(25, 1): tooBig, at(5, 1): tooBig, at(1, 1): tooBig,
+		})
+
+		_, err := f.UpsertComment(t.Context(), "acme/infra", "7", planRequest())
+		if !errors.Is(err, forge.ErrUnavailable) || f.sent(http.MethodPost) {
+			t.Fatalf("UpsertComment = %v with the calls %v, want ErrUnavailable and no comment", err, f.calls())
+		}
+	})
 }
