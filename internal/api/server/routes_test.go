@@ -361,7 +361,7 @@ func newServiceBackedHandlerOf(
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
-			Passkeys:        nil,
+			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),

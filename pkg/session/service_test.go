@@ -104,7 +104,7 @@ func signInEntry() audit.Entry {
 func startInput(authTime time.Time) session.Start {
 	return session.Start{
 		AuthTime: authTime, PrincipalID: personID, Provider: "corp", SourceIP: "192.0.2.1", UserAgent: "test",
-		Generation: 0, Stored: false,
+		Generation: 0, Stored: false, Alert: nil,
 	}
 }
 
