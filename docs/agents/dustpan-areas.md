@@ -145,13 +145,15 @@ left after `NewServer`, remove that write.
    body. Paste `git diff` of each changed file that the hash set does not
    include.
 
-8. **Gates:** paste the output in the pull request body.
+8. **Gates:** paste the output in the pull request body. CI runs nilaway,
+   semgrep and the e2e jobs.
    - `golangci-lint run ./...` and `golangci-lint run --build-tags e2e ./...`
-   - `make nilaway` and `make semgrep`
    - `go test -race -timeout 60m ./pkg/dustpan/... ./cmd/...` with
      `DUSTPAN_TEST_POSTGRES_URL` set to a local PostgreSQL 18 (TCP on
      127.0.0.1, UTF8, data under `/var/tmp`)
    - `E2E_DATABASES=sqlite go test -tags e2e -race -count=1 -run '^TestCLIs$' ./e2e/`
 
-9. Land each area just after a train, with an architecture review before the
-   merge.
+9. Open the pull request of each area ready for review, with an architecture
+   review before the maintainer enables auto-merge. A stacked pull request
+   targets the branch of the previous one, and moves its base to `main` after
+   that one merges.
