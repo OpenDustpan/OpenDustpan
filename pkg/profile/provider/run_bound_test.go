@@ -76,7 +76,11 @@ func TestRunLimitOfTheWholeOpen(t *testing.T) {
 
 	blocks := []provider.Block{login("a"), login("b"), login("c"), login("d"), login("e")}
 
-	_, err := reg.Run(t.Context(), blocks, provider.Call{Claims: nil, Tokens: nil, Limit: 150 * time.Millisecond})
+	_, err := reg.Run(
+		t.Context(),
+		blocks,
+		provider.Call{Claims: nil, Tokens: nil, Late: ignoreLate, Limit: 150 * time.Millisecond},
+	)
 	if !errors.Is(err, provider.ErrUnavailable) || !strings.Contains(err.Error(), "did not end in 150ms") {
 		t.Fatalf("Run = %v, want provider.ErrUnavailable for the limit of the open", err)
 	}
@@ -99,7 +103,7 @@ func TestRunRefusesALimitOutOfRange(t *testing.T) {
 			_, err := reg.Run(
 				t.Context(),
 				[]provider.Block{login("a")},
-				provider.Call{Claims: nil, Tokens: nil, Limit: limit},
+				provider.Call{Claims: nil, Tokens: nil, Late: ignoreLate, Limit: limit},
 			)
 			if !errors.Is(err, profile.ErrInvalid) || len(log.get()) != 0 {
 				t.Errorf("Run = %v, calls %v, want profile.ErrInvalid and no call", err, log.get())
@@ -161,7 +165,7 @@ func TestRunGivesTheAuditEntryOfEachToken(t *testing.T) {
 			reg := registry(t, f)
 
 			got, err := reg.Run(t.Context(), []provider.Block{login("a")}, provider.Call{
-				Claims: nil, Tokens: func(string) provider.TokenSource { return src }, Limit: 0,
+				Claims: nil, Tokens: func(string) provider.TokenSource { return src }, Late: ignoreLate, Limit: 0,
 			})
 			if !errors.Is(err, tc.fail) {
 				t.Fatalf("Run = %v, want %v", err, tc.fail)
@@ -211,7 +215,7 @@ func TestRunGivesNoTokenAfterTheBlockEnds(t *testing.T) {
 	b.Timeout = 20 * time.Millisecond
 
 	got, err := reg.Run(t.Context(), []provider.Block{b}, provider.Call{
-		Claims: nil, Tokens: func(string) provider.TokenSource { return src }, Limit: 0,
+		Claims: nil, Tokens: func(string) provider.TokenSource { return src }, Late: ignoreLate, Limit: 0,
 	})
 	close(release)
 

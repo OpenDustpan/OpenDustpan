@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -38,8 +37,15 @@ type Call struct {
 	// Tokens returns the token source of one block. Run calls it only for an
 	// adapter whose spec mints tokens.
 	Tokens func(block string) TokenSource
-	// Limit is the deadline of the whole open. Zero means MaxRunTime. A
-	// caller can set a shorter limit, never a longer one.
+	// Late receives each token that the issuer signed for a block after
+	// the block ended. Its value never reached the adapter, but the issuer
+	// signed it, so the caller commits its entry too. Run can call Late from
+	// another goroutine, also after Run returned. An open with a block that
+	// mints tokens needs Late.
+	Late func(Issued)
+	// Limit is the deadline of the whole open, the checks of the blocks
+	// included. Zero means MaxRunTime. A caller can set a shorter limit,
+	// never a longer one.
 	Limit time.Duration
 }
 
@@ -49,12 +55,14 @@ type Call struct {
 // that records the open, and gives no value of Results to anyone before
 // that commit. When Run fails, Results is nil, and the caller still commits
 // the entries of Tokens: the issuer signed each of them, and an adapter
-// may have sent it to a remote system.
+// may have sent it to a remote system. A token that the issuer signed after
+// the end of its block goes to Call.Late instead, and the caller commits its
+// entry too. So each token that the issuer signs reaches the caller.
 type Outcome struct {
 	// Results holds the result of each block by name.
 	Results map[string]Result
-	// Tokens holds each token that an adapter got from its token source, in
-	// the order of the calls.
+	// Tokens holds each token that the issuer signed for a block while the
+	// block ran, in the order of the calls.
 	Tokens []Issued
 }
 
@@ -69,6 +77,10 @@ type Issued struct {
 	ID string
 	// Warnings are the texts for a person from profile.Token.
 	Warnings []string
+	// Delivered says that the adapter got the value of the token. It is
+	// false for a token that the source answered with an error or after
+	// the end of the block.
+	Delivered bool
 }
 
 // BlockError is the error of one block. Err is the class: profile.ErrInvalid,
@@ -141,13 +153,13 @@ func (r *Registry) Run(ctx context.Context, blocks []Block, c Call) (Outcome, er
 		limit = MaxRunTime
 	}
 
-	entries, err := r.checkBlocks(blocks, c)
-	if err != nil {
-		return out, err
-	}
-
 	rctx, cancel := context.WithTimeoutCause(ctx, limit, errRunLimit)
 	defer cancel()
+
+	entries, err := r.checkBlocks(rctx, blocks, c)
+	if err != nil {
+		return out, limitError(rctx, err, limit)
+	}
 
 	results := make(map[string]Result, len(blocks))
 
@@ -158,37 +170,55 @@ func (r *Registry) Run(ctx context.Context, blocks []Block, c Call) (Outcome, er
 		out.Tokens = append(out.Tokens, issued...)
 
 		if err != nil {
-			if errors.Is(context.Cause(rctx), errRunLimit) {
-				err = blockFailure(b, ErrUnavailable, fmt.Sprintf("the provider blocks did not end in %s", limit))
-			}
-
-			return out, err
+			return out, limitError(rctx, err, limit)
 		}
 
 		results[b.Name] = res
 	}
 
-	out.Results = results
+	// The caller gets its own copy: an adapter goroutine that still holds a
+	// result cannot change what the caller reads.
+	out.Results = make(map[string]Result, len(results))
+	for name, res := range results {
+		out.Results[name] = cloneResult(res)
+	}
 
 	return out, nil
 }
 
+// limitError replaces err with the error of the limit of the open when that
+// limit ended.
+func limitError(ctx context.Context, err error, limit time.Duration) error {
+	if !errors.Is(context.Cause(ctx), errRunLimit) {
+		return err
+	}
+
+	be := &BlockError{Err: ErrUnavailable, Block: "", Use: "", Message: ""}
+	if errors.As(err, &be) {
+		return blockFailure(&Block{Name: be.Block, Use: be.Use, Inputs: nil, Login: "", Timeout: 0},
+			ErrUnavailable, fmt.Sprintf("the provider blocks did not end in %s", limit))
+	}
+
+	return fmt.Errorf("%w: the provider blocks did not end in %s", ErrUnavailable, limit)
+}
+
 // checkBlocks checks every block with no network and returns the adapter of
 // each block.
-func (r *Registry) checkBlocks(blocks []Block, c Call) ([]entry, error) {
+func (r *Registry) checkBlocks(ctx context.Context, blocks []Block, c Call) ([]entry, error) {
 	entries := make([]entry, len(blocks))
 	kinds := make(map[string]Kind, len(blocks))
 
 	for i := range blocks {
 		b := &blocks[i]
 
-		e, err := r.checkBlock(b, kinds)
+		e, err := r.checkBlock(ctx, b, kinds)
 		if err != nil {
 			return nil, err
 		}
 
-		if e.spec.MintsTokens && c.Tokens == nil {
-			return nil, blockFailure(b, profile.ErrMissingDependency, "the open has no token source")
+		if e.spec.MintsTokens && (c.Tokens == nil || c.Late == nil) {
+			return nil, blockFailure(b, profile.ErrMissingDependency,
+				"the open has no token source or no receiver of late tokens")
 		}
 
 		entries[i] = e
@@ -198,7 +228,7 @@ func (r *Registry) checkBlocks(blocks []Block, c Call) ([]entry, error) {
 	return entries, nil
 }
 
-func (r *Registry) checkBlock(b *Block, kinds map[string]Kind) (entry, error) {
+func (r *Registry) checkBlock(ctx context.Context, b *Block, kinds map[string]Kind) (entry, error) {
 	if err := checkName(b.Name); err != nil {
 		return entry{}, fmt.Errorf("a provider block: %w", err)
 	}
@@ -228,7 +258,7 @@ func (r *Registry) checkBlock(b *Block, kinds map[string]Kind) (entry, error) {
 		return entry{}, newBlockError(b, err, secretsOf(b.Inputs))
 	}
 
-	if err := e.p.Check(b.Inputs); err != nil {
+	if err := callCheck(ctx, e.p, cloneValue(b.Inputs)); err != nil {
 		return entry{}, newBlockError(b, err, secretsOf(b.Inputs))
 	}
 
@@ -252,19 +282,22 @@ func (r *Registry) open(
 	bctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req := Request{Inputs: maps.Clone(b.Inputs), Claims: maps.Clone(c.Claims), Tokens: nil, Login: nil}
+	// Each adapter gets deep copies, so that it cannot change the inputs,
+	// the claims or the result of an earlier block after their checks.
+	req := Request{Inputs: cloneValue(b.Inputs), Claims: cloneClaims(c.Claims), Tokens: nil, Login: nil}
 
 	var tokens *recordingTokens
 
 	if e.spec.MintsTokens {
 		tokens = &recordingTokens{
-			next: c.Tokens(b.Name), block: b.Name, values: nil, issued: nil, mu: sync.Mutex{}, closed: false,
+			next: c.Tokens(b.Name), late: c.Late, block: b.Name, values: nil, issued: nil, mu: sync.Mutex{},
+			closed: false,
 		}
 		req.Tokens = tokens
 	}
 
 	if b.Login != "" {
-		login := results[b.Login]
+		login := cloneResult(results[b.Login])
 		req.Login = &login
 	}
 
@@ -292,11 +325,37 @@ func (r *Registry) open(
 		return Result{}, issued, newBlockError(b, err, secrets)
 	}
 
+	// Check and keep a copy: the adapter goroutine may still hold res.
+	res = cloneResult(res)
 	if err := CheckResult(e.p.Kind(), &e.spec, &res, r.now()); err != nil {
 		return Result{}, issued, newBlockError(b, err, secrets)
 	}
 
 	return res, issued, nil
+}
+
+// callCheck calls p.Check in its own goroutine and returns when Check
+// returns or ctx ends, as callOpen does for Open. A panic of the adapter is
+// an ErrAdapter with no text of the panic.
+func callCheck(ctx context.Context, p Provider, in Value) error {
+	done := make(chan error, 1)
+
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				done <- fmt.Errorf("%w: the check of the adapter stopped with a panic", ErrAdapter)
+			}
+		}()
+
+		done <- p.Check(in)
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("%w: the check of the block did not end before the limit of the open", ErrUnavailable)
+	}
 }
 
 // callOpen calls p.Open in its own goroutine and returns when Open returns
@@ -491,10 +550,12 @@ var errClosed = errors.New("the block ended, and its token source is closed")
 
 // recordingTokens keeps the value of each token that it mints, so that Run
 // can remove them from an error message, and the audit entry of each token
-// that it gives to the adapter, so that the caller can commit it. After close
-// it gives no token.
+// that the issuer signed, so that the caller can commit it. After close it
+// calls no issuer, and it hands a token that the issuer signed during the
+// close to late.
 type recordingTokens struct {
 	next   TokenSource
+	late   func(Issued)
 	block  string
 	values []string
 	issued []Issued
@@ -516,33 +577,56 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 	}
 
 	tok, err := t.next.Token(ctx, audience, lifetime)
+	late, closed := t.record(&tok, err)
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if tok.Value != "" {
-		t.values = append(t.values, tok.Value)
+	if late != nil && t.late != nil {
+		// The issuer signed after the end of the block. The value never
+		// reaches the adapter, but the entry reaches the caller.
+		t.late(*late)
 	}
 
 	if err != nil {
 		return profile.Token{}, fmt.Errorf("token: %w", err)
 	}
 
-	if t.closed {
-		// The block ended while the issuer signed. The value never reaches
-		// the adapter, so no token leaves without its entry.
+	if closed {
 		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
 	}
 
-	t.issued = append(t.issued, Issued{
-		Entry: tok.Entry, Block: t.block, ID: tok.ID, Warnings: slices.Clone(tok.Warnings),
-	})
+	if tok.Value == "" {
+		return profile.Token{}, fmt.Errorf("%w: the token source gave no token", ErrUnavailable)
+	}
 
 	return tok, nil
 }
 
-// close stops the source and returns the tokens that it gave to the adapter
-// and the value of each token that it minted.
+// record keeps a token that the issuer signed. It returns the token for late
+// when the block closed while the issuer signed, and whether it closed.
+func (t *recordingTokens) record(tok *profile.Token, err error) (*Issued, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if tok.Value == "" {
+		return nil, t.closed
+	}
+
+	t.values = append(t.values, tok.Value)
+	issued := Issued{
+		Entry: tok.Entry, Block: t.block, ID: tok.ID, Warnings: slices.Clone(tok.Warnings),
+		Delivered: err == nil && !t.closed,
+	}
+
+	if t.closed {
+		return &issued, true
+	}
+
+	t.issued = append(t.issued, issued)
+
+	return nil, false
+}
+
+// close stops the source and returns the tokens that the issuer signed for
+// the block and the value of each of them.
 func (t *recordingTokens) close() ([]Issued, []string) {
 	if t == nil {
 		return nil, nil
@@ -554,4 +638,60 @@ func (t *recordingTokens) close() ([]Issued, []string) {
 	t.closed = true
 
 	return slices.Clone(t.issued), slices.Clone(t.values)
+}
+
+// cloneValue returns a deep copy of v.
+func cloneValue(v Value) Value {
+	if v == nil {
+		return nil
+	}
+
+	out := make(Value, len(v))
+	for k, leaf := range v {
+		out[k] = Leaf{Value: cloneAny(leaf.Value), Secret: leaf.Secret}
+	}
+
+	return out
+}
+
+// cloneClaims returns a deep copy of c.
+func cloneClaims(c Claims) Claims {
+	if c == nil {
+		return nil
+	}
+
+	out := make(Claims, len(c))
+	for k, v := range c {
+		out[k] = cloneAny(v)
+	}
+
+	return out
+}
+
+// cloneResult returns r with a deep copy of its value.
+func cloneResult(r Result) Result {
+	r.Value = cloneValue(r.Value)
+
+	return r
+}
+
+func cloneAny(v any) any {
+	switch x := v.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = cloneAny(e)
+		}
+
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = cloneAny(e)
+		}
+
+		return out
+	default:
+		return v
+	}
 }
