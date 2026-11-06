@@ -97,6 +97,19 @@ func helperMode(args *launcher.Args, log *slog.Logger) launcher.ExitCode {
 
 // runMode runs one claimed phase.
 func runMode(args *launcher.Args, log *slog.Logger) launcher.ExitCode {
+	// No descriptor that the launcher inherits reaches a step. The handoff
+	// pipe on descriptor 3 stays open until the launcher reads it.
+	first := launcher.HandoffFD
+	if args.Handoff == runner.HandoffPipe {
+		first++
+	}
+
+	if err := closeOnExec(first); err != nil {
+		log.Error("mark the inherited descriptors close-on-exec", slog.Any("error", err))
+
+		return launcher.ExitSandbox
+	}
+
 	secrets, err := launcher.TmpfsVolume{}.Prepare(args.SecretsDir)
 	if err != nil {
 		log.Error("prepare the secrets directory", slog.Any("error", err))

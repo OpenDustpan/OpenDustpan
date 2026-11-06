@@ -52,9 +52,12 @@ once, closes the pipe, and never writes the token to its output or to a log.
 
 ## What the mode run does
 
-1. It sets `PR_SET_DUMPABLE` to 0 and `PR_SET_NO_NEW_PRIVS` to 1. A process
-   of a step cannot read the memory of the launcher, and a step cannot get
-   more privileges through a set-user-ID program.
+1. It sets `PR_SET_DUMPABLE` to 0, and `PR_SET_NO_NEW_PRIVS` to 1 on each
+   thread. A process of a step cannot read the memory of the launcher, and a
+   step cannot get more privileges through a set-user-ID program. It sets
+   close-on-exec on each descriptor that it got from the runner, except the
+   handoff pipe until it reads it. A step gets only its standard input,
+   output and error.
 2. It checks that the secrets directory is on `tmpfs` or `ramfs`, and creates
    in it a directory with mode 0700. It deletes that directory at the end.
 3. It reads the handoff token and exchanges it at `POST /runner/v1/session`
@@ -128,7 +131,7 @@ The runner reads the exit code to decide what to do with the claim.
 | 65 | No valid handoff token, or the session exchange failed. No step started. | Releases the claim. |
 | 66 | The server refused the release of the launcher. No step started. | Releases the claim. |
 | 67 | The place is not safe: the secrets directory is not in memory, or the work directory is not an absolute path. No step started. | Releases the claim. |
-| 68 | The source failed, and the launcher reported the failed phase. | Lets the claim expire. |
+| 68 | The source failed, and the launcher reported the failed phase. In this release, it means that the launcher cannot download a source (see below). | Lets the claim expire. |
 | 69 | The claim ended under the launcher. | Deletes the Job or the sandbox. |
 | 70 | The launcher could not report the end of the phase. | Lets the claim expire. |
 | 71 | An error in the launcher. | Lets the claim expire. |
@@ -139,8 +142,11 @@ A helper mode stops with 0 when it answered, and with 1 when it failed.
 
 - **Source.** The launcher does not download a source snapshot. A phase with
   a source fails with the reason "this launcher release cannot download a
-  source snapshot", and the launcher stops with the exit code 68. Each step
-  runs in an empty checkout directory.
+  source snapshot", and the launcher stops with the exit code 68. The
+  contract of the launcher gives 68 to a source that failed its check or
+  its checkout. This release uses it also for a source that it cannot
+  download, because the runner does the same with the claim in both cases.
+  Each step runs in an empty checkout directory.
 - **Credentials.** The launcher does not ask for the credentials of a tool
   step, and does not serve the helper socket. A tool step runs with no
   credential, and its log starts with the line `dustpan-launcher: this
