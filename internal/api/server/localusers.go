@@ -714,7 +714,7 @@ func (h *Handler) renewSession(
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: old.AuthTime, PrincipalID: old.PrincipalID, Provider: old.Provider, SourceIP: e.SourceIP,
-		UserAgent: e.UserAgent, Generation: g, Stored: false,
+		UserAgent: e.UserAgent, Generation: g, Stored: false, Alert: nil,
 	})
 	if err != nil {
 		return

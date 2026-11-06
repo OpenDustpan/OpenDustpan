@@ -134,6 +134,8 @@ import {
   decodeOutputSharingRequest,
   decodePasskey,
   decodePasskeyCreationOptions,
+  decodePasskeyRequestOptions,
+  decodePasskeySignInRequest,
   decodePasswordSignInRequest,
   decodePasswordTooShortError,
   decodePasswordTooShortErrorArgs,
@@ -393,6 +395,8 @@ import type {
   OutputSharingRequest,
   Passkey,
   PasskeyCreationOptions,
+  PasskeyRequestOptions,
+  PasskeySignInRequest,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -532,6 +536,11 @@ export interface AddRegistryKeyInput {
 
 /** The input of the operation beginPasskeyRegistration. */
 export interface BeginPasskeyRegistrationInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation beginPasskeySignIn. */
+export interface BeginPasskeySignInInput {
   readonly signal?: AbortSignal;
 }
 
@@ -933,6 +942,12 @@ export interface ExportNamespaceIssuerInput {
 /** The input of the operation finishPasskeyRegistration. */
 export interface FinishPasskeyRegistrationInput {
   readonly body: FinishPasskeyRegistrationRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation finishPasskeySignIn. */
+export interface FinishPasskeySignInInput {
+  readonly body: PasskeySignInRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2102,6 +2117,23 @@ export const operations = {
     },
     ref(() => decodePasskeyCreationOptions),
   ),
+  beginPasskeySignIn: operation<PasskeyRequestOptions>(
+    {
+      id: "beginPasskeySignIn",
+      method: "POST",
+      path: "/api/dustpan/v1/sign-in/passkey/begin",
+      pathParameters: [],
+      queryParameters: [],
+      security: "public",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodePasskeyRequestOptions),
+  ),
   bulkReplaceUnitSettings: operation<BulkUnitSettingsResult>(
     {
       id: "bulkReplaceUnitSettings",
@@ -2747,6 +2779,23 @@ export const operations = {
       statuses: [201],
     },
     ref(() => decodePasskey),
+  ),
+  finishPasskeySignIn: operation<void>(
+    {
+      id: "finishPasskeySignIn",
+      method: "POST",
+      path: "/api/dustpan/v1/sign-in/passkey/finish",
+      pathParameters: [],
+      queryParameters: [],
+      security: "public",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [204],
+    },
+    undefined,
   ),
   fireTrigger: operation<FireTriggerResult>(
     {

@@ -1262,6 +1262,23 @@ func (q *Queries) CountOpenOperationsOfKinds(ctx context.Context, arg CountOpenO
 	return count, err
 }
 
+const countOpenPasskeyChallenges = `-- name: CountOpenPasskeyChallenges :one
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = ? AND expires_at_ms > ?
+`
+
+type CountOpenPasskeyChallengesParams struct {
+	Kind        string
+	ExpiresAtMs int64
+}
+
+// The challenges of one kind that have not expired at the given time.
+func (q *Queries) CountOpenPasskeyChallenges(ctx context.Context, arg CountOpenPasskeyChallengesParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenPasskeyChallenges, arg.Kind, arg.ExpiresAtMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countOpenRunnerJoinTokens = `-- name: CountOpenRunnerJoinTokens :one
 SELECT COUNT(*)
 FROM runner_join_tokens

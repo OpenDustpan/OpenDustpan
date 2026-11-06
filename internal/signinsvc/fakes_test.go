@@ -157,7 +157,7 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, Groups: groups,
-		Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
+		States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)

@@ -33,7 +33,7 @@ func TestBumpEndsLiveSession(t *testing.T) {
 
 	start := session.Start{
 		AuthTime: sessions.Now(), PrincipalID: in.PrincipalID, Provider: localuser.ProviderID,
-		SourceIP: "192.0.2.1", UserAgent: "test", Generation: in.SessionGeneration, Stored: false,
+		SourceIP: "192.0.2.1", UserAgent: "test", Generation: in.SessionGeneration, Stored: false, Alert: nil,
 	}
 
 	e := base(c.Principal.Subject)

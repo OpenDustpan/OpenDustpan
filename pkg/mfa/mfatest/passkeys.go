@@ -88,6 +88,10 @@ func passkeyCases() []passkeyCase {
 		},
 		{name: "a challenge works once", test: testChallengeOnce},
 		{
+			name: "a sign-in challenge over the cap of open ones stores no row, and the cap counts sign-ins only",
+			test: testSignInChallengeCap,
+		},
+		{
 			name: "a challenge after its expiry fails with ErrNotFound, also on a second take",
 			test: testChallengeExpired,
 		},
@@ -997,6 +1001,54 @@ func challengeOf(k mfa.Ceremony, sec int) mfa.Challenge {
 	}
 
 	return c
+}
+
+// testSignInChallengeCap fills the installation with the most open sign-in
+// challenges. The next sign-in challenge is refused with ErrChallengeLimit and
+// stores no row. A challenge of another kind still works. When one open
+// challenge ends, a new sign-in challenge works again, and a challenge that
+// expired does not count.
+func testSignInChallengeCap(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for i := range mfa.MaxOpenSignInChallenges {
+		if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, 0), digest(i)); err != nil {
+			t.Fatalf("sign-in challenge %d: %v", i, err)
+		}
+	}
+
+	over := digest(mfa.MaxOpenSignInChallenges)
+
+	err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, 1), over)
+	if !errors.Is(err, mfa.ErrChallengeLimit) || !errors.Is(err, mfa.ErrUnavailable) {
+		t.Fatalf("sign-in challenge over the cap = %v, want ErrChallengeLimit", err)
+	}
+
+	if _, err := s.TakeChallenge(ctx, over, at(2)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("take of the refused challenge = %v, want ErrNotFound: the refusal stored a row", err)
+	}
+
+	if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonyFresh, 1), digest(-1)); err != nil {
+		t.Fatalf("fresh challenge at the cap: %v", err)
+	}
+
+	if _, err := s.TakeChallenge(ctx, digest(0), at(2)); err != nil {
+		t.Fatalf("take of an open challenge: %v", err)
+	}
+
+	if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, 1), over); err != nil {
+		t.Fatalf("sign-in challenge after one ended: %v", err)
+	}
+
+	// Every challenge expired after their lifetime, so a new one works.
+	late := int(mfa.ChallengeExpiry(at(0)).Sub(at(0)).Seconds()) + 5
+	lateDigest := digest(mfa.MaxOpenSignInChallenges + 1)
+
+	if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, late), lateDigest); err != nil {
+		t.Fatalf("sign-in challenge after the others expired: %v", err)
+	}
 }
 
 func testChallengeOnce(t *testing.T, s PasskeyStore) {

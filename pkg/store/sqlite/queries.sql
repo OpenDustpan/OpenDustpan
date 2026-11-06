@@ -5005,6 +5005,10 @@ DELETE FROM local_user_resets WHERE expires_at_ms <= ?;
 -- credential counts only these.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = ? AND suspended_at_ms = 0;
 
+-- name: CountOpenPasskeyChallenges :one
+-- The challenges of one kind that have not expired at the given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = ? AND expires_at_ms > ?;
+
 -- name: CountPasskeys :one
 -- The passkeys of a person, read under the lock of the principal.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = ?;

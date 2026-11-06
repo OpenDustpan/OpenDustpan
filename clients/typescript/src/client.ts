@@ -6,6 +6,7 @@ import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
   BeginPasskeyRegistrationInput,
+  BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
   ChangeOwnPasswordInput,
   CheckGitHostConnectionInput,
@@ -44,6 +45,7 @@ import type {
   ExchangeWorkloadTokenInput,
   ExportNamespaceIssuerInput,
   FinishPasskeyRegistrationInput,
+  FinishPasskeySignInInput,
   FireTriggerInput,
   ForceUnlockCollectionInput,
   ForceUnlockNamespaceInput,
@@ -294,6 +296,8 @@ import type {
   OutputSharingRequest,
   Passkey,
   PasskeyCreationOptions,
+  PasskeyRequestOptions,
+  PasskeySignInRequest,
   PasswordSignInRequest,
   PasswordTooShortError,
   PasswordTooShortErrorArgs,
@@ -434,6 +438,10 @@ export class Client {
 
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {
     return execute(this.transport, operations.beginPasskeyRegistration, input);
+  }
+
+  beginPasskeySignIn(input: BeginPasskeySignInInput = {}): Promise<Answer<PasskeyRequestOptions>> {
+    return execute(this.transport, operations.beginPasskeySignIn, input);
   }
 
   bulkReplaceUnitSettings(input: BulkReplaceUnitSettingsInput): Promise<Answer<BulkUnitSettingsResult>> {
@@ -586,6 +594,10 @@ export class Client {
 
   finishPasskeyRegistration(input: FinishPasskeyRegistrationInput): Promise<Answer<Passkey>> {
     return execute(this.transport, operations.finishPasskeyRegistration, input);
+  }
+
+  finishPasskeySignIn(input: FinishPasskeySignInInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.finishPasskeySignIn, input);
   }
 
   fireTrigger(input: FireTriggerInput): Promise<Answer<FireTriggerResult>> {

@@ -241,7 +241,7 @@ func coverageSignInService(
 
 	service, err := signinsvc.New(signinsvc.Config{
 		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: st, Groups: nil,
-		Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+		States: st, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
 	})
 	if err != nil {
 		tb.Fatalf("sign-in service: %v", err)
@@ -268,8 +268,13 @@ func coverageSignIn(
 		Origins:         nil,
 		PasswordLimiter: coveragePasswordLimiter{},
 		Passkeys:        passkeys,
-		DevCode:         code,
-		DevAdmin:        identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
+		PasskeySignIn:   passkeys,
+		// The coverage test calls no route, and the route table holds the routes of the passkey sign-in only with a
+		// budget for the starts and a budget for the failures.
+		PasskeyBeginLimiter: coveragePasswordLimiter{},
+		PasskeyLimiter:      coveragePasswordLimiter{},
+		DevCode:             code,
+		DevAdmin:            identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 	}
 }
 

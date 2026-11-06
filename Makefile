@@ -30,8 +30,11 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
 
+# Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
+LINT_FLAGS ?=
+
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -102,8 +105,9 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # one regular expression per line. Each entry needs the owner's approval.
 # Today it holds one vendored agent skill, where a Markdown link that names a
 # file looks like a credential to a detector, two API reference pages, and
-# twelve test files whose fake URLs with a user name and a password test the
-# refusal or the masking of credentials.
+# test files whose fake URLs with a user name and a password test the refusal
+# or the masking of credentials. Four of these files no longer exist, but
+# their history still holds a fake credential.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 

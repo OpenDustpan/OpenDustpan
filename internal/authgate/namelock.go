@@ -24,6 +24,10 @@ const (
 	// pending sign-in. The name is the principal ID, and the sub-key is
 	// empty.
 	ScopeFactor = "factor"
+	// ScopeBreakGlass counts the failed passkey assertions for the passkeys of
+	// one break-glass account. The name is the principal ID, and the sub-key
+	// is empty. The count only raises an alert: no sign-in reads its lock.
+	ScopeBreakGlass = "breakglass"
 )
 
 // LockRule says when a count locks, and for how long.
@@ -322,6 +326,18 @@ func PasswordRule() LockRule {
 	}
 }
 
+// BreakGlassRule is the rule of the count of the failed assertions for one
+// break-glass account: 10 failures make the alert, and the count then waits an
+// hour before it counts again, so that one account gets at most one alert in
+// each hour. The lock of the count stops no sign-in.
+func BreakGlassRule() LockRule {
+	return LockRule{Limit: BreakGlassAlertLimit, LockFor: AlertWindow, MaxLockFor: AlertWindow, ResetAfter: 0}
+}
+
+// BreakGlassAlertLimit is the count of failed assertions for one break-glass
+// account that raises the alert.
+const BreakGlassAlertLimit = 10
+
 // PasswordNameRule is the rule of the count of one name from every source.
 func PasswordNameRule() LockRule {
 	return LockRule{
@@ -489,6 +505,11 @@ func LockAlert(ev *LockEvents, scope, name string, lock NameLock, at time.Time) 
 	}
 	n.Summary = "Sign-in lock in scope " + scope + " on " + ev.Locked.Object + " until " + until +
 		" after failed attempts."
+
+	if scope == ScopeBreakGlass {
+		n.Summary = strconv.Itoa(BreakGlassAlertLimit) + " failed passkey sign-ins for the break-glass account " +
+			ev.Locked.Object + ". The account is not locked."
+	}
 
 	return n
 }

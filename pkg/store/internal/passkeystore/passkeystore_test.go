@@ -155,6 +155,8 @@ func (looseTx) CreateChallenge(context.Context, passkeystore.ChallengeRow) (int6
 
 func (looseTx) DeleteExpiredChallenges(context.Context, int64) (int64, error) { return 0, nil }
 
+func (looseTx) CountOpenChallenges(context.Context, string, int64) (int64, error) { return 0, nil }
+
 func (looseTx) TakeChallenge(context.Context, string) (passkeystore.ChallengeRow, error) {
 	return passkeystore.ChallengeRow{}, passkeystore.ErrNoRow
 }

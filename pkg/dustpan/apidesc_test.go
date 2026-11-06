@@ -40,10 +40,14 @@ const openAPIPath = "/api/dustpan/v1/openapi.json"
 // is the credential: the exchange checks it against the trust rules.
 // signInWithPassword runs before the person has a session: the user name and
 // the password in its body are the credential. redeemLocalUserCode is public
-// because the one-use code in its body is the credential.
+// because the one-use code in its body is the credential. beginPasskeySignIn
+// runs before the person has a session and names no person, and
+// finishPasskeySignIn has the signed response of the passkey in its body as
+// the credential.
 func publicOperations() []string {
 	return []string{
-		"exchangeWorkloadToken", "getApiDescription", "getCapabilities", "redeemLocalUserCode", "signInWithPassword",
+		"beginPasskeySignIn", "exchangeWorkloadToken", "finishPasskeySignIn", "getApiDescription", "getCapabilities",
+		"redeemLocalUserCode", "signInWithPassword",
 	}
 }
 

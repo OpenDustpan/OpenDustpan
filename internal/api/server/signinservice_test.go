@@ -21,7 +21,7 @@ func newTestSignInService(
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: audit.ServerStore(st),
-		Groups: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+		Groups: nil, States: st, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("sign-in service: %v", err)
