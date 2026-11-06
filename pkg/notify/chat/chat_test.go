@@ -93,7 +93,7 @@ func TestContentValidate(t *testing.T) {
 		{"file link", func(c *chat.Content) { c.Links[0].URL = "file:///etc/passwd" }, false},
 		{
 			"link with user information",
-			func(c *chat.Content) { c.Links[0].URL = fakecred.URL("https", "u", "p", "console.example", "") },
+			func(c *chat.Content) { c.Links[0].URL = fakecred.URL("https", "u", "p", "console.example", "/") },
 			false,
 		},
 		{"link with no host", func(c *chat.Content) { c.Links[0].URL = "https:///x" }, false},

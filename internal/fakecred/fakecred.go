@@ -7,17 +7,25 @@
 // package. The binary does not link it.
 package fakecred
 
-import "net/url"
+import (
+	"net/url"
+	"strings"
+)
 
-// URL returns scheme://user:password@host/path, built from its parts with
-// net/url. The host can hold a port. The path has no leading slash and can be
-// empty. An empty password gives "user:@".
+// URL returns scheme://user:password@host followed by path, built from its
+// parts with net/url. The host can hold a port. An empty path gives no slash
+// after the host. A path that does not start with a slash gets one. A path
+// that starts with a slash keeps it, and the slash is not doubled. An empty
+// password gives "user:@".
 func URL(scheme, user, password, host, path string) string {
+	if path != "" {
+		path = "/" + strings.TrimPrefix(path, "/")
+	}
 	u := url.URL{
 		Scheme: scheme,
 		User:   url.UserPassword(user, password),
 		Host:   host,
-		Path:   "/" + path,
+		Path:   path,
 	}
 	return u.String()
 }

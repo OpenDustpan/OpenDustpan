@@ -313,7 +313,8 @@ func TestWritableAnswerRefusesNoResult(t *testing.T) {
 func TestPoolConfigRefusesURLThatDoesNotParse(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := poolConfig("postgres://user:hunter2@db.example:bad port/dustpan") // trufflehog:ignore fake address; the test needs the exact text, which is not a valid URL
+	const badPort = "postgres://user:hunter2@db.example:bad port/dustpan" // trufflehog:ignore fake address, invalid URL
+	_, _, err := poolConfig(badPort)
 	if !errors.Is(err, ErrFailoverSetting) {
 		t.Fatalf("poolConfig = %v, want ErrFailoverSetting", err)
 	}

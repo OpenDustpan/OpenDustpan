@@ -453,7 +453,7 @@ func TestCreateRefused(t *testing.T) {
 		{"a chat URL on a private IPv6 address", chat("https://[fd00::1]/services/" + canary), true},
 		{
 			"a chat URL with user information",
-			chat(fakecred.URL("https", "user", "pw", "hooks.slack.com", "") + canary),
+			chat(fakecred.URL("https", "user", "pw", "hooks.slack.com", "/") + canary),
 			true,
 		},
 		{"a chat URL with a fragment", chat("https://hooks.slack.com/x#" + canary), true},
@@ -499,7 +499,7 @@ func TestCreateRefused(t *testing.T) {
 		{"a webhook on IPv6 loopback", hook("https://[::1]/" + canary), true},
 		{
 			"a webhook with user information",
-			hook(fakecred.URL("https", "u", "p", "hooks.example.com", "") + canary),
+			hook(fakecred.URL("https", "u", "p", "hooks.example.com", "/") + canary),
 			true,
 		},
 		{"a webhook with no target", hook(""), true},

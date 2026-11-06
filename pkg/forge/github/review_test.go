@@ -250,7 +250,7 @@ func TestReadReviewRefusesAnswersThatFailACheck(t *testing.T) {
 		{"an empty address", func(p map[string]any) { p["html_url"] = "" }},
 		{
 			"an address with a password",
-			func(p map[string]any) { p["html_url"] = fakecred.URL("https", "u", "p", "github.example", "x") },
+			func(p map[string]any) { p["html_url"] = fakecred.URL("https", "u", "p", "github.example", "/x") },
 		},
 		{"an address that is too long", func(p map[string]any) {
 			p["html_url"] = "https://github.example/" + strings.Repeat("a", 3000)

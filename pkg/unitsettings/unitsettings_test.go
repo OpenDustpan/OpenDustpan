@@ -97,7 +97,7 @@ func hostileCases() []hostileCase {
 		{
 			"repository with a user name",
 			func(s *unitsettings.Settings) {
-				s.CodeLocation.Repository = fakecred.URL("https", "u", "p", "host", "a/b")
+				s.CodeLocation.Repository = fakecred.URL("https", "u", "p", "host", "/a/b")
 			},
 		},
 		{

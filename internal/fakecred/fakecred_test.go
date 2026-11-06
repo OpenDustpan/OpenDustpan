@@ -15,7 +15,10 @@ func TestURL(t *testing.T) {
 		want                               string
 	}{
 		{"user and password", "https", "user", "pw", "hooks.example.com", "x", "https://user:pw@hooks.example.com/x"},
-		{"empty path", "https", "u", "p", "host", "", "https://u:p@host/"},
+		{"empty path", "https", "u", "p", "host", "", "https://u:p@host"},
+		{"path with a leading slash", "https", "u", "p", "host", "/x", "https://u:p@host/x"},
+		{"path without a leading slash", "https", "u", "p", "host", "x", "https://u:p@host/x"},
+		{"only a slash", "https", "u", "p", "host", "/", "https://u:p@host/"},
 		{
 			"empty password",
 			"https",
@@ -25,7 +28,7 @@ func TestURL(t *testing.T) {
 			"acme/infra.git",
 			"https://user:@git.example.com/acme/infra.git",
 		},
-		{"port", "https", "user", "pw", "127.0.0.1:1", "", "https://user:pw@127.0.0.1:1/"},
+		{"port", "https", "user", "pw", "127.0.0.1:1", "", "https://user:pw@127.0.0.1:1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

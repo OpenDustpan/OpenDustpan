@@ -19,7 +19,7 @@ func TestGetJobNeverAnswersRepositoryCredentials(t *testing.T) {
 		repository string
 		want       string
 	}{
-		{fakecred.URL("https", "user", "hunter2", "git.example.com", "acme/infra.git"), `"location":{"ref":"main"`},
+		{fakecred.URL("https", "user", "hunter2", "git.example.com", "/acme/infra.git"), `"location":{"ref":"main"`},
 		{"ssh://git@git.example.com/acme/infra.git", `"location":{"ref":"main"`},
 		{"https://git.example.com/acme/infra.git", `"repository":"https://git.example.com/acme/infra.git"`},
 		{"acme/infra", `"repository":"acme/infra"`},

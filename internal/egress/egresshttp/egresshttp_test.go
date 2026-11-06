@@ -92,7 +92,7 @@ func TestClientChecksFirstURL(t *testing.T) {
 		url  string
 	}{
 		{"http for https only", "http://hooks.example.com/x"},
-		{"user information", fakecred.URL("https", "user", "pw", "hooks.example.com", "x")},
+		{"user information", fakecred.URL("https", "user", "pw", "hooks.example.com", "/x")},
 		{"hexadecimal loopback", "https://0x7f000001/x"},
 	}
 

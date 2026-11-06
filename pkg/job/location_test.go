@@ -91,12 +91,12 @@ func TestLocationValidateRepository(t *testing.T) {
 		"an https URL":             {"https://git.example.com/acme/infra.git", true},
 		"an https URL with a port": {"https://git.example.com:8443/acme/infra", true},
 		"an https URL with a password": {
-			fakecred.URL("https", "user", "hunter2", "git.example.com", "acme/infra.git"),
+			fakecred.URL("https", "user", "hunter2", "git.example.com", "/acme/infra.git"),
 			false,
 		},
 		"an https URL with a user name": {"https://user@git.example.com/acme/infra.git", false},
 		"an https URL with an empty password": {
-			fakecred.URL("https", "user", "", "git.example.com", "acme/infra.git"),
+			fakecred.URL("https", "user", "", "git.example.com", "/acme/infra.git"),
 			false,
 		},
 		"an http URL":                         {"http://git.example.com/acme/infra.git", false},

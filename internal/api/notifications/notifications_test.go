@@ -310,7 +310,7 @@ func TestCreateRefusals(t *testing.T) {
 		{
 			"a chat URL with user information",
 			"admin",
-			chat(fakecred.URL("https", "u", "p", "hooks.slack.com", "") + canary),
+			chat(fakecred.URL("https", "u", "p", "hooks.slack.com", "/") + canary),
 			400,
 			"sink.invalid",
 		},
