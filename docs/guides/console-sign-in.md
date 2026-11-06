@@ -232,6 +232,16 @@ The `__Host-dustpan_signin` cookie is `SameSite=Lax`, so the browser sends it
 when the provider sends the browser back. The `__Host-dustpan_session`
 cookie is `SameSite=Strict`.
 
+### Sign in with a passkey
+
+Local users and break-glass accounts do not use a provider. They can sign in
+with a passkey and no user name. The console calls
+`POST /api/dustpan/v1/sign-in/passkey/begin`, gives the options to the
+browser, and sends the result to `POST /api/dustpan/v1/sign-in/passkey/finish`.
+The second route sets the same `__Host-dustpan_session` cookie. The steps,
+the limits and the reasons for a failure are in
+[Sign in with a passkey](passkeys.md#sign-in-with-a-passkey).
+
 ## The session
 
 - `GET /api/server/session` answers the session and its CSRF value.
