@@ -6,7 +6,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -61,8 +60,8 @@ func TestLockedTextKeepsTheRouteOfALongReason(t *testing.T) {
 
 			got := refusal.LockedText(e)
 
-			if len(got) > problem.MaxMessageBytes {
-				t.Fatalf("LockedText has %d bytes, want at most %d", len(got), problem.MaxMessageBytes)
+			if len(got) > refusal.MaxLockedTextBytes {
+				t.Fatalf("LockedText has %d bytes, want at most %d", len(got), refusal.MaxLockedTextBytes)
 			}
 
 			want := ". To remove the lock, the holder sends DELETE " + tc.remove + "."
@@ -74,21 +73,10 @@ func TestLockedTextKeepsTheRouteOfALongReason(t *testing.T) {
 				t.Fatalf("LockedText = %q, want valid UTF-8", got)
 			}
 
-			if refusal.Clean(got, problem.MaxMessageBytes) != got {
+			if refusal.Clean(got, refusal.MaxLockedTextBytes) != got {
 				t.Fatal("Clean changes LockedText, so a later cut would remove the route")
 			}
 		})
-	}
-}
-
-// TestMaxLockedTextBytesIsTheMessageLimit proves that the bound of a locked text
-// is the limit of the message of an answer.
-func TestMaxLockedTextBytesIsTheMessageLimit(t *testing.T) {
-	t.Parallel()
-
-	if refusal.MaxLockedTextBytes != problem.MaxMessageBytes {
-		t.Fatalf("MaxLockedTextBytes = %d, want problem.MaxMessageBytes = %d",
-			refusal.MaxLockedTextBytes, problem.MaxMessageBytes)
 	}
 }
 
@@ -157,7 +145,7 @@ func checkLongestUnitText(t *testing.T, tool string, ns namespace.Name, unitName
 			len(suffix), wantSize)
 	}
 
-	if refusal.Clean(got, problem.MaxMessageBytes) != got {
+	if refusal.Clean(got, refusal.MaxLockedTextBytes) != got {
 		t.Fatal("the cut of the answer changes the text, so it would remove the route")
 	}
 }

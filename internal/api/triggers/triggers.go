@@ -280,7 +280,7 @@ func classifyRule(err error) (problem.Problem, bool) {
 func classifyLocked(manual *manuallock.LockedError) problem.Problem {
 	a, err := refusal.Locked(manual)
 
-	return problem.Built(http.StatusConflict, refusal.Clean(refusal.LockedText(manual), problem.MaxMessageBytes),
+	return problem.Built(http.StatusConflict, refusal.Clean(refusal.LockedText(manual), refusal.MaxLockedTextBytes),
 		errcode.LockLocked, a, err)
 }
 
