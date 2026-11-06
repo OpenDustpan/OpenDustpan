@@ -2,6 +2,7 @@ package casauth_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -142,38 +143,34 @@ func (s setup) callback(t *testing.T, r session.Redirect, service, ticket string
 }
 
 // browse sends the browser to the login URL of r and returns the callback
-// of the redirect back to the server.
+// of the way back to the server: the service URL of the login URL with the
+// ticket that the test server writes in the body of its answer.
 func (s setup) browse(t *testing.T, r session.Redirect, p sessiontest.TestPerson) session.Callback {
 	t.Helper()
 
 	s.srv.SetLogin(s.person(p), castest.AnswerSuccess)
-
-	browser := *s.srv.Client()
-	browser.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, r.URL, http.NoBody)
 	if err != nil {
 		t.Fatalf("login request: %v", err)
 	}
 
-	resp, err := browser.Do(req)
+	resp, err := s.srv.Client().Do(req)
 	if err != nil {
 		t.Fatalf("login request: %v", err)
 	}
+
+	body, err := io.ReadAll(resp.Body)
 
 	if closeErr := resp.Body.Close(); closeErr != nil {
 		t.Errorf("close body: %v", closeErr)
 	}
 
-	back, err := url.Parse(resp.Header.Get("Location"))
-	if err != nil || resp.StatusCode != http.StatusFound {
+	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("login answer = %d, %v", resp.StatusCode, err)
 	}
 
-	ticket := back.Query().Get("ticket")
-	back.RawQuery = url.Values{"state": {back.Query().Get("state")}}.Encode()
-
-	return s.callback(t, r, back.String(), ticket)
+	return s.callback(t, r, loginQuery(t, r).Get("service"), string(body))
 }
 
 // loginQuery returns the query of the login URL of r.
