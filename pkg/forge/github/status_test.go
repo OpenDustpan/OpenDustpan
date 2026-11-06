@@ -212,7 +212,7 @@ func TestSetStatusRefusesAnInstallationThatCannotWrite(t *testing.T) {
 
 	// The capability is listed until the first check, so the call reaches the token request.
 	setErr := fg.SetStatus(t.Context(), conformanceRepo, headSHA, successStatus())
-	if !errors.Is(setErr, forge.ErrRefused) || !strings.Contains(setErr.Error(), "commit statuses") {
+	if setErr == nil || !errors.Is(setErr, forge.ErrRefused) || !strings.Contains(setErr.Error(), "commit statuses") {
 		t.Fatalf("SetStatus = %v, want ErrRefused that names the commit statuses", setErr)
 	}
 }

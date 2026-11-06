@@ -43,7 +43,7 @@ func (c changedFile) wire() map[string]string {
 func diffFiles(rp *repo, from, to *commit) []changedFile {
 	var added, removed []string
 
-	var files []changedFile
+	files := []changedFile{}
 
 	for _, p := range slices.Sorted(maps.Keys(to.tree)) {
 		old, existed := from.tree[p]
@@ -82,7 +82,7 @@ func diffFiles(rp *repo, from, to *commit) []changedFile {
 // pairRenames turns the added and removed paths into files. A removed path and
 // an added path with the same blob ID are one rename.
 func pairRenames(rp *repo, from, to *commit, added, removed []string) []changedFile {
-	var files []changedFile
+	files := []changedFile{}
 
 	taken := map[string]bool{}
 
@@ -184,9 +184,10 @@ func pagedFiles(files []changedFile, r *http.Request) []map[string]string {
 	perPage, page := min(pageOf(q.Get("per_page"), defaultFiles), mostFiles), pageOf(q.Get("page"), 1)
 
 	start := min((page-1)*perPage, len(files))
-	listed := make([]map[string]string, 0, perPage)
+	window := files[start:min(start+perPage, len(files))]
+	listed := make([]map[string]string, 0, len(window))
 
-	for _, c := range files[start:min(start+perPage, len(files))] {
+	for _, c := range window {
 		listed = append(listed, c.wire())
 	}
 
