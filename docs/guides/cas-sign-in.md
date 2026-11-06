@@ -122,8 +122,9 @@ the future.
 
 The server refuses an answer with a document type declaration (DTD), an
 entity, or a processing instruction other than the XML declaration. It also
-refuses an answer with an element after its root element, and a user or an
-attribute value that holds an element. The answer must be UTF-8.
+refuses an answer with a tag or text other than whitespace outside its root
+element, an end tag with no start tag, and a user or an attribute value
+that holds an element. The answer must be UTF-8.
 
 ## Outbound connections
 

@@ -161,13 +161,17 @@ func checkDocument(b []byte) error {
 	return nil
 }
 
-// scanner is the state of the check of the tokens of one answer.
+// scanner is the state of the check of the tokens of one answer. The
+// decoder of the check reads raw tokens, which do not match an end tag
+// with its start tag, so the scanner counts the depth itself and refuses
+// an end tag with no open element.
 type scanner struct {
 	// depth is the nesting of the elements before the next token.
 	depth int
 	// n is the index of the next token.
 	n int
-	// closed is true after the end of the root element.
+	// closed is true after the end of the root element. It never goes back
+	// to false.
 	closed bool
 }
 
@@ -182,27 +186,48 @@ func (sc *scanner) check(tok xml.Token) error {
 		if sc.n != 0 || v.Target != "xml" {
 			return fmt.Errorf("%w: the answer holds a processing instruction", ErrAnswer)
 		}
-	case xml.StartElement:
-		if sc.closed {
-			// The decoder reads the first root only. A second root, or any
-			// element after the first one, is refused so that no value
-			// outside the read root can be in the answer.
-			return fmt.Errorf("%w: the answer holds an element after its root", ErrAnswer)
+	case xml.StartElement, xml.EndElement:
+		return sc.element(tok)
+	case xml.CharData:
+		if sc.depth == 0 && len(bytes.TrimSpace(v)) > 0 {
+			return fmt.Errorf("%w: the answer holds text outside its root", ErrAnswer)
 		}
-
-		if sc.depth+1 > MaxAnswerDepth {
-			return fmt.Errorf("%w: the answer is deeper than %d elements", ErrAnswer, MaxAnswerDepth)
-		}
-
-		sc.depth++
-	case xml.EndElement:
-		sc.depth--
-		sc.closed = sc.depth == 0
-	case xml.CharData, xml.Comment:
+	case xml.Comment:
 	default:
 		// Fail closed: the decoder has no other token type today.
 		return fmt.Errorf("%w: the answer holds an unknown token", ErrAnswer)
 	}
+
+	return nil
+}
+
+// element checks a start tag or an end tag and updates the depth. The
+// decoder reads the first root only, so the scanner refuses each tag after
+// the end of the root: no value outside the read root can be in the
+// answer.
+func (sc *scanner) element(tok xml.Token) error {
+	if sc.closed {
+		return fmt.Errorf("%w: the answer holds a tag after its root", ErrAnswer)
+	}
+
+	if _, end := tok.(xml.EndElement); end {
+		if sc.depth == 0 {
+			return fmt.Errorf("%w: the answer holds an end tag with no open element", ErrAnswer)
+		}
+
+		sc.depth--
+		if sc.depth == 0 {
+			sc.closed = true
+		}
+
+		return nil
+	}
+
+	if sc.depth+1 > MaxAnswerDepth {
+		return fmt.Errorf("%w: the answer is deeper than %d elements", ErrAnswer, MaxAnswerDepth)
+	}
+
+	sc.depth++
 
 	return nil
 }
