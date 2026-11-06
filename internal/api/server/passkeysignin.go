@@ -46,9 +46,9 @@ import (
 
 // Paths and names of the passkey sign-in.
 const (
-	passkeySignInBeginPath  = "/api/dustpan/v1/sign-in/passkey/begin"
-	passkeySignInFinishPath = "/api/dustpan/v1/sign-in/passkey/finish"
-	passkeySignInAuditActor = "sign-in:passkey"
+	signInWebauthnBeginPath  = "/api/dustpan/v1/sign-in/passkey/begin"
+	signInWebauthnFinishPath = "/api/dustpan/v1/sign-in/passkey/finish"
+	signInWebauthnAuditActor = "sign-in:passkey"
 	// passkeySignInRefused is the audit action of a refusal that this adapter
 	// makes before the service of the passkeys runs.
 	passkeySignInRefused = "passkey.sign-in-refused"
@@ -111,27 +111,25 @@ func (h *Handler) passkeySignInRoutes() []Route {
 
 	return append(routes,
 		Route{
-			Method: http.MethodPost, Path: passkeySignInBeginPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			Method: http.MethodPost, Path: signInWebauthnBeginPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, Serve: h.beginPasskeySignIn,
 		},
 		Route{
-			Method: http.MethodPost, Path: passkeySignInFinishPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
+			Method: http.MethodPost, Path: signInWebauthnFinishPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, Serve: h.finishPasskeySignIn,
 		},
 	)
 }
 
-// admitPasskey waits or refuses as the budgets of the address of the request
-// say. The budget of the failures applies to both routes, so that an address
-// that its failures refuse starts no ceremony. The budget of the begins
-// applies to the begin only. A handler with a missing budget refuses: it fails
-// closed.
+// admitPasskeyFinish waits or refuses as the budget of the failures of the
+// address of the request says. A handler with a missing budget refuses: it
+// fails closed.
 //
 // Defense in depth: passkeySignInRoutes mounts no route without the budgets.
 // This check stays so that a change to the route table never serves a
 // ceremony with no limit.
-func (h *Handler) admitPasskey(ctx context.Context, begin bool) error {
-	if h.signIn == nil || h.signIn.passkeyFailures == nil || (begin && h.signIn.passkeyBegins == nil) {
+func (h *Handler) admitPasskeyFinish(ctx context.Context) error {
+	if h.signIn == nil || h.signIn.passkeyFailures == nil {
 		return errPasskeySignInUnavailable
 	}
 
@@ -139,12 +137,27 @@ func (h *Handler) admitPasskey(ctx context.Context, begin bool) error {
 		return fmt.Errorf("passkey failure budget: %w", err)
 	}
 
-	if !begin {
-		return nil
+	return nil
+}
+
+// admitPasskeyStart is admitPasskeyFinish for the start of a ceremony. It
+// also checks the budget of the starts. The budget of the failures applies to
+// the start too, so that an address that its failures refuse starts no
+// ceremony.
+func (h *Handler) admitPasskeyStart(ctx context.Context) error {
+	if err := h.admitPasskeyFinish(ctx); err != nil {
+		return err
+	}
+
+	// Defense in depth: passkeySignInRoutes mounts no route without this
+	// budget. This check stays so that a change to the route table never
+	// serves a start with no limit.
+	if h.signIn.passkeyBegins == nil {
+		return errPasskeySignInUnavailable
 	}
 
 	if err := h.signIn.passkeyBegins.Admit(ctx); err != nil {
-		return fmt.Errorf("passkey begin budget: %w", err)
+		return fmt.Errorf("passkey start budget: %w", err)
 	}
 
 	return nil
@@ -153,7 +166,7 @@ func (h *Handler) admitPasskey(ctx context.Context, begin bool) error {
 // refusePasskeySignIn writes the audit entry of a refusal that the adapter
 // makes, and answers err.
 func (h *Handler) refusePasskeySignIn(w http.ResponseWriter, r *http.Request, cause string, err error) {
-	e := signInEntry(r, passkeySignInAuditActor, passkeySignInRefused)
+	e := signInEntry(r, signInWebauthnAuditActor, passkeySignInRefused)
 	e.At = h.now()
 	e.Namespace = audit.ServerScope
 	e.Kind = audit.KindSecurity
@@ -182,7 +195,7 @@ func (h *Handler) beginPasskeySignIn(w http.ResponseWriter, r *http.Request, _ i
 		return
 	}
 
-	if err := h.admitPasskey(ctx, true); err != nil {
+	if err := h.admitPasskeyStart(ctx); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -190,7 +203,11 @@ func (h *Handler) beginPasskeySignIn(w http.ResponseWriter, r *http.Request, _ i
 
 	h.signIn.passkeyBegins.Fail(ctx)
 
-	actor := mfasvc.Actor{Entry: signInEntry(r, passkeySignInAuditActor, session.ActionSignIn), PrincipalID: "", SessionID: ""}
+	actor := mfasvc.Actor{
+		Entry:       signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn),
+		PrincipalID: "",
+		SessionID:   "",
+	}
 
 	options, err := h.signIn.passkeySignIn.BeginAssertion(ctx, actor, mfa.CeremonySignIn, mfasvc.Binding{
 		PersonID: "", PendingID: "",
@@ -218,7 +235,7 @@ func (h *Handler) finishPasskeySignIn(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 
-	if err := h.admitPasskey(ctx, false); err != nil {
+	if err := h.admitPasskeyFinish(ctx); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -232,7 +249,7 @@ func (h *Handler) finishPasskeySignIn(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 
-	entry := signInEntry(r, passkeySignInAuditActor, session.ActionSignIn)
+	entry := signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn)
 
 	signed, err := h.signIn.passkeySignIn.FinishSignIn(
 		ctx, mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: ""}, req.Response,

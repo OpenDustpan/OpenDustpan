@@ -326,7 +326,7 @@ func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 func (s *Service) FinishAssertion(
 	ctx context.Context, a Actor, k mfa.Ceremony, b Binding, response []byte,
 ) (mfa.Passkey, error) {
-	key, _, err := s.finish(ctx, a, k, b, response)
+	key, _, err := finishCeremony(ctx, s, &finishInput{response: response, bind: b, actor: a, kind: k})
 
 	return key, err
 }
@@ -346,54 +346,90 @@ type SignedIn struct {
 // of the response. Before it makes a session, the caller checks that the
 // principal exists and is not disabled.
 func (s *Service) FinishSignIn(ctx context.Context, a Actor, response []byte) (SignedIn, error) {
-	key, got, err := s.finish(ctx, a, mfa.CeremonySignIn, Binding{PersonID: "", PendingID: ""}, response)
+	var none SignedIn
+
+	key, got, err := finishCeremony(ctx, s, &finishInput{
+		response: response, bind: Binding{PersonID: "", PendingID: ""}, actor: a, kind: mfa.CeremonySignIn,
+	})
 	if err != nil {
-		return SignedIn{Passkey: mfa.Passkey{}, UserVerified: false}, err
+		return none, err
 	}
 
 	return SignedIn{Passkey: key, UserVerified: got.UserVerified}, nil
 }
 
-// finish is FinishAssertion with the result of the relying party.
-func (s *Service) finish(
-	ctx context.Context, a Actor, k mfa.Ceremony, b Binding, response []byte,
-) (mfa.Passkey, mfa.Assertion, error) {
+// finishInput is what the end of an assertion ceremony needs: the caller, the
+// kind of the ceremony, what the ceremony binds to, and the response.
+type finishInput struct {
+	response []byte
+	bind     Binding
+	actor    Actor
+	kind     mfa.Ceremony
+}
+
+// openCeremony takes the challenge of the response and returns the passkey of
+// the response with the head of the response. It runs the checks that need no
+// signature: the kind, the person and the session of the ceremony, the owner
+// of the passkey and its suspension. It is a function and not a method, so
+// that the exported methods of the service stay before the unexported ones.
+func openCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey, mfa.ResponseHead, error) {
 	var (
-		none mfa.Passkey
-		zero mfa.Assertion
+		none   mfa.Passkey
+		noHead mfa.ResponseHead
 	)
 
-	h, c, err := s.take(ctx, response)
+	a := in.actor
+
+	h, c, err := s.take(ctx, in.response)
 	if err != nil {
-		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "no open ceremony", err)
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "no open ceremony", err)
 	}
 
-	if !bound(k, c, a, b) {
-		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
+	if !bound(in.kind, c, a, in.bind) {
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
 			"ceremony of another kind, person or session", mfa.ErrWrongPerson)
 	}
 
 	key, err := s.store.PasskeyByCredentialID(ctx, h.CredentialID)
 	if err != nil {
-		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "unknown passkey", err)
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "unknown passkey", err)
 	}
 
 	object := Object(key.ID)
 
-	if ownErr := owns(k, c, h, key); ownErr != nil {
-		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person", ownErr)
+	if ownErr := owns(in.kind, c, h, key); ownErr != nil {
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey of another person",
+			ownErr)
 	}
 
 	// Defense in depth: the store refuses the use of a suspended passkey in
 	// the transaction of the use. This check stays so that the relying party
 	// never checks a response of a suspended passkey.
 	if !key.SuspendedAt.IsZero() {
-		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended", mfa.ErrSuspended)
+		return none, noHead, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "passkey is suspended",
+			mfa.ErrSuspended)
 	}
+
+	return key, h, nil
+}
+
+// finishCeremony is FinishAssertion with the result of the relying party.
+func finishCeremony(ctx context.Context, s *Service, in *finishInput) (mfa.Passkey, mfa.Assertion, error) {
+	var (
+		none mfa.Passkey
+		zero mfa.Assertion
+	)
+
+	key, h, err := openCeremony(ctx, s, in)
+	if err != nil {
+		return none, zero, err
+	}
+
+	a, k, object := in.actor, in.kind, Object(key.ID)
 
 	owner := mfa.Person{ID: key.PersonID, Name: key.PersonID, DisplayName: ""}
 
-	got, err := s.rp.VerifyAssertion(k, owner, key, h.Challenge, response)
+	got, err := s.rp.VerifyAssertion(k, owner, key, h.Challenge, in.response)
 	if err != nil {
 		return none, zero, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, object), "response failed a check", err)
 	}

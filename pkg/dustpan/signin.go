@@ -108,10 +108,24 @@ func newSignIn(
 	}
 
 	in := &serverapi.SignIn{
-		Service: nil, Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), PasswordLimiter: nil, Passkeys: nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
-		DevCode: nil,
-		DevAdmin: noDevAdmin, OnDevRefused: devRefusalAudit(cfg),
+		Service:   nil,
+		Sessions:  sessions,
+		Limiter:   nil,
+		Stored:    nil,
+		Admin:     nil,
+		Providers: providers,
+		Origins: append(
+			[]string{origin},
+			cfg.allowedOrigins...,
+		),
+		PasswordLimiter:     nil,
+		Passkeys:            nil,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
+		DevCode:             nil,
+		DevAdmin:            noDevAdmin,
+		OnDevRefused:        devRefusalAudit(cfg),
 	}
 
 	if cfg.devSignIn != nil {

@@ -65,6 +65,7 @@ func TestPasskeySignIn(t *testing.T) {
 // passkeySignInClient is the browser of one passkey sign-in run.
 type passkeySignInClient struct {
 	localClient
+
 	auth *webauthntest.Authenticator
 	cred *webauthntest.Credential
 }
@@ -119,33 +120,10 @@ func runPasskeySignInOnStore(t *testing.T, env *e2e.Env, tofu, pulumi e2e.Instal
 	t.Helper()
 
 	ctx := t.Context()
-	admin := localClient{env: env, browser: env.BrowserClient(t)}
-
-	if status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces",
-		`{"name":"`+e2e.Namespace+`"}`); err != nil || (status != http.StatusCreated && status != http.StatusConflict) {
-		t.Fatalf("make the namespace = %d, %v: %s", status, err, body)
-	}
-
-	created := admin.send(t, http.MethodPost, "/api/dustpan/v1/local-users",
-		`{"userName":"pat","displayName":"Pat Example","reason":"e2e"}`, asAdmin())
-	created.want(t, "create the local user", http.StatusCreated, "")
-
-	var user struct {
-		PrincipalID string `json:"principal"`
-		Subject     string `json:"subject"`
-	}
-
-	if err := json.Unmarshal([]byte(created.body), &user); err != nil || user.PrincipalID == "" {
-		t.Fatalf("created = %s (%v)", created.body, err)
-	}
-
-	// The user has no password, so the password sign-in fails.
-	admin.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
-		`{"userName":"pat","password":"`+e2ePassword+`"}`, asBrowser("")).
-		want(t, "password sign-in of a user with no password", http.StatusUnauthorized, "local-user.sign-in-failed")
+	user := makePasswordlessUser(t, env)
 
 	auth, cred := env.SeedPasskey(ctx, t, user.PrincipalID, "maintainer")
-	p := passkeySignInClient{localClient: localClient{env: env, browser: env.BrowserClient(t)}, auth: auth, cred: cred}
+	p := newPasskeySignInClient(t, env, auth, cred)
 
 	checkPasskeyRefusals(t, p)
 
@@ -171,10 +149,60 @@ func runPasskeySignInOnStore(t *testing.T, env *e2e.Env, tofu, pulumi e2e.Instal
 		t.Fatalf("pulumi whoami with the token = %+v, %v; want the subject %s", whoami, err, user.Subject)
 	}
 
-	init, err := env.RunTofuWithToken(ctx, t, tofu, tok.Secret, "init", "-input=false")
-	if err != nil || init.ExitCode != 0 {
-		t.Fatalf("tofu init with the token = %+v, %v", init, err)
+	initRun, err := env.RunTofuWithToken(ctx, t, tofu, tok.Secret, "init", "-input=false")
+	if err != nil || initRun.ExitCode != 0 {
+		t.Fatalf("tofu init with the token = %+v, %v", initRun, err)
 	}
+}
+
+// passwordlessUser is a local user that has no password.
+type passwordlessUser struct {
+	PrincipalID string `json:"principal"`
+	Subject     string `json:"subject"`
+}
+
+// makePasswordlessUser makes the namespace and the local user pat, who has no
+// password, and checks that the password sign-in refuses pat.
+func makePasswordlessUser(t *testing.T, env *e2e.Env) passwordlessUser {
+	t.Helper()
+
+	status, answer, err := env.ServerAPIStatus(t.Context(), http.MethodPost, "/api/server/namespaces",
+		`{"name":"`+e2e.Namespace+`"}`)
+	if err != nil || (status != http.StatusCreated && status != http.StatusConflict) {
+		t.Fatalf("make the namespace = %d, %v: %s", status, err, answer)
+	}
+
+	admin := localClient{env: env, browser: env.BrowserClient(t)}
+
+	created := admin.send(t, http.MethodPost, "/api/dustpan/v1/local-users",
+		`{"userName":"pat","displayName":"Pat Example","reason":"e2e"}`, asAdmin())
+	created.want(t, "create the local user", http.StatusCreated, "")
+
+	var user passwordlessUser
+	if err := json.Unmarshal([]byte(created.body), &user); err != nil || user.PrincipalID == "" {
+		t.Fatalf("created = %s (%v)", created.body, err)
+	}
+
+	// The user has no password, so the password sign-in fails.
+	admin.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"pat","password":"`+e2ePassword+`"}`, asBrowser("")).
+		want(t, "password sign-in of a user with no password", http.StatusUnauthorized, "local-user.sign-in-failed")
+
+	return user
+}
+
+// newPasskeySignInClient returns a new browser with the authenticator and the
+// credential.
+func newPasskeySignInClient(
+	t *testing.T, env *e2e.Env, auth *webauthntest.Authenticator, cred *webauthntest.Credential,
+) passkeySignInClient {
+	t.Helper()
+
+	var p passkeySignInClient
+
+	p.env, p.browser, p.auth, p.cred = env, env.BrowserClient(t), auth, cred
+
+	return p
 }
 
 // checkPasskeyRefusals sends hostile responses to the real server. Each gets
@@ -252,7 +280,7 @@ func runBreakGlassPasskeyOnStore(t *testing.T, env *e2e.Env) {
 	// A second account keeps the rule of the last enabled account out of the way.
 	ids := env.SeedBreakGlass(ctx, t, "ana", "ben")
 	auth, cred := env.SeedPasskey(ctx, t, ids[0], "")
-	p := passkeySignInClient{localClient: localClient{env: env, browser: env.BrowserClient(t)}, auth: auth, cred: cred}
+	p := newPasskeySignInClient(t, env, auth, cred)
 
 	// No reason: the sign-in is refused, with no session and no alert.
 	missing := p.finishBody(t, webauthntest.For(p.begin(t)), "")
@@ -288,9 +316,9 @@ func runBreakGlassPasskeyOnStore(t *testing.T, env *e2e.Env) {
 func breakGlassAlerts(notes []notify.Notification) []notify.Notification {
 	var out []notify.Notification
 
-	for _, n := range notes {
-		if n.Type == notify.BreakGlassUsed {
-			out = append(out, n)
+	for i := range notes {
+		if notes[i].Type == notify.BreakGlassUsed {
+			out = append(out, notes[i])
 		}
 	}
 
@@ -300,9 +328,9 @@ func breakGlassAlerts(notes []notify.Notification) []notify.Notification {
 // hasBreakGlassEntry reports whether entries holds the successful sign-in of
 // the break-glass account ana with the reason.
 func hasBreakGlassEntry(entries []audit.Entry, reason string) bool {
-	for _, en := range entries {
-		if en.Action == "session:sign-in" && en.Outcome == audit.OutcomeSuccess && en.Subject == "break-glass:ana" &&
-			en.Reason == reason {
+	for i := range entries {
+		if entries[i].Action == "session:sign-in" && entries[i].Outcome == audit.OutcomeSuccess &&
+			entries[i].Subject == "break-glass:ana" && entries[i].Reason == reason {
 			return true
 		}
 	}

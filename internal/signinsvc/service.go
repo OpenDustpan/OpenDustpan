@@ -351,7 +351,7 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 
 	out := s.startSession(ctx, e, &session.Start{
 		AuthTime: authTime(a, s.cfg.Sessions.Now()), PrincipalID: p.ID, Provider: req.Provider.ID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: 0, Stored: req.Provider.Stored,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: 0, Stored: req.Provider.Stored, Alert: nil,
 	})
 
 	return s.started(ctx, req, a.Subject, &out)
@@ -404,7 +404,7 @@ func (s *Service) CompleteLocal(ctx context.Context, req *LocalRequest) (Result,
 
 	out := s.startSession(ctx, e, &session.Start{
 		AuthTime: a.AuthTime, PrincipalID: a.PrincipalID, Provider: session.LocalProviderID,
-		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: req.Generation, Stored: false,
+		SourceIP: e.SourceIP, UserAgent: e.UserAgent, Generation: req.Generation, Stored: false, Alert: nil,
 	})
 
 	if errors.Is(out.err, session.ErrGenerationChanged) {

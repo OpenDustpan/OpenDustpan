@@ -103,21 +103,36 @@ func (e *Env) SeedPasskey(
 		tb.Fatalf("make the credential: %v", err)
 	}
 
-	e.withStore(ctx, tb, func(st namespace.Store) error {
-		return seedPasskey(ctx, st, e.PasskeyOrigin(tb), principalID, auth, cred, role)
-	})
+	seed := &passkeySeed{
+		origin: e.PasskeyOrigin(tb), principalID: principalID, role: role, auth: auth, cred: cred,
+	}
+
+	e.withStore(ctx, tb, func(st namespace.Store) error { return seedPasskey(ctx, st, seed) })
 
 	return auth, cred
 }
 
+// outboxReadLimit is the most notifications that ServerRecords reads.
+const outboxReadLimit = 100
+
 // errNoPasskeyRows reports a store that keeps no passkeys.
 var errNoPasskeyRows = errors.New("the store keeps no passkeys or grants")
 
-// seedPasskey runs the register ceremony of the person principalID on st.
-func seedPasskey(
-	ctx context.Context, st namespace.Store, origin, principalID string, auth *webauthntest.Authenticator,
-	cred *webauthntest.Credential, role string,
-) error {
+// passkeySeed is what seedPasskey needs: the origin of the relying party, the
+// person, the role to grant on Namespace (or empty for none), and the software
+// authenticator with its credential.
+type passkeySeed struct {
+	auth        *webauthntest.Authenticator
+	cred        *webauthntest.Credential
+	origin      string
+	principalID string
+	role        string
+}
+
+// seedPasskey runs the register ceremony of the person in.principalID on st.
+func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error {
+	origin, principalID, auth, cred, role := in.origin, in.principalID, in.auth, in.cred, in.role
+
 	rows, ok := st.(interface {
 		mfa.PasskeyStore
 		mfasvc.Auditor
@@ -167,13 +182,15 @@ func seedPasskey(
 		return nil
 	}
 
-	return seedNamespaceGrant(ctx, st, rows, principalID, role, at)
+	return seedNamespaceGrant(ctx, st, rows, in, at)
 }
 
-// seedNamespaceGrant grants the role to the person on Namespace.
+// seedNamespaceGrant grants the role of in to its person on Namespace.
 func seedNamespaceGrant(
-	ctx context.Context, st namespace.Store, grants access.Store, principalID, role string, at time.Time,
+	ctx context.Context, st namespace.Store, grants access.Store, in *passkeySeed, at time.Time,
 ) error {
+	principalID, role := in.principalID, in.role
+
 	ns, err := st.GetNamespace(ctx, namespace.Name(Namespace))
 	if err != nil {
 		return fmt.Errorf("read the namespace: %w", err)
@@ -223,7 +240,7 @@ func (e *Env) ServerRecords(ctx context.Context, tb testing.TB) ([]audit.Entry, 
 // readServerRecords reads the entries of @server and the outbox of st.
 func readServerRecords(ctx context.Context, st namespace.Store) ([]audit.Entry, []notify.Notification, error) {
 	var (
-		log    interface {
+		log interface {
 			List(ctx context.Context, scope namespace.Name, page audit.Page) (audit.Listing, error)
 		}
 		outbox notify.Outbox
@@ -243,7 +260,7 @@ func readServerRecords(ctx context.Context, st namespace.Store) ([]audit.Entry, 
 		return nil, nil, fmt.Errorf("list the audit log: %w", err)
 	}
 
-	notes, err := outbox.After(ctx, audit.ServerScope, 0, 100)
+	notes, err := outbox.After(ctx, audit.ServerScope, 0, outboxReadLimit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the outbox: %w", err)
 	}
