@@ -48,9 +48,8 @@ through a path that does not go through the proxy.
 The proxy sends a signed JWT. The server checks these items:
 
 - The signature, with the keys of the issuer. The server reads the keys
-  from the key URL through the egress rules, and keeps them for at most 15
-  minutes. It reads the key URL at most once in 30 seconds, for all key IDs
-  together. It follows no redirect of the key URL.
+  from the key URL through the egress rules. It follows no redirect of the
+  key URL.
 - The algorithm. The presets accept ES256 only. A custom issuer accepts
   ES256, ES384, EdDSA, and RS256, RS384, RS512, PS256, PS384 and PS512.
   The server refuses `none` and each HMAC algorithm.
@@ -60,6 +59,22 @@ The proxy sends a signed JWT. The server checks these items:
   lives more than 24 hours.
 - A header that names or holds a key (`jku`, `jwk`, `x5u`, `x5c`). The
   server refuses it. The key always comes from the key URL.
+
+### Reads of the key URL
+
+The server keeps the key set of a JWKS URL for at most 15 minutes. It reads
+a JWKS URL at most once in 30 seconds, also for a token with an unknown key
+ID. When the key set expires and its read fails, each sign-in of the
+provider fails for 30 seconds, until the next read. The server does not use
+an expired key set.
+
+A key ID of the AWS ALB always names the same key, so the server keeps a key
+of the load balancer and does not read it again. It reads at most 3 new key
+IDs in 30 seconds. A token with a key ID that is not a key of the load
+balancer uses one of these reads, but it does not stop the sign-in with a
+key that the server holds.
+
+### The subject
 
 The subject is the `sub` claim. The email is the `email` claim. The
 server uses the subject byte for byte: it never changes the case or the

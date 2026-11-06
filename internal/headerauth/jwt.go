@@ -24,16 +24,19 @@ import (
 
 // Times of the key cache.
 const (
-	// KeyMaxAge is the longest time that the method uses the keys of one
-	// read of the key URL.
+	// KeyMaxAge is the longest time that the method uses the key set of one
+	// read of a JWKS URL. A key of the AWS ALB does not expire: its key ID
+	// always names the same key.
 	KeyMaxAge = 15 * time.Minute
-	// KeyRetryAfter is the shortest time between two reads of the key URL,
-	// for all keys together.
-	// A token with an unknown key ID reads the key URL again at most this
-	// often.
+	// KeyRetryAfter is the shortest time between two reads of a JWKS URL,
+	// and the window of the budget of new key IDs of the AWS ALB.
 	KeyRetryAfter = 30 * time.Second
 	// maxALBKeys is the most keys of the AWS ALB that the cache holds.
 	maxALBKeys = 32
+	// newALBKeyReads is the most reads of new key IDs of the AWS ALB in
+	// KeyRetryAfter. A read of a key ID that a request chose does not block
+	// the first read of a new key of the load balancer.
+	newALBKeyReads = 3
 	// es256Size is the size of one coordinate of an ES256 signature.
 	es256Size = 32
 	// jwtParts is the number of parts of a signed JWT.
@@ -285,14 +288,14 @@ func (m *Method) assertionOf(tok *trustrule.Token) (session.Assertion, error) {
 	// The subject is used byte for byte. It is never case-folded or
 	// normalized, so two subjects that only look the same stay two persons.
 	sub := tok.Subject()
-	if sub == "" || len(sub) > MaxSubject || !session.SafeText(sub) {
+	if sub == "" || len(sub) > MaxSubject || !session.IsSafeText(sub) {
 		return none, fmt.Errorf("%w: the sub claim is missing or not a valid subject", session.ErrMethodAnswer)
 	}
 
 	a := headerAssertion(m.providerID, sub)
 
 	if email, ok := stringMember(tok.Claims, "email"); ok {
-		if len(email) > session.MaxAssertionName || !session.SafeText(email) {
+		if len(email) > session.MaxAssertionName || !session.IsSafeText(email) {
 			return none, fmt.Errorf("%w: the email claim is not valid", session.ErrMethodAnswer)
 		}
 
@@ -333,7 +336,7 @@ func groupsOf(claims map[string]json.RawMessage, name string) ([]string, error) 
 	}
 
 	for _, g := range groups {
-		if g == "" || len(g) > session.MaxAssertionGroup || !session.SafeText(g) {
+		if g == "" || len(g) > session.MaxAssertionGroup || !session.IsSafeText(g) {
 			return nil, fmt.Errorf("%w: a group of the groups claim is not valid", session.ErrMethodAnswer)
 		}
 	}

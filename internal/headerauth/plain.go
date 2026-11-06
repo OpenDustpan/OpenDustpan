@@ -68,7 +68,7 @@ func (m *Method) secretMatches(values []string) bool {
 // is an empty list. It returns ErrMethodInput for a header of the wrong form
 // and ErrMethodAnswer for more groups than the limit.
 func parseGroupsHeader(v string) ([]string, error) {
-	if len(v) > maxGroupsHeader || !session.SafeText(v) {
+	if len(v) > maxGroupsHeader || !session.IsSafeText(v) {
 		return nil, fmt.Errorf("%w: the groups header is too long or has a character that is not graphic",
 			session.ErrMethodInput)
 	}

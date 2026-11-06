@@ -31,30 +31,30 @@ func refuseRedirects(client *http.Client) *http.Client {
 	return &c
 }
 
-// albKey is one key of the AWS ALB and the time of its read.
+// albKey is one key of the AWS ALB and the time of its last use. A key ID
+// of the AWS ALB always names the same key, so the key does not expire.
 type albKey struct {
-	at  time.Time
-	pub *ecdsa.PublicKey
+	used time.Time
+	pub  *ecdsa.PublicKey
 }
 
-// flight is one read of the key URL. Each request that needs the same keys
-// while the read runs waits for it, and gets its result.
+// flight is one read of the key URL. Each request that needs the read waits
+// for it with its own context, and gets its result.
 type flight struct {
 	err  error
 	done chan struct{}
 	pub  *ecdsa.PublicKey
-	kid  string
 	set  trustrule.KeySet
 }
 
 // keyCache reads and keeps the keys of the issuer. The mutex guards the
-// fields. It is never held during a read of the key URL, so a key URL that
-// does not answer does not block a sign-in with a key that the cache
-// holds.
+// fields. It is never held during a read of the key URL: a read runs in its
+// own goroutine, so a key URL that does not answer does not block a sign-in
+// with a key that the cache holds.
 //
-// The cache reads the key URL at most once in KeyRetryAfter, for all keys
-// together: a stream of tokens with new key IDs causes one read, not one
-// read for each token.
+// A JWKS URL is read at most once in KeyRetryAfter. New key IDs of the AWS
+// ALB are read at most newALBKeyReads times in KeyRetryAfter, together, and
+// a key ID that the cache holds is never read again.
 type keyCache struct {
 	set      trustrule.KeySet
 	setAt    time.Time
@@ -62,7 +62,8 @@ type keyCache struct {
 	client   *http.Client
 	now      func() time.Time
 	alb      map[string]albKey
-	inflight *flight
+	flights  map[string]*flight
+	albReads []time.Time
 	url      string
 	timeout  time.Duration
 	mu       sync.Mutex
@@ -73,7 +74,8 @@ type keyCache struct {
 func newKeyCache(client *http.Client, keyURL string, timeout time.Duration, now func() time.Time) *keyCache {
 	return &keyCache{
 		set: trustrule.KeySet{}, setAt: time.Time{}, tried: time.Time{}, client: refuseRedirects(client), now: now,
-		alb: map[string]albKey{}, inflight: nil, url: keyURL, timeout: timeout, mu: sync.Mutex{},
+		alb: map[string]albKey{}, flights: map[string]*flight{}, albReads: nil, url: keyURL, timeout: timeout,
+		mu: sync.Mutex{},
 	}
 }
 
@@ -84,7 +86,7 @@ func recent(t, now time.Time) bool {
 	return !t.IsZero() && d >= 0 && d < KeyRetryAfter
 }
 
-// fresh reports whether a key read at t can still be used at now.
+// fresh reports whether a key set read at t can still be used at now.
 func fresh(t, now time.Time) bool {
 	d := now.Sub(t)
 
@@ -96,20 +98,54 @@ func unavailable(reason string) error {
 	return fmt.Errorf("%w: %s", session.ErrMethodUnavailable, reason)
 }
 
-// start records a new read of the key URL at now. The caller holds the
-// mutex.
-func (c *keyCache) start(now time.Time, kid string) *flight {
-	f := &flight{err: nil, done: make(chan struct{}), pub: nil, kid: kid, set: trustrule.KeySet{}}
-	c.tried, c.inflight = now, f
+// launch starts the read of key in its own goroutine and returns its
+// flight. The read runs with the values of ctx but not its end, because
+// other requests can wait for it; the timeout of the cache bounds it. When
+// the read ends, store runs under the mutex, and the flight ends, also
+// after a panic of the read. The caller holds the mutex.
+func (c *keyCache) launch(ctx context.Context, key string, read func(ctx context.Context) (flight, error),
+	store func(r flight),
+) *flight {
+	f := &flight{err: nil, done: make(chan struct{}), pub: nil, set: trustrule.KeySet{}}
+	c.flights[key] = f
+	readCtx := context.WithoutCancel(ctx)
+
+	go func() {
+		var (
+			r   flight
+			err error
+		)
+
+		defer func() {
+			if p := recover(); p != nil {
+				// Fail closed: a read that panics gives no keys, and the
+				// flight ends, so that no request waits for it forever.
+				r, err = flight{
+					err:  nil,
+					done: nil,
+					pub:  nil,
+					set:  trustrule.KeySet{},
+				}, unavailable(
+					"the read of the keys failed",
+				)
+			}
+
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
+			f.set, f.pub, f.err = r.set, r.pub, err
+			if err == nil {
+				store(r)
+			}
+
+			delete(c.flights, key)
+			close(f.done)
+		}()
+
+		r, err = read(readCtx)
+	}()
 
 	return f
-}
-
-// finish ends the read f and wakes its waiters. The caller holds the
-// mutex.
-func (c *keyCache) finish(f *flight) {
-	c.inflight = nil
-	close(f.done)
 }
 
 // wait waits for the read f, or for the end of ctx.
@@ -125,7 +161,9 @@ func wait(ctx context.Context, f *flight) error {
 // jwks returns the key set of the JWKS URL. It reads the URL when the
 // cached set is older than KeyMaxAge, or has no key with the ID kid, and
 // no read started less than KeyRetryAfter ago. It returns
-// ErrMethodUnavailable when it has no usable set.
+// ErrMethodUnavailable when it has no usable set. A failed read is kept for
+// KeyRetryAfter: when the set expires and its read fails, each sign-in of
+// the provider fails until the next read.
 func (c *keyCache) jwks(ctx context.Context, kid string) (trustrule.KeySet, error) {
 	c.mu.Lock()
 
@@ -139,65 +177,97 @@ func (c *keyCache) jwks(ctx context.Context, kid string) (trustrule.KeySet, erro
 		return set, nil
 	}
 
-	if f := c.inflight; f != nil {
-		c.mu.Unlock()
+	f := c.flights[""]
+	if f == nil {
+		if recent(c.tried, now) {
+			set := c.set
+			c.mu.Unlock()
 
-		if err := wait(ctx, f); err != nil {
-			return trustrule.KeySet{}, err
+			if isFresh {
+				// The token names a key that the set does not hold; the check
+				// of the signature refuses it.
+				return set, nil
+			}
+
+			return trustrule.KeySet{}, unavailable("the keys of the issuer were not read")
 		}
 
-		return f.set, nil
+		c.tried = now
+		f = c.launch(ctx, "", c.readJWKS, func(r flight) { c.set, c.setAt = r.set, c.now() })
 	}
 
-	if recent(c.tried, now) {
-		set := c.set
-		c.mu.Unlock()
-
-		if isFresh {
-			// The token names a key that the set does not hold; the check of
-			// the signature refuses it.
-			return set, nil
-		}
-
-		return trustrule.KeySet{}, unavailable("the keys of the issuer were not read")
-	}
-
-	f := c.start(now, "")
 	c.mu.Unlock()
 
-	set, err := c.readJWKS(ctx)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	f.set, f.err = set, err
-	if err == nil {
-		c.set, c.setAt = set, c.now()
+	if err := wait(ctx, f); err != nil {
+		return trustrule.KeySet{}, err
 	}
 
-	c.finish(f)
-
-	return set, err
+	return f.set, nil
 }
 
 // readJWKS reads and parses the JWKS URL.
-func (c *keyCache) readJWKS(ctx context.Context) (trustrule.KeySet, error) {
+func (c *keyCache) readJWKS(ctx context.Context) (flight, error) {
+	none := flight{err: nil, done: nil, pub: nil, set: trustrule.KeySet{}}
+
 	body, err := c.get(ctx, c.url)
 	if err != nil {
-		return trustrule.KeySet{}, err
+		return none, err
 	}
 
 	set, err := trustrule.ParseKeySet(body)
 	if err != nil {
-		return trustrule.KeySet{}, unavailable("the key set of the issuer is not valid")
+		return none, unavailable("the key set of the issuer is not valid")
 	}
 
-	return set, nil
+	none.set = set
+
+	return none, nil
+}
+
+// allowNewALBKey reports whether the cache can read a new key ID of the
+// AWS ALB at now, and records the read. The caller holds the mutex.
+func (c *keyCache) allowNewALBKey(now time.Time) bool {
+	kept := c.albReads[:0]
+
+	for _, t := range c.albReads {
+		if recent(t, now) {
+			kept = append(kept, t)
+		}
+	}
+
+	c.albReads = kept
+
+	if len(c.albReads) >= newALBKeyReads {
+		return false
+	}
+
+	c.albReads = append(c.albReads, now)
+
+	return true
+}
+
+// storeALBKey keeps the key pub of kid. A full cache drops the key that was
+// used least recently, so that the key in use stays. The caller holds the
+// mutex.
+func (c *keyCache) storeALBKey(kid string, pub *ecdsa.PublicKey) {
+	if len(c.alb) >= maxALBKeys {
+		oldest := ""
+
+		for id, k := range c.alb {
+			if oldest == "" || k.used.Before(c.alb[oldest].used) {
+				oldest = id
+			}
+		}
+
+		delete(c.alb, oldest)
+	}
+
+	c.alb[kid] = albKey{used: c.now(), pub: pub}
 }
 
 // albKeyOf returns the key of the AWS ALB with the ID kid. It reads the key
-// URL of kid when the cache does not hold a fresh key of kid, and no read
-// started less than KeyRetryAfter ago.
+// URL of kid when the cache does not hold kid, within the budget of new key
+// IDs.
 func (c *keyCache) albKeyOf(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	u, err := ALBKeyURL(c.url, kid)
 	if err != nil {
@@ -208,53 +278,37 @@ func (c *keyCache) albKeyOf(ctx context.Context, kid string) (*ecdsa.PublicKey, 
 
 	now := c.now()
 
-	if k, ok := c.alb[kid]; ok && fresh(k.at, now) {
+	if k, ok := c.alb[kid]; ok {
+		k.used = now
+		c.alb[kid] = k
 		c.mu.Unlock()
 
 		return k.pub, nil
 	}
 
-	if f := c.inflight; f != nil {
-		c.mu.Unlock()
+	f := c.flights[kid]
+	if f == nil {
+		if !c.allowNewALBKey(now) {
+			c.mu.Unlock()
 
-		if f.kid != kid {
-			return nil, unavailable("the key URL is busy with another key")
+			return nil, unavailable("too many new key IDs of the load balancer were read in the retry time")
 		}
 
-		if waitErr := wait(ctx, f); waitErr != nil {
-			return nil, waitErr
+		read := func(ctx context.Context) (flight, error) {
+			pub, err := c.readALBKey(ctx, u)
+
+			return flight{err: nil, done: nil, pub: pub, set: trustrule.KeySet{}}, err
 		}
-
-		return f.pub, nil
+		f = c.launch(ctx, kid, read, func(r flight) { c.storeALBKey(kid, r.pub) })
 	}
 
-	if recent(c.tried, now) {
-		c.mu.Unlock()
-
-		return nil, unavailable("the key URL was read less than the retry time ago")
-	}
-
-	// Limit the memory of the cache: a full map starts again.
-	if len(c.alb) >= maxALBKeys {
-		clear(c.alb)
-	}
-
-	f := c.start(now, kid)
 	c.mu.Unlock()
 
-	pub, err := c.readALBKey(ctx, u)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	f.pub, f.err = pub, err
-	if err == nil {
-		c.alb[kid] = albKey{at: c.now(), pub: pub}
+	if err := wait(ctx, f); err != nil {
+		return nil, err
 	}
 
-	c.finish(f)
-
-	return pub, err
+	return f.pub, nil
 }
 
 // readALBKey reads and parses the key at u.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/session"
@@ -232,8 +231,8 @@ func (m *Method) bind(cb session.Callback) error {
 func (m *Method) assertion(id Identity, pending session.PendingRedirect) (session.Assertion, error) {
 	var none session.Assertion
 
-	if !validIdentityText(id.Subject, 1, session.MaxAssertionSubject) {
-		return none, fmt.Errorf("%w: the subject must have 1 to %d bytes and no control character",
+	if !validSubject(id.Subject) {
+		return none, fmt.Errorf("%w: the subject must have 1 to %d bytes of UTF-8 with graphic characters only",
 			session.ErrMethodAnswer, session.MaxAssertionSubject)
 	}
 
@@ -272,18 +271,26 @@ func (m *Method) assertion(id Identity, pending session.PendingRedirect) (sessio
 	return a, nil
 }
 
+// validSubject reports whether s has 1 to session.MaxAssertionSubject bytes
+// and is session.IsSafeText, the rule of the final check of the sign-in.
+func validSubject(s string) bool {
+	return s != "" && len(s) <= session.MaxAssertionSubject && session.IsSafeText(s)
+}
+
 // identityNames returns the display name candidates of id that are not
 // empty, in the order of preference: the name, the user name and the email.
-// It refuses a value over the limit of package session or with a control
-// character.
+// It refuses a value over the limit of package session or that is not
+// session.IsDisplayText, the rule of the final check of the sign-in.
 func identityNames(id Identity) ([]string, error) {
 	candidates := []string{id.Name, id.PreferredUsername, id.Email}
 	names := make([]string, 0, len(candidates))
 
 	for _, v := range candidates {
-		if !validIdentityText(v, 0, session.MaxAssertionName) {
-			return nil, fmt.Errorf("%w: a name or an email must have at most %d bytes and no control character",
-				session.ErrMethodAnswer, session.MaxAssertionName)
+		if len(v) > session.MaxAssertionName || !session.IsDisplayText(v) {
+			return nil, fmt.Errorf(
+				"%w: a name or an email must have at most %d bytes of UTF-8 with no control, format or line "+
+					"separator character", session.ErrMethodAnswer, session.MaxAssertionName,
+			)
 		}
 
 		if v != "" {
@@ -309,13 +316,6 @@ func validCallbackValue(v string, minLen int) bool {
 	}
 
 	return true
-}
-
-// validIdentityText reports whether v has minLen to maxLen bytes and no
-// control character.
-func validIdentityText(v string, minLen, maxLen int) bool {
-	return len(v) >= minLen && len(v) <= maxLen &&
-		!strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) })
 }
 
 // refusedError is an answer of the provider that refuses the sign-in: a
