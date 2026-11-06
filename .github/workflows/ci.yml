@@ -6,8 +6,6 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    # Draft pull requests run no jobs: mark a PR ready to run CI on it.
-    types: [ opened, synchronize, reopened, ready_for_review ]
   # The merge queue runs all jobs on the merge group (the pull request on top
   # of the newest main and of the pull requests ahead of it). The queue merges
   # only after each required job passes. Every job here runs on this event.
