@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-05. Decided by the project owner on 18 October, 26 October and 1 November 2026. Accepts RFC 16 in part. The other items of the RFC proposal wait for the owner in RFC 16
 
+Changed by:
+
+- ADR 330 extends: items P1 to P12 of RFC 16.
+
 Changes:
 
 - None.
