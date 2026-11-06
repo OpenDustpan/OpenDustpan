@@ -30,7 +30,7 @@ func ReadHandoff(f *os.File) (string, error) {
 		return "", fmt.Errorf("%w: no handoff file", ErrHandoff)
 	}
 
-	token, err := readPipe(f)
+	handoff, err := readPipe(f)
 
 	if closeErr := f.Close(); closeErr != nil && err == nil {
 		err = fmt.Errorf("%w: close the handoff: %w", ErrHandoff, closeErr)
@@ -40,7 +40,7 @@ func ReadHandoff(f *os.File) (string, error) {
 		return "", err
 	}
 
-	return token, nil
+	return handoff, nil
 }
 
 // readPipe checks that f is a pipe and reads the token from it.
@@ -63,12 +63,12 @@ func readPipe(f *os.File) (string, error) {
 		return "", fmt.Errorf("%w: the handoff has more than %d bytes", ErrHandoff, MaxHandoff)
 	}
 
-	token := strings.TrimSuffix(string(raw), "\n")
-	if !ValidHandoffToken(token) {
+	handoff := strings.TrimSuffix(string(raw), "\n")
+	if !ValidHandoffToken(handoff) {
 		return "", fmt.Errorf("%w: the handoff does not hold a handoff token", ErrHandoff)
 	}
 
-	return token, nil
+	return handoff, nil
 }
 
 // ValidHandoffToken reports whether s has the form of a handoff token:

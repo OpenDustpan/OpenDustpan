@@ -134,6 +134,9 @@ func (s *logSink) send(chunk []byte) {
 
 	s.chunks++
 	s.bytes += len(data)
+	// The SHA-256 of the log is the check of the protocol that the server
+	// stores the log that the launcher sent. It is not a password hash: it
+	// covers the masked log, which holds no secret value.
 	s.hash.Write(data)
 }
 
