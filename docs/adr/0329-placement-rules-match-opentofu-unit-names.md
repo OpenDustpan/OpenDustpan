@@ -17,8 +17,8 @@ On 6 November 2026, about 13:55 UTC, the owner wrote: "All are approved by me as
 Decided by the project owner on 6 November 2026.
 
 1. **Placement rules also match OpenTofu unit names (owner).** Placement rules also match OpenTofu unit names.
-2. **Fail closed (owner).** The server refuses a unit that no rule matches. The error names the missing rule.
-3. **The OpenTofu HTTP backend (owner).** This includes the OpenTofu HTTP backend. Today it creates a unit on its first POST.
+2. **Fail closed (owner).** The server refuses a unit that no rule matches.
+3. **The OpenTofu HTTP backend (owner).** This includes the OpenTofu HTTP backend.
 
 ## Consequences
 
