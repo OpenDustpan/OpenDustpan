@@ -115,6 +115,9 @@ var (
 	// queryName is the allowlist of a query parameter name: the characters
 	// that a URL never encodes.
 	queryName = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+	// otherSource matches a read of a provider or rotator output, or of a
+	// value of another profile.
+	otherSource = regexp.MustCompile(`\b(?:providers|rotators)\.` + identifier + `|\b(?:imports|profiles)\s*\[`)
 	// soleValuesRef is a string that is exactly one reference into values.
 	soleValuesRef = regexp.MustCompile(`^\$\{\s*(values(?:\.` + identifier +
 		`|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])+)\s*\}$`)
@@ -425,7 +428,7 @@ func (d *Document) checkTarget(path string, t ProxyType, kind proxyFieldKind, re
 	}
 
 	if kind == fieldSecretRef {
-		if err := checkSecretTarget(path, target); err != nil {
+		if err := d.checkSecretTarget(path, target); err != nil {
 			return err
 		}
 	}
@@ -433,27 +436,81 @@ func (d *Document) checkTarget(path string, t ProxyType, kind proxyFieldKind, re
 	return checkTargetText(path, t, target)
 }
 
-// checkSecretTarget refuses a plain value at the target of a secret field.
-// A computed value (an expression) may read a secret, so it passes here and
-// the open checks it.
-func checkSecretTarget(path string, target *yaml.Node) error {
-	if isEntryMap(target) {
-		if mapGet(target, keySecret) != nil || mapGet(target, keySealed) != nil {
-			return nil
-		}
-
-		if v := mapGet(target, keyValue); v != nil && v.Kind == yaml.ScalarNode && strings.Contains(v.Value, "${") {
-			return nil
-		}
-
-		return fmt.Errorf("%w: %s must read a %s value", ErrInvalid, path, keySecret)
-	}
-
-	if strings.Contains(target.Value, "${") {
+// checkSecretTarget refuses the target of a secret field unless it reads a
+// secret source (see readsSecret). A literal, a plain value and an
+// expression that reads only plain values fail, so a static key never sits
+// in plain text in a document.
+func (d *Document) checkSecretTarget(path string, target *yaml.Node) error {
+	if d.readsSecret(target, map[*yaml.Node]bool{}, 0) {
 		return nil
 	}
 
-	return fmt.Errorf("%w: %s must read a %s value", ErrInvalid, path, keySecret)
+	return fmt.Errorf("%w: %s must read a %s value, a provider or rotator output, or a value of another profile",
+		ErrInvalid, path, keySecret)
+}
+
+// readsSecret reports whether the node n of values is a secret source, or
+// reads one, directly or through other values. A secret source is a $secret
+// or $sealed entry, an output of a provider or a rotator, a value of another
+// profile (imports[...] or profiles[...]), or a path that the document does
+// not hold, which only an import can give. Each other case is false, so an
+// unknown case fails closed.
+func (d *Document) readsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int) bool {
+	if n == nil || seen[n] || depth > MaxDepth {
+		return false
+	}
+
+	seen[n] = true
+
+	switch {
+	case isEntryMap(n):
+		return d.entryReadsSecret(n, seen, depth)
+	case n.Kind == yaml.ScalarNode:
+		return n.Tag == tagStr && d.textReadsSecret(n.Value, seen, depth)
+	default:
+		return slices.ContainsFunc(n.Content, func(c *yaml.Node) bool { return d.readsSecret(c, seen, depth+1) })
+	}
+}
+
+// entryReadsSecret reports whether the entry map n is a secret entry, or
+// whether its $value reads a secret source.
+func (d *Document) entryReadsSecret(n *yaml.Node, seen map[*yaml.Node]bool, depth int) bool {
+	if mapGet(n, keySecret) != nil || mapGet(n, keySealed) != nil {
+		return true
+	}
+
+	v := mapGet(n, keyValue)
+
+	return v != nil && v.Kind == yaml.ScalarNode && d.textReadsSecret(v.Value, seen, depth)
+}
+
+// textReadsSecret reports whether the expressions in text read a secret
+// source. A "$${" is a literal "${", not an expression. A read of $env
+// fails closed: it can name any key, so the check cannot follow it.
+func (d *Document) textReadsSecret(text string, seen map[*yaml.Node]bool, depth int) bool {
+	text = strings.ReplaceAll(text, "$${", "")
+	if !strings.Contains(text, "${") || strings.Contains(text, "$env") {
+		return false
+	}
+
+	if otherSource.MatchString(text) {
+		return true
+	}
+
+	for _, ref := range refsInText(text) {
+		target := d.nodeAt(ref)
+		if target == nil {
+			// The document does not hold the path, so only an import can
+			// give it. The open reads it from that import.
+			return true
+		}
+
+		if d.readsSecret(target, seen, depth+1) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // checkTargetText refuses a control character in the plain text of a value
