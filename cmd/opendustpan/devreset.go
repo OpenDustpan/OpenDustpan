@@ -214,7 +214,14 @@ func checkDevResetDir(dir string, proc devProcess) error {
 	// Defense in depth: inspectDevDir follows a symbolic link, so this check
 	// refuses a linked data directory on its own. The checks of the database
 	// do not rely on it.
-	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	// Fail closed: a directory that Lstat cannot read is refused, and only a
+	// missing directory passes on to the checks below.
+	info, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s: %w", dir, err)
+	}
+
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s: %w", dir, errDevResetLinkedDir)
 	}
 
