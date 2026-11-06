@@ -2,6 +2,27 @@
 
 Status: accepted · 2026-10-18. Answers part of RFC 23. Decisions 3, 13, 15, 24 and 27 and the identity consequence superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. Decisions 1 and 24 extended by ADR 234. Decision 5 extended by ADR 241. The home region amended by ADR 248 (primary installation)
 
+Changed by:
+
+- ADR 146 extends decision 5: the catalog gets the chat link made and replaced
+  types.
+- ADR 149 changes decisions 15 and 24: the creator rule, BeforeAttempt and the
+  recipients.
+- ADR 149 extends decisions 3, 13 and 27: dedupe-key hash, sealed refs, 404
+  rule and the identity consequence.
+- ADR 197 extends decision 5: six change-order notification types join the
+  catalog.
+- ADR 203 extends decision 5: the profile notification types.
+- ADR 204 extends decision 5: the issuer notification types.
+- ADR 210 changes: the route paths, action names and the after paging
+  parameter.
+- ADR 234 extends decisions 1 and 24: notices rendered in the language of the
+  recipient.
+- ADR 241 extends decision 5: the import event types.
+- ADR 248 changes decision 9: each namespace has its own primary installation.
+- ADR 262 extends: the open question on the first chat tools.
+- ADR 315 extends: the event lock.held-too-long.
+
 ## Context
 
 [RFC 23](../rfc/0023-events-and-notifications.md) proposes one internal

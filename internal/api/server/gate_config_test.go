@@ -13,16 +13,20 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 const (
@@ -86,11 +90,21 @@ func (g gateEnv) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newGateEnv(t *testing.T, authz identity.Authorizer) gateEnv {
 	t.Helper()
 
+	return newGateEnvWith(t, authz, false)
+}
+
+// newGateEnvWith builds a gateEnv that authorizes with authz. With noEngine, the
+// gate config service has no policy engine.
+func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gateEnv {
+	t.Helper()
+
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, stored: nil, authz: authz,
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: noEngine, stored: nil, authz: authz, hostile: nil,
 		namespaces: []namespace.Name{"acme", "beta"},
 	})
 	sess := e.freshSignIn(t)
+
+	createGateUnits(t, e.store)
 
 	// The session read needs an action that the test authorizer may deny, so
 	// the CSRF value comes from the session secret.
@@ -100,6 +114,68 @@ func newGateEnv(t *testing.T, authz identity.Authorizer) gateEnv {
 	}
 
 	return gateEnv{env: e, session: sess, csrf: session.CSRFValue(secret)}
+}
+
+// createGateUnits makes the units of the unit scopes of the tests in acme:
+// the Pulumi stack web/prod and the OpenTofu workspace net. The gates of a
+// unit belong to the unit, so a write at the scope of a unit needs it.
+func createGateUnits(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	ns, err := st.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	now := time.Now()
+
+	err = st.CreateStack(t.Context(), stack.Stack{
+		NamespaceID: "", CreatedAt: now, UpdatedAt: now, Tags: map[string]string{}, Ref: ref,
+		ID: stack.ID("stk-gate-web-prod"), Version: 0,
+	}, ns.Fence())
+	if err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	createGateWorkspace(t, st, "ws-gate-net", "net")
+}
+
+// createGateWorkspace makes the OpenTofu workspace name of acme with the ID id.
+func createGateWorkspace(t *testing.T, st *sqlite.Store, id workspace.ID, name workspace.Name) {
+	t.Helper()
+
+	ns, err := st.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	now := time.Now()
+
+	err = st.CreateWorkspace(t.Context(), workspace.Workspace{
+		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), ID: id,
+		Ref:       workspace.Ref{Namespace: "acme", Name: name},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}, ns.Fence())
+	if err != nil {
+		t.Fatalf("create workspace %s: %v", name, err)
+	}
+}
+
+// gateTestEntry returns an audit entry of acme for the setup writes of a test.
+func gateTestEntry(action string) audit.Entry {
+	return audit.Entry{
+		At: time.Now(), Namespace: "acme", Subject: "admin", IDPSubject: "", TokenID: "", Action: action,
+		Object: "acme", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
+		Reason: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+	}
 }
 
 // newGateHandler builds a gateEnv over a fresh store with acme and beta.
@@ -128,17 +204,44 @@ func gateHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
-		Preferences:  nil,
-		GitHostLinks: nil,
-		GitHost:      nil,
-		Idempotency:  nil,
-		Workers:      nil, InstallationKind: "", Now: nil, TempAdmins: nil,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, Logger: slog.New(slog.DiscardHandler),
-		Namespaces: nss, Backups: nil, Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Metrics: stubMetrics{}, Version: "test", Schema: st, Journal: nil, Principals: nil, Access: nil,
-		Tokens: nil, Audit: st, OnAuditFailure: nil, IPAllowlists: nil, Gates: port, SessionPolicy: nil,
-		DeletedUnits: nil, AuditChain: nil, AuditSinks: nil, SignIn: nil, CheckpointEpochs: nil, DenialLimiter: nil,
-		Instances: nil,
+		LocalUsers:       nil,
+		Preferences:      nil,
+		GitHostLinks:     nil,
+		Settings:         nil,
+		GitHost:          nil,
+		Idempotency:      nil,
+		Workers:          nil,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       nss,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		IPAllowlists:     nil,
+		Gates:            port,
+		SessionPolicy:    nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
+		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -964,7 +1067,7 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 	}
 
 	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
-		Store: handler.env.store, Namespaces: nss, Approvers: testApprovers{}, Now: nil,
+		Store: handler.env.store, Namespaces: nss, Approvers: testApprovers{}, Engine: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
@@ -1217,4 +1320,12 @@ func (testApprovers) GroupByID(_ context.Context, id string) (gate.GroupRef, gat
 
 	return gate.GroupRef{ID: "", Name: ""}, gate.MemberCounts{Enabled: 0, Persons: 0},
 		fmt.Errorf("%w: group %q", gate.ErrNotFound, id)
+}
+
+// testGateEngine is the linked policy engine, with the one action that the
+// access limits of the tests name.
+//
+//nolint:ireturn // The service takes the engine port.
+func testGateEngine() gate.Engine {
+	return cedargo.New(cedargo.WithAccessActions("unit:write"))
 }

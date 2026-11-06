@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -31,12 +32,15 @@ func forbiddenHandler(t *testing.T, err error) testHandler {
 	}
 
 	handler, newErr := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    adminAuthenticator{},
@@ -65,6 +69,7 @@ func forbiddenHandler(t *testing.T, err error) testHandler {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if newErr != nil {
 		t.Fatalf("handler: %v", newErr)

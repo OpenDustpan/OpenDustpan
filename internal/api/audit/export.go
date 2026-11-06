@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -229,8 +229,7 @@ func (h *Handler) exportEntries(
 	defer cancel()
 
 	if err := h.streamExport(scanCtx, w, ns, req, last.Sequence); err != nil {
-		h.logger.ErrorContext(ctx, "audit export aborted",
-			slog.String("scope", ns.String()), slog.String("error", err.Error()))
+		faultlog.LogFault(ctx, h.logger, "audit export aborted", faultlog.Cause(err), "audit.export")
 
 		// The status line has left. Ending the transfer by force is the one
 		// way to tell the client that the lines are not whole.

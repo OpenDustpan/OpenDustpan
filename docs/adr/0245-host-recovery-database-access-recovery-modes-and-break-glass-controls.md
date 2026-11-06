@@ -1,6 +1,10 @@
 # 245. Host recovery: database access, recovery modes and break-glass controls
 
-Status: accepted · 2026-10-19. Supersedes in part ADR 39 decisions 1 and 4, for the command `host create-temp-admin` only. Refines ADR 57 decision 2 and ADR 70 decisions 26 and 27
+Status: accepted · 2026-10-19. Supersedes in part ADR 39 decisions 1 and 4, for the command `host create-temp-admin` only. Refines ADR 57 decision 2 and ADR 70 decisions 26 and 27. Changed by [ADR 295](0295-break-glass-recovery-mode-2-over-the-network.md)
+
+Changed by:
+
+- ADR 295 changes decision 12: a route for mode 2 over the network.
 
 ## Context
 

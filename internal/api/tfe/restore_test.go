@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -202,10 +203,11 @@ func (foreignRestoreWorkspaces) GetByID(
 			Holder:   "",
 			Reason:   "",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -235,7 +237,7 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -281,10 +283,11 @@ func (lockedRestoreWorkspaces) GetByID(
 			Holder:   "alice",
 			Reason:   "apply",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: name},
-		Revision:  2,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: name},
+		Revision:    2,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -327,7 +330,7 @@ func TestRestoreLockedByOtherWithoutHolder(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -360,7 +363,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

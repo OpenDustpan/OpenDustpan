@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-17 · adds to ADR 59
 
+Changed by:
+
+- ADR 311 extends: the header of OpenDustpan Cloud and the account switcher.
+
 ## Context
 
 ADR 59 decides that the project runs a hosted service, and that the hosted

@@ -95,6 +95,36 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 	return out, nil
 }
 
+// restoreWantBlobs returns the blob references that the staged data of the
+// backup id must name: the blobs of manifest and its damaged keys. The
+// backup holds no copy of a damaged key, and a restore leaves that key as it
+// is, but the rows of the backup still name it with the reference of the
+// live row.
+func restoreWantBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
+	out, err := parseManifestBlobs(manifest, id)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range manifest.Damaged {
+		// Defense in depth: readManifest checks each damaged entry. This
+		// check stays so that a manifest from another reader cannot add a
+		// reference that is not valid.
+		if err := validDamagedEntry(entry); err != nil {
+			return nil, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+		}
+
+		ref, err := damagedRef(entry)
+		if err != nil {
+			return nil, fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+		}
+
+		out = append(out, ref)
+	}
+
+	return out, nil
+}
+
 // checkRestoreSchema refuses a backup from before the baseline schema, and a
 // backup of another schema version. The error names both versions, so the
 // operator knows which release to use.
@@ -183,36 +213,6 @@ func portableOpener(ctx context.Context, target blob.Store, id ID) PortableOpene
 
 		return reader, nil
 	}
-}
-
-// putRestoreBlob Puts the bytes of reader under the key of ref while the
-// object check hashes them with MD5 and counts them. On a mismatch it deletes
-// the copied object.
-func putRestoreBlob(ctx context.Context, dest blob.Store, ref ManifestBlob, reader io.Reader) error {
-	check, err := newObjectCheck(ref.Key, blobWant(ref))
-	if err != nil {
-		return err
-	}
-
-	destKey, err := blob.ParseKey(ref.Key)
-	if err != nil {
-		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
-	}
-
-	if err := dest.Put(ctx, destKey, io.TeeReader(reader, check)); err != nil {
-		return fmt.Errorf("copy blob %q: %w", ref.Key, err)
-	}
-
-	if verifyErr := check.verify(ref.Key); verifyErr != nil {
-		if delErr := dest.Delete(ctx, destKey); delErr != nil {
-			return errors.Join(verifyErr, fmt.Errorf("delete blob %q that does not match the manifest: %w",
-				ref.Key, delErr))
-		}
-
-		return verifyErr
-	}
-
-	return nil
 }
 
 // restoreWant builds the Import want Summary from the manifest.

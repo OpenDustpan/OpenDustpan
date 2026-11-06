@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +44,11 @@ func newMemRecorderHarness(t *testing.T) jobtest.RecorderHarness {
 		t.Fatalf("open blob store: %v", err)
 	}
 
-	t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := blobs.Close(); err != nil {
+			t.Errorf("close blob store: %v", err)
+		}
+	})
 
 	return buildRecorderHarness(t, db, newMemKeyIndex(db), blobs)
 }
@@ -56,8 +61,12 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 
 	return jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
-			Jobs: db, Durable: db.durable, Freezes: db, Claimer: job.NewClaimer(db, db.durable, db), Namespaces: db,
-			Domain: db,
+			Jobs:       db,
+			Durable:    db.durable,
+			Freezes:    db,
+			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
+			Namespaces: db,
+			Domain:     db,
 		},
 		Records:  db,
 		ItemKeys: keys,
@@ -422,16 +431,37 @@ func (m *memDB) ReserveLogChunk(
 			m.records.chunks[plan.Version] = rows
 		}
 
-		rows[c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false}
+		rows[c.Seq] = job.ChunkRow{SHA256: c.SHA256, Size: c.Size, Confirmed: false, BlobKey: ""}
 	}
 
 	return plan, nil
 }
 
-// ConfirmLogChunk implements job.RecordStore.
-func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) error {
+// chunkKeys returns the blob key of each confirmed chunk of the log version, by
+// number. The caller holds m.mu.
+func (m *memDB) chunkKeys(version string) []string {
+	rows := m.records.chunks[version]
+	keys := make([]string, 0, len(rows))
+
+	for seq := 0; ; seq++ {
+		row, ok := rows[seq]
+		if !ok || !row.Confirmed {
+			return keys
+		}
+
+		keys = append(keys, row.BlobKey)
+	}
+}
+
+// ConfirmLogChunk implements job.RecordStore. The first confirm of a chunk
+// wins, as in the SQL adapters.
+func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.ChunkConfirm) (bool, error) {
 	if c.Stored.Size <= 0 {
-		return fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s has no stored size", job.ErrInvalid, c.Seq, c.Version)
+	}
+
+	if _, err := job.ChunkBlobKey(pc.Job, c.Version, c.Seq, c.BlobKey); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
 	}
 
 	m.mu.Lock()
@@ -439,27 +469,42 @@ func (m *memDB) ConfirmLogChunk(ctx context.Context, pc job.PhaseClaim, c job.Ch
 
 	next, err := m.guard(ctx, pc)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	row, ok := m.records.chunks[c.Version][c.Seq]
 	if !ok {
-		return fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
+		return false, fmt.Errorf("%w: chunk %d of log %s was not reserved", job.ErrInvalid, c.Seq, c.Version)
 	}
 
 	changed, err := job.ConfirmChunkRecord(&next, memKey(&pc, c.Step), c.Version, c.Seq, row)
 	if err != nil {
-		return fmt.Errorf("confirm log chunk: %w", err)
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
+	// A repeat of a confirm that the row holds with the same key answers true
+	// at any age.
+	if row.Confirmed && row.BlobKey == c.BlobKey {
+		return true, nil
+	}
+
+	if err := blob.CheckAttempt(c.AttemptStartedAt, time.Now()); err != nil {
+		return false, fmt.Errorf("confirm log chunk: %w", err)
+	}
+
+	if row.Confirmed {
+		return false, nil
 	}
 
 	row.Confirmed = true
+	row.BlobKey = c.BlobKey
 	m.records.chunks[c.Version][c.Seq] = row
 
 	if changed {
 		m.store(&next, time.Now().UTC())
 	}
 
-	return nil
+	return true, nil
 }
 
 // gatePlan applies the rules of a plan write. For a stale plan it fails the
@@ -671,7 +716,7 @@ func (m *memDB) Plan(_ context.Context, ns namespace.Name, plan string) (job.Art
 
 	p := e.plan
 
-	return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: &p, Log: nil}, nil
+	return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: "", Plan: &p, Log: nil, ChunkKeys: nil}, nil
 }
 
 // Log implements job.RecordStore.
@@ -694,9 +739,98 @@ func (m *memDB) Log(_ context.Context, ns namespace.Name, version string) (job.A
 		if r.Name == e.step && r.Token == e.token && r.Log != nil && r.Log.ID == version {
 			l := *r.Log
 
-			return job.ArtifactRecord{Job: j.ID, Unit: j.Spec.Unit, Step: e.step, Plan: nil, Log: &l}, nil
+			return job.ArtifactRecord{
+				Job: j.ID, Unit: j.Spec.Unit, Step: e.step, Plan: nil, Log: &l, ChunkKeys: m.chunkKeys(version),
+			}, nil
 		}
 	}
 
 	return job.ArtifactRecord{}, job.ErrNotFound
+}
+
+// ArtifactNames implements job.ArtifactKeyStore.
+func (m *memDB) ArtifactNames(_ context.Context, ns namespace.Name, id job.ID) (job.ArtifactNames, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	j, ok := m.lookup(id)
+	if !ok || j.Spec.Unit.Namespace() != ns {
+		return job.ArtifactNames{}, job.ErrNotFound
+	}
+
+	out := job.ArtifactNames{Plans: []string{}, ChunkKeys: []string{}}
+
+	for planID := range m.records.plans {
+		if m.records.plans[planID].job == id {
+			out.Plans = append(out.Plans, planID)
+		}
+	}
+
+	for version, e := range m.records.logs {
+		if e.job != id {
+			continue
+		}
+
+		for seq := range m.records.chunks[version] {
+			if c := m.records.chunks[version][seq]; c.Confirmed {
+				out.ChunkKeys = append(out.ChunkKeys, c.BlobKey)
+			}
+		}
+	}
+
+	slices.Sort(out.Plans)
+	slices.Sort(out.ChunkKeys)
+
+	return out, nil
+}
+
+func TestMemArtifactSweep(t *testing.T) {
+	t.Parallel()
+
+	jobtest.RunArtifactSweep(t, func(t *testing.T) jobtest.ArtifactSweepHarness {
+		t.Helper()
+
+		db := newMemDB()
+
+		blobs, err := blobfs.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open blob store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := blobs.Close(); err != nil {
+				t.Errorf("close blob store: %v", err)
+			}
+		})
+
+		return jobtest.ArtifactSweepHarness{
+			RecorderHarness: buildRecorderHarness(t, db, newMemKeyIndex(db), blobs), Names: db,
+			Clock: machineClock{}, Audit: &memServerAudit{mu: sync.Mutex{}, entries: nil},
+		}
+	})
+}
+
+// machineClock is the clock of the database of the memory store: the clock of
+// the machine.
+type machineClock struct{}
+
+func (machineClock) DatabaseNow(context.Context) (time.Time, error) { return time.Now(), nil }
+
+// memServerAudit keeps the audit entries of the scope of the server.
+type memServerAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *memServerAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append server entry: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
 }

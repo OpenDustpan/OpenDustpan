@@ -107,8 +107,9 @@ func faultOf(kind FaultKind, op string) Fault {
 type seedState struct {
 	// mu serializes the seed write.
 	mu sync.Mutex
-	// written says that a seed write succeeded. A failed write leaves it
-	// false, so that the next call tries again.
+	// written says that a seed write succeeded on a server at this URL. A
+	// failed write leaves it false, so that the next call tries again. The
+	// write reads the profile again before it trusts this value.
 	written bool
 	n       atomic.Int64
 }
@@ -119,7 +120,9 @@ type seedState struct {
 var fallbackSeed seedState
 
 // fallbackSeeds holds the seed state of each server URL, for an Env that no run
-// made.
+// made. A server that gets the URL of an earlier, closed server finds the old
+// state; the write reads the profile from it and writes the profile again when
+// the server does not have it.
 //
 //nolint:gochecknoglobals // One state for each server, so that a second call finds the profile.
 var (
@@ -141,14 +144,29 @@ func fallbackSeedFor(addr string) *seedState {
 	return s
 }
 
-// write runs writeSeed until one call succeeds. It does not keep the error
+// write writes the seed profile when no write has succeeded, or when the server
+// does not have the profile any more (a 404 answer). It does not keep the error
 // of a failed call, so that the next call tries again.
 func (s *seedState) write(ctx context.Context, env Env) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.written {
-		return nil
+		got, err := get(ctx, env, profilesPath+"/"+seedProfile, withToken)
+		if err != nil {
+			return err
+		}
+
+		switch got.status {
+		case http.StatusOK:
+			return nil
+		case http.StatusNotFound:
+			// Defense in depth: the server does not have the profile, so a new
+			// server has this URL. Write the profile again.
+			s.written = false
+		default:
+			return failf("the harness could not read the seed profile: %d %s", got.status, got.body)
+		}
 	}
 
 	if err := writeSeed(ctx, env); err != nil {

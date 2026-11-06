@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7. Decision 7 of ADR 226 extended by a third built-in gate of wider scope. Decision 4 of ADR 100 extended by a plan phase for a scheduled refresh job. Decision 3 scope narrowed by ADR 263
 
+Changed by:
+
+- ADR 263 changes decision 3: the scope of the built-in schedule gate.
+- ADR 263 extends decisions 1 and 6: the drift check job and the open schedule
+  and statuses.
+
 ## Context
 
 Decided by the product manager under the owner's delegation of 20 October

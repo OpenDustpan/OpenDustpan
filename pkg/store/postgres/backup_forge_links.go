@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/forgelinkstore"
 )
@@ -37,7 +35,7 @@ func pgCopyForgeLinkTables() []pgCopyTable {
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedForgeLinks(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedForgeLinks(ctx context.Context, pool pgQuerier, staging string) error {
 	links, err := pool.Query(ctx, "SELECT kind, host, account_id, login, principal_id, linked_at_ms FROM "+
 		stagingTable(staging, "forge_account_links"))
 	if err != nil {
@@ -68,7 +66,7 @@ func checkStagedForgeLinks(ctx context.Context, pool *pgxpool.Pool, staging stri
 }
 
 // checkStagedForgeRequests checks each link request of a staged backup.
-func checkStagedForgeRequests(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+func checkStagedForgeRequests(ctx context.Context, pool pgQuerier, staging string) error {
 	rows, err := pool.Query(ctx, "SELECT token_sha256, principal_id, created_at_ms, expires_at_ms, proved_kind, "+
 		"proved_host, proved_account_id, proved_login, proved_delivery_id, proved_at_ms, used_at_ms FROM "+
 		stagingTable(staging, "forge_link_requests"))

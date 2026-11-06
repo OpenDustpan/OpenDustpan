@@ -353,6 +353,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 
 	change := accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: &off,
+		ExchangeLifetime: nil,
 	}
 
 	_, setErr := tokens.SetPolicy(ctx, hostPolicyEntry(), change)
@@ -488,6 +489,7 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 
 	change := accesstoken.PolicyChange{
 		MaxLifetime: &capped, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: nil,
+		ExchangeLifetime: nil,
 	}
 
 	if _, err := tokens.SetPolicy(ctx, hostPolicyEntry(), change); err != nil {

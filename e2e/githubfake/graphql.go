@@ -107,10 +107,17 @@ func (f *Fake) graphql(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f.commitOnBranch(w, rp, in)
+	// GitHub names the account of the credential as the author, GitHub itself
+	// as the committer, and signs the commit.
+	author := f.UserLogin()
+	if f.classify(r) == BearerInstallation {
+		author = f.AppLogin()
+	}
+
+	f.commitOnBranch(w, rp, in, Signature{Author: author, Committer: WebFlow, Verified: true})
 }
 
-func (f *Fake) commitOnBranch(w http.ResponseWriter, rp *repo, in commitInput) {
+func (f *Fake) commitOnBranch(w http.ResponseWriter, rp *repo, in commitInput, sig Signature) {
 	head, found := rp.branches[in.Branch.Name]
 
 	switch {
@@ -130,6 +137,22 @@ func (f *Fake) commitOnBranch(w http.ResponseWriter, rp *repo, in commitInput) {
 		)
 
 		return
+	}
+
+	tip := rp.commits[head]
+	if tip == nil {
+		f.gqlError(w, gqlNotFound, "No such commit: "+head)
+
+		return
+	}
+
+	// GitHub refuses the delete of a file that the branch does not have.
+	for _, d := range in.FileChanges.Deletions {
+		if _, has := tip.tree[d.Path]; !has {
+			f.gqlError(w, gqlBadInput, "the file "+d.Path+" is not in the branch")
+
+			return
+		}
 	}
 
 	files := map[string][]byte{}
@@ -154,7 +177,7 @@ func (f *Fake) commitOnBranch(w http.ResponseWriter, rp *repo, in commitInput) {
 		message += "\n\n" + in.Message.Body
 	}
 
-	c := rp.commit(head, files, message, f.now())
+	c := rp.commitChange(head, change{files: files, entries: nil}, message, f.now(), sig)
 	rp.branches[in.Branch.Name] = c.meta.ID
 
 	f.writeJSON(w, http.StatusOK, wireGQLResponse{

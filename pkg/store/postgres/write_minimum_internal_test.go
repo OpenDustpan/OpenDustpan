@@ -20,7 +20,9 @@ import (
 // contractMigration returns a migration that sets the minimum binary version
 // to minimum.
 func contractMigration(minimum string) migrate.Migration {
-	return migrate.Migration{Name: "9999_contract.sql", SQL: "SELECT 1", MinBinaryVersion: minimum, Version: 9999}
+	return migrate.Migration{
+		Name: "9999_contract.sql", SQL: "SELECT 1", MinBinaryVersion: minimum, SHA256: "", Version: 9999,
+	}
 }
 
 // openAt opens the schema at url as a binary of version binary.

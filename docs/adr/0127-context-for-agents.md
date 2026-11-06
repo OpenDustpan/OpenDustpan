@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-17 · the output schema and its parser superseded in part by ADR 160
 
+Changed by:
+
+- ADR 160 changes decisions 1, 2 and 5: the output schema, the parser and the
+  metadata read.
+- ADR 160 extends decision 6: describe_unit adds the resolved values with
+  provenance.
+
 ## Context
 
 The project owner decided that the context for the agent comes from the

@@ -2,6 +2,25 @@
 
 Status: accepted · 2026-10-16 · supersedes ADR 33, ADR 48, ADR 60 and ADR 64 in part (see "Superseded decisions"). Decision 7 superseded in part by ADR 73. Decision 6 superseded in part by ADR 126 · decision 6 field list extended by ADR 240. Decision 11 extended by ADR 249. Extended by ADR 280 (the restore operation, the lease period)
 
+Changed by:
+
+- ADR 73 changes decision 7: the one-time collapse becomes a collapse before
+  each tag.
+- ADR 75 extends decision 10: the supported releases are the latest three
+  minor versions.
+- ADR 103 changes decision 6: an optional Agent field in the hash encoding.
+- ADR 126 changes decision 6: an optional agent block in the hash encoding.
+- ADR 151 extends decision 5: the redaction and tombstone tables are control
+  tables.
+- ADR 166 extends decision 1: the durable step result NotYet, Store.Defer and
+  StartRequest.Subject.
+- ADR 240 extends decision 6: the hash field list gets principalKind and
+  jobID.
+- ADR 249 extends decision 11: the version row records the components.
+- ADR 280 extends: the restore as a durable operation and the lease period.
+- ADR 298 extends: what each instance does while the PostgreSQL primary
+  fails over.
+
 ## Context
 
 [RFC 36](../rfc/0036-high-availability.md) asks how several server instances

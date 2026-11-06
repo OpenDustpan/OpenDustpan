@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-17. Route paths and `server:` action names superseded in part by ADR 210
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+
 ## Context
 
 The project owner decided that the task-shaped tools of the built-in agent

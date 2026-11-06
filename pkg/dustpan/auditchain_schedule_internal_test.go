@@ -69,10 +69,11 @@ type failingListBlobs struct {
 	lists *atomic.Int64
 }
 
-func (b failingListBlobs) List(context.Context, string) ([]blob.Object, error) {
+// ListPage implements blob.Store: it counts the call and fails.
+func (b failingListBlobs) ListPage(context.Context, blob.PageRequest) (blob.Page, error) {
 	b.lists.Add(1)
 
-	return nil, errBlobList
+	return blob.Page{}, errBlobList
 }
 
 // TestAuditChainGaugeKeepsTheMarksWhenTheEpochCannotBeRead proves that a

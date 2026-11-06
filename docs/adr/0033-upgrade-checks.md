@@ -2,6 +2,13 @@
 
 Status: accepted · 2026-10-11 · supersedes the gate of ADR 21 in part · decision 3 superseded by ADR 39. Decision 1 superseded by ADR 72
 
+Changed by:
+
+- ADR 39 supersedes decision 3: the check command reads the database.
+- ADR 72 supersedes decision 1: refuse every newer schema.
+- ADR 72 changes decision 5: the last sentence on an older binary.
+- ADR 72 extends decision 7: an upgrade test from each supported old release.
+
 ## Context
 
 [RFC 38](../rfc/0038-upgrade-checks.md) asks how an operator learns what an

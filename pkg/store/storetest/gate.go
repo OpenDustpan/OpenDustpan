@@ -104,7 +104,7 @@ func RunGate(t *testing.T, newStore GateFactory) {
 		testGateDeleteCollection(t, newStore(t))
 	})
 
-	t.Run("purge after the name is reused keeps the new unit's configuration", func(t *testing.T) {
+	t.Run("a purge of a deleted unit keeps the configuration of a new unit with its name", func(t *testing.T) {
 		t.Parallel()
 
 		for _, tc := range gateUnitCases() {
@@ -126,17 +126,17 @@ func RunGate(t *testing.T, newStore GateFactory) {
 		}
 	})
 
-	t.Run("a rename of a stack moves its configuration", func(t *testing.T) {
+	t.Run("a rename of a stack keeps its configuration", func(t *testing.T) {
 		t.Parallel()
 		testGateRenameStack(t, newStore(t))
 	})
 
-	t.Run("a rename to a name that holds the configuration of a deleted unit is refused", func(t *testing.T) {
+	t.Run("a rename to the name of a deleted unit keeps the configuration of each unit", func(t *testing.T) {
 		t.Parallel()
 		testGateRenameToUsedName(t, newStore(t))
 	})
 
-	t.Run("a restore under a new name moves its configuration", func(t *testing.T) {
+	t.Run("a restore under a new name keeps its configuration", func(t *testing.T) {
 		t.Parallel()
 
 		for _, tc := range gateUnitCases() {
@@ -147,7 +147,7 @@ func RunGate(t *testing.T, newStore GateFactory) {
 		}
 	})
 
-	t.Run("a restore under a new name is refused when a live unit holds the old name", func(t *testing.T) {
+	t.Run("a restore under a new name keeps the configuration of a live unit with the old name", func(t *testing.T) {
 		t.Parallel()
 
 		for _, tc := range gateUnitCases() {
@@ -244,8 +244,16 @@ func testGatePurgeUnit(t *testing.T, s GateStore) {
 		t.Fatalf("DeleteWorkspace() = %v", err)
 	}
 
-	if n := gateCount(t, s, unit); n != 1 {
-		t.Fatalf("gates of the deleted unit = %d, want 1: a soft delete keeps them", n)
+	// The rows of a deleted unit stay until the purge, but no name reaches
+	// them: a deleted unit holds no name.
+	if n := gateCount(t, s, unit); n != 0 {
+		t.Fatalf("gates of the name of the deleted unit = %d, want 0", n)
+	}
+
+	err = s.PathSets().Delete(t.Context(), gate.ObjectRef{Scope: ns, ID: "network", Version: 1}, fence,
+		gateEntry("acme", "namespace:manage-gates"))
+	if !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("Delete(path set that the deleted unit's gate reads) = %v, want gate.ErrInvalid", err)
 	}
 
 	purge := gateEntry("acme", "unit:purge")
@@ -353,6 +361,7 @@ type gateDomain struct {
 var (
 	_ gatetest.Domain    = gateDomain{s: nil}
 	_ gatetest.Placement = gateDomain{s: nil}
+	_ gatetest.Lifecycle = gateDomain{s: nil}
 	_ gatetest.Auditor   = gateDomain{s: nil}
 )
 
@@ -447,6 +456,7 @@ func (d gateDomain) CreateUnit(
 			CreatedAt:   gateTime(),
 			UpdatedAt:   gateTime(),
 			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(),
 			ID:          workspace.ID(ident.NewID("ws-")),
 			Ref:         workspace.Ref{Namespace: ns, Name: wname},
 			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
@@ -470,6 +480,108 @@ func (d gateDomain) CreateUnit(
 		Unit: collection.UnitRef{Namespace: ns, Tool: tool, Name: name}, From: "",
 		To: target.Ref, ToID: target.ID, EndsLock: false,
 	}
+	if err = d.s.SetUnitCollection(ctx, move, n.Fence(), gateEntry(ns, "unit:set-collection")); err != nil {
+		return fmt.Errorf("move unit %s: %w", name, err)
+	}
+
+	return nil
+}
+
+// DeleteUnit implements gatetest.Lifecycle.
+func (d gateDomain) DeleteUnit(ctx context.Context, ns namespace.Name, tool, name string) (string, error) {
+	n, err := d.s.GetNamespace(ctx, ns)
+	if err != nil {
+		return "", fmt.Errorf("get namespace %s: %w", ns, err)
+	}
+
+	del := inventory.Deletion{Entry: gateEntry(ns, "unit:delete"), PurgeAfter: gateTime()}
+
+	if tool == "pulumi" {
+		project, stackName, _ := strings.Cut(name, "/")
+
+		ref, rerr := stack.ParseRef(ns.String(), project, stackName)
+		if rerr != nil {
+			return "", fmt.Errorf("parse stack reference: %w", rerr)
+		}
+
+		st, gerr := d.s.GetStack(ctx, ref)
+		if gerr != nil {
+			return "", fmt.Errorf("get stack %s: %w", name, gerr)
+		}
+
+		if err = d.s.ForceDeleteStack(ctx, ref, n.Fence(), del); err != nil {
+			return "", fmt.Errorf("delete stack %s: %w", name, err)
+		}
+
+		return st.ID.String(), nil
+	}
+
+	ref := workspace.Ref{Namespace: ns, Name: workspace.Name(name)}
+
+	w, err := d.s.GetWorkspace(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("get workspace %s: %w", name, err)
+	}
+
+	if err = d.s.DeleteWorkspace(ctx, ref, n.Fence(), del); err != nil {
+		return "", fmt.Errorf("delete workspace %s: %w", name, err)
+	}
+
+	return w.ID.String(), nil
+}
+
+// RenameUnit implements gatetest.Lifecycle. Only a Pulumi stack has a rename.
+func (d gateDomain) RenameUnit(ctx context.Context, ns namespace.Name, tool, name, next string) error {
+	if tool != "pulumi" {
+		return fmt.Errorf("rename of a unit of the tool %s: %w", tool, errors.ErrUnsupported)
+	}
+
+	n, err := d.s.GetNamespace(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("get namespace %s: %w", ns, err)
+	}
+
+	project, stackName, _ := strings.Cut(name, "/")
+
+	ref, err := stack.ParseRef(ns.String(), project, stackName)
+	if err != nil {
+		return fmt.Errorf("parse stack reference: %w", err)
+	}
+
+	_, nextStack, _ := strings.Cut(next, "/")
+
+	newName, err := stack.ParseName(nextStack)
+	if err != nil {
+		return fmt.Errorf("parse stack name: %w", err)
+	}
+
+	if err = d.s.RenameStack(ctx, ref, newName, n.Fence()); err != nil {
+		return fmt.Errorf("rename stack %s: %w", name, err)
+	}
+
+	return nil
+}
+
+// MoveUnit implements gatetest.Lifecycle.
+func (d gateDomain) MoveUnit(ctx context.Context, ns namespace.Name, tool, name string, to collection.Name) error {
+	n, err := d.s.GetNamespace(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("get namespace %s: %w", ns, err)
+	}
+
+	unit := collection.UnitRef{Namespace: ns, Tool: tool, Name: name}
+
+	from, err := d.s.UnitCollection(ctx, unit)
+	if err != nil && !errors.Is(err, collection.ErrNoCollection) {
+		return fmt.Errorf("get the collection of %s: %w", name, err)
+	}
+
+	target, err := d.s.GetCollection(ctx, collection.Ref{Namespace: ns, Name: to})
+	if err != nil {
+		return fmt.Errorf("get collection %s: %w", to, err)
+	}
+
+	move := collection.Move{Unit: unit, From: from.Name, To: target.Ref, ToID: target.ID, EndsLock: false}
 	if err = d.s.SetUnitCollection(ctx, move, n.Fence(), gateEntry(ns, "unit:set-collection")); err != nil {
 		return fmt.Errorf("move unit %s: %w", name, err)
 	}
@@ -848,9 +960,10 @@ func bareName(unit string) string {
 	return bare
 }
 
-// testGateRestoreNewName checks that a restore under a new name moves the
-// configuration of the unit, as a rename does, and that a restore onto a name
-// that holds the configuration of another deleted unit is refused.
+// testGateRestoreNewName checks that a restore under a new name keeps the
+// configuration of the unit: the rows key on the stable ID, which the restore
+// keeps. A restore onto the name of another deleted unit gets none of the
+// configuration of that unit.
 func testGateRestoreNewName(t *testing.T, s GateStore, tc gateUnitCase) {
 	t.Helper()
 
@@ -877,39 +990,37 @@ func testGateRestoreNewName(t *testing.T, s GateStore, tc gateUnitCase) {
 	}
 
 	oldScope := unitScopeOf(t, tc.tool, tc.unit)
+	otherScope := unitScopeOf(t, tc.tool, other)
 	putGateAt(t, s, oldScope, fence)
-	putGateAt(t, s, unitScopeOf(t, tc.tool, other), fence)
+
+	limit := gate.AccessLimit{
+		Scope: otherScope, ID: "no-agents", Version: 0, Policy: `forbid (principal, action, resource);`,
+	}
+	if _, err = s.AccessLimits().Put(t.Context(), limit, 0, fence, en); err != nil {
+		t.Fatalf("Put(access limit of the other unit) = %v", err)
+	}
 
 	deleted := deletedUnit{tc: tc, fence: fence, id: softDeleteUnitID(t, s, tc, fence)}
 	softDeleteUnitID(t, s, gateUnitCase{name: "", tool: tc.tool, unit: other}, fence)
 
-	// The other deleted unit holds its name, so the restore is refused and
-	// leaves the rows where they are.
-	err = deleted.restoreAs(t, s, bareName(other))
-	if !errors.Is(err, errAlreadyExists(tc)) {
-		t.Fatalf("restore onto a name with the configuration of a deleted unit = %v, want ErrAlreadyExists", err)
+	if err = deleted.restoreAs(t, s, bareName(other)); err != nil {
+		t.Fatalf("restore onto the name of another deleted unit = %v", err)
 	}
 
-	if n := gateCount(t, s, oldScope); n != 1 {
-		t.Fatalf("gates of the old name after the refusal = %d, want 1", n)
+	if n := gateCount(t, s, otherScope); n != 1 {
+		t.Fatalf("gates of the restored unit = %d, want 1", n)
 	}
 
-	fresh := tc.unit + "-new"
-	if err = deleted.restoreAs(t, s, bareName(fresh)); err != nil {
-		t.Fatalf("restore under a new name = %v", err)
+	limits, err := s.AccessLimits().List(t.Context(), otherScope)
+	if err != nil || len(limits) != 0 {
+		t.Fatalf("access limits of the restored unit = %d, %v, want none of the other deleted unit", len(limits), err)
 	}
 
 	if n := gateCount(t, s, oldScope); n != 0 {
 		t.Fatalf("gates of the old name = %d, want 0", n)
 	}
 
-	if n := gateCount(t, s, unitScopeOf(t, tc.tool, fresh)); n != 1 {
-		t.Fatalf("gates of the new name = %d, want 1", n)
-	}
-
-	wantRemoved(t, s, "unit:restore", []string{"moved:gate:cost-cap"})
-
-	// The gate still reads the path set, so the reference moved with it.
+	// The gate still reads the path set: the reference stays with the row.
 	ref := gate.ObjectRef{Scope: gate.NamespaceScope("acme"), ID: "network", Version: 1}
 
 	err = s.PathSets().Delete(t.Context(), ref, fence, en)
@@ -918,9 +1029,8 @@ func testGateRestoreNewName(t *testing.T, s GateStore, tc gateUnitCase) {
 	}
 }
 
-// testGateRestoreAfterReuse checks that a restore under a new name is refused
-// when a live unit holds the old name, because the live unit shares the gates
-// of the deleted unit and a move would take its access limits from it.
+// testGateRestoreAfterReuse checks that a restore under a new name, while a
+// live unit holds the old name, gives each unit its own configuration.
 func testGateRestoreAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
 	t.Helper()
 
@@ -958,26 +1068,31 @@ func testGateRestoreAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
 
 	fresh := tc.unit + "-new"
 
-	err = deleted.restoreAs(t, s, bareName(fresh))
-	if !errors.Is(err, errAlreadyExists(tc)) {
-		t.Fatalf("restore under a new name while a live unit holds the old name = %v, want ErrAlreadyExists", err)
+	if err = deleted.restoreAs(t, s, bareName(fresh)); err != nil {
+		t.Fatalf("restore under a new name while a live unit holds the old name = %v", err)
 	}
 
-	limits, err := s.AccessLimits().List(t.Context(), unit)
-	if err != nil {
-		t.Fatalf("List(access limits) = %v", err)
+	freshScope := unitScopeOf(t, tc.tool, fresh)
+
+	tests := []struct {
+		name   string
+		scope  gate.Scope
+		gates  int
+		limits int
+	}{
+		{"the live unit", unit, 0, 1},
+		{"the restored unit", freshScope, 1, 0},
 	}
 
-	if len(limits) != 1 {
-		t.Fatalf("access limits of the live unit = %d, want 1", len(limits))
-	}
+	for _, tt := range tests {
+		if n := gateCount(t, s, tt.scope); n != tt.gates {
+			t.Fatalf("gates of %s = %d, want %d", tt.name, n, tt.gates)
+		}
 
-	if n := gateCount(t, s, unit); n != 1 {
-		t.Fatalf("gates of the live unit = %d, want 1", n)
-	}
-
-	if n := gateCount(t, s, unitScopeOf(t, tc.tool, fresh)); n != 0 {
-		t.Fatalf("gates of the new name = %d, want 0", n)
+		limits, lerr := s.AccessLimits().List(t.Context(), tt.scope)
+		if lerr != nil || len(limits) != tt.limits {
+			t.Fatalf("access limits of %s = %d, %v, want %d", tt.name, len(limits), lerr, tt.limits)
+		}
 	}
 }
 
@@ -991,15 +1106,6 @@ func unitScopeOf(t *testing.T, tool, unit string) gate.Scope {
 	}
 
 	return scope
-}
-
-// errAlreadyExists returns the ErrAlreadyExists of the tool of tc.
-func errAlreadyExists(tc gateUnitCase) error {
-	if tc.tool == "pulumi" {
-		return stack.ErrAlreadyExists
-	}
-
-	return workspace.ErrAlreadyExists
 }
 
 // testGatePurgeChangeCap checks that a purge of a unit with the most gates that
@@ -1074,6 +1180,9 @@ func testGatePurgeChangeCap(t *testing.T, s GateStore) {
 	t.Fatal("no audit entry with the action unit:purge")
 }
 
+// testGatePurgeAfterReuse checks that the purge of a deleted unit removes its
+// own configuration only: a new unit with the same name starts with none of
+// it, and keeps its own configuration through the purge.
 func testGatePurgeAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
 	t.Helper()
 
@@ -1104,10 +1213,14 @@ func testGatePurgeAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
 
 	purge := softDeleteUnit(t, s, tc, fence)
 
-	// A team creates the unit again under the freed name, and gives it an
-	// access limit. The rows of the deleted unit carry the same name.
+	// A team creates the unit again under the freed name. It starts clean,
+	// and gets an access limit of its own.
 	if err = d.CreateUnit(t.Context(), "acme", tc.tool, tc.unit, ""); err != nil {
 		t.Fatalf("CreateUnit(again) = %v", err)
+	}
+
+	if n := gateCount(t, s, unit); n != 0 {
+		t.Fatalf("gates of the new unit = %d, want 0: a new unit with a used name starts clean", n)
 	}
 
 	limit := gate.AccessLimit{Scope: unit, ID: "no-agents", Version: 0, Policy: `forbid (principal, action, resource);`}
@@ -1119,20 +1232,16 @@ func testGatePurgeAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
 		t.Fatalf("purge of the old unit = %v", err)
 	}
 
-	if n := gateCount(t, s, unit); n != 1 {
-		t.Fatalf("gates of the new unit = %d, want 1: the purge of the old unit keeps them", n)
-	}
-
 	limits, err := s.AccessLimits().List(t.Context(), unit)
 	if err != nil {
 		t.Fatalf("List(access limits) = %v", err)
 	}
 
 	if len(limits) != 1 {
-		t.Fatalf("access limits of the new unit = %d, want 1", len(limits))
+		t.Fatalf("access limits of the new unit = %d, want 1: the purge of the old unit keeps them", len(limits))
 	}
 
-	wantRemoved(t, s, "unit:purge", nil)
+	wantRemoved(t, s, "unit:purge", []string{"removed:gate:cost-cap"})
 }
 
 func testGateRenameStack(t *testing.T, s GateStore) {
@@ -1191,16 +1300,16 @@ func testGateRenameStack(t *testing.T, s GateStore) {
 		t.Fatalf("gates of the new name = %d, want 1", n)
 	}
 
-	// The gate still reads the path set, so the reference moved with it.
+	// The gate still reads the path set: the reference stays with the row.
 	err = s.PathSets().Delete(t.Context(), gate.ObjectRef{Scope: ns, ID: "network", Version: 1}, fence, en)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("Delete(path set read by the renamed unit's gate) = %v, want gate.ErrInvalid", err)
 	}
 }
 
-// testGateRenameToUsedName checks that a rename to a name that holds the
-// configuration of a deleted unit is refused: the rename would give that
-// configuration to this unit.
+// testGateRenameToUsedName checks that a rename to the name of a deleted unit
+// keeps the configuration of the renamed unit, and gives it none of the
+// configuration of the deleted unit.
 func testGateRenameToUsedName(t *testing.T, s GateStore) {
 	t.Helper()
 
@@ -1224,12 +1333,16 @@ func testGateRenameToUsedName(t *testing.T, s GateStore) {
 		t.Fatalf("Put(path set) = %v", err)
 	}
 
-	otherScope, err := gate.UnitScope("acme", "pulumi", "web/other")
-	if err != nil {
-		t.Fatalf("UnitScope(other) = %v", err)
-	}
-
+	otherScope := unitScopeOf(t, "pulumi", "web/other")
+	thirdScope := unitScopeOf(t, "pulumi", "web/third")
 	putGateAt(t, s, otherScope, fence)
+
+	limit := gate.AccessLimit{
+		Scope: thirdScope, ID: "no-agents", Version: 0, Policy: `forbid (principal, action, resource);`,
+	}
+	if _, err = s.AccessLimits().Put(t.Context(), limit, 0, fence, en); err != nil {
+		t.Fatalf("Put(access limit) = %v", err)
+	}
 
 	softDeleteUnit(t, s, gateUnitCase{name: "", tool: "pulumi", unit: "web/other"}, fence)
 
@@ -1238,9 +1351,17 @@ func testGateRenameToUsedName(t *testing.T, s GateStore) {
 		t.Fatalf("ParseRef() = %v", err)
 	}
 
-	err = s.RenameStack(t.Context(), third, "other", fence)
-	if !errors.Is(err, stack.ErrAlreadyExists) {
-		t.Fatalf("RenameStack(to a name with the configuration of a deleted unit) = %v, want ErrAlreadyExists", err)
+	if err = s.RenameStack(t.Context(), third, "other", fence); err != nil {
+		t.Fatalf("RenameStack(to the name of a deleted unit) = %v", err)
+	}
+
+	if n := gateCount(t, s, otherScope); n != 0 {
+		t.Fatalf("gates of the renamed unit = %d, want 0: the gate of the deleted unit stays with it", n)
+	}
+
+	limits, err := s.AccessLimits().List(t.Context(), otherScope)
+	if err != nil || len(limits) != 1 {
+		t.Fatalf("access limits of the renamed unit = %d, %v, want 1", len(limits), err)
 	}
 }
 

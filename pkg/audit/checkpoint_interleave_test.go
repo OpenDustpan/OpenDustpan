@@ -24,7 +24,7 @@ type afterFirstRead struct {
 
 func (a *afterFirstRead) fire() { a.once.Do(a.hook) }
 
-// listHook wraps a blob store: a list of the checkpoints of a scope (not of
+// listHook wraps a blob store: the last page of a list of the checkpoints of a scope (not of
 // the epoch objects) fires the hook after it answered.
 type listHook struct {
 	blob.Store
@@ -32,10 +32,10 @@ type listHook struct {
 	after *afterFirstRead
 }
 
-func (l listHook) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	out, err := l.Store.List(ctx, prefix)
+func (l listHook) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	out, err := l.Store.ListPage(ctx, req)
 
-	if !strings.Contains(prefix, "/epochs/") {
+	if !strings.Contains(req.Prefix, "/epochs/") && out.Next == "" {
 		l.after.fire()
 	}
 

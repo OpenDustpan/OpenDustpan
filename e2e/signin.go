@@ -178,7 +178,7 @@ func noFaults() oauthtest.Faults {
 		WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
 		AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
 		IssuedIn: 0, IgnoreMaxAge: false, TokenType: "", UserinfoStatus: 0, UserinfoBody: "", UserinfoType: "",
-		UserinfoRedirect: "", TokenRedirect: "",
+		UserinfoRedirect: "", TokenRedirect: "", AuthTime: time.Time{},
 	}
 }
 
@@ -230,17 +230,34 @@ func NewEnvWithRealTimeSignIn(ctx context.Context, tb testing.TB, cli Install, s
 	return startSignInEnv(ctx, tb, cli, store, true)
 }
 
+// NewEnvWithIssuer starts a server as NewEnvWithRealTimeSignIn does, with the
+// reads of the keys of an issuer allowed on the loopback and the certificate
+// of issuer trusted, so a test can exchange the tokens of the fake issuer.
+// Only the in-process server takes the issuer.
+func NewEnvWithIssuer(ctx context.Context, tb testing.TB, cli Install, store Store, issuer *OIDCIssuerFake) *Env {
+	tb.Helper()
+
+	return startSignInEnvWith(
+		ctx,
+		tb,
+		cli,
+		store,
+		signInEnvOptions{issuer: issuer, realTime: true, ipAllowlists: false},
+	)
+}
+
 // NewEnvWithIPAllowlistsAndSignIn starts a server as NewEnvWithIPAllowlists
 // does, with the console sign-in of NewEnvWithRealTimeSignIn, so a step can
 // change an allowlist with the fresh console session that the change needs.
 func NewEnvWithIPAllowlistsAndSignIn(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
-	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{realTime: true, ipAllowlists: true})
+	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{issuer: nil, realTime: true, ipAllowlists: true})
 }
 
 // signInEnvOptions are the switches of a sign-in env.
 type signInEnvOptions struct {
+	issuer       *OIDCIssuerFake
 	realTime     bool
 	ipAllowlists bool
 }
@@ -250,7 +267,13 @@ type signInEnvOptions struct {
 func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store, realTime bool) *Env {
 	tb.Helper()
 
-	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{realTime: realTime, ipAllowlists: false})
+	return startSignInEnvWith(
+		ctx,
+		tb,
+		cli,
+		store,
+		signInEnvOptions{issuer: nil, realTime: realTime, ipAllowlists: false},
+	)
 }
 
 // startSignInEnvWith starts a sign-in env with the switches opts.
@@ -264,8 +287,10 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 		sinkSenders:       nil,
 		disableJournaling: false,
 		ipAllowlists:      opts.ipAllowlists,
+		issuer:            opts.issuer,
 		signIn:            true,
 		signInRealTime:    realTime,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,

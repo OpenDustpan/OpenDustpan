@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -98,15 +99,20 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.ownTokenRoutes()...)
 	routes = append(routes, h.tokenPolicyRoutes()...)
 	routes = append(routes, h.sessionPolicyRoutes()...)
+	routes = append(routes, h.localUserRoutes()...)
+	routes = append(routes, h.passkeyRoutes()...)
+	routes = append(routes, h.passkeySignInRoutes()...)
 	routes = append(routes, h.auditSinkRoutes()...)
 	routes = append(routes, h.checkpointRoutes()...)
 	routes = append(routes, h.instanceRoutes()...)
+	routes = append(routes, h.storeCheckRoutes()...)
 	routes = append(routes, h.signInRoutes()...)
 	routes = append(routes, h.devSignInRoutes()...)
 	routes = append(routes, h.capabilitiesRoutes()...)
 	routes = append(routes, h.openAPIRoutes()...)
 	routes = append(routes, h.signInProviderRoutes()...)
 	routes = append(routes, h.preferencesRoutes()...)
+	routes = append(routes, h.settingsRoutes()...)
 	routes = append(routes, h.gitHostRoutes()...)
 	routes = append(routes, h.gitHostLinkRoutes()...)
 
@@ -321,13 +327,13 @@ func newPatternMux() *patternMux {
 // Handle registers pattern and records it.
 func (m *patternMux) Handle(pattern string, handler http.Handler) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.Handle(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, handler))
 }
 
 // HandleFunc registers pattern and records it.
 func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	m.patterns = append(m.patterns, pattern)
-	m.servemux.HandleFunc(pattern, handler)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
 }
 
 // ServeHTTP implements http.Handler.

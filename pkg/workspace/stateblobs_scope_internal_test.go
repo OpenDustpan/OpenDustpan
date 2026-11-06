@@ -292,7 +292,7 @@ func TestStateBlobCallsReadNoNamespace(t *testing.T) {
 
 			return r.Close()
 		}},
-		{"list", func() error { _, listErr := e.svc.blobs.list(ctx, w.NamespaceID, w.ID); return listErr }},
+		{"list", func() error { _, listErr := listState(ctx, e.svc.blobs, w.NamespaceID, w.ID); return listErr }},
 		{"delete", func() error { return e.svc.blobs.delete(ctx, w.NamespaceID, w.ID, key) }},
 		{"deleteRetried", func() error { return e.svc.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, key) }},
 		{"noteAttempt", func() error { return e.svc.noteAttempt(ctx, w, "sv-1", key, fence) }},

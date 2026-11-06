@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -328,12 +329,15 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	signIn, sessions := signInOf(t, st)
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          svc,
 		Idempotency:      mw,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -362,6 +366,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

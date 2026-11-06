@@ -63,7 +63,7 @@ func (s *Service) checkLimits(ctx context.Context, subject Subject, call AccessC
 		return fmt.Errorf("access limits of %s: %w", call.Action, err)
 	}
 
-	cfg, err := s.store.Snapshot(ctx, chain)
+	cfg, err := s.snapshot(ctx, chain)
 	if err != nil {
 		return fmt.Errorf("access limits of %s: %w: %w", call.Action, ErrUnavailable, err)
 	}
@@ -234,20 +234,37 @@ func (s *Service) authAge(subject Subject) int64 {
 // factMemoKey is the context key of the factMemo of one call.
 type factMemoKey struct{}
 
-// factMemo keeps the collection and the labels of the units that one call
+// factMemo keeps the unit facts and the gate configuration that one call
 // read, so a call that checks the limits and then the gates reads each one
-// once. It lives for one call only, so it never serves a stale value to a
-// later call.
+// once, and both checks see the same rows. It lives for one call only, so it
+// never serves a stale value to a later call. It keeps no failed read: a
+// store error refuses the call, and nothing reads the value again after it.
 type factMemo struct {
-	mu          sync.Mutex
-	collections map[string]collection.Name
-	labels      map[string][]string
+	mu    sync.Mutex
+	units map[string]unitRead
+	// configs holds the configuration of each list of scopes that the call
+	// read. A call reads one or two lists, so a slice is enough.
+	configs []configRead
+}
+
+// unitRead is one read of the facts of a unit. known is false for a unit
+// that the source does not know.
+type unitRead struct {
+	info  UnitInfo
+	known bool
+}
+
+// configRead is one read of the configuration of a list of scopes. The list
+// compares by value, so the stable ID of a unit scope is part of the match.
+type configRead struct {
+	scopes []Scope
+	cfg    Config
 }
 
 // withFactMemo returns ctx with a new factMemo.
 func withFactMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, factMemoKey{}, &factMemo{
-		mu: sync.Mutex{}, collections: map[string]collection.Name{}, labels: map[string][]string{},
+		mu: sync.Mutex{}, units: map[string]unitRead{}, configs: nil,
 	})
 }
 
@@ -261,94 +278,136 @@ func memoOf(ctx context.Context) *factMemo {
 	return m
 }
 
-// collectionOf returns the collection of unit, or the empty name for a unit
-// in no collection.
-func (s *Service) collectionOf(ctx context.Context, unit identity.Object) (collection.Name, error) {
-	if m := memoOf(ctx); m != nil {
+// snapshot returns the configuration of scopes from the memo or from the
+// store. It returns the error of the store as it is. Each caller gets its own
+// copy of the lists, so a caller that changes a list does not change the
+// configuration of the other check.
+func (s *Service) snapshot(ctx context.Context, scopes []Scope) (Config, error) {
+	m := memoOf(ctx)
+	if m != nil {
 		m.mu.Lock()
-		name, ok := m.collections[unit.String()]
+
+		for i := range m.configs {
+			if slices.Equal(m.configs[i].scopes, scopes) {
+				cfg := cloneConfig(m.configs[i].cfg)
+				m.mu.Unlock()
+
+				return cfg, nil
+			}
+		}
+
+		m.mu.Unlock()
+	}
+
+	cfg, err := s.store.Snapshot(ctx, scopes)
+	if err != nil {
+		return Config{}, err
+	}
+
+	if m != nil {
+		m.mu.Lock()
+		m.configs = append(m.configs, configRead{scopes: slices.Clone(scopes), cfg: cloneConfig(cfg)})
+		m.mu.Unlock()
+	}
+
+	return cfg, nil
+}
+
+// cloneConfig returns a copy of cfg with lists of its own.
+func cloneConfig(cfg Config) Config {
+	return Config{
+		Gates: slices.Clone(cfg.Gates), AccessLimits: slices.Clone(cfg.AccessLimits),
+		ApprovalRules: slices.Clone(cfg.ApprovalRules), OwnershipRules: slices.Clone(cfg.OwnershipRules),
+		PathSets: slices.Clone(cfg.PathSets), ApprovalDefaults: slices.Clone(cfg.ApprovalDefaults),
+		CarryOver: slices.Clone(cfg.CarryOver),
+	}
+}
+
+// unitOf reads the facts of unit from the memo or from the source. It returns
+// known false for a unit that the source does not know, and the error of the
+// source wrapped with ErrUnavailable. A unit that the source does not know
+// stays unknown for the call, so a lenient read of it never hides it from a
+// strict read in the same call.
+func (s *Service) unitOf(ctx context.Context, unit identity.Object) (unitRead, error) {
+	m := memoOf(ctx)
+	if m != nil {
+		m.mu.Lock()
+		read, ok := m.units[unit.String()]
 		m.mu.Unlock()
 
 		if ok {
-			return name, nil
+			return cloneUnitRead(read), nil
 		}
 	}
 
-	name, err := s.members.Collection(ctx, unit)
-	if errors.Is(err, ErrNotFound) {
-		name, err = "", nil
+	info, err := s.units.Unit(ctx, unit)
+
+	var read unitRead
+
+	switch {
+	case errors.Is(err, ErrNotFound):
+		read = unitRead{info: UnitInfo{Collection: "", Labels: []string{}}, known: false}
+	case err != nil:
+		return unitRead{}, fmt.Errorf("%w: facts of %s: %w", ErrUnavailable, unit, err)
+	default:
+		if info.Labels == nil {
+			info.Labels = []string{}
+		}
+
+		read = unitRead{info: info, known: true}
 	}
 
-	if err != nil {
-		return "", fmt.Errorf("%w: collection of %s: %w", ErrUnavailable, unit, err)
-	}
-
-	if m := memoOf(ctx); m != nil {
+	if m != nil {
 		m.mu.Lock()
-		m.collections[unit.String()] = name
+		m.units[unit.String()] = cloneUnitRead(read)
 		m.mu.Unlock()
 	}
 
-	return name, nil
+	return read, nil
+}
+
+// cloneUnitRead returns a copy of r with a label list of its own.
+func cloneUnitRead(r unitRead) unitRead {
+	r.info.Labels = slices.Clone(r.info.Labels)
+
+	return r
+}
+
+// collectionOf returns the collection of unit, or the empty name for a unit
+// in no collection and for a unit that the source does not know.
+func (s *Service) collectionOf(ctx context.Context, unit identity.Object) (collection.Name, error) {
+	read, err := s.unitOf(ctx, unit)
+	if err != nil {
+		return "", fmt.Errorf("collection of %s: %w", unit, err)
+	}
+
+	return read.info.Collection, nil
 }
 
 // labelsOf returns the labels of unit, or none for an unknown unit.
 func (s *Service) labelsOf(ctx context.Context, unit identity.Object) ([]string, error) {
-	labels, err := s.fetchLabels(ctx, unit)
-	if errors.Is(err, ErrNotFound) {
-		return []string{}, nil
-	}
-
+	read, err := s.unitOf(ctx, unit)
 	if err != nil {
-		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, err)
+		return nil, fmt.Errorf("labels of %s: %w", unit, err)
 	}
 
-	return labels, nil
+	return read.info.Labels, nil
 }
 
 // labelsOfKnown returns the labels of a unit that must exist. A unit that the
 // source does not know fails closed with ErrUnavailable, and never reads as a
 // unit with no labels.
 func (s *Service) labelsOfKnown(ctx context.Context, unit identity.Object) ([]string, error) {
-	labels, err := s.fetchLabels(ctx, unit)
+	read, err := s.unitOf(ctx, unit)
 	if err != nil {
-		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, err)
+		return nil, fmt.Errorf("labels of %s: %w", unit, err)
 	}
 
-	return labels, nil
-}
-
-// fetchLabels reads the labels of unit from the memo or from the source. It
-// returns the error of the source as it is, ErrNotFound included. It keeps only
-// labels of a unit that exists, so that a lenient read of an unknown unit never
-// hides the unit from a strict read in the same call.
-func (s *Service) fetchLabels(ctx context.Context, unit identity.Object) ([]string, error) {
-	if m := memoOf(ctx); m != nil {
-		m.mu.Lock()
-		labels, ok := m.labels[unit.String()]
-		m.mu.Unlock()
-
-		if ok {
-			return labels, nil
-		}
+	if !read.known {
+		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, ErrNotFound)
 	}
 
-	labels, err := s.units.Labels(ctx, unit)
-	if err != nil {
-		return nil, err
-	}
-
-	if labels == nil {
-		labels = []string{}
-	}
-
-	if m := memoOf(ctx); m != nil {
-		m.mu.Lock()
-		m.labels[unit.String()] = labels
-		m.mu.Unlock()
-	}
-
-	return labels, nil
+	return read.info.Labels, nil
 }
 
 // digestOf returns the SHA-256 of the JSON form of doc, in lowercase hex.

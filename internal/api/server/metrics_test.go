@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -68,12 +69,15 @@ func newMetricsHandler(
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -102,6 +106,7 @@ func newMetricsHandler(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

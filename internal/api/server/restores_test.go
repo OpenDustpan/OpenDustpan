@@ -14,6 +14,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -147,12 +148,15 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          workers,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -181,6 +185,7 @@ func newRestoreFixtureWorkers(
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -377,8 +382,8 @@ func (g *gatedRestoreTarget) Delete(ctx context.Context, key blob.Key) error {
 	return g.inner.Delete(ctx, key)
 }
 
-func (g *gatedRestoreTarget) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return g.inner.List(ctx, prefix)
+func (g *gatedRestoreTarget) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return g.inner.ListPage(ctx, req)
 }
 
 func (g *gatedRestoreTarget) Ping(ctx context.Context) error {
@@ -614,12 +619,15 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -650,6 +658,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -828,12 +837,15 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -862,6 +874,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -896,11 +909,11 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables will be replaced"},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables kept",
+			want: "access tables will be kept",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -969,12 +982,15 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,
@@ -1003,6 +1019,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1101,12 +1118,15 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
 		Now:              nil,
 		CheckpointEpochs: nil,
@@ -1135,6 +1155,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		SessionPolicy:    nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

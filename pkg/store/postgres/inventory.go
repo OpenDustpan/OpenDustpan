@@ -276,7 +276,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 
 	// One REPEATABLE READ snapshot for the count and the page, so the total
 	// agrees with the rows.
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.txs, s.snapshotOptions(), func(tx pgx.Tx) error {
 		var readErr error
 
 		page, readErr = queryDeletedPage(ctx, tx, q)
@@ -586,6 +586,7 @@ func inventoryEntry(row db.ListInventoryRow) inventory.Entry {
 		Status:        row.Status,
 		ResourceCount: count,
 		Lock:          inventoryLock(row),
+		LastRelease:   inventoryLastRelease(row),
 		ManualLock:    inventoryManualFlag(row),
 		Collection:    row.Collection,
 		Labels:        nil,
@@ -630,16 +631,12 @@ func (s *Store) GetDeletedUnitFacts(
 ) (inventory.DeletedFacts, error) {
 	// One snapshot, so that the entry, the collection and the labels come from
 	// the same state of the database.
-	tx, err := s.pool.BeginTx(ctx, s.snapshotOptions())
+	tx, err := s.txs.BeginTx(ctx, s.snapshotOptions())
 	if err != nil {
 		return inventory.DeletedFacts{}, fmt.Errorf("begin read transaction: %w", err)
 	}
 
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			_ = rollbackErr
-		}
-	}()
+	defer rollbackRead(ctx, tx)
 
 	q := s.queries.WithTx(tx)
 
@@ -668,4 +665,25 @@ func (s *Store) GetDeletedUnitFacts(
 	}
 
 	return facts, nil
+}
+
+// inventoryLastRelease converts the last release columns of an inventory row
+// into a domain record, or nil when the unit has none. A kind that is not a
+// release kind gives no record.
+//
+// Defense in depth: the CHECK of the column refuses such a kind at each write,
+// and a restore refuses it before the copy. This check stays so that a row
+// that skips both still reads as no record.
+func inventoryLastRelease(row db.ListInventoryRow) *inventory.LastRelease {
+	if !workspace.ReleaseKind(row.LastReleaseKind).Valid() {
+		return nil
+	}
+
+	return &inventory.LastRelease{
+		At:     codec.FromOptionalMillis(row.LastReleaseAtMs),
+		LockID: row.LastReleaseLockID,
+		Holder: row.LastReleaseHolder,
+		By:     row.LastReleaseBy,
+		Kind:   row.LastReleaseKind,
+	}
 }

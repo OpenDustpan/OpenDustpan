@@ -191,6 +191,10 @@ var secretSettings = []*Setting{
 	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE"),
 	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET"),
 	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET_FILE"),
+	mustEnv("DUSTPAN_AUDIT_OTLP_HEADERS"),
+	mustEnv("DUSTPAN_AUDIT_OTLP_HEADERS_FILE"),
+	mustEnv("DUSTPAN_LOG_OTLP_HEADERS"),
+	mustEnv("DUSTPAN_LOG_OTLP_HEADERS_FILE"),
 }
 
 // mustEnv answers the declaration of the environment variable. It panics
@@ -315,6 +319,7 @@ func clientRows() []clientRow {
 		{"opendustpan backup", BackupCommand(nil)},
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},
+		{"opendustpan store check --target <blobs|backup>", StoreCheckCommand(nil)},
 		{"opendustpan upgrade check", UpgradeCheckCommand(nil)},
 		{"opendustpan audit-chain status", AuditChainStatusCommand(nil)},
 		{"opendustpan audit-chain approve", AuditChainApproveCommand(nil)},

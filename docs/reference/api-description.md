@@ -29,7 +29,7 @@ namespace, no setting and no secret.
 | Part | Value |
 | --- | --- |
 | `openapi` | `3.1.0` |
-| `info.version` | The version of the description, for example `0.2.1`. It is not the version of the server. It changes when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
+| `info.version` | The version of the description, for example `0.2.1`. It is not the version of the server. Until the first release, it stays at one value when the description changes. It is valid as a SemVer version and as a PEP 440 version. |
 | `servers` | One relative server, `/` |
 
 The document uses the part of OpenAPI 3.1.0 that maps one to one to 3.0.3, so
@@ -203,46 +203,40 @@ To write the checked-in file again after a change of the routes, run:
 go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
 ```
 
-## Change the version of the description
+## The version of the description
 
-`info.version` changes with every change of the description. A test in
-`internal/api/apidesc` keeps the file `openapi.pin`. The file holds the
-`info.version` and the SHA-256 of the last committed description. The test
-fails when the bytes of the description differ from the pin and the version
-is the same. It also fails when the version differs and the bytes are the
-same, and when the version does not rise.
+Until the first release, `info.version` stays at one value. A change of the
+description does not change it. Before 1.0, the tool-neutral API under
+`/api/dustpan/v1` can change in a way that breaks a client, and its path and
+its version stay the same. The release notes list each break.
+
+The test of `openapi.pin` in `internal/api/apidesc` is disabled until the
+first release. The file stays in the tree. At the first release, the release
+sets `DocumentVersion`, writes the pin again and turns the test on again:
+
+```sh
+go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
+```
 
 After a change of the routes, a contributor does these steps:
 
-1. Raise `DocumentVersion` in `internal/api/apidesc/document.go`. The new
-   version must be higher than the version in `openapi.pin`.
-2. Write the description again:
+1. Write the description again:
 
    ```sh
    go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description
    ```
 
-3. Write the pin again. The command refuses to write the pin when the version
-   did not rise:
+2. Write the generated clients and the golden files again:
 
    ```sh
-   go test ./internal/api/apidesc -run TestVersionFollowsTheDescription -update-description-pin
-   ```
-
-4. Write the golden files of the Go client again. Do this for every change of
-   the version, a patch change too, because the generated files and the
-   metadata of the client hold the full version of the description. Only the
-   major and minor parts of the client version come from the description:
-
-   ```sh
+   make clients-generate
    go test ./internal/clientgen/golang -run TestRenderGolden -update
    ```
 
-Commit `document.go`, `openapi.json`, `openapi.pin` and the golden files in
-the same pull request.
+`make clients-check` fails when a generated client differs from a new run on
+the description.
 
-Two pull requests that both change the description conflict on `openapi.pin`,
-because both write the two lines of the file. The pull request that merges
-second must raise the version again after it merges `main`. Keep the pin of
-`main` in the conflict, raise `DocumentVersion` above it, and do steps 2 to 4
-again.
+Commit `openapi.json`, the generated clients and the golden files in the same
+pull request. When two pull requests change the description, a merge of the
+second can conflict in these generated files. Do not resolve such a conflict
+by hand: take either side, then do steps 1 and 2 again on the merged code.

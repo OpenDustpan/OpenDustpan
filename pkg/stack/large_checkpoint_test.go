@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
@@ -90,6 +92,8 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	blobs := newMemBlob(clk)
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             secrettest.NewMemorySealer(),
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,

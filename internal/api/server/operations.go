@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -13,6 +14,7 @@ const (
 	tagApprovals   = "approvals"
 	tagPreferences = "preferences"
 	tagGitHostLink = "git-host-links"
+	tagSettings    = "settings"
 )
 
 // operationLabels names the routes of this adapter that sit under
@@ -55,7 +57,11 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities").
-		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities")),
+		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities",
+			apidesc.Named[stateWriteGatesBody]("StateWriteGates"),
+			apidesc.DeclareOpenEnum[stategate.Mode]("StateWriteGatesMode",
+				string(stategate.ModeOn), string(stategate.ModeOff)),
+			apidesc.DeclareOpenEnum[stategate.WritePath]("StateWritePath", writePaths()...))),
 	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
 		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
 	apidesc.Pattern(http.MethodPost, gitHostLinkRequestsPath): apidesc.Name("startGitHostLinkRequest", tagGitHostLink).
@@ -107,6 +113,24 @@ var operationLabels = map[string]apidesc.Label{
 		WithBodies(apidesc.Typed[updatePreferencesRequest](
 			"UpdatePreferencesRequest", apidesc.Named[terminalSchemesPatchRequest]("TerminalSchemesPatch"),
 		), preferencesSchema),
+	apidesc.Pattern(http.MethodGet, settingsPath): apidesc.Name("getSettings", tagSettings).
+		WithETag().
+		On(apidesc.KindServer).
+		WithBodies(apidesc.NoBody, settingsSchema),
+	apidesc.Pattern(http.MethodPatch, settingsPath): apidesc.Name("updateSettings", tagSettings).
+		WithIfMatchRequired().
+		WithETag().
+		On(apidesc.KindServer).
+		WithBodies(settingsPatchSchema, settingsSchema),
+	apidesc.Pattern(http.MethodGet, namespaceSettingsPath): apidesc.Name("getNamespaceSettings", tagSettings).
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, settingsSchema),
+	apidesc.Pattern(http.MethodPatch, namespaceSettingsPath): apidesc.Name("updateNamespaceSettings", tagSettings).
+		WithIfMatchRequired().
+		WithETag().
+		On(apidesc.KindNamespace).
+		WithBodies(settingsPatchSchema, settingsSchema),
 }
 
 // The bodies that several routes share. The types of the bodies are the types
@@ -123,6 +147,10 @@ var (
 	preferencesSchema  = apidesc.Typed[preferencesResponse](
 		"Preferences", apidesc.Named[terminalSchemesResponse]("TerminalSchemes"),
 	)
+	settingsSchema = apidesc.Typed[settingsBody](
+		"Settings", apidesc.Named[settingBody]("Setting"), settingValueSchema,
+	)
+	settingsPatchSchema = apidesc.Typed[settingsPatchRequest]("UpdateSettingsRequest", settingValueSchema)
 )
 
 // Operations returns the routes of this adapter that the description of the
@@ -152,11 +180,16 @@ func (h *Handler) Operations() []apidesc.Operation {
 //nolint:gochecknoglobals // A fixed table, built once from the two tables above.
 var allLabels = joinLabels()
 
-// joinLabels returns one table with the labels of operationLabels and of
-// gitHostOperationLabels.
+// joinLabels returns one table with the labels of operationLabels, of
+// gitHostOperationLabels, of the gate and access limit routes and of
+// storeCheckOperationLabels.
 func joinLabels() map[string]apidesc.Label {
 	labels := maps.Clone(operationLabels)
 	maps.Copy(labels, gitHostOperationLabels)
+	maps.Copy(labels, gateObjectLabels())
+	maps.Copy(labels, storeCheckOperationLabels())
+	maps.Copy(labels, localUserOperationLabels())
+	maps.Copy(labels, passkeyOperationLabels())
 
 	return labels
 }
@@ -181,4 +214,17 @@ func actionNames(actions []identity.Action) []string {
 // userAgent returns the User-Agent header of a request, for the audit record.
 func userAgent(r *http.Request) string {
 	return apidesc.Header(r, "User-Agent")
+}
+
+// writePaths returns the names of every write path of the state.write gates,
+// the values of the enum StateWritePath.
+func writePaths() []string {
+	all := append(stategate.CheckedPaths(), stategate.UncheckedPaths()...)
+	out := make([]string, 0, len(all))
+
+	for _, p := range all {
+		out = append(out, string(p))
+	}
+
+	return out
 }

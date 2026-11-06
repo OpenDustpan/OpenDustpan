@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -76,6 +78,9 @@ type accessFixture struct {
 	store    *sqlite.Store
 	sessions *session.Sessions
 	handler  testHandler
+	// passwords is the password budget of the handler: it counts each
+	// failure of a password or code check.
+	passwords *fakeLimiter
 }
 
 // newAccessFixture builds a handler whose authorizer and access service
@@ -100,7 +105,30 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureLinks(t, entries, noGitHostLinks)
+	return newAccessFixtureFull(t, entries, nil)
+}
+
+// newAccessFixtureFull builds the fixture of newAccessFixtureWith with the
+// passkey service passkeys. With nil, the handler gets a real passkey service
+// over the store.
+func newAccessFixtureFull(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureSignIn(t, entries, passkeys, nil)
+}
+
+// newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
+// tweak change the console sign-in before the handler reads it. With nil, the
+// sign-in stays as it is.
+func newAccessFixtureSignIn(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+	tweak func(in *apiserver.SignIn, st *sqlite.Store),
+) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, entries, passkeys, tweak, noGitHostLinks)
 }
 
 // noGitHostLinks gives no link service: the routes of the links are not mounted.
@@ -119,7 +147,22 @@ func newAccessFixtureLinks(
 ) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureAll(t, entries, nil, nil, links)
+}
+
+// newAccessFixtureAll builds the fixture with the passkey service passkeys, the
+// sign-in change tweak and the link service that links gives for the store.
+func newAccessFixtureAll(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+	tweak func(in *apiserver.SignIn, st *sqlite.Store), links func(*sqlite.Store) *forgelink.Service,
+) accessFixture {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+
+	if passkeys == nil {
+		passkeys = newRoutePasskeys(t, st)
+	}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
@@ -175,13 +218,28 @@ func newAccessFixtureLinks(
 		t.Fatalf("sessions: %v", err)
 	}
 
+	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
+
+	signIn := &apiserver.SignIn{
+		Service:      newTestSignInService(t, st, sessions, principals),
+		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
+		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
+		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+	}
+	if tweak != nil {
+		tweak(signIn, st)
+	}
+
 	handler, err := newCheckedHandler(t, apiserver.Config{
+		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		GitHostLinks:     links(st),
+		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,
 		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
@@ -206,19 +264,17 @@ func newAccessFixtureLinks(
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn: &apiserver.SignIn{
-			OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-			Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil,
-		},
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
+		StoreChecks:      nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, sessions: sessions, handler: handler}
+	f := accessFixture{store: st, sessions: sessions, handler: handler, passwords: passwords}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())

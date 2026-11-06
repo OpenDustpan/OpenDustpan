@@ -400,3 +400,99 @@ func TestPublishRefusesAKeyRemovedBeforeTheCommit(t *testing.T) {
 		t.Fatalf("Release after the refused publish = %v, want ErrNotFound", getErr)
 	}
 }
+
+// existingRow is one scenario of TestPublishOfAnExistingVersionWritesNoContentKey.
+type existingRow struct {
+	name string
+	// second stages the request of the second publish of version 1.0.0.
+	second func(t *testing.T, e *env, sg pgpfixture.Signer, first *set) service.PublishRequest
+	// want is the error of the second publish, or nil when it must succeed.
+	want error
+}
+
+// TestPublishOfAnExistingVersionWritesNoContentKey holds the rule that a publish
+// of a version that exists with other content copies no file to a content key.
+// Each row is one scenario. The refused publish leaves the content keys and the
+// staging directory as they were before it.
+func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
+	t.Parallel()
+
+	rows := []existingRow{
+		{
+			name: "other archive bytes",
+			second: func(t *testing.T, e *env, sg pgpfixture.Signer, _ *set) service.PublishRequest {
+				t.Helper()
+
+				other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
+				other.archives[other.order[0]] = []byte("other bytes")
+				other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
+				other.sig = sg.Detach(t, other.sums)
+
+				return e.stage(t, acme, other)
+			},
+			want: registry.ErrVersionExists,
+		},
+		{
+			name: "other protocols",
+			second: func(t *testing.T, e *env, _ pgpfixture.Signer, first *set) service.PublishRequest {
+				t.Helper()
+
+				req := e.stage(t, acme, first)
+				req.Protocols = []string{"6.0"}
+
+				return req
+			},
+			want: registry.ErrVersionExists,
+		},
+		{
+			name: "same content",
+			second: func(t *testing.T, e *env, _ pgpfixture.Signer, first *set) service.PublishRequest {
+				t.Helper()
+
+				return e.stage(t, acme, first)
+			},
+			want: nil,
+		},
+	}
+
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkExistingVersion(t, tc)
+		})
+	}
+}
+
+// checkExistingVersion publishes version 1.0.0, runs the second publish of tc,
+// and checks its error and the content keys and staging files after it.
+func checkExistingVersion(t *testing.T, tc existingRow) {
+	t.Helper()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	first := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
+	if _, err := e.publish(t, acme, first); err != nil {
+		t.Fatalf("first Publish: %v", err)
+	}
+
+	before := e.listing(t, e.ids[acme], "sha256")
+
+	_, err := e.svc.Publish(t.Context(), e.caller, tc.second(t, e, sg, first))
+	if tc.want == nil && err != nil {
+		t.Fatalf("second Publish = %v, want no error", err)
+	}
+
+	if tc.want != nil && !errors.Is(err, tc.want) {
+		t.Fatalf("second Publish = %v, want %v", err, tc.want)
+	}
+
+	if got := e.listing(t, e.ids[acme], "sha256"); !slices.Equal(got, before) {
+		t.Fatalf("content keys after the second publish = %v, want %v", got, before)
+	}
+
+	if got := e.listing(t, e.ids[acme], "staging"); len(got) != 0 {
+		t.Fatalf("staged files left: %v", got)
+	}
+}

@@ -27,3 +27,20 @@ func TestInstanceConformance(t *testing.T) {
 		return open(t, base)
 	})
 }
+
+func TestStoreCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunStoreChecks(t, func(t *testing.T) storetest.StoreCheckStore {
+		t.Helper()
+
+		st := open(t, base)
+
+		return storetest.StoreCheckStore{Records: st, Ops: st.DurableOperationsPort()}
+	})
+}

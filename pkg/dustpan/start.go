@@ -33,10 +33,11 @@ func newStartState() *startState {
 // the check of the key-encryption key against every wrapped key in the
 // database, the failure of every backup and restore that was running when the
 // server stopped (with the fence of the namespaces after a restore that
-// stopped), the check of the audit chain and the binding of the sign-in
-// providers. It opens no listener. Run calls Start. A program that serves
-// Handler by itself must call Start before it serves a request: until Start
-// has succeeded, Handler answers 503 on each route except GET /health/live.
+// stopped), the check of the audit chain, the record of the effective value
+// of the state.write gates and the binding of the sign-in providers. It
+// opens no listener. Run calls Start. A program that serves Handler by itself
+// must call Start before it serves a request: until Start has succeeded,
+// Handler answers 503 on each route except GET /health/live.
 //
 // Start runs the steps once. After a Start that succeeded, Start and Run
 // return at once and do not repeat them. A Start that failed does not mark
@@ -66,6 +67,7 @@ func (s *Server) startSteps(ctx context.Context) error {
 	steps := []func(context.Context) error{
 		s.startUp,
 		s.startUpAuditChain,
+		s.recordStateWriteGates,
 		s.bindSignInProviders,
 	}
 

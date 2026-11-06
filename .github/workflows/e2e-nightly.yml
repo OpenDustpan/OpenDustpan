@@ -2,6 +2,16 @@
 # SQLite, once each night on main. The ci.yml e2e job runs the suite with the
 # in-process server. This run shows that the shipped binary works with each
 # CLI. It is slower, so pull requests do not run it.
+# The run has two jobs: "pinned" runs the pinned CLI versions and "latest" runs
+# the newest release of each CLI, which the run downloads each time. A red
+# "latest" job with a green "pinned" job means that a new CLI release changed
+# something. It does not mean that the server broke, and it does not block a
+# release.
+# Read the contract.md part of the job summary: it lists what the new release
+# reads that the newest contract file does not have.
+# The step summary shows summary.md and contract.md of the report directory.
+# The reports hold the names of the response headers and never the value of a
+# request header, so no secret reaches the summary.
 # GitHub sends the failure notification of a scheduled run to the user who
 # last changed the cron line.
 name: e2e-nightly
@@ -19,10 +29,15 @@ permissions:
 
 jobs:
   e2e-binary:
+    name: e2e-binary (${{ matrix.set }})
+    strategy:
+      # A failure of one set must not hide the result of the other.
+      fail-fast: false
+      matrix:
+        set: [ pinned, latest ]
     # A scheduled run uses the default branch. A run by hand must use it too.
     if: ${{ github.ref == 'refs/heads/main' }}
-    # The same value as the jobs of ci.yml.
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,10 +45,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The newest Go caches of the e2e job of ci.yml. This run only restores
+      # them and saves no entry of its own.
+      - name: Restore the Go caches
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-e2e-0-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-e2e-0-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-e2e-0-
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - name: Cache the CLI archives
-        if: ${{ !startsWith(runner.name, 'github-actions-runner') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/opendustpan-e2e
@@ -42,10 +68,15 @@ jobs:
         env:
           E2E_SERVER: binary
           E2E_DATABASES: sqlite
+          E2E_PULUMI_VERSIONS: ${{ matrix.set }}
+          E2E_TOFU_VERSIONS: ${{ matrix.set }}
         run: make e2e
       - name: Show the report
         if: ${{ !cancelled() }}
         run: |
           if [ -f e2e/report/summary.md ]; then
             cat e2e/report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f e2e/report/contract.md ]; then
+            cat e2e/report/contract.md >> "$GITHUB_STEP_SUMMARY"
           fi

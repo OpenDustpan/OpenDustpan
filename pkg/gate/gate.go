@@ -66,6 +66,11 @@ var (
 	// ErrNotFound reports a gate, a limit, a rule, a path set or a decision
 	// record that does not exist in the scope that the call names.
 	ErrNotFound = errors.New("gate: object not found")
+	// ErrUnitNotFound reports a write at a unit scope whose name no live
+	// unit has: the unit does not exist, or it is deleted. The configuration
+	// of a unit keys on the stable ID of the unit, so a write needs the unit.
+	// It matches ErrNotFound too.
+	ErrUnitNotFound = fmt.Errorf("%w: no live unit has the name of the scope", ErrNotFound)
 	// ErrConflict reports a write whose expected version is not the stored
 	// version.
 	ErrConflict = errors.New("the stored version changed")

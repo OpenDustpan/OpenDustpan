@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -40,7 +41,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	}
 
 	status, body := classifyProtocol(err)
-	h.logFailure(ctx, status)
+	h.logFailure(ctx, status, err)
 
 	h.logFenced(ctx, err)
 	h.logRefused(ctx, err, body.Message)
@@ -78,7 +79,13 @@ func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
 		return
 	}
 
-	h.logger.Log(ctx, refusedLevel(err), "runner request refused", slog.String("error", err.Error()))
+	if refusedLevel(err) == slog.LevelDebug {
+		h.logger.DebugContext(ctx, "runner request refused", slog.String("error", err.Error()))
+
+		return
+	}
+
+	h.logger.WarnContext(ctx, "runner request refused", slog.String("error", err.Error()))
 }
 
 // refusedLevel returns the log level of a refusal. Debug is for the errors
@@ -97,9 +104,10 @@ func refusedLevel(err error) slog.Level {
 // text, which may hold driver detail, a token or a key. Only logFenced and
 // logRefused log the text of an error, and only for an error that a case of a
 // switch knows.
-func (h *Handler) logFailure(ctx context.Context, status int) {
+func (h *Handler) logFailure(ctx context.Context, status int, err error) {
 	if status >= http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "runner request failed", slog.Int("status", status))
+		faultlog.LogServer(ctx, h.logger, "runner request failed",
+			faultlog.Fields{Status: status, Cause: faultlog.Cause(err), Code: "", Op: ""})
 	}
 }
 
@@ -114,6 +122,12 @@ const internalMessage = "internal error"
 func classifyProtocol(err error) (int, protocol.Error) {
 	mk := func(status int, code string, sentinels ...error) (int, protocol.Error) {
 		return status, protocol.Error{Code: code, Message: sentenceOf(err, sentinels), Supported: ""}
+	}
+
+	// A database that does not answer comes first: the runner tries again
+	// after the Retry-After time, whatever else the error wraps.
+	if errors.Is(err, namespace.ErrUnavailable) {
+		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrUnavailable)
 	}
 
 	switch {
@@ -154,19 +168,26 @@ func classifyProtocolOther(
 	err error, mk func(status int, code string, sentinels ...error) (int, protocol.Error),
 ) (int, protocol.Error) {
 	switch {
-	case errors.Is(err, runner.ErrClaimLost), errors.Is(err, durable.ErrClaimLost):
-		return mk(http.StatusConflict, protocol.ErrorClaimLost, runner.ErrClaimLost, durable.ErrClaimLost)
+	case errors.Is(err, runner.ErrClaimLost), errors.Is(err, durable.ErrClaimLost), errors.Is(err, job.ErrClaimLost):
+		return mk(
+			http.StatusConflict, protocol.ErrorClaimLost, runner.ErrClaimLost, durable.ErrClaimLost, job.ErrClaimLost,
+		)
 	case errors.Is(err, job.ErrCanceled), errors.Is(err, durable.ErrCanceled):
 		return mk(http.StatusConflict, protocol.ErrorCanceled, job.ErrCanceled, durable.ErrCanceled)
-	case errors.Is(err, runner.ErrConflict), errors.Is(err, runner.ErrRunnerOnline):
-		return mk(http.StatusConflict, protocol.ErrorConflict, runner.ErrConflict, runner.ErrRunnerOnline)
-	case errors.Is(err, runner.ErrNotFound), errors.Is(err, durable.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
+	case errors.Is(err, runner.ErrConflict), errors.Is(err, runner.ErrRunnerOnline), errors.Is(err, job.ErrConflict),
+		errors.Is(err, durable.ErrStepDone):
+		return mk(
+			http.StatusConflict, protocol.ErrorConflict,
+			job.ErrLogDiffers, runner.ErrConflict, runner.ErrRunnerOnline, job.ErrConflict, durable.ErrStepDone,
+		)
+	case errors.Is(err, runner.ErrNotFound), errors.Is(err, durable.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
+		errors.Is(err, job.ErrNotFound):
 		return mk(
 			http.StatusNotFound, protocol.ErrorNotFound,
-			runner.ErrNotFound, durable.ErrNotFound, namespace.ErrNotFound,
+			runner.ErrNotFound, durable.ErrNotFound, namespace.ErrNotFound, job.ErrNotFound,
 		)
-	case errors.Is(err, runner.ErrInvalid), errors.Is(err, errBadBody):
-		return mk(http.StatusBadRequest, protocol.ErrorInvalid, runner.ErrInvalid, errBadBody)
+	case errors.Is(err, runner.ErrInvalid), errors.Is(err, job.ErrInvalid), errors.Is(err, errBadBody):
+		return mk(http.StatusBadRequest, protocol.ErrorInvalid, runner.ErrInvalid, job.ErrInvalid, errBadBody)
 	case errors.Is(err, runner.ErrLimit):
 		return mk(http.StatusTooManyRequests, protocol.ErrorRateLimited, runner.ErrLimit)
 	case errors.Is(err, namespace.ErrFenced):

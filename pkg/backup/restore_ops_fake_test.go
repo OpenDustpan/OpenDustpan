@@ -159,6 +159,15 @@ func (l *restoreServiceLive) ConfirmRestoreMaintenance(
 	return entered, l.recordFence(ctx, f, id, result)
 }
 
+// CheckRestoreFence implements backup.RestoreOperations.
+func (l *restoreServiceLive) CheckRestoreFence(ctx context.Context, f durable.StepFence, id backup.RestoreID) error {
+	if err := l.checkFence(ctx, f, id); err != nil {
+		return err
+	}
+
+	return l.requireRunning(ctx, id)
+}
+
 // RecordRestoreEvent implements backup.RestoreOperations.
 func (l *restoreServiceLive) RecordRestoreEvent(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, object string,
@@ -220,9 +229,17 @@ func (l *restoreServiceLive) RestoreMaintenanceEntered(ctx context.Context, id b
 
 // MarkRestoreApplying implements backup.RestoreOperations.
 func (l *restoreServiceLive) MarkRestoreApplying(
-	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID,
+	ctx context.Context, f durable.StepFence, id backup.RestoreID, pre backup.ID, result []byte,
 ) error {
-	if err := l.recordFence(ctx, f, id, nil); err != nil {
+	l.mu.Lock()
+	hook := l.onApplying
+	l.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
+
+	if err := l.recordFence(ctx, f, id, result); err != nil {
 		return err
 	}
 
@@ -351,6 +368,10 @@ func (l *restoreServiceLive) StageRestore(
 		return backup.Summary{}, none, err
 	}
 
+	l.mu.Lock()
+	l.staged = append(l.staged, in)
+	l.mu.Unlock()
+
 	sum, err := l.StagePortable(ctx, in.Open, in.Want, in.Files, in.Options)
 	if err != nil {
 		return backup.Summary{}, none, err
@@ -367,9 +388,32 @@ func (l *restoreServiceLive) StageRestore(
 
 	l.mu.Lock()
 	l.areas = append(l.areas, a)
+	after := l.afterStage
+	sum.Blobs = append(slices.Clone(sum.Blobs), l.stageBlobs...)
 	l.mu.Unlock()
 
+	if after != nil {
+		after()
+	}
+
 	return sum, report, nil
+}
+
+// DropStagedIssuerKeys implements backup.RestoreStaging. It records the
+// installation that it got, and answers the report of the test.
+func (l *restoreServiceLive) DropStagedIssuerKeys(
+	_ context.Context, a backup.StagingArea, keep string,
+) ([]backup.IssuerKeysDropped, error) {
+	if _, err := backup.NewStagingArea(a.Restore, a.Token); err != nil {
+		return nil, err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.keeps = append(l.keeps, keep)
+
+	return append([]backup.IssuerKeysDropped(nil), l.dropReport...), nil
 }
 
 // applyMode says how the fake swaps a staging area.

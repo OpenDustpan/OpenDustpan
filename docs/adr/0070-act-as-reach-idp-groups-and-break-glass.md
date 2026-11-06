@@ -2,6 +2,24 @@
 
 Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210. Decisions 11, 23 and 28 superseded in part by ADR 216: the sign-in of a namespace, and support access. The fresh MFA step of decisions 16, 17 and 23 uses the window of ADR 227. Decisions 26 and 27 refined by ADR 245: the host command, its reason and its review
 
+Changed by:
+
+- ADR 142 changes decision 26: the review after use of a break-glass session.
+- ADR 142 extends decision 13: server:review-break-glass is a sensitive
+  action.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 216 changes decisions 11, 23, 24 and 28: sign-in of a namespace,
+  break-glass of a namespace, support access.
+- ADR 222 extends decisions 16, 17 and 23: the fresh step uses the one window.
+- ADR 227 extends decisions 16, 17 and 23: the fresh MFA step uses the one
+  window.
+- ADR 245 changes decisions 26 and 27: the host command, its reason and its
+  review.
+- ADR 306 changes decisions 24, 25 and 26: a site admin may disable a break-glass principal, and the rule of the sweep.
+- ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
+- ADR 320 extends decision 12: LDAP memberships have the source `ldap`. SAML, CAS and trusted-header persons have their own principal source.
+- ADR 321 extends decision 19: an LDAP sync applies a disabled entry at once. A search that misses more persons than a bound waits for a site administrator.
+
 ## Context
 
 Issue #531 showed that an access token can give its maker authority that no

@@ -9,8 +9,8 @@ created: 2026-10-10
 
 Status: discussing. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". The section "Proposal (2026-10-30)" is ready to
-accept, with two owner decisions: D6 (the words) and D10 (a preview rule
-applies).
+accept, with one owner decision: D10 (a preview rule applies). The owner
+decided D6 (the words) on 31 October 2026, and ADR 286 records it.
 
 ## Problem
 
@@ -25,15 +25,18 @@ environments; preview environments per pull request are common.
 
 ## What is decided already
 
-- `GLOSSARY.md`: **Promotion** names the operator action that makes a
-  replica installation the primary installation of a namespace.
-  **Environment** is the word of the Pulumi CLI for a profile, and is on the
-  _Avoid_ list of **Unit**, **Stack** and **Workspace**. Copy says "stack" and
-  "workspace", never "unit" (ADR 251). So this feature needs other words.
+- ADR 286: the operator action that makes a replica installation the
+  primary installation of a namespace is a **failover**, not a promotion.
+  The word **promotion** goes to this feature: a **promotion path**, to
+  **promote** and a **comparison**. The owner rejected "Lane".
+- `GLOSSARY.md`: **Environment** is the word of the Pulumi CLI for a profile,
+  and is on the _Avoid_ list of **Unit**, **Stack** and **Workspace**. Copy
+  says "stack" and "workspace", never "unit" (ADR 251). So the objects of
+  this feature are not called environments.
 - ADR 51: a collection is a named set of units that a team manages. Each
   unit is in exactly one collection. So a collection cannot also be the
   "dev" or the "prod" of a team.
-- ADR 110 to 117: a Catalog request pins a blueprint version and holds the
+- ADR 110 to 117: a self-service request pins a blueprint version and holds the
   answers. An update needs `unit:edit-inputs` on the unit and passes every
   check. A request in git changes through a write-back job.
 - ADR 41: a read of state masks each secret value. ADR 273: a read of the
@@ -94,20 +97,22 @@ order (Kargo, Patcher), and a copy of params with a diff (Massdriver).
 
 ## Proposal (2026-10-30)
 
-### Owner decision D6. The words
+### Owner decision D6. The words (decided)
 
-Recommended:
+The owner decided on 31 October 2026 (ADR 286):
 
-- **Lane**: an ordered list of 2 to 10 units of one namespace, through which
-  a change moves, for example `dev`, `staging`, `prod`.
-- **Advance**: the change that copies what one unit of a lane runs to the
-  next unit of the lane.
-- **Comparison**: the side-by-side read of two units.
+- **Promotion path**: an ordered list of 2 to 10 units of one namespace,
+  from dev to prod, along which a change moves, for example `dev`,
+  `staging`, `prod`.
+- **Promote**: the change that copies what one unit of a promotion path
+  runs to the next unit of the path. One such change is a **promotion**.
+- **Comparison**: the side-by-side read of two units, for example two steps
+  of a promotion path.
 
-Other options: "stage" (it is on the _Avoid_ list of **Phase**), "pipeline"
-(on the _Avoid_ list of **Follows trigger**), "track", "path" (a code path).
-Copy can still say "promote to production" in a sentence. The words name
-the objects of the API.
+The owner rejected "Lane", and "Advance" went with it. Other options were
+"stage" (it is on the _Avoid_ list of **Phase**), "pipeline" (on the _Avoid_
+list of **Follows trigger**) and "track". The words name the objects of the
+API.
 
 ### Decisions
 
@@ -116,7 +121,7 @@ the objects of the API.
    `namespaces/-`, in two (ADR 210 decision 4). The server checks
    `unit:read` on each unit. It answers, for each side:
    - The tool and the name.
-   - For a unit of a Catalog request: the blueprint, the version, and each
+   - For a unit of a self-service request: the blueprint, the version, and each
      answer, marked `same`, `different`, `left-only` or `right-only`.
    - The runner settings: the pool, the code location and the last commit
      that a job applied.
@@ -130,74 +135,74 @@ the objects of the API.
    A comparison is a read. It stores nothing and writes no audit entry,
    as other reads do. It never shows a secret value, and a part that the
    caller cannot read is marked `hidden`, never left out with no mark.
-2. **A lane.** A lane (`lane.Lane`, ID prefix `lan-`) has a name, a
+2. **A promotion path.** A promotion path (`promotion.Path`, ID prefix `pph-`) has a name, a
    namespace, an ordered list of members, and a kind:
-   - `catalog`: each member is the unit of a Catalog request of one
+   - `self-service`: each member is the unit of a self-service request of one
      blueprint.
    - `code`: each member is a unit with runner settings, of one tool, whose
      code locations name the same repository.
 
-   A unit is in at most one lane. A lane has 2 to 10 members. The action
-   `namespace:manage-lanes` creates, changes and deletes a lane, with an
-   audit entry. A namespace has at most 200 lanes. Each member has an
+   A unit is in at most one promotion path. A promotion path has 2 to 10 members. The action
+   `namespace:manage-promotion-paths` creates, changes and deletes a promotion path, with an
+   audit entry. A namespace has at most 200 promotion paths. Each member has an
    optional `soak`: the time that the member before it must have run its
-   last applied change before an advance takes it (default 0, shown in the
+   last applied change before a promotion takes it (default 0, shown in the
    API). This is the verification of Kargo in its smallest form.
-3. **What an advance copies.**
-   - In a `catalog` lane: the blueprint version of the member before, and
-     the answers of each input that the blueprint marks `"advance": true`.
-     Other answers stay. A new input field `advance` in the blueprint
+3. **What a promotion copies.**
+   - In a `self-service` promotion path: the blueprint version of the member before, and
+     the answers of each input that the blueprint marks `"promote": true`.
+     Other answers stay. A new input field `promote` in the blueprint
      document says this, so the platform team decides which inputs move
      (an image tag, a feature switch) and which stay per unit (a size, a
      name). Schema version 1 takes the field, because no tag shipped it
      (ADR 73). When the version changes, the answers that stay go through
      the upgrade path of RFC 111.
-   - In a `code` lane: the commit that the member before last applied. The
-     advance starts a runner job with the operation `apply` on the target,
+   - In a `code` promotion path: the commit that the member before last applied. The
+     promotion starts a runner job with the operation `apply` on the target,
      at that commit, in the code location of the target.
-4. **An advance is a normal change.** `POST .../lanes/{lane}/advances`
+4. **A promotion is a normal change.** `POST .../promotion-paths/{path}/promotions`
    takes `{"to": "<unit ID>", "reason": "..."}`. The source is always the
    member before `to`, and its last applied revision or commit. There is no
-   way to advance from another unit.
-   - In a `catalog` lane, it submits a revision of the request of the
-     target, with the origin `advance`, and needs `unit:edit-inputs` on the
-     target and `catalog:read` on the source. A request in git receives a
+   way to promote from another unit.
+   - In a `self-service` promotion path, it submits a revision of the request of the
+     target, with the origin `promotion`, and needs `unit:edit-inputs` on the
+     target and `self-service:read` on the source. A request in git receives a
      write-back job with the delivery of the request.
-   - In a `code` lane, it starts the job through `job.Service.Start`, and
+   - In a `code` promotion path, it starts the job through `job.Service.Start`, and
      needs `unit:run-apply` on the target and `unit:read` on the source.
    - Every gate of the target applies. The submit checks, the rechecks and
-     the one revision in flight of the Catalog apply.
-   - `POST .../lanes/{lane}/advance-checks` with the same body answers the
-     document or the commit that an advance would give, and its failures,
+     the one revision in flight of a self-service request apply.
+   - `POST .../promotion-paths/{path}/promotion-checks` with the same body answers the
+     document or the commit that a promotion would give, and its failures,
      and stores nothing.
 5. **A fact for gates.** The fact schemas of `change.propose`,
-   `change.planned` and `change.apply` add the group `advance` (a minor
-   version, ADR 226 decision 2): `available`, `lane`, `fromUnit`,
+   `change.planned` and `change.apply` add the group `promotion` (a minor
+   version, ADR 226 decision 2): `available`, `path`, `fromUnit`,
    `fromRevision`, `fromCommit` and `fromAppliedSeconds`. A change that is
-   not an advance has `available == false`. So a team writes the real
+   not a promotion has `available == false`. So a team writes the real
    promotion control as a gate on the production unit, for example: deny a
-   change unless `advance.available && advance.fromAppliedSeconds >= 86400`.
+   change unless `promotion.available && promotion.fromAppliedSeconds >= 86400`.
    The user documentation gives this gate as an example.
-6. **No automatic advance.** The server never advances on its own. A
+6. **No automatic promotion.** The server never promotes on its own. A
    `follows` trigger (ADR 267) can start a plan of the next unit after the
-   member before applies, and a person then asks for the advance. Kargo
+   member before applies, and a person then asks for the promotion. Kargo
    lets an admin turn on auto-promotion. That is a server-driven change, and
    the owner put such changes after Milestone 6 (issue 2037).
 7. **Answer to the open question.** The feature does not depend on RFC 4's
-   grouping of units. A comparison takes any two units. A lane is its own
+   grouping of units. A comparison takes any two units. A promotion path is its own
    small object, because a collection belongs to a team and holds the
    units of all its stages (ADR 51).
-8. **A fork.** `POST .../namespaces/{namespace}/catalog-requests/{blueprint}/{name}/forks`
+8. **A fork.** `POST .../namespaces/{namespace}/self-service-requests/{blueprint}/{name}/forks`
    takes `{"name": "...", "inputs": {...}, "destroyTime": {...}, "reason":
-   "..."}`. It submits a create of a new Catalog request of the same
+   "..."}`. It submits a create of a new self-service request of the same
    blueprint and version, with the answers of the source request and the
    answers of the body over them. It is a normal create: it needs
-   `catalog:request` on the blueprint and `catalog:read` on the source, and
+   `self-service:request` on the blueprint and `self-service:read` on the source, and
    every check of `submit` runs. The new request records `forkOf`, and the
    comparison shows it. A fork copies no secret, because no answer is
    secret (ADR 111 decision 3), and the profile comes from the blueprint.
    Massdriver forks an environment the same way, and copies secrets only on
-   request [fetched, link above]. A unit with no Catalog request cannot be
+   request [fetched, link above]. A unit with no self-service request cannot be
    forked, because its config lives in the code of the team. The answer
    names that reason.
 9. **Preview rules.** A **preview rule** (ID prefix `pvr-`) of a namespace
@@ -220,7 +225,7 @@ the objects of the API.
    `ensure: absent`. The server reads the events from the forge webhook of
    ADR 267 decision 19. Each submit runs as the last saver of the rule, as
    a trigger does (ADR 267 decision 14): the server checks the current
-   grants of the saver (`catalog:request` on the blueprint,
+   grants of the saver (`self-service:request` on the blueprint,
    `unit:edit-inputs` and `unit:request-destroy` on the fork) at each
    event, and fails closed. Every gate of the fork applies, with
    `source.kind == "forge"`. The action `namespace:manage-preview-rules`
@@ -264,33 +269,33 @@ forks that it made." Options:
 
 ### Ports
 
-- `pkg/lane`: the model, the errors, the port `lane.Store` with the suite
-  `lanetest`. Each write checks the fence and appends its audit entry. A
-  lane is namespace data, so a backup and a namespace backup hold it.
-- `lane.Advance(lane, source, target)`, a pure function that gives the new
+- `pkg/promotion`: the model, the errors, the port `promotion.Store` with
+  the suite `promotiontest`. Each write checks the fence and appends its audit entry. A
+  promotion path is namespace data, so a backup and a namespace backup hold it.
+- `promotion.Promote(path, source, target)`, a pure function that gives the new
   document or the commit and each failure, with a table-driven test.
 - `internal/comparison`: the read of two units over the inventory, the
-  Catalog store, the runner settings, the profiles and the masked output
+  Self-service store, the runner settings, the profiles and the masked output
   read. It needs no new port.
-- The producer of the fact group `advance` in `pkg/gate` (ADR 226 decision
+- The producer of the fact group `promotion` in `pkg/gate` (ADR 226 decision
   12), with its conformance cases.
 
 ### End-to-end steps (real CLIs)
 
 1. Publish an OpenTofu blueprint and a Pulumi blueprint with the inputs
-   `imageTag` (`"advance": true`) and `size`. Submit `dev` and `prod` requests
+   `imageTag` (`"promote": true`) and `size`. Submit `dev` and `prod` requests
    of each in the home `opendustpan`, with different sizes, and apply.
-2. Make a `catalog` lane for each blueprint: `dev`, then `prod`.
+2. Make a `self-service` promotion path for each blueprint: `dev`, then `prod`.
 3. Submit a new `imageTag` to `dev`, and apply. Read the comparison of `dev`
    and `prod`: `imageTag` is `different`, `size` is `different`, the version
    is `same`.
-4. Save a gate on `prod` that denies a change unless `advance.available`.
+4. Save a gate on `prod` that denies a change unless `promotion.available`.
    Submit an edit of `prod` by hand and see the denial.
-5. Advance to `prod`. Check that `tofu apply` and `pulumi up` ran, that
+5. Promote to `prod`. Check that `tofu apply` and `pulumi up` ran, that
    `imageTag` is the value of `dev`, and that `size` kept the value of
    `prod`.
-6. Make a `code` lane of two OpenTofu units on one repository. Apply a new
-   commit on the first, advance, and check that the second applied that
+6. Make a `code` promotion path of two OpenTofu units on one repository. Apply a new
+   commit on the first, promote, and check that the second applied that
    commit.
 7. Fork the `dev` request of each tool with one changed answer, and check
    the new unit, its answers and its `forkOf`.
@@ -301,22 +306,22 @@ forks that it made." Options:
 
 ### Security tests (ADR 250)
 
-1. **Boundary.** A lane with 1 or 11 members, a member twice, a unit of
-   another namespace, units of two blueprints in a `catalog` lane, two
-   repositories in a `code` lane, and an advance `to` the first member.
-2. **Contain.** An advanced answer is data only in the render (ADR 110
-   decision 8). The commit of a `code` advance is a full commit ID from the
+1. **Boundary.** A promotion path with 1 or 11 members, a member twice, a unit of
+   another namespace, units of two blueprints in a `self-service` promotion path, two
+   repositories in a `code` promotion path, and a promotion `to` the first member.
+2. **Contain.** A promoted answer is data only in the render (ADR 110
+   decision 8). The commit of a `code` promotion is a full commit ID from the
    job record, never from the request body.
-3. **Limit.** 201 lanes in a namespace, and a comparison of two units with
+3. **Limit.** 201 promotion paths in a namespace, and a comparison of two units with
    10,000 outputs each, which the server cuts with a mark.
-4. **Authorize at use.** An advance with `unit:edit-inputs` on the target and
+4. **Authorize at use.** A promotion with `unit:edit-inputs` on the target and
    no read on the source. A comparison where the caller can read one unit
    only: the answer is a 404, never a partial answer. The 404 is for a
    whole unit that the caller cannot read. The mark `hidden` of decision 1
    is for a part of a unit that the caller can read, for example the
    output values: with `unit:read-outputs` on one side only, both sides
    are `hidden`.
-   A preview rule whose saver lost `catalog:request` makes no fork. A
+   A preview rule whose saver lost `self-service:request` makes no fork. A
    review request whose head repository has another forge ID than the
    repository of the rule makes no fork: a test calls the preview service
    with such an event directly, with the webhook filter of ADR 267
@@ -324,8 +329,8 @@ forks that it made." Options:
    name and another ID, and a head with no ID. A fork
    that names a source request that the caller cannot read is a 404.
 5. **Fail closed.** A source with no applied revision, or under its `soak`,
-   refuses the advance with the reason. A fact producer that fails gives
-   `advance.available == false`, and a gate that reads it denies.
+   refuses the promotion with the reason. A fact producer that fails gives
+   `promotion.available == false`, and a gate that reads it denies.
 
 ### Work items
 
@@ -333,37 +338,27 @@ Sizes and conflict groups as in RFC 111.
 
 | ID | Item | Size | Conflict group | Depends on |
 | --- | --- | --- | --- | --- |
-| P1 | `internal/comparison` and its route | M | `api-units` | M6-2, Catalog routes |
-| P2 | `pkg/lane`: model, `lane.Store`, `lanetest`, `lane.Advance` | M | `lane` | none |
-| P3 | SQLite and PostgreSQL adapters of `lane.Store`, one migration each, the backup table list | M | `store-migrations` | P2 |
-| P4 | The input field `advance` of a blueprint, and the advance of a `catalog` lane | M | `catalog-core` | P3, B1 |
-| P5 | The advance of a `code` lane, the routes, the action `namespace:manage-lanes`, and the fact group `advance` | M | `gate-facts`, `identity-actions` | P3, the job model start of a runner apply |
-| P6 | The e2e steps above, and the docs page "Compare, fork and advance stacks and workspaces" | M | `e2e`, `docs` | P1, P4, P5, P7, P8 |
-| P7 | The fork route and `forkOf` | S | `catalog-core`, `store-migrations` | M6-2, Catalog routes |
+| P1 | `internal/comparison` and its route | M | `api-units` | M6-2, Self-service routes |
+| P2 | `pkg/promotion`: model, `promotion.Store`, `promotiontest`, `promotion.Promote` | M | `promotion` | none |
+| P3 | SQLite and PostgreSQL adapters of `promotion.Store`, one migration each, the backup table list | M | `store-migrations` | P2 |
+| P4 | The input field `promote` of a blueprint, and the promotion of a `self-service` promotion path | M | `catalog-core` | P3, B1 |
+| P5 | The promotion of a `code` promotion path, the routes, the action `namespace:manage-promotion-paths`, and the fact group `promotion` | M | `gate-facts`, `identity-actions` | P3, the job model start of a runner apply |
+| P6 | The e2e steps above, and the docs page "Compare, fork and promote stacks and workspaces" | M | `e2e`, `docs` | P1, P4, P5, P7, P8 |
+| P7 | The fork route and `forkOf` | S | `catalog-core`, `store-migrations` | M6-2, Self-service routes |
 | P8 | Preview rules: the store, its suite and adapters, the events of the forge webhook, the saver check, the limits, `preview.skipped`, the action (after D10) | L | `preview`, `store-migrations`, `identity-actions` | P7, E3 of RFC 43, the review-request webhook of ADR 267 |
 
 Order: P1, P2 and P7 in parallel, then P3, then P4, P5 and P8, then P6.
 
-### Proposed glossary lines (if the owner takes the words of D6)
+### Glossary lines
 
-**Lane**:
-An ordered list of 2 to 10 units of one namespace, through which a change
-moves, for example from a test stack to a production stack (RFC 55). A unit
-is in at most one lane.
-_Avoid_: Environment (that is a profile of the Pulumi CLI), pipeline, stage,
-promotion path (a promotion is of an installation)
+`GLOSSARY.md` has **Promotion path**, **Promote** and **Comparison** (ADR
+286). Proposed line for D10:
 
 **Preview rule**:
-A rule of a namespace that makes a fork of one Catalog request for each
+A rule of a namespace that makes a fork of one self-service request for each
 open review request of one repository, and destroys the fork when the
 review request closes.
 _Avoid_: Preview environment, ephemeral environment, PR environment
-
-**Advance**:
-The change that copies the blueprint version and the marked answers, or the
-applied commit, of one unit of a lane to the next unit. It is a normal
-change of the next unit, with all its gates.
-_Avoid_: Promote (that is of an installation), deploy, sync
 
 ## Open questions
 

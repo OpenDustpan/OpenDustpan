@@ -5,13 +5,17 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/releaserecord"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 //go:embed migrations/*.sql migrations/*.sql.sha256
@@ -24,6 +28,13 @@ var frozenMigrations embed.FS
 // new numbered SQL file and its hash file in the same change.
 func TestFrozenMigrations(t *testing.T) {
 	t.Parallel()
+
+	// Off until the release record lists a shipped migration. Until then the
+	// schema of each dialect is one baseline file, and a change to the schema
+	// edits it in place.
+	if why := currentRecord(t).Off("TestFrozenMigrations"); why != "" {
+		t.Skip(why)
+	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
 	if err != nil {
@@ -142,6 +153,41 @@ func checkTagDir(t *testing.T, dir string) {
 			}
 		}
 	}
+
+	copies, countErr := countTagCopies(dir)
+	if countErr != nil {
+		t.Fatal(countErr)
+	}
+
+	if copies == 0 {
+		t.Errorf(
+			"tag migration dir %s holds no .sql copy: run scripts/copy-tag-migrations.sh <tag>",
+			dir,
+		)
+	}
+}
+
+// countTagCopies returns the number of regular files in dir whose name ends in
+// .sql. A hash file (NAME.sql.sha256) and a subdirectory do not count.
+func countTagCopies(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("read tag migration dir %s: %w", dir, err)
+	}
+
+	count := 0
+
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+
+		if strings.HasSuffix(entry.Name(), ".sql") {
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 // checkTagCopy proves one tag migration copy matches the hash file next to it.
@@ -212,4 +258,141 @@ func readFrozenHash(t *testing.T, name string) (string, bool) {
 	}
 
 	return want, true
+}
+
+// TestMigrationFilesFollowTheRecord checks the migrations directory against
+// the release record. Before the first tag, it must hold the baseline alone.
+// After the first tag, each shipped file stays as it shipped, and a change to
+// the schema adds a new numbered file above them.
+func TestMigrationFilesFollowTheRecord(t *testing.T) {
+	t.Parallel()
+
+	all, err := migrate.Load(frozenMigrations, "migrations")
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+
+	files := make(map[string]string, len(all))
+	for _, m := range all {
+		files[m.Name] = m.SQL
+	}
+
+	for _, problem := range currentRecord(t).MigrationFiles("sqlite", schema.BaselineName, files) {
+		t.Error(problem)
+	}
+}
+
+// TestTagCopiesHaveTheirLines proves that each tag directory under
+// testdata/tag-migrations has its lines in the release record, with the
+// SHA-256 of each copy. It runs before and after the first tag.
+//
+// Defense in depth: the release build refuses a tag without its lines, and
+// TestMigrationFilesFollowTheRecord holds the shipped files to the record.
+// This check stays so that a later removal of the lines of a tag fails even
+// when both of those layers see an empty record.
+func TestTagCopiesHaveTheirLines(t *testing.T) {
+	t.Parallel()
+
+	rec := currentRecord(t)
+	copies := os.DirFS("testdata/tag-migrations")
+
+	tags, err := fs.ReadDir(copies, ".")
+	if err != nil {
+		t.Fatalf("read the tag copies: %v", err)
+	}
+
+	for _, tag := range tags {
+		if !tag.IsDir() {
+			continue
+		}
+
+		files := map[string]string{}
+
+		sqlFiles, err := fs.Glob(copies, tag.Name()+"/*.sql")
+		if err != nil {
+			t.Fatalf("list the copies of %s: %v", tag.Name(), err)
+		}
+
+		for _, name := range sqlFiles {
+			data, err := fs.ReadFile(copies, name)
+			if err != nil {
+				t.Fatalf("read the copy %s: %v", name, err)
+			}
+
+			files[path.Base(name)] = string(data)
+		}
+
+		for _, problem := range rec.TagCopies("sqlite", tag.Name(), files) {
+			t.Error(problem)
+		}
+	}
+}
+
+// TestCountTagCopies pins the count of tag migration copies. checkTagDir fails
+// on a count of 0, so this test is the check of what counts as a copy.
+func TestCountTagCopies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		files []string
+		dirs  []string
+		want  int
+	}{
+		{name: "empty", files: nil, dirs: nil, want: 0},
+		{name: "hash file only", files: []string{"0001_x.sql.sha256"}, dirs: nil, want: 0},
+		{name: "copy only", files: []string{"0001_x.sql"}, dirs: nil, want: 1},
+		{name: "copy and hash file", files: []string{"0001_x.sql", "0001_x.sql.sha256"}, dirs: nil, want: 1},
+		{name: "subdirectory named like a copy", files: nil, dirs: []string{"x.sql"}, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkCountTagCopies(t, tt.files, tt.dirs, tt.want)
+		})
+	}
+}
+
+// checkCountTagCopies builds the fixture of one case in a new directory and
+// checks the count that countTagCopies returns for it.
+func checkCountTagCopies(t *testing.T, files, dirs []string, want int) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, name := range dirs {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := countTagCopies(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got != want {
+		t.Errorf("countTagCopies() = %d, want %d", got, want)
+	}
+}
+
+// currentRecord returns the release record of the tree. A record that does
+// not parse fails the test: it never counts as "not released".
+func currentRecord(t *testing.T) releaserecord.Record {
+	t.Helper()
+
+	rec, err := releaserecord.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rec
 }

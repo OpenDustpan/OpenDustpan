@@ -33,7 +33,7 @@ func replayFixture(t *testing.T, replayer stack.JournalReplayer) updateFixture {
 		t,
 		allowAll(),
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: replayer},
+		fixtureOptions{manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: replayer, guard: nil},
 	)
 }
 

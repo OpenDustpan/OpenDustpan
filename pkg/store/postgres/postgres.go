@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/internal/storeerr"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
@@ -49,7 +50,9 @@ const migrationLockID int64 = 0x6f64706e
 // Store implements namespace.Store, stack.Store and the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on PostgreSQL.
 type Store struct {
-	pool    *pgxpool.Pool
+	pool *pgxpool.Pool
+	// txs starts the transactions of the API paths and translates their errors.
+	txs     guardedPool
 	queries *db.Queries
 	// gate serves the ports of gate.Store over this store.
 	gate *gatestore.Store
@@ -61,6 +64,11 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// swapHook, when set, runs in the swap transaction of a restore after
+	// the checks and before the first rename. Tests set it to hold a swap
+	// open and prove that the claim of the restore stays renewable. Nil in
+	// production.
+	swapHook func(ctx context.Context)
 	// betweenProfileReads, when set, runs once in the next read of a profile
 	// revision, between the read of the profile and the read of the revision,
 	// inside the snapshot. Tests run a restore swap there. Nil in production.
@@ -90,6 +98,20 @@ type Store struct {
 	// logger records the warnings of the store. It defaults to a discard
 	// handler; pass WithLogger to record them.
 	logger *slog.Logger
+	// tracer, when set, sees every statement, batch, prepare and copy of the
+	// pool. Nil in production.
+	tracer pgx.QueryTracer
+	// failover holds the effective failover settings of the pool.
+	failover FailoverSettings
+	// guard resets the pool when it holds a connection to a server that
+	// refuses writes.
+	guard *poolGuard
+	// marks holds the connections of the long paths, which the pool resets
+	// at their release.
+	marks *longMarks
+	// reads runs the short catalog reads of the backup and restore code with
+	// the bounds of the API paths.
+	reads guardedDB
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -131,6 +153,16 @@ func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
 }
 
+// WithQueryTracer makes the pool report each statement, batch, prepare and
+// copy to tracer. The tracer may also implement pgx.BatchTracer,
+// pgx.PrepareTracer and pgx.CopyFromTracer, and then it sees those too. A
+// benchmark of database round trips uses it. Without it, the pool has no
+// tracer. The pool pings an idle connection with the protocol layer, which the
+// tracer does not see.
+func WithQueryTracer(tracer pgx.QueryTracer) Option {
+	return func(s *Store) { s.tracer = tracer }
+}
+
 var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
@@ -149,29 +181,89 @@ func liveSchemaName(searchPath string) string {
 	return "public"
 }
 
-// Open connects to the database at url and migrates it.
-func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+// poolConfig parses the database URL into the pool configuration. It checks
+// the failover settings of the URL against their allowlist and sets the
+// default of each setting that the URL does not name (see
+// readFailoverSettings). It also sets the search path of each new connection.
+// The other pgxpool settings of the URL stay as the URL gives them.
+func poolConfig(url string) (*pgxpool.Config, FailoverSettings, error) {
+	plan, err := readFailoverSettings(url)
+	if err != nil {
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
+	}
+
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres pool: %w", err)
+		return nil, FailoverSettings{}, fmt.Errorf("open postgres pool: %w", err)
 	}
+
+	plan.apply(cfg)
 
 	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
 
 	// Defense in depth: pgIdent still doubles the quotes of this name, so a
 	// name that this check misses still cannot end the quoted identifier.
 	if identErr := checkIdent(live); identErr != nil {
-		return nil, fmt.Errorf("open postgres store: schema %q of the search path: %w", live, identErr)
+		return nil, FailoverSettings{}, fmt.Errorf(
+			"open postgres store: schema %q of the search path: %w",
+			live,
+			identErr,
+		)
 	}
 
+	// The search path and the server timeouts are start-up parameters, not
+	// a SET after the connect: RESET ALL then goes back to them, so the reset
+	// of a released long-path connection keeps them.
 	ctl := live + "_control"
-	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
-			return fmt.Errorf("set postgres search path: %w", execErr)
-		}
+	cfg.ConnConfig.RuntimeParams["search_path"] = pgIdent(live) + ", " + pgIdent(ctl)
+	maps.Copy(cfg.ConnConfig.RuntimeParams, serverTimeoutParams())
 
-		return nil
+	return cfg, plan.report, nil
+}
+
+// Open connects to the database at url and migrates it.
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+	cfg, failover, err := poolConfig(url)
+	if err != nil {
+		return nil, err
 	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+
+	s := &Store{
+		pool:                nil,
+		txs:                 guardedPool{pool: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
+		queries:             nil,
+		stagingMu:           sync.Mutex{},
+		stagingSchema:       "",
+		keepAccessHook:      nil,
+		swapHook:            nil,
+		betweenProfileReads: atomic.Pointer[func()]{},
+		snapshotBegin:       snapshotBeginQuery(live),
+		beforeLockDelete:    nil,
+		stateLockWait:       0,
+		binaryVersion:       "",
+		gate:                nil,
+		kind:                "",
+		noMigrate:           false,
+		logger:              slog.New(slog.DiscardHandler),
+		tracer:              nil,
+		failover:            failover,
+		guard:               nil,
+		marks:               newLongMarks(),
+		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.tracer != nil {
+		cfg.ConnConfig.Tracer = s.tracer
+	}
+
+	cfg.AfterRelease = s.marks.afterRelease
+	cfg.BeforeClose = s.marks.beforeClose
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -184,19 +276,17 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		betweenProfileReads: atomic.Pointer[func()]{}, snapshotBegin: snapshotBeginQuery(live),
-		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
-	}
+	s.pool = pool
+	s.guard = newPoolGuard(pool, s.logger)
+	s.txs = guardedPool{pool: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.reads = guardedDB{inner: pool, rt: roundTrip{deadline: statementDeadline, watch: s.guard, readOnlyTx: false}}
+	s.queries = db.New(s.reads)
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
-	for _, opt := range opts {
-		opt(s)
-	}
-
 	if err := s.migrate(ctx); err != nil {
+		// A read-only check can start during the migration: close the guard
+		// first, so it does not outlive Open.
+		s.guard.close()
 		pool.Close()
 
 		return nil, err
@@ -226,6 +316,7 @@ func (s *Store) CloseContext(ctx context.Context) {
 		_ = s.dropStagingSchema(context.WithoutCancel(ctx), staging) //nolint:errcheck // Best-effort cleanup.
 	}
 
+	s.guard.close()
 	s.pool.Close()
 }
 
@@ -237,6 +328,30 @@ func (s *Store) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// CheckWritable reports whether the database accepts writes. It reads
+// pg_is_in_recovery() and transaction_read_only on one connection of the
+// pool. It returns false for a server that refuses writes, and then resets the
+// pool, at most once in each resetInterval. It returns an error that wraps
+// namespace.ErrUnavailable, with no driver text, when the check cannot run.
+func (s *Store) CheckWritable(ctx context.Context) (bool, error) {
+	return s.guard.checkWritable(ctx)
+}
+
+// FailoverSettings returns the effective failover settings of the pool. They
+// hold no part of the URL besides the values of the settings.
+func (s *Store) FailoverSettings() FailoverSettings {
+	out := s.failover
+	out.Settings = slices.Clone(s.failover.Settings)
+
+	return out
+}
+
+// PoolResets returns how many times the store reset its pool because a
+// connection reached a server that refuses writes.
+func (s *Store) PoolResets() uint64 {
+	return s.guard.resets.Load()
 }
 
 // CreateNamespace implements namespace.Store.
@@ -467,12 +582,6 @@ func (s *Store) RenameStack(
 		}
 
 		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
-		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
-
-		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
-			return gateErr
-		}
-
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
 			Project:   newRef.Project.String(),
@@ -954,7 +1063,7 @@ func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) e
 
 // runTx runs before, when set, and then fn in one transaction.
 func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before func(tx pgx.Tx) error) error {
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
 		if before != nil {
 			if err := before(tx); err != nil {
 				return err
@@ -1019,6 +1128,12 @@ func readWritable(
 	}
 
 	if err := errors.Join(lockErr, scanErr, results.Close()); err != nil {
+		// A database that does not answer is not a state that cannot be read:
+		// the write is temporary, and the client tries it again.
+		if unavailable := translate(err); storeerr.Is(unavailable) {
+			return nil, fmt.Errorf("read installation state postgres database: %w", unavailable)
+		}
+
 		return nil, fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
 
@@ -1092,7 +1207,7 @@ func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) 
 // inSnapshotConn is inSnapshotTx for a read that also runs a hand-written
 // statement: fn gets the transaction itself.
 func (s *Store) inSnapshotConn(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	err := pgx.BeginTxFunc(ctx, s.pool, s.snapshotOptions(), fn)
+	err := pgx.BeginTxFunc(ctx, s.txs, s.snapshotOptions(), fn)
 	if err != nil {
 		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
 	}
@@ -1175,13 +1290,25 @@ func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q
 	})
 }
 
+// migrationDeadline bounds each round trip of the migration transaction. It
+// replaces the statement deadline of the API paths there: the first round
+// trip waits for the migration lock while another instance migrates, and a
+// migration of a large table can run for minutes.
+const migrationDeadline = 15 * time.Minute
+
 func (s *Store) migrate(ctx context.Context) error {
 	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
 		return err
 	}
 
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard, readOnlyTx: false}}
+
+	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
+		if boundErr := setLocalBounds(ctx, tx, migrationBound()); boundErr != nil {
+			return boundErr
+		}
+
 		return migrateTx(
 			ctx,
 			tx,
@@ -1227,13 +1354,9 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 		return err
 	}
 
-	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
-		return fmt.Errorf("check schema versions: %w", baselineErr)
-	}
-
-	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
+	plan, err := checkSchema(ctx, tx, recorded, all, rules.binaryVersion)
 	if err != nil {
-		return fmt.Errorf("check schema: %w", err)
+		return err
 	}
 
 	if err := checkKind(ctx, tx, rules.kind); err != nil {
@@ -1255,6 +1378,28 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 	}
 
 	return nil
+}
+
+// checkSchema runs the three checks of the recorded migrations: the
+// baseline check, migrate.Check and verifyRecorded. Each one refuses a
+// database that another build of the schema made, without the others.
+func checkSchema(
+	ctx context.Context, tx pgx.Tx, recorded []schema.AppliedMigration, all []migrate.Migration, binaryVersion string,
+) (migrate.Plan, error) {
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
+	plan, err := migrate.Check(recorded, all, binaryVersion)
+	if err != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema: %w", err)
+	}
+
+	if err := verifyRecorded(ctx, tx, all); err != nil {
+		return migrate.Plan{}, fmt.Errorf("check schema: %w", err)
+	}
+
+	return plan, nil
 }
 
 // checkInstances refuses a pending migration that sets a minimum binary
@@ -1317,7 +1462,7 @@ func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigrati
 
 	for rows.Next() {
 		var row schema.AppliedMigration
-		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion, &row.SHA256); err != nil {
 			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
@@ -1364,17 +1509,17 @@ func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
 	return recordMigration(ctx, tx, m)
 }
 
-// hasMinimumColumn reports whether schema_migrations in the current schema
-// has the min_binary_version column. A migration adds it. Before that
-// migration, the schema records no minimum.
-func hasMinimumColumn(ctx context.Context, tx pgx.Tx) (bool, error) {
+// hasVersionColumn reports whether schema_migrations in the current schema
+// has the column. The baseline adds the min_binary_version and the sha256
+// columns, so a version table from before it lacks them.
+func hasVersionColumn(ctx context.Context, tx pgx.Tx, column string) (bool, error) {
 	var exists bool
 
 	err := tx.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
-			AND column_name = 'min_binary_version'
-	)`).Scan(&exists)
+			AND column_name = $1
+	)`, column).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check schema_migrations columns: %w", err)
 	}
@@ -1383,46 +1528,110 @@ func hasMinimumColumn(ctx context.Context, tx pgx.Tx) (bool, error) {
 }
 
 // appliedQuery returns the query that reads the rows of schema_migrations
-// ordered by version: with the minimum binary version when the column
-// exists, and with the empty value before.
+// ordered by version: the version, the name, the minimum binary version and
+// the SHA-256. A column that the table lacks reads as the empty value, so the
+// schema check refuses a recorded migration with no SHA-256.
 func appliedQuery(ctx context.Context, tx pgx.Tx) (string, error) {
-	exists, err := hasMinimumColumn(ctx, tx)
+	hasMinimum, err := hasVersionColumn(ctx, tx, "min_binary_version")
 	if err != nil {
 		return "", err
 	}
 
-	if exists {
-		return `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`, nil
+	hasSum, err := hasVersionColumn(ctx, tx, "sha256")
+	if err != nil {
+		return "", err
 	}
 
-	return `SELECT version, name, '' FROM schema_migrations ORDER BY version`, nil
+	minimum, digest := "''", "''"
+	if hasMinimum {
+		minimum = "min_binary_version"
+	}
+
+	if hasSum {
+		digest = "sha256"
+	}
+
+	return "SELECT version, name, " + minimum + ", " + digest + " FROM schema_migrations ORDER BY version", nil
 }
 
-// recordMigration records m in schema_migrations in tx, after its SQL ran.
-// It records the minimum binary version of m when the column exists. A
-// migration that sets a minimum before the column exists fails.
-func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
-	hasMinimum, err := hasMinimumColumn(ctx, tx)
+// verifyRecorded refuses the database when it records a version that the
+// binary embeds under another name or another SHA-256. It reads the rows
+// itself, so a fault in the read of the migration check cannot let a
+// changed schema through. The caller holds the migration lock in tx.
+//
+// Defense in depth: migrate.Check compares the same rows, and the baseline
+// check refuses a database from before the baseline; this check stays so
+// that a new caller of Check, or a change to it, cannot skip the comparison.
+func verifyRecorded(ctx context.Context, tx pgx.Tx, embedded []migrate.Migration) error {
+	hasSum, err := hasVersionColumn(ctx, tx, "sha256")
 	if err != nil {
 		return err
 	}
 
-	if !hasMinimum {
-		if m.MinBinaryVersion != "" {
-			return fmt.Errorf("record migration %s: %w: schema_migrations has no min_binary_version column",
-				m.Name, schema.ErrBadMinimum)
+	for _, m := range embedded {
+		var present bool
+
+		presentErr := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`,
+			m.Version).Scan(&present)
+		if presentErr != nil {
+			return fmt.Errorf("read migration %s: %w", m.Name, presentErr)
 		}
 
-		const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-		if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
-			return fmt.Errorf("record migration %s: %w", m.Name, err)
+		if !present {
+			continue
 		}
 
-		return nil
+		if !hasSum {
+			return fmt.Errorf("%w: the version table records no SHA-256 for migration %s",
+				schema.ErrSchemaDiverged, m.Name)
+		}
+
+		var name, digest string
+
+		readErr := tx.QueryRow(ctx, `SELECT name, sha256 FROM schema_migrations WHERE version = $1`, m.Version).
+			Scan(&name, &digest)
+		if readErr != nil {
+			return fmt.Errorf("read migration %s: %w", m.Name, readErr)
+		}
+
+		// Defense in depth: migrate.Check refuses a value that is not a
+		// SHA-256 too; this check stays so that an embedded migration with an
+		// empty sum cannot let an empty recorded sum through.
+		if !schema.ValidSHA256(digest) {
+			return fmt.Errorf("%w: migration %s records the SHA-256 %q, which is not 64 lowercase hex digits",
+				schema.ErrSchemaDiverged, m.Name, digest)
+		}
+
+		if name != m.Name || digest != m.SHA256 {
+			return fmt.Errorf("%w: the database records migration %s with SHA-256 %q, and this binary has %s "+
+				"with SHA-256 %s: another build of the schema made the database",
+				schema.ErrSchemaDiverged, name, digest, m.Name, m.SHA256)
+		}
 	}
 
-	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
-	if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
+	return nil
+}
+
+// recordMigration records m in schema_migrations in tx, after its SQL ran:
+// its version, its name, its minimum binary version and the SHA-256 of its
+// SQL. The baseline adds the min_binary_version and the sha256 columns, so a
+// version table without them is one from before the baseline. The checks
+// refuse such a database before any migration runs, and the record fails too.
+func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
+	for _, column := range []string{"min_binary_version", "sha256"} {
+		exists, err := hasVersionColumn(ctx, tx, column)
+		if err != nil {
+			return err
+		}
+
+		if !exists {
+			return fmt.Errorf("record migration %s: %w: schema_migrations has no %s column",
+				m.Name, schema.ErrSchemaDiverged, column)
+		}
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version, sha256) VALUES ($1, $2, $3, $4)`
+	if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion, m.SHA256); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.Name, err)
 	}
 

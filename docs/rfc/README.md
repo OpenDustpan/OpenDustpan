@@ -103,7 +103,7 @@ both together.
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
 | [54](0054-sources-beyond-git.md) | Sources other than git | draft |
-| [55](0055-environment-promotion.md) | Environment promotion and comparison | discussing; proposal of 2026-10-30 |
+| [55](0055-environment-promotion.md) | Environment promotion and comparison | discussing; proposal of 2026-10-30; words decided by ADR 286 |
 | [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | discussing; proposal of 2026-10-30 |
 | [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft; docs in the same pull request accepted (ADR 214) |
 | [58](0058-large-request-limits.md) | Bound memory of large request bodies | accepted |
@@ -159,3 +159,9 @@ both together.
 | [109](0109-job-kinds-for-state-operations-and-many-runs.md) | Job kinds for state operations and many runs, from the gaps of RFC 6 | draft |
 | [110](0110-step-results-hooks-approval-steps-and-scanners.md) | Step results: hooks, approval steps and scanners, from the gaps of RFC 6 | draft |
 | [111](0111-blueprint-rollouts-and-the-migration-of-answers.md) | Blueprint rollouts and the migration of answers | discussing |
+| [112](0112-the-token-exchange-issues-a-stored-access-token.md) | The token exchange issues a stored access token | accepted (ADR 284) |
+| [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
+| [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
+| [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
+| [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
+| [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |

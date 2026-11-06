@@ -2,6 +2,14 @@
 
 Status: accepted · 2026-10-17. Supersedes part of ADRs 20, 28, 30, 37, 38, 41 and 43 (see "What this ADR replaces"). Decisions 3, 8, 15, 28 and 29 and the item kinds superseded in part by ADR 154. Route paths superseded in part by ADR 210. Decision 2 superseded in part by ADR 217: the namespace key wraps each item key, and a rewrap writes a new key blob
 
+Changed by:
+
+- ADR 154 changes decisions 3, 8, 15, 28 and 29: also the item kinds of the
+  consequences.
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 217 changes decision 2: the namespace key wraps each item key.
+- ADR 220 changes decision 2: the item key blob name gets a namespace prefix.
+
 ## Context
 
 ADR 150 defines history items: one Pulumi update, one OpenTofu state

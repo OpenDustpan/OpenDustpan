@@ -2,6 +2,12 @@
 
 Status: accepted · 2026-10-18. Supersedes part of ADRs 160 to 165 (see "What this ADR replaces"). Route paths superseded in part by ADR 210
 
+Changed by:
+
+- ADR 210 changes: the route paths and the server: action names.
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 ADRs 160 to 165 decide context on every object, the context read API, the

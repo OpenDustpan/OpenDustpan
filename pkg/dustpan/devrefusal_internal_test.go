@@ -96,9 +96,13 @@ func (w *devRefusalWorld) signIn(t *testing.T, subject string) error {
 	t.Helper()
 
 	w.cfg.authenticator = subjectAuthenticator{subject: subject}
-	wireDevGuard(w.cfg)
 
-	_, err := w.cfg.authenticator.AuthenticateToken(t.Context(), "token")
+	ports, err := newAuthPorts(w.cfg, nil)
+	if err != nil {
+		t.Fatalf("auth ports: %v", err)
+	}
+
+	_, err = ports.authenticator.AuthenticateToken(t.Context(), "token")
 
 	return err
 }

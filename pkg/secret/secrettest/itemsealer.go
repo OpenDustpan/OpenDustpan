@@ -77,10 +77,10 @@ func (c *countingBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, e
 	return c.Store.Get(ctx, key)
 }
 
-func (c *countingBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+func (c *countingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
 	c.counts.reads.Add(1)
 
-	return c.Store.List(ctx, prefix)
+	return c.Store.ListPage(ctx, req)
 }
 
 // noRefusals is a scopeaudit.Recorder that drops every refusal. The suite
@@ -201,6 +201,9 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "another key-encryption key does not open", test: testSealerForeignWrapper},
 		{name: "no key-encryption key fails closed", test: testSealerUnkeyed},
 		{name: "a malformed reference is refused", test: testSealerBadRef},
+		{name: "a batch seals and opens with one read of the key", test: testSealerBatchRoundTrip},
+		{name: "a batch with a moved part or of another item fails as a whole", test: testSealerBatchMoved},
+		{name: "a batch with a bad binding, no key or a shredded key fails", test: testSealerBatchRefusals},
 	}
 
 	for _, tc := range cases {
@@ -289,7 +292,7 @@ func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, bi
 func keyBlobs(t *testing.T, r *SealerRig, ns namespace.ID) []blob.Object {
 	t.Helper()
 
-	objects, err := r.Blobs.List(t.Context(), "namespaces/"+ns.String()+"/item-keys/")
+	objects, err := listBlobs(t.Context(), r.Blobs, "namespaces/"+ns.String()+"/item-keys/")
 	if err != nil {
 		t.Fatalf("list item key blobs: %v", err)
 	}
@@ -902,4 +905,17 @@ func testSealerBadRef(t *testing.T, r *SealerRig) {
 	if n := len(keyBlobs(t, r, r.Acme.ID)); n != 0 {
 		t.Errorf("a refused create left %d key blobs", n)
 	}
+}
+
+// listBlobs walks every page under prefix and returns the objects.
+func listBlobs(ctx context.Context, store blob.Store, prefix string) ([]blob.Object, error) {
+	var out []blob.Object
+
+	err := blob.Walk(ctx, store, prefix, func(o blob.Object) error {
+		out = append(out, o)
+
+		return nil
+	})
+
+	return out, err
 }

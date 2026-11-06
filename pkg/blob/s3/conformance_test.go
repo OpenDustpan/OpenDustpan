@@ -167,8 +167,8 @@ func (s *cleaningStore) Delete(ctx context.Context, key blob.Key) error {
 }
 
 // List returns the objects under prefix.
-func (s *cleaningStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return s.inner.List(ctx, prefix)
+func (s *cleaningStore) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return s.inner.ListPage(ctx, req)
 }
 
 // Ping checks that the bucket answers.

@@ -1,6 +1,16 @@
 # 180. Console themes, color schemes and the preferences of a person
 
-Status: accepted · 2026-10-18. Adds to ADR 58. Route paths superseded in part by ADR 210. Decision 11 extended by ADR 212 and ADR 235. Decision 13 time format superseded by ADR 210 decision 10.
+Status: accepted · 2026-10-18. Adds to ADR 58. Route paths superseded in part by ADR 210. Decision 11 extended by ADR 212 and ADR 235. Decision 13 time format superseded by ADR 210 decision 10. Changed by [ADR 290](0290-console-themes-friendly-theme-dropped-and-the-search-shortcut.md). Decision 15 changed by ADR 297: the audit entry names the sign-in ID
+
+Changed by:
+
+- ADR 181 extends decision 13: six new fields in the preferences document.
+- ADR 210 changes decision 13: the route paths and the time format.
+- ADR 212 extends decision 11: the branding preset as an installation setting.
+- ADR 235 extends decision 11: the product name, logo, accent and agent name.
+- ADR 290 changes decision 2: the Default theme gets the search shortcut.
+- ADR 297 changes decision 15: the audit entry names the sign-in ID.
+- ADR 311 extends: sentence case, underlined navigation, no friendly locale, no achievements.
 
 ## Context
 

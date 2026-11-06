@@ -60,6 +60,7 @@ const (
 	checkBlob         = "blob"
 	checkClaimLoop    = "claim-loop"
 	checkMinimum      = "binary-minimum"
+	checkReadOnly     = "store-read-only"
 	checkDraining     = "draining"
 	infoAuditChain    = "audit-chain"
 	chainAdmits       = "admits"
@@ -101,7 +102,10 @@ type readinessSettings struct {
 	chainAdmits func(context.Context) bool
 	// minimum checks the binary version against the minimum of the schema, or
 	// is nil for a store without the check.
-	minimum  minimumChecker
+	minimum minimumChecker
+	// writable checks that the database accepts writes, or is nil for a
+	// store without the check.
+	writable writeChecker
 	timeout  time.Duration
 	failures *metrics.Counter
 	logger   *slog.Logger
@@ -147,8 +151,10 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 	if cfg.components.Has(ComponentAPI) {
 		part := componentChecks{
 			name: ComponentAPI,
-			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
-				minimumChecks(cfg.minimum)...),
+			pings: slices.Concat(
+				[]readinessCheck{storeCheck(cfg.store, cfg.writable), {name: checkBlob, ping: cfg.blobs}},
+				minimumChecks(cfg.minimum),
+			),
 			tests: nil,
 			infos: nil,
 		}
@@ -167,8 +173,9 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 
 	if cfg.components.Has(ComponentWorker) {
 		rd.parts = append(rd.parts, componentChecks{
-			name:  ComponentWorker,
-			pings: append([]readinessCheck{{name: checkStore, ping: cfg.store}}, minimumChecks(cfg.minimum)...),
+			name: ComponentWorker,
+			pings: slices.Concat([]readinessCheck{storeCheck(cfg.store, cfg.writable)},
+				minimumChecks(cfg.minimum)),
 			tests: []stateCheck{
 				{name: checkClaimLoop, ok: func(context.Context) bool { return cfg.watch.claimLoopRan() }},
 			},
@@ -209,6 +216,59 @@ func minimumChecks(checker minimumChecker) []readinessCheck {
 	}
 
 	return []readinessCheck{{name: checkMinimum, ping: minimumPing{checker: checker}}}
+}
+
+// writeChecker checks that the database accepts writes. It returns false for
+// a server that refuses writes, for example an old primary after a failover,
+// and an error when the check cannot run.
+type writeChecker interface {
+	CheckWritable(ctx context.Context) (bool, error)
+}
+
+// writablePing is the store check of a store with a write check. It replaces
+// the ping of the store: one statement both reaches the database and reads
+// whether it accepts writes.
+type writablePing struct {
+	checker writeChecker
+}
+
+// renamedFailureError is a failure of a readiness check that the probe lists under
+// another name than the name of the check.
+type renamedFailureError struct {
+	name string
+}
+
+func (f *renamedFailureError) Error() string { return "readiness check failed: " + f.name }
+
+// errStoreCheck is the failure of the write check when it cannot run.
+var errStoreCheck = errors.New("the store check cannot run")
+
+// Ping fails closed. When the check cannot run, it fails as the store check:
+// the probe cannot know that the database accepts writes. When the database
+// answers that it refuses writes, it fails under the name store-read-only.
+// Either way the probe answers 503, and a load balancer takes the process
+// out of the pool.
+func (p writablePing) Ping(ctx context.Context) error {
+	ok, err := p.checker.CheckWritable(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errStoreCheck, err)
+	}
+
+	if !ok {
+		return &renamedFailureError{name: checkReadOnly}
+	}
+
+	return nil
+}
+
+// storeCheck returns the store check: the write check when the store has
+// one, and the ping of the store otherwise.
+func storeCheck(store pinger, writable writeChecker) readinessCheck {
+	if writable != nil {
+		return readinessCheck{name: checkStore, ping: writablePing{checker: writable}}
+	}
+
+	return readinessCheck{name: checkStore, ping: store}
 }
 
 // ServeHTTP implements http.Handler.
@@ -386,9 +446,17 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 	var failed []string
 
 	for i := range checks {
-		if errs[i] != nil {
-			failed = append(failed, checks[i].name)
+		if errs[i] == nil {
+			continue
 		}
+
+		name := checks[i].name
+
+		if renamed, ok := errors.AsType[*renamedFailureError](errs[i]); ok && renamed != nil {
+			name = renamed.name
+		}
+
+		failed = append(failed, name)
 	}
 
 	return failed

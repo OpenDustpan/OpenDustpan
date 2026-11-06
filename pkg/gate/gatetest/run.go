@@ -82,7 +82,9 @@ type runner func(t *testing.T, f Factory)
 func storeRunners() map[string]runner {
 	out := map[string]runner{}
 
-	for _, m := range []map[string]runner{objectRunners(), ruleRunners(), settingsRunners(), recordRunners()} {
+	for _, m := range []map[string]runner{
+		objectRunners(), ruleRunners(), unitRunners(), settingsRunners(), recordRunners(),
+	} {
 		maps.Copy(out, m)
 	}
 
@@ -97,12 +99,15 @@ type env struct {
 	acme   namespace.Fence
 	globex namespace.Fence
 	fx     fixtures
+	// placed is true when the collections and the units of the fixtures
+	// exist.
+	placed bool
 }
 
 func newEnv(t *testing.T, h Harness) *env {
 	t.Helper()
 
-	e := &env{t: t, h: h, acme: zeroFence(), globex: zeroFence(), fx: newFixtures()}
+	e := &env{t: t, h: h, acme: zeroFence(), globex: zeroFence(), fx: newFixtures(), placed: false}
 
 	var err error
 
@@ -114,12 +119,19 @@ func newEnv(t *testing.T, h Harness) *env {
 		t.Fatalf("CreateNamespace(globex) = %v", err)
 	}
 
+	// The configuration of a unit keys on the stable ID of the unit, so a
+	// store that resolves units holds none for a unit that does not exist.
+	// Each case gets the units of the fixtures when the Domain can make them.
+	if _, ok := h.Domain.(Placement); ok {
+		e.place()
+	}
+
 	return e
 }
 
 // place makes the collections prod and staging of acme, the unit web/prod of
 // pulumi in prod and the unit net of opentofu in no collection, and skips the
-// case when the Domain cannot place units.
+// case when the Domain cannot place units. A second call does nothing.
 func (e *env) place() {
 	e.t.Helper()
 
@@ -127,6 +139,12 @@ func (e *env) place() {
 	if !ok {
 		e.t.Skip("the Domain does not implement Placement")
 	}
+
+	if e.placed {
+		return
+	}
+
+	e.placed = true
 
 	ctx := e.t.Context()
 

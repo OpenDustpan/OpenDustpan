@@ -43,8 +43,10 @@ const (
 	serverEnv = "E2E_SERVER"
 	// binaryServer names the proof variant.
 	binaryServer = "binary"
-	// binaryBuildTimeout bounds the `go build` of the server binary.
-	binaryBuildTimeout = 5 * time.Minute
+	// binaryBuildTimeout bounds the `go build` of the server binary. A race
+	// build on a 4-core CI runner, next to 16 parallel tests, can take more
+	// than 5 minutes.
+	binaryBuildTimeout = 15 * time.Minute
 	// binaryStartTimeout bounds the wait for the backend's /health/live.
 	binaryStartTimeout = 30 * time.Second
 	// binaryStartPoll sets how often the wait checks /health/live.
@@ -104,6 +106,10 @@ type envInput struct {
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
 	signInRealTime bool
+	// passkeys gives the server a public URL with the host name localhost
+	// in place of its address, because a passkey relying party ID is never an
+	// IP address.
+	passkeys bool
 	// journalRefuser corrupts one outputs-only journal batch on the way to
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
@@ -115,6 +121,9 @@ type envInput struct {
 	// sinkSenders replace the built-in notification sink senders of the
 	// in-process server. The server binary has no such seam.
 	sinkSenders []notify.Sender
+	// issuer is a fake OpenID provider of a CI platform whose keys the
+	// in-process server may read, on the loopback, or nil.
+	issuer *OIDCIssuerFake
 }
 
 // backendConfig groups the settings of one backend process.
@@ -154,6 +163,10 @@ type backendConfig struct {
 	// is nil, so the provider registry of an OpenTofu run answers on the
 	// host of the recording proxy. The sign-in passes its own public URL.
 	publicURL string
+	// auditSinks passes --audit-sink items, with the variables that hold
+	// their secrets, when it is not nil. Nil starts the server with no
+	// audit sink.
+	auditSinks *AuditSinkSettings
 }
 
 // pemCertificate is the PEM block type of a certificate.
@@ -547,6 +560,8 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--public-url", cfg.publicURL)
 	}
 
+	args = append(args, cfg.auditSinks.args()...)
+
 	return append(args, cfg.signIn.args()...)
 }
 
@@ -590,6 +605,7 @@ func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*e
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
 	cmd.Env = append(cmd.Env, journalingServeEnv(cfg)...)
+	cmd.Env = append(cmd.Env, cfg.auditSinks.env()...)
 
 	var out lockedBuffer
 
@@ -712,6 +728,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		auditChain:        "",
 		components:        "",
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -1152,6 +1169,7 @@ func binaryBackendConfig(in envInput, bin, dbURL string, setup blobSetup, cert b
 		components:        "",
 		signIn:            nil,
 		publicURL:         "",
+		auditSinks:        nil,
 	}
 }
 
@@ -1216,6 +1234,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
 		signIn:        signIn,
+		claimers:      nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
@@ -1302,6 +1321,7 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
 		signIn:        signIn,
+		claimers:      nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)

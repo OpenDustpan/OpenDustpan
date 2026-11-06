@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-19. The project owner decided it. Accepts RFC 88. Supersedes the first two decisions of ADR 4 (the home region and the standby regions). Drops RFC 79. Amends ADRs 12, 18, 19, 30, 38, 48, 51, 145, 153, 204, 215, 218 and 241.
 
+Changed by:
+
+- ADR 286 changes: the words catalog and promotion become self-service and
+  failover.
+
 ## Context
 
 ADR 4 gave each namespace a home region, and planned standby regions that

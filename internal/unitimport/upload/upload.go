@@ -10,14 +10,16 @@
 //
 //	<unit key>/unit.json                    the tool and the name of the unit
 //	<unit key>/<sequence>.<attempt>.bin     the bytes of one attempt to store the version
-//	<unit key>/<sequence>.json              the facts of the version
+//	<unit key>/<sequence>-<attempt>.json    the facts of one attempt to store the version
 //
-// Each attempt writes its body to its own key, and no key is written twice.
-// The facts file names the body key, the size and the digest. The create-only
-// write of the facts file is the commit of a version: the first attempt that
-// writes it wins, and the body of each other attempt is deleted or stays as
-// an unreferenced object. A body that no facts file names is never read.
-// The cancel and the release of the import delete each object below the prefix.
+// Each attempt writes its body and its facts file to its own keys, and no key
+// is written twice, so a store that replaces an object instead of refusing a
+// second write loses nothing. The facts file names the body key, the size and
+// the digest. The commit row of the import store is the commit of a version:
+// the row names the facts file of the one attempt that won, and the database
+// decides which attempt that is. A body or a facts file that no row names is
+// never read. The attempt that loses deletes its two files. The cancel and the
+// release of the import delete each object below the prefix.
 package upload
 
 import (
@@ -30,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,6 +41,7 @@ import (
 	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // MaxMetadataBytes is the limit of the metadata document of one version.
@@ -46,6 +50,9 @@ const MaxMetadataBytes = 64 << 10
 // maxFactsBytes is the most that the source reads of a facts or unit file.
 const maxFactsBytes = MaxMetadataBytes + 4<<10
 
+// attemptFacts is the name of a facts file of one attempt.
+var attemptFacts = regexp.MustCompile(`^\d{10}-[0-9a-z]{1,64}\.json$`)
+
 // sequenceDigits is the width of a sequence in a key and in a version ID, so
 // that the order of the keys is the order of the versions.
 const sequenceDigits = 10
@@ -53,9 +60,22 @@ const sequenceDigits = 10
 // sha256Hex is the length of a SHA-256 digest in hex.
 const sha256Hex = 64
 
+// Commits is the commit store of one import: the store, the fence of the
+// namespace of the import, and the ID of the import. Entry gives the audit
+// entry that the store appends in the transaction of a commit row. The caller
+// sets the principal, the channel and the request in it; the source does not
+// know them.
+type Commits struct {
+	Store    unitimport.UploadStore
+	Fence    namespace.Fence
+	ImportID string
+	Entry    func(c unitimport.UploadCommit) audit.Entry
+}
+
 // Source is the upload source of one import.
 type Source struct {
 	blobs    blob.Store
+	commits  Commits
 	now      func() time.Time
 	prefix   string
 	maxBytes int64
@@ -64,10 +84,13 @@ type Source struct {
 var _ unitimport.Source = (*Source)(nil)
 
 // New returns the upload source for the blob keys below prefix. The prefix
-// names one import, for example "upload/<namespace ID>/<import ID>". maxBytes
-// is the limit of one body. now gives the time of a version that a client sent
-// with no time.
-func New(blobs blob.Store, prefix string, maxBytes int64, now func() time.Time) (*Source, error) {
+// names one import, for example "upload/<namespace ID>/<import ID>". commits
+// is the commit store of that import. maxBytes is the limit of one body. now
+// gives the time of a version that a client sent with no time and the time of
+// each commit.
+func New(
+	blobs blob.Store, commits Commits, prefix string, maxBytes int64, now func() time.Time,
+) (*Source, error) {
 	key, err := blob.ParseKey(prefix)
 	if err != nil {
 		return nil, fmt.Errorf("upload prefix: %w", err)
@@ -84,11 +107,17 @@ func New(blobs blob.Store, prefix string, maxBytes int64, now func() time.Time) 
 		)
 	}
 
+	if commits.Store == nil || commits.ImportID == "" || commits.Entry == nil {
+		return nil, fmt.Errorf(
+			"%w: the upload source needs a commit store, an import ID and an audit entry", unitimport.ErrInvalid,
+		)
+	}
+
 	if maxBytes < 1 {
 		return nil, fmt.Errorf("%w: the body limit is %d bytes", unitimport.ErrInvalid, maxBytes)
 	}
 
-	return &Source{blobs: blobs, now: now, prefix: prefix, maxBytes: maxBytes}, nil
+	return &Source{blobs: blobs, commits: commits, now: now, prefix: prefix, maxBytes: maxBytes}, nil
 }
 
 // Version is what a client reports with one body. Each value is a claim of
@@ -128,26 +157,26 @@ func (s *Source) Units(
 		return nil, err
 	}
 
-	objs, err := s.blobs.List(ctx, s.prefix)
-	if err != nil {
-		return nil, fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
 	out := []unitimport.SourceUnit{}
 
-	for _, o := range objs {
+	err := blob.Walk(ctx, s.blobs, s.prefix, func(o blob.Object) error {
 		if !strings.HasSuffix(o.Key.String(), "/unit.json") {
-			continue
+			return nil
 		}
 
 		var f facts
 		if readErr := s.readJSON(ctx, o.Key, &f); readErr != nil {
-			return nil, readErr
+			return readErr
 		}
 
 		if len(sel.Names) == 0 || slices.Contains(sel.Names, f.Name) {
 			out = append(out, unitimport.SourceUnit{Tool: f.Tool, Name: f.Name})
 		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, s.walkError(err)
 	}
 
 	return out, nil
@@ -174,14 +203,14 @@ func (s *Source) Versions(
 		return nil, unitErr
 	}
 
-	seqs, err := s.factsSequences(ctx, u)
+	idx, err := s.index(ctx, u)
 	if err != nil {
 		return nil, err
 	}
 
 	out := []unitimport.SourceVersion{}
 
-	for _, seq := range seqs {
+	for _, seq := range idx.seqs {
 		if seq <= afterSeq {
 			continue
 		}
@@ -190,7 +219,7 @@ func (s *Source) Versions(
 			break
 		}
 
-		f, loadErr := s.loadFacts(ctx, u, seq)
+		f, loadErr := s.loadFacts(ctx, u, seq, idx.names[seq])
 		if loadErr != nil {
 			return nil, loadErr
 		}
@@ -214,7 +243,17 @@ func (s *Source) Open(
 		return nil, unitimport.ErrSourceNotFound
 	}
 
-	f, err := s.loadFacts(ctx, u, seq)
+	idx, err := s.index(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+
+	name, ok := idx.names[seq]
+	if !ok {
+		return nil, unitimport.ErrSourceNotFound
+	}
+
+	f, err := s.loadFacts(ctx, u, seq, name)
 	if err != nil {
 		return nil, err
 	}
@@ -248,30 +287,33 @@ func (s *Source) Head(
 		return "", err
 	}
 
-	seqs, err := s.factsSequences(ctx, u)
+	idx, err := s.index(ctx, u)
 	if err != nil {
 		return "", err
 	}
 
-	if len(seqs) == 0 {
+	if len(idx.seqs) == 0 {
 		return "", unitimport.ErrSourceNotFound
 	}
 
-	return unitimport.VersionID(pad(seqs[len(seqs)-1])), nil
+	return unitimport.VersionID(pad(idx.seqs[len(idx.seqs)-1])), nil
 }
 
 // Put stores the version seq of the unit u. The first version of a unit has
 // the sequence 1, and each later version has the next sequence, so a client
 // sends the versions oldest first. Put wraps unitimport.ErrSourceInvalid for
 // a body above the limit, a bad sequence, a bad metadata document, or a
-// sequence that another upload stored first. A stored version never changes.
+// sequence that another upload committed first; the last also wraps
+// unitimport.ErrUploadExists. A stored version never changes.
 func (s *Source) Put(
 	ctx context.Context, u unitimport.SourceUnit, seq int, v Version, body io.Reader,
 ) (unitimport.SourceVersion, error) {
-	f, unitFile, err := s.prepare(ctx, u, seq, v)
+	at, err := s.prepare(ctx, u, seq, v)
 	if err != nil {
 		return unitimport.SourceVersion{}, err
 	}
+
+	f := at.facts
 
 	bk, err := s.bodyKey(u, f)
 	if err != nil {
@@ -285,51 +327,74 @@ func (s *Source) Put(
 
 	f.Size, f.SHA256 = size, sum
 
-	return s.commit(ctx, u, f, bk, unitFile)
+	at.facts = f
+
+	return s.commit(ctx, u, at, bk)
 }
 
 // Delete deletes each object below the prefix of the import: the unit files,
 // the facts files and the bodies, also the bodies that no facts file names.
 func (s *Source) Delete(ctx context.Context) error {
-	objs, err := s.blobs.List(ctx, s.prefix)
-	if err != nil {
-		return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
-	for _, o := range objs {
+	// The walk deletes each object as its page arrives. A key sorts after the
+	// cursor of the walk, so a delete does not move the walk.
+	err := blob.Walk(ctx, s.blobs, s.prefix, func(o blob.Object) error {
 		// Defense in depth: New refuses a prefix under the audit checkpoint
-		// prefix, and List answers only keys below the prefix. This check
-		// stays so that a wrong prefix or a List that answers too much
+		// prefix, and the listing answers only keys below the prefix. This check
+		// stays so that a wrong prefix or a listing that answers too much
 		// never deletes an audit checkpoint copy: every copy is evidence.
 		if audit.IsCheckpointKey(o.Key) {
 			return fmt.Errorf("%w: refuse to delete %s under %s", unitimport.ErrInvalid, o.Key, audit.CheckpointPrefix)
 		}
 
-		if err = blob.DeleteRetried(ctx, s.blobs, o.Key); err != nil {
-			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, err)
+		if delErr := blob.DeleteRetried(ctx, s.blobs, o.Key); delErr != nil {
+			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, delErr)
 		}
+
+		return nil
+	})
+	if err != nil {
+		return s.walkError(err)
 	}
 
 	return nil
 }
 
-// prepare checks a Put before it writes. It returns the facts with the
-// longest size and digest, and the encoded unit file. The longest facts are
-// the largest facts, so a file that is too large is refused before the body
-// is stored.
+// walkError turns the error of a walk of the uploads into the error of a
+// source. An error that already is a source error stays as it is, and a
+// store error is a source that cannot be reached.
+func (s *Source) walkError(err error) error {
+	if errors.Is(err, unitimport.ErrSourceUnreachable) || errors.Is(err, unitimport.ErrInvalid) {
+		return err
+	}
+
+	return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
+}
+
+// attempt is one attempt to store a version: the facts with the longest size
+// and digest, the encoded unit file and the identifier of the attempt. The
+// longest facts are the largest facts, so a file that is too large is refused
+// before the body is stored.
+type attempt struct {
+	facts    facts
+	unitFile []byte
+	id       string
+	started  time.Time
+}
+
+// prepare checks a Put before it writes and returns the new attempt.
 func (s *Source) prepare(
 	ctx context.Context, u unitimport.SourceUnit, seq int, v Version,
-) (facts, []byte, error) {
+) (attempt, error) {
 	if err := ctxErr(ctx); err != nil {
-		return facts{}, nil, err
+		return attempt{}, err
 	}
 
 	if err := checkPut(u, seq, v); err != nil {
-		return facts{}, nil, err
+		return attempt{}, err
 	}
 
 	if err := s.checkNext(ctx, u, seq); err != nil {
-		return facts{}, nil, err
+		return attempt{}, err
 	}
 
 	at := v.At
@@ -337,84 +402,127 @@ func (s *Source) prepare(
 		at = s.now()
 	}
 
+	started := s.now().UTC()
+	id := newAttempt()
+
 	f := facts{
-		Tool: u.Tool, Name: u.Name, Sequence: seq, Body: bodyName(seq), AtMs: at.UnixMilli(),
+		Tool: u.Tool, Name: u.Name, Sequence: seq, Body: bodyName(seq, id), AtMs: at.UnixMilli(),
 		Actor: unitimport.SanitizeSourceActor(v.Actor), Metadata: v.Metadata,
 		Size: s.maxBytes, SHA256: strings.Repeat("0", sha256Hex),
 	}
 
 	if _, err := encode(f); err != nil {
-		return facts{}, nil, err
+		return attempt{}, err
 	}
 
 	unitFile, err := encode(facts{
 		Tool: u.Tool, Name: u.Name, Sequence: 0, Body: "", AtMs: 0, Actor: "", Metadata: nil, Size: 0, SHA256: "",
 	})
 	if err != nil {
-		return facts{}, nil, err
+		return attempt{}, err
 	}
 
-	return f, unitFile, nil
+	return attempt{facts: f, unitFile: unitFile, id: id, started: started}, nil
 }
 
-// commit makes the unit file, and then it writes the facts file f, which
-// commits the version. The body at bk is deleted when the commit fails for
-// a reason that leaves the facts file unwritten.
+// commit makes the unit file for the first version of a unit, writes the facts file of the attempt, and
+// inserts the commit row, which commits the version. The row decides which
+// attempt wins a sequence. The body at bk and the facts file of this attempt
+// are deleted when the row says that another attempt won, or when the attempt
+// fails before the row. After an error of the commit that does not say whether
+// the row exists, both files stay.
 func (s *Source) commit(
-	ctx context.Context, u unitimport.SourceUnit, f facts, bk blob.Key, unitFile []byte,
+	ctx context.Context, u unitimport.SourceUnit, at attempt, bk blob.Key,
 ) (unitimport.SourceVersion, error) {
-	if err := s.ensureUnit(ctx, u, unitFile); err != nil {
-		return unitimport.SourceVersion{}, s.discard(ctx, bk, err)
+	f := at.facts
+
+	// checkNext accepts only the next sequence of the committed versions, and
+	// a committed version has made the unit file first. So a unit has no unit
+	// file only while the sequence is 1, and a later version never writes it.
+	if f.Sequence == 1 {
+		if err := s.ensureUnit(ctx, u, at.unitFile); err != nil {
+			return unitimport.SourceVersion{}, s.discard(ctx, err, bk)
+		}
 	}
 
 	encoded, err := encode(f)
 	if err != nil {
-		return unitimport.SourceVersion{}, s.discard(ctx, bk, err)
+		return unitimport.SourceVersion{}, s.discard(ctx, err, bk)
 	}
 
-	k, err := s.key(u, f.Sequence, "json")
+	name := factsName(f.Sequence, at.id)
+
+	fk, err := s.factsKey(u, name)
 	if err != nil {
-		return unitimport.SourceVersion{}, s.discard(ctx, bk, err)
+		return unitimport.SourceVersion{}, s.discard(ctx, err, bk)
 	}
 
-	switch err = s.blobs.Put(ctx, k, bytes.NewReader(encoded)); {
-	case errors.Is(err, blob.ErrExists):
-		return s.settle(ctx, u, f, bk)
-	case err != nil:
-		// The write may have stored the facts file, and then the body is in
-		// use. The body stays.
-		return unitimport.SourceVersion{}, fmt.Errorf(
+	if err = s.blobs.Put(ctx, fk, bytes.NewReader(encoded)); err != nil {
+		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
 			"%w: write upload file: %w", unitimport.ErrSourceUnreachable, err,
-		)
+		), bk, fk)
+	}
+
+	row := unitimport.UploadCommit{
+		ImportID: s.commits.ImportID, UnitDir: s.unitDirName(u), Sequence: f.Sequence, Facts: name,
+		CommittedAt: s.now().UTC(), AttemptStartedAt: at.started,
+	}
+
+	switch err = s.commits.Store.CommitUploadVersion(ctx, s.commits.Fence, row, s.commits.Entry(row)); {
+	case err == nil:
+		return f.version(), nil
+	case errors.Is(err, unitimport.ErrUploadExists):
+		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
+			"%w: sequence %d is stored: %w", unitimport.ErrSourceInvalid, f.Sequence, err,
+		), bk, fk)
+	case errors.Is(err, unitimport.ErrAttemptExpired):
+		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf(
+			"%w: the attempt for sequence %d is outside its time window (at most %s old): %w",
+			unitimport.ErrSourceInvalid, f.Sequence, unitimport.UploadAttemptDeadline, err,
+		), bk, fk)
+	case errors.Is(err, unitimport.ErrInvalid), errors.Is(err, unitimport.ErrNotFound),
+		errors.Is(err, unitimport.ErrPurged), errors.Is(err, unitimport.ErrTransition),
+		errors.Is(err, namespace.ErrFenced), errors.Is(err, namespace.ErrNotFound):
+		// The store refused the row, so no row names the two files.
+		return unitimport.SourceVersion{}, s.discard(ctx, fmt.Errorf("commit upload version: %w", err), bk, fk)
 	default:
-		return f.version(), nil
+		return s.settle(ctx, u, f, name, err)
 	}
 }
 
-// settle resolves a create-only write of the facts file that the store
-// refused as existing. The store may have retried its own write after it lost
-// the response, and then the stored facts file is the one of this attempt.
+// settle resolves a commit that failed with an error that does not say
+// whether the row exists, for example a lost response. It reads the row of
+// the sequence. When the row names the facts file of this attempt, the commit
+// succeeded. Otherwise the two files stay, because the commit may still land,
+// and the cancel or the release of the import deletes them.
 func (s *Source) settle(
-	ctx context.Context, u unitimport.SourceUnit, f facts, bk blob.Key,
+	ctx context.Context, u unitimport.SourceUnit, f facts, name string, cause error,
 ) (unitimport.SourceVersion, error) {
-	stored, err := s.loadFacts(ctx, u, f.Sequence)
-	if err != nil {
-		// The facts file may be this attempt's, and then the body is in use.
-		// The body stays.
-		return unitimport.SourceVersion{}, fmt.Errorf("%w: read upload file: %w", unitimport.ErrSourceUnreachable, err)
+	rows, err := s.commits.Store.UploadCommits(ctx, s.commits.Fence.Namespace, s.commits.ImportID, s.unitDirName(u))
+	if err == nil {
+		for _, r := range rows {
+			if r.Sequence == f.Sequence && r.Facts == name {
+				return f.version(), nil
+			}
+		}
 	}
 
-	if stored.Body == f.Body {
-		return f.version(), nil
-	}
-
-	return unitimport.SourceVersion{}, s.discard(ctx, bk, invalid("sequence %d is stored", f.Sequence))
+	return unitimport.SourceVersion{}, fmt.Errorf(
+		"%w: commit upload version: %w", unitimport.ErrSourceUnreachable, cause,
+	)
 }
 
-// discard deletes the body at k, which only the failed attempt wrote, and it
-// returns cause with any error of the delete.
-func (s *Source) discard(ctx context.Context, k blob.Key, cause error) error {
-	return errors.Join(cause, s.blobs.Delete(context.WithoutCancel(ctx), k))
+// discard deletes the objects at keys, which only the failed attempt wrote,
+// and it returns cause with any error of the deletes.
+func (s *Source) discard(ctx context.Context, cause error, keys ...blob.Key) error {
+	errs := make([]error, 0, 1+len(keys))
+	errs = append(errs, cause)
+
+	for _, k := range keys {
+		errs = append(errs, s.blobs.Delete(context.WithoutCancel(ctx), k))
+	}
+
+	return errors.Join(errs...)
 }
 
 func (f facts) version() unitimport.SourceVersion {
@@ -482,12 +590,12 @@ func checkPut(u unitimport.SourceUnit, seq int, v Version) error {
 // unit directory, so it costs O(n) for each Put. That is acceptable at the
 // version limit of one unit.
 func (s *Source) checkNext(ctx context.Context, u unitimport.SourceUnit, seq int) error {
-	seqs, err := s.factsSequences(ctx, u)
+	idx, err := s.index(ctx, u)
 	if err != nil {
 		return err
 	}
 
-	if next := len(seqs) + 1; seq != next {
+	if next := len(idx.seqs) + 1; seq != next {
 		return invalid("the next version of this unit has the sequence %d, not %d", next, seq)
 	}
 
@@ -517,19 +625,30 @@ func (s *Source) putBody(ctx context.Context, k blob.Key, body io.Reader) (int64
 	counter := &countingReader{r: io.LimitReader(body, s.maxBytes+1), n: 0}
 
 	if err := s.blobs.Put(ctx, k, io.TeeReader(counter, h)); err != nil {
-		return 0, "", s.discard(ctx, k, fmt.Errorf("%w: store upload: %w", unitimport.ErrSourceUnreachable, err))
+		return 0, "", s.discard(ctx, fmt.Errorf("%w: store upload: %w", unitimport.ErrSourceUnreachable, err), k)
 	}
 
 	if counter.n > s.maxBytes {
-		return 0, "", s.discard(ctx, k, invalid("the body is larger than %d bytes", s.maxBytes))
+		return 0, "", s.discard(ctx, invalid("the body is larger than %d bytes", s.maxBytes), k)
 	}
 
 	return counter.n, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// bodyName returns the file name of a new attempt to store the body of seq.
-func bodyName(seq int) string {
-	return pad(seq) + "." + strings.ToLower(rand.Text()) + ".bin"
+// newAttempt returns the identifier of a new attempt to store a version: a
+// random text that is unique to the attempt.
+func newAttempt() string {
+	return strings.ToLower(rand.Text())
+}
+
+// bodyName returns the file name of the body of the attempt to store seq.
+func bodyName(seq int, attempt string) string {
+	return pad(seq) + "." + attempt + ".bin"
+}
+
+// factsName returns the file name of the facts of the attempt to store seq.
+func factsName(seq int, attempt string) string {
+	return pad(seq) + "-" + attempt + ".json"
 }
 
 // bodyKey returns the key of the body that f names.
@@ -575,13 +694,29 @@ func (s *Source) unitDir(u unitimport.SourceUnit) string {
 	return s.prefix + "/" + hex.EncodeToString(sum[:16])
 }
 
-func (s *Source) key(u unitimport.SourceUnit, seq int, ext string) (blob.Key, error) {
-	k, err := blob.ParseKey(s.unitDir(u) + "/" + pad(seq) + "." + ext)
+// factsKey returns the key of the facts file name in the directory of u. The
+// name is one of the names that the source or a commit row gives; the check
+// here is a defense-in-depth layer next to the check of the commit row, so a
+// name from a restored row cannot point outside the unit directory.
+func (s *Source) factsKey(u unitimport.SourceUnit, name string) (blob.Key, error) {
+	if !attemptFacts.MatchString(name) {
+		return "", invalid("an upload file name is not a facts file name")
+	}
+
+	k, err := blob.ParseKey(s.unitDir(u) + "/" + name)
 	if err != nil {
 		return "", fmt.Errorf("upload key: %w", err)
 	}
 
 	return k, nil
+}
+
+// unitDirName returns the last element of the directory of u: the hex of a
+// digest of the tool and the name, which the commit rows hold.
+func (s *Source) unitDirName(u unitimport.SourceUnit) string {
+	dir := s.unitDir(u)
+
+	return dir[strings.LastIndex(dir, "/")+1:]
 }
 
 func (s *Source) unitKey(u unitimport.SourceUnit) (blob.Key, error) {
@@ -625,35 +760,46 @@ func (s *Source) readJSON(ctx context.Context, k blob.Key, v any) error {
 	return nil
 }
 
-// factsSequences returns the sequences of u that have a facts file, in order.
-func (s *Source) factsSequences(ctx context.Context, u unitimport.SourceUnit) ([]int, error) {
-	objs, err := s.blobs.List(ctx, s.unitDir(u))
-	if err != nil {
-		return nil, fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
-	}
-
-	var seqs []int
-
-	for _, o := range objs {
-		name := o.Key.String()[strings.LastIndex(o.Key.String(), "/")+1:]
-
-		base, ok := strings.CutSuffix(name, ".json")
-		if !ok || base == "unit" {
-			continue
-		}
-
-		if n, convErr := strconv.Atoi(base); convErr == nil {
-			seqs = append(seqs, n)
-		}
-	}
-
-	slices.Sort(seqs)
-
-	return seqs, nil
+// versionIndex is the set of the committed versions of one unit: the
+// sequences in order, and the name of the facts file of each.
+type versionIndex struct {
+	seqs  []int
+	names map[int]string
 }
 
-func (s *Source) loadFacts(ctx context.Context, u unitimport.SourceUnit, seq int) (facts, error) {
-	k, err := s.key(u, seq, "json")
+// index returns the committed versions of u: the commit rows. A facts file of
+// an attempt that no row names is not a version.
+func (s *Source) index(ctx context.Context, u unitimport.SourceUnit) (versionIndex, error) {
+	rows, err := s.commits.Store.UploadCommits(ctx, s.commits.Fence.Namespace, s.commits.ImportID, s.unitDirName(u))
+	if err != nil {
+		return versionIndex{}, fmt.Errorf("%w: read upload commits: %w", unitimport.ErrSourceUnreachable, err)
+	}
+
+	idx := versionIndex{seqs: nil, names: map[int]string{}}
+
+	for _, r := range rows {
+		// Defense in depth: a row can come from a restored backup, so the
+		// reader checks it again.
+		if validErr := r.Validate(); validErr != nil {
+			return versionIndex{}, invalid("an upload commit row is not valid: %v", validErr)
+		}
+
+		idx.names[r.Sequence] = r.Facts
+	}
+
+	for n := range idx.names {
+		idx.seqs = append(idx.seqs, n)
+	}
+
+	slices.Sort(idx.seqs)
+
+	return idx, nil
+}
+
+// loadFacts reads the facts file name of the version seq of u. The sequence in
+// the file must be seq.
+func (s *Source) loadFacts(ctx context.Context, u unitimport.SourceUnit, seq int, name string) (facts, error) {
+	k, err := s.factsKey(u, name)
 	if err != nil {
 		return facts{}, err
 	}
@@ -661,6 +807,10 @@ func (s *Source) loadFacts(ctx context.Context, u unitimport.SourceUnit, seq int
 	var f facts
 	if readErr := s.readJSON(ctx, k, &f); readErr != nil {
 		return facts{}, readErr
+	}
+
+	if f.Sequence != seq {
+		return facts{}, invalid("an upload file holds the sequence %d, not %d", f.Sequence, seq)
 	}
 
 	return f, nil

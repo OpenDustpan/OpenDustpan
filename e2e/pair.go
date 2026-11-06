@@ -51,6 +51,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -62,12 +63,14 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:               rec,
 		deltaCutoff:       0,
 		sinkSenders:       nil,
+		issuer:            nil,
 	})
 	dst := newInprocessEnv(ctx, envInput{
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
 		signInRealTime:    false,
+		passkeys:          false,
 		journalRefuser:    nil,
 		journalCap:        nil,
 		tb:                tb,
@@ -79,6 +82,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:               rec,
 		deltaCutoff:       0,
 		sinkSenders:       nil,
+		issuer:            nil,
 	})
 
 	return &Pair{Src: src, Dst: dst}

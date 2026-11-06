@@ -22,9 +22,11 @@ var ErrNilStore = errors.New("scoped blob view needs a store")
 // namespacesDir starts the prefix of every namespace.
 const namespacesDir = "namespaces/"
 
-// Scoped is a view of a Store for one namespace. It refuses each key outside
-// the prefix "namespaces/<namespace ID>/" with ErrOutOfScope, before any call
-// to the store. It implements Store, so a domain service of a namespace takes
+// Scoped is a view of a Store for one directory of keys, for example the
+// directory of one namespace. It refuses each key outside the prefix
+// "namespaces/<namespace ID>/" of the namespace, or outside the prefix that
+// NewScopedPrefix got, with ErrOutOfScope, before any call to the store. It implements Store, so a domain service of a
+// namespace takes
 // the view where it took the store.
 type Scoped struct {
 	store Store
@@ -52,6 +54,28 @@ func NewScoped(s Store, id namespace.ID) (*Scoped, error) {
 
 	if _, err := ParseKey(prefix + "x"); err != nil {
 		return nil, fmt.Errorf("%w: the namespace ID cannot be part of a key", ErrInvalidKey)
+	}
+
+	return &Scoped{store: s, prefix: prefix}, nil
+}
+
+// NewScopedPrefix returns the view of s for the directory prefix, which ends
+// with a slash, for example "store-checks/<check ID>/". It returns
+// ErrNilStore when s is nil, and ErrInvalidKey when prefix has no trailing
+// slash or is not a valid directory of keys. The view refuses each key
+// outside prefix with ErrOutOfScope, as the view of a namespace does.
+func NewScopedPrefix(s Store, prefix string) (*Scoped, error) {
+	if s == nil {
+		return nil, ErrNilStore
+	}
+
+	dir, ok := strings.CutSuffix(prefix, "/")
+	if !ok || dir == "" {
+		return nil, fmt.Errorf("%w: the scope prefix needs a trailing slash", ErrInvalidKey)
+	}
+
+	if _, err := ParseKey(dir); err != nil {
+		return nil, fmt.Errorf("%w: the scope prefix is not a valid directory", ErrInvalidKey)
 	}
 
 	return &Scoped{store: s, prefix: prefix}, nil
@@ -98,32 +122,49 @@ func (v *Scoped) Delete(ctx context.Context, key Key) error {
 	return v.store.Delete(ctx, key)
 }
 
-// List returns the objects under prefix, which must name a directory inside
-// the scope, with or without a trailing slash. The empty prefix, and a prefix
-// that is the parent of the scope or only a string prefix of it, return
-// ErrOutOfScope. If the store returns a key outside the scope, List returns
-// ErrOutOfScope and no objects.
-func (v *Scoped) List(ctx context.Context, prefix string) ([]Object, error) {
-	dir := strings.TrimSuffix(prefix, "/")
+// ListPage returns one page of the objects under req.Prefix, which must name
+// a directory inside the scope, with or without a trailing slash. The empty
+// prefix, and a prefix that is the parent of the scope or only a string
+// prefix of it, return ErrOutOfScope. If the store returns a key outside the
+// scope, ListPage returns ErrOutOfScope and no objects.
+func (v *Scoped) ListPage(ctx context.Context, req PageRequest) (Page, error) {
+	dir := strings.TrimSuffix(req.Prefix, "/")
 
 	if !v.dirInScope(dir) {
-		return nil, ErrOutOfScope
+		return Page{}, ErrOutOfScope
 	}
 
-	objects, err := v.store.List(ctx, prefix)
+	// Defense in depth: the adapters validate the request too, and a cache or a
+	// fault wrapper sends it on unchanged. These checks stay so that a chain of
+	// stores with one layer that forgets to validate cannot list from a limit
+	// or from a position that the port refuses, or from a key of another
+	// namespace. They do not rely on the store under the view.
+	if err := req.Validate(); err != nil {
+		return Page{}, err
+	}
+
+	if req.After != "" && !v.inScope(req.After) {
+		return Page{}, ErrOutOfScope
+	}
+
+	page, err := v.store.ListPage(ctx, req)
 	if err != nil {
-		return nil, err
+		return Page{}, err
 	}
 
-	// Defense in depth: the store lists only under prefix. This check stays so
+	// Defense in depth: the store lists only under the prefix. This check stays so
 	// that an adapter with a listing fault cannot show a key of another namespace.
-	for i := range objects {
-		if !v.inScope(objects[i].Key) {
-			return nil, ErrOutOfScope
+	for i := range page.Objects {
+		if !v.inScope(page.Objects[i].Key) {
+			return Page{}, ErrOutOfScope
 		}
 	}
 
-	return objects, nil
+	if page.Next != "" && !v.inScope(page.Next) {
+		return Page{}, ErrOutOfScope
+	}
+
+	return page, nil
 }
 
 // Ping checks the store. It takes no key, so the scope does not apply.

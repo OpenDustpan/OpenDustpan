@@ -19,10 +19,12 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -60,6 +62,10 @@ type Config struct {
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
 	Collections *collection.Service
+	// Placements serves the placement rule routes. It is optional: nil serves
+	// no such route, so a store that holds no placement rules keeps the rest of
+	// the API unchanged.
+	Placements *collection.PlacementService
 	// Locks serves the manual lock routes. It is optional: a nil service serves
 	// no lock route, so a namespace store that holds no manual locks keeps the
 	// rest of the API unchanged.
@@ -99,9 +105,10 @@ type Config struct {
 	Logger    *slog.Logger
 	Now       func() time.Time
 	// StateGuard checks the restore and the final delete of a unit against
-	// the access limits and the gates of state.write. It is optional: nil
-	// means the server keeps no gates, and no call is checked.
-	StateGuard StateGuard
+	// the access limits and the gates of state.write. It is required. A
+	// server whose store keeps no gates gives the guard of stategate.Off
+	// with its reason.
+	StateGuard stategate.Guard
 }
 
 // Handler serves the inventory API under /api/inventory/.
@@ -113,6 +120,7 @@ type Handler struct {
 	lifecycles    map[string]coreinventory.Lifecycle
 	readScope     DeletedReadScope
 	collections   *collection.Service
+	placements    *collection.PlacementService
 	locks         *manuallock.Service
 	outputSharing *outputsharesvc.Service
 	outputs       *outputsharesvc.Reader
@@ -125,7 +133,7 @@ type Handler struct {
 	publicURL     *url.URL
 	logger        *slog.Logger
 	now           func() time.Time
-	stateGuard    StateGuard
+	admit         *stategate.Admitter
 	mux           *route.Mux
 	routes        []Route
 }
@@ -178,6 +186,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	admit, err := stategate.New(cfg.StateGuard, cfg.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("%w: state guard: %w", ErrMissingDependency, err)
+	}
+
 	h := &Handler{
 		views:         viewState,
 		namespaces:    cfg.Namespaces,
@@ -187,6 +200,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:    cfg.Lifecycles,
 		readScope:     cfg.ReadScope,
 		collections:   cfg.Collections,
+		placements:    cfg.Placements,
 		locks:         cfg.Locks,
 		outputSharing: cfg.OutputSharing,
 		outputs:       cfg.Outputs,
@@ -198,7 +212,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		publicURL:     publicURL,
 		logger:        cfg.Logger,
 		now:           clockOf(cfg.Now),
-		stateGuard:    cfg.StateGuard,
+		admit:         admit,
 		mux:           route.NewMux(),
 		routes:        nil,
 	}
@@ -251,6 +265,20 @@ type lockEntry struct {
 	Operation string `json:"operation"`
 }
 
+// lastReleaseEntry is the last released lock of a unit: the lock ID, the
+// subject of the principal that held the lock, the subject of the principal
+// that released it, the time of the release as an RFC 3339 time in UTC, and
+// the kind of release ("normal" or "forced"). A repeated unlock of the same
+// lock succeeds for 24 hours after the time of the release, because of this
+// record. It never holds a token or a secret.
+type lastReleaseEntry struct {
+	LockID     string `json:"id"`
+	Holder     string `json:"holder"`
+	ReleasedBy string `json:"releasedBy"`
+	ReleasedAt string `json:"releasedAt"`
+	Kind       string `json:"kind"`
+}
+
 // stateEntry is one state of a unit: its wire value and the time it began, an
 // RFC 3339 time in UTC.
 type stateEntry struct {
@@ -284,6 +312,9 @@ type unitEntry struct {
 	States        []stateEntry `json:"states"`
 	ResourceCount *int64       `json:"resourceCount,omitempty"`
 	Lock          *lockEntry   `json:"lock,omitempty"`
+	// LastRelease is the last released lock of the unit, omitted when the
+	// unit has no record. Only an OpenTofu workspace has one.
+	LastRelease *lastReleaseEntry `json:"lastRelease,omitempty"`
 	// ManualLock is the manual lock that covers the unit, omitted when none
 	// does. Like Lock, it is a flag and not a status.
 	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
@@ -334,6 +365,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		States:        toStateEntries(e),
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		LastRelease:   toLastReleaseEntry(e.LastRelease),
 		ManualLock:    toManualLockEntry(e.ManualLock),
 		Collection:    e.Collection,
 		Labels:        e.Labels,
@@ -374,6 +406,22 @@ func toLockEntry(lock *coreinventory.Lock) *lockEntry {
 	}
 
 	return &lockEntry{Holder: lock.Holder, Since: formatTime(lock.Since), Operation: lock.Operation}
+}
+
+// toLastReleaseEntry maps one projection record to its wire shape, or nil
+// when the unit has none, so the field stays omitted.
+func toLastReleaseEntry(r *coreinventory.LastRelease) *lastReleaseEntry {
+	if r == nil {
+		return nil
+	}
+
+	return &lastReleaseEntry{
+		LockID:     r.LockID,
+		Holder:     r.Holder,
+		ReleasedBy: r.By,
+		ReleasedAt: formatTime(r.At),
+		Kind:       r.Kind,
+	}
 }
 
 // listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units with one
@@ -596,7 +644,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // to show callers. The shared module answers the rest.
 func classify(err error) (problem.Problem, bool) {
 	for _, try := range []func(error) (problem.Problem, bool){
-		classifyView, classifyRequest, classifyCollection, classifyChange, classifyLock,
+		classifyView, classifyRequest, classifyCollection, classifyPlacement, classifyChange, classifyLock,
 	} {
 		if p, ok := try(err); ok {
 			return p, true
@@ -612,8 +660,11 @@ func classifyRequest(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errMissingUnit):
 		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
-	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody):
+	case errors.Is(err, errOutputSharingBody), errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody),
+		errors.Is(err, errPlacementBody):
 		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
+	case errors.Is(err, errPlacementRuleID):
+		return problem.New(http.StatusBadRequest, errcode.RequestInvalidPath, err.Error()), true
 	case errors.Is(err, namespace.ErrInvalidName):
 		return problem.New(http.StatusBadRequest, errcode.NamespaceInvalidName, err.Error()), true
 	case errors.Is(err, identity.ErrInvalidObject):
@@ -624,6 +675,8 @@ func classifyRequest(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusNotFound, errcode.UnitNotFound, "unit not found"), true
 	case errors.Is(err, collection.ErrUnitNotFound):
 		return problem.New(http.StatusNotFound, errcode.UnitNotFound, err.Error()), true
+	case errors.Is(err, access.ErrUnitMissing):
+		return problem.New(http.StatusNotFound, errcode.UnitNotFound, "unit not found"), true
 	}
 
 	var none problem.Problem
@@ -638,6 +691,10 @@ func classifyCollection(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusBadRequest, errcode.CollectionInvalidName, err.Error()), true
 	case errors.Is(err, collection.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, err.Error()), true
+	case errors.Is(err, access.ErrCollectionMissing):
+		// The move check found no such collection. The text is the fixed one of
+		// the collection error, so it does not repeat the check's wrap.
+		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, collection.ErrNotFound.Error()), true
 	case errors.Is(err, collection.ErrAlreadyExists):
 		return problem.New(http.StatusConflict, errcode.CollectionAlreadyExists, err.Error()), true
 	case errors.Is(err, collection.ErrNotEmpty):
@@ -648,6 +705,28 @@ func classifyCollection(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusConflict, errcode.UnitNoCollection, err.Error()), true
 	case errors.Is(err, collection.ErrMoveOutOfLockedCollection):
 		return problem.New(http.StatusConflict, errcode.CollectionMoveOutLocked, err.Error()), true
+	}
+
+	var none problem.Problem
+
+	return none, false
+}
+
+// classifyPlacement maps the errors of the placement rules.
+func classifyPlacement(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, collection.ErrInvalidPattern):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPattern, err.Error()), true
+	case errors.Is(err, collection.ErrInvalidPlacementTool):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidTool, err.Error()), true
+	case errors.Is(err, collection.ErrInvalidPosition):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPosition, err.Error()), true
+	case errors.Is(err, collection.ErrPlacementRuleNotFound):
+		return problem.New(http.StatusNotFound, errcode.PlacementRuleNotFound, err.Error()), true
+	case errors.Is(err, collection.ErrPlacementConflict):
+		return problem.New(http.StatusConflict, errcode.PlacementConflict, err.Error()), true
+	case errors.Is(err, collection.ErrTooManyPlacementRules):
+		return problem.New(http.StatusConflict, errcode.PlacementTooManyRules, err.Error()), true
 	}
 
 	var none problem.Problem

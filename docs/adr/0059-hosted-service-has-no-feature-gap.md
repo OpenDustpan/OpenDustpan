@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-13. Decision 6 superseded in part by ADR 215: the hosted service is multitenant, with the namespace as the tenant
 
+Changed by:
+
+- ADR 77 extends: the name and the domains of the hosted service.
+- ADR 215 changes decision 6: the hosted service is multitenant.
+
 ## Context
 
 On 2026-10-13 the project owner chose a hosted service on the model of

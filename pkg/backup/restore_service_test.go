@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,10 @@ type restoreServiceSetup struct {
 	maint   *restoreServiceMaintenance
 	order   *orderLog
 	id      backup.ID
+	// exporter is the exporter of the backup before the restore.
+	exporter *stubBackupExporter
+	// backupOps holds the operations of the backup service.
+	backupOps durable.Store
 }
 
 // restoreServiceLive is a fake backup.RestoreLive: the check store with an
@@ -97,6 +102,12 @@ type restoreServiceLive struct {
 	// applyErr is the error of ApplyStaging, to test a refusal by the swap.
 	applyErr error
 	dev      devLiveState
+	// staged holds the input of each StageRestore call.
+	staged []backup.RestoreStageInput
+	// keeps holds the installation that each DropStagedIssuerKeys call was
+	// given, and dropReport is what the fake answers to it.
+	keeps      []string
+	dropReport []backup.IssuerKeysDropped
 	// ops is the store of durable operations of the restores, maint the
 	// installation state that the fenced writes change, entered the
 	// maintenance flag of each restore, and areas the staging areas.
@@ -108,6 +119,14 @@ type restoreServiceLive struct {
 	events map[backup.RestoreID]string
 	// minErr is the answer of CheckBinaryMinimum.
 	minErr error
+	// afterStage runs once StageRestore has staged, and onApplying runs at
+	// the start of MarkRestoreApplying (the pre-backup step). A test uses
+	// them to change the backup target at a chosen point of the restore.
+	afterStage func()
+	onApplying func()
+	// stageBlobs are added to the blobs of the staged summary: rows of the
+	// staged data that name a blob.
+	stageBlobs []backup.BlobRef
 }
 
 // devLiveState holds what the fake live store does for the dev data ports.
@@ -598,6 +617,8 @@ type stubBackupExporter struct {
 	sum   backup.Summary
 	data  []byte
 	order *orderLog
+	// hook, when set, runs at the start of each export.
+	hook atomic.Pointer[func()]
 }
 
 func (e *stubBackupExporter) ExportPortable(
@@ -605,6 +626,10 @@ func (e *stubBackupExporter) ExportPortable(
 ) (backup.Summary, []backup.PortableFile, error) {
 	if e.order != nil {
 		e.order.add("export")
+	}
+
+	if hook := e.hook.Load(); hook != nil {
+		(*hook)()
 	}
 
 	// Every table gets a file, as the real export does: a backup without a
@@ -640,8 +665,11 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	live.maint = maint
 
 	backupRegs := newFakeRegistry()
+	exporter := &stubBackupExporter{
+		sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
+	}
 	backups, err := backup.NewService(backup.Config{
-		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Operations:  backupRegs.ops,
@@ -690,15 +718,17 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	regs.setWorker(service)
 
 	return &restoreServiceSetup{
-		service: service,
-		target:  setup.target,
-		live:    live,
-		blobs:   blobs,
-		backups: backups,
-		regs:    regs,
-		maint:   maint,
-		order:   order,
-		id:      setup.id,
+		service:   service,
+		target:    setup.target,
+		live:      live,
+		blobs:     blobs,
+		backups:   backups,
+		regs:      regs,
+		maint:     maint,
+		order:     order,
+		id:        setup.id,
+		exporter:  exporter,
+		backupOps: backupRegs.ops,
 	}
 }
 
@@ -921,8 +951,8 @@ func (m *mutatingTarget) Delete(ctx context.Context, key blob.Key) error {
 	return m.inner.Delete(ctx, key)
 }
 
-func (m *mutatingTarget) List(ctx context.Context, prefix string) ([]blob.Object, error) {
-	return m.inner.List(ctx, prefix)
+func (m *mutatingTarget) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	return m.inner.ListPage(ctx, req)
 }
 
 func (m *mutatingTarget) Ping(ctx context.Context) error {
@@ -1295,7 +1325,9 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	live.maint = maint
 
 	backups, err := backup.NewService(backup.Config{
-		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
+		Exporter: &stubBackupExporter{
+			sum: testSummary(), data: []byte("pre-backup-sql"), order: nil, hook: atomic.Pointer[func()]{},
+		},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Operations:  backupRegs.ops,
@@ -1937,6 +1969,7 @@ func (k fixedKind) ReadKind(_ context.Context) (installation.Kind, error) {
 func emptyReport() backup.DevStripReport {
 	return backup.DevStripReport{
 		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil, Approvers: nil, Warnings: nil,
+		PreBackupFound: nil, NotHeld: nil, ErrorCode: "",
 	}
 }
 
@@ -1951,6 +1984,9 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		stageBlock: nil,
 		applyGate:  nil,
 		stageCalls: 0,
+		staged:     nil,
+		keeps:      nil,
+		dropReport: nil,
 		applied:    0,
 		kept:       0,
 		bumped:     0,
@@ -1961,12 +1997,15 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 			stripErr: map[backup.DevStripMode]error{}, dropped: 0, order: nil, appendErr: nil,
 			stageOpts: nil, strips: nil, records: nil, appends: nil, discards: 0,
 		},
-		ops:     durabletest.NewMem().Store(),
-		maint:   nil,
-		entered: map[backup.RestoreID]bool{},
-		areas:   nil,
-		events:  map[backup.RestoreID]string{},
-		minErr:  nil,
+		ops:        durabletest.NewMem().Store(),
+		maint:      nil,
+		entered:    map[backup.RestoreID]bool{},
+		areas:      nil,
+		events:     map[backup.RestoreID]string{},
+		minErr:     nil,
+		afterStage: nil,
+		onApplying: nil,
+		stageBlobs: nil,
 	}
 }
 

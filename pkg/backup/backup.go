@@ -45,7 +45,8 @@ const (
 // budget is a windowed count in the database: the live rows stay across the
 // swap of a restore, as the claim tokens and the next runs do. So does the
 // row of the last audit chain check and the marks of checkpoint mismatches
-// do too: a restore must not clear a mark.
+// do too: a restore must not clear a mark. The counts of the lockout by name
+// and the key of their digests stay too: a restore must not end a lock.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
@@ -53,6 +54,8 @@ const (
 	TableSignInFailures    = "sign_in_failures"
 	TableAuditChainCheck   = "audit_chain_check"
 	TableAuditChainMark    = "audit_chain_mark"
+	TableNameLocks         = "name_locks"
+	TableNameLockKey       = "name_lock_key"
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server
@@ -62,6 +65,8 @@ const (
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableDurableHeartbeats    = "durable_heartbeats"
+	TableLocalUserResets      = "local_user_resets"
+	TablePasskeyChallenges    = "passkey_challenges"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
@@ -79,6 +84,10 @@ const (
 	// process. The rows describe the processes that run now, so a restore
 	// keeps the live rows.
 	TableInstanceVersions = "instance_versions"
+	// TableStoreChecks holds the rows of the store checks of the installation.
+	// A check describes the store of this installation at the time of the
+	// check, so a restore keeps the live rows and a backup leaves them out.
+	TableStoreChecks = "store_checks"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an
@@ -113,6 +122,7 @@ var Tables = []string{
 	"inventory_changes",
 	"collections",
 	"collection_members",
+	"placement_rules",
 	"object_context",
 	"object_context_owners",
 	"gate_objects",
@@ -142,6 +152,7 @@ var Tables = []string{
 	"imports_purged",
 	"import_units",
 	"import_ledger",
+	"import_upload_commits",
 	"workspace_blame_cursors",
 	"workspace_blame_items",
 	"workspace_resource_changes",
@@ -157,12 +168,19 @@ var Tables = []string{
 	"job_log_chunks",
 	"profiles",
 	"profile_revisions",
+	"issuer_keys",
+	"issuer_settings",
 	"manual_locks",
 	TablePersonPreferences,
 	TableForgeAccountLinks,
 	TableForgeLinkRequests,
+	TableLocalUsers,
+	TableSessionGenerations,
+	TablePasskeys,
 	"saved_views",
 	"drift_results",
+	"unit_settings",
+	"unit_defaults",
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	"git_host_connections",
@@ -171,8 +189,18 @@ var Tables = []string{
 	"notification_sinks",
 	"notification_sink_secrets",
 	"notification_sink_refs",
+	"notifications",
+	"notification_sequences",
+	"notification_cursors",
+	"notification_subscriptions",
+	"notification_deliveries",
 	"triggers",
 	"item_keys",
+	"settings",
+	"settings_state",
+	"catalog_blueprints",
+	"catalog_blueprint_versions",
+	TableTrustRules,
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list
@@ -275,7 +303,7 @@ type Summary struct {
 // backup with a lower schema version cannot be restored by any binary. It
 // equals schema.BaselineVersion of the store package, which this package
 // cannot import; a test pins the two.
-const BaselineSchemaVersion = 100
+const BaselineSchemaVersion = 168
 
 // EndedWithoutFinishText is the error text of a backup row that
 // Registry.FailEndedBackups marks failed when its operation holds no error
@@ -362,6 +390,15 @@ type Registry interface {
 	// if the ID is taken, and ErrAlreadyRunning when another backup is
 	// running. A failed start changes nothing.
 	StartBackup(ctx context.Context, r Record, start durable.StartRequest) error
+	// StartBackupClaimed stores r and starts the operation start as
+	// StartBackup does, and claims the new operation for claim in the same
+	// transaction, with the rules of durable.StartClaim. It returns the
+	// claimed operation. It returns durable.ErrInvalid for a claim that
+	// fails Validate, and the errors of StartBackup. A failed start changes
+	// nothing.
+	StartBackupClaimed(
+		ctx context.Context, r Record, start durable.StartRequest, claim durable.StartClaim,
+	) (durable.Operation, error)
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time,
 	// and records the step f.Step, in one transaction that checks the claim

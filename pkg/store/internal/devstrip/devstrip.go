@@ -143,6 +143,13 @@ var classes = []class{
 		name: backup.RemovedTempAdmins, table: "temp_admins", link: colPrincipalID, only: "",
 		extra: func(d Dialect) string { return d.matchSubject() },
 	},
+	{name: backup.RemovedTrustRules, table: backup.TableTrustRules, link: colPrincipalID, only: "", extra: nil},
+	{name: backup.RemovedLocalUsers, table: backup.TableLocalUsers, link: colPrincipalID, only: "", extra: nil},
+	{
+		name: backup.RemovedSessionGenerations, table: backup.TableSessionGenerations, link: colPrincipalID,
+		only: "", extra: nil,
+	},
+	{name: backup.RemovedPasskeys, table: backup.TablePasskeys, link: colPrincipalID, only: "", extra: nil},
 }
 
 // where returns the SQL condition of the rows of c that the strip removes.

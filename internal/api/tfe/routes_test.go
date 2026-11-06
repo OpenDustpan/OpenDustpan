@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -273,7 +274,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -349,6 +350,7 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 		CreatedAt:   stubWorkspaceTime(),
 		UpdatedAt:   stubWorkspaceTime(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID("ws-" + name.String()),
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
@@ -817,6 +819,49 @@ func (stubWorkspaces) Restore(
 	return restored, nil
 }
 
+// ReadRollbackChange answers a change of the stub state: the current version
+// of the stub, no removed address and one resource.
+func (stubWorkspaces) ReadRollbackChange(
+	ctx context.Context, id workspace.ID, to workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	src, err := stubWorkspaces{}.ReadState(ctx, to)
+	if err != nil {
+		return workspace.RollbackChange{}, err
+	}
+
+	if src.Workspace != id {
+		return workspace.RollbackChange{}, workspace.ErrStateVersionNotFound
+	}
+
+	cur, err := stubWorkspaces{}.Current(ctx, id)
+	if err != nil {
+		return workspace.RollbackChange{}, err
+	}
+
+	return workspace.RollbackChange{Current: cur.ID, Resources: 1, Removed: []string{}, Encrypted: false}, nil
+}
+
+// RestoreExpecting restores as Restore does, and fails when expectCurrent is
+// not the current version of the stub.
+func (stubWorkspaces) RestoreExpecting(
+	ctx context.Context,
+	id workspace.ID,
+	from workspace.StateVersionID,
+	by string,
+	expectCurrent workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	cur, err := stubWorkspaces{}.Current(ctx, id)
+	if err != nil {
+		return workspace.StateVersion{}, err
+	}
+
+	if cur.ID != expectCurrent {
+		return workspace.StateVersion{}, workspace.ErrConcurrentModification
+	}
+
+	return stubWorkspaces{}.Restore(ctx, id, from, by)
+}
+
 // History serves the stub state of ws-test123 as a list of one, so the list
 // route test proves authorization, not the state rules.
 func (stubWorkspaces) History(
@@ -882,10 +927,11 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Holder:   "",
 			Reason:   "",
 		},
-		ID:        id,
-		Ref:       workspace.Ref{Namespace: ns, Name: parsed},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns, Name: parsed},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -907,7 +953,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -934,7 +980,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -963,7 +1009,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1851,6 +1897,18 @@ func (errorWorkspaces) Restore(
 	return workspace.StateVersion{}, errTestInternal
 }
 
+func (errorWorkspaces) ReadRollbackChange(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID,
+) (workspace.RollbackChange, error) {
+	return workspace.RollbackChange{}, errTestInternal
+}
+
+func (errorWorkspaces) RestoreExpecting(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
+}
+
 func (errorWorkspaces) History(
 	_ context.Context, _ workspace.ID, _ workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
@@ -1884,7 +1942,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

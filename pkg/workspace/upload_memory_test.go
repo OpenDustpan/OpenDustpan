@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -419,6 +420,7 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 	tb.Helper()
 
 	svc, svcErr := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         base.store,
 		States:             base.store,

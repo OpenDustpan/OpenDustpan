@@ -231,7 +231,7 @@ func TestContentsAboveTheLimitAnswerTooLarge(t *testing.T) {
 	t.Parallel()
 
 	f := githubfake.New(t, githubfake.Config{
-		AppID: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
+		AppID: "", AppSlug: "", InstallationID: "", Owner: githubfake.Account{ID: 0, Login: ""},
 		User: githubfake.Account{ID: 0, Login: ""}, UserToken: userValue, ClassicToken: false,
 		Permissions: nil, ContentsLimit: 10, Key: nil, Now: nil, WebhookClient: nil,
 	})

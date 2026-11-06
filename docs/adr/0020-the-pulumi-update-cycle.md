@@ -2,6 +2,16 @@
 
 Status: accepted · 2026-10-10. The stored event bodies superseded in part by ADR 151. Extended by ADR 213 decision 10
 
+Changed by:
+
+- ADR 24 extends decision 6: the storage and history of checkpoints.
+- ADR 28 extends decision 1: the force-release action is the existing cancel
+  route.
+- ADR 37 changes decision 5: the server advertises delta checkpoint uploads.
+- ADR 43 changes decision 5: the journaling part of milestone 1 checkpoints.
+- ADR 151 changes: the stored event bodies are sealed with the item key.
+- ADR 213 extends: a manual lock blocks the start of an update.
+
 ## Context
 
 The Pulumi CLI needs an update cycle after stack management: create, start,

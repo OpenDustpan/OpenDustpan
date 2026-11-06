@@ -23,7 +23,10 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -648,6 +651,21 @@ func (m *memStore) FenceAndUnlock(
 func (m *memStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	return memFinalize(m, sv, fence, nil)
+}
+
+// FinalizeStateVersionExpecting finalizes as FinalizeStateVersion does, and
+// also checks the current version under the same lock.
+func (m *memStore) FinalizeStateVersionExpecting(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
+) error {
+	return memFinalize(m, sv, fence, &expect)
+}
+
+// memFinalize finalizes sv, and checks the current version when expect is set.
+func memFinalize(
+	m *memStore, sv workspace.StateVersion, fence namespace.Fence, expect *workspace.StateVersionID,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -684,6 +702,10 @@ func (m *memStore) FinalizeStateVersion(
 
 	if err := checkMemFinalize(m, w, sv); err != nil {
 		return err
+	}
+
+	if expect != nil && m.current[sv.Workspace] != *expect {
+		return workspace.ErrConcurrentModification
 	}
 
 	m.versions[sv.ID] = sv
@@ -1010,6 +1032,15 @@ func (m *memStore) ListStateVersions(
 	return all[offset:end], total, nil
 }
 
+// memLastRelease returns the inventory record of r, or nil when r is no record.
+func memLastRelease(r workspace.Release) *inventory.LastRelease {
+	if !r.Recorded() {
+		return nil
+	}
+
+	return &inventory.LastRelease{At: r.At, LockID: r.LockID, Holder: r.Holder, By: r.By, Kind: string(r.Kind)}
+}
+
 // memLock returns the inventory lock a workspace holds, or nil when it is
 // unlocked, as the store adapters publish it.
 func memLock(lock workspace.Lock) *inventory.Lock {
@@ -1064,7 +1095,7 @@ func stateDirOf(ctx context.Context, t *testing.T, namespaces *namespace.Service
 func listStateBlobs(t *testing.T, blobs blob.Store, id workspace.ID) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "namespaces/")
+	listed, err := blobtest.ListAll(t.Context(), blobs, "namespaces/")
 	if err != nil {
 		t.Fatalf("list state blobs of %s: %v", id, err)
 	}
@@ -1109,6 +1140,21 @@ func openFixtureBlobs(t *testing.T) *fs.Store {
 func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	t.Helper()
 
+	return newFixtureGuarded(t, blobs, blobguardtest.None{})
+}
+
+// newFixtureGuarded is newFixtureWithBlobs with guard as the guard of the
+// blob deletes.
+func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Watch) fixture {
+	t.Helper()
+
+	return newFixtureSized(t, blobs, guard, 64)
+}
+
+// newFixtureSized is newFixtureGuarded with a state size limit of maxState.
+func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Watch, maxState int64) fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
@@ -1133,6 +1179,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          guard,
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -1142,7 +1189,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
-		MaxStateBytes:      64,
+		MaxStateBytes:      maxState,
 		MaxPendingVersions: 0,
 		Retention:          0,
 	})
@@ -1176,6 +1223,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 	f := newFixture(t)
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -1289,6 +1337,7 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             goneStates{StateStore: f.store},
@@ -1399,6 +1448,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 	var svc *workspace.Service
 
 	svc, err = workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -1572,6 +1622,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -3204,6 +3255,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         gated,
 		States:             gated,
@@ -3389,6 +3441,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 	t.Helper()
 
 	second, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
@@ -4244,6 +4297,12 @@ func (f fencedStates) FinalizeStateVersion(
 	return namespace.ErrFenced
 }
 
+func (f fencedStates) FinalizeStateVersionExpecting(
+	_ context.Context, _ workspace.StateVersion, _ namespace.Fence, _ workspace.StateVersionID,
+) error {
+	return namespace.ErrFenced
+}
+
 // TestRestoreStaleFenceWritesNothing proves a restore whose writes the store
 // fences fails with ErrFenced and changes nothing: no lock, no version and
 // no blob.
@@ -4266,6 +4325,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 	}
 
 	fenced, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         fencedWorkspaces{memStore: f.store},
 		States:             fencedStates{memStore: f.store},
@@ -4428,6 +4488,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 	}
 
 	raced, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         &raceWorkspaces{memStore: f.store, raced: false},
 		States:             f.store,
@@ -4609,6 +4670,7 @@ func newSealedFixture(t *testing.T) fixture {
 	refusals := workspacetest.NewRefusals()
 
 	svc, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -4685,6 +4747,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 	}
 
 	_, err = workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -5328,6 +5391,7 @@ func (m *memStore) publish(w workspace.Workspace) {
 	name := w.Ref.Name.String()
 
 	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		LastRelease:   memLastRelease(w.LastRelease),
 		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   w.UpdatedAt,
@@ -5407,4 +5471,20 @@ func (m *memStore) checkDeclareSwitches(w workspace.Workspace, sv workspace.Stat
 	}
 
 	return nil
+}
+
+// pendingCount returns the number of state versions of m that are pending.
+func pendingCount(m *memStore) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	n := 0
+
+	for id := range m.versions {
+		if m.versions[id].Status == workspace.StatusPending {
+			n++
+		}
+	}
+
+	return n
 }

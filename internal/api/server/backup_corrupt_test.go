@@ -97,7 +97,8 @@ func TestGetBackupCorruptManifest(t *testing.T) {
 var errSecretText = errors.New("dsn host=secret-name")
 
 // TestInternalErrorLogNamesTheCause proves that the log line of a 500 names
-// the code and the type of the cause, and never the text of the error.
+// the status and a cause from the closed list, and never the text of the
+// error.
 func TestInternalErrorLogNamesTheCause(t *testing.T) {
 	t.Parallel()
 
@@ -112,9 +113,9 @@ func TestInternalErrorLogNamesTheCause(t *testing.T) {
 				"read manifest: %w",
 				&fs.PathError{Op: "open", Path: "/srv/secret-name", Err: fs.ErrPermission},
 			),
-			cause: "*fs.PathError",
+			cause: "file_permission",
 		},
-		{name: "text error", err: errSecretText, cause: "*errors.errorString"},
+		{name: "text error", err: errSecretText, cause: "unclassified"},
 	}
 
 	for _, tc := range tests {
@@ -128,10 +129,10 @@ func TestInternalErrorLogNamesTheCause(t *testing.T) {
 			apiserver.WriteErrorLogForTest(rec, r, tc.err, slog.New(slog.NewTextHandler(&buf, nil)))
 
 			line := buf.String()
-			if !strings.Contains(line, "error_code="+errcode.ServerInternal) ||
+			if !strings.Contains(line, "status=500") ||
 				!strings.Contains(line, "cause="+tc.cause) ||
 				strings.Contains(line, "secret-name") {
-				t.Fatalf("log = %q, want the code and the cause %s, and no text of the error", line, tc.cause)
+				t.Fatalf("log = %q, want the status and the cause %s, and no text of the error", line, tc.cause)
 			}
 		})
 	}
