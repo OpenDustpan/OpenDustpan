@@ -405,6 +405,8 @@ Reference:
   the routes, fields and errors of notification destinations.
 - [Languages and digits](docs/reference/languages-and-digits.md): the
   languages, the `digits` setting and the plural forms.
+- [Proxy rules](docs/reference/proxy-rules.md): the format, the variables, the
+  limits and the refusals of a proxy rule set of the job proxy.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 
