@@ -90,6 +90,10 @@ var (
 		status: http.StatusBadRequest, code: errcode.MFABreakGlassReasonRequired, args: nil,
 		message: "a break-glass sign-in needs a reason: start the sign-in again and type the reason",
 	}
+	errPasskeySignInSourceLimit = &codedError{
+		status: http.StatusTooManyRequests, code: errcode.MFASignInSourceLimit, args: nil,
+		message: "this address holds the most open sign-ins: wait 5 minutes and try again",
+	}
 	errPasskeySignInUnavailable = &codedError{
 		status: http.StatusServiceUnavailable, code: errcode.MFAUnavailable, args: nil,
 		message: "the passkeys cannot answer: try again later",
@@ -312,10 +316,15 @@ func (h *Handler) completePasskey(
 }
 
 // passkeySignInError returns the answer of an error of a step of the passkey
-// sign-in. A store that cannot answer is a 503. Every other error answers the
+// sign-in. A source at its count of open challenges is a 429. A store that
+// cannot answer is a 503. Every other error answers the
 // text of a failed sign-in: the answer tells nothing about a passkey, a
 // person or a ceremony.
 func passkeySignInError(err error) error {
+	if errors.Is(err, mfa.ErrSourceChallengeLimit) {
+		return errPasskeySignInSourceLimit
+	}
+
 	if errors.Is(err, mfa.ErrUnavailable) {
 		return errPasskeySignInUnavailable
 	}

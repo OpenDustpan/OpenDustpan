@@ -92,6 +92,11 @@ func passkeyCases() []passkeyCase {
 			test: testSignInChallengeCap,
 		},
 		{
+			name: "a source over its cap of open sign-in challenges stores no row, and another source still works",
+			test: testSignInSourceCap,
+		},
+		{name: "a challenge with a hostile source fails with ErrInvalid", test: testChallengeSourceChecks},
+		{
 			name: "a challenge after its expiry fails with ErrNotFound, also on a second take",
 			test: testChallengeExpired,
 		},
@@ -981,6 +986,19 @@ func digest(n int) mfa.Digest {
 	return mfa.DigestOf([]byte("challenge " + strconv.Itoa(n)))
 }
 
+// defaultSource is the source of a sign-in challenge that challengeOf makes.
+// The fill of the installation uses other sources, so this one has room.
+const defaultSource = "192.0.2.1"
+
+// challengeFrom returns a sign-in challenge from the source that starts at
+// second sec.
+func challengeFrom(source string, sec int) mfa.Challenge {
+	c := challengeOf(mfa.CeremonySignIn, sec)
+	c.Source = source
+
+	return c
+}
+
 // challengeOf returns a challenge of the kind k that starts at second sec.
 func challengeOf(k mfa.Ceremony, sec int) mfa.Challenge {
 	c := mfa.Challenge{
@@ -990,6 +1008,11 @@ func challengeOf(k mfa.Ceremony, sec int) mfa.Challenge {
 		PersonID:  "",
 		PendingID: "",
 		SessionID: "",
+		Source:    "",
+	}
+
+	if k == mfa.CeremonySignIn {
+		c.Source = defaultSource
 	}
 
 	if k == mfa.CeremonyRegister || k == mfa.CeremonyFresh {
@@ -1013,8 +1036,11 @@ func testSignInChallengeCap(t *testing.T, s PasskeyStore) {
 
 	ctx := t.Context()
 
+	// Many sources, each one under its own count, fill the installation.
 	for i := range mfa.MaxOpenSignInChallenges {
-		if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, 0), digest(i)); err != nil {
+		source := "10.0." + strconv.Itoa(i/mfa.MaxOpenSignInChallengesPerSource)
+
+		if err := s.CreateChallenge(ctx, challengeFrom(source, 0), digest(i)); err != nil {
 			t.Fatalf("sign-in challenge %d: %v", i, err)
 		}
 	}
@@ -1048,6 +1074,99 @@ func testSignInChallengeCap(t *testing.T, s PasskeyStore) {
 
 	if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonySignIn, late), lateDigest); err != nil {
 		t.Fatalf("sign-in challenge after the others expired: %v", err)
+	}
+}
+
+// testSignInSourceCap fills one source with the most open sign-in challenges
+// that one source can hold. The next challenge of that source is refused with
+// ErrSourceChallengeLimit, which is not ErrChallengeLimit, and stores no row.
+// Another source, and a challenge of another kind, still work.
+func testSignInSourceCap(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	ctx := t.Context()
+	flood := "198.51.100.7"
+
+	for i := range mfa.MaxOpenSignInChallengesPerSource {
+		if err := s.CreateChallenge(ctx, challengeFrom(flood, 0), digest(i)); err != nil {
+			t.Fatalf("sign-in challenge %d: %v", i, err)
+		}
+	}
+
+	over := digest(mfa.MaxOpenSignInChallengesPerSource)
+
+	err := s.CreateChallenge(ctx, challengeFrom(flood, 1), over)
+	if !errors.Is(err, mfa.ErrSourceChallengeLimit) || errors.Is(err, mfa.ErrChallengeLimit) ||
+		errors.Is(err, mfa.ErrUnavailable) {
+		t.Fatalf("challenge over the count of a source = %v, want ErrSourceChallengeLimit", err)
+	}
+
+	if _, err := s.TakeChallenge(ctx, over, at(2)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("take of the refused challenge = %v, want ErrNotFound: the refusal stored a row", err)
+	}
+
+	for i, other := range []string{"198.51.100.8", "2001:db8:0:1::/64"} {
+		if err := s.CreateChallenge(ctx, challengeFrom(other, 1), digest(100+i)); err != nil {
+			t.Fatalf("challenge of another source %s: %v", other, err)
+		}
+	}
+
+	if err := s.CreateChallenge(ctx, challengeOf(mfa.CeremonyFresh, 1), digest(-1)); err != nil {
+		t.Fatalf("fresh challenge while a source is at its count: %v", err)
+	}
+
+	testSourceRecovers(t, s, flood, over)
+}
+
+// testSourceRecovers checks that a source at its count works again after one
+// of its challenges ends, and after all of them expire.
+func testSourceRecovers(t *testing.T, s PasskeyStore, flood string, over mfa.Digest) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if _, err := s.TakeChallenge(ctx, digest(0), at(2)); err != nil {
+		t.Fatalf("take of an open challenge: %v", err)
+	}
+
+	if err := s.CreateChallenge(ctx, challengeFrom(flood, 2), over); err != nil {
+		t.Fatalf("challenge after one of the source ended: %v", err)
+	}
+
+	late := int(mfa.ChallengeExpiry(at(0)).Sub(at(0)).Seconds()) + 5
+	if err := s.CreateChallenge(ctx, challengeFrom(flood, late), digest(200)); err != nil {
+		t.Fatalf("challenge after the others of the source expired: %v", err)
+	}
+}
+
+// testChallengeSourceChecks sends a hostile source to the store alone. A
+// sign-in without a source, a source on another kind, a source with a control
+// character or a source over the length is refused with ErrInvalid and stores
+// no row.
+func testChallengeSourceChecks(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	onFresh := challengeOf(mfa.CeremonyFresh, 0)
+	onFresh.Source = "198.51.100.7"
+
+	cases := [...]struct {
+		name string
+		c    mfa.Challenge
+	}{
+		{"sign-in without a source", challengeFrom("", 0)},
+		{"source with a line break", challengeFrom("198.51.100.7\r\nX: 1", 0)},
+		{"source with a non-ASCII character", challengeFrom("198.51.100.\u00e9", 0)},
+		{"source over the length", challengeFrom(strings.Repeat("a", mfa.MaxSourceBytes+1), 0)},
+		{"source on a fresh challenge", onFresh},
+	}
+
+	for i := range cases {
+		err := s.CreateChallenge(t.Context(), cases[i].c, digest(i))
+		wantErr(t, cases[i].name, err, mfa.ErrInvalid)
+
+		if _, err := s.TakeChallenge(t.Context(), digest(i), at(1)); !errors.Is(err, mfa.ErrNotFound) {
+			t.Fatalf("%s: take = %v, want ErrNotFound: the refusal stored a row", cases[i].name, err)
+		}
 	}
 }
 

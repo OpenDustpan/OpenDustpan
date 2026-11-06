@@ -173,6 +173,12 @@ the address for 15 minutes. A source at a limit gets 429 with the error code
 is the client address that the server resolves: a forwarding header counts only
 when a trusted proxy sent it.
 
+Each source address also holds at most 20 open sign-in challenges. An IPv6
+source is its /64 range. Over that count a start answers 429 with the error
+code `mfa.sign-in-source-limit`, stores no row, and writes an audit entry. The
+limit keeps one source from using the whole budget of the installation, so a
+sign-in from another address, a break-glass sign-in included, still works.
+
 The installation also holds at most 10,000 open sign-in challenges. Over that
 count a start answers 503 with the error code `mfa.unavailable` and stores no
 row. A challenge ends after 5 minutes. The failures count by source address and never by

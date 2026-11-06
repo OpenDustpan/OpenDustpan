@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/mfa"
@@ -149,7 +150,10 @@ func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) 
 		return nil, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "passkey limit reached", mfa.ErrLimit)
 	}
 
-	c, err := s.newChallenge(ctx, mfa.CeremonyRegister, p.ID, "", a.SessionID)
+	c, err := s.newChallenge(ctx, &mfa.Challenge{
+		CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: mfa.CeremonyRegister, PersonID: p.ID, PendingID: "",
+		SessionID: a.SessionID, Source: "",
+	})
 	if err != nil {
 		return nil, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "challenge cannot be stored", err)
 	}
@@ -269,7 +273,15 @@ func (s *Service) BeginAssertion(ctx context.Context, a Actor, k mfa.Ceremony, b
 		allow = keys
 	}
 
-	c, err := s.newChallenge(ctx, k, personID, pendingID, sessionID)
+	c, err := s.newChallenge(ctx, &mfa.Challenge{
+		CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: personID, PendingID: pendingID,
+		SessionID: sessionID, Source: challengeSource(k, a.Entry.SourceIP),
+	})
+	if errors.Is(err, mfa.ErrSourceChallengeLimit) {
+		return nil, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject),
+			"source holds the most open sign-in challenges", err)
+	}
+
 	if err != nil {
 		return nil, s.refuse(ctx, a.Entry, on(ActionCeremonyRefused, unknownObject), "challenge cannot be stored", err)
 	}
@@ -289,15 +301,21 @@ func (s *Service) BeginAssertion(ctx context.Context, a Actor, k mfa.Ceremony, b
 func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 	binds := map[mfa.Ceremony]mfa.Challenge{
 		mfa.CeremonySignIn: {
-			CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: "", PendingID: "", SessionID: "",
+			CreatedAt: time.Time{},
+			ExpiresAt: time.Time{},
+			Kind:      k,
+			PersonID:  "",
+			PendingID: "",
+			SessionID: "",
+			Source:    "",
 		},
 		mfa.CeremonySecondFactor: {
 			CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: b.PersonID, PendingID: b.PendingID,
-			SessionID: "",
+			SessionID: "", Source: "",
 		},
 		mfa.CeremonyFresh: {
 			CreatedAt: time.Time{}, ExpiresAt: time.Time{}, Kind: k, PersonID: a.PrincipalID, PendingID: "",
-			SessionID: a.SessionID,
+			SessionID: a.SessionID, Source: "",
 		},
 	}
 
@@ -587,7 +605,7 @@ func (s *Service) refuse(ctx context.Context, base audit.Entry, tg target, cause
 
 	kind := audit.KindChange
 	if errors.Is(err, mfa.ErrVerification) || errors.Is(err, mfa.ErrWrongPerson) ||
-		errors.Is(err, mfa.ErrSuspended) {
+		errors.Is(err, mfa.ErrSuspended) || errors.Is(err, mfa.ErrSourceChallengeLimit) {
 		kind = audit.KindSecurity
 	}
 
@@ -604,21 +622,41 @@ func (s *Service) refuse(ctx context.Context, base audit.Entry, tg target, cause
 	return err
 }
 
-// newChallenge stores a new challenge of the kind k for the person, the
-// pending sign-in and the session, and returns its bytes.
-func (s *Service) newChallenge(ctx context.Context, k mfa.Ceremony, personID, pendingID, sessionID string) (
-	[]byte, error,
-) {
+// challengeSource returns the budget key of the source of a challenge of the
+// kind k that starts from the address address, which the HTTP adapter took
+// with the trusted-proxy rules. Only a sign-in has a source: its start is
+// public, so its open challenges are counted for each source. An address that
+// is empty, or is not valid text of at most mfa.MaxSourceBytes bytes, gets
+// mfa.UnknownSource, which has one shared budget, so a request that hides its
+// address is limited and never free.
+//
+// Defense in depth: the store checks the source of the challenge again.
+func challengeSource(k mfa.Ceremony, address string) string {
+	if k != mfa.CeremonySignIn {
+		return ""
+	}
+
+	key := authgate.SourceKey(address)
+
+	if !mfa.ValidSource(key) {
+		return mfa.UnknownSource
+	}
+
+	return key
+}
+
+// newChallenge stores a new challenge for the kind, the person, the pending
+// sign-in, the session and the source of want, and returns its bytes. It sets
+// the times of the challenge.
+func (s *Service) newChallenge(ctx context.Context, want *mfa.Challenge) ([]byte, error) {
 	b := make([]byte, mfa.ChallengeBytes)
 	if _, err := rand.Read(b); err != nil {
 		return nil, fmt.Errorf("%w: random bytes: %w", mfa.ErrUnavailable, err)
 	}
 
 	at := s.now()
-	c := mfa.Challenge{
-		CreatedAt: at, ExpiresAt: mfa.ChallengeExpiry(at), Kind: k,
-		PersonID: personID, PendingID: pendingID, SessionID: sessionID,
-	}
+	c := *want
+	c.CreatedAt, c.ExpiresAt = at, mfa.ChallengeExpiry(at)
 
 	if err := s.store.CreateChallenge(ctx, c, mfa.DigestOf(b)); err != nil {
 		return nil, fmt.Errorf("store the challenge: %w", err)

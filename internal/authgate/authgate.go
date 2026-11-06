@@ -329,13 +329,14 @@ type key struct{}
 // WithRequest returns ctx with the state of one request from the address
 // source. Call it once for each request, before any authentication.
 func WithRequest(ctx context.Context, source string) context.Context {
-	return context.WithValue(ctx, key{}, &request{source: sourceKey(source), memo: nil, mu: sync.Mutex{}})
+	return context.WithValue(ctx, key{}, &request{source: SourceKey(source), memo: nil, mu: sync.Mutex{}})
 }
 
-// sourceKey returns the budget key of the address source: an IPv4 address
-// as it is, an IPv6 address as its /64, a text with the scope separator as
-// the one unknown source, and any other text as it is.
-func sourceKey(source string) string {
+// SourceKey returns the budget key that the gate uses for the address source.
+// Other budgets by source address use it too, so that one address is one
+// source in every budget: an IPv4 address as it is, an IPv6 address as its
+// /64, and a text with the scope separator as one unknown source.
+func SourceKey(source string) string {
 	// Defense in depth: the counter key adds the scope in front of the source
 	// with a separator, and this check keeps a source from forging another
 	// scope. It does not rely on the scope check of New.

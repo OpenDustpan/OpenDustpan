@@ -1279,6 +1279,25 @@ func (q *Queries) CountOpenPasskeyChallenges(ctx context.Context, arg CountOpenP
 	return count, err
 }
 
+const countOpenPasskeyChallengesBySource = `-- name: CountOpenPasskeyChallengesBySource :one
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = ? AND source = ? AND expires_at_ms > ?
+`
+
+type CountOpenPasskeyChallengesBySourceParams struct {
+	Kind        string
+	Source      string
+	ExpiresAtMs int64
+}
+
+// The challenges of one kind from one source that have not expired at the
+// given time.
+func (q *Queries) CountOpenPasskeyChallengesBySource(ctx context.Context, arg CountOpenPasskeyChallengesBySourceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenPasskeyChallengesBySource, arg.Kind, arg.Source, arg.ExpiresAtMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countOpenRunnerJoinTokens = `-- name: CountOpenRunnerJoinTokens :one
 SELECT COUNT(*)
 FROM runner_join_tokens
@@ -2131,8 +2150,9 @@ func (q *Queries) CreatePasskey(ctx context.Context, arg CreatePasskeyParams) (i
 }
 
 const createPasskeyChallenge = `-- name: CreatePasskeyChallenge :execrows
-INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, created_at_ms,
+                                expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -2142,6 +2162,7 @@ type CreatePasskeyChallengeParams struct {
 	PrincipalID string
 	PendingID   string
 	SessionID   string
+	Source      string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
@@ -2153,6 +2174,7 @@ func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyC
 		arg.PrincipalID,
 		arg.PendingID,
 		arg.SessionID,
+		arg.Source,
 		arg.CreatedAtMs,
 		arg.ExpiresAtMs,
 	)
@@ -20346,7 +20368,7 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 }
 
 const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one
-DELETE FROM passkey_challenges WHERE digest = ? RETURNING digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms
+DELETE FROM passkey_challenges WHERE digest = ? RETURNING digest, kind, principal_id, pending_id, session_id, source, created_at_ms, expires_at_ms
 `
 
 // The delete of a challenge returns it, so that a challenge works once,
@@ -20360,6 +20382,7 @@ func (q *Queries) TakePasskeyChallenge(ctx context.Context, digest string) (Pass
 		&i.PrincipalID,
 		&i.PendingID,
 		&i.SessionID,
+		&i.Source,
 		&i.CreatedAtMs,
 		&i.ExpiresAtMs,
 	)

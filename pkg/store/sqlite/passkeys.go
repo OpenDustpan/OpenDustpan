@@ -274,6 +274,7 @@ func (t passkeyTx) CreateChallenge(ctx context.Context, r passkeystore.Challenge
 		PrincipalID: r.PrincipalID,
 		PendingID:   r.PendingID,
 		SessionID:   r.SessionID,
+		Source:      r.Source,
 		CreatedAtMs: r.CreatedAtMs,
 		ExpiresAtMs: r.ExpiresAtMs,
 	})
@@ -283,6 +284,16 @@ func (t passkeyTx) CreateChallenge(ctx context.Context, r passkeystore.Challenge
 
 func (t passkeyTx) CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error) {
 	n, err := t.q.CountOpenPasskeyChallenges(ctx, db.CountOpenPasskeyChallengesParams{Kind: kind, ExpiresAtMs: atMs})
+
+	return n, passkeyErr(err)
+}
+
+func (t passkeyTx) CountOpenChallengesBySource(
+	ctx context.Context, kind, source string, atMs int64,
+) (int64, error) {
+	n, err := t.q.CountOpenPasskeyChallengesBySource(ctx, db.CountOpenPasskeyChallengesBySourceParams{
+		Kind: kind, Source: source, ExpiresAtMs: atMs,
+	})
 
 	return n, passkeyErr(err)
 }
@@ -305,6 +316,7 @@ func (t passkeyTx) TakeChallenge(ctx context.Context, digest string) (passkeysto
 		PrincipalID: r.PrincipalID,
 		PendingID:   r.PendingID,
 		SessionID:   r.SessionID,
+		Source:      r.Source,
 		CreatedAtMs: r.CreatedAtMs,
 		ExpiresAtMs: r.ExpiresAtMs,
 	}, nil

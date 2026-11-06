@@ -68,6 +68,7 @@ type ChallengeRow struct {
 	PrincipalID string
 	PendingID   string
 	SessionID   string
+	Source      string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
@@ -114,6 +115,9 @@ type ChallengeWrites interface {
 	// CountOpenChallenges counts the challenges of the kind that have not
 	// expired at atMs.
 	CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error)
+	// CountOpenChallengesBySource counts the challenges of the kind from the
+	// source that have not expired at atMs.
+	CountOpenChallengesBySource(ctx context.Context, kind, source string, atMs int64) (int64, error)
 	// TakeChallenge deletes the challenge digest and returns it.
 	TakeChallenge(ctx context.Context, digest string) (ChallengeRow, error)
 }
@@ -473,6 +477,7 @@ func ChallengeRowOf(c mfa.Challenge, d mfa.Digest) ChallengeRow {
 		PrincipalID: c.PersonID,
 		PendingID:   c.PendingID,
 		SessionID:   c.SessionID,
+		Source:      c.Source,
 		CreatedAtMs: codec.Millis(c.CreatedAt),
 		ExpiresAtMs: codec.Millis(c.ExpiresAt),
 	}
@@ -488,6 +493,7 @@ func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 		PersonID:  r.PrincipalID,
 		PendingID: r.PendingID,
 		SessionID: r.SessionID,
+		Source:    r.Source,
 	}
 
 	// Defense in depth: each write checks the challenge, and the CHECK
@@ -502,22 +508,21 @@ func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 
 // CreateChallenge deletes the challenges that expired at the time of c, and
 // stores c with the digest d. The caller checked c with Validate. A sign-in
-// challenge over mfa.MaxOpenSignInChallenges open ones stores no row and
-// returns mfa.ErrChallengeLimit: the start of a sign-in is public, and no limit
-// by source address bounds the table when many sources send.
+// challenge over mfa.MaxOpenSignInChallengesPerSource open ones from its
+// source stores no row and returns mfa.ErrSourceChallengeLimit, so one source
+// cannot fill the table. A sign-in challenge over mfa.MaxOpenSignInChallenges
+// open ones stores no row and returns mfa.ErrChallengeLimit: the start of a
+// sign-in is public, and many sources can send together. The source count is
+// checked first, so a source that is over its count never learns the state of
+// the installation total.
 func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) error {
 	if _, err := tx.DeleteExpiredChallenges(ctx, codec.Millis(c.CreatedAt)); err != nil {
 		return fmt.Errorf("delete expired challenges: %w", err)
 	}
 
 	if c.Kind == mfa.CeremonySignIn {
-		open, err := tx.CountOpenChallenges(ctx, string(c.Kind), codec.Millis(c.CreatedAt))
-		if err != nil {
-			return fmt.Errorf("count open challenges: %w", err)
-		}
-
-		if open >= mfa.MaxOpenSignInChallenges {
-			return mfa.ErrChallengeLimit
+		if err := checkSignInCaps(ctx, tx, c); err != nil {
+			return err
 		}
 	}
 
@@ -528,6 +533,31 @@ func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) 
 
 	if n != 1 {
 		return mfa.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// checkSignInCaps returns mfa.ErrSourceChallengeLimit when the source of the
+// sign-in challenge c holds the most open ones, and mfa.ErrChallengeLimit when
+// the installation holds the most open ones.
+func checkSignInCaps(ctx context.Context, tx Tx, c mfa.Challenge) error {
+	bySource, err := tx.CountOpenChallengesBySource(ctx, string(c.Kind), c.Source, codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges of a source: %w", err)
+	}
+
+	if bySource >= mfa.MaxOpenSignInChallengesPerSource {
+		return mfa.ErrSourceChallengeLimit
+	}
+
+	open, err := tx.CountOpenChallenges(ctx, string(c.Kind), codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges: %w", err)
+	}
+
+	if open >= mfa.MaxOpenSignInChallenges {
+		return mfa.ErrChallengeLimit
 	}
 
 	return nil
