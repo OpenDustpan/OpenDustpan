@@ -36,6 +36,10 @@ type sessionServer struct {
 	finished *protocol.Finish
 }
 
+func newSessionServer() *sessionServer {
+	return &sessionServer{steps: nil, mu: sync.Mutex{}, logs: map[string][]byte{}, finished: nil}
+}
+
 // ServeHTTP answers the calls of the launcher. It checks no proof: the
 // session client has its own tests.
 func (s *sessionServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +115,7 @@ func TestEachStepHasNoNewPrivs(t *testing.T) {
 		t.Skip("needs grep")
 	}
 
-	srv := &sessionServer{steps: nil, mu: sync.Mutex{}, logs: map[string][]byte{}, finished: nil}
+	srv := newSessionServer()
 
 	for i := range stepCount {
 		srv.steps = append(srv.steps, protocol.Step{
@@ -143,8 +147,9 @@ func TestEachStepHasNoNewPrivs(t *testing.T) {
 }
 
 // runAgainst runs bin in the mode run against ts, with the handoff token
-// on a pipe, and returns its exit code and its messages.
-func runAgainst(t *testing.T, ts *httptest.Server, bin string) (int, string) {
+// on a pipe as descriptor 3 and the files extra from descriptor 4, and
+// returns its exit code and its messages.
+func runAgainst(t *testing.T, ts *httptest.Server, bin string, extra ...*os.File) (int, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -173,7 +178,7 @@ func runAgainst(t *testing.T, ts *httptest.Server, bin string) (int, string) {
 	cmd := command(bin, "run", "--server", ts.URL, "--handoff", "pipe", "--work-dir", filepath.Join(dir, "work"),
 		"--secrets-dir", "/dev/shm")
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "SSL_CERT_FILE=" + cert}
-	cmd.ExtraFiles = []*os.File{r}
+	cmd.ExtraFiles = append([]*os.File{r}, extra...)
 	cmd.Stderr = &stderr
 
 	runErr := cmd.Run()
@@ -187,4 +192,60 @@ func runAgainst(t *testing.T, ts *httptest.Server, bin string) (int, string) {
 	}
 
 	return cmd.ProcessState.ExitCode(), stderr.String()
+}
+
+// TestNoInheritedDescriptorReachesAStep starts the launcher with three
+// open files above the handoff pipe, as a runner could leave them. A step
+// that lists its own descriptors finds only the standard three and the
+// directory that it reads.
+func TestNoInheritedDescriptorReachesAStep(t *testing.T) {
+	t.Parallel()
+
+	if !onMemory("/dev/shm") {
+		t.Skip("needs /dev/shm on tmpfs")
+	}
+
+	ls, err := exec.LookPath("ls")
+	if err != nil {
+		t.Skip("needs ls")
+	}
+
+	extra := make([]*os.File, 0, 3)
+
+	for range 3 {
+		f, openErr := os.OpenInRoot(t.TempDir(), ".")
+		if openErr != nil {
+			t.Fatalf("open: %v", openErr)
+		}
+
+		t.Cleanup(func() {
+			if closeErr := f.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		})
+
+		extra = append(extra, f)
+	}
+
+	srv := newSessionServer()
+	srv.steps = []protocol.Step{{
+		Name: "fds", Role: "hook", Args: []string{ls, "-1", "/proc/self/fd"}, Env: nil, Dir: "", Timeout: 0,
+		AllowFailure: false, ChangesResources: false, Outputs: nil,
+	}}
+
+	ts := httptest.NewTLSServer(srv)
+	t.Cleanup(ts.Close)
+
+	code, stderr := runAgainst(t, ts, buildLauncher(t), extra...)
+	if code != int(launcher.ExitOK) {
+		t.Fatalf("exit %d, want 0: %s", code, stderr)
+	}
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	// ls reads the directory through the lowest free descriptor, 3.
+	if got := strings.Join(strings.Fields(string(srv.logs["fds"])), " "); got != "0 1 2 3" {
+		t.Fatalf("descriptors of the step = %q, want 0 1 2 3", got)
+	}
 }
