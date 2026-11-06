@@ -48,11 +48,15 @@ func fakeLauncher(t *testing.T, answer string) (string, func() []string) {
 				return
 			}
 
-			req := serve(t, conn, answer)
+			// The kind is recorded before the answer is written: the call
+			// of the helper returns only after it reads the answer.
+			req := readRequest(t, conn)
 
 			mu.Lock()
 			kinds = append(kinds, req.Kind)
 			mu.Unlock()
+
+			writeAnswer(t, conn, req, answer)
 		}
 	}()
 
@@ -72,8 +76,8 @@ func fakeLauncher(t *testing.T, answer string) (string, func() []string) {
 	}
 }
 
-// serve reads one request on conn and writes the answer.
-func serve(t *testing.T, conn net.Conn, answer string) helper.Request {
+// readRequest reads one request on conn.
+func readRequest(t *testing.T, conn net.Conn) helper.Request {
 	t.Helper()
 
 	var req helper.Request
@@ -82,6 +86,13 @@ func serve(t *testing.T, conn net.Conn, answer string) helper.Request {
 	if readErr != nil || json.Unmarshal(line, &req) != nil {
 		t.Errorf("read the request %q: %v", line, readErr)
 	}
+
+	return req
+}
+
+// writeAnswer writes the answer to req on conn and closes it.
+func writeAnswer(t *testing.T, conn net.Conn, req helper.Request, answer string) {
+	t.Helper()
 
 	out := answer
 	if out == "" {
@@ -98,8 +109,6 @@ func serve(t *testing.T, conn net.Conn, answer string) helper.Request {
 	if err := conn.Close(); err != nil {
 		t.Errorf("close the connection: %v", err)
 	}
-
-	return req
 }
 
 // call runs one helper call and returns its output.
