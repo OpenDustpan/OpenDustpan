@@ -43,7 +43,7 @@ func TestSDKAnswersCarryACode(t *testing.T) {
 			"readiness of a component that does not run", http.MethodGet,
 			func(w http.ResponseWriter, r *http.Request) {
 				r.SetPathValue("component", "runner")
-				(&readiness{checks: nil, timeout: 0, failures: nil, logger: nil, parts: nil, draining: atomic.Bool{}}).ServeOne(
+				(&readiness{checks: nil, timeout: 0, failures: nil, logger: nil, parts: nil, draining: atomic.Bool{}, streamStop: nil}).ServeOne(
 					w,
 					r,
 				)
