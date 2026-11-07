@@ -298,7 +298,11 @@ func (h *Handler) createWorkspace(
 	// The job of the token, if any, decides whether a manual lock of the
 	// namespace applies to the create: the phase of a job that started before
 	// the lock passes it, as it does for the LOCK that follows.
-	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref)
+	// The handler chooses no collection yet, so the workspace service refuses
+	// the create with collection.ErrNoCollection and makes no workspace.
+	var noPlacement workspace.Placement
+
+	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref, noPlacement)
 }
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current

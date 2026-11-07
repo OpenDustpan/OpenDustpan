@@ -24,12 +24,16 @@ type jobCreateWorkspaces struct {
 }
 
 // Create keeps the job of ctx, then creates the workspace as the stub does.
-func (w jobCreateWorkspaces) Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+func (w jobCreateWorkspaces) Create(
+	ctx context.Context,
+	ref workspace.Ref,
+	p workspace.Placement,
+) (workspace.Workspace, error) {
 	w.mu.Lock()
 	*w.jobs = append(*w.jobs, workspace.JobFrom(ctx))
 	w.mu.Unlock()
 
-	return w.stubWorkspaces.Create(ctx, ref)
+	return w.stubWorkspaces.Create(ctx, ref, p)
 }
 
 // jobIDOnAccessToken authenticates the test token as an access token whose

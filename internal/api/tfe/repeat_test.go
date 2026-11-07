@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
@@ -134,7 +135,8 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		t.Fatalf("namespaces: %v", err)
 	}
 
-	if _, createErr := namespaces.Create(t.Context(), namespace.Name("acme")); createErr != nil {
+	acme, createErr := namespaces.Create(t.Context(), namespace.Name("acme"))
+	if createErr != nil {
 		t.Fatalf("create namespace: %v", createErr)
 	}
 
@@ -148,7 +150,9 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		t.Fatalf("workspaces: %v", err)
 	}
 
-	ws, err := workspaces.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: "web"})
+	ws, err := workspaces.Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: "web"}, placementtest.Workspace(t, store, acme.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

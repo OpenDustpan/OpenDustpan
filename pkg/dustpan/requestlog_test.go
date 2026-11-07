@@ -417,7 +417,9 @@ func TestStateUploadLogsPatternNotToken(t *testing.T) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	w, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	w, err := svc.Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, st, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
