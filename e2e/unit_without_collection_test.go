@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"testing"
@@ -10,31 +11,74 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// noRuleNamespace is a namespace with no collection and no placement rule, so
-// no new unit in it has a collection.
-const noRuleNamespace = "norules"
+// rulesPath is the placement rule route of the namespace of the harness.
+const rulesPath = "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/placement-rules"
 
-// createNamespaceWithoutRules creates the namespace noRuleNamespace through the
-// installation API and seeds no collection and no placement rule, which the
-// harness helper would seed.
-func createNamespaceWithoutRules(t *testing.T, env *e2e.Env) {
+// ruleDoc holds the fields of a placement rule that the steps read.
+type ruleDoc struct {
+	ID         string `json:"id"`
+	Tool       string `json:"tool"`
+	Project    string `json:"project"`
+	Stack      string `json:"stack"`
+	Collection string `json:"collection"`
+}
+
+// ruleListDoc is the answer of the rule list.
+type ruleListDoc struct {
+	Rules []ruleDoc `json:"rules"`
+}
+
+// catchAllRuleID returns the ID of the catch-all rule of tool in the namespace
+// of the harness.
+func catchAllRuleID(t *testing.T, env *e2e.Env, tool string) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(
-		t.Context(), http.MethodPost, "/api/server/namespaces", `{"name":`+strconv.Quote(noRuleNamespace)+`}`,
-	)
-	if err != nil {
-		t.Fatalf("POST /api/server/namespaces %q: %v", noRuleNamespace, err)
+	status, body, err := env.ServerAPIStatus(t.Context(), http.MethodGet, rulesPath, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s = %d %s: %v, want 200", rulesPath, status, body, err)
 	}
 
-	if status != http.StatusCreated {
-		t.Fatalf(
-			"POST /api/server/namespaces %q answers %d, want %d (%s)",
-			noRuleNamespace,
-			status,
-			http.StatusCreated,
-			body,
-		)
+	var list ruleListDoc
+
+	if err = json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode the rules %q: %v", body, err)
+	}
+
+	for _, rule := range list.Rules {
+		if rule.Tool == tool && rule.Project == "*" && rule.Stack == "*" && rule.Collection == e2e.CatchAllCollection {
+			return rule.ID
+		}
+	}
+
+	t.Fatalf("the namespace %s has no catch-all rule for %s in %s", e2e.Namespace, tool, body)
+
+	return ""
+}
+
+// withoutCatchAllRule removes the catch-all placement rule of tool from the
+// namespace of the harness, runs fn, and makes the rule again. While fn runs,
+// no rule places a new unit of the tool, so the server must refuse it. The
+// steps use the namespace of the scenario, because a second namespace changes
+// the default organization of the Pulumi CLI.
+func withoutCatchAllRule(t *testing.T, env *e2e.Env, tool string, fn func()) {
+	t.Helper()
+
+	ctx := t.Context()
+	id := catchAllRuleID(t, env, tool)
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodDelete, rulesPath+"/"+id, "")
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("DELETE the %s rule = %d %s: %v, want 204", tool, status, body, err)
+	}
+
+	fn()
+
+	again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collection":` +
+		strconv.Quote(e2e.CatchAllCollection) + `}`
+
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, rulesPath, again)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("POST the %s rule again = %d %s: %v, want 201", tool, status, body, err)
 	}
 }
 
@@ -44,13 +88,12 @@ func createNamespaceWithoutRules(t *testing.T, env *e2e.Env) {
 func pulumiUnitWithoutCollectionRefused(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	ctx := t.Context()
-	createNamespaceWithoutRules(t, env)
-
-	env.Step(ctx, t, failStep(
-		"stack init with no placement rule", outputContains("no placement rule matches"),
-		"stack", "init", noRuleNamespace+"/"+e2e.Project+"/orphan", "--no-select",
-	))
+	withoutCatchAllRule(t, env, "pulumi", func() {
+		env.Step(t.Context(), t, failStep(
+			"stack init with no placement rule", outputContains("no placement rule matches"),
+			"stack", "init", e2e.Namespace+"/"+e2e.Project+"/orphan", "--no-select",
+		))
+	})
 }
 
 // tofuUnitWithoutCollectionRefused proves that OpenTofu cannot make a
@@ -59,13 +102,11 @@ func pulumiUnitWithoutCollectionRefused(t *testing.T, env *e2e.Env) {
 func tofuUnitWithoutCollectionRefused(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	ctx := t.Context()
-	createNamespaceWithoutRules(t, env)
-
-	env.WriteTofuConfig(t, `terraform {
+	withoutCatchAllRule(t, env, "opentofu", func() {
+		env.WriteTofuConfig(t, `terraform {
   cloud {
     hostname     = `+strconv.Quote(env.Host())+`
-    organization = `+strconv.Quote(noRuleNamespace)+`
+    organization = `+strconv.Quote(e2e.Namespace)+`
     workspaces {
       name = "orphan"
     }
@@ -77,8 +118,9 @@ output "greeting" {
 }
 `)
 
-	env.Step(ctx, t, failStep(
-		"init with no placement rule", outputContains("no placement rule matches"),
-		"init", "-input=false", "-no-color",
-	))
+		env.Step(t.Context(), t, failStep(
+			"init with no placement rule", outputContains("no placement rule matches"),
+			"init", "-input=false", "-no-color",
+		))
+	})
 }

@@ -67,13 +67,22 @@ type Placer struct {
 	Collections PlacementCollections
 }
 
+// WritableNamespaces is the namespace use case that Place needs.
+// namespace.Service implements it.
+type WritableNamespaces interface {
+	// WritableHere returns the namespace if this installation may write to it,
+	// namespace.ErrNotHome when another installation is its primary, or
+	// namespace.ErrNotFound.
+	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+}
+
 // PlaceRequest is what Place needs to place one new workspace.
 type PlaceRequest struct {
 	Request    *http.Request
 	Principal  identity.Principal
 	Ref        workspace.Ref
 	Guard      Guard
-	Namespaces Namespaces
+	Namespaces WritableNamespaces
 	Workspaces WorkspaceReader
 }
 
@@ -91,7 +100,7 @@ func (p *Placer) Place(ctx context.Context, req PlaceRequest) (workspace.Placeme
 
 	if p == nil || p.Rules == nil || p.Collections == nil {
 		// A namespace that does not exist gets its own error first.
-		if _, err := req.Namespaces.Get(ctx, req.Ref.Namespace); err != nil {
+		if _, err := req.Namespaces.WritableHere(ctx, req.Ref.Namespace); err != nil {
 			return none, err
 		}
 
@@ -160,8 +169,9 @@ func (p *Placer) rule(ctx context.Context, req PlaceRequest) (collection.Rule, e
 		return rule, err
 	}
 
-	// A namespace that does not exist has no rules. Its error comes first.
-	if _, nsErr := req.Namespaces.Get(ctx, req.Ref.Namespace); nsErr != nil {
+	// A namespace that does not exist has no rules, and a namespace of another
+	// installation holds none here. Their errors come first.
+	if _, nsErr := req.Namespaces.WritableHere(ctx, req.Ref.Namespace); nsErr != nil {
 		return rule, nsErr
 	}
 

@@ -255,6 +255,11 @@ func (f *fakeUnits) WriteState(
 // fakeNamespaces answers the switches of the namespace of the unit.
 type fakeNamespaces struct{}
 
+// WritableHere returns the namespace as Get does.
+func (n fakeNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return n.Get(ctx, name)
+}
+
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{

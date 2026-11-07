@@ -62,6 +62,10 @@ func (g *guardStub) Authorize(
 
 type namespacesStub struct{ err error }
 
+func (n namespacesStub) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return n.Get(ctx, name)
+}
+
 func (n namespacesStub) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	var none namespace.Namespace
 
@@ -210,6 +214,10 @@ func TestPlaceRefusals(t *testing.T) {
 		{
 			"no rule matches and the namespace is gone",
 			newRules(noRule(), noRuleError()), found, nil, namespace.ErrNotFound, false, namespace.ErrNotFound, "",
+		},
+		{
+			"no rule matches and another installation owns the namespace",
+			newRules(noRule(), noRuleError()), found, nil, namespace.ErrNotHome, false, namespace.ErrNotHome, "",
 		},
 		{
 			"no rule matches and the workspace exists",
