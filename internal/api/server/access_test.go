@@ -75,7 +75,11 @@ type grantListDoc struct {
 
 // accessFixture is a handler that decides with grants, over one store.
 type accessFixture struct {
-	store    *sqlite.Store
+	store *sqlite.Store
+	// path is the database file of store. A test opens a second connection to
+	// it to plant a row that no port writes.
+	path string
+
 	sessions *session.Sessions
 	handler  testHandler
 	// passwords is the password budget of the handler: it counts each
@@ -158,7 +162,8 @@ func newAccessFixtureAll(
 ) accessFixture {
 	t.Helper()
 
-	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	st := openServerTemplateStore(t, path)
 
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
@@ -274,7 +279,7 @@ func newAccessFixtureAll(
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, sessions: sessions, handler: handler, passwords: passwords}
+	f := accessFixture{store: st, path: path, sessions: sessions, handler: handler, passwords: passwords}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())

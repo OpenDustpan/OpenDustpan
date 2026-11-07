@@ -224,8 +224,8 @@ func testReviewUnknownMembershipSource(t *testing.T, s access.Store) {
 		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
 
 		rows, total, err := rs.ReviewGrants(t.Context(), q)
-		if !errors.Is(err, principal.ErrInvalid) || rows != nil || total != 0 {
-			t.Fatalf("unknown source with history %t = %+v, total %d, %v; want no rows and ErrInvalid",
+		if !errors.Is(err, access.ErrStoredSource) || rows != nil || total != 0 {
+			t.Fatalf("unknown source with history %t = %+v, total %d, %v; want no rows and ErrStoredSource",
 				history, rows, total, err)
 		}
 	}
@@ -233,8 +233,8 @@ func testReviewUnknownMembershipSource(t *testing.T, s access.Store) {
 	q := callerQuery(snapshotMinute)
 	q.Principal = members[1].PrincipalID
 	rows, total, err := rs.CallerGrants(t.Context(), q)
-	if !errors.Is(err, principal.ErrInvalid) || rows != nil || total != 0 {
-		t.Fatalf("caller with unknown source = %+v, total %d, %v; want no rows and ErrInvalid", rows, total, err)
+	if !errors.Is(err, access.ErrStoredSource) || rows != nil || total != 0 {
+		t.Fatalf("caller with unknown source = %+v, total %d, %v; want no rows and ErrStoredSource", rows, total, err)
 	}
 }
 

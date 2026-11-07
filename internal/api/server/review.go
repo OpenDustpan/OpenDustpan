@@ -147,7 +147,7 @@ type reviewViaResponse struct {
 	Member          string `json:"member"`
 	MemberSubject   string `json:"memberSubject"`
 	MemberSource    string `json:"memberSource"`
-	MemberSourceID  string `json:"memberSourceId"` //nolint:tagliatelle // The API description names this field memberSourceId, in lower camel case.
+	MemberSourceID  string `json:"memberSourceId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
 	MemberFromMs    int64  `json:"memberFromMs"`
 	MemberSuspended bool   `json:"memberSuspended"`
 }

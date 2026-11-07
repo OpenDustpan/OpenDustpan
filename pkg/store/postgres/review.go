@@ -181,7 +181,7 @@ func reviewRows(rows []db.ReviewGrantsRow) ([]access.ReviewRow, error) {
 			// a row written by another version or by hand cannot show as a known source.
 			source, parseErr := principal.ParseMembershipSource(r.MemberSource)
 			if parseErr != nil {
-				return nil, fmt.Errorf("read review membership source: %w", parseErr)
+				return nil, fmt.Errorf("%w: group %q", access.ErrStoredSource, r.SubjectID)
 			}
 
 			row.Via = &access.Membership{

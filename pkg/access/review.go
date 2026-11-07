@@ -2,10 +2,16 @@ package access
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// ErrStoredSource reports a stored group membership whose source is not a known
+// value. It is a fault of the store, not of the request: the server answers 500
+// and never echoes the stored value.
+var ErrStoredSource = errors.New("a stored group membership has an unknown source")
 
 // ReviewScope names the grants of an access-review export (ADR 52,
 // decision 10), as a store reads them. A grant is in the scope when:
