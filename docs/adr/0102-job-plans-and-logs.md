@@ -13,7 +13,8 @@ Changed by:
   a namespace prefix.
 - ADR 299 changes decision 8: the plan comment on a review request holds
   counts and resource addresses by default.
-
+- ADR 353 extends decision 7: the two plan parts must agree.
+.
 ## Context
 
 A job makes two kinds of content: the plan of its plan phase, and the logs
