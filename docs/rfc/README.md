@@ -167,3 +167,4 @@ both together.
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
+| [124](0124-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
