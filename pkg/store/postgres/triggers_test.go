@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"testing"
 
@@ -171,9 +172,29 @@ func TestTriggerCorruptRowIsNotServed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			checkCorruptRow(t, open(t, base), tc)
+			checkCorruptRow(t, openWithConnectBudget(t, base), tc)
 		})
 	}
+}
+
+// openWithConnectBudget returns a store in a fresh schema with a longer
+// connect budget than the default 5 seconds, so a loaded runner does not fail
+// the open. The test does not depend on the connect time.
+func openWithConnectBudget(tb testing.TB, base string) *postgres.Store {
+	tb.Helper()
+
+	schemaURL := isolatedURL(tb, base)
+
+	u, err := url.Parse(schemaURL)
+	if err != nil {
+		tb.Fatalf("parse the database URL: %v", err)
+	}
+
+	values := u.Query()
+	values.Set("connect_timeout", "60")
+	u.RawQuery = values.Encode()
+
+	return openURL(tb, u.String())
 }
 
 // checkCorruptRow stores the triggers s1 and f1, changes one row with tc, and

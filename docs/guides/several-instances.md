@@ -233,6 +233,8 @@ After a failover, the old primary can stay up as a read-only database. A pool co
 | `pool_max_conn_lifetime_jitter` | `1m` | `0s` to the lifetime | A random part of the lifetime, so the instances do not open their connections again at the same time. |
 | `pool_health_check_period` | `10s` | `1s` to `10m` | The pool checks the idle connections with this period and replaces a connection that is closed. |
 
+The server also sets TCP keepalive on each connection: 15 seconds idle, 5 seconds between probes, and 3 probes.
+
 A duration is a number with a unit, for example `5m` or `30s`. A value outside the allowed values stops the start of the server with the error code `store.failover-setting-invalid`. The error names the setting and the allowed values. The server does not change a value to make it valid. A setting that appears two times in the URL also stops the start. The variables `PGTARGETSESSIONATTRS` and `PGCONNECT_TIMEOUT` of the environment do not apply: the URL or the default decides.
 
 At the start, the server writes the effective value of each setting to its log, with the word `url` or `default` for where the value came from. The log also gives the 30-second limit of each round trip.
