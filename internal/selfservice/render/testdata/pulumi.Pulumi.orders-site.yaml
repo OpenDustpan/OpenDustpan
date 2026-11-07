@@ -1,0 +1,5 @@
+config:
+  "aws:region": "eu-west-1"
+  "webapp:replicas": 2
+  "webapp:size": "large"
+  "webapp:tags": ["a","b"]

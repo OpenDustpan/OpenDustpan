@@ -9,6 +9,10 @@ Changes:
 - Extends ADR 72: what each instance does while the PostgreSQL primary
   fails over.
 
+Changed by:
+
+- ADR 337 changes decision 9: the record of the last released lock is shown in the workspace API, and not in the inventory.
+
 ## Context
 
 ADR 280 makes one installation run active-active on one PostgreSQL

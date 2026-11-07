@@ -257,7 +257,7 @@ A test sends canary values through both tool adapters and fails when one appears
 
 ## What this guide does not cover
 
-These items are not in milestone 3.
+These items are not in this release.
 
 - Rate limits.
 - Tracing.

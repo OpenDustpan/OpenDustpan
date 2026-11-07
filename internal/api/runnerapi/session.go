@@ -293,6 +293,9 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request, c *call) {
 
 	sess, err := h.handoffs.OpenSession(ctx, sha256Hex(c.handoff.HandoffToken), key, now)
 	if err != nil {
+		// The request names no runner before the session opens, so the entry
+		// holds no claimed runner ID and the installation scope.
+		h.recordUnverifiedHandoffRefusal(ctx, r, err)
 		h.writeError(ctx, w, ScopeHandoffToken, err)
 
 		return
