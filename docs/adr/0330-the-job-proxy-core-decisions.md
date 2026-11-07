@@ -8,6 +8,10 @@ Changes:
 - Extends ADR 134 decision 6: the launcher writes the CA bundle and the proxy variables for the tool steps (decision 6).
 - Extends ADR 137 decision 6: a sandbox has one route, to the job proxy (decision 2).
 
+Changed by:
+
+- ADR 353 extends decisions 2, 4 and 7: isolation, read-only checks, the header scan and the tunnel rule for an untrusted source.
+.
 ## Context
 
 [ADR 327](0327-the-job-proxy.md) accepts the parts of [RFC 16](../rfc/0016-egress-proxy.md) that have an owner source. It says that the other parts wait for the owner in the RFC 16 section "Proposed (PM), waiting for the owner".

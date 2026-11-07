@@ -8,7 +8,8 @@ Changed by:
   verdicts and cancel.
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 299 extends: a write-back review request carries a change order.
-
+- ADR 354 changes decisions 3, 5, 9 and 15: agent rules key on the delegation.
+.
 ## Context
 
 The project owner decided on 2026-10-17:

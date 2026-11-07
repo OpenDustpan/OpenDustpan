@@ -773,7 +773,8 @@ names.
    "proposed"; its proposer is the person who delegated, and it names the
    agent and the delegation.
 3. **A person confirms it.** Pass: the change order moves on only after the
-   confirmation of a person. The person who delegated is not that confirmer.
+   confirmation of a person. With a two-person approval rule on the namespace,
+   the person who delegated cannot be the second approver.
    The audit log has no apply step before it.
 4. **Every step is audited.** Pass: each step has an audit entry that names
    the agent, the delegation and the reason. The hash chain of the namespace
