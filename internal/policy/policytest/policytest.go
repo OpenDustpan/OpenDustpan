@@ -29,7 +29,7 @@ import (
 type Policy string
 
 // The fixture set. The documents of the suite are JSON objects with the
-// field blueprint.name, as the document of the kind catalog.request has.
+// field blueprint.name, as the document of the kind self-service.request has.
 const (
 	// PolicyAllowAll allows every input.
 	PolicyAllowAll Policy = "allow-all"
@@ -140,18 +140,18 @@ func testAllowAll(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 func testDeny(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 	t.Helper()
 
-	if !slices.Contains(kinds, policy.KindCatalogRequest) {
-		t.Skip("the adapter does not decide catalog requests")
+	if !slices.Contains(kinds, policy.KindSelfServiceRequest) {
+		t.Skip("the adapter does not decide self-service requests")
 	}
 
 	e := newEngine(t, PolicyDenyBlueprint)
 
-	d := decide(t, e, input(policy.KindCatalogRequest, ForbiddenBlueprint))
+	d := decide(t, e, input(policy.KindSelfServiceRequest, ForbiddenBlueprint))
 	if d.Effect != policy.EffectDeny || !slices.Contains(d.Reasons, ForbiddenReason) {
 		t.Fatalf("Decide(forbidden) = %+v, want deny with %q", d, ForbiddenReason)
 	}
 
-	if d := decide(t, e, input(policy.KindCatalogRequest, "postgres")); d.Effect != policy.EffectAllow {
+	if d := decide(t, e, input(policy.KindSelfServiceRequest, "postgres")); d.Effect != policy.EffectAllow {
 		t.Fatalf("Decide(postgres) = %q, want allow", d.Effect)
 	}
 }
@@ -240,7 +240,7 @@ func testUnsupportedKind(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 
 	e := newEngine(t, PolicyAllowAll)
 
-	for _, k := range []policy.Kind{policy.KindCatalogRequest, policy.KindJobStart} {
+	for _, k := range []policy.Kind{policy.KindSelfServiceRequest, policy.KindJobStart} {
 		if slices.Contains(kinds, k) {
 			continue
 		}

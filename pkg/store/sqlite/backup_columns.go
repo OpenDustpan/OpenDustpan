@@ -445,7 +445,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteItemKeyBackupTables(),
 		sqliteSettingBackupTables(),
 		sqlitePlacementBackupTables(),
-		sqliteCatalogBackupTables(),
+		sqliteSelfServiceBackupTables(),
 		sqliteTrustRuleBackupTables(),
 	)
 }

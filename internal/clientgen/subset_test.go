@@ -336,7 +336,7 @@ func TestEnumValueAllowlist(t *testing.T) {
 		// kebab-case
 		"awaiting-approval", "every-6-hours", "in-sync", "unit-busy",
 		"phase-done", "last-phase-done", "state-observed", "plan-display",
-		"change-order", "catalog-revision", "state-write",
+		"change-order", "self-service-revision", "state-write",
 		"review-request-push",
 		// dot and colon
 		"mfa.fresh-step-required", "server:observe",

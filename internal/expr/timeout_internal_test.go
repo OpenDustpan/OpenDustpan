@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
 // TestTimeLayer checks that a run past the time limit returns ErrRuleFailed
@@ -20,7 +20,7 @@ func TestTimeLayer(t *testing.T) {
 	e := mustNew(t, NewLimiter())
 	e.timeout = time.Microsecond
 
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value:   nil,
 		Inputs:  map[string]any{"big": strings.Repeat("ab", 16<<10)},
 		Usage:   nil,
@@ -31,7 +31,7 @@ func TestTimeLayer(t *testing.T) {
 	start := time.Now()
 
 	got, err := e.Bool(t.Context(), "inputs.big matches '^(a|b|ab|ba)*c$'", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 
@@ -43,7 +43,7 @@ func TestTimeLayer(t *testing.T) {
 func TestNewTimeLimit(t *testing.T) {
 	t.Parallel()
 
-	if got, want := mustNew(t, NewLimiter()).timeout, catalog.ExprTimeoutMillis*time.Millisecond; got != want {
+	if got, want := mustNew(t, NewLimiter()).timeout, selfservice.ExprTimeoutMillis*time.Millisecond; got != want {
 		t.Fatalf("timeout = %v, want %v", got, want)
 	}
 }
@@ -56,20 +56,20 @@ func TestWorkLayer(t *testing.T) {
 	e := mustNew(t, NewLimiter())
 	e.timeout = time.Minute
 
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value:   nil,
 		Inputs:  map[string]any{"big": strings.Repeat("ab", 8<<10)},
 		Usage:   nil,
 		Input:   nil,
 		Request: schema().Request,
 	}
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
 	start := time.Now()
 
 	_, err := e.run(t.Context(), "none(request.requester.groups, {inputs.big matches '^(a|b|ab|ba)*c$'})",
-		catalog.ResultBool, env)
-	if !errors.Is(err, errWork) || !errors.Is(err, catalog.ErrRuleFailed) {
+		selfservice.ResultBool, env)
+	if !errors.Is(err, errWork) || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("run() = %v, want the work budget error", err)
 	}
 
@@ -106,17 +106,17 @@ func TestRunEndsAfterTheLimit(t *testing.T) {
 	e := mustNew(t, NewLimiter())
 	e.timeout = time.Nanosecond
 
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value:   nil,
 		Inputs:  map[string]any{"s": "abc"},
 		Usage:   nil,
 		Input:   nil,
 		Request: schema().Request,
 	}
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
 	got, err := e.Bool(t.Context(), "all(request.requester.groups, lower(inputs.s) == 'abc')", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 
@@ -140,7 +140,7 @@ func TestRunCap(t *testing.T) {
 	t.Parallel()
 
 	e := mustNew(t, NewLimiter())
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value: nil, Inputs: nil, Usage: nil, Input: nil, Request: schema().Request,
 	}
 
@@ -149,7 +149,7 @@ func TestRunCap(t *testing.T) {
 	}
 
 	got, err := e.Bool(t.Context(), "true", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) || !errors.Is(err, errBusy) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, errBusy) {
 		t.Fatalf("Bool() on a full evaluator = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 
@@ -212,7 +212,7 @@ func TestEvaluatorsShareTheLimiter(t *testing.T) {
 	first, second := mustNew(t, limiter), mustNew(t, limiter)
 	other := mustNew(t, limiterOf(2))
 
-	env := &catalog.Env{Value: nil, Inputs: nil, Usage: nil, Input: nil, Request: schema().Request}
+	env := &selfservice.Env{Value: nil, Inputs: nil, Usage: nil, Input: nil, Request: schema().Request}
 
 	// Two runs of the first Evaluator that have not ended.
 	limiter.slots <- struct{}{}
@@ -221,7 +221,7 @@ func TestEvaluatorsShareTheLimiter(t *testing.T) {
 
 	for name, e := range map[string]*Evaluator{"first": first, "second": second} {
 		got, err := e.Bool(t.Context(), "true", env)
-		if got || !errors.Is(err, catalog.ErrRuleFailed) || !errors.Is(err, errBusy) {
+		if got || !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, errBusy) {
 			t.Fatalf("%s: Bool() on a full limiter = %v, %v, want false, ErrRuleFailed", name, got, err)
 		}
 	}
