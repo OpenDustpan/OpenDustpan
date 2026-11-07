@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -502,14 +501,10 @@ func validateText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) {
-			return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
-		}
-
-		if unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: %s holds the format character %U", ErrInvalid, field, c)
-		}
+	// Defense in depth: the HTTP adapters validate the text too; this check
+	// stays so that a new caller of the domain cannot skip it.
+	if ident.HasHidden(s) {
+		return fmt.Errorf("%w: %s holds a control, format or separator character", ErrInvalid, field)
 	}
 
 	return nil

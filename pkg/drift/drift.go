@@ -18,9 +18,9 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -199,10 +199,8 @@ func validateAddress(address string) error {
 		return fmt.Errorf("%w: address length %d", ErrInvalid, len(address))
 	case !utf8.ValidString(address):
 		return fmt.Errorf("%w: address is not valid UTF-8", ErrInvalid)
-	case strings.IndexFunc(address, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
-	}) >= 0:
-		return fmt.Errorf("%w: address has a control or format character", ErrInvalid)
+	case ident.HasHidden(address):
+		return fmt.Errorf("%w: address has a control, format or separator character", ErrInvalid)
 	}
 
 	return nil

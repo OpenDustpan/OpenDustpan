@@ -26,9 +26,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -193,7 +193,7 @@ func ValidateReason(reason string) error {
 // look different from its bytes, so a stored text that the server shows or
 // logs refuses it.
 func IsHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	return ident.IsHiddenRune(r)
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and

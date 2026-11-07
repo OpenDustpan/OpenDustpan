@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -330,10 +329,10 @@ func ValidateName(s string) error {
 		return fmt.Errorf("%w: name starts or ends with white space", ErrInvalid)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: name holds the control or format character %U", ErrInvalid, c)
-		}
+	// Defense in depth: the HTTP adapters validate the name too; this check
+	// stays so that a new caller of the domain cannot skip it.
+	if ident.HasHidden(s) {
+		return fmt.Errorf("%w: name holds a control, format or separator character", ErrInvalid)
 	}
 
 	return nil

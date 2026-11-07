@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -364,10 +363,8 @@ func checkText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: the %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) || unicode.In(c, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return fmt.Errorf("%w: the %s holds the control, format or separator character %U", ErrInvalid, field, c)
-		}
+	if ident.HasHidden(s) {
+		return fmt.Errorf("%w: the %s holds a control, format or separator character", ErrInvalid, field)
 	}
 
 	return nil

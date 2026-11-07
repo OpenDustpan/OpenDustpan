@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // checkApprovers returns a with each group name resolved to the ID of the
@@ -199,11 +200,11 @@ func checkUserName(name string) error {
 			fmt.Sprintf("the user name %q starts or ends with white space", name))
 	}
 
-	for _, c := range name {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return newApproversError(ApproversUserInvalid,
-				fmt.Sprintf("the user name %q holds a control or format character", name))
-		}
+	// Defense in depth: the HTTP adapters validate the name too; this check
+	// stays so that a new caller of the domain cannot skip it.
+	if ident.HasHidden(name) {
+		return newApproversError(ApproversUserInvalid,
+			fmt.Sprintf("the user name %q holds a control, format or separator character", name))
 	}
 
 	return nil
