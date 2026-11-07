@@ -107,16 +107,18 @@ func gitShow(ctx context.Context, rev, path string) ([]byte, error) {
 
 // git runs one git command with an argument list, never through a shell. The
 // command name is fixed, and the only input is a ref that refPattern allowed.
-func git(ctx context.Context, args ...string) ([]byte, error) {
+func git(ctx context.Context, sub string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 
+	argv := append([]string{sub}, args...)
+
 	//nolint:gosec // The command name is fixed and the ref was checked by refPattern; no shell runs.
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", argv...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git %s: %w: %s", sub, err, strings.TrimSpace(stderr.String()))
 	}
 
 	return stdout.Bytes(), nil
