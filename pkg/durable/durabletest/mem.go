@@ -832,6 +832,12 @@ func (m *Mem) HeartbeatHarness() HeartbeatHarness {
 func (m *memDB) heartbeatHarness() HeartbeatHarness {
 	return HeartbeatHarness{
 		Open: func(_ *testing.T, skew time.Duration) durable.HeartbeatStore { return memStore{db: m, skew: skew} },
+		Seed: func(_ *testing.T, owner string, at time.Time, lease time.Duration) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			m.beats[owner] = memBeat{at: at, lease: lease}
+		},
 	}
 }
 
@@ -876,7 +882,7 @@ func (s memStore) LastBeat(_ context.Context) (durable.Beat, error) {
 	var validUntil time.Time
 
 	for owner, b := range s.db.beats {
-		until := b.at.Add(b.lease)
+		until := b.at.Add(2 * b.lease)
 
 		if beat.Owner == "" || until.After(validUntil) ||
 			(until.Equal(validUntil) && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {

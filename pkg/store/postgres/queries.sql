@@ -2966,7 +2966,7 @@ DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms')::bigint;
 
 -- name: GetLatestDurableHeartbeat :one
 SELECT owner, at_ms, lease_ms FROM durable_heartbeats
-ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
+ORDER BY at_ms + 2 * lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- name: GetNamespaceID :one
 -- The stable ID of the namespace that has the name now.
