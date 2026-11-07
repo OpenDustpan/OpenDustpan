@@ -353,6 +353,24 @@ CASES = [
         "hides": ["\r", "\x1b"],
     },
     {
+        "name": "control characters in the line and the commit",
+        "runs": [
+            [
+                make_result(
+                    True,
+                    line="7\n::error::forged\x1b[31m",
+                    commit="c\r::warning::c\nforged\x1b[31m",
+                )
+            ]
+        ],
+        "code": 1,
+        "made": 1,
+        "text_lines": 2,
+        "no_prefix": ["::"],
+        "shows": ["7?::error::forged?[31m", "c?::warning::c?forged?[31m"],
+        "hides": ["\r", "\x1b"],
+    },
+    {
         "name": "the scan command fails and gives no result",
         "runs": [ScanError(2)],
         "code": 1,
