@@ -326,8 +326,22 @@ It does not stop example 3, and a read can be a credential theft: see
     mutation over `GET`, or an RPC endpoint such as `GET ...?action=delete`.
 
   The first two kinds are generic, and the job proxy can refuse them (H5).
-  The third kind is specific to each API. Only a list of read paths in the
-  proxy rules limits it.
+  The third kind is specific to each API. Only an allowlist of methods and
+  paths in the proxy rules limits it. So under `proxy-only`, a plan proxy
+  rule of an untrusted source is an allowlist of methods and paths, never
+  a whole host (O8-b).
+
+  Examples of `GET` endpoints that are not safe, and how an allowlist
+  leaves them out:
+
+  | API | `GET` that is not safe | How the allowlist covers it |
+  | --- | --- | --- |
+  | Kubernetes | `.../pods/{pod}/exec`, `.../attach`, `.../portforward`, `.../proxy`, `/api/v1/nodes/{node}/proxy` (with an upgrade, they run commands or open a channel) | List the read paths of the resources that the stack manages, for example `/apis/apps/v1/namespaces/{{ unit.labels.ns }}/deployments/*`. Never `/api/**`. H5 refuses the upgrade too. |
+  | Kubernetes | `.../secrets`, `.../serviceaccounts/{sa}/token` (a read that returns credentials) | Leave the paths of secrets and tokens out of the list. |
+  | Elasticsearch and OpenSearch | `GET .../_search` and other endpoints that take a body | H5 refuses a body on `GET`. A search that needs a body uses a `POST` rule with body matching (O7). |
+  | GraphQL servers that accept `GET` | `GET /graphql?query=mutation...` | Body or query matching (O7), or no `GET` rule for `/graphql`. |
+  | RPC-style APIs | `GET ...?action=delete`, `GET .../run` | List only the read paths. A path rule cannot match a query value, so an endpoint whose action is in the query is not listed. |
+  | Secret stores and identity APIs | `GET /api/tokens`, `/users/{id}/keys`, `/v1/secret/**` | Leave them out of the list. Residual risk 2. |
 - **G9. The same proxy rules for a trusted and an untrusted job.** A proxy
   rule has `operations`, but no condition on the source. See option set
   O8.
@@ -688,9 +702,11 @@ binding of the result:
    commit does not change the check.
 5. **The server binds the result, once.** The server accepts a result only
    from the claim of the check phase of that job, and only once for each
-   check step. The result names the job ID, the claim token of the check
-   phase, the check step ID, the image digest, the configuration digest
-   and the SHA-256 of the source snapshot. The server refuses a result
+   check step. At the claim of the check phase, the server issues a nonce
+   of 32 random bytes for each check step, and the launcher gets it with
+   the step. The result names the job ID, the claim token of the check
+   phase, the check step ID, the nonce, the image digest, the
+   configuration digest and the SHA-256 of the source snapshot. The server refuses a result
    when any of these is not the value of the job. So a result of an
    earlier job on the same commit, with an older image or older policy
    files, does not count. The claim of a plan, apply or verify phase can
@@ -701,7 +717,11 @@ binding of the result:
    `passed`, `failed`, `missing`, `timedOut` and `error`. A check step
    with no result at the end of the check phase is in `missing`. A file
    that makes the scanner crash, hang or time out is not a pass. A
-   starter gate denies unless the check step is in `passed`.
+   built-in gate `builtin/check-steps-passed`, in `enforce` mode at
+   `change.plan`, denies when a check step that the unit configures is
+   not in `passed`. So a crash fails closed with no gate that a person
+   writes. A person can switch it to `evaluate` mode only with the fresh
+   authentication and the audit entry of ADR 226 decision 7.
 
 What stays: the scanner reads the files of the change, and these files
 are hostile input. A file made to exploit a bug in the scanner can make
@@ -862,6 +882,13 @@ use.
   with `paths: ["/**"]`) and `proxy.planTunnelRules` (the count of
   `tunnel` rules for `plan`). A starter gate denies a plan of an untrusted
   source when any count is above 0.
+  - A fixed control too, in addition to the gate: under `proxy-only`, the
+    job start of an untrusted source refuses a plan proxy rule with
+    `inspect` and no path list, a path pattern that ends in `**` at the
+    first segment, or a method other than `GET`, `HEAD` and `OPTIONS`
+    with no body condition (O7). The error is `jobproxy.ErrRender`, and it
+    names the proxy rule. Defense in depth: the starter gate denies the
+    same rules, and this check does not rely on the gate.
 - **O8-c. A source condition on a proxy rule.** A field `sources` with the
   values `trusted` and `untrusted`. A proxy rule with
   `sources: [trusted]` does not render for a job of an untrusted source.
@@ -1084,8 +1111,12 @@ These stay possible with the full proposal. The docs must say each one.
    them. The program can print them to a log that the author can read.
    Only a list of read paths that leaves these paths out limits this.
 3. **A `GET` with a side effect.** H5 refuses the generic ways to write
-   with `GET`. An API that changes data on a `GET` of a listed path is
-   specific to that API. Only the list of paths limits it.
+   with `GET`: upgrades, method overrides and bodies. An API that changes
+   data, or opens a channel, on a `GET` of a listed path is specific to
+   that API, for example Kubernetes `exec` and `proxy` paths or an RPC
+   endpoint with its action in the query. Only the allowlist of methods
+   and paths limits it, and only when the person who writes it leaves
+   these paths out. The table in G8 lists the known cases.
 4. **Data that the plan reads can leak through the plan and the log.**
    The plan and the job log mask only values that the server knows as
    secret. A program that reads a value of the downstream system and
