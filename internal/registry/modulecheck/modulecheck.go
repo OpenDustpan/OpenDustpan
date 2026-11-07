@@ -347,6 +347,10 @@ func readZip(data []byte, limits Limits) ([]entry, error) {
 }
 
 // Sizes in the end-of-central-directory record of a zip archive.
+// zipDirectoryExtra is a budget of 1,024 bytes for the extra field and the
+// comment of each directory entry. It does not cover every legal directory:
+// each of these fields can hold up to 65,535 bytes. A directory that is larger
+// than the total budget of all its entries is refused.
 const (
 	zipEndRecordLen    = 22
 	zipMaxCommentLen   = 1<<16 - 1

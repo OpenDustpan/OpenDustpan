@@ -441,8 +441,8 @@ func gitArchive(t *testing.T, records map[string]string) []byte {
 }
 
 // TestCheckGitArchive proves that a pax global header is read as metadata: a
-// comment is accepted, and a path or link override is refused because other
-// archive readers apply it to the entries after the header.
+// comment is accepted, and any other record is refused because other archive
+// readers apply it to the entries after the header.
 func TestCheckGitArchive(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +456,8 @@ func TestCheckGitArchive(t *testing.T) {
 		{"comment", map[string]string{"comment": comment}, ""},
 		{"comment and path", map[string]string{"comment": comment, "path": "../evil"}, "global header"},
 		{"comment and linkpath", map[string]string{"comment": comment, "linkpath": "/etc/passwd"}, "global header"},
+		{"path only", map[string]string{"path": "../evil"}, "global header"},
+		{"mtime only", map[string]string{"mtime": "1700000000"}, "global header"},
 	}
 
 	for _, tc := range tests {
