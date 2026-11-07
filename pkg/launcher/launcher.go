@@ -379,6 +379,9 @@ const (
 	EnvCommit      = "DUSTPAN_COMMIT"
 	EnvServer      = "DUSTPAN_SERVER_URL"
 	EnvSweepReport = "DUSTPAN_SWEEP_REPORT"
+	// EnvHelperSocket names the path of SocketHelper for the helpers of a
+	// tool step. It holds a path, never a credential.
+	EnvHelperSocket = "DUSTPAN_HELPER_SOCKET"
 )
 
 // Variables of the tool that the launcher sets for a step of the role tool
