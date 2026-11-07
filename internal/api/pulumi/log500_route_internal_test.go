@@ -46,6 +46,12 @@ func TestWriteErrorLogs500Route(t *testing.T) {
 			wantLog: []string{"status=500", "cause=unclassified"},
 			noLog:   []string{"hunter2", "forged", "route="},
 		},
+		{
+			name:    "route ends with a line feed",
+			pattern: "GET /x\n",
+			wantLog: []string{"status=500", "cause=unclassified"},
+			noLog:   []string{"hunter2", "route="},
+		},
 	}
 
 	for _, tc := range tests {
