@@ -1,11 +1,11 @@
 ---
-rfc: 124
+rfc: 125
 title: An index of the unit graph and the blast radius that is fast and small
 status: discussing
 created: 2026-11-07
 ---
 
-# RFC 124. An index of the unit graph and the blast radius that is fast and small
+# RFC 125. An index of the unit graph and the blast radius that is fast and small
 
 Status: discussing. Design only. No code changes with this RFC. Until the
 owner decides, ADRs 153, 162, 163 and 166 stay as they are.
