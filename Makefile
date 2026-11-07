@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
@@ -217,10 +218,13 @@ test-ci-other: ## Go tests as in test, without the two store packages; the go jo
 # needed only with -race.
 COVER_FLAGS ?= -covermode=set
 
-cover: ## Fast coverage pass for the packages of test-ci-other, without -race: writes coverage.out and prints a table. In CI, GITHUB_STEP_SUMMARY gets the same table.
+cover: ## Fast coverage pass for the packages of test-ci-other, without -race: writes coverage.out and prints a table, also when a test fails. The exit status is the one of go test. In CI, GITHUB_STEP_SUMMARY gets the same table.
 	go list ./... >/dev/null
-	go test $(COVER_FLAGS) -coverprofile=coverage.out -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
-	python3 -I scripts/cover-summary.py coverage.out
+	python3 -I scripts/cover-summary.py --selftest
+	status=0; \
+	go test $(COVER_FLAGS) -coverprofile=coverage.out -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS))) || status=$$?; \
+	python3 -I scripts/cover-summary.py coverage.out; \
+	exit $$status
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
