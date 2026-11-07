@@ -1068,7 +1068,8 @@ func (e *DeniedError) Unwrap() error { return ErrDenied }
 
 // ObjectKind returns the kind of the object of the denial in the words of
 // the API: "namespace", "unit", "collection", "principal", "caller" or
-// "server". It names no object.
+// "server". It names no object. It returns the empty string for an object
+// that names no kind.
 func (e *DeniedError) ObjectKind() string {
 	switch {
 	case e.Object.IsServer():
@@ -1081,8 +1082,10 @@ func (e *DeniedError) ObjectKind() string {
 		return "unit"
 	case e.Object.IsCollection():
 		return "collection"
-	default:
+	case e.Object.IsNamespace():
 		return "namespace"
+	default:
+		return ""
 	}
 }
 
