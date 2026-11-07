@@ -3,10 +3,12 @@ package postgres //nolint:testpackage // The unexported write path of the settin
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 )
 
 // CheckSettingFence runs the comparison of the fence and the namespace that
@@ -92,4 +94,23 @@ func CountRunnerControlRows(ctx context.Context, s *Store) (map[string]int64, er
 	}
 
 	return counts, nil
+}
+
+// SetItemKeyAttemptDeadline makes the attempt deadline of each item key
+// transaction that starts after the call d after its start, for the late
+// commit cases of the conformance suite.
+func SetItemKeyAttemptDeadline(s *Store, d time.Duration) {
+	s.attemptDeadline = func(_ context.Context, start time.Time) time.Time {
+		return start.Add(d)
+	}
+}
+
+// JobWrite runs fn in one write transaction of the job stores of s.
+func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Write(ctx, fence, fn)
+}
+
+// JobRead runs fn in one read transaction of the job stores of s.
+func JobRead(ctx context.Context, s *Store, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Read(ctx, fn)
 }

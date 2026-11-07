@@ -413,8 +413,9 @@ func TestInItemKeyTxEndsALateWrite(t *testing.T) {
 
 		return writeErr
 	})
-	if writeErr == nil || err == nil {
-		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail", writeErr, err)
+	if writeErr == nil || !errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail, the transaction "+
+			"with ErrItemKeyAttemptExpired", writeErr, err)
 	}
 
 	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
@@ -472,8 +473,9 @@ func TestInItemKeyTxGivesItsOwnDeadline(t *testing.T) {
 
 		return writeErr
 	})
-	if writeErr == nil || err == nil {
-		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail", writeErr, err)
+	if writeErr == nil || !errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail, the transaction "+
+			"with ErrItemKeyAttemptExpired", writeErr, err)
 	}
 
 	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
