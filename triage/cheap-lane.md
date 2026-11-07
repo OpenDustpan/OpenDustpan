@@ -33,8 +33,8 @@ No two issues in one batch touch the same file.
 - Batch 1: 2534, 986, 985, 1654, 2581, 2561, 2484, 2580 (group 1)
 - Batch 2: 2051 (after the owner gives the numbers), 2580 (group 2 and later, one per run)
 
-2580 shares e2e/e2e_test.go with nothing else in batch 1. 2561 and 2051 touch other
-e2e files, so they stay out of the same run as 2580 only if the lane edits e2e/harness.go.
+Batch 1 has no shared file. 2580 edits e2e/e2e_test.go and a new e2e file only.
+2561 edits e2e/contract_test.go and maybe e2e/harness.go. 2051 edits e2e/doc.go.
 
 ## STALE
 
