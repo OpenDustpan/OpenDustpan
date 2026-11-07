@@ -225,6 +225,7 @@ The platform must be observable and intuitive. A user must be able to see and ex
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
+- Security code: write one table of hostile cases for each layer. The layers are the port adapter, the service and the HTTP handler. For each guard, show a test that fails when you remove the guard.
 - The backend protocols implemented so far are not published, versioned specs
   we can implement from. Any endpoint change must be checked against the real
   CLI with `make e2e`.
@@ -254,6 +255,7 @@ CLIs. Until 1.0, everything else can break (ADR 73).
   each action. Make every change pass the policy check. A route without an
   action fails the route test. Put routes that need no sign-in on the explicit
   public list in that test.
+- Until the first server tag, do not change `info.version` in the API description or `internal/api/apidesc/openapi.pin`. The release sets both. `make pin-frozen` checks this.
 
 ## Security code: defense in depth (ADR 250)
 
@@ -337,6 +339,8 @@ skill (ADR 14):
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
   two weeks old (ADR 7), and review its diff first.
+- Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash.
+- Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
 
 ## Agent skills
 
