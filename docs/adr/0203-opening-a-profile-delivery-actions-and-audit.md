@@ -13,7 +13,8 @@ Changed by:
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 - ADR 300 changes decision 5: a job of a unit with an open rule waits. It does not fail.
-
+- ADR 353 extends decision 1: the server derives the consumer job-proxy from the proxy session.
+.
 ## Context
 
 An **open** resolves a profile for one caller: it merges the imports, calls
