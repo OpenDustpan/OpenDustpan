@@ -169,3 +169,4 @@ both together.
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
 | [121](0121-agent-principals.md) | Agent principals, delegation and the kind agent | accepted |
 | [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | accepted |
+| [125](0125-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
