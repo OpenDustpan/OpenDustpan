@@ -5,8 +5,6 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -473,7 +471,8 @@ func startPlainDev(t *testing.T, bin string, extra ...string) *devServer {
 }
 
 // devPulumi drives the Pulumi CLI against dev with only dev.env: login, whoami,
-// stack init in the namespace dev, up, and export.
+// stack init in the namespace dev, up, and export. The stack init needs the
+// placement rule that dev makes on its first start.
 func devPulumi(t *testing.T, server *devServer, cli e2e.Install) {
 	t.Helper()
 
@@ -486,8 +485,6 @@ func devPulumi(t *testing.T, server *devServer, cli e2e.Install) {
 		t.Fatalf("login printed %q, want it to name %s", out, server.url)
 	}
 
-	devSeedPlacement(t, server)
-
 	pulumi.mustRun(t, "stack", "init", qualified)
 
 	if out := pulumi.mustRun(t, "up", "--yes", "--non-interactive"); !strings.Contains(out, "greeting") {
@@ -497,71 +494,6 @@ func devPulumi(t *testing.T, server *devServer, cli e2e.Install) {
 	if out := pulumi.mustRun(t, "stack", "export"); !strings.Contains(out, "greeting") {
 		t.Fatalf("stack export printed %q, want the output greeting", out)
 	}
-}
-
-// devSeedPlacement makes a collection and a placement rule for every Pulumi
-// stack of the namespace dev, as the administrator. The server refuses a new
-// stack that no rule places, and dev makes no rule.
-func devSeedPlacement(t *testing.T, server *devServer) {
-	t.Helper()
-
-	client := devHTTPClient(t, server)
-	token := strings.TrimSpace(string(mustReadFile(t, filepath.Join(server.dir, "dev.token"))))
-	base := server.url + "/api/dustpan/v1/namespaces/" + devNamespace
-
-	for _, step := range []struct{ path, body string }{
-		{"/collections", `{"name":"everything"}`},
-		{"/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`},
-	} {
-		req, err := http.NewRequestWithContext(
-			t.Context(), http.MethodPost, base+step.path, strings.NewReader(step.body),
-		)
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", step.path, err)
-		}
-
-		answer, readErr := io.ReadAll(resp.Body)
-		if closeErr := resp.Body.Close(); closeErr != nil || readErr != nil {
-			t.Fatalf("read the answer: %v, %v", readErr, closeErr)
-		}
-
-		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("POST %s answers %d, want 201 (%s)", step.path, resp.StatusCode, answer)
-		}
-	}
-}
-
-// devHTTPClient returns a client that trusts the certificate of the server:
-// the bundle that SSL_CERT_FILE names in dev.env, when dev wrote one.
-func devHTTPClient(t *testing.T, server *devServer) *http.Client {
-	t.Helper()
-
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-
-	for line := range strings.Lines(string(mustReadFile(t, filepath.Join(server.dir, "dev.env")))) {
-		path, ok := strings.CutPrefix(strings.TrimSpace(line), "export SSL_CERT_FILE=")
-		if !ok {
-			continue
-		}
-
-		pool.AppendCertsFromPEM(mustReadFile(t, strings.Trim(path, `'"`)))
-	}
-
-	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
-	t.Cleanup(transport.CloseIdleConnections)
-
-	return &http.Client{Transport: transport}
 }
 
 // devTofuHTTP drives OpenTofu through the http backend with only dev.env and
