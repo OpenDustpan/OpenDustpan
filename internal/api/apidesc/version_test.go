@@ -26,10 +26,9 @@ var updatePin = flag.Bool(
 )
 
 // pinFile is the record of the last committed description: its info.version
-// and the SHA-256 of its bytes. No server release exists yet, so the baseline
-// is the committed description and not a released one. After the first
-// release, a change of the description still compares with this file, and the
-// file moves with each pull request that changes the description.
+// and the SHA-256 of its bytes. Before the first tag, this file does not change
+// with a pull request. After the first tag, it moves with each pull request
+// that changes the description.
 const pinFile = "openapi.pin"
 
 // pinCheckEnv names the variable that runs TestVersionFollowsTheDescription
