@@ -70,7 +70,10 @@
       "Bash(git add -A*)",
       "Bash(git add .)",
       "Bash(git add --all*)",
-      "mcp__claude-code-remote__subscribe_pr_activity"
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "Bash(git commit --no-verify*)",
+      "Bash(git commit -n *)",
+      "Bash(git commit * --no-verify*)"
     ]
   },
   "hooks": {

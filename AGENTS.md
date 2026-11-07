@@ -339,7 +339,7 @@ skill (ADR 14):
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
   two weeks old (ADR 7), and review its diff first.
-- Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash.
+- Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash. Do not skip the pre-commit hook.
 - Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
 
 ## Agent skills
