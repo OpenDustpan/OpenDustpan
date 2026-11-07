@@ -1,6 +1,9 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "lsp": true,
+  // Some model providers refuse the gopls MCP tool schema, with a provider error 400 on gopls_go_diagnostics.
+  // To run OpenCode with the gopls tools turned off, set the environment variable OPENCODE_CONFIG_CONTENT to the JSON text {"mcp":{"gopls":{"enabled":false}}}, for that run only.
+  // This file is not changed by that run.
   "mcp": {
     "gopls": {
       "type": "local",
