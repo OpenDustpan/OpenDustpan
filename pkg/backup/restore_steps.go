@@ -1319,7 +1319,8 @@ func (w restoreWriter) SetStateIf(ctx context.Context, expected, next maintenanc
 // reports durable.ErrClaimLost unless the claim of the fence still holds it.
 // Then it stores the cancel of unit as an audit event of the restore, under
 // the fence, so the record exists before the cancel and survives the swap and
-// a takeover.
+// a takeover, and writes the log line of the attempt. Every attempt gets this
+// line, also one that cancels nothing.
 func (w restoreWriter) Check(ctx context.Context, unit string) error {
 	op, err := w.s.operations.Get(ctx, w.fence.Operation)
 	if err != nil {
@@ -1339,6 +1340,9 @@ func (w restoreWriter) Check(ctx context.Context, unit string) error {
 		return fmt.Errorf("record the cancel of %s for restore %s: %w", unit, w.id, err)
 	}
 
+	w.s.logger.WarnContext(ctx, "restore attempted to cancel the active work", slog.String("restore_id", w.id.String()),
+		slog.Int64("token", w.fence.Token), slog.String("unit", unit))
+
 	return nil
 }
 
@@ -1348,9 +1352,11 @@ func (w restoreWriter) Actor() string {
 }
 
 // logCanceled writes one log line for each unit of work that an enter of the
-// restore canceled, with the restore ID, the claim token and the unit name.
-// The audit entry of each cancel comes from the audit event that the writer
-// stored before the cancel.
+// restore canceled and confirmed, with the restore ID, the claim token and
+// the unit name. The writer writes the line of every attempt, before the
+// cancel, so this line names only the confirmed cancels. The audit entry of
+// each cancel comes from the audit event that the writer stored before the
+// cancel.
 func (s *RestoreService) logCanceled(ctx context.Context, in restoreInput, fence durable.StepFence, units []string) {
 	if len(units) == 0 {
 		return

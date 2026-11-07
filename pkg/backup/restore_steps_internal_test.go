@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
 )
@@ -70,6 +71,92 @@ func cancelRecordAttrs(rec slog.Record) (map[string]string, int) {
 	return attrs, rec.NumAttrs()
 }
 
+// writerCheckOps answers the operation that the writer check reads.
+type writerCheckOps struct {
+	durable.Store
+
+	op durable.Operation
+}
+
+// Get implements durable.Store.
+func (o writerCheckOps) Get(context.Context, durable.ID) (durable.Operation, error) {
+	return o.op, nil
+}
+
+// writerCheckLive stores the audit events that the writer check records. The
+// embedded interface is nil: a call that needs another method panics, so the
+// test also proves that the check uses nothing else.
+type writerCheckLive struct {
+	RestoreLive
+
+	events []string
+}
+
+// RecordRestoreEvent implements RestoreOperations.
+func (l *writerCheckLive) RecordRestoreEvent(_ context.Context, _ durable.StepFence, _ RestoreID, object string) error {
+	l.events = append(l.events, object)
+
+	return nil
+}
+
+// TestRestoreWriterCheckLogsTheAttempt proves that the check that runs before
+// every cancel writes one attempt line with the restore ID, the claim token
+// and the unit name, and stores the audit event that names the attempt.
+func TestRestoreWriterCheckLogsTheAttempt(t *testing.T) {
+	t.Parallel()
+
+	recorder := &cancelLogRecorder{mu: sync.Mutex{}, records: nil}
+	live := &writerCheckLive{RestoreLive: nil, events: nil}
+	id := MintRestoreID()
+	fence := durable.StepFence{Operation: "restore-op", Token: 7, Step: RestoreStepEnterMaintenance}
+
+	service := &RestoreService{
+		live: live, operations: writerCheckOps{Store: nil, op: durable.Operation{
+			ID: "restore-op", Key: RestoreOperationKey(id), Kind: RestoreOperationKind,
+			Version: RestoreOperationVersion, Input: nil, State: durable.StateRunning, Steps: nil, Attempt: 1,
+			Failures: 0, Expiries: 0, LastError: "",
+			Claim:           durable.Claim{Operation: "restore-op", Owner: "", Token: 7, ExpiresAt: time.Time{}},
+			CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		}},
+		canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil, key: nil, installation: "",
+		afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
+		logger: slog.New(recorder), runner: nil,
+	}
+
+	unit := "pulumi:acme/web/prod"
+
+	if err := service.writer(fence, id).Check(t.Context(), unit); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	records := recorder.recordsOf()
+	if len(records) != 1 {
+		t.Fatalf("log lines = %d, want 1 attempt line", len(records))
+	}
+
+	rec := records[0]
+
+	if rec.Level != slog.LevelWarn {
+		t.Errorf("level = %v, want warn", rec.Level)
+	}
+
+	if rec.Message != "restore attempted to cancel the active work" {
+		t.Errorf("message = %q, want the attempt message", rec.Message)
+	}
+
+	attrs, n := cancelRecordAttrs(rec)
+	if n != 3 || attrs["restore_id"] != id.String() || attrs["token"] != strconv.FormatInt(fence.Token, 10) ||
+		attrs["unit"] != unit {
+		t.Errorf("attrs = %v, want the restore ID, the token and the unit", attrs)
+	}
+
+	want := "restore " + id.String() + " claim token " + strconv.FormatInt(fence.Token, 10) +
+		" attempted to cancel the active work: " + unit
+	if len(live.events) != 1 || live.events[0] != want {
+		t.Errorf("audit events = %q, want [%q]", live.events, want)
+	}
+}
+
 // TestRestoreCancelAuditNamesAnAttempt proves that the audit text of one
 // cancel names an attempt: the writer stores the entry before the cancel
 // runs, so the text must not say that the cancel completed.
@@ -105,8 +192,9 @@ func TestRestoreCancelAuditNamesAnAttempt(t *testing.T) {
 }
 
 // TestRestoreCancelLogWritesOneLinePerUnit proves that logCanceled writes one
-// log line for each unit, with the restore ID, the claim token and the unit
-// name, so the log records identify each canceled stack or workspace.
+// log line for each unit that the cancel confirmed, with the restore ID, the
+// claim token and the unit name, so the log records identify each canceled
+// stack or workspace.
 func TestRestoreCancelLogWritesOneLinePerUnit(t *testing.T) {
 	t.Parallel()
 
