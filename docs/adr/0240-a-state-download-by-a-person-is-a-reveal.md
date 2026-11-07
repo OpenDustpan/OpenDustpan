@@ -5,7 +5,8 @@ Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, AD
 Changed by:
 
 - ADR 297 extends: the credential session names a request that an access cookie authenticates.
-
+- ADR 354 changes decisions 1, 3 and 4: principal.kind gets the value agent.
+.
 ## Context
 
 The console design for the OpenTofu workspace page

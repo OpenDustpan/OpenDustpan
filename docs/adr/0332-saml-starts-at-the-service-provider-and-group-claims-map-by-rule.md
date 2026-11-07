@@ -42,5 +42,5 @@ Decided by the project owner on 7 November 2026.
 - The SAML adapter of ADR 321 has one normal path. The path without a request exists only where an administrator turns it on for one provider.
 - The API shows the effective value of the IdP-started setting of each provider. The default is off.
 - A group that two providers use has one link for each pair of provider and claim value. A claim value of one provider never reaches a group that another provider linked.
-- ADR 70 decisions 13 to 16 still apply. A rule does not add a member to a protected group unless the group trusts the identity provider.
+- ADR 70 decisions 13, 14, 15 and 16 still apply. A rule does not add a member to a protected group unless the group trusts the identity provider.
 - This ADR does not decide the syntax of the claim pattern or the exact maximum age of an assertion. It does not decide the shape of the audit entries. A later decision does.
