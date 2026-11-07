@@ -513,6 +513,50 @@ exports:
 
 	before := mustDoc(t, base)
 
+	// Reads that the walk cannot follow by name count as a read of the whole
+	// values tree, and a chain is followed to its end.
+	chain := `schemaVersion: 1
+values:
+  a: "${ values.b }"
+  b: "${ values.c }"
+  c: { $secret: abc }
+  note: hello
+exports:
+  files:
+    F: "${ values.a }"
+`
+	env := strings.Replace(base, `DB_PASSWORD_FILE: "${ values.dbPassword }"`,
+		`DB_PASSWORD_FILE: "${ $env.X + values.dbPassword }"`, 1)
+	index := strings.Replace(base, `DB_PASSWORD_FILE: "${ values.dbPassword }"`,
+		`DB_PASSWORD_FILE: "${ values[values.key] }"`, 1)
+	index = strings.Replace(index, "note: hello", "note: hello\n  key: dbPassword", 1)
+
+	for _, tc := range []struct {
+		name, before, after string
+		want                []string
+	}{
+		{
+			"a chain of three values, with a change at its end",
+			chain, strings.Replace(chain, "c: { $secret: abc }", "c: { $secret: xyz }", 1),
+			[]string{"values.c"},
+		},
+		{
+			"an expression with $env and a value, with a change of another value",
+			env, strings.Replace(env, "note: hello", "note: bye", 1),
+			[]string{"values"},
+		},
+		{
+			"a computed index, with a change of another value",
+			index, strings.Replace(index, "note: hello", "note: bye", 1),
+			[]string{"values"},
+		},
+	} {
+		got := profile.RoutingChanges(mustDoc(t, tc.before), mustDoc(t, tc.after))
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: RoutingChanges() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
