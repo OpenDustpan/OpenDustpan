@@ -137,6 +137,8 @@ var classes = []class{
 	},
 	{name: backup.RemovedAccessTokens, table: "access_tokens", link: colPrincipalID, only: "", extra: nil},
 	{name: backup.RemovedPreferences, table: "person_preferences", link: colPrincipalID, only: "", extra: nil},
+	{name: backup.RemovedForgeLinks, table: "forge_account_links", link: colPrincipalID, only: "", extra: nil},
+	{name: backup.RemovedForgeLinkRequests, table: "forge_link_requests", link: colPrincipalID, only: "", extra: nil},
 	{
 		name: backup.RemovedTempAdmins, table: "temp_admins", link: colPrincipalID, only: "",
 		extra: func(d Dialect) string { return d.matchSubject() },

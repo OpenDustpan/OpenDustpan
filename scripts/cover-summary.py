@@ -25,6 +25,12 @@ import tempfile
 MODULE_PREFIX = "opendustpan.org/opendustpan/"
 
 
+def check_path(file_name, where):
+    """Refuse a path that holds a character which can break a Markdown table."""
+    if not file_name.isprintable() or any(c in file_name for c in "|`"):
+        raise ValueError(f"{where}: refused a path with a pipe, a backtick or a control character")
+
+
 def parse(path):
     """Return {(file, block): (statements, covered)} for a profile."""
     blocks = {}
@@ -52,6 +58,7 @@ def parse(path):
                 count = int(count)
             except ValueError as err:
                 raise ValueError(f"{path}:{number}: number expected: {err}") from err
+            check_path(file_name, f"{path}:{number}")
             key = (file_name, block)
             previous = blocks.get(key)
             covered = count > 0 or (previous is not None and previous[1])
@@ -104,6 +111,7 @@ def render_markdown(packages):
         "| --- | ---: | ---: |",
     ]
     for package in sorted(packages):
+        check_path(package, "package")
         statements, covered = packages[package]
         lines.append(f"| `{short(package)}` | {percent(covered, statements):.1f}% | {covered}/{statements} |")
     return "\n".join(lines) + "\n"
@@ -126,8 +134,27 @@ def selftest():
         assert packages == {"m/a": [3, 2], "m/b": [5, 4]}, packages
         text = render_text(packages)
         assert text.splitlines()[-1].endswith("total"), text
-        assert "75.0%" in text.splitlines()[-1] or "75.0" in text, text
+        assert text.splitlines()[-1] == "  75.0%        6/8        total", repr(text)
         assert "| `m/a` | 66.7% | 2/3 |" in render_markdown(packages)
+        # Defense in depth: parse rejects a path that could break a Markdown
+        # table; render_markdown also refuses it, so a new caller cannot skip
+        # the check in parse.
+        for hostile in ("m/a|b/x.go", "m/a`b/x.go", "m/a\nb/x.go"):
+            try:
+                render_markdown({hostile.rpartition("/")[0]: [1, 1]})
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"render_markdown must refuse {hostile!r}")
+        hostile_profile = os.path.join(directory, "hostile.out")
+        with open(hostile_profile, "w", encoding="utf-8") as handle:
+            handle.write("mode: set\nm/a|b/x.go:1.1,2.2 1 1\n")
+        try:
+            parse(hostile_profile)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("parse must refuse a path with a pipe")
         bad = os.path.join(directory, "bad.out")
         with open(bad, "w", encoding="utf-8") as handle:
             handle.write("m/a/x.go:1.1,2.2 2 0\n")

@@ -1197,6 +1197,24 @@ func (q *Queries) CountNotificationsByID(ctx context.Context, id string) (int64,
 	return count, err
 }
 
+const countOpenForgeLinkRequests = `-- name: CountOpenForgeLinkRequests :one
+SELECT COUNT(*) AS open_requests FROM forge_link_requests
+WHERE forge_link_requests.principal_id = ?1 AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.expires_at_ms > ?2
+`
+
+type CountOpenForgeLinkRequestsParams struct {
+	PrincipalID string
+	NowMs       int64
+}
+
+func (q *Queries) CountOpenForgeLinkRequests(ctx context.Context, arg CountOpenForgeLinkRequestsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenForgeLinkRequests, arg.PrincipalID, arg.NowMs)
+	var open_requests int64
+	err := row.Scan(&open_requests)
+	return open_requests, err
+}
+
 const countOpenJobsOfNamespace = `-- name: CountOpenJobsOfNamespace :one
 SELECT COUNT(*) FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
@@ -2883,6 +2901,21 @@ func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error
 	return err
 }
 
+const deleteExpiredForgeLinkRequestsOf = `-- name: DeleteExpiredForgeLinkRequestsOf :exec
+DELETE FROM forge_link_requests
+WHERE forge_link_requests.principal_id = ?1 AND forge_link_requests.expires_at_ms <= ?2
+`
+
+type DeleteExpiredForgeLinkRequestsOfParams struct {
+	PrincipalID string
+	BeforeMs    int64
+}
+
+func (q *Queries) DeleteExpiredForgeLinkRequestsOf(ctx context.Context, arg DeleteExpiredForgeLinkRequestsOfParams) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredForgeLinkRequestsOf, arg.PrincipalID, arg.BeforeMs)
+	return err
+}
+
 const deleteExpiredIdempotencyRecord = `-- name: DeleteExpiredIdempotencyRecord :exec
 DELETE FROM idempotency_records
 WHERE principal = ?1 AND method = ?2 AND path = ?3
@@ -2958,6 +2991,44 @@ DELETE FROM runner_nonces WHERE expires_at_ms < ?1
 
 func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredRunnerNonces, beforeMs)
+	return err
+}
+
+const deleteForgeAccountLink = `-- name: DeleteForgeAccountLink :execrows
+DELETE FROM forge_account_links
+WHERE forge_account_links.kind = ?1 AND forge_account_links.host = ?2
+  AND forge_account_links.account_id = ?3
+`
+
+type DeleteForgeAccountLinkParams struct {
+	Kind      string
+	Host      string
+	AccountID string
+}
+
+func (q *Queries) DeleteForgeAccountLink(ctx context.Context, arg DeleteForgeAccountLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteForgeAccountLink, arg.Kind, arg.Host, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteForgeAccountLinksOfPrincipal = `-- name: DeleteForgeAccountLinksOfPrincipal :exec
+DELETE FROM forge_account_links WHERE forge_account_links.principal_id = ?1
+`
+
+func (q *Queries) DeleteForgeAccountLinksOfPrincipal(ctx context.Context, principalID string) error {
+	_, err := q.db.ExecContext(ctx, deleteForgeAccountLinksOfPrincipal, principalID)
+	return err
+}
+
+const deleteForgeLinkRequestsOfPrincipal = `-- name: DeleteForgeLinkRequestsOfPrincipal :exec
+DELETE FROM forge_link_requests WHERE forge_link_requests.principal_id = ?1
+`
+
+func (q *Queries) DeleteForgeLinkRequestsOfPrincipal(ctx context.Context, principalID string) error {
+	_, err := q.db.ExecContext(ctx, deleteForgeLinkRequestsOfPrincipal, principalID)
 	return err
 }
 
@@ -5508,6 +5579,58 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getForgeAccountLink = `-- name: GetForgeAccountLink :one
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.kind = ?1 AND l.host = ?2 AND l.account_id = ?3
+`
+
+type GetForgeAccountLinkParams struct {
+	Kind      string
+	Host      string
+	AccountID string
+}
+
+func (q *Queries) GetForgeAccountLink(ctx context.Context, arg GetForgeAccountLinkParams) (ForgeAccountLink, error) {
+	row := q.db.QueryRowContext(ctx, getForgeAccountLink, arg.Kind, arg.Host, arg.AccountID)
+	var i ForgeAccountLink
+	err := row.Scan(
+		&i.Kind,
+		&i.Host,
+		&i.AccountID,
+		&i.Login,
+		&i.PrincipalID,
+		&i.LinkedAtMs,
+	)
+	return i, err
+}
+
+const getForgeLinkRequest = `-- name: GetForgeLinkRequest :one
+SELECT r.token_sha256, r.principal_id, r.created_at_ms, r.expires_at_ms, r.proved_kind, r.proved_host,
+    r.proved_account_id, r.proved_login, r.proved_delivery_id, r.proved_at_ms, r.used_at_ms
+FROM forge_link_requests AS r
+WHERE r.token_sha256 = ?1
+`
+
+func (q *Queries) GetForgeLinkRequest(ctx context.Context, tokenSha256 string) (ForgeLinkRequest, error) {
+	row := q.db.QueryRowContext(ctx, getForgeLinkRequest, tokenSha256)
+	var i ForgeLinkRequest
+	err := row.Scan(
+		&i.TokenSha256,
+		&i.PrincipalID,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.ProvedKind,
+		&i.ProvedHost,
+		&i.ProvedAccountID,
+		&i.ProvedLogin,
+		&i.ProvedDeliveryID,
+		&i.ProvedAtMs,
+		&i.UsedAtMs,
+	)
+	return i, err
 }
 
 const getGateDeletedUnit = `-- name: GetGateDeletedUnit :one
@@ -9473,6 +9596,60 @@ func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID 
 	return result.RowsAffected()
 }
 
+const insertForgeAccountLink = `-- name: InsertForgeAccountLink :exec
+INSERT INTO forge_account_links (kind, host, account_id, login, principal_id, linked_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5,
+    ?6)
+`
+
+type InsertForgeAccountLinkParams struct {
+	Kind        string
+	Host        string
+	AccountID   string
+	Login       string
+	PrincipalID string
+	LinkedAtMs  int64
+}
+
+func (q *Queries) InsertForgeAccountLink(ctx context.Context, arg InsertForgeAccountLinkParams) error {
+	_, err := q.db.ExecContext(ctx, insertForgeAccountLink,
+		arg.Kind,
+		arg.Host,
+		arg.AccountID,
+		arg.Login,
+		arg.PrincipalID,
+		arg.LinkedAtMs,
+	)
+	return err
+}
+
+const insertForgeLinkRequest = `-- name: InsertForgeLinkRequest :exec
+INSERT INTO forge_link_requests (
+    token_sha256, principal_id, created_at_ms, expires_at_ms, proved_kind, proved_host, proved_account_id,
+    proved_login, proved_delivery_id, proved_at_ms, used_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, '', '', '', '', '',
+    0, 0
+)
+`
+
+type InsertForgeLinkRequestParams struct {
+	TokenSha256 string
+	PrincipalID string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) InsertForgeLinkRequest(ctx context.Context, arg InsertForgeLinkRequestParams) error {
+	_, err := q.db.ExecContext(ctx, insertForgeLinkRequest,
+		arg.TokenSha256,
+		arg.PrincipalID,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
+}
+
 const insertGateObject = `-- name: InsertGateObject :exec
 INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms)
 VALUES (?1, ?2, ?3, ?4, CAST(?5 AS TEXT), ?6,
@@ -12512,6 +12689,43 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.SensitiveMarks,
 			&i.FencedBy,
 			&i.UnlockedWrite,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listForgeAccountLinksOf = `-- name: ListForgeAccountLinksOf :many
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.principal_id = ?1
+ORDER BY l.kind, l.host, l.account_id
+`
+
+func (q *Queries) ListForgeAccountLinksOf(ctx context.Context, principalID string) ([]ForgeAccountLink, error) {
+	rows, err := q.db.QueryContext(ctx, listForgeAccountLinksOf, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ForgeAccountLink
+	for rows.Next() {
+		var i ForgeAccountLink
+		if err := rows.Scan(
+			&i.Kind,
+			&i.Host,
+			&i.AccountID,
+			&i.Login,
+			&i.PrincipalID,
+			&i.LinkedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -17727,6 +17941,45 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const proveForgeLinkRequest = `-- name: ProveForgeLinkRequest :execrows
+UPDATE forge_link_requests
+SET proved_kind = ?1, proved_host = ?2,
+    proved_account_id = ?3, proved_login = ?4,
+    proved_delivery_id = ?5, proved_at_ms = ?6
+WHERE forge_link_requests.token_sha256 = ?7 AND forge_link_requests.proved_at_ms = 0
+  AND forge_link_requests.used_at_ms = 0 AND forge_link_requests.expires_at_ms > ?8
+`
+
+type ProveForgeLinkRequestParams struct {
+	ProvedKind       string
+	ProvedHost       string
+	ProvedAccountID  string
+	ProvedLogin      string
+	ProvedDeliveryID string
+	ProvedAtMs       int64
+	TokenSha256      string
+	NowMs            int64
+}
+
+// The first proof wins: the statement changes a row only while it has no proof
+// and no accept, and before its expiry.
+func (q *Queries) ProveForgeLinkRequest(ctx context.Context, arg ProveForgeLinkRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, proveForgeLinkRequest,
+		arg.ProvedKind,
+		arg.ProvedHost,
+		arg.ProvedAccountID,
+		arg.ProvedLogin,
+		arg.ProvedDeliveryID,
+		arg.ProvedAtMs,
+		arg.TokenSha256,
+		arg.NowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pruneEndedNameLocks = `-- name: PruneEndedNameLocks :many
 DELETE FROM name_locks
 WHERE rowid IN (
@@ -18511,6 +18764,41 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Namespace,
 		arg.Project,
 		arg.Name_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const replaceForgeAccountLink = `-- name: ReplaceForgeAccountLink :execrows
+UPDATE forge_account_links
+SET login = ?1, principal_id = ?2, linked_at_ms = ?3
+WHERE forge_account_links.kind = ?4 AND forge_account_links.host = ?5
+  AND forge_account_links.account_id = ?6
+  AND forge_account_links.principal_id = ?7
+`
+
+type ReplaceForgeAccountLinkParams struct {
+	Login               string
+	PrincipalID         string
+	LinkedAtMs          int64
+	Kind                string
+	Host                string
+	AccountID           string
+	PreviousPrincipalID string
+}
+
+// Replaces the link only while it names the principal that the person saw.
+func (q *Queries) ReplaceForgeAccountLink(ctx context.Context, arg ReplaceForgeAccountLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceForgeAccountLink,
+		arg.Login,
+		arg.PrincipalID,
+		arg.LinkedAtMs,
+		arg.Kind,
+		arg.Host,
+		arg.AccountID,
+		arg.PreviousPrincipalID,
 	)
 	if err != nil {
 		return 0, err
@@ -21778,6 +22066,30 @@ func (q *Queries) UpsertUnitCollection(ctx context.Context, arg UpsertUnitCollec
 		arg.AssignedAtMs,
 	)
 	return err
+}
+
+const useForgeLinkRequest = `-- name: UseForgeLinkRequest :execrows
+UPDATE forge_link_requests
+SET used_at_ms = ?1
+WHERE forge_link_requests.token_sha256 = ?2 AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.proved_at_ms > 0 AND forge_link_requests.expires_at_ms > ?1
+  AND forge_link_requests.principal_id = ?3
+`
+
+type UseForgeLinkRequestParams struct {
+	UsedAtMs    int64
+	TokenSha256 string
+	PrincipalID string
+}
+
+// The accept wins once: the statement changes a row only for the principal that
+// started it, after a proof, before its expiry, and while it has no accept.
+func (q *Queries) UseForgeLinkRequest(ctx context.Context, arg UseForgeLinkRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, useForgeLinkRequest, arg.UsedAtMs, arg.TokenSha256, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const useRunnerHandoffToken = `-- name: UseRunnerHandoffToken :exec

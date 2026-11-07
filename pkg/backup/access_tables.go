@@ -44,6 +44,13 @@ const (
 	// principals table: a restore that kept the principals and took the
 	// preferences of the backup would leave rows with no person.
 	TablePersonPreferences = "person_preferences"
+	// TableForgeAccountLinks and TableForgeLinkRequests hold the links from
+	// accounts of a Git host to principals and the one-time requests that make
+	// them. A link gives the account the actions of its principal, so a restore
+	// without server:restore-access keeps the current rows. Both tables name
+	// principals by a foreign key, so they move with the principals table.
+	TableForgeAccountLinks = "forge_account_links"
+	TableForgeLinkRequests = "forge_link_requests"
 	// TableLocalUsers holds the user name and the password hash of each
 	// local user. A row names a principal by a foreign key and is a
 	// credential of that principal, so the table moves with the principals
@@ -89,6 +96,8 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	TablePersonPreferences,
+	TableForgeAccountLinks,
+	TableForgeLinkRequests,
 	TableLocalUsers,
 	TableSessionGenerations,
 	TablePasskeys,

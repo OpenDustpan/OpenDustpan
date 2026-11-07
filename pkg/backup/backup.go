@@ -172,6 +172,8 @@ var Tables = []string{
 	"issuer_settings",
 	"manual_locks",
 	TablePersonPreferences,
+	TableForgeAccountLinks,
+	TableForgeLinkRequests,
 	TableLocalUsers,
 	TableSessionGenerations,
 	TablePasskeys,

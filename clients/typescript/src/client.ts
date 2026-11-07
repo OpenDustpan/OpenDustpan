@@ -33,10 +33,12 @@ import type {
   DeleteGitHostAppInput,
   DeleteGitHostConnectionInput,
   DeleteGitHostInstallationInput,
+  DeleteGitHostLinkInput,
   DeleteNamespaceContextInput,
   DeleteNotificationSinkInput,
   DeleteNotificationSubscriptionInput,
   DeletePlacementRuleInput,
+  DeletePrincipalGitHostLinkInput,
   DeleteProfileInput,
   DeleteTriggerInput,
   DeleteTrustRuleInput,
@@ -104,6 +106,7 @@ import type {
   ListGatesInput,
   ListGitHostConnectionsInput,
   ListGitHostInstallationsInput,
+  ListGitHostLinksInput,
   ListJobsInput,
   ListModuleReleasesInput,
   ListNotificationDeliveriesInput,
@@ -237,6 +240,8 @@ import type {
   GitHostConnection,
   GitHostCredentialSet,
   GitHostInstallation,
+  GitHostLink,
+  GitHostLinkAccount,
   IssuerCopyCheck,
   IssuerCopyStep,
   IssuerExportFile,
@@ -267,6 +272,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListGitHostLinksResponse,
   ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationDeliveriesResponse,
@@ -569,6 +575,10 @@ export class Client {
     return execute(this.transport, operations.deleteGitHostInstallation, input);
   }
 
+  deleteGitHostLink(input: DeleteGitHostLinkInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deleteGitHostLink, input);
+  }
+
   deleteNamespaceContext(input: DeleteNamespaceContextInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteNamespaceContext, input);
   }
@@ -583,6 +593,10 @@ export class Client {
 
   deletePlacementRule(input: DeletePlacementRuleInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deletePlacementRule, input);
+  }
+
+  deletePrincipalGitHostLink(input: DeletePrincipalGitHostLinkInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deletePrincipalGitHostLink, input);
   }
 
   deleteProfile(input: DeleteProfileInput): Promise<Answer<void>> {
@@ -851,6 +865,10 @@ export class Client {
 
   listGitHostInstallations(input: ListGitHostInstallationsInput = {}): Promise<Answer<ListGitHostInstallationsResponse>> {
     return execute(this.transport, operations.listGitHostInstallations, input);
+  }
+
+  listGitHostLinks(input: ListGitHostLinksInput = {}): Promise<Answer<ListGitHostLinksResponse>> {
+    return execute(this.transport, operations.listGitHostLinks, input);
   }
 
   listJobs(input: ListJobsInput): Promise<Answer<ListJobsResponse>> {
