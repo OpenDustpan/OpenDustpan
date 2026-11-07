@@ -8,7 +8,7 @@ Changes:
 
 Changed by:
 
-- ADR 350 extends decision 4: the integrity of the served bytes is a security control. The meaning of provenance is not.
+- ADR 351 extends decision 4: the integrity of the served bytes is a security control. The meaning of provenance is not.
 
 ## Context
 

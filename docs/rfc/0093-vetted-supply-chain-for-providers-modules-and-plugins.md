@@ -12,7 +12,7 @@ Status: discussing. No code exists for it. The owner answers the questions at
 the end (ADR 15).
 
 **Revision of 2026-11-07.** On 7 November 2026 the owner decided that
-OpenDustpan does not decide what provenance means (ADR 350). This revision
+OpenDustpan does not decide what provenance means (ADR 351). This revision
 follows that decision. It keeps the facts from primary sources, the mirror,
 the storage and the run-time layers. It cuts every built-in verdict about
 trust: the installation gate that could not be lowered, and the rule that a
@@ -1450,6 +1450,6 @@ _Avoid_: Registry (alone), proxy, cache
 
 ## Outcome
 
-Partly decided. ADR 350 records the owner's decision of 2026-11-07: OpenDustpan
+Partly decided. ADR 351 records the owner's decision of 2026-11-07: OpenDustpan
 computes provenance signals and administrators write the policy. The decision
 point, the fact schema and the rest of this RFC wait for the owner's answers.

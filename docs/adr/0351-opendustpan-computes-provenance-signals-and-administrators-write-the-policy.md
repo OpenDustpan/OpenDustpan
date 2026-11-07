@@ -1,4 +1,4 @@
-# 350. OpenDustpan computes provenance signals, and administrators write the policy
+# 351. OpenDustpan computes provenance signals, and administrators write the policy
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
