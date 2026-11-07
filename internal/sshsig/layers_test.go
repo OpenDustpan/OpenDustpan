@@ -2,6 +2,7 @@ package sshsig_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/sshsig"
+	"opendustpan.org/opendustpan/internal/testutil/layertest"
 )
 
 // Each test in this file sends hostile input to one layer of the ECDSA path,
@@ -262,42 +264,48 @@ func TestVerifyKeyECDSALayers(t *testing.T) {
 	signer := ecdsaTestKey(t)
 	key := ecdsaKey(&signer.PublicKey)
 
-	tests := []struct {
-		name  string
+	type input struct {
 		key   sshsig.PublicKey
 		flags byte
 		count uint32
-		want  error
-	}{
-		{"flags on an ECDSA signature", key, 0x01, 0, sshsig.ErrFlags},
-		{"a counter on an ECDSA signature", key, 0, 1, sshsig.ErrFlags},
+	}
+
+	tests := []layertest.Case[input]{
 		{
-			"a key type that has no branch",
-			sshsig.PublicKey{Type: "ssh-rsa", Key: nil, Application: "", ECDSA: nil},
-			0, 0, sshsig.ErrKeyType,
+			Name: "flags on an ECDSA signature",
+			In:   input{key: key, flags: 0x01, count: 0},
+			Want: sshsig.ErrFlags,
+		},
+		{
+			Name: "a counter on an ECDSA signature",
+			In:   input{key: key, flags: 0, count: 1},
+			Want: sshsig.ErrFlags,
+		},
+		{
+			Name: "a key type that has no branch",
+			In: input{
+				key:   sshsig.PublicKey{Type: "ssh-rsa", Key: nil, Application: "", ECDSA: nil},
+				flags: 0, count: 0,
+			},
+			Want: sshsig.ErrKeyType,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	// The blob is a valid signature, so that only the layer under test can
+	// refuse it.
+	blob := ecdsaSign(t, signer, signedFor(sshsig.NamespaceStepUp, sshsig.HashSHA512, testMessage()))
+	digest := digestOf(sshsig.HashSHA512, testMessage())
 
-			// The blob is a valid signature, so that only the layer under
-			// test can refuse it.
-			sig := sshsig.Signature{
-				PublicKey: nil, Namespace: "", HashAlgorithm: sshsig.HashSHA512, Type: sshsig.TypeECDSAP256,
-				Blob:  ecdsaSign(t, signer, signedFor(sshsig.NamespaceStepUp, sshsig.HashSHA512, testMessage())),
-				Flags: tc.flags, Counter: tc.count,
-			}
+	layertest.Run(t, tests, func(_ context.Context, in input) error {
+		sig := sshsig.Signature{
+			PublicKey: nil, Namespace: "", HashAlgorithm: sshsig.HashSHA512, Type: sshsig.TypeECDSAP256,
+			Blob: blob, Flags: in.flags, Counter: in.count,
+		}
 
-			digest := digestOf(sshsig.HashSHA512, testMessage())
+		_, err := sshsig.VerifyKey(sig, in.key, sshsig.NamespaceStepUp, digest)
 
-			_, err := sshsig.VerifyKey(sig, tc.key, sshsig.NamespaceStepUp, digest)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("VerifyKey error = %v, want %v", err, tc.want)
-			}
-		})
-	}
+		return err
+	})
 }
 
 // TestVerifySignatureTypeLayer sends a Signature that a caller builds with

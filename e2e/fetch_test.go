@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -73,6 +74,23 @@ func validArchive(t *testing.T) []byte {
 func release(t *testing.T, archive []byte, wantSum string) (*e2e.Fetcher, e2e.Tool, *atomic.Int32) {
 	t.Helper()
 
+	return releaseWith(t, archive, wantSum, func(w http.ResponseWriter, _ int32) {
+		if _, err := w.Write(archive); err != nil {
+			t.Errorf("serve archive: %v", err)
+		}
+	})
+}
+
+// releaseWith is release with serve answering each request for the archive.
+// serve gets the number of the request, from 1.
+func releaseWith(
+	t *testing.T,
+	archive []byte,
+	wantSum string,
+	serve func(w http.ResponseWriter, n int32),
+) (*e2e.Fetcher, e2e.Tool, *atomic.Int32) {
+	t.Helper()
+
 	tool := e2e.Pulumi()
 
 	name, err := tool.ArchiveName(fakeVersion)
@@ -89,11 +107,7 @@ func release(t *testing.T, archive []byte, wantSum string) (*e2e.Fetcher, e2e.To
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
-		downloads.Add(1)
-
-		if _, err := w.Write(archive); err != nil {
-			t.Errorf("serve archive: %v", err)
-		}
+		serve(w, downloads.Add(1))
 	})
 	mux.HandleFunc("/pulumi-"+fakeVersion+"-checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
 		if _, err := fmt.Fprintf(w, "%s  %s\n", wantSum, name); err != nil {
@@ -142,6 +156,119 @@ func TestFetchInstallsAndCaches(t *testing.T) {
 
 	if got := downloads.Load(); got != 1 {
 		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+}
+
+// serveBroken sends the headers and half of archive, then drops the connection.
+func serveBroken(t *testing.T, w http.ResponseWriter, archive []byte) {
+	t.Helper()
+
+	w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+
+	if _, err := w.Write(archive[:len(archive)/2]); err != nil {
+		t.Errorf("serve half archive: %v", err)
+	}
+
+	panic(http.ErrAbortHandler)
+}
+
+func serveFull(t *testing.T, w http.ResponseWriter, archive []byte) {
+	t.Helper()
+
+	if _, err := w.Write(archive); err != nil {
+		t.Errorf("serve archive: %v", err)
+	}
+}
+
+// failFirst answers the first request with fail and later requests with archive.
+func failFirst(
+	archive []byte,
+	fail func(t *testing.T, w http.ResponseWriter),
+) func(*testing.T, http.ResponseWriter, int32) {
+	return func(t *testing.T, w http.ResponseWriter, n int32) {
+		t.Helper()
+
+		if n == 1 {
+			fail(t, w)
+
+			return
+		}
+
+		serveFull(t, w, archive)
+	}
+}
+
+// status answers every request with code.
+func status(code int) func(*testing.T, http.ResponseWriter, int32) {
+	return func(_ *testing.T, w http.ResponseWriter, _ int32) { w.WriteHeader(code) }
+}
+
+func TestFetchRetriesDownload(t *testing.T) {
+	t.Parallel()
+
+	archive := validArchive(t)
+
+	cases := []struct {
+		name          string
+		serve         func(t *testing.T, w http.ResponseWriter, n int32)
+		wantErr       error
+		wantDownloads int32
+	}{
+		{
+			name: "broken stream then success",
+			serve: failFirst(archive, func(t *testing.T, w http.ResponseWriter) {
+				t.Helper()
+				serveBroken(t, w, archive)
+			}),
+			wantErr:       nil,
+			wantDownloads: 2,
+		},
+		{
+			name: "server error then success",
+			serve: failFirst(archive, func(_ *testing.T, w http.ResponseWriter) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}),
+			wantErr:       nil,
+			wantDownloads: 2,
+		},
+		{
+			name:          "not found is not retried",
+			serve:         status(http.StatusNotFound),
+			wantErr:       e2e.ErrUnexpectedStatus,
+			wantDownloads: 1,
+		},
+		{
+			name:          "server error on every attempt",
+			serve:         status(http.StatusBadGateway),
+			wantErr:       e2e.ErrUnexpectedStatus,
+			wantDownloads: 3,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fetcher, tool, downloads := releaseWith(t, archive, "", func(w http.ResponseWriter, n int32) {
+				tc.serve(t, w, n)
+			})
+
+			// errors.Is(err, nil) is true only when err is nil.
+			inst, err := fetcher.Install(t.Context(), tool, fakeVersion)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got error %v, want %v", err, tc.wantErr)
+			}
+
+			if tc.wantErr == nil {
+				if _, statErr := os.Stat(inst.Binary()); statErr != nil {
+					t.Errorf("binary missing: %v", statErr)
+				}
+			}
+
+			if got := downloads.Load(); got != tc.wantDownloads {
+				t.Errorf("archive requested %d times, want %d", got, tc.wantDownloads)
+			}
+		})
 	}
 }
 
