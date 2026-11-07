@@ -434,8 +434,9 @@ func TestDemoSeedRevokesAGrantOutsideTheFixedSet(t *testing.T) {
 }
 
 // TestDemoSeedFailsClosedOnTheLastSiteAdministrator proves that the seed stops
-// with access.ErrLastSiteAdministrator, and keeps the grant, when the extra
-// grant is the last site-administrator grant of the installation.
+// with access.ErrLastSiteAdministrator, and changes nothing else, when the
+// extra grant is the last site-administrator grant of the installation: the
+// grant, the password and the required grants stay as they are.
 func TestDemoSeedFailsClosedOnTheLastSiteAdministrator(t *testing.T) {
 	t.Parallel()
 
@@ -446,22 +447,31 @@ func TestDemoSeedFailsClosedOnTheLastSiteAdministrator(t *testing.T) {
 		t.Fatalf("new demo seed: %v", err)
 	}
 
-	if _, runErr := seed.Run(t.Context(), nil); runErr != nil {
-		t.Fatalf("first run: %v", runErr)
+	first, err := seed.Run(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
 	}
 
 	personID, _ := demoGrants(t.Context(), t, f)
 	extraSiteAdministrator(t, f, "grt-last-site-admin", personID)
 
-	if _, runErr := seed.Run(t.Context(), nil); !errors.Is(runErr, access.ErrLastSiteAdministrator) {
+	// The second run names a namespace, so its admin grant is a required grant
+	// that does not exist yet. The refused revoke must leave it missing.
+	names := makeNamespaces(t, f, "dev")
+
+	_, before := demoGrants(t.Context(), t, f)
+
+	if _, runErr := seed.Run(t.Context(), names); !errors.Is(runErr, access.ErrLastSiteAdministrator) {
 		t.Fatalf("second run = %v, want %v", runErr, access.ErrLastSiteAdministrator)
 	}
 
-	_, got := demoGrants(t.Context(), t, f)
+	if !personCanSignIn(t, f, first) {
+		t.Error("the refused start changed the password")
+	}
 
-	kept := access.RoleSiteAdministrator + " " + identity.ServerObject().String()
-	if !slices.Contains(got, kept) {
-		t.Fatalf("grants after the refused start = %v, want the site-administrator grant to stay", got)
+	_, after := demoGrants(t.Context(), t, f)
+	if !slices.Equal(before, after) {
+		t.Fatalf("grants after the refused start = %v, want %v", after, before)
 	}
 }
 
