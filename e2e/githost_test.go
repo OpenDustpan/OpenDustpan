@@ -195,9 +195,9 @@ func (s *hostScenario) check(t *testing.T, id string) {
 		t.Fatalf("check = %+v", check)
 	}
 
-	// The connection reads files, so the Catalog misses nothing.
-	if catalog, found := check.Missing["catalog"]; !found || len(catalog) != 0 {
-		t.Fatalf("missing for the catalog = %v, %v; want an empty list", catalog, found)
+	// The connection reads files, so Self-service misses nothing.
+	if selfService, found := check.Missing["self-service"]; !found || len(selfService) != 0 {
+		t.Fatalf("missing for self-service = %v, %v; want an empty list", selfService, found)
 	}
 
 	if s.fake.Calls() < 2 {

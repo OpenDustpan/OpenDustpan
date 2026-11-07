@@ -48,7 +48,7 @@ func (l Level) segments() (int, bool) {
 const maxSegmentLength = 300
 
 // MaxBlueprintNameBytes is the most bytes in the name of a blueprint. It
-// equals the bound of the catalog, which a test of the catalog checks.
+// equals the bound of a self-service blueprint name, which a test of Self-service checks.
 const MaxBlueprintNameBytes = 63
 
 // MaxScopeKeyLength is the length in bytes of the longest scope key: a unit

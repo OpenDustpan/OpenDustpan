@@ -224,3 +224,53 @@ func TestSpecAnswerRefusesTooManyArgs(t *testing.T) {
 		t.Fatalf("Answer error = %v, want %v", err, errcode.ErrTooManyArgs)
 	}
 }
+
+// TestIdentifierUpToHasItsOwnLimit proves that IdentifierUpTo takes a value up
+// to its own limit and refuses a longer one, that a limit below MaxIdentifier is
+// MaxIdentifier, and that Identifier keeps MaxIdentifier.
+func TestIdentifierUpToHasItsOwnLimit(t *testing.T) {
+	t.Parallel()
+
+	spec := errcode.Spec{
+		Code: "workspace.named", Meaning: "a workspace has a name",
+		Args: []errcode.Arg{{Name: "workspace", Kind: errcode.KindIdentifier}},
+	}
+
+	const limit = 2 * errcode.MaxIdentifier
+
+	tests := []struct {
+		name  string
+		value errcode.Value
+		want  error
+	}{
+		{"value at the own limit", errcode.IdentifierUpTo("workspace", strings.Repeat("a", limit), limit), nil},
+		{
+			"value over the own limit",
+			errcode.IdentifierUpTo("workspace", strings.Repeat("a", limit+1), limit), errcode.ErrArgValue,
+		},
+		{
+			"limit below the shared one",
+			errcode.IdentifierUpTo("workspace", strings.Repeat("a", errcode.MaxIdentifier), 1), nil,
+		},
+		{
+			"shared limit still holds for a limit below it",
+			errcode.IdentifierUpTo("workspace", strings.Repeat("a", errcode.MaxIdentifier+1), 1), errcode.ErrArgValue,
+		},
+		{
+			"plain identifier over the shared limit",
+			errcode.Identifier("workspace", strings.Repeat("a", errcode.MaxIdentifier+1)), errcode.ErrArgValue,
+		},
+		{"line break under the own limit", errcode.IdentifierUpTo("workspace", "a\nb", limit), errcode.ErrArgValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := errcode.SpecAnswer(spec, tt.value)
+			if !errors.Is(err, tt.want) || (tt.want == nil && err != nil) {
+				t.Fatalf("Answer = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}

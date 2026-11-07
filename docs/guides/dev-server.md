@@ -14,6 +14,13 @@ opendustpan dev
 
 The command keeps its data in a directory for each user and listens on `127.0.0.1:8080` with plain HTTP.
 It makes the namespace `dev`, so the first stack or workspace needs no other command.
+At the first start of a data directory, it also makes the collection `everything` in the namespace `dev`.
+It makes one placement rule that puts each new Pulumi stack in that collection.
+The server refuses a new Pulumi stack that no placement rule matches, so the rule lets `pulumi stack init` work at once.
+The `dev` command makes the rule as the administrator of dev, with the same audit entries as the API.
+The server itself makes no rule.
+With `--demo`, it makes the same collection and rule in each of `demo-platform` and `demo-data` when it makes that namespace.
+A later start makes no rule, also after you delete it.
 It prints a banner to stderr before the first log line:
 
 ```text
@@ -22,11 +29,13 @@ Data:     /home/alex/.local/share/opendustpan/dev
 Server:   http://127.0.0.1:8080
 Sign in:  http://localhost:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 10 minutes)
 Token:    in the file /home/alex/.local/share/opendustpan/dev/dev.token
+Rule:     in the namespace dev, a rule puts each new Pulumi stack in the collection everything. List it with: curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/dustpan/v1/namespaces/<namespace>/placement-rules; delete it with: curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/dustpan/v1/namespaces/<namespace>/placement-rules/<id>
 Settings: . /home/alex/.local/share/opendustpan/dev/dev.env
 The key-encryption key is in the data directory. A backup of this directory holds the key.
 For production, run: opendustpan serve --help
 ```
 
+The `Rule` line shows at the first start only.
 The banner never shows the administrator token.
 A signal ends the server: press Ctrl+C.
 
@@ -41,7 +50,7 @@ So no request line, access log or `Referer` header holds the code.
 The code signs one browser in as the person `dev:admin`.
 The bootstrap administrator gives that person the site-administrator role.
 The prefix `dev:` and the provider ID `dev` are reserved.
-No other path makes such a person.
+Only the sign-in link and `--demo` (see "A demo person") make such a person.
 A server that is not a `dev` server refuses their sessions and tokens.
 It works one time, and it stops 10 minutes after the start or when `dev` stops.
 Open the link at once.
@@ -57,6 +66,49 @@ A later start prints no link.
 A start with no terminal, for example in a CI job, prints the path of the token file in place of the link.
 So a log never holds the code.
 To sign in again, sign in to the console with the token in the token file.
+
+## A demo person
+
+Start `dev` with `--demo` to get a person that signs in with a user name and a password:
+
+```sh
+opendustpan dev --demo
+```
+
+At each start, `dev` sets up the person `dev:demo`.
+Its local user name is `demo`.
+`dev` makes a new random password, sets it, and prints it one time to the terminal:
+
+```text
+Demo user: sign in with the user name demo and the password <password> (new at each start)
+```
+
+The password is in no file, no log record and no audit entry.
+A second start sets a new password and keeps the one person.
+To sign in again, read the line of the new start.
+
+`dev` also makes the namespaces `demo-platform` and `demo-data`, so the data of `make demo` has an owner.
+The person has these grants, and no other:
+
+| Role | Object |
+| --- | --- |
+| `admin` | the namespaces `dev`, `demo-platform` and `demo-data` |
+| `viewer` | the installation |
+
+Each grant has the creator `system`.
+The audit entry of each change gives the reason "demo user of opendustpan dev".
+The person does not hold the site-administrator role.
+At each start, `dev` revokes every other grant of the person, for example a role that someone added after the last start.
+The audit entry of each revoke names the grant and gives the reason "demo reset".
+If the grant is the last site-administrator grant of the installation, the revoke fails and `dev` does not start.
+Give the role to a second person first, or start `dev` without `--demo`.
+It reads the namespaces and works in them, but it cannot change an installation setting.
+The server refuses each change of its password, its user name and its factors with the error code `local-user.demo-fixed`.
+
+Only `dev` takes `--demo`.
+`serve` has no flag, variable or key for it.
+The seed and the server refuse a database that is not of the kind `dev`.
+A server of another kind refuses the sessions and the tokens of the person.
 
 ## Use the Pulumi CLI and OpenTofu
 

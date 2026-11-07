@@ -227,7 +227,7 @@ type Forge interface {
 }
 
 // Files reads the code of a repository. Write-back, triggers, the change
-// order review and the request files of the Catalog use it.
+// order review and the request files of Self-service use it.
 type Files interface {
 	// Head returns the commit at the head of the branch or tag ref. It
 	// returns ErrNotFound for a repository or a ref that does not exist.
@@ -1300,8 +1300,8 @@ const (
 	// source of the job, for example a private Git module source. It never
 	// gives a long-lived token.
 	ConsumerRunnerGit Consumer = "runner-git"
-	// ConsumerCatalog reads the request files of the Catalog.
-	ConsumerCatalog Consumer = "catalog"
+	// ConsumerSelfService reads the request files of Self-service.
+	ConsumerSelfService Consumer = "self-service"
 	// ConsumerCauseDiff reads the cause diff of a change order.
 	ConsumerCauseDiff Consumer = "cause-diff"
 )
@@ -1318,7 +1318,7 @@ func Needs(consumer Consumer) Capabilities {
 		return Capabilities{CapGitAccess}
 	case ConsumerRunnerGit:
 		return Capabilities{CapRepoToken}
-	case ConsumerCatalog:
+	case ConsumerSelfService:
 		return Capabilities{CapFiles}
 	case ConsumerCauseDiff:
 		return Capabilities{CapCompare}

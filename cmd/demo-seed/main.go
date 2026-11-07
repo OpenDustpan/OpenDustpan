@@ -100,6 +100,9 @@ type apiCall struct {
 	auth   string
 	body   any
 	want   int
+	// exists, when it is not 0, is a status that also counts as done: the
+	// thing to create exists already (for example a namespace that dev --demo made).
+	exists int
 	fail   error
 }
 
@@ -188,10 +191,15 @@ func runMain(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		"",
 		"admin token (default the DUSTPAN_ADMIN_TOKEN environment variable)",
 	)
+	skipBackup := fs.Bool(
+		"skip-backup",
+		false,
+		"do not start a backup, for a server with no backup target, for example opendustpan dev",
+	)
 	fs.Usage = func() {
 		_, err := fmt.Fprintln(
 			stderr,
-			"Usage: demo-seed -url <server> [-token <token>]\n"+
+			"Usage: demo-seed -url <server> [-token <token>] [-skip-backup]\n"+
 				"Seed a local demo installation with namespaces, stacks, updates and one backup.\n"+
 				"The token comes from -token or from the DUSTPAN_ADMIN_TOKEN environment variable.",
 		)
@@ -218,7 +226,7 @@ func runMain(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return fmt.Errorf("%w: set %s and run make demo again", errSeedNoToken, tokenEnvVar)
 	}
 
-	return runSeed(ctx, stdout, base, token)
+	return runSeed(ctx, stdout, base, token, seedOptions{skipBackup: *skipBackup})
 }
 
 // stackSeeds answers the stacks to create with the outcomes of their updates
@@ -243,9 +251,15 @@ func stackSeeds() []stackSeed {
 	}
 }
 
+// seedOptions are the choices of one seed run. skipBackup leaves out the
+// backup, for a server with no backup target.
+type seedOptions struct {
+	skipBackup bool
+}
+
 // runSeed creates the namespaces, stacks, updates and one backup on the
 // server at base, and prints one line per step.
-func runSeed(ctx context.Context, stdout io.Writer, base, token string) error {
+func runSeed(ctx context.Context, stdout io.Writer, base, token string, opts seedOptions) error {
 	s := &seeder{
 		base:   strings.TrimSuffix(base, "/"),
 		token:  token,
@@ -271,8 +285,10 @@ func runSeed(ctx context.Context, stdout io.Writer, base, token string) error {
 		}
 	}
 
-	if err := s.seedBackup(ctx); err != nil {
-		return err
+	if !opts.skipBackup {
+		if err := s.seedBackup(ctx); err != nil {
+			return err
+		}
 	}
 
 	return s.announce("demo data is ready")
@@ -311,6 +327,7 @@ func (s *seeder) createNamespace(ctx context.Context, name string) error {
 		auth:   bearerAuth(s.token),
 		body:   namespaceRequest{Name: name},
 		want:   http.StatusCreated,
+		exists: http.StatusConflict,
 		fail:   errCreateNamespace,
 	}
 
@@ -318,7 +335,54 @@ func (s *seeder) createNamespace(ctx context.Context, name string) error {
 		return err
 	}
 
+	if err := s.placeEveryStack(ctx, name); err != nil {
+		return err
+	}
+
 	return s.announce("created namespace " + name)
+}
+
+// demoCollection is the collection that holds the demo stacks.
+const demoCollection = "demo"
+
+// collectionRequest is the collection create body.
+type collectionRequest struct {
+	Name string `json:"name"`
+}
+
+// placementRuleRequest is the placement rule create body.
+type placementRuleRequest struct {
+	Tool       string `json:"tool"`
+	Project    string `json:"project"`
+	Stack      string `json:"stack"`
+	Collection string `json:"collection"`
+}
+
+// placeEveryStack makes the collection demoCollection and a placement rule
+// that puts every Pulumi stack in it. The server refuses a new stack that no
+// rule places.
+func (s *seeder) placeEveryStack(ctx context.Context, name string) error {
+	base := "/api/dustpan/v1/namespaces/" + name
+
+	for _, call := range []apiCall{
+		{
+			name: "create collection", method: http.MethodPost, path: base + "/collections",
+			auth: bearerAuth(s.token), body: collectionRequest{Name: demoCollection},
+			want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
+		},
+		{
+			name: "create placement rule", method: http.MethodPost, path: base + "/placement-rules",
+			auth: bearerAuth(s.token),
+			body: placementRuleRequest{Tool: "pulumi", Project: "*", Stack: "*", Collection: demoCollection},
+			want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
+		},
+	} {
+		if err := s.call(ctx, call, nil); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // createStack creates stack in projectDemo through the stack API.
@@ -330,6 +394,7 @@ func (s *seeder) createStack(ctx context.Context, namespace, stack string) error
 		auth:   tokenAuth(s.token),
 		body:   stackRequest{StackName: stack},
 		want:   http.StatusOK,
+		exists: 0,
 		fail:   errCreateStack,
 	}
 
@@ -386,6 +451,7 @@ func (s *seeder) createUpdate(ctx context.Context, namespace, stack string) (upd
 		auth:   tokenAuth(s.token),
 		body:   struct{}{},
 		want:   http.StatusOK,
+		exists: 0,
 		fail:   errCreateUpdate,
 	}
 
@@ -413,6 +479,7 @@ func (s *seeder) startUpdate(ctx context.Context, target updateTarget) (string, 
 		auth:   tokenAuth(s.token),
 		body:   nil,
 		want:   http.StatusOK,
+		exists: 0,
 		fail:   errStartUpdate,
 	}
 
@@ -436,6 +503,7 @@ func (s *seeder) completeUpdate(ctx context.Context, target updateTarget, lease,
 		auth:   updateTokenAuth(lease),
 		body:   completeRequest{Status: status},
 		want:   http.StatusOK,
+		exists: 0,
 		fail:   errCompleteUpdate,
 	}
 
@@ -453,6 +521,7 @@ func (s *seeder) seedBackup(ctx context.Context) error {
 		auth:   bearerAuth(s.token),
 		body:   nil,
 		want:   http.StatusAccepted,
+		exists: 0,
 		fail:   errStartBackup,
 	}
 
@@ -487,6 +556,7 @@ func (s *seeder) pollBackup(ctx context.Context, id string) error {
 			auth:   bearerAuth(s.token),
 			body:   nil,
 			want:   http.StatusOK,
+			exists: 0,
 			fail:   errReadBackup,
 		}
 
@@ -561,6 +631,10 @@ func (s *seeder) call(ctx context.Context, call apiCall, result any) error {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return fmt.Errorf("%w: %s: read answer: %w: %s", call.fail, call.name, err, hintServerLog)
+	}
+
+	if call.exists != 0 && resp.StatusCode == call.exists {
+		return nil
 	}
 
 	if resp.StatusCode != call.want {

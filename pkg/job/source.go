@@ -15,8 +15,8 @@ const (
 	SourceAPI SourceKind = "api"
 	// SourceAgent is a start by an agent for the user who asked it.
 	SourceAgent SourceKind = "agent"
-	// SourceCatalog is a start that a Catalog request makes.
-	SourceCatalog SourceKind = "catalog"
+	// SourceSelfService is a start that a self-service request makes.
+	SourceSelfService SourceKind = "self-service"
 	// SourceForge is a start that an event of a forge makes, for example a
 	// push to a review request.
 	SourceForge SourceKind = "forge"
@@ -29,13 +29,13 @@ const (
 
 // SourceKinds lists the source kinds, in the order of the table above.
 func SourceKinds() []SourceKind {
-	return []SourceKind{SourceAPI, SourceAgent, SourceCatalog, SourceForge, SourceSchedule, SourceTrigger}
+	return []SourceKind{SourceAPI, SourceAgent, SourceSelfService, SourceForge, SourceSchedule, SourceTrigger}
 }
 
 // Valid reports whether k is one of the source kinds of this package.
 func (k SourceKind) Valid() bool {
 	switch k {
-	case SourceAPI, SourceAgent, SourceCatalog, SourceForge, SourceSchedule, SourceTrigger:
+	case SourceAPI, SourceAgent, SourceSelfService, SourceForge, SourceSchedule, SourceTrigger:
 		return true
 	default:
 		return false

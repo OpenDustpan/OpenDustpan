@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -52,7 +53,8 @@ const (
 	webhookURL  = "https://hooks.example.com/ops/" + canary + "?token=" + canary
 	webhookHost = "hooks.example.com"
 
-	base = "/api/dustpan/v1/namespaces/acme/sinks"
+	base              = "/api/dustpan/v1/namespaces/acme/sinks"
+	subscriptionsBase = "/api/dustpan/v1/namespaces/acme/subscriptions"
 )
 
 // grantsOf returns the actions of a subject. The token of a subject is its
@@ -178,8 +180,10 @@ type fixture struct {
 	config  apinotifications.Config
 	store   *sqlite.Store
 	secrets *secret.Service
-	hook    *recordingSender
-	logs    *logBuffer
+	// namespaces makes the fence of a seeded delivery.
+	namespaces *namespace.Service
+	hook       *recordingSender
+	logs       *logBuffer
 	// denied holds the actions that testAuthz refuses. A test can add one
 	// while no request runs.
 	denied map[identity.Action]bool
@@ -332,6 +336,18 @@ func buildFixtureFull(
 		t.Fatalf("sink service: %v", err)
 	}
 
+	subscriptions, ok := store.NotificationSinks().(notify.Subscriptions)
+	if !ok {
+		t.Fatal("the sink store is not a notify.Subscriptions")
+	}
+
+	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("subscription service: %v", err)
+	}
+
 	denied := map[identity.Action]bool{}
 	for _, a := range deny {
 		denied[a] = true
@@ -340,9 +356,17 @@ func buildFixtureFull(
 	logs := &logBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	cfg := apinotifications.Config{
-		Sinks: svc, Authenticator: testAuthn{}, Authorizer: testAuthz{deny: denied}, Audit: store, Namespaces: nil,
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: middleware(t, store, clock),
-		Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		Sinks:          svc,
+		Subscriptions:  subscriptionSvc,
+		Authenticator:  testAuthn{},
+		Authorizer:     testAuthz{deny: denied},
+		Audit:          store,
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Idempotency:    middleware(t, store, clock),
+		Logger:         slog.New(slog.NewTextHandler(logs, nil)),
 	}
 
 	handler, err := apinotifications.NewHandler(cfg)
@@ -351,15 +375,16 @@ func buildFixtureFull(
 	}
 
 	return fixture{
-		handler: handler,
-		served:  apidesctest.CheckStatus(t, handler),
-		config:  cfg,
-		store:   store,
-		secrets: secrets,
-		hook:    hook,
-		logs:    logs,
-		denied:  denied,
-		clock:   clock,
+		handler:    handler,
+		served:     apidesctest.CheckStatus(t, handler),
+		config:     cfg,
+		store:      store,
+		secrets:    secrets,
+		namespaces: namespaces,
+		hook:       hook,
+		logs:       logs,
+		denied:     denied,
+		clock:      clock,
 	}
 }
 

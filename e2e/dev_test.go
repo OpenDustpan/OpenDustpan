@@ -471,7 +471,8 @@ func startPlainDev(t *testing.T, bin string, extra ...string) *devServer {
 }
 
 // devPulumi drives the Pulumi CLI against dev with only dev.env: login, whoami,
-// stack init in the namespace dev, up, and export.
+// stack init in the namespace dev, up, and export. The stack init needs the
+// placement rule that dev makes on its first start.
 func devPulumi(t *testing.T, server *devServer, cli e2e.Install) {
 	t.Helper()
 
@@ -966,4 +967,198 @@ func (d *devServer) waitBanner(t *testing.T, want string) string {
 	}
 
 	return banner
+}
+
+// devDemoPasswordPattern finds the password in the demo line of dev.
+var devDemoPasswordPattern = regexp.MustCompile(`the user name demo and the password ((?:[a-z0-9]{4}-){4}[a-z0-9]{4}) `)
+
+// TestDevDemoSignIn starts opendustpan dev --demo as a binary and proves the
+// demo person: it signs in with the printed password, reads the namespaces,
+// cannot change its password (the code local-user.demo-fixed) and cannot
+// change a setting of the installation (403).
+func TestDevDemoSignIn(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skipf("the dev e2e step needs Linux (a pseudo terminal), not %s", runtime.GOOS)
+	}
+
+	if _, err := exec.LookPath("script"); err != nil {
+		t.Skip("the dev e2e step needs the script utility for a pseudo terminal")
+	}
+
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
+	// Debug level writes the most log records: none of them may hold the password.
+	server := startPlainDev(t, bin, "--demo", "--log-level", "debug")
+
+	// dev.addr exists, but the pseudo terminal can deliver the demo line a
+	// moment later, mostly under load: wait for the end of the line.
+	ctx, cancel := context.WithTimeout(t.Context(), devReadyLimit)
+	defer cancel()
+
+	output, _ := server.out.waitFor(ctx, "(new at each start)")
+
+	match := devDemoPasswordPattern.FindStringSubmatch(output)
+	if match == nil {
+		t.Fatalf("dev --demo prints no demo sign-in:\n%s", devDemoPasswordPattern.ReplaceAllString(
+			output, "the user name demo and the password <redacted> ",
+		))
+	}
+
+	password := match[1]
+
+	// The password is printed one time. The output holds the log records at
+	// the level debug, so no log record holds it.
+	if count := strings.Count(server.out.String(), password); count != 1 {
+		t.Fatalf("the output of dev holds the demo password %d times, want 1", count)
+	}
+
+	wrong := devDemoDo(t, server.url, demoReq(http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"demo","password":"not-the-password-1234"}`, "", nil))
+	if wrong.status == http.StatusNoContent {
+		t.Fatal("sign-in with a wrong password succeeded")
+	}
+
+	cookies, csrf := devDemoSignIn(t, server.url, password)
+
+	checkDemoReads(t, server.url, cookies)
+	checkDemoRefusals(t, server.url, cookies, csrf, password)
+}
+
+// devDemoSignIn signs the demo person in and answers the session cookies and
+// the CSRF value of the session.
+func devDemoSignIn(t *testing.T, base, password string) ([]*http.Cookie, string) {
+	t.Helper()
+
+	signIn := devDemoDo(t, base, demoReq(http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"demo","password":"`+password+`"}`, "", nil))
+	if signIn.status != http.StatusNoContent || len(signIn.cookies) == 0 {
+		t.Fatalf("sign-in with the demo password = %d with %d cookies, want 204 and a cookie",
+			signIn.status, len(signIn.cookies))
+	}
+
+	session := devDemoDo(
+		t,
+		base,
+		demoReq(http.MethodGet, "/api/server/session", "", "", signIn.cookies),
+	)
+
+	var doc struct {
+		Subject   string `json:"subject"`
+		CSRFToken string `json:"csrfToken"`
+	}
+
+	err := json.Unmarshal([]byte(session.body), &doc)
+	if err != nil || doc.Subject != "dev:demo" || doc.CSRFToken == "" {
+		t.Fatalf("session = %d %q (%v), want the subject dev:demo and a CSRF value", session.status, session.body, err)
+	}
+
+	return signIn.cookies, doc.CSRFToken
+}
+
+// checkDemoReads proves that the demo person reads the namespaces.
+func checkDemoReads(t *testing.T, base string, cookies []*http.Cookie) {
+	t.Helper()
+
+	for _, name := range []string{"dev", "demo-platform", "demo-data"} {
+		path := "/api/dustpan/v1/namespaces/" + name + "/units"
+		units := devDemoDo(t, base, demoReq(http.MethodGet, path, "", "", cookies))
+		if units.status != http.StatusOK {
+			t.Errorf("list the units of the namespace %s = %d, want 200", name, units.status)
+		}
+	}
+
+	list := devDemoDo(t, base, demoReq(http.MethodGet, "/api/server/namespaces", "", "", cookies))
+	if list.status != http.StatusOK || !strings.Contains(list.body, `"name":"dev"`) {
+		t.Errorf("list the namespaces = %d %s, want 200 and the namespace dev", list.status, list.body)
+	}
+}
+
+// checkDemoRefusals proves that the demo person cannot change its password
+// and cannot change an installation setting.
+func checkDemoRefusals(t *testing.T, base string, cookies []*http.Cookie, csrf, password string) {
+	t.Helper()
+
+	change := devDemoDo(t, base, demoReq(http.MethodPost, "/api/dustpan/v1/me/password",
+		`{"currentPassword":"`+password+`","newPassword":"another-long-password-1234"}`, csrf, cookies))
+	if change.status != http.StatusConflict || !strings.Contains(change.body, "local-user.demo-fixed") {
+		t.Errorf("change of the demo password = %d %s, want 409 with the code local-user.demo-fixed",
+			change.status, change.body)
+	}
+
+	setting := devDemoDo(t, base, demoReq(http.MethodPatch, "/api/dustpan/v1/settings",
+		`{"password-sign-in-min-length":"14"}`, csrf, cookies))
+	if setting.status != http.StatusForbidden {
+		t.Errorf("change of an installation setting = %d %s, want 403", setting.status, setting.body)
+	}
+}
+
+// devDemoAnswer is the answer to one request of TestDevDemoSignIn.
+type devDemoAnswer struct {
+	body    string
+	cookies []*http.Cookie
+	status  int
+}
+
+// devDemoRequest is one request of TestDevDemoSignIn. csrf and cookies are
+// the session of the person, and body is JSON.
+type devDemoRequest struct {
+	method  string
+	path    string
+	csrf    string
+	body    string
+	cookies []*http.Cookie
+}
+
+// demoReq builds one request of TestDevDemoSignIn.
+func demoReq(method, path, body, csrf string, cookies []*http.Cookie) devDemoRequest {
+	return devDemoRequest{method: method, path: path, csrf: csrf, body: body, cookies: cookies}
+}
+
+// devDemoDo sends one request to dev with the session cookies and the
+// origin and CSRF headers of the console.
+func devDemoDo(t *testing.T, base string, in devDemoRequest) devDemoAnswer {
+	t.Helper()
+
+	reader := io.Reader(http.NoBody)
+	if in.body != "" {
+		reader = strings.NewReader(in.body)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), in.method, base+in.path, reader)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	req.Header.Set("Origin", base)
+
+	if in.body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	if in.csrf != "" {
+		req.Header.Set("X-Dustpan-Csrf", in.csrf)
+	}
+
+	for _, c := range in.cookies {
+		req.AddCookie(c)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", in.method, in.path, err)
+	}
+
+	raw, readErr := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Errorf("close body: %v", closeErr)
+	}
+
+	if readErr != nil {
+		t.Fatalf("read body: %v", readErr)
+	}
+
+	return devDemoAnswer{status: resp.StatusCode, body: string(raw), cookies: resp.Cookies()}
 }

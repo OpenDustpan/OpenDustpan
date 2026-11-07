@@ -11,7 +11,7 @@ import (
 	exprlang "github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 
-	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
 // The work budget of one run. Every call of a string function, and every
@@ -123,7 +123,7 @@ func (m *meter) strings(units int, args ...any) ([]string, error) {
 }
 
 // stringFunctions returns the options that give the string functions of
-// catalog.ExprBuiltins that read a string, and the operators that read one,
+// selfservice.ExprBuiltins that read a string, and the operators that read one,
 // as functions that count their work in m.
 func (m *meter) stringFunctions() []exprlang.Option {
 	oneS := func(string) string { return "" }
@@ -255,7 +255,7 @@ func (r *rewriter) Visit(node nodeRef) {
 // twoArgs is the count of arguments of matches.
 const twoArgs = 2
 
-// isMetered reports whether name is a builtin of catalog.ExprBuiltins that the
+// isMetered reports whether name is a builtin of selfservice.ExprBuiltins that the
 // meter gives as a function that counts its work.
 func isMetered(name string) bool {
 	return slices.Contains([]string{
@@ -329,7 +329,7 @@ func (s *envSize) object(fields map[string]any) bool {
 
 // checkEnvSize refuses an environment with more than MaxEnvBytes bytes of
 // strings and items, and a value that is not a JSON value.
-func checkEnvSize(env *catalog.Env) error {
+func checkEnvSize(env *selfservice.Env) error {
 	s := &envSize{left: MaxEnvBytes, err: nil}
 	req := &env.Request
 

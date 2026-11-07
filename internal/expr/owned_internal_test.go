@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
 // waitIdle waits until every run of e has ended and has given its slot back.
@@ -49,7 +49,7 @@ func TestAbandonedRunOwnsItsData(t *testing.T) {
 
 	list := bigList(100_000)
 	nested := map[string]any{"deep": bigList(1000)}
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value:   list,
 		Inputs:  map[string]any{"l": list, "m": nested},
 		Usage:   map[string]int{"units": 1},
@@ -59,7 +59,7 @@ func TestAbandonedRunOwnsItsData(t *testing.T) {
 	env.Request.Requester.Groups = []string{"a", "b"}
 
 	got, err := e.Bool(t.Context(), "count(inputs.l, {# >= 0}) > 0 && len(inputs.m.deep) > 0", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) || errors.Is(err, errEnvTooBig) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) || errors.Is(err, errEnvTooBig) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed from the time limit", got, err)
 	}
 
@@ -84,7 +84,7 @@ func TestCloneEnvIsDeep(t *testing.T) {
 	list := []any{"x"}
 	object := map[string]any{"l": list}
 	input := map[string]any{"k": "v"}
-	env := &catalog.Env{
+	env := &selfservice.Env{
 		Value:   list,
 		Inputs:  map[string]any{"k": object},
 		Usage:   map[string]int{"u": 1},
@@ -101,7 +101,7 @@ func TestCloneEnvIsDeep(t *testing.T) {
 	input["k"] = "w"
 	env.Request.Requester.Groups[0] = "h"
 
-	want := catalog.Env{
+	want := selfservice.Env{
 		Value:   []any{"x"},
 		Inputs:  map[string]any{"k": map[string]any{"l": []any{"x"}}},
 		Usage:   map[string]int{"u": 1},
@@ -143,7 +143,7 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 			t.Parallel()
 
 			e := mustNew(t, NewLimiter())
-			env := &catalog.Env{
+			env := &selfservice.Env{
 				Value:   nil,
 				Inputs:  map[string]any{"l": bigList(100_000), "rows": rows},
 				Usage:   nil,
@@ -158,7 +158,7 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 				t.Fatalf("Bool() error = %v, the test environment must be under its size limit", err)
 			}
 
-			if err != nil && !errors.Is(err, catalog.ErrRuleFailed) {
+			if err != nil && !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() error = %v, want nil or ErrRuleFailed", err)
 			}
 

@@ -377,6 +377,9 @@ const (
 	// DevAdminSubject is the subject of the person that the one-time code of
 	// opendustpan dev signs in.
 	DevAdminSubject = DevSubjectPrefix + "admin"
+	// DemoSubject is the subject of the demo person of opendustpan dev. The
+	// package localuser has the same value as localuser.DemoSubject.
+	DemoSubject = DevSubjectPrefix + "demo"
 )
 
 // IsDevSubject reports whether the first 4 bytes of s equal DevSubjectPrefix
@@ -555,6 +558,21 @@ func (p Principal) validateLocalPerson(userID string) error {
 func (p Principal) validateDevAdministrator() error {
 	if p.Subject != DevAdminSubject {
 		return fmt.Errorf("%w: %q is not the subject of the dev sign-in", ErrReservedSubject, p.Subject)
+	}
+
+	if err := checkSubjectForm(p.Subject); err != nil {
+		return err
+	}
+
+	return p.validateFields()
+}
+
+// validateDemoPerson is Validate for the one principal that the demo seed
+// makes: it accepts the subject DemoSubject and no other subject with the
+// prefix of the dev sign-in.
+func (p Principal) validateDemoPerson() error {
+	if p.Subject != DemoSubject {
+		return fmt.Errorf("%w: %q is not the subject of the demo person", ErrReservedSubject, p.Subject)
 	}
 
 	if err := checkSubjectForm(p.Subject); err != nil {

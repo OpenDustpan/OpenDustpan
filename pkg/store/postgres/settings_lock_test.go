@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -92,12 +93,17 @@ func raceGrant(id string, n int) access.Grant {
 	}
 }
 
-// writeSetting changes a setting of the namespace. A stale revision reads the
-// revision again and tries once more, as a client does.
+// writeSetting changes a setting of the namespace. A stale revision is a
+// correct answer when other writers change the same settings at the same time:
+// it means that another writer committed. The function reads the revision again
+// and tries once more, as a client does, until the write succeeds or the test
+// ends. Each conflict is one commit of another writer, so the number of
+// conflicts has a bound and a fixed limit of tries would only make the test
+// depend on timing.
 func writeSetting(t *testing.T, store setting.Store, scope setting.Scope, fence namespace.Fence, n int) error {
 	t.Helper()
 
-	for range 50 {
+	for t.Context().Err() == nil {
 		stored, err := store.Load(t.Context(), scope)
 		if err != nil {
 			return err
@@ -115,5 +121,5 @@ func writeSetting(t *testing.T, store setting.Store, scope setting.Scope, fence 
 		}
 	}
 
-	return setting.ErrPreconditionFailed
+	return fmt.Errorf("write setting: %w", t.Context().Err())
 }

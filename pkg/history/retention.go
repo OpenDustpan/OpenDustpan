@@ -7,7 +7,7 @@ import (
 )
 
 // ErrInvalidRetention reports a retention period that is shorter than
-// MinRetention.
+// MinRetention or longer than MaxRetention.
 var ErrInvalidRetention = errors.New("invalid retention period")
 
 // DefaultRetention is the retention period of a stored plan and of a
@@ -18,6 +18,11 @@ const DefaultRetention = 400 * 24 * time.Hour
 // MinRetention is the shortest retention period that a setting accepts, so
 // that a typing error cannot shred every plan and job log at the next sweep.
 const MinRetention = 24 * time.Hour
+
+// MaxRetention is the longest retention period that a setting accepts: ten
+// years. A longer period is almost always a typing error, and a huge value
+// could overflow the expiry time of an item.
+const MaxRetention = 10 * 365 * 24 * time.Hour
 
 // The names of the retention settings, as a flag and as an environment
 // variable.
@@ -50,8 +55,9 @@ func DefaultRetentionSettings() RetentionSettings {
 	return RetentionSettings{Plan: DefaultRetention, JobLog: DefaultRetention}
 }
 
-// Validate reports whether each period is at least MinRetention. It
-// returns ErrInvalidRetention with the name of the flag otherwise.
+// Validate reports whether each period is from MinRetention to
+// MaxRetention. It returns ErrInvalidRetention with the name of the flag
+// otherwise.
 func (s RetentionSettings) Validate() error {
 	if err := ValidateRetention(PlanRetentionFlag, s.Plan); err != nil {
 		return err
@@ -60,12 +66,16 @@ func (s RetentionSettings) Validate() error {
 	return ValidateRetention(JobLogRetentionFlag, s.JobLog)
 }
 
-// ValidateRetention reports whether period is at least MinRetention. name
-// is the flag of the setting, for the error text. It returns
-// ErrInvalidRetention otherwise.
+// ValidateRetention reports whether period is from MinRetention to
+// MaxRetention. name is the flag of the setting, for the error text. It
+// returns ErrInvalidRetention otherwise.
 func ValidateRetention(name string, period time.Duration) error {
 	if period < MinRetention {
 		return fmt.Errorf("%w: --%s is %s, the minimum is %s", ErrInvalidRetention, name, period, MinRetention)
+	}
+
+	if period > MaxRetention {
+		return fmt.Errorf("%w: --%s is %s, the maximum is %s", ErrInvalidRetention, name, period, MaxRetention)
 	}
 
 	return nil

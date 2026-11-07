@@ -9,10 +9,15 @@ import (
 
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 )
+
+// subscriptionPort names notify.Subscriptions for an embedded field: the port has a method of the same name as
+// its type, which an embedded field cannot have.
+type subscriptionPort = notify.Subscriptions
 
 // coverageSinkRoutes returns the routes of the notification sink API. The
 // stores are empty shells: they exist only to build a Handler for its route
@@ -33,8 +38,19 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		tb.Fatalf("sink service: %v", err)
 	}
 
+	subscriptions, err := subscriptionsvc.NewService(subscriptionsvc.Config{
+		Subscriptions: struct{ subscriptionPort }{nil},
+		Deliveries:    struct{ notify.Deliveries }{nil},
+		Namespaces:    coverageNamespaces(tb),
+		Now:           nil,
+	})
+	if err != nil {
+		tb.Fatalf("subscription service: %v", err)
+	}
+
 	handler, err := notificationsapi.NewHandler(notificationsapi.Config{
 		Sinks:          svc,
+		Subscriptions:  subscriptions,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		Sessions:       nil,
@@ -59,12 +75,13 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 	return out
 }
 
-// sinkAllowEntries covers the routes of the notification sinks. No CLI calls
+// sinkAllowEntries covers the routes of the notification sinks, subscriptions and deliveries. No CLI calls
 // them: the console and the clients of the API do. The steps of
 // TestNotificationSinksAPI call each of them with the token of an administrator.
 func sinkAllowEntries() []AllowEntry {
 	const (
 		base = "/api/dustpan/v1/namespaces/{namespace}/sinks"
+		subs = "/api/dustpan/v1/namespaces/{namespace}/subscriptions"
 		test = "TestNotificationSinksAPI"
 		why  = "Console and client route: no CLI calls it. The steps of TestNotificationSinksAPI call it through the API."
 	)
@@ -76,5 +93,15 @@ func sinkAllowEntries() []AllowEntry {
 		{Method: http.MethodPut, Path: base + "/{sink_id}", CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: base + "/{sink_id}", CoveringTest: test, Reason: why},
 		{Method: http.MethodPost, Path: base + "/{sink_id}/test", CoveringTest: test, Reason: why},
+		{Method: http.MethodPost, Path: subs, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: subs, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: subs + "/{subscription_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodPut, Path: subs + "/{subscription_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: subs + "/{subscription_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: subs + "/{subscription_id}/deliveries", CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/deliveries/{delivery_id}/redeliver",
+			CoveringTest: test, Reason: why,
+		},
 	}
 }

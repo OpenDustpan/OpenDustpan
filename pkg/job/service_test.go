@@ -527,7 +527,7 @@ func TestStartSource(t *testing.T) {
 		{"schedule", "", job.SourceSchedule, job.SourceSchedule},
 		{"trigger", "", job.SourceTrigger, job.SourceTrigger},
 		{"forge", "", job.SourceForge, job.SourceForge},
-		{"catalog", "", job.SourceCatalog, job.SourceCatalog},
+		{"self-service", "", job.SourceSelfService, job.SourceSelfService},
 	}
 
 	for _, tt := range tests {

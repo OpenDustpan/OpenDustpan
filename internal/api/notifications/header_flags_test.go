@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // TestHeaderFlagsMatchTheHandler proves that the header flags of each
@@ -69,6 +70,47 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 			t.Helper()
 
 			return probe(http.MethodPost, base+"/"+f.makeWebhook(t).ID+"/test", "")
+		},
+		"listNotificationSubscriptions": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			return probe(http.MethodGet, subscriptionsBase, "")
+		},
+		"createNotificationSubscription": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			return probe(http.MethodPost, subscriptionsBase, `{"sink":"`+f.makeWebhook(t).ID+`"}`)
+		},
+		"getNotificationSubscription": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			return probe(http.MethodGet, subscriptionsBase+"/"+f.makeSubscription(t).ID, "")
+		},
+		"replaceNotificationSubscription": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			sub := f.makeSubscription(t)
+
+			return probe(http.MethodPut, subscriptionsBase+"/"+sub.ID,
+				`{"version":1,"sink":"`+sub.Sink+`","state":"suspended"}`)
+		},
+		"deleteNotificationSubscription": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			return probe(http.MethodDelete, subscriptionsBase+"/"+f.makeSubscription(t).ID, "")
+		},
+		"listNotificationDeliveries": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			return probe(http.MethodGet, subscriptionsBase+"/"+f.makeSubscription(t).ID+"/deliveries", "")
+		},
+		"redeliverNotification": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			sub := f.makeSubscription(t)
+			d := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+
+			return probe(http.MethodPost, deliveriesBase+"/"+d.ID+"/redeliver", "")
 		},
 	}
 

@@ -148,12 +148,13 @@ let the server host it in the same process with
 `make demo` runs a local demo. You need Git, Go, Node and npm. You need
 no Pulumi CLI and no OpenTofu CLI.
 
-The command builds the web console, starts the server on
-`http://127.0.0.1:8080`, and seeds two namespaces with demo stacks, update
-history and one backup. It then reads two routes that the console calls. A
-404 on either route means that the console at `CONSOLE_REF` calls a route
-that this server does not serve, and the command stops. It prints the URL and
-the sign-in token. Use the token on the sign-in page.
+The command builds the web console, starts `opendustpan dev --demo` on
+`http://127.0.0.1:8080`, and seeds two namespaces with demo stacks and update
+history. It then reads one route that the console calls. A
+404 on that route means that the console at `CONSOLE_REF` calls a route
+that this server does not serve, and the command stops. It prints the URL, the
+user name and the password of the demo person, and the sign-in token. Sign in
+with the user name and the password, or use the token on the sign-in page.
 
 The server uses port 8080 by default. Set another port with
 `make demo DEMO_PORT=<port>`.
@@ -407,6 +408,8 @@ Reference:
   the routes, fields and errors of notification destinations.
 - [Languages and digits](docs/reference/languages-and-digits.md): the
   languages, the `digits` setting and the plural forms.
+- [Proxy rules](docs/reference/proxy-rules.md): the format, the variables, the
+  limits and the refusals of a proxy rule set of the job proxy.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 

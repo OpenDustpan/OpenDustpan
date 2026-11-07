@@ -25,6 +25,8 @@ type devBanner struct {
 	network string
 	// tokenNote is the text of the Token line, or empty.
 	tokenNote string
+	// placement is the text of the Placement line, or empty.
+	placement string
 	// trustNote is the text of the TLS line for a platform where dev cannot
 	// write a certificate bundle.
 	ephemeral bool
@@ -63,6 +65,10 @@ func writeDevBanner(w io.Writer, b devBanner) error {
 
 	if b.tokenNote != "" {
 		writeBannerLine(&out, "Token", b.tokenNote)
+	}
+
+	if b.placement != "" {
+		writeBannerLine(&out, "Rule", b.placement)
 	}
 
 	writeBannerLine(&out, "Settings", ". "+shellWord(b.envFile))
