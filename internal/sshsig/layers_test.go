@@ -182,6 +182,11 @@ func TestVerifyECDSALayers(t *testing.T) {
 
 	blob := ecdsaSign(t, signer, signed)
 
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
+	}
+
 	blobOf := func(r, s *big.Int) []byte { return append(mpint(r), mpint(s)...) }
 
 	tests := []struct {
@@ -212,6 +217,11 @@ func TestVerifyECDSALayers(t *testing.T) {
 			"the point at infinity",
 			ecdsaKey(rawKey(new(big.Int), new(big.Int))),
 			blob, sshsig.ErrMalformed, "not on the curve",
+		},
+		{
+			"a P-384 point",
+			ecdsaKey(&p384.PublicKey),
+			blob, sshsig.ErrMalformed, "not on P-256",
 		},
 		{"a byte after s", key, append(bytes.Clone(blob), 0), sshsig.ErrMalformed, ""},
 		{"an empty blob", key, nil, sshsig.ErrMalformed, ""},
@@ -399,30 +409,34 @@ func TestMarshalHostileKeys(t *testing.T) {
 	gx, gy := coordX(t, &signer.PublicKey), coordY(t, &signer.PublicKey)
 	typeOnly := appendString(nil, []byte(sshsig.TypeECDSAP256))
 
-	keys := map[string]*ecdsa.PublicKey{
-		"no point":      nil,
-		"no X":          rawKey(nil, gy),
-		"no Y":          rawKey(gx, nil),
-		"no coordinate": rawKey(nil, nil),
-		"off the curve": rawKey(big.NewInt(1), big.NewInt(2)),
-		"infinity":      rawKey(new(big.Int), new(big.Int)),
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
 	}
 
-	for name, pub := range keys {
+	keys := map[string]struct {
+		pub  *ecdsa.PublicKey
+		text string // text that tells the layer
+	}{
+		"no point":      {nil, "without a point"},
+		"no X":          {rawKey(nil, gy), "not on the curve"},
+		"no Y":          {rawKey(gx, nil), "not on the curve"},
+		"no coordinate": {rawKey(nil, nil), "not on the curve"},
+		"off the curve": {rawKey(big.NewInt(1), big.NewInt(2)), "not on the curve"},
+		"infinity":      {rawKey(new(big.Int), new(big.Int)), "not on the curve"},
+		"a P-384 point": {&p384.PublicKey, "not on P-256"},
+	}
+
+	for name, tc := range keys {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := ecdsaKey(pub).Marshal(); !bytes.Equal(got, typeOnly) {
+			if got := ecdsaKey(tc.pub).Marshal(); !bytes.Equal(got, typeOnly) {
 				t.Fatalf("Marshal = %x, want the type alone %x", got, typeOnly)
 			}
 
-			text := "not on the curve"
-			if pub == nil {
-				text = "without a point"
-			}
-
-			_, err := sshsig.EncodeECDSAPoint(pub)
-			checkLayerError(t, err, text, sshsig.ErrMalformed)
+			_, err := sshsig.EncodeECDSAPoint(tc.pub)
+			checkLayerError(t, err, tc.text, sshsig.ErrMalformed)
 		})
 	}
 
