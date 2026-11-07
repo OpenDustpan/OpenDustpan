@@ -330,8 +330,8 @@ func ParseALBKey(body []byte) (*ecdsa.PublicKey, error) {
 
 	// Reject data before the block: pem.Decode would discard it, and with it
 	// a malformed block that precedes a valid one.
-	start := len(body) - len(bytes.TrimLeftFunc(body, unicode.IsSpace))
-	if !bytes.HasPrefix(body[start:], []byte("-----BEGIN ")) {
+	trimmed := bytes.TrimLeftFunc(body, unicode.IsSpace)
+	if !bytes.HasPrefix(trimmed, []byte("-----BEGIN ")) {
 		return nil, errKey
 	}
 
@@ -340,7 +340,9 @@ func ParseALBKey(body []byte) (*ecdsa.PublicKey, error) {
 		return nil, errKey
 	}
 
-	if bytes.Count(body[start:len(body)-len(rest)], []byte("-----BEGIN ")) != 1 {
+	// The rest after the block is only white space, so each other block
+	// start in the body is a block before this one.
+	if bytes.Count(trimmed, []byte("-----BEGIN ")) != 1 {
 		return nil, errKey
 	}
 
