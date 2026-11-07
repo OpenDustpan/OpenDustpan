@@ -44,14 +44,16 @@ const (
 // A route of ScopeAuthorized runs the checks in this order:
 //
 //  1. The credential is authenticated. A request without a valid credential
-//     answers 401, a refused session answers 403, and too many failed
-//     sign-ins answer 429.
+//     answers 401, a session that fails the CSRF check or comes from
+//     another site answers 403, and too many failed sign-ins answer 429.
 //  2. The client address is checked against the IP allowlist of the namespace
 //     of the path. A refused address answers 403.
 //  3. The namespace of the path is read. An unknown namespace answers 404.
 //  4. identity.ActionNamespaceRead on the namespace. A refusal answers 404,
 //     the answer of an unknown namespace, so a caller learns nothing about a
-//     namespace that it cannot read.
+//     namespace that it cannot read. This read check applies the IP allowlist
+//     a second time, and an allowlist refusal there keeps its 403: it is not
+//     mapped to 404.
 //  5. Actions on the namespace of the path. A refusal answers 403.
 //
 // A route of the other scopes checks its credential, and Actions names the
