@@ -56,6 +56,100 @@ func TestTimeZoneNames(t *testing.T) {
 	}
 }
 
+// hostileZones are names that each layer of the time zone check must refuse on
+// its own, or that the layers below it must refuse. The case lists the layers
+// that are meant to refuse the name.
+type zoneCase struct {
+	name      string
+	zone      string
+	allowlist bool // the allowlist refuses it
+	shape     bool // the shape check refuses it
+	loader    bool // the zone database refuses it
+}
+
+func hostileZones() []zoneCase {
+	return []zoneCase{
+		{"wrong case", "europe/berlin", true, false, false},
+		{"wrong case in the second segment", "Europe/berlin", true, false, false},
+		{"all upper case", "EUROPE/BERLIN", true, false, false},
+		{"a trailing space", "Europe/Berlin ", true, true, true},
+		{"a path up", "../etc/passwd", true, true, true},
+		{"a path up inside", "Europe/Berlin/../Paris", true, true, true},
+		{"a null byte", "Europe/Berlin\x00", true, true, true},
+		{"a very long name", strings.Repeat("Europe/", 1000), true, true, true},
+		{"the zone of the host", "Local", true, true, true},
+		{"empty", "", true, true, true},
+		{"a directory", "America", true, false, false},
+	}
+}
+
+// TestZoneAllowlist sends hostile names to the allowlist alone. The answer
+// comes from a list in the binary, so it is the same on every host.
+func TestZoneAllowlist(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileZones() {
+		if tc.allowlist && preferences.AllowlistAccepts(tc.zone) {
+			t.Errorf("%s: allowlist accepted %q", tc.name, tc.zone)
+		}
+	}
+
+	for _, zone := range []string{"UTC", "Europe/Berlin", "America/Argentina/Buenos_Aires", "Etc/GMT+5"} {
+		if !preferences.AllowlistAccepts(zone) {
+			t.Errorf("allowlist refused %q", zone)
+		}
+	}
+}
+
+// TestZoneShape sends hostile names to the shape check alone.
+func TestZoneShape(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileZones() {
+		if tc.shape && preferences.ShapeAccepts(tc.zone) {
+			t.Errorf("%s: shape check accepted %q", tc.name, tc.zone)
+		}
+	}
+
+	if !preferences.ShapeAccepts("Europe/Berlin") {
+		t.Error("shape check refused Europe/Berlin")
+	}
+}
+
+// TestZoneLoads sends hostile names to the time zone database alone.
+func TestZoneLoads(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileZones() {
+		if tc.loader && preferences.DatabaseAccepts(tc.zone) {
+			t.Errorf("%s: zone database accepted %q", tc.name, tc.zone)
+		}
+	}
+
+	for _, zone := range []string{"Not/AZone", "zone.tab"} {
+		if preferences.DatabaseAccepts(zone) {
+			t.Errorf("zone database accepted %q", zone)
+		}
+	}
+
+	if !preferences.DatabaseAccepts("Europe/Berlin") {
+		t.Error("zone database refused Europe/Berlin")
+	}
+}
+
+// TestZonePatchRefusesWrongCase checks the public path. The refusal of a name
+// in the wrong case comes from the allowlist, not from the host: the allowlist
+// refuses it, so the answer is the same where the file system ignores case.
+func TestZonePatchRefusesWrongCase(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range hostileZones() {
+		if _, err := preferences.ParsePatch([]byte(`{"timeZone":` + jsonText(tc.zone) + `}`)); err == nil {
+			t.Errorf("%s: patch accepted %q", tc.name, tc.zone)
+		}
+	}
+}
+
 // jsonText quotes s as a JSON string.
 func jsonText(s string) string {
 	var b strings.Builder

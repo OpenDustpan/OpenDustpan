@@ -146,29 +146,53 @@ func digits(value string) error {
 
 var errTimeZone = reason("timeZone must be an IANA time zone name of 1 to 64 characters, for example Europe/Berlin")
 
-// timeZone checks an IANA zone name. The check has two layers that each stop
-// a hostile name alone: an allowlist of bytes and of segments, which runs
-// before any file name is built, and the time zone database.
+// timeZone checks an IANA zone name. The check has three layers that each stop
+// a hostile name alone, and it runs them in this order: an exact,
+// case-sensitive list of the zone names of the Go toolchain (knownZone), an
+// allowlist of bytes and of segments (zoneShape), and the time zone database
+// (zoneLoads). The first two layers run before any file name is built, so the
+// answer does not depend on the zone files or the file system of the host.
 func timeZone(value string) error {
+	if !knownZone(value) {
+		return errTimeZone
+	}
+
+	// Defense in depth: knownZone already refuses these names; this layer
+	// stays so that a wrong list cannot let a hostile name reach the file
+	// system. It does not rely on the list or on the time zone database.
 	if !zoneShape(value) {
 		return errTimeZone
 	}
 
-	if _, err := time.LoadLocation(value); err != nil {
+	if !zoneLoads(value) {
 		return errTimeZone
 	}
 
 	return nil
 }
 
+// zoneLoads reports whether the time zone database loads value. It refuses the
+// empty name and "Local", which time.LoadLocation answers with the zone of the
+// host and with UTC. It is the last layer: time.LoadLocation reads the zone
+// files of the host before the embedded database, so on its own it can answer
+// differently on two hosts, for example for a name in the wrong case on a file
+// system that ignores case.
+func zoneLoads(value string) bool {
+	if value == "" || value == "Local" {
+		return false
+	}
+
+	_, err := time.LoadLocation(value)
+
+	return err == nil
+}
+
 // zoneShape reports whether value has the shape of an IANA zone name: 1 to 64
 // bytes of ASCII letters, digits and the characters / _ + -, in segments with
 // no empty segment. A zone name has no dot, so a segment of dots, a file
 // extension and a relative path never pass. It also refuses some names that
-// only some hosts have. The answer can still differ by host: time.LoadLocation
-// reads the zone files of the host before the embedded database, so a host can
-// know a name that the embedded database does not, and a file system that
-// ignores case can accept a name in the wrong case.
+// only some hosts have. It checks the shape only: it does not know which names
+// exist, and it does not check case.
 func zoneShape(value string) bool {
 	if value == "" || len(value) > maxTimeZoneLen {
 		return false
