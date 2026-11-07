@@ -64,6 +64,10 @@ func (o ownDatabase) Run() int {
 	if tplErr := pgtest.BuildTemplate(ctx, base, template, migrateTemplate); tplErr != nil {
 		fmt.Fprintf(os.Stderr, "make the template database: %v\n", tplErr)
 
+		// The build drops the template database when it fails. The database
+		// of the test binary stays, so drop it here too.
+		dropTestDatabase(ctx, base, db.name)
+
 		return 1
 	}
 
@@ -232,6 +236,15 @@ func execOn(ctx context.Context, dbURL, stmt string) error {
 	}
 
 	return nil
+}
+
+// dropTestDatabase drops the test database name on the server of base. A
+// failure only reaches stderr: the caller decides the result.
+func dropTestDatabase(ctx context.Context, base, name string) {
+	drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
+	if dropErr := execOn(ctx, base, drop); dropErr != nil {
+		fmt.Fprintf(os.Stderr, "drop the test database %s: %v\n", name, dropErr)
+	}
 }
 
 // migrateTemplate opens the store at dbURL, which applies the migrations, and closes

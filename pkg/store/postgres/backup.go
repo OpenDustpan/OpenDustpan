@@ -1038,9 +1038,13 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 	return sum, nil
 }
 
-// checkStaged runs the checks of the staged rows in q: the sealed state, the
-// namespace IDs, the owned rows and the feature rows.
+// checkStaged runs the checks of the staged rows in q: the staging name, the
+// sealed state, the namespace IDs, the owned rows and the feature rows.
 func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
+	if identErr := checkStagingIdent(staging); identErr != nil {
+		return identErr
+	}
+
 	if sealedErr := checkStagedSealedState(ctx, q, staging); sealedErr != nil {
 		return sealedErr
 	}

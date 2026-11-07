@@ -1294,9 +1294,11 @@ func (s *Store) holdWrite(ctx context.Context) (func(), error) {
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the write connection; the inner one asks for it again,
-// and it queues behind an enter that waits for the outer one: a deadlock.
-// Take the state check once, in the outermost transaction.
+// transaction holds the write connection; the inner one asks for it again and
+// waits behind an enter that waits for the outer one. That gate wait ends
+// when the context of the inner call ends, and the inner call returns the
+// context error. SQLite lock contention can fail the inner transaction after
+// the busy timeout. Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
 }
