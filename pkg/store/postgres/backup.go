@@ -41,6 +41,8 @@ const (
 	pgColNameKey     = "name_key"
 	pgColCreatedAtMs = "created_at_ms"
 	pgColCreatedBy   = "created_by"
+	pgColGroupID     = "group_id"
+	pgColSourceID    = "source_id"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
@@ -607,10 +609,17 @@ func pgCopyPrincipalTables() []pgCopyTable {
 		{
 			table: backup.TableGroupMembers,
 			columns: []string{
-				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
+				pgColGroupID, pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, pgColSourceID,
 				pgColState, "suspended_at_ms", "pinned",
 			},
-			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
+			orderBy: []string{pgColGroupID, pgColPrincipalID, "added_at_ms"},
+		},
+		{
+			table: backup.TableGroupMappings,
+			columns: []string{
+				pgColSource, pgColSourceID, "claim_value", pgColGroupID, pgColCreatedBy, pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColSource, pgColSourceID, "claim_value", pgColGroupID},
 		},
 		{
 			table: backup.TableTempAdmins,

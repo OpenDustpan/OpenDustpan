@@ -139,6 +139,7 @@ var Tables = []string{
 	TablePrincipals,
 	TablePrincipalGroups,
 	TableGroupMembers,
+	TableGroupMappings,
 	TableTempAdmins,
 	TableAccessTokens,
 	TableSessions,

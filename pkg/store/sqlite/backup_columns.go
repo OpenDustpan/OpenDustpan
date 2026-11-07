@@ -746,6 +746,17 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "group_mappings",
+			columns: []string{
+				backupColSource,
+				"source_id",
+				"claim_value",
+				"group_id",
+				backupColCreatedBy,
+				backupColCreatedAtMs,
+			},
+		},
+		{
 			table: "temp_admins",
 			columns: []string{
 				backupColPrincipalID,

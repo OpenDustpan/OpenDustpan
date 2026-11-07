@@ -29,7 +29,7 @@ title: What sits under a namespace
 status: draft          # draft | discussing | accepted | dropped
 created: 2026-10-10
 adr: 16                # only when accepted
-was: proposed ADR 9    # only for RFCs 1 to 3, which were proposed ADRs
+was: proposed under number 9    # only for RFCs 1 to 3, which were proposed ADRs
 ```
 
 The front matter and the first lines of prose give the same state. Change
@@ -42,8 +42,8 @@ both together.
 - `make docs-lint` does not check RFCs, so that writing one costs little. The
   ADR that comes from an RFC follows ADR 14.
 - RFCs 1 to 3 were proposed ADRs 9 to 11. ADRs 12 and 13 cite those numbers.
-  ADR 1 forbids edits to accepted ADRs, so read "ADR 9" there as RFC 1,
-  "ADR 10" as RFC 2 and "ADR 11" as RFC 3.
+  ADR 1 forbids edits to accepted ADRs, so read the numbers 9, 10 and 11
+  there as RFC 1, RFC 2 and RFC 3.
 
 ## Index
 
