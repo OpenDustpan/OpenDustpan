@@ -140,6 +140,13 @@ resources, so the body has no field for it.
 A job that needs a field with no value fails at its start with a message that
 names the field.
 
+A job that names no location uses the effective location: the connection, the
+repository, the ref and the directory of the unit settings. A job that names no
+pool uses the effective pool. A value in the start request wins over the
+settings. The job lists the values that it took from the settings in its
+`defaulted` field. A connection of another namespace gets the same refusal as a
+connection that does not exist.
+
 ## Read
 
 `GET .../settings` answers 200 for a unit with no record too. It then has

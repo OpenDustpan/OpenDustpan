@@ -303,6 +303,7 @@ const (
 	ErrorCodeSettingsKeyUnknown                    ErrorCode = "settings.key-unknown"
 	ErrorCodeSettingsLocked                        ErrorCode = "settings.locked"
 	ErrorCodeSettingsPatchInvalid                  ErrorCode = "settings.patch-invalid"
+	ErrorCodeSettingsRetentionInvalid              ErrorCode = "settings.retention-invalid"
 	ErrorCodeSettingsStaticOnly                    ErrorCode = "settings.static-only"
 	ErrorCodeSettingsUnavailable                   ErrorCode = "settings.unavailable"
 	ErrorCodeSettingsValueInvalid                  ErrorCode = "settings.value-invalid"

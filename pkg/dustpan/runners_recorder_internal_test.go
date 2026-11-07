@@ -46,7 +46,7 @@ func fullRecorderInputs(t *testing.T) *jobRecorderInputs {
 
 	return &jobRecorderInputs{
 		jobs: st.Jobs(), blobs: blobs, updates: st, namespaceStore: st, wrapper: wrapper, now: time.Now,
-		namespaces: namespaces,
+		namespaces: namespaces, retention: defaultJobRetention(),
 	}
 }
 
@@ -84,6 +84,40 @@ func TestNewDurableRecorderNeedsItsStores(t *testing.T) {
 
 			if ok != tc.want || (got != nil) != tc.want {
 				t.Fatalf("newDurableRecorder = %v, %t, want a recorder: %t", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewDurableRecorderAppliesTheConfiguredRetention proves that the
+// recorder gets the periods of the inputs, so a configured period is the one
+// that the recorder gives to new plans and log versions.
+func TestNewDurableRecorderAppliesTheConfiguredRetention(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want jobRetention
+	}{
+		{name: "the defaults", want: defaultJobRetention()},
+		{name: "two days of logs", want: jobRetention{Plan: 400 * 24 * time.Hour, JobLog: 48 * time.Hour}},
+		{name: "two days of plans", want: jobRetention{Plan: 48 * time.Hour, JobLog: 400 * 24 * time.Hour}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := fullRecorderInputs(t)
+			in.retention = tc.want
+
+			got, ok, err := newDurableRecorder(in)
+			if err != nil || !ok {
+				t.Fatalf("newDurableRecorder = %t, %v, want a recorder", ok, err)
+			}
+
+			if got.Retention() != tc.want {
+				t.Errorf("recorder retention = %+v, want %+v", got.Retention(), tc.want)
 			}
 		})
 	}

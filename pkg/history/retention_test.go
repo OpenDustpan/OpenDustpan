@@ -33,6 +33,26 @@ func TestRetentionSettings(t *testing.T) {
 			want:     history.ErrInvalidRetention,
 		},
 		{
+			name:     "the maximum",
+			settings: history.RetentionSettings{Plan: history.MaxRetention, JobLog: history.MaxRetention},
+			want:     nil,
+		},
+		{
+			name:     "a plan period above the maximum",
+			settings: history.RetentionSettings{Plan: history.MaxRetention + 1, JobLog: history.DefaultRetention},
+			want:     history.ErrInvalidRetention,
+		},
+		{
+			name:     "a job log period above the maximum",
+			settings: history.RetentionSettings{Plan: history.DefaultRetention, JobLog: time.Duration(1<<63 - 1)},
+			want:     history.ErrInvalidRetention,
+		},
+		{
+			name:     "a negative period",
+			settings: history.RetentionSettings{Plan: -history.DefaultRetention, JobLog: history.DefaultRetention},
+			want:     history.ErrInvalidRetention,
+		},
+		{
 			name:     "a zero period",
 			settings: history.RetentionSettings{Plan: 0, JobLog: 0},
 			want:     history.ErrInvalidRetention,

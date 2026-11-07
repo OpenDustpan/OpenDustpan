@@ -298,11 +298,12 @@ func randomHex(tb testing.TB) string {
 type SyslogReceiver struct {
 	*entryLog
 
-	tb    testing.TB
-	ln    net.Listener
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
-	cmu   sync.Mutex
+	tb     testing.TB
+	ln     net.Listener
+	conns  map[net.Conn]struct{}
+	wg     sync.WaitGroup
+	cmu    sync.Mutex
+	closed bool // guarded by cmu; set by close before it walks conns
 }
 
 // newSyslogReceiver listens on a loopback port and stops when the test ends.
@@ -324,6 +325,7 @@ func newSyslogReceiver(tb testing.TB, cert tls.Certificate) *SyslogReceiver {
 		conns:    map[net.Conn]struct{}{},
 		wg:       sync.WaitGroup{},
 		cmu:      sync.Mutex{},
+		closed:   false,
 	}
 
 	r.wg.Go(r.accept)
@@ -347,6 +349,15 @@ func (r *SyslogReceiver) accept() {
 		}
 
 		r.cmu.Lock()
+		if r.closed {
+			// close has already walked conns, so this connection would
+			// never be closed by it. Close it here and stop.
+			r.cmu.Unlock()
+			closeLogged(r.tb, conn)
+
+			return
+		}
+
 		r.conns[conn] = struct{}{}
 		r.cmu.Unlock()
 
@@ -359,6 +370,7 @@ func (r *SyslogReceiver) close() {
 	closeLogged(r.tb, r.ln)
 
 	r.cmu.Lock()
+	r.closed = true
 	for conn := range r.conns {
 		closeLogged(r.tb, conn)
 	}

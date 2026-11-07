@@ -53,6 +53,8 @@ the same list.
 | `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
 | `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
+| `--plan-retention` | `DUSTPAN_PLAN_RETENTION` | `plan-retention` | `9600h` (400 days). A Go duration from `24h` to `87600h`. Each plan records its end of retention when it is made, so a change applies to later plans |
+| `--job-log-retention` | `DUSTPAN_JOB_LOG_RETENTION` | `job-log-retention` | `9600h` (400 days). A Go duration from `24h` to `87600h`. Each log version records its end of retention when it is made, so a change applies to later versions |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 | `--destination-ports` | `DUSTPAN_DESTINATION_PORTS` | `destination-ports` | (none: port 443 only). For example `8443,9443` |
 | `--oidc-issuer` | `DUSTPAN_OIDC_ISSUER` | `oidc-issuer` | (none: no console sign-in). The identity of a person does not hold the issuer. To use another issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a person of the old issuer with the same `sub`. |
@@ -203,6 +205,7 @@ set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
 | `DUSTPAN_COMMIT` | The commit of the source that the job runs. |
 | `DUSTPAN_SERVER_URL` | The URL of the server that the step calls. |
 | `DUSTPAN_SWEEP_REPORT` | Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes its report to. The launcher uploads the file when the command ends. |
+| `DUSTPAN_HELPER_SOCKET` | Set for a tool step only: the path of the Unix socket on which the launcher answers its helpers for OpenTofu and git. The variable holds a path. |
 
 ## Client commands
 
@@ -253,6 +256,7 @@ The [dev server guide](../guides/dev-server.md) shows the steps.
 | Flag | Default |
 | --- | --- |
 | `--data-dir` | (none). The default is a directory for each user. On Linux and other Unix systems, it is `$XDG_DATA_HOME/opendustpan/dev`, or `~/.local/share/opendustpan/dev` when `XDG_DATA_HOME` is not set. On macOS, it is `~/Library/Application Support/opendustpan/dev`. On Windows, it is `%LocalAppData%\opendustpan\dev`. With `DUSTPAN_DATA_DIR` set, it is the directory `dev` in the one that the variable names. Not with `--ephemeral` |
+| `--demo` | (none: no demo person). Each start sets a new password for the local user `demo`. The person gets the admin role on the namespaces `dev`, `demo-platform` and `demo-data`. It gets the viewer role on the installation |
 | `--ephemeral` | (none: the data stays). A stop deletes the data, and with it the state that tracks the cloud resources of the trial. Not with `--data-dir` |
 | `--listen` | `127.0.0.1:8080`. Another address adds a line to the banner and to the log. With no `--tls`, the line also says that the token and the sign-in code cross the network in plain text |
 | `--tls` | (none: HTTP). The `cloud` block of OpenTofu needs it. The certificate lives 30 days |

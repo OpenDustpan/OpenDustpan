@@ -24,6 +24,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // errDevTestTimeout reports a dev command that neither started nor ended in
@@ -662,6 +664,73 @@ func TestDevRefusesTheDatabaseOfServe(t *testing.T) {
 
 	if !errors.Is(startErr, installation.ErrKindMismatch) {
 		t.Fatalf("err = %v, want it to wrap ErrKindMismatch", startErr)
+	}
+}
+
+// TestDevDemoRefusesAProductionDatabase proves that dev --demo on a database
+// that serve made fails at the start, and that the database holds no dev:demo
+// person and no local user afterwards.
+func TestDevDemoRefusesAProductionDatabase(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	if _, err := claimDevDir(dir); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if _, err := makeDevKey(filepath.Join(dir, devKeyName)); err != nil {
+		t.Fatalf("make key: %v", err)
+	}
+
+	database := "sqlite:" + filepath.Join(dir, devDBName)
+	logger := slog.New(slog.DiscardHandler)
+
+	st, err := openStore(t.Context(), database, logger, openMigrate, installation.KindProduction)
+	if err != nil {
+		t.Fatalf("open as serve: %v", err)
+	}
+
+	if _, claimErr := st.ClaimKind(t.Context(), installation.KindProduction); claimErr != nil {
+		t.Fatalf("claim: %v", claimErr)
+	}
+
+	st.close()
+
+	_, startErr := startDev(t, newDevTestProcess(false), t.TempDir(),
+		"--demo", "--data-dir", dir, "--listen", "127.0.0.1:0")
+	if !errors.Is(startErr, installation.ErrKindMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrKindMismatch", startErr)
+	}
+
+	after, err := openStore(t.Context(), database, logger, openMigrate, installation.KindProduction)
+	if err != nil {
+		t.Fatalf("open after the start: %v", err)
+	}
+
+	defer after.close()
+
+	people, ok := after.(interface {
+		GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+	})
+	if !ok {
+		t.Fatal("the store cannot read a principal by subject")
+	}
+
+	_, getErr := people.GetPrincipalBySubject(t.Context(), localuser.DemoSubject)
+	if !errors.Is(getErr, principal.ErrNotFound) {
+		t.Errorf("the person %s after the refused start: err = %v, want ErrNotFound", localuser.DemoSubject, getErr)
+	}
+
+	users, ok := after.(interface {
+		UserByName(ctx context.Context, name string) (localuser.Credential, error)
+	})
+	if !ok {
+		t.Fatal("the store cannot read a local user by name")
+	}
+
+	_, userErr := users.UserByName(t.Context(), localuser.DemoUserName)
+	if !errors.Is(userErr, localuser.ErrNotFound) {
+		t.Errorf("the local user demo after the refused start: err = %v, want ErrNotFound", userErr)
 	}
 }
 

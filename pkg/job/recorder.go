@@ -92,6 +92,12 @@ func NewRecorder(cfg RecorderConfig) (*DurableRecorder, error) {
 	}, nil
 }
 
+// Retention answers the retention periods that the recorder gives to each
+// new plan and each new version of a job log.
+func (r *DurableRecorder) Retention() history.RetentionSettings {
+	return r.retention
+}
+
 // BeginStep implements Recorder.
 func (r *DurableRecorder) BeginStep(ctx context.Context, c PhaseClaim, name string) error {
 	if err := checkStepName(name); err != nil {

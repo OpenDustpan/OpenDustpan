@@ -41,6 +41,12 @@ var devSettings = []*Setting{
 			"Not with `--ephemeral`",
 	),
 	boolSetting(
+		"demo", "",
+		"set up the demo person, with a password that dev prints once",
+		"(none: no demo person). Each start sets a new password for the local user `demo`. The person gets the "+
+			"admin role on the namespaces `dev`, `demo-platform` and `demo-data`. It gets the viewer role on the installation",
+	),
+	boolSetting(
 		"ephemeral", "",
 		"use a new temporary directory and delete it at a clean stop",
 		"(none: the data stays). A stop deletes the data, and with it the state that tracks the cloud "+
