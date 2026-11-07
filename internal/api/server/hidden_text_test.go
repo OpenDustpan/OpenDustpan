@@ -74,6 +74,10 @@ func TestPrincipalRoutesRefuseHiddenText(t *testing.T) {
 			calls := []apiCall{
 				{http.MethodPost, "/api/server/principals", subjectBody + bad + `}`, http.StatusBadRequest},
 				{http.MethodPatch, "/api/server/principals/" + alice.ID, `{"displayName":` + bad + `}`, 400},
+				{
+					http.MethodPatch, "/api/server/namespaces/acme/principals/" + alice.ID,
+					`{"displayName":` + bad + `}`, 400,
+				},
 				{http.MethodPost, "/api/server/groups", `{"name":"dev","description":` + bad + `}`, 400},
 				{http.MethodPatch, "/api/server/groups/" + group.ID, `{"description":` + bad + `}`, 400},
 				{http.MethodPost, "/api/server/namespaces/acme/principals", nsBody + bad + `}`, 400},
@@ -108,6 +112,42 @@ func TestTokenRoutesRefuseHiddenName(t *testing.T) {
 				http.StatusBadRequest,
 			}, &doc)
 			wantHiddenRefusal(t, doc.Message)
+		})
+	}
+}
+
+// TestOwnAndServiceTokenRoutesRefuseHiddenName proves that the caller token and
+// service token create routes refuse a hidden character in the name with 400
+// before they call the service. The session is fresh, so the freshness check
+// passes and the name check is the one that refuses.
+func TestOwnAndServiceTokenRoutesRefuseHiddenName(t *testing.T) {
+	t.Parallel()
+
+	for _, hr := range hiddenRunes() {
+		t.Run(hr.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSignInEnv(t, true)
+			sess := e.signIn(t)
+			bad := quoteJSON(t, hr.text)
+
+			for _, c := range []struct{ name, path, body string }{
+				{"caller", "/api/server/caller/tokens", `{"name":` + bad + `}`},
+				{
+					"service", "/api/server/service-tokens",
+					`{"principalID":"` + testOtherPrincipalID + `","name":` + bad + `}`,
+				},
+			} {
+				rec := e.postWithSession(t, sess, c.path, c.body)
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("%s token name %q = %d %s, want 400", c.name, hr.text, rec.Code, rec.Body.String())
+				}
+
+				var doc errorDoc
+
+				decodeInto(t, rec.Body.String(), &doc)
+				wantHiddenRefusal(t, doc.Message)
+			}
 		})
 	}
 }
