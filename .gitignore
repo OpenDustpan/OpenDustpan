@@ -25,3 +25,6 @@ soak-reports/
 
 # Local agent config (see docs/agents/local-setup.md)
 /opencode.local.jsonc
+
+# Coverage profile (make cover writes it next to the Makefile)
+coverage.out
