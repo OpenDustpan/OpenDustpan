@@ -144,8 +144,8 @@ type Handler struct {
 	polls               sync.Map
 	mux                 *patternMux
 	routes              []Route
-	plans      job.PlanRecorder
-	artifacts  job.ArtifactReader
+	plans               job.PlanRecorder
+	artifacts           job.ArtifactReader
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -250,8 +250,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		polls:               sync.Map{},
 		mux:                 newPatternMux(),
 		routes:              nil,
-		plans:      cfg.Plans,
-		artifacts:  cfg.Artifacts,
+		plans:               cfg.Plans,
+		artifacts:           cfg.Artifacts,
 	}
 
 	h.routes = h.buildRoutes()
