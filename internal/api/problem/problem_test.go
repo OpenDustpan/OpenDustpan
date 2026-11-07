@@ -557,7 +557,7 @@ type refusalCase struct {
 	wantRefused bool
 	// wantLog is the text that the request refused line holds when wantRefused is true, or "".
 	wantLog string
-	// hidden is a value that the body never holds.
+	// hidden is a value that the body never holds, and that a 5xx log never holds.
 	hidden string
 }
 
@@ -594,6 +594,12 @@ func checkRefusalLog(t *testing.T, tc refusalCase, logs string, recs []logRecord
 	}
 
 	if tc.status >= http.StatusInternalServerError {
+		// The allowlist checks the names of the fields. This check stays
+		// for their values: a secret in an allowed field also fails.
+		if tc.hidden != "" && strings.Contains(logs, tc.hidden) {
+			t.Errorf("5xx log %q holds %q", logs, tc.hidden)
+		}
+
 		checkFailureLog(t, tc, recs)
 	}
 }
