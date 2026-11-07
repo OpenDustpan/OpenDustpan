@@ -386,8 +386,9 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 
 	for _, spec := range kept {
 		columns := strings.Join(spec.columns, ", ")
+
 		stmts = append(stmts, "INSERT INTO "+pgIdent(live)+"."+spec.table+" ("+columns+") SELECT "+
-			columns+" FROM "+pgIdent(previous)+"."+spec.table)
+			columns+" FROM "+keepFrom(live, previous, spec))
 	}
 
 	for _, stmt := range stmts {
@@ -397,6 +398,23 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 	}
 
 	return nil
+}
+
+// keepFrom returns the FROM item of the copy of the control table spec from
+// the schema previous into the restored schema live, with its WHERE clause. A
+// handoff token and a job session name the runner of the claim of a live
+// durable operation: the restored data can predate that runner, so the copy
+// keeps the credential only while the restored schema holds its runner. A
+// credential of a runner that the restored schema does not hold names no
+// runner, and a later use must fail as unknown, never with a store error.
+func keepFrom(live, previous string, spec pgCopyTable) string {
+	from := pgIdent(previous) + "." + spec.table
+
+	if spec.table == "runner_handoff_tokens" || spec.table == "runner_sessions" {
+		return from + " t WHERE EXISTS (SELECT 1 FROM " + pgIdent(live) + ".runners r WHERE r.id = t.runner_id)"
+	}
+
+	return from
 }
 
 // errNoColumnList reports a control table with no column list in the adapter.

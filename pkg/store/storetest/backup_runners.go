@@ -18,23 +18,26 @@ import (
 )
 
 // RunnerPorts are the ports of the runner tool on one store: the pools and
-// their join tokens, and the members that hold the runners and their keys.
+// their join tokens, the members that hold the runners and their keys, and
+// the handoff tokens and job sessions of the runners.
 type RunnerPorts struct {
-	Pools   runner.PoolStore
-	Members runner.MemberStore
+	Pools    runner.PoolStore
+	Members  runner.MemberStore
+	Sessions runner.SessionStore
 }
 
 // RunnerSeeder is a BackupStore capability for a store that keeps runner
 // pools. The round trip fills and compares the three runner tables through
 // RunnerPorts. The control rows of the runner protocol are not in the backup:
-// SeedRunnerControlRows writes one row in each of them, and
-// CountRunnerControlRows reads the rows of each. A store that has no runner
-// port does not implement this interface, so the suite refuses it at compile
-// time.
+// SeedRunnerControlRows writes one row in each of them, for the runner
+// runnerID in the rows that name one, and CountRunnerControlRows reads the
+// rows of each. A store that has no runner port does not implement this
+// interface, so the suite refuses it at compile time.
 type RunnerSeeder interface {
 	RunnerPorts() RunnerPorts
-	// SeedRunnerControlRows writes one row in each control table.
-	SeedRunnerControlRows(ctx context.Context) error
+	// SeedRunnerControlRows writes one row in each control table. The rows
+	// that name a runner name runnerID.
+	SeedRunnerControlRows(ctx context.Context, runnerID string) error
 	// CountRunnerControlRows returns the rows that each control table holds.
 	CountRunnerControlRows(ctx context.Context) (map[string]int64, error)
 }
@@ -65,9 +68,9 @@ const runnerSecret = runner.JoinTokenPrefix + "seed-secret-0123456789"
 
 // seedBackupRunners writes one pool in acme, one join token of the pool, and
 // one runner that joined with that token. It also writes one row in each
-// control table of the runner protocol, so that the restore check can prove
-// that those rows do not arrive. It returns nil for a store with no runner
-// port.
+// control table of the runner protocol, for that runner in the rows that name
+// one, so that the restore check can prove that those rows do not arrive. It
+// returns nil for a store with no runner port.
 func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *seededRunners {
 	t.Helper()
 
@@ -76,7 +79,22 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 		return nil
 	}
 
-	ports := seeder.RunnerPorts()
+	seeded := joinBackupRunner(t, seeder.RunnerPorts(), acme, "linux-1")
+
+	if err := seeder.SeedRunnerControlRows(t.Context(), seeded.runner.ID); err != nil {
+		t.Fatalf("seed runner control rows: %v", err)
+	}
+
+	return seeded
+}
+
+// joinBackupRunner creates one pool in acme, one join token of the pool, and
+// one runner called name that joins with the secret of the token, through the
+// ports. It returns the pool, the token and the runner as the store returns
+// them after the join.
+func joinBackupRunner(t *testing.T, ports RunnerPorts, acme namespace.Namespace, name string) *seededRunners {
+	t.Helper()
+
 	ctx := t.Context()
 	fence := acme.Fence()
 	entries := []audit.Entry{lifecycleEntry(acme.Name, "namespace:manage-runners")}
@@ -110,7 +128,7 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 	joined, err := ports.Members.Join(ctx, runner.Joining{
 		TokenSHA256: token.SHA256,
 		Request: runner.JoinRequest{
-			Token: "", Name: "linux-1", Kind: runner.KindKubernetes, Isolation: runner.IsolationKubernetes,
+			Token: "", Name: name, Kind: runner.KindKubernetes, Isolation: runner.IsolationKubernetes,
 			Labels:  map[string]string{"region": "eu-west-1"},
 			Release: runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""},
 			Key:     runner.Key{Public: pub, CreatedAt: time.Time{}}, Proof: nil,
@@ -124,10 +142,6 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 	})
 	if err != nil {
 		t.Fatalf("join runner: %v", err)
-	}
-
-	if err := seeder.SeedRunnerControlRows(ctx); err != nil {
-		t.Fatalf("seed runner control rows: %v", err)
 	}
 
 	return &seededRunners{
