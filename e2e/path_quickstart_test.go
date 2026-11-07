@@ -95,7 +95,10 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 	t.Helper()
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, pulumiCLI, store)
+	// The server serves HTTPS when the env starts for OpenTofu, as the guide's
+	// server does. The Pulumi CLI works over HTTPS too.
+	env := e2e.NewEnv(ctx, t, tofuCLI, store)
+	env.SetCLI(pulumiCLI)
 
 	checkReady(ctx, t, env)
 
