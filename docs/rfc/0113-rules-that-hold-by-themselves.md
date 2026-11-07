@@ -32,7 +32,7 @@ Also bring the size of files and packages under control.
 Each line gives the failure, what exists on `main` today, and why that did
 not stop it.
 
-| # | Failure | What exists on `main` (`2583f66`) | Why it did not stop it |
+| # | Failure | What exists on `main` (`a7dc146`) | Why it did not stop it |
 | --- | --- | --- | --- |
 | F1 | Agents ran golangci-lint v2.14.0. CI runs v2.15.0. An `errcheck` finding in `load/main.go` reached `main` (fix #2113). | The Makefile names v2.15.0 in a comment only. CI pins `version: v2.15.0` in two steps of `ci.yml`. | `make lint` runs whatever `golangci-lint` is on the `PATH`. Nothing compares the versions. |
 | F2 | `make e2e` and `internal/servertest` ran on SQLite only when `DUSTPAN_TEST_POSTGRES_URL` was not set. Three merges had SQLite-only e2e. | 61 `t.Skip` calls in 47 files say "set DUSTPAN_TEST_POSTGRES_URL". The e2e summary writes a "not run" report for each skipped store. | A skip is a pass for `go test`. The notice is one line among thousands of lines of output. |
@@ -54,7 +54,7 @@ records that pull requests that each passed alone broke `main` together about
 
 ### Size facts
 
-Measured on `main` at `2583f66` with `git ls-files '*.go'`. A file is
+Measured on `main` at `a7dc146` with `git ls-files '*.go'`. A file is
 generated when its first 2,000 bytes hold "Code generated" and "DO NOT EDIT".
 
 - 3,034 Go files with 923,634 lines. 424,171 lines (46%) are in `_test.go`
@@ -90,7 +90,7 @@ generated when its first 2,000 bytes hold "Code generated" and "DO NOT EDIT".
   `pkg/store/sqlite` 182, `pkg/dustpan` 146, `e2e` 133,
   `internal/api/server` 102. 11 packages have more than 60 files.
 
-Repowise on the indexed commit `56611cf`:
+Repowise on the indexed commit `50282f0`:
 
 - `get_health`: average health 7.59, hotspot health 6.31. The worst
   production file is `pkg/store/storetest/workspaces.go` (score 1). The worst
@@ -481,7 +481,7 @@ layout. The same applies to the root file: its "Layout" section has 92 of its
 
 **Recommendation:** `AGENTS.md` is the source in each directory, and
 `CLAUDE.md` imports it. This also applies to the root. Today the root
-`AGENTS.md` and `CLAUDE.md` are two separate regular files. On `2583f66` they
+`AGENTS.md` and `CLAUDE.md` are two separate regular files. On `a7dc146` they
 are byte for byte equal, but no check keeps them equal, and an edit of one
 does not reach the other. The root `CLAUDE.md` becomes `@AGENTS.md` plus the
 Claude-only lines, for example the Repowise tool names. **Reason:**
