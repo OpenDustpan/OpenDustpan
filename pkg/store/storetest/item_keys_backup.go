@@ -333,7 +333,7 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 	}
 
 	out, err := io.ReadAll(rd)
-	if err != nil {
+	if err = errors.Join(err, rd.Close()); err != nil {
 		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 

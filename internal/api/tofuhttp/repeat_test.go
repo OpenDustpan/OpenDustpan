@@ -33,7 +33,7 @@ func (noSealer) SealState(context.Context, namespace.Name, string, string, io.Re
 	return nil, errNoSeal
 }
 
-func (noSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.Reader, error) {
+func (noSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.ReadCloser, error) {
 	return nil, errNoSeal
 }
 

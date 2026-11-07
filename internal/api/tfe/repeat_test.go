@@ -59,7 +59,7 @@ func (repeatSealer) SealState(context.Context, namespace.Name, string, string, i
 	return nil, errRepeatNoSeal
 }
 
-func (repeatSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.Reader, error) {
+func (repeatSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.ReadCloser, error) {
 	return nil, errRepeatNoSeal
 }
 

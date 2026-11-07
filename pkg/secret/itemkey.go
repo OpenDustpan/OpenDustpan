@@ -243,8 +243,11 @@ type ItemSealer interface {
 	// binding. It reads the record before any blob, so it returns
 	// ErrShredded at once after a shred on any instance. It returns
 	// ErrKeyNotFound when ref has no item key, and ErrDecrypt for a
-	// stream of another item or binding, or a changed stream.
-	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.Reader, error)
+	// stream of another item, record or binding, or a changed stream. The
+	// reader can hold the raw item key until it reads the stream header. The
+	// caller closes the reader: Close clears the key, also when the reader
+	// was never read, and a Read after Close returns ErrStreamClosed.
+	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.ReadCloser, error)
 	// SealContents seals the Data of each part with the item key of ref and
 	// the Binding of the part, as SealContent does, and opens the key one
 	// time for all of them. It returns the sealed bytes in the order of
@@ -265,14 +268,44 @@ type ContentPart struct {
 	Data    []byte
 }
 
-// itemAADLabel starts the associated data of an item key and of the content
-// that it seals. It differs from aadLabel, so no item ciphertext opens as
-// the value of a scope, and no value of a scope opens as an item.
-const itemAADLabel = "opendustpan/item/v1"
+// itemKeyAADLabel starts the associated data of a wrapped item key, and
+// itemContentAADLabel starts the associated data of each chunk of the content
+// that an item key seals. Each purpose has its own label, so a wrapped key
+// never opens as content and content never opens as a wrapped key. Both
+// differ from aadLabel, so no item ciphertext opens as the value of a scope,
+// and no value of a scope opens as an item. Both differ from streamKeyInfo,
+// the HKDF info of a stream key.
+const (
+	itemKeyAADLabel     = "opendustpan/item-key/v1"
+	itemContentAADLabel = "opendustpan/item-content/v1"
+)
 
-// aad is the associated data that binds a wrapped item key and its content
-// to the scope, the kind and the item ID of the reference.
-func (r ItemRef) aad() []byte {
-	return []byte(itemAADLabel + "\x00" + r.Scope.Namespace.String() + "\x00" + r.Scope.ID + "\x00" +
-		string(r.Kind) + "\x00" + r.Item)
+// itemAAD is the associated data of one purpose, label, for the item ref and
+// the item key record id. The parts are separated by a zero byte: the
+// namespace, the scope ID, the kind, the item ID and the record ID never
+// hold one.
+func itemAAD(label string, ref ItemRef, id ItemKeyID) []byte {
+	return []byte(label + "\x00" + ref.Scope.Namespace.String() + "\x00" + ref.Scope.ID + "\x00" +
+		string(ref.Kind) + "\x00" + ref.Item + "\x00" + string(id))
+}
+
+// itemKeyAAD is the associated data that binds a wrapped item key to the
+// scope, the kind and the item ID of ref, and to the ID of its record. A
+// wrapped key that is put under another record does not unwrap.
+func itemKeyAAD(ref ItemRef, id ItemKeyID) []byte {
+	return itemAAD(itemKeyAADLabel, ref, id)
+}
+
+// itemContent is the aadSource of the content that one item key seals: the
+// reference of the item and the ID of its key record.
+type itemContent struct {
+	ref ItemRef
+	id  ItemKeyID
+}
+
+// aad binds each chunk of the content to the scope, the kind and the item ID
+// of the reference, and to the ID of the key record. Content that is put
+// under another record does not open.
+func (c itemContent) aad() []byte {
+	return itemAAD(itemContentAADLabel, c.ref, c.id)
 }
