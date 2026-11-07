@@ -75,6 +75,25 @@ func (h *Handler) buildRoutes() []Route {
 			method: http.MethodPost, path: testPath, actions: manage, serve: h.test, answer: testedAnswer,
 			secret: nil,
 		}),
+		h.readRoute(subscriptionsPath, read, h.listSubscriptions),
+		keyedRoute(keyedSpec{
+			method: http.MethodPost, path: subscriptionsPath, actions: manage, serve: h.createSubscription,
+			answer: subscriptionCreatedAnswer, secret: nil,
+		}),
+		h.readRoute(subscriptionPath, read, h.getSubscription),
+		keyedRoute(keyedSpec{
+			method: http.MethodPut, path: subscriptionPath, actions: manage, serve: h.replaceSubscription,
+			answer: subscriptionReplacedAnswer, secret: nil,
+		}),
+		keyedRoute(keyedSpec{
+			method: http.MethodDelete, path: subscriptionPath, actions: manage, serve: h.deleteSubscription,
+			answer: deletedAnswer, secret: nil,
+		}),
+		h.readRoute(historyPath, read, h.history),
+		keyedRoute(keyedSpec{
+			method: http.MethodPost, path: redeliverPath, actions: manage, serve: h.redeliver,
+			answer: deletedAnswer, secret: nil,
+		}),
 	}
 }
 

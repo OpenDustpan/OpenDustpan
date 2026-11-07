@@ -42,3 +42,19 @@ func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.writeError(ctx, w, err)
 }
+
+// WriteSubscriptionError is WriteError for the subscription routes.
+func WriteSubscriptionError(ctx context.Context, w http.ResponseWriter, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeSubscriptionError(ctx, w, err)
+}
+
+// WriteDeliveryError is WriteError for the redelivery route.
+func WriteDeliveryError(ctx context.Context, w http.ResponseWriter, err error) {
+	var h Handler
+
+	h.logger = slog.New(slog.DiscardHandler)
+	h.writeDeliveryError(ctx, w, err)
+}

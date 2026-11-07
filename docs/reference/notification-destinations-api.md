@@ -17,6 +17,13 @@ See `docs/guides/notification-destinations.md` for the steps.
 | `PUT /sinks/{sink_id}` | `namespace:manage-notifications` | the namespace | 200, the destination |
 | `DELETE /sinks/{sink_id}` | `namespace:manage-notifications` | the namespace | 204 |
 | `POST /sinks/{sink_id}/test` | `namespace:manage-notifications` | the namespace | 200, the result |
+| `GET /subscriptions` | `namespace:read` | the namespace | 200, the list |
+| `GET /subscriptions/{subscription_id}` | `namespace:read` | the namespace | 200, one subscription |
+| `POST /subscriptions` | `namespace:manage-notifications` | the namespace | 201, the subscription |
+| `PUT /subscriptions/{subscription_id}` | `namespace:manage-notifications` | the namespace | 200, the subscription |
+| `DELETE /subscriptions/{subscription_id}` | `namespace:manage-notifications` | the namespace | 204 |
+| `GET /subscriptions/{subscription_id}/deliveries` | `namespace:read` | the namespace | 200, one page of the history |
+| `POST /deliveries/{delivery_id}/redeliver` | `namespace:manage-notifications` | the namespace | 204 |
 
 Each route that changes data takes the header `Idempotency-Key`. A `GET`
 route with the header answers as without it. A server with no store of replay
@@ -149,6 +156,100 @@ and the first audit entry is written under the fence of the namespace. A
 namespace of another installation answers 421 `namespace.not-home`. A moved fence
 answers 409 `namespace.fenced`.
 
+## Subscriptions
+
+A subscription sends the notifications of the namespace that match its filter
+to one destination of the same namespace. A list, a read and the history of
+deliveries need `namespace:read`. A create, a change, a delete and a redelivery
+need `namespace:manage-notifications`.
+
+| Field | Content |
+| --- | --- |
+| `id` | `sub-...` |
+| `namespace` | The namespace |
+| `sink` | The ID of the destination. It is a destination of the same namespace. |
+| `filter.types` | Notification types. An entry that ends in `.*` selects a family of types. An empty list selects every type. At most 100 entries. |
+| `filter.objects` | Object references. An entry that ends in `/*` selects a prefix. An empty list selects every object. At most 100 entries. |
+| `filter.minSeverity` | `info`, `warning` or `critical`. The answer shows `info` for a filter with no severity. |
+| `state` | `active` or `suspended`. A suspended subscription sends nothing. |
+| `reason` | Why the subscription sends nothing. Absent for an active subscription. |
+| `createdBy` | The subject of the last create or change. The server checks the access of this subject before each delivery. |
+| `version` | Starts at 1 and grows by 1 with each change |
+
+### Create a subscription
+
+The body has `sink`, and may have `filter` with the fields `types`, `objects`
+and `minSeverity`. The subscription starts `active`. The answer has the header
+`Location`.
+
+A `sink` that the namespace does not hold answers 422
+`sink.subscription-sink-not-found`. The answer is the same for an unknown
+destination and for a destination of another namespace.
+
+### Change a subscription
+
+The body has `version`, `sink`, `state` and may have `filter`. A change replaces
+the whole subscription. A `filter` that you leave out becomes the filter that
+selects everything. `state` is `active` or `suspended`. A change to `active`
+resumes a subscription that the server or a person suspended. The change sets
+`createdBy` to the subject of the request, so the server checks the access of
+that subject from then on. A `version` that is not the stored version answers
+409 `sink.subscription-conflict`.
+
+A change of the kind, the target or the secrets of a destination suspends its
+active subscriptions with the reason `the destination of the sink changed`. A
+person resumes them with this route.
+
+### Delete a subscription
+
+A delete deletes the subscription and its pending deliveries. The other
+deliveries stay in the history.
+
+## Deliveries
+
+`GET /subscriptions/{subscription_id}/deliveries` answers one page of the
+deliveries of the subscription, newest first. The query parameters:
+
+| Parameter | Content |
+| --- | --- |
+| `pageSize` | 1 to 200. The default is 50. |
+| `pageToken` | The `nextPageToken` of the page before, for the same subscription |
+
+The answer has `deliveries` and `nextPageToken`. `nextPageToken` is empty on the
+last page. The history reaches back at most 1000 deliveries. A page that would
+go past that count ends there and has no next page. A new delivery moves the
+older ones back, so a token shows the page by position. A token for another
+subscription answers 400 `request.page-token-invalid`.
+
+| Field | Content |
+| --- | --- |
+| `id` | `dlv-...` |
+| `notification` | The ID of the notification |
+| `subscription` | The ID of the subscription |
+| `sink` | The ID of the destination |
+| `contact` | Only for a delivery to the personal contact of a person |
+| `principal` | The subject whose access decides the delivery |
+| `state` | `pending`, `delivered`, `abandoned` or `skipped` |
+| `attempts` | The number of attempts |
+| `nextAt` | When the next attempt is due |
+| `lastError` | `refused`, `permanent` or `temporary`. Absent when the last attempt did not fail. |
+| `deliveredAt` | Absent until the receiver accepts the delivery |
+| `version` | The version of the delivery row |
+
+A delivery holds no address, no secret and no text of an error.
+
+### Send a delivery again
+
+`POST /deliveries/{delivery_id}/redeliver` makes a delivery that stopped
+(`delivered`, `abandoned` or `skipped`) pending again, with no attempts. The
+dispatcher then sends it. The body is empty. A delivery can be sent again
+only while its subscription exists, is `active`, sends to the destination of
+the delivery, and has the `principal` of the delivery as `createdBy`. A
+delivery from before a change of the destination or of the subscription never
+goes to the new place. A delivery that is pending, or that fails these
+conditions, answers 409 `sink.delivery-not-redeliverable`. An unknown delivery,
+and a delivery of another namespace, answer 404 `sink.delivery-not-found`.
+
 ## Error codes
 
 | Status | `errorCode` | Cause |
@@ -158,7 +259,15 @@ answers 409 `namespace.fenced`.
 | 400 | `sink.platform-host` | The host of the chat URL is not a webhook host of the platform |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
 | 403 | `access.denied`, `access.ip-not-allowed`, `session.csrf`, `session.other-site` | See the error codes of a 403 answer |
+| 400 | `sink.subscription-invalid` | A field of a subscription is not valid: the sink, the state or the filter |
+| 400 | `request.invalid-query` | `pageSize` is not a number from 1 to 200 |
+| 400 | `request.page-token-invalid` | `pageToken` does not belong to this subscription |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
+| 404 | `sink.subscription-not-found` | No subscription with this ID in the namespace |
+| 404 | `sink.delivery-not-found` | No delivery with this ID in the namespace |
+| 409 | `sink.subscription-conflict` | The subscription changed since you read it |
+| 409 | `sink.delivery-not-redeliverable` | The delivery is pending, or its subscription does not send it now |
+| 422 | `sink.subscription-sink-not-found` | The namespace holds no destination with the ID in `sink` |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
@@ -176,7 +285,12 @@ The text of a `sink.*` error is fixed. It never holds a part of the request.
 | `sink:create` | A create |
 | `sink:update` | A change |
 | `sink:delete` | A delete |
+| `subscription:create` | A create of a subscription |
+| `subscription:update` | A change of a subscription, a suspend and a resume included |
+| `subscription:delete` | A delete of a subscription |
+| `delivery:redeliver` | A redelivery |
 | `sink:test` | A test. The reason `started` marks the entry before the send. The next entry has the class of the result, and its outcome is `failure` when the message was not delivered. |
 
-The entry has the object `<namespace>` and the ID of the destination. It holds
-no URL, name or secret.
+The entry has the object `<namespace>` and the ID of the destination, the
+subscription or the delivery. It holds no URL, name, filter or secret. A replay
+of a request with the same `Idempotency-Key` writes no second entry.
