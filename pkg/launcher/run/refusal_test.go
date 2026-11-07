@@ -179,9 +179,11 @@ func cancelDuringBegin(f *fakeServer, _ runConfig) {
 	}
 }
 
-// loseClaimDuringBegin sets f to answer the begin of the step with a lost
-// claim.
-func loseClaimDuringBegin(f *fakeServer, _ runConfig) {
+// loseClaimAtTheBeginCall sets f to answer the begin call of the step with a
+// lost claim. The step ends at that call, before the checks that refuse a
+// step before its start run: this case covers the begin call, not the check
+// of a lost claim in refuseStep.
+func loseClaimAtTheBeginCall(f *fakeServer, _ runConfig) {
 	f.begin = func(string) *session.Response {
 		return refusal(409, protocol.ErrorClaimLost)
 	}
@@ -215,8 +217,8 @@ func TestStopBeforeProcessStart(t *testing.T) {
 			"step bad: the job was canceled",
 		},
 		{
-			"claim loss during the begin of the step",
-			loseClaimDuringBegin,
+			"claim loss at the begin call",
+			loseClaimAtTheBeginCall,
 			launcher.ExitClaimLost,
 			"",
 		},
