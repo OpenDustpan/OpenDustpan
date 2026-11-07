@@ -107,16 +107,18 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 
 # Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
-# that could not be verified (for example, the provider did not answer), so a
-# network failure can fail this target. Exit code 183 means a secret was found.
+# that could not be verified (for example, the provider did not answer).
+# Exit code 1 means a verified secret, or an unknown result after three runs.
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Each entry stays only because an old commit holds a fake credential in that
 # path. A test builds a fake credential with internal/fakecred, and a raw one
 # carries a trufflehog:ignore tag with a reason. Do not add a path.
 # Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
+# An unknown result gets up to two more runs, and a verified result fails at once.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
+	python3 -I scripts/trufflehog-gate.py --selftest
+	python3 -I scripts/trufflehog-gate.py scan -- trufflehog git file://. --branch=HEAD --results=verified,unknown --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
