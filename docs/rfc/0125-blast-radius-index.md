@@ -472,6 +472,13 @@ answer never reads as complete when an index gap could hide a unit.
 
 ### Measurements
 
+**Where the numbers come from.** The scripts that made these numbers are in
+[`bench/graphindex/`](../../bench/graphindex/), with a README that gives the
+steps. `make check` and `make bench` do not run them. They ran one time, on
+the hardware below, and the raw results are not in this repository. Slice 1
+moves the benchmark into `make bench`, and its results replace these numbers.
+Until then, treat each number here as one measurement that nobody repeated.
+
 **The data set.** One synthetic data set for both dialects, made by one
 script with a fixed seed: 3,040 units and 1,064,500 resources in 10
 namespaces. Unit sizes are skewed: 10 units of 30,000 resources (one in each
@@ -583,7 +590,7 @@ every latest state item. The cost is in the extraction, not in SQL:
 
 | Step | Measured | For 1,000,000 resources |
 | --- | --- | --- |
-| Extraction in Go (JSON decode, allowlist, JSON-string scan, HMAC), synthetic `aws_instance` state of 3.5 KB for each resource | 54 MB/s on one core, at 20,000 and 100,000 resources | ~5 GB of state at 5 KB for each resource: ~93 core-seconds, ~25 s on 4 cores |
+| Extraction in Go (JSON decode, allowlist, JSON-string scan, HMAC), synthetic `aws_instance` state of 3.5 KB for each resource | 32 to 54 MB/s on one core, in 5 runs at 20,000 and 100,000 resources | ~5 GB of state at 5 KB for each resource: ~93 to 156 core-seconds, ~25 to 40 s on 4 cores |
 | Bulk insert of the produced values | PostgreSQL `COPY` of 2,129,000 rows into the keyed table: 6.1 s. SQLite: 9.6 s for 3.3 million rows from Python | ~10 s |
 | All edges from the values | PostgreSQL 0.63 s, SQLite `WITHOUT ROWID` 1.16 s, rowid form 1.89 s | ~1 to 2 s |
 
@@ -862,8 +869,9 @@ Each slice lands with its e2e step first, through the real CLI.
 1. **Measure and benchmark.** A corpus tool reads the state fixtures of the
    e2e suite and the states that an operator gives on the command line, and
    prints the produced and consumed values for each resource (only the
-   counts). The benchmark of this RFC (one data set, both dialects, cold and
-   warm, churn, a hub run, an extraction) goes into `make bench`. No API
+   counts). The benchmark of this RFC in `bench/graphindex/` (one data set,
+   both dialects, cold and warm, churn, a hub run, an extraction) moves into
+   `make bench`. No API
    change. The result replaces the range of 1 to 5 consumed values.
 2. **State references.** Extraction of `pulumi:pulumi:StackReference`,
    `terraform_remote_state` and `tfe_outputs` in the projection run,
@@ -920,9 +928,13 @@ explanation for a reader who is new to the topic (ELI5).
    guess (B holds the ID of a network that A made). When you ask "what breaks
    if I change A", should the answer include the guesses?
    - A. Exact edges only. Guesses show only when the person asks for them.
+     Consequence: a dependent that is known only by a shared ID, for example
+     a VPC, is not in the answer unless the person asks for guesses.
    - B. Exact edges and the `strong` and `weak` guesses, each with a mark.
      `hint` edges (ambiguous locks, DNS) only on request.
    - C. Everything, `hint` included.
+     Consequence: ambiguous lock edges and DNS edges add units that often do
+     not depend on A.
 
    Recommendation: B. A missed dependent is the costly error in a blast
    radius, and the mark keeps the guess honest. Profiles are an anchor in all
@@ -934,6 +946,8 @@ explanation for a reader who is new to the topic (ELI5).
    one team can name a unit of the other. If the server joins them without
    asking, a team can learn what the other team has.
    - A. Never.
+     Consequence: two teams in two namespaces that share a VPC never see each
+     other in a blast radius, also with a link.
    - B. An identity match needs a namespace link that both namespaces accept
      (ADR 216). A state reference needs that link or a sharing rule of the
      producer (ADR 273).
@@ -950,6 +964,8 @@ explanation for a reader who is new to the topic (ELI5).
      gate fact `dependents`. Inferred edges warn.
    - B. Like A, but non-ambiguous `lock` edges stop blocking and only warn,
      because they are an inference too.
+     Consequence: a delete that a non-ambiguous lock edge blocks today goes
+     through with a warning.
    - C. Every edge blocks and enters the gate facts.
 
    Recommendation: A now, and B after the e2e suite shows how often `lock`
@@ -962,8 +978,12 @@ explanation for a reader who is new to the topic (ELI5).
    `unit:manage-edges` would hold the permission.
    - A. A person who can change the dependent unit (the unit that holds the
      value).
+     Consequence: the team that made the resource cannot hide a wrong guess
+     about its unit.
    - B. A person who can change the source unit (the unit that made the
      resource).
+     Consequence: the team that holds the value cannot hide a wrong guess on
+     its unit.
    - C. Either of them.
    - D. Both of them must agree.
 
