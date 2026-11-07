@@ -365,7 +365,7 @@ const (
 func zipDirectoryBytes(limits Limits) int64 {
 	perEntry := int64(zipDirectoryHeader + MaxPathBytes + zipDirectoryExtra)
 
-	return int64(zipEndRecordLen+zipMaxCommentLen) + perEntry*int64(limits.Entries)/4
+	return int64(zipEndRecordLen+zipMaxCommentLen) + perEntry*int64(limits.Entries)
 }
 
 // errDirectoryTooLarge reports that the reader read more than the guard allows.
@@ -575,9 +575,16 @@ func readTarNext(b *budget, tr *tar.Reader, limited *io.LimitedReader) (entry, b
 	}
 
 	// A pax global header is metadata for the tools that write the archive, for
-	// example git archive. The check counts it as an entry, ignores its content,
-	// and never applies a path or a link field of it.
+	// example git archive. The check counts it as an entry and takes only a
+	// comment record. Other archive readers apply a path or a link override of
+	// a global header to the entries that follow it, and this check does not.
 	if hdr.Typeflag == tar.TypeXGlobalHeader {
+		for key := range hdr.PAXRecords {
+			if key != "comment" {
+				return none, false, refuse("the pax global header has the record %q", key)
+			}
+		}
+
 		return none, true, b.count()
 	}
 
