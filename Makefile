@@ -135,7 +135,8 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 BANNED    := python3 -I scripts/docs-banned-words.py
 ADR_DECISIONS := python3 -I scripts/adr-decisions.py
 # Owner decision claims in the ADRs that docs-lint reads, and in the RFCs, must
-# quote the owner and give a date or a link. More than 30 findings only warn.
+# quote the owner and give a date or a link. A claim that lacks one must be in
+# scripts/docs-owner-decisions.baseline, and each baseline entry must still match.
 OWNER_DECISIONS := python3 -I scripts/docs-owner-decisions.py
 OWNER_DOCS := $(DOCS_ADRS) $(wildcard docs/rfc/*.md)
 
