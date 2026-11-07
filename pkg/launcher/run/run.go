@@ -247,6 +247,13 @@ func (r *phaseRun) runPhase(ctx context.Context) launcher.ExitCode {
 
 	outcome := r.runSteps(ctx)
 
+	// The renewal loop runs until the report ends, so that the retries of the
+	// report, which can wait up to a lease each, keep the claim.
+	code := launcher.ExitClaimLost
+	if !r.isLost() {
+		code = r.finish(ctx, outcome, launcher.ExitOK)
+	}
+
 	stopRenew()
 	<-done
 
@@ -256,7 +263,7 @@ func (r *phaseRun) runPhase(ctx context.Context) launcher.ExitCode {
 		return launcher.ExitClaimLost
 	}
 
-	return r.finish(ctx, outcome, launcher.ExitOK)
+	return code
 }
 
 // unsupported returns the reason why this release cannot run the

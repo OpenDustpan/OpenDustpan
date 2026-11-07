@@ -70,6 +70,7 @@ func TestRetryAfterCap(t *testing.T) {
 		{"/retry/at-cap", maxRetryAfter},
 		{"/retry/short", 5 * time.Second},
 		{"/retry/negative", 0},
+		{"/retry/negative-overflow", 0},
 		{"/retry/bad", 0},
 		{"/retry/none", 0},
 	}
@@ -103,6 +104,8 @@ func retryHeader(path string) (string, bool) {
 		return "5", true
 	case "/retry/negative":
 		return "-5", true
+	case "/retry/negative-overflow":
+		return "-99999999999999999999", true
 	case "/retry/bad":
 		return "soon", true
 	case "/retry/none":

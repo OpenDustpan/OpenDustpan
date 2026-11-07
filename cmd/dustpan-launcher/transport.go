@@ -115,6 +115,9 @@ const maxRetryAfter = runner.MinLease
 func retryAfter(h http.Header) time.Duration {
 	s, err := strconv.ParseInt(h.Get("Retry-After"), 10, 64)
 	switch {
+	case errors.Is(err, strconv.ErrRange) && s < 0:
+		// ParseInt returns the lowest int64 for a negative value that overflows.
+		return 0
 	case errors.Is(err, strconv.ErrRange):
 		return maxRetryAfter
 	case err != nil || s < 0:
