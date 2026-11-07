@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forge/forgetest"
@@ -317,7 +318,11 @@ func TestOpenHostile(t *testing.T) {
 	}{
 		{"an empty address", withBase(""), pkcs1PEM(testKey())},
 		{"an http address", withBase("http://127.0.0.1:1"), pkcs1PEM(testKey())},
-		{"an address with user information", withBase("https://user:pw@127.0.0.1:1"), pkcs1PEM(testKey())},
+		{
+			"an address with user information",
+			withBase(fakecred.URL("https", "user", "pw", "127.0.0.1:1", "")),
+			pkcs1PEM(testKey()),
+		},
 		{"an address with a query", withBase("https://127.0.0.1:1/?x=1"), pkcs1PEM(testKey())},
 		{"an address with a fragment", withBase("https://127.0.0.1:1/#f"), pkcs1PEM(testKey())},
 		{"localhost", withBase("https://localhost:1"), pkcs1PEM(testKey())},

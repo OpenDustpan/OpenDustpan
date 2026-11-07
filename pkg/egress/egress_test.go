@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 )
 
@@ -81,7 +82,7 @@ func TestCheckURL(t *testing.T) {
 		{"mapped loopback", "https://[::ffff:7f00:1]/", egress.HTTPSOnly, false},
 		{"localhost", "https://localhost/", egress.HTTPSOnly, false},
 		{"localhost subdomain", "https://a.localhost./", egress.HTTPSOnly, false},
-		{"userinfo", "https://user:pw@hooks.example.com/", egress.HTTPSOnly, false},
+		{"userinfo", fakecred.URL("https", "user", "pw", "hooks.example.com", "/"), egress.HTTPSOnly, false},
 		{"fragment", "https://hooks.example.com/#x", egress.HTTPSOnly, false},
 		{"no host", "https:///x", egress.HTTPSOnly, false},
 		{"other scheme", "file:///etc/passwd", egress.HTTPOrHTTPS, false},
