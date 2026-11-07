@@ -197,6 +197,7 @@ const (
 	ErrorCodeMfaRateLimited                        ErrorCode = "mfa.rate-limited"
 	ErrorCodeMfaSessionRequired                    ErrorCode = "mfa.session-required"
 	ErrorCodeMfaSignInFailed                       ErrorCode = "mfa.sign-in-failed"
+	ErrorCodeMfaSignInSourceLimit                  ErrorCode = "mfa.sign-in-source-limit"
 	ErrorCodeMfaUnavailable                        ErrorCode = "mfa.unavailable"
 	ErrorCodeNamespaceAlreadyExists                ErrorCode = "namespace.already-exists"
 	ErrorCodeNamespaceFenced                       ErrorCode = "namespace.fenced"
