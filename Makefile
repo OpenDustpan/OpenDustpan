@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -162,6 +162,16 @@ ifeq ($(origin VERSION),command line)
 	./scripts/check-release-record.sh '$(VERSION)'
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
+endif
+
+# The PR body check reads the body from a file, so CI writes the body to a file
+# first. PR_BODY_FILE has no default: the target refuses to run without it.
+pr-body-check: ## Check that the PR body in PR_BODY_FILE names an issue or says No issue.
+ifeq ($(strip $(PR_BODY_FILE)),)
+	@echo "usage: make pr-body-check PR_BODY_FILE=<file with the PR body>" >&2
+	@exit 1
+else
+	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
