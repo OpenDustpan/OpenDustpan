@@ -74,6 +74,8 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 		if nsErr := st.CreateNamespace(t.Context(), ns); nsErr != nil {
 			t.Fatalf("create namespace %s: %v", name, nsErr)
 		}
+
+		seedCatchAllPlacement(t, st, name)
 	}
 
 	storePrincipal(t, st, "nina")

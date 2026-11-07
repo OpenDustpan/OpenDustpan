@@ -50,6 +50,19 @@ func (f failingStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack
 	return stack.Stack{}, f.err
 }
 
+// CreateStackPlaced implements stack.PlacedStore. It passes through to the
+// wrapped store, so the create of a placed stack works as without the wrapper.
+func (f failingStackStore) CreateStackPlaced(
+	ctx context.Context, st stack.Stack, p stack.Placement, fence namespace.Fence,
+) error {
+	placed, ok := f.Store.(stack.PlacedStore)
+	if !ok {
+		return stack.ErrPlacementUnsupported
+	}
+
+	return placed.CreateStackPlaced(ctx, st, p, fence)
+}
+
 // canaryServer starts a server whose request log goes to sink and whose
 // encrypt route has a key. A nil stackErr uses the SQLite store for stacks;
 // a set stackErr fails stack reads with it, so one request answers 500. It
@@ -143,6 +156,8 @@ func seedCanaryNamespace(t *testing.T, st *sqlite.Store) {
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+
+	seedCatchAllPlacement(t, st, "acme")
 }
 
 // canaryCall sends call and names the canary values it carries, so the test
@@ -219,7 +234,9 @@ func canaryCalls() []canaryCall {
 				path:      "/api/stacks/acme/web",
 				auth:      "token " + adminToken,
 				requestID: "",
-				body:      `{"stackName":"` + bodyCanary + `"}`,
+				// The canary is a tag value and not the stack name: the audit
+				// entry of a placed stack names the stack on purpose.
+				body: `{"stackName":"body-canary-stack","tags":{"note":"` + bodyCanary + `"}}`,
 			},
 		},
 		{

@@ -707,6 +707,10 @@ func createStack(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
 
 	project, name := path.Split(ref)
 
+	// The server refuses a stack that no rule places. The call is safe to
+	// repeat when the namespace has the rule already.
+	env.SeedCatchAllPlacement(ctx, t, strings.SplitN(ref, "/", 2)[0])
+
 	resp, err := env.APIStatusHeaders(ctx, http.MethodPost, "/api/stacks/"+strings.TrimSuffix(project, "/"),
 		`{"stackName":"`+name+`"}`)
 	if err != nil {

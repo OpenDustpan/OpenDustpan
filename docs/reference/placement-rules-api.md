@@ -9,9 +9,10 @@ the collection.
 OpenTofu does not use placement rules. The `project` of its `cloud` block names
 the collection.
 
-This page describes the rules and the routes that manage them. The server does
-not apply the rules yet when a CLI makes a stack. A later release adds that
-step.
+This page describes the rules and the routes that manage them. The server
+applies the rules when the Pulumi CLI makes a stack, for example with
+`pulumi stack init`. It also applies them to a stack that is made through the
+Pulumi Cloud-compatible API. See [A new Pulumi stack](#a-new-pulumi-stack).
 
 ## What a rule does
 
@@ -33,14 +34,39 @@ To place a new stack, the server tests the rules from position 1. A rule
 matches when its `tool` is the tool of the stack, its `project` pattern matches
 the project name, and its `stack` pattern matches the stack name. The first
 rule that matches wins. The server does not test the rules after it. When no
-rule matches, the server chooses no collection. It must refuse to make the
-stack with an error that tells the caller to add a rule.
+rule matches, the server chooses no collection. It refuses to make the stack
+and it makes no unit. The error names the placement rules and tells the caller
+to add a rule.
 
 A rule never gives a right. The caller that makes the stack must still hold
 `collection:create-unit` on the collection that the rule names.
 
 A change to a rule does not change a stack that exists. A rule only applies to
 a stack that is new.
+
+## A new Pulumi stack
+
+A request to make a stack goes through these steps in this order:
+
+1. The server finds the first rule that matches the project name and the stack
+   name. When no rule matches, the answer is `422` with the code
+   `placement.no-match`. The server makes no stack.
+2. The server checks that the caller holds `collection:create-unit` on the
+   collection of the rule. Without it, the answer is `403`, and the server
+   makes no stack. The server writes the refusal to the audit log.
+3. The server checks that the collection exists. If it does not, the answer is
+   `409` with the code `collection.not-found`, and the server makes no stack.
+4. The server makes the stack, puts it in the collection and writes the audit
+   entry in one transaction. The audit entry holds the rule ID, in the form
+   `from=none;to=<collection>;rule=<rule ID>`. If any part fails, the server
+   makes none of them, so no stack exists without a collection.
+
+A server that keeps no placement rules makes no stack. The answer is `501` with
+the code `placement.unavailable`.
+
+The Pulumi CLI shows the message of the `422` answer. The server does not
+choose a default collection. To allow every stack, add a last rule with the
+patterns `*` and `*`.
 
 ## Patterns
 
@@ -170,3 +196,5 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 404 | `collection.not-found` | The collection does not exist in the namespace. |
 | 409 | `placement.conflict` | An earlier rule hides the rule, or the rule hides a later rule. |
 | 409 | `placement.too-many-rules` | The namespace holds 200 rules. |
+| 501 | `placement.unavailable` | The server keeps no placement rules, so it cannot place a new stack. This answer comes from the stack routes. |
+| 422 | `placement.no-match` | A request to make a stack matched no rule. This answer comes from the stack routes, not from the rule routes. |

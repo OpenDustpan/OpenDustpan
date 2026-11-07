@@ -182,6 +182,8 @@ type renamedStack struct {
 // reference and records every Create and Rename. It lets the enforcement tests prove
 // that allowed requests reach the service.
 type recordingStackStore struct {
+	placed    []stack.Placement
+	placeErr  error
 	tags      []taggedStack
 	created   []stack.Stack
 	renamed   []renamedStack
@@ -193,6 +195,21 @@ type recordingStackStore struct {
 
 func (s *recordingStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespace.Fence) error {
 	s.created = append(s.created, st)
+
+	return nil
+}
+
+// CreateStackPlaced records the stack and its placement, or fails as placeErr
+// says and records nothing, as the transaction of a real store does.
+func (s *recordingStackStore) CreateStackPlaced(
+	_ context.Context, st stack.Stack, p stack.Placement, _ namespace.Fence,
+) error {
+	if s.placeErr != nil {
+		return s.placeErr
+	}
+
+	s.created = append(s.created, st)
+	s.placed = append(s.placed, p)
 
 	return nil
 }
@@ -440,6 +457,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -493,6 +511,16 @@ func newGuardedEnforcingHandler(
 ) (*pulumi.Handler, *recordingStackStore) {
 	t.Helper()
 
+	return newPlacingHandler(t, authz, entries, guard, newFake().placer())
+}
+
+// newPlacingHandler is newGuardedEnforcingHandler with placer as the Placer of
+// the handler.
+func newPlacingHandler(
+	t *testing.T, authz identity.Authorizer, entries audit.Store, guard stategate.Guard, placer *pulumi.Placer,
+) (*pulumi.Handler, *recordingStackStore) {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -501,6 +529,8 @@ func newGuardedEnforcingHandler(
 	}
 
 	stores := &recordingStackStore{
+		placed:    nil,
+		placeErr:  nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -519,6 +549,7 @@ func newGuardedEnforcingHandler(
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		StateGuard:              guard,
+		Placer:                  placer,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
@@ -1619,6 +1650,8 @@ func newDeleteHandlerWithAudit(
 	}
 
 	stores := &recordingStackStore{
+		placed:    nil,
+		placeErr:  nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -1660,6 +1693,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
