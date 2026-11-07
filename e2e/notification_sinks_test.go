@@ -410,7 +410,7 @@ func subscriptionSteps(t *testing.T, env *e2e.Env, hook sinkDoc) {
 	if e2e.UseBinaryServer() {
 		env.SkipScenario(t, "notification subscription history",
 			"a seeded delivery needs the in-process server")
-		t.Skip("a seeded delivery needs the in-process server")
+		t.SkipNow()
 	}
 
 	sub := subscriptionMakeSteps(t, env, hook)

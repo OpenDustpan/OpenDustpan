@@ -176,7 +176,7 @@ func (p *Pair) NewPairRunAs(label string) Run {
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          p.Steps(),
 		Requests:       p.Src.Recorder.Entries(),
-		Skipped:        nil,
+		Skipped:        p.Src.Skipped(),
 	}
 }
 
