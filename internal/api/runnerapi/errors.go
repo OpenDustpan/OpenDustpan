@@ -44,7 +44,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	h.logFailure(ctx, status, err)
 
 	h.logFenced(ctx, err)
-	h.logRefused(ctx, err, body.Message)
+	h.logRefused(ctx, err, status, body.Code, body.Message)
 
 	if status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
@@ -57,7 +57,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
 	wr := problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classifyManagement}
 
-	h.logRefused(ctx, err, wr.Problem(err).Message)
+	p := wr.Problem(err)
+	h.logRefused(ctx, err, p.Status, p.Code, p.Message)
 	wr.Write(ctx, w, err)
 }
 
@@ -75,21 +76,24 @@ func (h *Handler) logFenced(ctx context.Context, err error) {
 // anonymous caller can cause logs at Debug without the text of its error, so
 // that a flood of forged requests does not fill the log and no wrapped secret
 // reaches it. Other refusals log the text at Warn.
-func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
+func (h *Handler) logRefused(ctx context.Context, err error, status int, code, sent string) {
 	if sent == err.Error() || sent == internalMessage || errors.Is(err, namespace.ErrFenced) {
 		return
 	}
 
 	if refusedLevel(err) == slog.LevelDebug {
 		// Defense in depth: a caller without credentials causes this line, and the
-		// wrap of its error can hold a session or proof detail. The line names no
-		// text of err, and this check stays so that a new caller cannot add it.
-		h.logger.DebugContext(ctx, "runner request refused")
+		// wrap of its error can hold a session or proof detail. The line names the
+		// status and the code only, and this check stays so that a new caller
+		// cannot add the text of err.
+		h.logger.DebugContext(ctx, "runner request refused",
+			slog.Int("status", status), slog.String("code", code))
 
 		return
 	}
 
-	h.logger.WarnContext(ctx, "runner request refused", slog.String("error", err.Error()))
+	h.logger.WarnContext(ctx, "runner request refused",
+		slog.Int("status", status), slog.String("code", code), slog.String("error", err.Error()))
 }
 
 // refusedLevel returns the log level of a refusal. Debug is for the errors

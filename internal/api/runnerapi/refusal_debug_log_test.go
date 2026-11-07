@@ -57,6 +57,10 @@ func TestAnonymousRefusalLogHoldsNoText(t *testing.T) {
 				t.Errorf("log %q does not hold the Debug refusal line", logs)
 			}
 
+			if !strings.Contains(logs, "status=") || !strings.Contains(logs, "code=") {
+				t.Errorf("log %q does not hold the status and the code", logs)
+			}
+
 			if strings.Contains(logs, debugSecret) {
 				t.Errorf("log %q holds the wrapped session detail", logs)
 			}

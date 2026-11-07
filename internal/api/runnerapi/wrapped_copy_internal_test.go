@@ -223,7 +223,7 @@ func TestRefusedLevel(t *testing.T) {
 			)
 
 			h.logger = slog.New(slog.NewTextHandler(&buf, nil))
-			h.logRefused(t.Context(), tc.err, "sent text")
+			h.logRefused(t.Context(), tc.err, http.StatusBadRequest, "test.code", "sent text")
 
 			if got := strings.Contains(buf.String(), "runner request refused"); got != (tc.want == slog.LevelWarn) {
 				t.Fatalf("log = %q, refused line at default level = %t", buf.String(), got)
