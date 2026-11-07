@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
@@ -766,6 +768,24 @@ type providerWire struct {
 	Name      string `json:"name"`
 }
 
+// providerToken is the wire shape of the provider page token. The tests build
+// one to send a cursor that names no provider.
+type providerToken struct {
+	After string `json:"a"`
+}
+
+// providerTokenOf returns a page token that holds the cursor after.
+func providerTokenOf(t *testing.T, after string) string {
+	t.Helper()
+
+	token, err := pagetoken.Encode(providerToken{After: after})
+	if err != nil {
+		t.Fatalf("encode a page token: %v", err)
+	}
+
+	return token
+}
+
 // pageNames returns the names of a provider page, and fails on a bad answer.
 func pageNames(t *testing.T, got response) ([]string, string) {
 	t.Helper()
@@ -801,40 +821,25 @@ func TestListProviders(t *testing.T) {
 	f.trust(t, "acme", sg)
 
 	// Published out of order: the list is ordered by name.
+	want := []string{"dns", "payments", "vault"}
+
 	for _, name := range []string{"vault", "payments", "dns"} {
 		body := f.publishBodyFor(t, buildSetFor(t, sg, name), name)
 		wantCode(t, "publish "+name, f.call(t, "admin", http.MethodPut,
 			base+"/providers/"+name+"/versions/"+providerVersion, body), http.StatusOK)
 	}
 
-	providers := base + "/providers"
-	tokenOf := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	t.Run("the pages of the list", func(t *testing.T) {
+		t.Parallel()
 
-	tests := []struct {
-		name       string
-		query      string
-		wantNames  []string
-		wantCursor string
-	}{
-		{"all on one page", "", []string{"dns", "payments", "vault"}, ""},
-		{"first page of two", "?pageSize=2", []string{"dns", "payments"}, tokenOf("payments")},
-		{"second page", "?pageSize=2&pageToken=" + tokenOf("payments"), []string{"vault"}, ""},
-		{"page of one", "?pageSize=1&pageToken=" + tokenOf("dns"), []string{"payments"}, tokenOf("payments")},
-		{"exact fit has no token", "?pageSize=3", []string{"dns", "payments", "vault"}, ""},
-		{"token of a name not listed", "?pageToken=" + tokenOf("e"), []string{"payments", "vault"}, ""},
-		{"token past the end", "?pageToken=" + tokenOf("zzz"), []string{}, ""},
-	}
+		checkProviderPages(t, f, want)
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("a cursor that names no provider", func(t *testing.T) {
+		t.Parallel()
 
-			names, token := pageNames(t, f.call(t, "reader", http.MethodGet, providers+tt.query, nil))
-			if !slices.Equal(names, tt.wantNames) || token != tt.wantCursor {
-				t.Errorf("page = %v, token %q; want %v, token %q", names, token, tt.wantNames, tt.wantCursor)
-			}
-		})
-	}
+		checkProviderCursors(t, f)
+	})
 
 	t.Run("an empty namespace", func(t *testing.T) {
 		t.Parallel()
@@ -858,17 +863,105 @@ func TestListProviders(t *testing.T) {
 	t.Run("a caller that cannot read", func(t *testing.T) {
 		t.Parallel()
 
-		for _, subject := range []string{"publisher", "keyholder"} {
-			got := f.call(t, subject, http.MethodGet, providers, nil)
-			wantCode(t, subject, got, http.StatusForbidden)
+		checkProviderRefusals(t, f)
+	})
+}
 
-			if strings.Contains(got.body, "payments") {
-				t.Errorf("a refusal for %s names a provider: %s", subject, got.body)
-			}
+// checkProviderPages reads one page and the whole list of the providers of
+// acme. A page that holds every provider carries no token, also when the page
+// size is an exact fit.
+func checkProviderPages(t *testing.T, f fixture, want []string) {
+	t.Helper()
+
+	providers := base + "/providers"
+
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{"all on one page", ""},
+		{"an exact fit has no token", "?pageSize=3"},
+	} {
+		names, token := pageNames(t, f.call(t, "reader", http.MethodGet, providers+tc.query, nil))
+		if !slices.Equal(names, want) || token != "" {
+			t.Errorf("%s: page = %v, token %q; want %v, no token", tc.name, names, token, want)
+		}
+	}
+
+	if got := walkProviderPages(t, f, 1, len(want)); !slices.Equal(got, want) {
+		t.Errorf("providers in page order = %v, want %v", got, want)
+	}
+}
+
+// checkProviderCursors sends page tokens that name no provider.
+func checkProviderCursors(t *testing.T, f fixture) {
+	t.Helper()
+
+	for _, tc := range []struct {
+		name  string
+		after string
+		want  []string
+	}{
+		{"a cursor between two names", "e", []string{"payments", "vault"}},
+		{"a cursor past the last name", "zzz", []string{}},
+	} {
+		names, token := pageNames(t, f.call(t, "reader", http.MethodGet,
+			base+"/providers?pageToken="+url.QueryEscape(providerTokenOf(t, tc.after)), nil))
+		if !slices.Equal(names, tc.want) || token != "" {
+			t.Errorf("%s: page = %v, token %q; want %v, no token", tc.name, names, token, tc.want)
+		}
+	}
+}
+
+// walkProviderPages reads every page of the provider list with the page size,
+// and returns the names in page order. It fails when the pages do not end
+// after maxPages pages.
+func walkProviderPages(t *testing.T, f fixture, pageSize, maxPages int) []string {
+	t.Helper()
+
+	var (
+		got   []string
+		token string
+	)
+
+	for pages := 0; ; pages++ {
+		if pages > maxPages {
+			t.Fatalf("the pages did not end after %d pages", pages)
 		}
 
-		wantCode(t, "no token", f.call(t, "", http.MethodGet, providers, nil), http.StatusUnauthorized)
-	})
+		target := base + "/providers?pageSize=" + strconv.Itoa(pageSize)
+		if token != "" {
+			target += "&pageToken=" + url.QueryEscape(token)
+		}
+
+		names, next := pageNames(t, f.call(t, "reader", http.MethodGet, target, nil))
+		got = append(got, names...)
+
+		if next == "" {
+			return got
+		}
+
+		token = next
+	}
+}
+
+// checkProviderRefusals proves that a caller without the read grant is
+// refused, and that the refusal names no provider.
+func checkProviderRefusals(t *testing.T, f fixture) {
+	t.Helper()
+
+	providers := base + "/providers"
+
+	for _, subject := range []string{"publisher", "keyholder"} {
+		got := f.call(t, subject, http.MethodGet, providers, nil)
+		wantCode(t, subject, got, http.StatusForbidden)
+
+		if strings.Contains(got.body, "payments") {
+			t.Errorf("a refusal for %s names a provider: %s", subject, got.body)
+		}
+	}
+
+	wantCode(t, "no token", f.call(t, "", http.MethodGet, providers, nil), http.StatusUnauthorized)
 }
 
 // TestListProvidersHostileQuery sends hostile page sizes and tokens straight to
@@ -878,6 +971,7 @@ func TestListProvidersHostileQuery(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
+
 	enc := base64.RawURLEncoding.EncodeToString
 
 	tests := []struct {
@@ -891,13 +985,17 @@ func TestListProvidersHostileQuery(t *testing.T) {
 		{"huge page size", "?pageSize=99999999999999999999"},
 		{"token that is not base64", "?pageToken=%25%25%25"},
 		{"padded base64", "?pageToken=" + url.QueryEscape(base64.URLEncoding.EncodeToString([]byte("ab")))},
-		{"path traversal", "?pageToken=" + enc([]byte("../../etc/passwd"))},
-		{"separator in the name", "?pageToken=" + enc([]byte("a/b"))},
-		{"upper case name", "?pageToken=" + enc([]byte("Payments"))},
-		{"control characters", "?pageToken=" + enc([]byte("a\r\nb"))},
-		{"null byte", "?pageToken=" + enc([]byte("a\x00b"))},
-		{"SQL text", "?pageToken=" + enc([]byte("x' OR '1'='1"))},
-		{"name over the length limit", "?pageToken=" + enc([]byte(strings.Repeat("a", 300)))},
+		{"token in the old raw form", "?pageToken=" + enc([]byte("payments"))},
+		{"token that is not JSON", "?pageToken=" + enc([]byte("{"))},
+		{"token with another field", "?pageToken=" + enc([]byte(`{"b":"payments"}`))},
+		{"empty cursor", "?pageToken=" + url.QueryEscape(providerTokenOf(t, ""))},
+		{"path traversal", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "../../etc/passwd"))},
+		{"separator in the name", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "a/b"))},
+		{"upper case name", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "Payments"))},
+		{"control characters", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "a\r\nb"))},
+		{"null byte", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "a\x00b"))},
+		{"SQL text", "?pageToken=" + url.QueryEscape(providerTokenOf(t, "x' OR '1'='1"))},
+		{"name over the length limit", "?pageToken=" + url.QueryEscape(providerTokenOf(t, strings.Repeat("a", 300)))},
 		{"token over the length limit", "?pageToken=" + strings.Repeat("A", 100000)},
 	}
 
@@ -916,17 +1014,16 @@ func TestListProvidersHostileQuery(t *testing.T) {
 }
 
 // TestProviderPageTokenLengthCap proves that a page token over the length limit
-// answers 400 by its length alone. The name in the token is valid, and the
+// answers 400 by its length alone. The cursor in the token is valid, and the
 // base64 decoder ignores line breaks, so only the length refuses the token.
 func TestProviderPageTokenLengthCap(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	enc := base64.RawURLEncoding.EncodeToString
 
-	token := strings.Repeat("\n", 4096) + enc([]byte("payments"))
+	token := strings.Repeat("\n", pagetoken.MaxLen) + providerTokenOf(t, "payments")
 	got := f.call(t, "reader", http.MethodGet, base+"/providers?pageToken="+url.QueryEscape(token), nil)
-	wantCode(t, "a valid name over the length limit", got, http.StatusBadRequest)
+	wantCode(t, "a valid cursor over the length limit", got, http.StatusBadRequest)
 }
 
 // TestPublishRepeatReplaysTheFirstRelease proves that the replay of a repeat

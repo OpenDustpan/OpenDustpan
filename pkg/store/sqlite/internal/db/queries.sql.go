@@ -15614,12 +15614,18 @@ SELECT DISTINCT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = ?1 AND r.kind = ?2
+  AND (r.name > ?3
+    OR (r.name = ?3 AND r.system > ?4))
 ORDER BY r.name, r.system
+LIMIT ?5
 `
 
 type ListRegistryAddressesParams struct {
-	Namespace string
-	Kind      string
+	Namespace   string
+	Kind        string
+	AfterName   string
+	AfterSystem string
+	Lim         int64
 }
 
 type ListRegistryAddressesRow struct {
@@ -15627,8 +15633,17 @@ type ListRegistryAddressesRow struct {
 	System string
 }
 
+// One page of the distinct addresses of a kind in a namespace, after the
+// cursor (name, system). The caller reads one row more than the page size, so
+// that the extra row tells whether a next page exists.
 func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAddressesParams) ([]ListRegistryAddressesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listRegistryAddresses, arg.Namespace, arg.Kind)
+	rows, err := q.db.QueryContext(ctx, listRegistryAddresses,
+		arg.Namespace,
+		arg.Kind,
+		arg.AfterName,
+		arg.AfterSystem,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}

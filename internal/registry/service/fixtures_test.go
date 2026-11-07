@@ -32,12 +32,23 @@ const (
 	subject                = "user:ada"
 )
 
+// addressCall records one call of memStore.Addresses: the limit of the call,
+// the number of address rows that the store read, and the number of addresses
+// that the call returned.
+type addressCall struct {
+	limit    int
+	rows     int
+	returned int
+}
+
 // memStore is registry.Store and registry.KeyStore in memory.
 type memStore struct {
 	mu       sync.Mutex
 	releases map[string]registry.Release
 	keys     map[namespace.Name][]registry.KeyRecord
 	audits   []audit.Entry
+	// addressCalls records each Addresses call, oldest first.
+	addressCalls []addressCall
 	// beforeCommit, when it is not nil, runs at the start of Publish, before the
 	// key check. A test uses it to remove a key between the checks of the
 	// service and the commit.
@@ -47,7 +58,7 @@ type memStore struct {
 func newMemStore() *memStore {
 	return &memStore{
 		mu: sync.Mutex{}, releases: map[string]registry.Release{}, keys: map[namespace.Name][]registry.KeyRecord{},
-		audits: nil, beforeCommit: nil,
+		audits: nil, addressCalls: nil, beforeCommit: nil,
 	}
 }
 
@@ -118,7 +129,20 @@ func (m *memStore) List(_ context.Context, a registry.Address) ([]registry.Relea
 	return out, nil
 }
 
-func (m *memStore) Addresses(_ context.Context, ns namespace.Name, kind registry.Kind) ([]registry.Address, error) {
+func (m *memStore) Addresses(
+	_ context.Context, ns namespace.Name, kind registry.Kind, after string, limit int,
+) ([]registry.Address, string, error) {
+	if limit < 1 || limit > registry.MaxAddressPage {
+		return nil, "", fmt.Errorf("%w: limit %d", registry.ErrInvalid, limit)
+	}
+
+	// Defense in depth: the callers check the cursor too; the store refuses a
+	// cursor that does not hold an address of the kind.
+	cursor, err := registry.ParseAddressKey(ns, kind, after)
+	if err != nil {
+		return nil, "", err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -133,11 +157,29 @@ func (m *memStore) Addresses(_ context.Context, ns namespace.Name, kind registry
 		}
 	}
 
-	slices.SortFunc(out, func(x, y registry.Address) int {
-		return strings.Compare(x.Name+"/"+x.System, y.Name+"/"+y.System)
-	})
+	slices.SortFunc(out, registry.CompareAddresses)
 
-	return out, nil
+	if cursor.Name != "" {
+		out = slices.DeleteFunc(out, func(a registry.Address) bool {
+			return registry.CompareAddresses(a, cursor) <= 0
+		})
+	}
+
+	// The store reads one address more than the page, as the SQL store does,
+	// so that the extra address tells whether a next page exists.
+	rows := min(limit+1, len(out))
+	out = out[:rows]
+
+	next := ""
+
+	if len(out) > limit {
+		out = out[:limit]
+		next = registry.AddressKey(out[limit-1])
+	}
+
+	m.addressCalls = append(m.addressCalls, addressCall{limit: limit, rows: rows, returned: len(out)})
+
+	return out, next, nil
 }
 
 func (m *memStore) AddKey(_ context.Context, k registry.KeyRecord, _ namespace.Fence, e audit.Entry) error {

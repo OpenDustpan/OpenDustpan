@@ -16058,13 +16058,19 @@ SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = $1 AND r.kind = $2
+  AND (r.name COLLATE "C" > $3
+    OR (r.name COLLATE "C" = $3 AND r.system COLLATE "C" > $4))
 GROUP BY r.name, r.system
 ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT $5
 `
 
 type ListRegistryAddressesParams struct {
-	Namespace string
-	Kind      string
+	Namespace   string
+	Kind        string
+	AfterName   string
+	AfterSystem string
+	Lim         int32
 }
 
 type ListRegistryAddressesRow struct {
@@ -16072,9 +16078,18 @@ type ListRegistryAddressesRow struct {
 	System string
 }
 
+// One page of the distinct addresses of a kind in a namespace, after the
+// cursor (name, system). The caller reads one row more than the page size, so
+// that the extra row tells whether a next page exists.
 // The order is by code point, whatever the collation of the database.
 func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAddressesParams) ([]ListRegistryAddressesRow, error) {
-	rows, err := q.db.Query(ctx, listRegistryAddresses, arg.Namespace, arg.Kind)
+	rows, err := q.db.Query(ctx, listRegistryAddresses,
+		arg.Namespace,
+		arg.Kind,
+		arg.AfterName,
+		arg.AfterSystem,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}

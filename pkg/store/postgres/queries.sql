@@ -4246,13 +4246,19 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 ORDER BY r.version COLLATE "C";
 
 -- name: ListRegistryAddresses :many
+-- One page of the distinct addresses of a kind in a namespace, after the
+-- cursor (name, system). The caller reads one row more than the page size, so
+-- that the extra row tells whether a next page exists.
 SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+  AND (r.name COLLATE "C" > sqlc.arg(after_name)
+    OR (r.name COLLATE "C" = sqlc.arg(after_name) AND r.system COLLATE "C" > sqlc.arg(after_system)))
 GROUP BY r.name, r.system
 -- The order is by code point, whatever the collation of the database.
-ORDER BY r.name COLLATE "C", r.system COLLATE "C";
+ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT sqlc.arg(lim);
 
 -- name: InsertRegistryKey :execrows
 -- The caller checks the fence in the same transaction. A key with the same

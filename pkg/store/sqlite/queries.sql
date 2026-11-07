@@ -3828,11 +3828,17 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 ORDER BY r.version;
 
 -- name: ListRegistryAddresses :many
+-- One page of the distinct addresses of a kind in a namespace, after the
+-- cursor (name, system). The caller reads one row more than the page size, so
+-- that the extra row tells whether a next page exists.
 SELECT DISTINCT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
-ORDER BY r.name, r.system;
+  AND (r.name > sqlc.arg(after_name)
+    OR (r.name = sqlc.arg(after_name) AND r.system > sqlc.arg(after_system)))
+ORDER BY r.name, r.system
+LIMIT sqlc.arg(lim);
 
 -- name: InsertRegistryKey :execrows
 -- The caller checks the fence in the same transaction. A key with the same

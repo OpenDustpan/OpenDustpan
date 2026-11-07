@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/internal/pagetoken"
 )
 
 const moduleBase = base + "/modules"
@@ -273,17 +275,50 @@ func TestModuleListPaging(t *testing.T) {
 	}
 }
 
+// moduleToken is the wire shape of the module page token. The tests build one
+// to send a cursor that names no module.
+type moduleToken struct {
+	After string `json:"a"`
+}
+
+// moduleTokenOf returns a page token that holds the cursor after.
+func moduleTokenOf(t *testing.T, after string) string {
+	t.Helper()
+
+	token, err := pagetoken.Encode(moduleToken{After: after})
+	if err != nil {
+		t.Fatalf("encode a page token: %v", err)
+	}
+
+	return token
+}
+
 func TestModuleListHostileQuery(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	encode := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 
-	for _, token := range []string{
-		"!!!", encode("vpc"), encode("../x/aws"), encode("vpc/AWS"), strings.Repeat("A", 5000),
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{"token that is not base64", "!!!"},
+		{"token in the old raw form", encode("vpc/aws")},
+		{"token that is not JSON", encode("{")},
+		{"empty cursor", moduleTokenOf(t, "")},
+		{"cursor with no system", moduleTokenOf(t, "vpc")},
+		{"cursor with an empty system", moduleTokenOf(t, "vpc/")},
+		{"upper case system", moduleTokenOf(t, "vpc/AWS")},
+		{"path traversal", moduleTokenOf(t, "../x/aws")},
+		{"token over the length limit", strings.Repeat("A", 5000)},
 	} {
-		wantCode(t, "hostile page token", f.call(t, "reader", http.MethodGet, moduleBase+"?pageToken="+token, nil),
-			http.StatusBadRequest)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			wantCode(t, tc.name, f.call(t, "reader", http.MethodGet, moduleBase+"?pageToken="+tc.token, nil),
+				http.StatusBadRequest)
+		})
 	}
 
 	wantCode(t, "page size", f.call(t, "reader", http.MethodGet, moduleBase+"?pageSize=0", nil), http.StatusBadRequest)
