@@ -68,6 +68,10 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
+	// The write moves the update time of the row even when the clock of the
+	// database did not move since the last write.
+	now = nextUpdateAt(now, cur.UpdatedAt)
+
 	next := cloneJob(&cur)
 
 	if err := change(ctx, tx, &next, c, now); err != nil {
@@ -314,9 +318,11 @@ func closeAwaiting(
 			return nil, err
 		}
 
+		at := nextUpdateAt(now, j.UpdatedAt)
+
 		prev := j.Version
 		j.Version++
-		j.UpdatedAt, j.StateChangedAt = now, now
+		j.UpdatedAt, j.StateChangedAt = at, at
 
 		if err := update(ctx, tx, &j, prev); err != nil {
 			return nil, err
@@ -369,6 +375,8 @@ func setVerificationIn(
 		return false, err
 	}
 
+	now = nextUpdateAt(now, j.UpdatedAt)
+
 	prev := j.Version
 	j.Verification, j.Version, j.UpdatedAt = v, prev+1, now
 
@@ -413,6 +421,8 @@ func (s *Store) AppendStepRecord(ctx context.Context, pc job.PhaseClaim, r job.S
 		if err != nil {
 			return err
 		}
+
+		now = nextUpdateAt(now, j.UpdatedAt)
 
 		prev := j.Version
 		j.Phases[pc.Phase].Steps = append(j.Phases[pc.Phase].Steps, r)
