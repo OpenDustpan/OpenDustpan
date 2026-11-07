@@ -35,8 +35,9 @@ func TestUsageGroupsByIntent(t *testing.T) {
 		{"Try out", []string{"dev"}},
 		{"Run in production", []string{"serve", "key generate", "doctor"}},
 		{"Operate", []string{
-			"health", "namespace create", "host create-temp-admin", "audit-chain status", "audit-chain approve",
-			"store check",
+			"health", "namespace create", "collection create", "collection list", "placement add",
+			"placement list", "placement delete", "host create-temp-admin", "audit-chain status",
+			"audit-chain approve", "store check",
 		}},
 		{"Back up", []string{"backup", "backup check", "restore"}},
 		{"Upgrade", []string{"upgrade check"}},
