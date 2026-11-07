@@ -117,7 +117,8 @@ func TestFailOnce(t *testing.T) {
 }
 
 // TestFailTryLockSweep fails the first TryLockSweep with the default sentinel
-// of the namespace port, takes no lock, and counts the call.
+// of the namespace port and takes no lock; the second call succeeds, takes the
+// lock and releases it at once.
 func TestFailTryLockSweep(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +143,19 @@ func TestFailTryLockSweep(t *testing.T) {
 		t.Fatal("faulted try lock sweep returned an unlock function, want nil")
 	}
 
-	if n := wrapped.Calls("TryLockSweep"); n != 1 {
-		t.Fatalf("try lock sweep calls = %d, want 1", n)
+	unlock, err = wrapped.TryLockSweep(t.Context())
+	if err != nil {
+		t.Fatalf("second try lock sweep: err = %v, want nil", err)
+	}
+
+	if unlock == nil {
+		t.Fatal("second try lock sweep returned no unlock function, want one")
+	}
+
+	unlock()
+
+	if n := wrapped.Calls("TryLockSweep"); n != 2 {
+		t.Fatalf("try lock sweep calls = %d, want 2", n)
 	}
 }
 
