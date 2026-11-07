@@ -1,2 +1,8 @@
 sink.access-token
+sink.delivery-not-found
+sink.delivery-not-redeliverable
+sink.subscription-conflict
+sink.subscription-invalid
+sink.subscription-not-found
+sink.subscription-sink-not-found
 sink.test-limit-unavailable

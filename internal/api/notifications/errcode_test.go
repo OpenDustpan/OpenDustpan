@@ -1,6 +1,7 @@
 package notifications_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -113,6 +115,67 @@ func TestRequestErrorsHaveCodes(t *testing.T) {
 
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(got.body),
 				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: []byte(tc.req.body)})
+		})
+	}
+}
+
+// TestSubscriptionErrorsHaveCodes proves that each error of the subscription
+// and delivery routes answers its status with a code of the catalog.
+func TestSubscriptionErrorsHaveCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		write  func(context.Context, http.ResponseWriter, error)
+		err    error
+		status int
+		code   string
+	}{
+		{
+			"unknown subscription", notifications.WriteSubscriptionError, notify.ErrNotFound,
+			http.StatusNotFound, errcode.SinkSubscriptionNotFound,
+		},
+		{
+			"changed subscription", notifications.WriteSubscriptionError, notify.ErrConflict,
+			http.StatusConflict, errcode.SinkSubscriptionConflict,
+		},
+		{
+			"invalid subscription", notifications.WriteSubscriptionError, notify.ErrInvalid,
+			http.StatusBadRequest, errcode.SinkSubscriptionInvalid,
+		},
+		{
+			"sink of another namespace", notifications.WriteSubscriptionError,
+			fmt.Errorf("create: %w", subscriptionsvc.ErrSinkNotInNamespace),
+			http.StatusUnprocessableEntity, errcode.SinkSubscriptionSinkNotFound,
+		},
+		{
+			"fenced subscription write", notifications.WriteSubscriptionError, namespace.ErrFenced,
+			http.StatusConflict, errcode.NamespaceFenced,
+		},
+		{
+			"unknown delivery", notifications.WriteDeliveryError, notify.ErrNotFound,
+			http.StatusNotFound, errcode.SinkDeliveryNotFound,
+		},
+		{
+			"delivery that cannot be sent again", notifications.WriteDeliveryError,
+			fmt.Errorf("redeliver: %w", errors.Join(subscriptionsvc.ErrNotRedeliverable, notify.ErrConflict)),
+			http.StatusConflict, errcode.SinkDeliveryNotRedeliverable,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			tc.write(t.Context(), rec, tc.err)
+
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
+				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
 		})
 	}
 }
