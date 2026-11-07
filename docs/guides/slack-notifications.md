@@ -106,8 +106,8 @@ start bold, italic, strike-through or code text in Slack show as plain text.
 The server cuts a text that is too long for Slack and ends it with `…`.
 
 The fallback text of a Slack message includes zero-width spaces. The server
-puts a zero-width space after `@`, `#`, a dot and a colon, and after some style
-characters. Copying a name from the fallback text, for example `app.prod`, can
+puts a zero-width space after `@`, `#`, a dot and a colon. It also puts one
+after `*`, `~` and `` ` ``, and after an `_` that is not inside a word. Copying a name from the fallback text, for example `app.prod`, can
 copy those zero-width spaces. The copied value can then differ from the name
 that the person typed.
 

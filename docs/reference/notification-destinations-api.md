@@ -43,7 +43,7 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `kind` | `webhook`, `chat` or `email` |
 | `platform` | For `chat`: `slack`, `teams`, `mattermost` or `matrix`. Not in the answer for another kind. |
 | `name` | 1 to 100 bytes |
-| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. For a `webhook` destination, the destination still sends. It keeps the legacy webhook compatibility. For a `chat` destination, this field does not promise delivery. The chat sender sends only when the host of the URL passes the chat host check at send time. A URL that the chat host check rejects does not send. A change of the URL needs a host that passes the allowlist, as it does now. Absent otherwise. |
+| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. For a `webhook` destination, the destination still sends. It keeps the legacy webhook compatibility. For a `chat` destination, this field does not promise delivery. The chat sender sends only when the host of the URL passes the chat host check at send time. A URL that the chat host check rejects does not send. A change of the URL needs a host that passes the allowlist. Absent otherwise. |
 | `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
 | `urlSet` | `true` for a `webhook` or a `chat` destination that has a sealed URL item. `false` for a destination that has no URL item, and for a `webhook` that an upgrade left with no URL. It does not say that the server can open the URL. |
 | `createdBy` | The subject that made the destination |

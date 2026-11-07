@@ -812,9 +812,7 @@ A third engine adds an ongoing cost to CI. It needs an additional real-server
 conformance job. The current CI starts real database servers as job services:
 for example, a PostgreSQL job starts a `postgres:18` image
 (`.github/workflows/ci.yml:183-188`). The new engine adds an additional job of
-this kind. That job needs runner and server resources. Its engine version must be
-kept up to date with each release of the engine, and its CI maintenance is
-ongoing.
+this kind. That job needs runner and server resources.
 
 The order puts the core first (1 to 7), because each area needs it. Step 3
 changes no behavior: it moves the checks into one function, and each dialect
