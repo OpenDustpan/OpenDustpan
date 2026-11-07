@@ -78,13 +78,26 @@ type fieldView struct {
 	Optional bool
 }
 
-// addTypes builds the views of the schemas.
+// addTypes builds the views of the schemas. Each schema claims its name, the
+// name of its decoder, and, for an enum, the name of its values, so that no
+// two emitted identifiers clash.
 func (d *data) addTypes(api *model.API, seen map[string]string) error {
 	for i := range api.Schemas {
 		s := &api.Schemas[i]
 
 		if err := claim(seen, s.Name, "schema "+s.Name, clientgen.ErrInvalidName); err != nil {
 			return err
+		}
+
+		if err := claim(seen, "decode"+s.Name, "the decoder of schema "+s.Name, clientgen.ErrInvalidName); err != nil {
+			return err
+		}
+
+		if s.Kind == model.KindEnum {
+			valuesErr := claim(seen, s.Name+"Values", "the values of schema "+s.Name, clientgen.ErrInvalidName)
+			if valuesErr != nil {
+				return valuesErr
+			}
 		}
 
 		tv, err := typeOf(s)
