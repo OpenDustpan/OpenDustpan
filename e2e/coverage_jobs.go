@@ -47,8 +47,8 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	return out
 }
 
-// jobAllowEntries covers the routes that start, list and read a job, and read
-// its log. No CLI calls
+// jobAllowEntries covers the routes that start, list and read a job, record the
+// approvals of a job, and read its log. No CLI calls
 // them: the console and the clients of the API do. The harness steps of
 // TestJobsAPI start a plan job, start it again with the same key, refuse
 // starts that are not valid, and read a job, a job that the caller may not
@@ -62,6 +62,12 @@ func jobAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals",
+			CoveringTest: test,
+			Reason: "Console and client route: no CLI calls it. The steps of TestJobsAPI call it through the API " +
+				"for a job that waits for no approval and for requests that are not valid.",
+		},
 		{
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/logs/{phase}",
 			CoveringTest: test, Reason: why,

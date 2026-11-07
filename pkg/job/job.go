@@ -88,6 +88,10 @@ var (
 	// ErrSelfApproval reports an approval by the principal that started the
 	// job, when the decision does not allow it.
 	ErrSelfApproval = errors.New("the principal that started the job cannot approve it")
+	// ErrAlreadyApproved reports an approval by a subject that approved the
+	// current phase already. An approval counts once, and a repeat adds
+	// nothing but a record, so the service refuses it.
+	ErrAlreadyApproved = errors.New("the principal approved this phase already")
 	// ErrPlanChanged reports an approval or an apply for plan hashes that are
 	// not the hashes of the stored plans.
 	ErrPlanChanged = errors.New("plan changed since the approval")
