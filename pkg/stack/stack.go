@@ -367,28 +367,28 @@ func NewService(cfg Config) (*Service, error) {
 	}, nil
 }
 
-// Create creates the stack identified by ref with the given tags. The write is
-// fenced on the namespace's failover version and only allowed in its primary installation.
-// The stack has no collection. A server that keeps placement rules uses
-// CreatePlaced.
-func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (Stack, error) {
-	return createStack(ctx, s, ref, tags, nil)
-}
-
 // CreatePlaced creates the stack identified by ref and puts it in the
-// collection of p in one fenced transaction. It returns ErrPlacementUnsupported,
-// and makes no stack, when the store is not a PlacedStore.
+// collection of p in one fenced transaction. The write is fenced on the
+// namespace's failover version and only allowed in its primary installation.
+// A stack always has a collection: it returns an error that matches
+// collection.ErrNoCollection, and makes no stack, when p names no collection,
+// no checked collection ID, or a collection of another namespace. It returns
+// ErrPlacementUnsupported, and makes no stack, when the store is not a
+// PlacedStore.
 func (s *Service) CreatePlaced(ctx context.Context, ref Ref, tags map[string]string, p Placement) (Stack, error) {
-	return createStack(ctx, s, ref, tags, &p)
-}
-
-// createRows makes st in store, with the membership of p when there is one. A
-// store that is not a PlacedStore makes nothing for a placed create.
-func createRows(ctx context.Context, store Store, st Stack, p *Placement, fence namespace.Fence) error {
-	if p == nil {
-		return store.CreateStack(ctx, st, fence)
+	// Defense in depth: the handler chooses the collection by a placement rule
+	// and the store checks the collection in the transaction. This check stays
+	// so that a new caller cannot make a stack that no collection holds.
+	if p.Collection.Name == "" || p.CollectionID == "" || p.Collection.Namespace != ref.Namespace {
+		return Stack{}, fmt.Errorf("create stack %s: %w", ref, collection.ErrNoCollection)
 	}
 
+	return createStack(ctx, s, ref, tags, p)
+}
+
+// createRows makes st in store with the membership of p. A store that is not a
+// PlacedStore makes nothing.
+func createRows(ctx context.Context, store Store, st Stack, p Placement, fence namespace.Fence) error {
 	placed, ok := store.(PlacedStore)
 	if !ok {
 		return ErrPlacementUnsupported
@@ -396,10 +396,10 @@ func createRows(ctx context.Context, store Store, st Stack, p *Placement, fence 
 
 	p.Entry.At = st.CreatedAt
 
-	return placed.CreateStackPlaced(ctx, st, *p, fence)
+	return placed.CreateStackPlaced(ctx, st, p, fence)
 }
 
-func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p *Placement) (Stack, error) {
+func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p Placement) (Stack, error) {
 	if len(tags) > maxTags {
 		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
 	}

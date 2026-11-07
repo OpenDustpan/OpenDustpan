@@ -437,8 +437,28 @@ func NewService(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// Create creates an unlocked workspace without state.
-func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
+// ErrPlacementUnsupported reports that the store cannot make a workspace and
+// put it in a collection in one transaction, so the service makes no workspace.
+var ErrPlacementUnsupported = errors.New("the store cannot put a new workspace in a collection")
+
+// Create creates an unlocked workspace without state and puts it in the
+// collection of p in one fenced transaction. It returns an error that matches
+// collection.ErrNoCollection, and makes no workspace, when p names no
+// collection, no checked collection ID, or a collection of another namespace.
+// It returns ErrPlacementUnsupported when the store is not a PlacedStore.
+func (s *Service) Create(ctx context.Context, ref Ref, p Placement) (Workspace, error) {
+	// Defense in depth: the handler chooses the collection by a placement rule
+	// and the store checks the collection in the transaction. This check stays
+	// so that a new caller cannot make a workspace that no collection holds.
+	if !p.Complete(ref.Namespace) {
+		return Workspace{}, errNoCollection(ref)
+	}
+
+	placed, ok := s.workspaces.(PlacedStore)
+	if !ok {
+		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, ErrPlacementUnsupported)
+	}
+
 	n, err := s.writable(ctx, ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -472,7 +492,9 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 
 	ctx = WithLockPass(ctx, pass)
 
-	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
+	p.Entry.At = now
+
+	if err := placed.CreateWorkspacePlaced(ctx, w, p, fence); err != nil {
 		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
 	}
 
