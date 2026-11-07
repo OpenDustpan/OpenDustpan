@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
@@ -140,6 +141,44 @@ func TestCheckWritesNothingWhenTheEpochChangesMidCycle(t *testing.T) {
 
 	if got := counted.count(); got < 2 {
 		t.Fatalf("epoch scans: got %d, want the recheck to run", got)
+	}
+}
+
+// TestCheckFailsClosedWhenTheEpochReadFails proves that a cycle whose epoch
+// read fails falls back to the reads of each scope: a bad epoch object fails
+// the scope, the scope counts as invalid, and nothing is signed. The chain is
+// pending, so no write can hide the result.
+func TestCheckFailsClosedWhenTheEpochReadFails(t *testing.T) {
+	t.Parallel()
+
+	chain, counted, _ := newEpochCycleChain(t)
+	chain.observed = metrics.NewServerMetrics("test", time.Now())
+
+	rec, err := chain.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.Pending = true
+
+	if err = chain.store.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	// A key under the epoch directory that the server does not write.
+	bad := blob.Key(audit.CheckpointPrefix + "/epochs/not-an-epoch.json")
+	if err = counted.Put(t.Context(), bad, strings.NewReader("{}")); err != nil {
+		t.Fatalf("plant bad epoch object: %v", err)
+	}
+
+	chain.check(t.Context())
+
+	if got := metricLine(t, chain); !strings.Contains(got, "dustpan_audit_chain_invalid 1") {
+		t.Fatalf("metrics after a failed epoch read:\n%s\nwant one invalid scope", got)
+	}
+
+	if got := checkpointCountOf(t, counted); got != 0 {
+		t.Fatalf("checkpoints after a failed epoch read: got %d objects, want none", got)
 	}
 }
 

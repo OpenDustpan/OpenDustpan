@@ -786,7 +786,9 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 
 // VerifyAt is Verify for a caller that already read the current epoch in the
 // same background cycle: it checks the checkpoints of epoch and does not read
-// the epoch again.
+// the epoch again. It does not check the epoch objects, so it does not fail a
+// scope for a bad epoch object. The Epoch read of the caller must have checked
+// them, and the caller must not call VerifyAt with an epoch from a failed read.
 func (c *Checkpoints) VerifyAt(ctx context.Context, scope namespace.Name, epoch int64) (CheckpointResult, error) {
 	return c.verifyWith(ctx, scope, &epoch)
 }
