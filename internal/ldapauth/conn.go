@@ -23,9 +23,9 @@ import (
 var ErrPlainRefused = errors.New("a connection with no TLS to the directory is not allowed")
 
 // plainRefused returns the error of a refused plain connection to address.
-// It names the address and the setting to change.
+// It names the address and the transports to use.
 func plainRefused(address string) error {
-	return fmt.Errorf("%w: %w: %s: use ldaps:// or StartTLS, or allow plain connections in the installation settings",
+	return fmt.Errorf("%w: %w: %s: use ldaps:// or StartTLS",
 		session.ErrMethodUnavailable, ErrPlainRefused, address)
 }
 
