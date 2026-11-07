@@ -45,6 +45,9 @@ type passkeySignInEnv struct {
 	auth     *webauthntest.Authenticator
 	lena     *webauthntest.Credential
 	ana      *webauthntest.Credential
+	// remote is the peer address of the next requests. Empty keeps the
+	// address of the test request.
+	remote string
 }
 
 // newPasskeyLimiter returns a budget that refuses nothing and counts.
@@ -149,6 +152,10 @@ func (e *passkeySignInEnv) post(t *testing.T, target, body string, header http.H
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
 	maps.Copy(req.Header, header)
+
+	if e.remote != "" {
+		req.RemoteAddr = e.remote
+	}
 
 	rec := httptest.NewRecorder()
 	e.f.handler.ServeHTTP(rec, req)
