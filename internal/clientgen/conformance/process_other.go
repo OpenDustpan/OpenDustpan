@@ -10,7 +10,7 @@ import (
 
 // prepareGroup does nothing: this platform has no process groups here, so a
 // kill reaches the adapter only. An adapter must not start other processes.
-func prepareGroup(*exec.Cmd) {}
+func prepareGroup(*exec.Cmd, *ProcessAdapter) {}
 
 // killGroup stops the adapter process.
 func killGroup(p *os.Process) error {
@@ -20,7 +20,3 @@ func killGroup(p *os.Process) error {
 
 	return nil
 }
-
-// waitForExitNoReap does nothing: this platform has no waitid. The adapter is
-// reaped by the wait that follows.
-func waitForExitNoReap(int) error { return nil }

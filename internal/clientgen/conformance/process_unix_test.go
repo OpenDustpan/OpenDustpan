@@ -92,7 +92,8 @@ func runSleeper() {
 
 // waitUntilGone waits until the process that holds the lock on the file has
 // exited. The kernel releases the lock when the process ends, so the test
-// needs no clock.
+// needs no clock. A regression that misses the kill makes this wait block
+// until the go test timeout.
 func waitUntilGone(t *testing.T, lockFile string) {
 	t.Helper()
 
@@ -160,6 +161,11 @@ func TestProcessAdapterCleanShutdownEndsTheGroup(t *testing.T) {
 
 	if err = a.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+
+	// The fake adapter wrote the PID before the close: the child started.
+	if _, err = os.Stat(pidFile); err != nil {
+		t.Fatalf("the fake adapter wrote no PID: %v", err)
 	}
 
 	waitUntilGone(t, lockFile)
