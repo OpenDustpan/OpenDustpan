@@ -9,7 +9,8 @@ created: 2026-11-07
 
 Status: discussing. Design only. Nothing in this RFC is decided, and no code
 exists for it. The owner answers the questions at the end (ADR 15). Until the
-owner decides, ADR 145, ADR 146, ADR 262 and ADR 334 stay as they are. This
+owner decides, ADR 52, ADR 145, ADR 146, ADR 212, ADR 262 and ADR 334 stay
+as they are. This
 RFC refines decision 4 of RFC 98 (the "later form" of a chat sink, which
 posts as an app with a channel ID).
 
@@ -42,8 +43,8 @@ sink that exists today.
    tool, the operation, the result, the actor and the links as named
    attributes, so a receiver needs no lookup.
 4. **An operator route for chat traffic**: an upstream proxy for chat
-   traffic and a gateway base URL for each chat platform, set as installation
-   settings. The host checks of ADR 334 then accept the host that the
+   traffic, a gateway base URL for each chat platform, and the private
+   ranges that they use, set as installation settings. The host checks of ADR 334 then accept the host that the
    operator configured, at save time and at send time, as two separate
    layers.
 
@@ -52,7 +53,8 @@ The recommendation is all four, in that order of delivery, with Slack first.
 Slack and Mattermost are the reference platforms of this design. Each
 proposal must work for both. Matrix follows the same model. Microsoft Teams
 is covered from its documentation only, as facts with sources, and no need
-that only Teams has shapes the design.
+that only Teams has shapes the design. A chat platform that ADR 262 does not
+list, for example Google Chat, is out of scope.
 
 ## Problem
 
@@ -285,10 +287,16 @@ namespace.
 | `name` | 1 to 100 bytes |
 | `target` | The host that the connection posts to, for example `slack.com`. Never a path, a query or a token. |
 | `tokenSet` | `true` when the sealed credential exists |
-| `channels` | An optional allowlist of channel IDs. Empty means "the channels that the platform lets the credential post to". The API shows the effective value. |
+| `channels` | An allowlist of channel IDs. Required for an installation connection, optional for a namespace connection (owner question Q10). Empty means "the channels that the platform lets the credential post to". The API shows the effective value. |
 | `namespaces` | Only for `@server`: the namespaces that can use it, or `*`. The default is no namespace. |
 | `createdBy`, `version` | As for a sink |
 
+- **The target has two host checks.** The server checks `target` against
+  the Web API host list of its platform (P7) when a person saves the
+  connection, and the sender checks it again before each send. The two
+  checks are separate layers, and neither relies on the other. For Matrix,
+  the homeserver host passes `egress.CheckURL` at save time, and the
+  outbound guard checks the resolved address at each connection.
 - The credential is a secret item of the scope (ADR 23), as for a sink:
   write-only, sealed, and in no answer, audit entry or log. A Slack
   connection in the mode `token` holds a bot token. A Mattermost connection
@@ -326,12 +334,16 @@ through one connection. It holds no secret.
   uses the unit binding when one exists, else the collection binding, else
   the namespace binding. The read API shows the effective binding of a unit,
   with its origin (`unit`, `collection` or `namespace`), as the unit
-  settings API shows an effective value. Owner question Q3 asks about this
-  rule.
-- **The creator rule of ADR 145 decision 15 applies.** Before each delivery,
-  the dispatcher checks that the creator of the binding still holds the
-  action that sets it (P5), can read the notification, and can still use the
-  connection. When a check fails, the dispatcher suspends the binding and
+  settings API shows an effective value. With this rule, a unit owner who
+  sets a unit channel removes that unit from the namespace binding. A
+  platform team that must see every notification uses a channel rule, which
+  always adds (P3). Owner question Q3 asks about this rule.
+- **The creator rule of ADR 145 decision 15 applies, with other actions.**
+  Before each delivery, the dispatcher checks that the creator of the
+  binding still holds the action that sets it on the object of the binding
+  (P5), holds `namespace:use-chat-connection` on the object of the
+  connection (P5), and can read the notification. When a check fails, the
+  dispatcher suspends the binding and
   sends `subscription.suspended` to the administrators, as for a
   subscription.
 - **A delivery records its origin.** Each delivery names the binding or the
@@ -354,6 +366,9 @@ match a selector.
 - The rules of a namespace are a list. Each rule that matches makes a
   delivery. Two rules, or a rule and a binding, that name the same
   connection and the same channel make one delivery for one notification.
+- When a binding and one or more rules make one delivery, the delivery
+  records each origin: the binding first, then the rules in the order of the
+  list.
 - A rule adds to the bindings of P2. It does not replace them. So a unit
   owner keeps the own channel, and the platform team adds a channel for all
   units with `team=payments`, for example.
@@ -368,16 +383,30 @@ decides that.
 
 ### P4. The channel
 
-- **Slack.** A channel ID, for example `C0123ABCDEF`. The check at the
-  boundary accepts only the ID form: an upper-case letter `C`, `G` or `D`,
-  then 8 to 20 upper-case letters and digits. A name such as `#ops` is
-  refused, because a rename in Slack would move the messages without a
+The check at the boundary is an allowlist: one regular expression for each
+form, matched against the whole value. No pattern below is in a source that
+we read. Each one is marked "not verified: derived from observed IDs", and
+the implementation checks it against the platform before it ships.
+
+| Form | Pattern | Length | Status |
+| --- | --- | --- | --- |
+| Slack channel ID | `^[CGD][A-Z0-9]{8,20}$` | 9 to 21 bytes | not verified: derived from observed IDs |
+| Mattermost channel ID (mode `token`) | `^[a-z0-9]{26}$` | 26 bytes | not verified: derived from observed IDs |
+| Mattermost channel name (mode `webhook`) | `^[a-z0-9][a-z0-9_-]{0,63}$` | 1 to 64 bytes | not verified: derived from observed names |
+| Matrix room ID | `^![A-Za-z0-9._=/+-]{1,200}:[A-Za-z0-9.-]{1,230}(:[0-9]{1,5})?$` | at most 255 bytes | not verified: derived from observed IDs |
+
+- **Slack.** A channel ID, for example `C0123ABCDEF`. A name such as `#ops`
+  is refused, because a rename in Slack would move the messages without a
   change in OpenDustpan. Owner question Q4.
 - **Mattermost.** In the mode `token`, a channel ID. In the mode `webhook`,
-  the channel name that the `channel` field of the webhook takes, with the
-  characters that Mattermost allows in a channel name.
-- **Matrix.** A room ID, `!<opaque>:<server>`. An alias is refused for the
-  same reason as a Slack name.
+  the channel name that the `channel` field of the webhook takes.
+- **Matrix.** A room ID. An alias is refused for the same reason as a Slack
+  name.
+- A value outside its pattern answers 400 at save time. The sender checks
+  the pattern again before each send, and refuses a value outside it with the
+  class `refused`. The two checks are separate layers. The renderer encodes
+  the channel as it encodes every other text, so a channel never becomes
+  markup or a mention.
 - The channel is not a secret, and a read shows it.
 - When the connection has a `channels` allowlist, a channel outside it
   answers 400 at save time, and the sender refuses it at send time with the
@@ -389,14 +418,18 @@ decides that.
 | --- | --- | --- |
 | `server:manage-chat-connections` | the server | Create, change, delete and test an installation connection, and set its `namespaces` |
 | `namespace:manage-chat-connections` | the namespace | The same for a connection of the namespace |
-| `namespace:use-chat-connection` | the namespace | Name a connection in a binding of this namespace |
+| `namespace:use-chat-connection` | `namespace:<ns>/chat-connection:<id>`, or `@server/chat-connection:<id>` for an installation connection that `namespaces` offers to the namespace | Name this connection in a binding of this namespace |
 | `unit:set-chat-channel` | the unit | Create, change and delete the binding of the unit |
 | `collection:set-chat-channel` | the collection | The same for a collection |
 | `namespace:manage-notifications` | the namespace | The binding of the namespace, and the channel rules (no change) |
 
 - A binding needs two actions: the action on its object, and
-  `namespace:use-chat-connection`. This mirrors
-  `namespace:use-git-host-connection`.
+  `namespace:use-chat-connection` on the object of the connection. This
+  mirrors `namespace:use-git-host-connection` on
+  `namespace:<ns>/git-host-connection:<id>` (ADR 271 decision 6). So a
+  platform team can keep one connection for one team with a grant on that
+  connection only. A role grant on the namespace gives the action on each
+  connection of the namespace.
 - A binding needs no action that reads or changes a credential. So a unit
   owner sets a channel without ever holding a token.
 - Owner question Q5 asks which built-in roles hold the new actions.
@@ -436,13 +469,28 @@ key for the same fact.
 
 ### P7. The operator route for chat traffic
 
-Two installation settings. Each one is optional, and each one is off by
+Three installation settings. Each one is optional, and each one is off by
 default.
 
 | Setting | Content | Example |
 | --- | --- | --- |
 | `chat-upstream-proxy` | The URL of an HTTP proxy that takes `CONNECT`, for all chat traffic | `http://proxy.corp.example:3128` |
 | `chat-gateway-<platform>` | The base URL of a gateway that speaks the API of the platform, for example `chat-gateway-slack` | `https://slack-relay.corp.example/api/` |
+| `chat-allowed-ranges` | The private address ranges that the proxy and the gateways can use | `10.20.0.0/16` |
+
+**The allowed ranges.** `chat-allowed-ranges` has the limits of the range
+setting of a Git host connection (ADR 271 decision 12 item 5):
+
+- A range opens private-network addresses only: RFC 1918 and the
+  unique-local range of IPv6.
+- It never opens a loopback, link-local, metadata, unspecified or multicast
+  address, also inside a range.
+- The server refuses a prefix shorter than /8 for IPv4 or /32 for IPv6.
+- A range opens an address for the connection to the upstream proxy and to
+  a gateway only. A chat sink and the target of a connection on a vendor
+  host get no private address from it.
+- The outbound guard checks the resolved address against the ranges when the
+  connection opens, as it checks every other address.
 
 **The upstream proxy.**
 
@@ -460,11 +508,9 @@ default.
 - The proxy URL takes no user information. A proxy credential, when one is
   needed, is a separate sensitive setting, so a log line and an audit entry
   show it only as `set` or `not set`.
-- The proxy is on a private address in most networks. The proxy address is
-  an allowlist entry of its own: the outbound guard accepts that one address
-  for the proxy connection, and still refuses loopback, link-local, cloud
-  metadata, unspecified and multicast addresses, as `--git-host-allowed-ranges`
-  does.
+- The proxy is on a private address in most networks. Its address must be
+  in `chat-allowed-ranges`, else the outbound guard refuses the connection
+  to the proxy.
 
 **The gateway base URL.**
 
@@ -472,15 +518,18 @@ default.
   `<base>/chat.postMessage`, and a Slack chat sink accepts a webhook URL on
   the host of the gateway. The base URL is `https`, with no user
   information, no query and no fragment.
-- **The configured host joins the host list.** The platform host rule of
-  Slack accepts `hooks.slack.com`, `hooks.slack-gov.com`, the Web API hosts
-  `slack.com` and `slack-gov.com`, and the host of `chat-gateway-slack` when
-  it is set. The match is exact, as today. The save check
-  (`sinks.Service.checkPlatformHost`) and the send check
-  (`Renderer.CheckHost`) each read the effective setting on their own. Neither
-  check relies on the other (ADR 334 decision 2).
-- A gateway on a private address needs its address in an allowed range for
-  chat traffic, the same kind of entry as for the proxy.
+- **The configured host joins the host lists.** Slack has two host lists.
+  The webhook list of a chat sink stays `hooks.slack.com` and
+  `hooks.slack-gov.com`, plus the host of `chat-gateway-slack` when it is
+  set. The Web API list of a connection is `slack.com` and `slack-gov.com`,
+  plus the host of `chat-gateway-slack` when it is set. With no gateway
+  setting, the webhook list is the list of today. The match is exact, as
+  today. The save check (`sinks.Service.checkPlatformHost` for a sink, and
+  the check of P1 for a connection) and the send check
+  (`Renderer.CheckHost`) each read the effective setting on their own.
+  Neither check relies on the other (ADR 334 decision 2).
+- A gateway on a private address needs its address in
+  `chat-allowed-ranges`.
 - When the operator removes the gateway setting, a sink or a connection on
   the gateway host fails both checks: a delivery ends with the class
   `refused`, and a change needs a host that passes. This is the consequence
@@ -490,12 +539,15 @@ default.
 
 - The static layer (a flag, an environment variable or the configuration
   file) needs no MFA step, as ADR 212 decision 3 says for every setting.
-- Through the settings resource, a set or a widening of either setting is a
-  change that reduces security. It needs `server:manage-settings` and a fresh
-  MFA step (ADR 212 decision 3). An access token gets 403
-  `mfa.fresh-step-required`.
-- Each change writes an audit entry with the old and the new host. The proxy
-  credential shows only as `set` or `not set`.
+- Through the settings resource, each set or change of
+  `chat-upstream-proxy`, its credential, a `chat-gateway-<platform>` or
+  `chat-allowed-ranges` reduces security, except a removal. A change from
+  one host to another is not a widening, but it moves all chat traffic and
+  every token to the new host, so it needs the step too. Each such change
+  needs `server:manage-settings` and a fresh MFA step (ADR 212 decision 3).
+  An access token gets 403 `mfa.fresh-step-required`.
+- Each change, a removal too, writes an audit entry with the old and the new
+  host or range. The proxy credential shows only as `set` or `not set`.
 - A namespace cannot set either setting. A namespace administrator never
   widens the host list.
 
@@ -504,9 +556,16 @@ hostile input to that layer alone: a gateway URL with user information, a
 query, a port or an `http` scheme at the setting boundary; a sink URL on a
 host that is close to the gateway host (a sub-domain, a different case, a
 trailing dot) at the save check and at the send check, each with the other
-check removed; a proxy that answers a `CONNECT` with a redirect; a proxy
-address in the link-local range; a channel ID with markup at the channel
-check and at the renderer.
+check removed; a webhook sink URL on `slack.com` at both checks, which must
+still answer 400 `sink.platform-host`; a connection `target` on a host that
+is not in the Web API list, at the save check of P1 and at the send check,
+each with the other check removed; a Matrix homeserver host that resolves to
+a private address outside `chat-allowed-ranges`; a range wider than /8, a
+range that holds a loopback or a metadata address, and `0.0.0.0/0`, at the
+setting boundary and at the outbound guard; a proxy that answers a
+`CONNECT` with a redirect; a proxy address in the link-local range; a
+channel outside its pattern, and a channel with markup, at the save check,
+at the send check and at the renderer.
 
 ### P8. Platforms
 
@@ -517,7 +576,8 @@ check and at the renderer.
 | Matrix | `token` | The access token posts to each room that its account can send to. |
 | Microsoft Teams | none in this RFC | A Workflows webhook is bound to its channel. A Graph application permission posts only for migration. A bot needs a person to install it in each team. Teams keeps the chat sink of today, one Workflows webhook for each channel. |
 
-The order follows ADR 262: Slack first, then Mattermost, then Matrix. Slack
+The order follows ADR 262, with Teams left out: Slack first, then
+Mattermost, then Matrix. Slack
 and Mattermost are the reference platforms: the end-to-end steps of each
 proposal run against both. Teams gets a connection only when a later RFC
 designs the bot path.
@@ -567,8 +627,8 @@ designs the bot path.
 ### For the operator route
 
 - **A. An upstream proxy and a gateway base URL, as installation settings
-  (proposed).** Covers both kinds of air-gapped network. Two settings to
-  document and test.
+  (proposed), with the allowed ranges.** Covers both kinds of air-gapped
+  network. Three settings to document and test.
 - **B. The proxy only.** A network with no route to Slack at all needs a
   gateway, so the proxy alone does not meet need 4 for that network.
 - **C. The gateway only.** A network with a proxy and no gateway must deploy
@@ -585,24 +645,34 @@ designs the bot path.
     scope. A channel binding and a channel rule hold no secret.
   - Decision 14 extends: a binding and a rule route notifications next to
     subscriptions.
-  - Decision 15 extends: the creator rule applies to a binding and a rule,
-    with `namespace:use-chat-connection`.
+  - Decision 15 changes: for a binding, the creator holds the action on the
+    object of the binding and `namespace:use-chat-connection` on the
+    connection, in place of `namespace:manage-notifications`. For a channel
+    rule, the creator holds `namespace:manage-notifications`, as today.
   - Decision 20 changes: a sender can post through the upstream proxy of
     chat traffic. The outbound guard then checks the proxy address on each
-    connection, and the proxy resolves the target.
+    connection, and the proxy resolves the target. A configured range of
+    `chat-allowed-ranges` opens a private address for the proxy and the
+    gateway only.
   - Decisions 5 and 6 extend: the named attributes of P6, and the types
     `unit.operation-succeeded` and `unit.operation-failed`.
 - **ADR 262.** Extends decision 1: the connection modes of each platform, in
   the same order. Teams gets no connection mode in this RFC.
-- **ADR 334.** Extends decision 2: the host list that both checks read is
-  the built-in list of the platform plus the host of the gateway setting of
-  that platform. The tunnel target of the upstream proxy goes through both
-  checks too. Each check reads the setting on its own. Decision 1 stays: no
-  second, weaker host path.
+- **ADR 334.** Extends decision 2. For Slack, the webhook list of a chat
+  sink stays `hooks.slack.com` and `hooks.slack-gov.com`, plus the host of
+  `chat-gateway-slack` when it is set. The Web API list of a connection is
+  `slack.com` and `slack-gov.com`, plus the host of `chat-gateway-slack`
+  when it is set. With no gateway setting, the webhook list is the list of
+  today. The tunnel target of the upstream proxy goes through both checks
+  too. Each check reads the setting on its own. Decision 1 stays: no second,
+  weaker host path.
+- **ADR 52.** The built-in roles get the actions of Q5.
 - **ADR 146.** No change now. Decision 11 later applies to a message that a
   Slack connection posts as the app.
-- **ADR 212.** Extends decision 3: the list of changes that reduce security
-  gets "set or widen `chat-upstream-proxy` or a `chat-gateway-<platform>`".
+- **ADR 212.** Extends decision 3: each set or change of
+  `chat-upstream-proxy`, its credential, a `chat-gateway-<platform>` or
+  `chat-allowed-ranges` reduces security, except a removal. Each change, a
+  removal too, writes an audit entry with the old and the new host or range.
 
 ## Glossary changes
 
@@ -626,14 +696,17 @@ Each step is one pull request with its user documentation page (ADR 214)
 and its end-to-end step against a local fake of the platform.
 
 1. The named attributes of P6 and the two operation types. No new resource.
-2. The chat connection for Slack in the mode `token`, at the namespace, with
-   its test route.
+2. The chat connection at the namespace, with its test route.
 3. The channel binding on a unit, a collection and the namespace, with the
    new actions.
 4. Installation connections and `namespaces`.
 5. The channel rule.
-6. The operator route: the upstream proxy, then the gateway base URL.
-7. Mattermost, then Matrix.
+6. The operator route: `chat-allowed-ranges` and the upstream proxy, then
+   the gateway base URL.
+7. Matrix.
+
+Steps 2 to 6 each ship for Slack and Mattermost, with an end-to-end step
+against a local fake of each.
 
 ## Open questions for the owner
 
@@ -641,74 +714,141 @@ Each question stands alone.
 
 ### Q1. Add the chat connection next to the webhook sink?
 
-Context: a Slack incoming webhook posts to one channel only, so one
-credential means one channel. A platform team wants one credential and many
-channels. Option A adds a connection object (a bot token) and a channel per
-object. Option B adds a channel field to the chat sink, which Slack refuses.
-Option C keeps today's model.
+Context: today a chat sink holds one incoming webhook URL. A Slack incoming
+webhook posts to one channel only, so one credential means one channel. A
+platform team wants one credential and many channels.
 
-Recommendation: A. The webhook sink stays as it is.
+Options:
 
-Summary: one Slack app token for many channels, next to the webhooks of
-today.
+- (a) A connection object: one credential (for Slack, a bot token), and a
+  channel on each object.
+- (b) A channel field on the chat sink of today.
+- (c) No change: one webhook sink for each channel.
+
+Consequences:
+
+- (a) Meets the need for Slack and Mattermost. Costs a new resource, new
+  actions and a sender path for the Web API of each platform. A bot token
+  reaches more channels than a webhook, so it is a stronger credential.
+- (b) Works for a Mattermost webhook only. A Slack webhook refuses a
+  channel override, so it does not meet the need for Slack.
+- (c) No cost. Each new channel still needs a new credential and an
+  administrator.
+
+Recommendation: (a). The webhook sink of today stays as it is.
+
+Summary: one Slack or Mattermost token for many channels, next to the
+webhooks of today.
 
 ### Q2. Where can a connection live?
 
-Context: a connection can belong to the installation, to a namespace, or to
-both. An installation connection lets a platform team connect Slack once for
-every namespace. A namespace connection lets one team use its own Slack
-workspace.
+Context: a chat connection holds the credential of one chat platform. It
+can belong to the installation, to one namespace, or both levels can exist.
 
-Options: (a) both, with an installation list of the namespaces that can use
-an installation connection; (b) the installation only; (c) the namespace
-only.
+Options:
 
-Recommendation: (a). The installation list starts empty, so no namespace
-posts as the installation's app until an administrator adds it.
+- (a) Both levels. An installation connection lists the namespaces that can
+  use it, and the list starts empty.
+- (b) The installation only.
+- (c) The namespace only.
+
+Consequences:
+
+- (a) A platform team connects once for many namespaces, and a team with
+  its own chat workspace connects its own. Costs one list to manage and two
+  sets of actions.
+- (b) One connection for all. A team with its own chat workspace cannot
+  connect it.
+- (c) Each namespace repeats the credential, which is the problem that this
+  RFC tries to solve.
+
+Recommendation: (a).
 
 Summary: both levels, and an administrator opts each namespace in.
 
 ### Q3. Which binding wins for a unit?
 
-Context: a unit can have a binding, its collection can have one, and the
-namespace can have one. Channel rules on labels can match too.
+Context: a channel binding sends the notifications of a unit to a channel.
+A unit, its collection and its namespace can each have a binding. A channel
+rule of the namespace can also match the unit by its labels.
 
-Options: (a) the most specific object binding wins (unit, then collection,
-then namespace), and channel rules add to it; (b) every binding and rule
-delivers, with one message for each distinct channel; (c) only the unit
-binding counts.
+Options:
+
+- (a) The most specific binding wins (unit, then collection, then
+  namespace). Channel rules always add.
+- (b) Every binding and every rule delivers, with one message for each
+  distinct channel.
+- (c) Only the unit binding counts. Rules always add.
+
+Consequences:
+
+- (a) A unit owner chooses the unit's channel. A unit owner who sets a unit
+  channel removes that unit from the namespace binding, with no
+  `namespace:manage-notifications`. A platform team that must see every
+  notification uses a channel rule, which always adds.
+- (b) The platform team always sees every notification. A unit owner cannot
+  stop a message in a channel of the collection or the namespace, and a
+  busy namespace channel gets every message.
+- (c) Simple. A collection or a namespace channel needs a rule for each
+  label set.
 
 Recommendation: (a). The read API shows the effective binding and its
-origin, and each delivery names the binding or the rule that made it.
+origin, and each delivery names the bindings and rules that made it.
 
-Summary: the unit's own channel replaces the collection's channel; label
-rules always add.
+Summary: the unit's own channel replaces the collection's and the
+namespace's channel; label rules always add.
 
 ### Q4. Channel IDs only, or names too?
 
-Context: Slack `chat.postMessage` takes an ID or a name. A name follows a
-rename in Slack, so a rename can move messages with no change in
-OpenDustpan and no audit entry. An ID does not move.
+Context: a channel binding names a channel. Slack `chat.postMessage` takes an
+ID or a name. A name follows a rename in Slack. An ID does not change.
 
-Options: (a) IDs only for Slack and Matrix, names only where the platform
-needs them (a Mattermost webhook); (b) IDs and names.
+Options:
+
+- (a) IDs only for Slack, Mattermost tokens and Matrix. A name only where
+  the platform needs it (a Mattermost webhook).
+- (b) IDs and names.
+
+Consequences:
+
+- (a) A rename in the chat platform never moves the messages. A person must
+  find the channel ID, which costs a step in the chat platform.
+- (b) Easier to type. A rename can move the messages to another channel
+  with no change in OpenDustpan and no audit entry.
 
 Recommendation: (a).
 
-Summary: store the channel ID, so that a rename in Slack never moves the
-messages.
+Summary: store the channel ID, so that a rename never moves the messages.
 
 ### Q5. Which built-in roles hold the new actions?
 
-Context: P5 adds `server:manage-chat-connections`,
-`namespace:manage-chat-connections`, `namespace:use-chat-connection`,
-`unit:set-chat-channel` and `collection:set-chat-channel`. A unit owner must
-set a channel with no credential and no `namespace:manage-notifications`.
+Context: the RFC adds five actions: `server:manage-chat-connections`,
+`namespace:manage-chat-connections`, `namespace:use-chat-connection` (on
+one connection), `unit:set-chat-channel` and `collection:set-chat-channel`.
+A unit owner must set a channel with no credential and no
+`namespace:manage-notifications`. A role grant on the namespace gives
+`namespace:use-chat-connection` on each connection of the namespace. ADR 52
+defines the built-in roles.
 
-Recommendation: the admin roles hold all of them. `maintainer` holds
-`namespace:use-chat-connection`, `unit:set-chat-channel` and
-`collection:set-chat-channel`. `writer` holds `unit:set-chat-channel` and
-`namespace:use-chat-connection`. No role below `writer` holds them.
+Options:
+
+- (a) The admin roles hold all five. `maintainer` holds
+  `namespace:use-chat-connection`, `unit:set-chat-channel` and
+  `collection:set-chat-channel`. `writer` holds `unit:set-chat-channel` and
+  `namespace:use-chat-connection`. No role below `writer` holds any.
+- (b) As (a), but `writer` holds none.
+- (c) Only the admin roles hold them.
+
+Consequences:
+
+- (a) The people who change a unit also choose its channel. A `writer` can
+  post into any channel that a connection of the namespace reaches, unless
+  the connection has a `channels` allowlist (Q10).
+- (b) Fewer people can move messages. A `writer` asks a `maintainer`.
+- (c) Same as today: every channel change needs an administrator, so need
+  2 is not met.
+
+Recommendation: (a).
 
 Summary: the people who maintain a unit set its channel; only
 administrators handle credentials.
@@ -716,12 +856,21 @@ administrators handle credentials.
 ### Q6. Can the code of a unit set its channel?
 
 Context: the reserved output `opendustpan` sets the context of a unit from
-its code (ADR 160). A channel from the output would let the program of a
-unit move its messages to any channel that the connection reaches, with no
-grant.
+its code (ADR 160). A channel in that output would route messages from the
+program of the unit.
 
-Options: (a) no, the channel comes from the API only; (b) yes, through a new
-context field, limited to the `channels` allowlist of the connection.
+Options:
+
+- (a) No. A person sets the channel through the API.
+- (b) Yes, through a new context field, limited to the `channels` allowlist
+  of the connection.
+
+Consequences:
+
+- (a) Each channel change has a person, an action and an audit entry. A team
+  that keeps all settings in code sets the channel in one more place.
+- (b) The channel lives with the code. A program, or anyone who can change
+  it, can move the messages to any allowed channel with no grant.
 
 Recommendation: (a) for now.
 
@@ -730,13 +879,22 @@ not.
 
 ### Q7. Notifications for operations outside a job?
 
-Context: the catalog has job types only. A `pulumi up` or a `tofu apply`
-that a person runs with the CLI makes no notification today. Need 3 asks for
-the operation details in each message.
+Context: the notification catalog has job types only. A `pulumi up` or a
+`tofu apply` that a person runs with the CLI makes no notification today.
+The need asks for the operation details in each message.
 
-Options: (a) add `unit.operation-succeeded` and `unit.operation-failed`,
-with the tool's own word in the attribute `operation`; (b) one type for each
-tool's operation; (c) jobs only.
+Options:
+
+- (a) Add `unit.operation-succeeded` and `unit.operation-failed`, with the
+  tool's own word in the attribute `operation`.
+- (b) One type for each operation of each tool.
+- (c) Jobs only.
+
+Consequences:
+
+- (a) Two new types. A filter catches every operation with two entries.
+- (b) Many types, and each new tool adds more.
+- (c) No cost. A team that runs the CLI gets no message.
 
 Recommendation: (a).
 
@@ -745,21 +903,37 @@ from the CLI.
 
 ### Q8. The operator route: proxy, gateway, or both?
 
-Context: an air-gapped installation cannot reach Slack today, because the
-chat sender uses no proxy and the outbound rules refuse private addresses.
-Some networks have an HTTP proxy. Others have no route to Slack, only a
-gateway inside the network that speaks the Slack API.
+Context: an air-gapped installation cannot reach Slack today. The chat
+sender uses no proxy, and the outbound rules refuse private addresses for
+chat traffic. Some networks have an HTTP proxy. Others have no route to
+Slack, only a gateway inside the network that speaks the Slack API.
 
-Options: (a) both, as installation settings; (b) the proxy only; (c) the
-gateway only; (d) the environment variable `HTTPS_PROXY`.
+Options:
 
-Recommendation: (a). A set or a widening through the API needs
-`server:manage-settings` and a fresh MFA step, and writes an audit entry
-with the old and the new host. Both host checks of ADR 334 read the setting,
-each on its own.
+- (a) Both, as installation settings: `chat-upstream-proxy`,
+  `chat-gateway-<platform>` and `chat-allowed-ranges`.
+- (b) The proxy only.
+- (c) The gateway only.
+- (d) The environment variable `HTTPS_PROXY`.
 
-Summary: the operator names one proxy and one gateway host, and both checks
-then accept that one host and no other.
+Consequences:
+
+- (a) Covers both kinds of network. Each set or change of a setting,
+  except a removal, needs `server:manage-settings` and a fresh MFA step.
+  Each change, a removal too, writes an audit entry with the old and the new
+  host or range. Both host checks of ADR 334 accept the configured host, and
+  each check reads the setting on its own. The proxy resolves the target, so
+  the outbound guard checks the proxy address, not the target address.
+- (b) A network with no route to Slack stays without chat.
+- (c) A network with a proxy must deploy a gateway.
+- (d) No setting to manage. A variable set for another program moves the
+  chat traffic with no record and no MFA step.
+
+Recommendation: (a).
+
+Summary: the operator names one proxy, one gateway host for each platform
+and the private ranges they use, and both checks then accept that host and
+no other.
 
 ### Q9. Teams in this RFC or later?
 
@@ -768,9 +942,47 @@ Teams facts come from the Microsoft documentation only. A Teams Workflows
 webhook is bound to its channel, a Graph application permission posts only
 for migration, and a bot needs a person to install it in each team.
 
-Options: (a) Teams keeps the webhook sink of today, and a later RFC designs
-a bot connection; (b) design the bot connection here.
+Options:
+
+- (a) Teams keeps the webhook sink of today. A later RFC designs a bot
+  connection.
+- (b) Design the bot connection here.
+
+Consequences:
+
+- (a) No new Teams code. A Teams user keeps one webhook for each channel.
+- (b) A design that we cannot test against a Teams tenant, and a per-team
+  install step that no other platform has.
 
 Recommendation: (a).
 
 Summary: Teams keeps one webhook for each channel for now.
+
+### Q10. Must a connection list its channels?
+
+Context: a chat connection has an optional `channels` allowlist. With an
+empty list, a holder of `unit:set-chat-channel` can post into any channel
+that the token reaches, including a channel that the holder cannot read in
+the chat platform.
+
+Options:
+
+- (a) Optional. An empty list means "the channels that the platform lets the
+  token post to", and the API shows that effective value.
+- (b) Required for an installation connection, optional for a namespace
+  connection.
+- (c) Required for every connection.
+
+Consequences:
+
+- (a) Easy to start. The chat platform's own membership rules are the only
+  limit, for example Slack `chat:write` without `chat:write.public`.
+- (b) A platform team decides where the installation's app posts. A
+  namespace team owns its own token and its own risk.
+- (c) The strongest limit. Each new channel needs an administrator, which
+  works against need 2.
+
+Recommendation: (b).
+
+Summary: the installation's app posts only to the channels that the
+platform team lists.
