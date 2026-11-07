@@ -35,7 +35,7 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}${{ github.event_name == 'schedule' && '-schedule' || '' }}${{ github.event_name == 'merge_group' && '-merge-group' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Each job has its own GitHub-hosted runner (ubuntu-24.04), so the jobs share
+# Each job has its own GitHub-hosted runner (ubuntu-26.04), so the jobs share
 # no disk and no port. The Go build cache (with the test results) and the Go
 # module cache are kept with the GitHub Actions cache, one entry for each job
 # and commit. A cache key can be written only once, so the key holds the
@@ -47,7 +47,7 @@ concurrency:
 jobs:
   # The checks that need no database. They run apart from the tests.
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -122,7 +122,7 @@ jobs:
   # the schedule.
   golangci-lint:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -145,7 +145,7 @@ jobs:
   # golangci-lint on the PATH and skips the lint cache of the action.
   golangci-lint-journal:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -164,7 +164,7 @@ jobs:
 
   nilaway:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -179,7 +179,7 @@ jobs:
       - *go-cache-save
 
   go:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -221,7 +221,7 @@ jobs:
   # the schedule.
   bench:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -237,7 +237,7 @@ jobs:
   # the go job does not run these tests. The make target holds the tag.
   journal-test:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -255,7 +255,7 @@ jobs:
   # that it does not share the cores of a runner with the other or with the
   # rest of go test.
   store:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -309,7 +309,7 @@ jobs:
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -352,7 +352,7 @@ jobs:
   # its module, as make nilaway and make vuln build their tools.
   chart-lint:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -372,7 +372,7 @@ jobs:
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 70
     services:
       # The e2e-journal, upgrade-test, crash-test and faults jobs use the same
@@ -446,7 +446,7 @@ jobs:
   # next to the e2e suite.
   e2e-journal:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 70
     services:
       postgres: *postgres-service
@@ -469,7 +469,7 @@ jobs:
 
   upgrade-test:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     services:
       postgres: *postgres-service
@@ -503,7 +503,7 @@ jobs:
 
   crash-test:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     services:
       postgres: *postgres-service
@@ -526,7 +526,7 @@ jobs:
 
   faults:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     services:
       postgres: *postgres-service
