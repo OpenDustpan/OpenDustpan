@@ -24,7 +24,6 @@ Changes:
 8. **Imports need research first (owner, 2026-10-18).** An import from a comment needs deep research first.
 9. **Apply timing at each level (owner, 2026-10-18).** The namespace and the collection each set a default for the apply timing. Each also allows or forbids an override at the levels below it, down to the unit. So an apply before the merge is possible.
 10. **Apply after the merge is the recommended default (owner, 2026-10-18).** An apply after the merge is the strong recommendation and the recommended default. The project researches this flow and writes it in the docs.
-11. **Apply timing decides the command mode (owner, 2026-10-18).** The apply timing of a unit decides its command mode. Decisions 5 and 6 give the two modes.
 
 ## Not decided here
 
@@ -40,6 +39,7 @@ Changes:
 
 ## Consequences
 
+- The apply timing of a unit decides its command mode. Decisions 5 and 6 give the two modes, and decision 9 sets the timing at each level.
 - An approval from the forge still passes the approval rules and the approval floor (ADR 299 decision 10) on the OpenDustpan side.
 - A comment command runs as the principal that a person linked to the forge account (ADR 271 decision 7). A comment never passes a gate.
 - The API shows the effective apply timing and its source, as ADR 299 decision 4 requires for the review mode.
