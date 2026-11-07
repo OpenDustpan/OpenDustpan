@@ -41,7 +41,8 @@ func claimed(ctx context.Context, tx Tx, pc job.PhaseClaim) (job.Job, error) {
 }
 
 // save replaces the row of j, which was read at version prev, with the next
-// version, at the time of the database.
+// version, at the time of the database and strictly after the stored update
+// time of the row.
 func save(ctx context.Context, tx Tx, j *job.Job) error {
 	now, err := tx.Now(ctx)
 	if err != nil {
@@ -49,7 +50,8 @@ func save(ctx context.Context, tx Tx, j *job.Job) error {
 	}
 
 	prev := j.Version
-	j.Version, j.UpdatedAt = prev+1, now
+	j.UpdatedAt = nextUpdateAt(now, j.UpdatedAt)
+	j.Version = prev + 1
 
 	return update(ctx, tx, j, prev)
 }
