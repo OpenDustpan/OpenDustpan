@@ -2,10 +2,13 @@ package registry_test
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
+	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -43,17 +46,24 @@ func TestPublishDenialWritesAuditEntry(t *testing.T) {
 }
 
 // TestNewHandlerRefusesNoNamespaces checks that the handler does not start
-// without the namespaces: a refusal of a namespace could not be written.
+// without the namespaces, and only for that reason: every other dependency is
+// set. A refusal of a namespace could not be written without them.
 func TestNewHandlerRefusesNoNamespaces(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 
 	_, err := apiregistry.NewHandler(apiregistry.Config{
-		Service: nil, Authenticator: nil, Authorizer: nil, MaxUploadBytes: 0, Audit: f.store, Namespaces: nil,
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: nil, Logger: nil,
+		Service: &service.Service{}, Authenticator: testAuthn{}, Authorizer: testAuthz{deny: nil},
+		MaxUploadBytes: maxUpload, Audit: f.store, Namespaces: nil,
+		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: nil,
+		Logger: slog.New(slog.DiscardHandler),
 	})
 	if !errors.Is(err, apiregistry.ErrMissingDependency) {
 		t.Errorf("NewHandler without namespaces: got %v, want %v", err, apiregistry.ErrMissingDependency)
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "namespaces") {
+		t.Errorf("error names the missing dependency: got %q, want namespaces", err.Error())
 	}
 }

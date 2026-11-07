@@ -70,8 +70,8 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
-		Namespaces: coverageRegistryNamespaces{}, Audit: coverageAuditStore{}, Now: nil, MaxArchiveBytes: 0,
-		MaxReleaseBytes: 0, MaxModuleArchiveBytes: 0,
+		Namespaces: coverageRegistryNamespaces{}, Audit: coverageAuditStore{}, Logger: slog.New(slog.DiscardHandler),
+		OnAuditFailure: func() {}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0, MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)

@@ -164,6 +164,8 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		Blobs:                 blobs,
 		Namespaces:            store,
 		Audit:                 store,
+		Logger:                slog.New(slog.DiscardHandler),
+		OnAuditFailure:        func() {},
 		Now:                   nil,
 		MaxArchiveBytes:       maxUpload,
 		MaxReleaseBytes:       8 * maxUpload,

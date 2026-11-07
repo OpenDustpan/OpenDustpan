@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
+	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/registry"
@@ -204,18 +206,43 @@ func checkRefused(t *testing.T, e *env, err error, tc refusedCase) {
 	t.Helper()
 
 	if tc.auditErr != nil {
-		if !errors.Is(err, tc.auditErr) {
-			t.Errorf("publish error: got %v, want it to wrap %v", err, tc.auditErr)
-		}
-
-		if entries := auditEntries(e); len(entries) != 0 {
-			t.Errorf("audit entries: got %d, want 0", len(entries))
-		}
+		checkAuditLost(t, e, err, tc.auditErr)
 
 		return
 	}
 
 	assertDenied(t, e, err, refusedVersion, tc.reason)
+}
+
+// checkAuditLost fails the test unless the refused publish keeps the refusal
+// text only, writes no entry, and logs and counts the lost entry once. The
+// text of the audit store must not reach the answer.
+func checkAuditLost(t *testing.T, e *env, err, auditErr error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("publish: want the refusal, got nil")
+	}
+
+	if !errors.Is(err, releasecheck.ErrRefused) {
+		t.Errorf("publish error: got %v, want the archive set refusal", err)
+	}
+
+	if strings.Contains(err.Error(), auditErr.Error()) || errors.Is(err, errAuditDown) {
+		t.Errorf("publish error carries the audit store text: %v", err)
+	}
+
+	if entries := auditEntries(e); len(entries) != 0 {
+		t.Errorf("audit entries: got %d, want 0", len(entries))
+	}
+
+	if *e.failures != 1 {
+		t.Errorf("audit failures counted: got %d, want 1", *e.failures)
+	}
+
+	if !strings.Contains(e.logs.String(), "audit append failed for a refused publish") {
+		t.Errorf("log lines: got %q, want the audit append failure", e.logs.String())
+	}
 }
 
 // checkRelease fails the test unless the store holds the release of the

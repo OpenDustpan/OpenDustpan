@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 
 	"opendustpan.org/opendustpan/internal/registry/modulecheck"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
@@ -45,9 +45,10 @@ func refusalReason(err error) (string, bool) {
 // An error that names no reason class is returned unchanged. Request-field,
 // not-staged, no-keys, integrity and store errors stay unrecorded.
 //
-// A failed append fails the publish: the caller must not see a refusal that
-// the audit log does not hold. The append uses the context of the request, so
-// a done context fails the publish too.
+// The publish stays refused when the append fails: the release is not stored,
+// so the refusal is the answer. The answer carries the refusal text only, never
+// the text of the audit store. The loss is logged and counted by the hooks of
+// the service. The append uses the context of the request.
 func (s *Service) refusal(ctx context.Context, c *Caller, rec namespace.Namespace, version string, err error) error {
 	if err == nil {
 		return nil
@@ -65,7 +66,10 @@ func (s *Service) refusal(ctx context.Context, c *Caller, rec namespace.Namespac
 	e.Changes = nil
 
 	if _, appendErr := s.auditor.Append(ctx, rec.Fence(), e); appendErr != nil {
-		return fmt.Errorf("%w: record the refused publish: %w", err, appendErr)
+		s.logger.ErrorContext(ctx, "audit append failed for a refused publish",
+			slog.String("namespace", rec.Name.String()), slog.String("reason", reason),
+			slog.String("cause", appendErr.Error()))
+		s.onAudit()
 	}
 
 	return err

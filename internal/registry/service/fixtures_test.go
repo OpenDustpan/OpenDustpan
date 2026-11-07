@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -239,6 +240,9 @@ type env struct {
 	caller *service.Caller
 	now    time.Time
 	aud    *memAudit
+	// logs holds the log lines of the service; failures counts the audit failures.
+	logs     *bytes.Buffer
+	failures *int
 }
 
 // memAudit is an audit store for a test. It holds the appended entries in
@@ -309,12 +313,22 @@ func namespaceOf(name namespace.Name, id namespace.ID, now time.Time) namespace.
 
 // config returns the service config of a test over the given stores.
 func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.Config {
-	return configAudit(store, blobs, ns, at, newMemAudit())
+	return configAudit(store, blobs, ns, at, auditSinks{
+		aud: newMemAudit(), logger: slog.New(slog.DiscardHandler), onFail: func() {},
+	})
+}
+
+// auditSinks are the audit dependencies of a service config: the audit store,
+// the logger and the audit failure hook.
+type auditSinks struct {
+	aud    service.Auditor
+	logger *slog.Logger
+	onFail func()
 }
 
 // configAudit returns the service config of a test over the given stores and
-// audit store.
-func configAudit(store *memStore, blobs blob.Store, ns nsStub, at time.Time, aud service.Auditor) service.Config {
+// audit sinks.
+func configAudit(store *memStore, blobs blob.Store, ns nsStub, at time.Time, sinks auditSinks) service.Config {
 	v := pgpverify.Verifier{Now: func() time.Time { return at }}
 
 	return service.Config{
@@ -324,7 +338,9 @@ func configAudit(store *memStore, blobs blob.Store, ns nsStub, at time.Time, aud
 		Inspector:             v,
 		Blobs:                 blobs,
 		Namespaces:            ns,
-		Audit:                 aud,
+		Audit:                 sinks.aud,
+		Logger:                sinks.logger,
+		OnAuditFailure:        sinks.onFail,
 		Now:                   func() time.Time { return at },
 		MaxArchiveBytes:       1 << 20,
 		MaxReleaseBytes:       3 << 20,
@@ -355,13 +371,22 @@ func newEnv(t *testing.T, flip bool) *env {
 	}
 
 	aud := newMemAudit()
+	logs := &bytes.Buffer{}
+	failures := new(int)
 
-	svc, err := service.New(configAudit(store, blobs, ns, now, aud))
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+
+	svc, err := service.New(configAudit(store, blobs, ns, now, auditSinks{
+		aud: aud, logger: logger, onFail: func() { *failures++ },
+	}))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 
-	return &env{svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud}
+	return &env{
+		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud,
+		logs: logs, failures: failures,
+	}
 }
 
 // trust registers the key of s in ns, through the service.
