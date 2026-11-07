@@ -55,8 +55,9 @@ func WithRegistryURLKey(key []byte) Option {
 }
 
 // newRegistryService builds the registry service, or returns nil when no
-// registry store is set.
-func newRegistryService(cfg *settings) (*service.Service, error) {
+// registry store is set. onFailure counts a refused publish whose audit entry
+// could not be written.
+func newRegistryService(cfg *settings, onFailure func()) (*service.Service, error) {
 	if cfg.registry == nil || cfg.registry.releases == nil || cfg.registry.keys == nil {
 		return nil, nil //nolint:nilnil // No registry: no registry store is set.
 	}
@@ -67,6 +68,11 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 
 	verifier := pgpverify.Verifier{Now: nil}
 
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
 	svc, err := service.New(service.Config{
 		Store:                 cfg.registry.releases,
 		Keys:                  cfg.registry.keys,
@@ -74,6 +80,9 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 		Inspector:             verifier,
 		Blobs:                 cfg.blobStore,
 		Namespaces:            cfg.namespaceStore,
+		Audit:                 entries,
+		Logger:                cfg.logger,
+		OnAuditFailure:        onFailure,
 		Now:                   cfg.now,
 		MaxArchiveBytes:       0,
 		MaxReleaseBytes:       0,
@@ -89,7 +98,7 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 // newRegistryHandler builds the registry API, or returns nil when no registry
 // store is set.
 func newRegistryHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
-	regSvc, err := newRegistryService(cfg)
+	regSvc, err := newRegistryService(cfg, onFailure)
 	if err != nil || regSvc == nil {
 		return nil, err
 	}
@@ -125,8 +134,8 @@ var errRegistryURL = errors.New("the public URL has no host")
 // serves no registry route, when no registry store is set or no public URL is
 // set: the host check compares each request with the host of the public URL, so
 // without one every request would fail.
-func newRegistryProtocol(cfg *settings, publicURL string) (*tfe.RegistryConfig, error) {
-	regSvc, err := newRegistryService(cfg)
+func newRegistryProtocol(cfg *settings, publicURL string, onFailure func()) (*tfe.RegistryConfig, error) {
+	regSvc, err := newRegistryService(cfg, onFailure)
 	if err != nil || regSvc == nil || publicURL == "" {
 		return nil, err
 	}

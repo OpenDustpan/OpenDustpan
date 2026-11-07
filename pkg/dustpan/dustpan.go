@@ -1548,7 +1548,7 @@ func newTFEHandler(
 		return nil, err
 	}
 
-	registryProtocol, err := newRegistryProtocol(cfg, base.String())
+	registryProtocol, err := newRegistryProtocol(cfg, base.String(), func() { observed.IncAuditAppendFailure() })
 	if err != nil {
 		return nil, err
 	}
