@@ -180,7 +180,7 @@ schedule.
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |
 | `startedBy`, `agent`, `agentMode` | Who started the job, and the agent that acted for them |
-| `source` | Where the start came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` |
+| `source` | Where the start came from: `api`, `agent`, `self-service`, `forge`, `schedule` or `trigger` |
 | `breakGlass` | `reason` and `freeze`, when the job started through an active change freeze |
 | `trigger` | `id` of the trigger that started the job, and `saver`, the subject of its last saver at the start. The field is not there when no trigger started the job. See the [triggers guide](../guides/run-triggers.md). |
 | `delivery` | The result of the deliver phase of a write-back job |

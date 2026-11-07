@@ -117,9 +117,9 @@ internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
   agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
-  calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
+  calendar/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/, selfservice/
                        features with their own package and suite (<name>test/)
-  expr/                the built-in Expr engine (catalog.Evaluator); the only package that imports the Expr library
+  expr/                the built-in Expr engine (selfservice.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
   breakglass/, graph/, history/, store/, blob/, notify/

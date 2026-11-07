@@ -36,7 +36,7 @@ func openAppWith(t *testing.T, permissions map[string]string) opened {
 
 // TestFilesCapabilityFollowsThePermissions checks that an installation with no
 // permission to read the contents lists no files capability after a check,
-// so that the Catalog shows the feature as missing.
+// so that Self-service shows the feature as missing.
 func TestFilesCapabilityFollowsThePermissions(t *testing.T) {
 	t.Parallel()
 
@@ -70,9 +70,9 @@ func TestFilesCapabilityFollowsThePermissions(t *testing.T) {
 				t.Fatalf("after Check, files listed = %v, want %v", got, tc.want)
 			}
 
-			missing := o.fg.Capabilities().Missing(forge.Needs(forge.ConsumerCatalog))
+			missing := o.fg.Capabilities().Missing(forge.Needs(forge.ConsumerSelfService))
 			if (len(missing) == 0) != tc.want {
-				t.Fatalf("the Catalog misses %v, want files missing = %v", missing, !tc.want)
+				t.Fatalf("Self-service misses %v, want files missing = %v", missing, !tc.want)
 			}
 		})
 	}

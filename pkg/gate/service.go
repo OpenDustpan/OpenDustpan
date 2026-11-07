@@ -147,7 +147,7 @@ type AccessCall struct {
 
 // Service evaluates the gates of each decision point and the access limits
 // of each call. Each caller of a decision point uses it: the job model, the
-// change orders, the Catalog, the profiles, the tool-neutral state
+// change orders, Self-service, the profiles, the tool-neutral state
 // operations and each tool adapter at state.write. A tool adapter calls
 // Evaluate before the write and writes a refusal in the error shape of its
 // own tool.

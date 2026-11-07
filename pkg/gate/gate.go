@@ -155,7 +155,7 @@ type DecisionPoint string
 
 // The six decision points.
 const (
-	// PointChangePropose runs before a job, a change order or a Catalog
+	// PointChangePropose runs before a job, a change order or a self-service request
 	// revision starts, before a plan.
 	PointChangePropose DecisionPoint = "change.propose"
 	// PointChangePlanned runs after the plan is stored and its facts are
