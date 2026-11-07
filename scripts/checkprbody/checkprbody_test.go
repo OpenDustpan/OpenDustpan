@@ -3,50 +3,76 @@ package checkprbody_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 const wantMessage = "check-pr-body: the PR body names no issue. Add 'Closes #N', 'Part of #N' or 'No issue: <reason>'.\n"
 
-// scriptPath returns the absolute path of scripts/check-pr-body.sh.
-func scriptPath(t *testing.T) string {
-	t.Helper()
-
-	path, err := filepath.Abs(filepath.Join("..", "check-pr-body.sh"))
-	if err != nil {
-		t.Fatalf("resolve the script path: %v", err)
-	}
-
-	return path
-}
-
-// runScript runs the script with args under bash. It returns the exit code and
+// runScript runs scripts/check-pr-body.sh with args. The script goes in on
+// standard input, and each argument goes in through an environment variable,
+// so that the command line holds no variable. It returns the exit code and
 // the text that the script wrote to standard error.
 func runScript(t *testing.T, args ...string) (int, string) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "bash", append([]string{scriptPath(t)}, args...)...)
+	script, err := os.ReadFile(filepath.Join("..", "check-pr-body.sh"))
+	if err != nil {
+		t.Fatalf("read check-pr-body.sh: %v", err)
+	}
+
+	// Build "set -- "$CHECK_ARG_0" "$CHECK_ARG_1"", so the script sees the
+	// same arguments that a direct call would pass.
+	var prefix strings.Builder
+
+	prefix.WriteString("set --")
+
+	env := os.Environ()
+
+	for i, arg := range args {
+		name := fmt.Sprintf("CHECK_ARG_%d", i)
+		fmt.Fprintf(&prefix, " \"$%s\"", name)
+		env = append(env, name+"="+arg)
+	}
+
+	prefix.WriteString("\n")
+
+	cmd := exec.CommandContext(t.Context(), "bash", "-s")
+	cmd.Stdin = strings.NewReader(prefix.String() + string(script))
+	cmd.Env = env
 
 	var stderr bytes.Buffer
 
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err == nil {
 		return 0, stderr.String()
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exitErr.ExitCode(), stderr.String()
 	}
 
 	t.Fatalf("run check-pr-body.sh: %v", err)
 
 	return -1, ""
+}
+
+// runOnBody writes body to a file and runs the script on it.
+func runOnBody(t *testing.T, body string) (int, string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write the body file: %v", err)
+	}
+
+	return runScript(t, path)
 }
 
 func TestCheckPRBodyNamesAnIssue(t *testing.T) {
@@ -78,12 +104,7 @@ func TestCheckPRBodyNamesAnIssue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			path := filepath.Join(t.TempDir(), "body.md")
-			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
-				t.Fatalf("write the body file: %v", err)
-			}
-
-			code, stderr := runScript(t, path)
+			code, stderr := runOnBody(t, tc.body)
 
 			if tc.pass {
 				if code != 0 {
