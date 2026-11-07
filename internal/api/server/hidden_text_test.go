@@ -113,7 +113,7 @@ func TestTokenRoutesRefuseHiddenName(t *testing.T) {
 }
 
 // TestApprovalRoutesRefuseHiddenApproverUser proves that the approval default
-// and rule routes refuse a hidden character in an approver user name with 400
+// and rule routes refuse a hidden character in an approver user name with 422
 // before they call the store.
 func TestApprovalRoutesRefuseHiddenApproverUser(t *testing.T) {
 	t.Parallel()
@@ -130,9 +130,9 @@ func TestApprovalRoutesRefuseHiddenApproverUser(t *testing.T) {
 				gateBase + "acme" + gateRulesURL + "/ops",
 			} {
 				rec := serveGate(t, h, gateCall{http.MethodPut, target, body, ""})
-				wantStatus(t, rec, http.StatusBadRequest)
+				wantStatus(t, rec, http.StatusUnprocessableEntity)
 
-				if got := rec.Body.String(); !strings.Contains(got, "invalid text:") {
+				if got := rec.Body.String(); !strings.Contains(got, "invalid approver user name: the name holds") {
 					t.Fatalf("PUT %s body = %s, want the adapter refusal", target, got)
 				}
 			}

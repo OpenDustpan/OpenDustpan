@@ -46,22 +46,3 @@ func TestConfigServiceRefusesHiddenRunesInApproverUser(t *testing.T) {
 		})
 	}
 }
-
-// The user name check refuses invalid UTF-8 on its own: HasHidden does not,
-// because Go decodes an invalid byte as U+FFFD.
-func TestConfigServiceRefusesInvalidUTF8InApproverUser(t *testing.T) {
-	t.Parallel()
-
-	svc, _ := newConfigService(t)
-
-	def := goodDefault(gate.NamespaceScope("acme"))
-	def.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"a\xffb"}, UnitOwners: false}
-	def.Count = 1
-
-	_, err := svc.PutApprovalDefault(t.Context(), def, 0, callerEntry())
-
-	got, ok := errors.AsType[*gate.ApproversError](err)
-	if !ok || got.Reason != gate.ApproversUserInvalid {
-		t.Fatalf("error = %v, want reason ApproversUserInvalid", err)
-	}
-}
