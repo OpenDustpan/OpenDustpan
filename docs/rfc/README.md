@@ -85,7 +85,7 @@ both together.
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | accepted (ADRs 27, 246, 283) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
-| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
+| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79; open design points in RFC 126 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft; saved views in RFC 100, a saved view is a server object with an API (ADR 266) |
@@ -114,7 +114,7 @@ both together.
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | accepted |
 | [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | accepted |
 | [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | accepted |
-| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244) |
+| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244); no move between namespaces (ADR 346); moves between installations in RFC 126 |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
 | [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings and one settings API accepted (ADR 212), the namespace as the tenant (ADR 215) and a lock that turns a feature off (ADR 219) |
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
@@ -167,3 +167,4 @@ both together.
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
+| [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |
