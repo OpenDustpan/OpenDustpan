@@ -148,7 +148,7 @@ func TestScanStagedTriggerReturnsTheZeroRowOnError(t *testing.T) {
 	}{
 		"no namespace": {
 			query: `SELECT NULL::text, 'f1', 'opentofu', 'b', 'follows', '', '', 'acme', 'opentofu', 'a', 1::bigint,
-'user:ada', 'prn-user:ada', 1::bigint, 2::bigint`,
+'user:ada', 'prn-user:ada', 1::bigint, 2::bigint, 0::bigint`,
 			want: backup.ErrCorrupt,
 		},
 		"a row with too few columns": {query: `SELECT 'acme', 'f1'`, want: backup.ErrExportRead},
