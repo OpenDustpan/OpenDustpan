@@ -27,12 +27,24 @@ const (
 	// pagingStacks is one more than a page of GET /api/user/stacks, so the
 	// CLI must read a second page with the continuationToken.
 	pagingStacks = 501
-	// pagingStackPrefix starts the name of each stack of pagingProject. The
-	// names are created as s0000 to s0500, so the name tells the project.
-	pagingStackPrefix = pagingNamespace + "/s"
+	// pagingStackLetter starts the name of each stack of pagingProject, and
+	// pagingOtherStackLetter that of each stack of pagingOtherProject. The
+	// CLI output carries no project field, so the name tells the project.
+	// pagingStackName makes the names, and the prefixes come from the same
+	// letters, so the two cannot drift apart.
+	pagingStackLetter      = "s"
+	pagingOtherStackLetter = "o"
+	// pagingStackPrefix starts the name of each stack of pagingProject.
+	pagingStackPrefix = pagingNamespace + "/" + pagingStackLetter
 	// pagingOtherStackPrefix starts the name of each stack of pagingOtherProject.
-	pagingOtherStackPrefix = pagingNamespace + "/o"
+	pagingOtherStackPrefix = pagingNamespace + "/" + pagingOtherStackLetter
 )
+
+// pagingStackName returns the name of stack i of a project whose stacks start
+// with letter. The prefixes above are built from the same letters.
+func pagingStackName(letter string, i int) string {
+	return fmt.Sprintf("%s%04d", letter, i)
+}
 
 // pulumiStackPagingScenario creates pagingStacks stacks in one project of a
 // namespace of their own, and a few stacks in a second project of the same
@@ -53,7 +65,7 @@ func pulumiStackPagingScenario(t *testing.T, env *e2e.Env, clis []e2e.Install) {
 
 	for i := range pagingStacks {
 		path := "/api/stacks/" + pagingNamespace + "/" + pagingProject
-		body := `{"stackName":` + strconv.Quote(fmt.Sprintf("s%04d", i)) + `}`
+		body := `{"stackName":` + strconv.Quote(pagingStackName(pagingStackLetter, i)) + `}`
 
 		status, answer, err := env.APIStatus(ctx, http.MethodPost, path, body)
 		if err != nil || status != http.StatusOK {
@@ -63,7 +75,7 @@ func pulumiStackPagingScenario(t *testing.T, env *e2e.Env, clis []e2e.Install) {
 
 	for i := range pagingOtherStacks {
 		path := "/api/stacks/" + pagingNamespace + "/" + pagingOtherProject
-		body := `{"stackName":` + strconv.Quote(fmt.Sprintf("o%04d", i)) + `}`
+		body := `{"stackName":` + strconv.Quote(pagingStackName(pagingOtherStackLetter, i)) + `}`
 
 		status, answer, err := env.APIStatus(ctx, http.MethodPost, path, body)
 		if err != nil || status != http.StatusOK {
