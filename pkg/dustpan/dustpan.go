@@ -60,6 +60,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -2877,7 +2878,7 @@ type forgeLinkStore interface {
 // namespace store, or returns nil when the store keeps no links or no
 // principals. Both SQL adapters keep both. A nil service makes the routes
 // answer 501.
-func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelink.Service {
+func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelinksvc.Service {
 	store, ok := st.(forgeLinkStore)
 	if !ok {
 		return nil
@@ -2888,7 +2889,7 @@ func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelink.Se
 		return nil
 	}
 
-	return forgelink.NewService(store.ForgeLinks(), people, now, nil)
+	return forgelinksvc.NewService(store.ForgeLinks(), people, now, nil)
 }
 
 // auditStoreOf returns the audit store of the namespace store. It answers
