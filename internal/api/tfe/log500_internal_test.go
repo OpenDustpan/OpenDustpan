@@ -109,9 +109,19 @@ func TestWriteRegistryDenialLogs500Cause(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.writeRegistryDenial(requestid.WithContext(t.Context(), "0123abcd"), rec, errDriver)
 
-	check500Log(t, rec, buf.String(),
-		[]string{"registry authorization failed", "status=500", "cause=unclassified", "error_code=server.internal", "request_id=0123abcd"},
-		[]string{"hunter2"})
+	check500Log(
+		t,
+		rec,
+		buf.String(),
+		[]string{
+			"registry authorization failed",
+			"status=500",
+			"cause=unclassified",
+			"error_code=server.internal",
+			"request_id=0123abcd",
+		},
+		[]string{"hunter2"},
+	)
 }
 
 // check500Log checks the answer and the log of a 500: the answer holds no
