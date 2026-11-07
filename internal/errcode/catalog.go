@@ -89,6 +89,7 @@ func areas() []func() []Spec {
 		grantSpecs,
 		instanceSpecs,
 		issuerSpecs,
+		jobLogSpecs,
 		jobSpecs,
 		journalSpecs,
 		localUserSpecs,

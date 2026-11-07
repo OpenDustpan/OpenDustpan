@@ -98,6 +98,7 @@ import type {
   JobLocation,
   JobLocationRequest,
   JobLog,
+  JobLogEntry,
   JobPhase,
   JobPlan,
   JobPlanPart,
@@ -113,6 +114,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
@@ -950,6 +952,13 @@ export const decodeJobLog: Decoder<JobLog> = object<JobLog>("JobLog", {
   version: int64,
 });
 
+/** The validator of JobLogEntry. */
+export const decodeJobLogEntry: Decoder<JobLogEntry> = object<JobLogEntry>("JobLogEntry", {
+  seq: int64,
+  step: string,
+  text: string,
+});
+
 /** The validator of JobPhase. */
 export const decodeJobPhase: Decoder<JobPhase> = object<JobPhase>("JobPhase", {
   approvals: array(ref(() => decodeJobApproval)),
@@ -1053,6 +1062,12 @@ export const decodeListGitHostConnectionsResponse: Decoder<ListGitHostConnection
 /** The validator of ListGitHostInstallationsResponse. */
 export const decodeListGitHostInstallationsResponse: Decoder<ListGitHostInstallationsResponse> = object<ListGitHostInstallationsResponse>("ListGitHostInstallationsResponse", {
   installations: array(ref(() => decodeGitHostInstallation)),
+});
+
+/** The validator of ListJobsResponse. */
+export const decodeListJobsResponse: Decoder<ListJobsResponse> = object<ListJobsResponse>("ListJobsResponse", {
+  jobs: array(ref(() => decodeJob)),
+  nextPageToken: optional(string),
 });
 
 /** The validator of ListModuleReleasesResponse. */

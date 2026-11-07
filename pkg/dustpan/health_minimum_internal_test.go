@@ -69,6 +69,7 @@ func TestReadinessReportsABinaryBelowTheMinimum(t *testing.T) {
 			t.Parallel()
 
 			rd := newComponentReadiness(readinessSettings{
+				streamStop:  nil,
 				components:  Components{api: true, worker: false},
 				store:       stubPinger{err: nil, block: false},
 				blobs:       stubPinger{err: nil, block: false},
@@ -195,6 +196,7 @@ func TestStoreDownListsOnlyTheStore(t *testing.T) {
 			t.Parallel()
 
 			rd := newComponentReadiness(readinessSettings{
+				streamStop: nil,
 				components: Components{api: true, worker: false}, store: tt.store,
 				blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: tt.minimum,
 				writable: nil, timeout: 50 * time.Millisecond,

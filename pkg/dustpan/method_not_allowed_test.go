@@ -20,7 +20,7 @@ func TestToolNeutralMethodNotAllowedIsJSON(t *testing.T) {
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/api/dustpan/v1/namespaces/acme/units/unit-1/outputs"},
-		{http.MethodGet, "/api/dustpan/v1/namespaces/acme/jobs"},
+		{http.MethodDelete, "/api/dustpan/v1/namespaces/acme/jobs"},
 		{http.MethodPost, "/api/server/tokens"},
 		{http.MethodGet, "/api/inventory/deleted-units/pulumi/unit-1/restore"},
 		{http.MethodGet, "/api/runners/acme/runners/run-1/drain"},
