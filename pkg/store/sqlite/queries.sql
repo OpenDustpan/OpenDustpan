@@ -1399,6 +1399,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms = ?;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -1437,6 +1443,38 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
+
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = ? AND source_id = ? AND claim_value = ? AND group_id = ?;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = ? AND source_id = ?
+ORDER BY claim_value, group_id;
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = ? AND m.source_id = ? AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value, m.group_id;
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = ? AND removed_at_ms IS NULL
+ORDER BY group_id;
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)

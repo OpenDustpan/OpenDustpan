@@ -3161,6 +3161,31 @@ func (q *Queries) DeleteGroup(ctx context.Context, arg DeleteGroupParams) (int64
 	return result.RowsAffected()
 }
 
+const deleteGroupMapping = `-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = ? AND source_id = ? AND claim_value = ? AND group_id = ?
+`
+
+type DeleteGroupMappingParams struct {
+	Source     string
+	SourceID   string
+	ClaimValue string
+	GroupID    string
+}
+
+func (q *Queries) DeleteGroupMapping(ctx context.Context, arg DeleteGroupMappingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteGroupMapping,
+		arg.Source,
+		arg.SourceID,
+		arg.ClaimValue,
+		arg.GroupID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteImport = `-- name: DeleteImport :exec
 DELETE FROM imports
 WHERE namespace_id = ?1 AND id = ?2
@@ -12323,6 +12348,52 @@ func (q *Queries) ListCollections(ctx context.Context, namespace string) ([]List
 	return items, nil
 }
 
+const listCurrentMembershipsOfPrincipal = `-- name: ListCurrentMembershipsOfPrincipal :many
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = ? AND removed_at_ms IS NULL
+ORDER BY group_id
+`
+
+type ListCurrentMembershipsOfPrincipalRow struct {
+	GroupID  string
+	Source   string
+	SourceID string
+	State    string
+	Pinned   bool
+}
+
+// Each current membership of the principal, whatever its source, so that a
+// group claim changes only the memberships of its own source and source ID.
+func (q *Queries) ListCurrentMembershipsOfPrincipal(ctx context.Context, principalID string) ([]ListCurrentMembershipsOfPrincipalRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentMembershipsOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCurrentMembershipsOfPrincipalRow
+	for rows.Next() {
+		var i ListCurrentMembershipsOfPrincipalRow
+		if err := rows.Scan(
+			&i.GroupID,
+			&i.Source,
+			&i.SourceID,
+			&i.State,
+			&i.Pinned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeletedInventory = `-- name: ListDeletedInventory :many
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
@@ -13127,6 +13198,48 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 			&i.CreatedBy,
 			&i.HolderName,
 			&i.HolderKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupMappings = `-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = ? AND source_id = ?
+ORDER BY claim_value, group_id
+`
+
+type ListGroupMappingsParams struct {
+	Source   string
+	SourceID string
+}
+
+func (q *Queries) ListGroupMappings(ctx context.Context, arg ListGroupMappingsParams) ([]GroupMapping, error) {
+	rows, err := q.db.QueryContext(ctx, listGroupMappings, arg.Source, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GroupMapping
+	for rows.Next() {
+		var i GroupMapping
+		if err := rows.Scan(
+			&i.Source,
+			&i.SourceID,
+			&i.ClaimValue,
+			&i.GroupID,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14523,6 +14636,49 @@ func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSeque
 			return nil, err
 		}
 		items = append(items, sequence)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveGroupMappings = `-- name: ListLiveGroupMappings :many
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = ? AND m.source_id = ? AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value, m.group_id
+`
+
+type ListLiveGroupMappingsParams struct {
+	Source   string
+	SourceID string
+}
+
+type ListLiveGroupMappingsRow struct {
+	ClaimValue string
+	GroupID    string
+}
+
+// The mappings of the source and the source ID whose group exists and was
+// not deleted. A mapping of a deleted group stays in the table for the record
+// and never answers here.
+func (q *Queries) ListLiveGroupMappings(ctx context.Context, arg ListLiveGroupMappingsParams) ([]ListLiveGroupMappingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveGroupMappings, arg.Source, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveGroupMappingsRow
+	for rows.Next() {
+		var i ListLiveGroupMappingsRow
+		if err := rows.Scan(&i.ClaimValue, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -18201,6 +18357,36 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) (i
 	return column_1, err
 }
 
+const putGroupMapping = `-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type PutGroupMappingParams struct {
+	Source      string
+	SourceID    string
+	ClaimValue  string
+	GroupID     string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
+func (q *Queries) PutGroupMapping(ctx context.Context, arg PutGroupMappingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, putGroupMapping,
+		arg.Source,
+		arg.SourceID,
+		arg.ClaimValue,
+		arg.GroupID,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
 INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
 VALUES (
@@ -18821,6 +19007,27 @@ type ReplaceIdempotencyServerKeyParams struct {
 // It changes no row when another process replaced the key first.
 func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const restoreGroupMember = `-- name: RestoreGroupMember :execrows
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms = ?
+`
+
+type RestoreGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+	RemovedAtMs sql.NullInt64
+}
+
+// Undoes RemoveGroupMember in the same transaction, for a removal that the
+// last-site-administrator rule refuses.
+func (q *Queries) RestoreGroupMember(ctx context.Context, arg RestoreGroupMemberParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreGroupMember, arg.GroupID, arg.PrincipalID, arg.RemovedAtMs)
 	if err != nil {
 		return 0, err
 	}
