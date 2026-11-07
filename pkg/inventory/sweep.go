@@ -79,7 +79,8 @@ func (e DeletedEntry) Reference() string {
 // FinishedBlobPurges counts the blob purge records that the sweep finished,
 // and PendingBlobPurges the records that stay. WaitingBlobPurges counts the
 // records that stay because a backup or a restore runs, and WaitingFor names
-// that work, for example "backup bkp-...", or is empty. A record that waits
+// the last of that work that the sweep saw, for example "backup bkp-...", or is
+// empty when no record waited. A record that waits
 // counts in PendingBlobPurges too, and not in Failed.
 type SweepResult struct {
 	Purged             []DeletedEntry
