@@ -274,6 +274,10 @@ linters:
             - "**/internal/*svc/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
+            # The job proxy is an HTTP proxy, so it imports net/http on
+            # purpose. The launcher rule still applies to it: no internal
+            # code, no forge, no SQL driver.
+            - "!**/pkg/launcher/proxy/**"
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: Domain code depends on ports, never on store adapters.
