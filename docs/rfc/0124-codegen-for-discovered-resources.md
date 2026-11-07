@@ -128,7 +128,9 @@ and repositories named. "Not found" means that the search found nothing.
   resources of one type with the same source position come from one loop or
   one function. A frame inside a component constructor names the component.
   So the runtime already answers "which loop made this resource", in every
-  language, with no parser of that language. A program that does not send
+  language, with no parser of that language to find the site. To edit the
+  site, the engine still reads the source (B3), and the server parses only
+  the languages that B9 names. A program that does not send
   source positions leaves the field empty, and the engine then has less
   evidence.
 - **OpenTofu state records the loop of each resource.** An instance address
@@ -136,8 +138,12 @@ and repositories named. "Not found" means that the search found nothing.
   (`module.buckets["a"].aws_s3_bucket.this`). `tofu show -json` of a plan
   gives, for each attribute of each resource in configuration, its
   `references` or its `constant_value`, and the `for_each_expression` of the
-  resource. So the expression that feeds an attribute is known without a
-  parser of our own.
+  resource. So the tool's own output tells which expression feeds an
+  attribute. To edit a file, OpenDustpan still needs an HCL parser (B9,
+  question 3). OpenTofu builds with its own fork of HCL: its `go.mod` replaces
+  `github.com/hashicorp/hcl/v2` with `github.com/opentofu/hcl/v2`. A parser
+  that OpenDustpan uses must be that fork, or must pass the same tests as the
+  fork, so that the server and the tool read a file the same way.
 - **A plan with an import is a non-destructive check.** An OpenTofu plan with
   an `import` block, and a Pulumi preview with the `import` option, read the
   resource and compare it with the code, and write no state.
@@ -279,8 +285,10 @@ An unclear value is never written.
 3. **The checks of a literal, on the runner and again in the server.** A
    literal fails, and becomes a reference, when:
    - its keyed digest equals the keyed digest of a known secret (step 6);
-   - a secret pattern matches it (the pattern set of the project's secret
-     scan in CI);
+   - a secret pattern matches it. The project's CI scanner, TruffleHog, is
+     AGPL-3.0: it stays a CI tool and is never linked or shipped. The runner
+     and the server use a pattern set as data: the rule file of gitleaks
+     (MIT), with the owner's approval (question 3), or a list of our own;
    - its Shannon entropy is above the limit for its length (a number that
      slice 1 sets from the benchmark corpus).
 4. **The forms of a reference.**
@@ -312,9 +320,15 @@ An unclear value is never written.
    secret is). It writes no file with it.
 8. **The upload guard.** Before upload, the runner searches the typed edits
    and the evidence for each value from step 2, step 3 and the plan's
-   sensitive values, plain and in its JSON, HCL, URL and Base64 forms. One
-   hit fails the job, and the job uploads no edit. It also fails on
-   `secret(` with a literal argument.
+   sensitive values of 6 characters or more, in these forms: plain; JSON
+   with `\uXXXX` escapes; HCL and YAML escapes; YAML block scalars (the
+   search ignores line breaks and indentation); URL percent-encoding;
+   Base64 and Base64URL; hexadecimal in lower and upper case. A value of
+   fewer than 6 characters is not searched, because short strings match
+   too much text; default-deny already makes such a value a reference, and
+   the server's list check (B9) refuses it as a literal. One hit fails the
+   job, and the job uploads no edit. It also fails on `secret(` with a
+   literal argument.
 9. **Write-only attributes** (for example a password that the provider never
    returns): the job writes the reference, and the evidence says that the
    plan cannot compare it.
@@ -361,31 +375,43 @@ second run does not make a duplicate.
 The check is the acceptance test of every codification, the floor and the
 ceiling. It checks the result. It is not a security layer (section B9).
 
+- **A baseline plan first.** A unit can have changes that wait (code that
+  was merged and not applied, or drift). So the job plans the unedited commit
+  first (the baseline) and the edited copy second, with the same inputs, and
+  compares them. The frame rule means "the edits add nothing to the
+  baseline", not "the plan is empty". The evidence and the review request
+  show the baseline changes, so the reviewer sees that the unit had changes
+  that wait.
 - **OpenTofu.** On the edited copy, `tofu plan -out` and `tofu show -json`.
   Pass when every item holds:
   - **The new resource.** Each new address has the action `no-op` with an
     `importing` block, its `before` and `after` are equal, and it has no
     `previous_address`.
-  - **The frame.** Every other `resource_changes` entry has the action
-    `no-op`. No `delete`, no `create`, no `update`, no replace in either
-    order (`delete` with `create`), and no `forget`. No `previous_address`
-    on any entry: the edits add no `moved` or `removed` block, and an
+  - **The frame.** Every other `resource_changes` entry is equal to its
+    entry in the baseline: the same address, the same actions and the same
+    `after` value. The edits add no `delete`, `create`, `update`, replace in
+    either order (`delete` with `create`) or `forget`. No entry gains a
+    `previous_address`: the edits add no `moved` or `removed` block, and an
     existing `moved` block does not start to apply.
+  - **Drift.** The `resource_drift` entries are equal to the baseline's, and
+    the new resource has none.
   - **Not a destroy.** The plan mode is normal, not destroy, and the unit
     keeps every resource that it had.
   - **Protection unchanged.** For each existing resource, `prevent_destroy`,
     `create_before_destroy`, `ignore_changes` and `replace_triggered_by` in
     the configuration JSON are equal before and after the edits. The new
     resource gets the protection of question 5.
-  - No output changes, no new `check` failure, and no error diagnostics.
+  - The output changes are equal to the baseline's; no new `check` failure;
+    no error diagnostics.
 - **Pulumi.** `pulumi preview --json` with the `import` options. Pass when:
   - each new resource has the step `import` with no detailed diff;
-  - every other step is `same`: no `create`, `update`, `delete`, `replace`,
-    `create-replacement`, `delete-replaced` or `discard`;
+  - every other step is equal to the baseline preview: the edits add no
+    `create`, `update`, `delete`, `replace`, `create-replacement`,
+    `delete-replaced` or `discard`;
   - `protect`, `retainOnDelete`, `deleteBeforeReplace`, `replaceOnChanges`
     and `ignoreChanges` of each existing resource are equal in state and in
     the preview, and no alias is added;
-  - no stack output changes.
+  - the stack output changes are equal to the baseline's.
 - **The check plans what it shows.** The runner renders the typed edits with
   the same encoders as the server (section B9) and reports the SHA-256 of
   each rendered file. The server renders the same edits and compares. A
@@ -417,6 +443,9 @@ What the check proves, and what it does not:
 | The provider and the code agree on the resource, under the provider's own diff rules. | Attributes that the provider does not compare: write-only attributes, `ignore_changes`, attributes that a provider normalizes. |
 | | That the cloud does not change before the merge. The plan of the review request runs the check again. |
 | | That a provider upgrade keeps the same defaults. |
+| | The behavior on a later replace. A dropped attribute (A3) has no value in the code, so a replace of the resource creates it with the provider's default, which can differ from the value in the cloud today. |
+| | Drift of a dropped attribute. A later change outside the code to a dropped attribute shows no diff, because the code does not hold it. |
+| | That changes that wait in the baseline are wanted. The check shows them, and does not judge them. |
 
 ### A8. Pulumi in six languages
 
@@ -427,22 +456,28 @@ What the check proves, and what it does not:
    --out <scratch>` against the stack, with the language **YAML** as the
    working form. YAML is data: a YAML library edits it, with no parser of a
    general language.
-   - Whether `--preview-only` gives code is not confirmed. The code path
-     generates from the snapshot of the operation. If it does not, the job
-     imports into a copy of the state in a local backend in the sandbox, and
-     never into the real stack. Slice 2 tests this first.
+   - `--preview-only` gives code. Checked in the source of the Pulumi CLI
+     (`master` at `6bbe25d`): with `PreviewOnly`, both the local backend
+     (`pkg/backend/diy/backend.go`) and the service backend
+     (`pkg/backend/httpstate/backend.go`) run the import as a dry run with a
+     snapshot manager that writes nothing, and return its in-memory
+     snapshot. The service backend's comment names `pulumi import
+     --preview-only` as the caller. `pulumi import` generates code when that
+     snapshot is not nil. So the job never imports into the real stack and
+     needs no local backend.
 4. Apply A3 to A6 on the YAML. A3 uses the preview with the `import` option
    as its oracle: a dropped input that the preview shows in the diff goes
    back.
-5. Turn the YAML into a typed edit `add-pulumi-resource`: the type token,
-   the logical name, the inputs as a typed value tree with the schema type
-   of each property, and the options. `pulumi convert --from yaml
+5. Turn the YAML into a typed edit `add-pulumi-resource`: the finding ID,
+   the logical name, the inputs as a typed value tree with the attribute
+   path of each literal, and the options. The server takes the type token
+   and the import ID from the finding (B9). `pulumi convert --from yaml
    --language <language>` is a reference only: the runner compares its
    output with the shared encoder's output in tests, and never ships it.
-6. The encoder of the language renders the declaration: a new file that the
-   entry file imports (TypeScript, Python), or a new function in a new file
-   and one call in the entry point (Go, C#, Java). YAML projects get a new
-   entry under `resources`.
+6. The server renders the declaration with the encoder of the language in a
+   new file that it names, and adds the one line of `add-entry-reference`
+   (B9). YAML projects get a new key under `resources:` in `Pulumi.yaml`.
+   C# and Java entry files are not written back in the first slices (B9).
 7. Check with A7, on the rendered files.
 
 A loop or a component in Pulumi cannot take an `import` option for one new
@@ -460,11 +495,25 @@ item without a change to the loop's code. Section B5 handles that case.
 - The ideas of `tfadd` (partial mode) and aztfexport (the plan as the goal),
   with no code.
 
-**Reuse (a library):** an HCL parser that keeps comments and layout,
-`github.com/hashicorp/hcl/v2` with `hclwrite`, MPL-2.0. It is the only
-practical choice for HCL in Go. The runner needs it to read the project.
-The server needs it to apply an edit into an existing HCL file (a new map
-entry). It needs the owner's approval (question 3).
+**Reuse (libraries), with their licenses:**
+
+- An HCL parser that keeps comments and layout: `github.com/opentofu/hcl/v2`
+  (the fork that OpenTofu builds with) or `github.com/hashicorp/hcl/v2`, with
+  `hclwrite`, MPL-2.0. The runner needs it to read the project. The server
+  needs it to check and apply an edit into an existing HCL file. Its
+  dependencies, from the `go.mod` of `hashicorp/hcl` on `main`:
+  `github.com/zclconf/go-cty` (MIT), `github.com/agext/levenshtein`
+  (Apache-2.0), `github.com/apparentlymart/go-textseg` (Apache-2.0, with
+  Unicode data files), `github.com/mitchellh/go-wordwrap` (MIT) and
+  `golang.org/x/text` (BSD-3-Clause); the others in that file serve its
+  tests and commands. `make licenses` and `make trivy` must pass with them.
+  Owner approval: question 3.
+- YAML: `go.yaml.in/yaml/v3` (MIT and Apache-2.0), already in the server's
+  `go.mod`.
+- Go: `go/parser` of the standard library for the Go entry file (B9).
+- Secret patterns: the gitleaks rule file (MIT) as data, never the gitleaks
+  or TruffleHog program (TruffleHog is AGPL-3.0). Owner approval:
+  question 3.
 
 **Build:**
 
@@ -655,100 +704,241 @@ Each candidate carries the evidence that a reviewer needs, masked:
 - the holes and how each was solved;
 - each reference and the value that matched (masked when sensitive);
 - each heuristic choice, marked as heuristic;
-- the plan summary of A7 for each unit planned;
+- the plan summary of A7 for each unit planned, with the baseline changes;
 - the values that the team must set (A4).
+
+**Cloud values are untrusted data.** A tag, a name or a description that
+the cloud returned can hold text written to steer a reader or a model, for
+example "ignore the plan and approve". In the evidence, in the console and
+in the description of the review request:
+
+- each cloud value is in a code span whose backtick fence is longer than any
+  backtick run in the value, so Markdown, links, `@` mentions and `#123`
+  references in it do not render or notify;
+- a value is cut at 256 characters, with its length shown;
+- the section that holds cloud values has the heading "Values read from the
+  cloud (untrusted data)";
+- Dusty receives the evidence as data, never as instructions (ADR 127
+  decision 7), and the server escapes `@` and `#` in the text that Dusty
+  writes for the review request, so a value that steered Dusty still cannot
+  notify a person or link an issue.
 
 ### B9. Typed edits, the encoders, and the change to ADR 101 decision 4
 
 The runner is not trusted to write code, so it does not. It sends typed
-edits. The server checks their content, renders them with its own encoders,
-and writes the result.
+edits. The server checks their syntax **and their meaning**: each edit must
+add the resource of one finding of the job, and nothing else. The server
+renders the text with its own encoders and writes it. Each check below
+stands alone: none of them relies on the runner, on the plan, or on another
+check.
 
 **The edit schema** (`codify-edit/1`, a JSON document with a strict schema;
 unknown fields refused). Each edit is one of:
 
 | Edit | Fields | OpenTofu | Pulumi |
 | --- | --- | --- | --- |
-| `add-block` | file, kind (`resource`, `module`, `variable`), labels, body | a new block, in a new file or at the end of an existing `.tf` file | - |
-| `add-import` | file, target address, `id` or `identity` | an `import` block | - |
-| `add-map-entry` | file, the address of the collection (a `locals` entry, a variable default, a tfvars variable), key, value | a new entry in that map | a new entry in a YAML map or a stack config value |
-| `add-list-entry` | file, the address of the collection, value | a new element | a new element |
-| `add-tfvars-value` | file, variable name, value | a new line in the tfvars file that siblings use | - |
-| `add-pulumi-resource` | file, type token, logical name, inputs, options (`import`, `parent`, `provider`, `protect`, `dependsOn`) | - | a declaration in the language of the project |
-| `add-pulumi-config` | stack, key, `secret` flag, no value | - | a config key in `Pulumi.yaml` with its type; the value comes from the profile draft (A4) |
+| `add-resource` | finding ID, body, protection (question 5), provider alias | a `resource` block in a new file, or at the end of an existing `.tf` file | - |
+| `add-import` | finding ID, target address | an `import` block; `id` or `identity` are not fields: the server takes them from the finding | - |
+| `add-module-instance` | finding IDs, the address of an existing module call, key | a new key of the `for_each` of that call (G3) | - |
+| `add-map-entry` | finding ID, the address of the collection (a `locals` entry, a variable default, a tfvars variable), key, value | a new entry in that map (G2) | a new entry in a YAML map or a stack config value (G2) |
+| `add-list-entry` | finding ID, the address of the collection, value | a new element (G2) | a new element (G2) |
+| `add-variable` | name, type, `sensitive`, `ephemeral` | a `variable` block | - |
+| `add-tfvars-value` | variable name, value | a new line in an existing tfvars file that siblings use, only for a variable that the same edit set declares with `add-variable` | - |
+| `add-pulumi-resource` | finding ID, logical name, inputs, options (`parent`, `provider`, `protect`, `dependsOn`) | - | a declaration in a new file; the `import` option is not a field: the server takes it from the finding |
+| `add-pulumi-config` | key, type, `secret` flag; no value | - | a key under `config:` in the existing `Pulumi.yaml`; the value comes from the profile draft (A4) |
+| `add-entry-reference` | the new file | - | one line in the entry file (below) |
+
+The server, not the runner, chooses every file name and every target place.
+There is no `file` field in any edit.
 
 A value is a typed tree: `string`, `number`, `bool`, `null`, `list`, `map`,
-`object` with schema type names, and `expr`. An `expr` is not text. It is a
-closed grammar: a traversal (`var.x`, `local.x`, `module.m.x`,
-`<type>.<name>.<attr>`, `each.key`, `each.value.<field>`, `data.<type>.<name>.<attr>`,
-`config.<key>` in Pulumi, a resource output in Pulumi) or a call of `merge`
-or `lookup` on such terms. No other function, no template, no operator.
+`object`, and `expr`. Each literal carries its attribute path (resource type
+and attribute path), so the server can check it against the non-secret list.
+An `expr` is not text. It is a closed grammar:
 
-**What the server checks, at each edit, without trust in the runner:**
+- OpenTofu: a traversal (`var.x`, `local.x`, `module.m.x`,
+  `<type>.<name>.<attr>`, `data.<type>.<name>.<attr>`, `each.key`,
+  `each.value.<field>`), or a call of `merge` or `lookup` on such terms. No
+  other function, no template, no operator, no `for` expression.
+- Pulumi: `config.<key>` for a key that `Pulumi.yaml` declares or that the
+  same edit set adds, and `<name>.<output>` for a resource that the same edit
+  set adds (YAML: also a resource name under `resources:` in `Pulumi.yaml`).
+  No other symbol. A general language program has no configuration JSON,
+  and the server does not parse TypeScript, Python, C# or Java, so the
+  server knows no other symbol there. A name such as `process.env` or
+  `os.environ` is not in the set, so it is refused.
 
-- the schema and the bounds: 1 to 64 edits, 1 to 32 files, 256 KiB of
-  values, a depth of 16, at most 1,000 nodes in one value tree;
-- the paths: the rules of ADR 101 decision 4 (relative, clean, inside the
-  code location, no CI configuration), and only the file kinds of the tool:
-  `.tf`, `.tfvars`, `.tfvars.json` for OpenTofu; `Pulumi.yaml`, the stack
-  settings file and the source files of the project's language for Pulumi;
-- the names: labels, keys and identifiers from the namer's character set
-  (A6), never from a raw cloud value;
-- each `expr` against the grammar, and each traversal against the symbols
-  that the configuration JSON of the job lists (no reference to a symbol
-  that does not exist);
-- each literal against the secret checks of A4 step 3 and step 6 (the
-  digests, the patterns, the entropy);
-- each `add-map-entry` and `add-list-entry` against the file: the server
-  parses the file at the commit of the job, finds the collection, and
-  refuses when it is not a literal map or list in that file;
-- no edit removes or changes existing text. Every edit adds.
+**The binding to the findings (meaning, not syntax).** The server holds
+each finding of the job: its kind, its tool type (from the `iac` entry of
+RFC 123 or the mapping table, as the person confirmed it at the start), and
+its import ID or identity. For each edit set:
 
-A failure refuses the whole edit set, with an audit entry, before any review
-request exists.
+- **One resource for each finding, and nothing else.** Each finding has
+  exactly one `add-resource`, `add-pulumi-resource`, G2 entry or G3
+  instance, and every resource edit names a finding of the job. The type of
+  the block is the type of the finding.
+- **The import is the finding's.** The server writes the `id` or `identity`
+  of each import from the finding. The runner cannot name another ID. The
+  target address of an `add-import` must be the address that the same edit
+  set creates for that finding: `<type>.<name>`, `<type>.<name>["<key>"]` for
+  G2, or the resource of that type in the module instance for G3.
+- **No executing constructs.** A body holds only attributes and nested blocks
+  that the provider schema has for that type. The server refuses, in every
+  body and at every depth: `provisioner`, `connection`, `lifecycle` (except
+  the protection of question 5, which the server writes itself), `dynamic`,
+  `count`, `for_each`, `depends_on`, `provider` (except an alias that the
+  unit's configuration already has), `source`, and any block that the schema
+  does not list. No edit adds a `data` block, a `module` block, a `provider`
+  block, a `terraform` block, a `moved`, `removed` or `check` block.
+- **No executing types.** The server refuses a finding type on a fixed deny
+  list: `terraform_data`, `null_resource`, the `external` data source, and
+  the types of the `local`, `http`, `tls` key generation and `archive`
+  providers. A cloud sweep never reports such a type, but the finding came
+  from an untrusted report.
+- **Module instances (G3).** `add-module-instance` names an existing module
+  call. The server parses the unit's files at the job's commit and checks
+  that the call exists, has a `for_each` over a literal map in the code
+  location, and that its `source` is a local path inside the code location.
+  The edit adds a key and a value; it never writes a `source`. A remote
+  source (registry, Git, HTTP) is never offered.
+- **G2 sites.** The collection of an `add-map-entry` or `add-list-entry`
+  must be the literal map or list that the `for_each` or `count` of a
+  resource of the finding's type reads, in a file of the code location. The
+  server finds this with its own parse at the job's commit.
+- **Pulumi options.** `parent` and `provider` must name a resource in the
+  stack's state, which the server holds. The type token must be the
+  finding's Pulumi type. No other option: no `transforms`, no `hooks`, no
+  `aliases`, no `replaceOnChanges`, no `deletedWith`.
+- **The provider schema.** The server takes the schema of the provider
+  version in the unit's lock file from the installation's registry or
+  provider mirror, when it has that release as a checked archive set
+  (ADR 269). Else it uses the schema that the runner sent, and the change
+  order marks it as unverified. The construct and type deny lists above do
+  not depend on the schema, so they hold in both cases.
 
-**The encoders.** One escaping encoder for each target: HCL, the tfvars
-JSON, Pulumi YAML, TypeScript, Python, Go, C# and Java. Each turns a typed
-value into a literal of its language, and nothing else:
+**The non-secret list in the server.** The server holds the same versioned
+non-secret list as the runner (A4 step 1); the server's copy decides. For
+each literal, the server checks that its attribute path is on the list for
+the finding's type and that the value has the shape. The **name** shape is
+narrower than in round 1: a name is a literal only when the same string is
+also part of the finding's import ID or identity (for example the bucket
+name in its ARN). Any other string goes to the profile draft. Then the
+digest, pattern and entropy checks of A4 run as well.
+
+**The paths and the file names.**
+
+- The server names each new file from a fixed pattern: `codified_<n>.tf`
+  for OpenTofu, and `codified_<n>.ts`, `codified_<n>.py`, `codified_<n>.go`,
+  `Codified<n>.cs` and `Codified<n>.java` in the directory of the entry file
+  for Pulumi, where `<n>` is the next free number. A YAML project gets no new
+  file.
+- Defense in depth: the server refuses a new or changed file with a name of
+  special meaning, even one that its own pattern made: `override.tf`,
+  `*_override.tf`, `*.tofu` and a `.tf` file with a `.tofu` twin, `*.tf.json`,
+  `*.tftest.hcl`, `*.auto.tfvars`, `*.auto.tfvars.json`, `terraform.tfvars`,
+  `terraform.tfvars.json`, `.terraformrc`, `conftest.py`, `setup.py`,
+  `sitecustomize.py`, `usercustomize.py`, `__init__.py`, `*.pth`,
+  `Pulumi.<stack>.yaml`, `package.json`, `tsconfig.json`, `.npmrc`,
+  `go.mod`, `go.sum`, `*.csproj`, `Directory.Build.props`, `pom.xml`,
+  `build.gradle`, any name that starts with `.`, and any path under a
+  directory whose name starts with `.`. The path rules of ADR 101 decision 4
+  (relative, clean, inside the code location, no CI configuration) also hold.
+- An existing file changes only through `add-map-entry`, `add-list-entry`,
+  `add-resource` at the end of a `.tf` file, `add-tfvars-value`,
+  `add-pulumi-config` and `add-entry-reference`. Every edit adds; none
+  deletes or changes a line.
+
+**The entry file of a Pulumi program.** `add-entry-reference` writes
+exactly one line or statement, and the server writes it:
+
+- TypeScript: `import "./codified_<n>";` as the last line of the entry file
+  (`main` of `Pulumi.yaml`, else `index.ts`).
+- Python: `import codified_<n>  # noqa: F401, E402` as the last line of
+  `__main__.py`.
+- Go: the new file declares `func codified<n>(ctx *pulumi.Context) error`.
+  The server parses the entry file with `go/parser` of the standard library,
+  finds the one function literal passed to `pulumi.Run`, and inserts
+  `if err := codified<n>(ctx); err != nil { return err }` as its first
+  statement. No such call, or two: refused.
+- C# and Java: the server parses neither language. The first slices do not
+  write back their entry file: the console shows the new file and the one
+  line to add, and the person adds it. The check of A7 runs with that line.
+- YAML: no entry file. The resource is a new key under `resources:` in
+  `Pulumi.yaml`, written by the YAML library that the server already links.
+
+**The encoders.** One escaping encoder for each target: HCL, tfvars JSON,
+Pulumi YAML, TypeScript, Python, Go, C# and Java. Each turns a typed value
+into a literal of its language, and nothing else:
 
 - HCL: a quoted string with `\`, `"` and control characters escaped, `${` as
   `$${` and `%{` as `%%{`. Never a heredoc.
+- tfvars JSON: a JSON string, and also `${` as `$${` and `%{` as `%%{`,
+  because OpenTofu reads the strings of a `.tfvars.json` file as templates.
 - Pulumi YAML: always a double-quoted scalar, `${` as `$${`.
 - TypeScript: a double-quoted string literal with escapes, never a template
   literal. Python: a string literal with escapes, never an f-string. Go:
   `strconv.Quote`. C#: a regular string literal, never `$"..."` or `@"..."`.
-  Java: an escaped string literal, never a text block.
-- All: ` `, ` `, NUL and the bidirectional control characters are
-  escaped; non-printable characters are written as escapes.
+- Java: an escaped string literal, never a text block. Java turns `\u`
+  escapes into characters before it reads tokens, so the encoder never
+  writes `\u000a`, `\u000d`, `"` or `\`. It escapes `\` first, then
+  writes `\n`, `\r`, `\t`, `\"` and `\\`, an octal escape for the other
+  control characters below U+0020, and a `\u` escape only for the other
+  characters listed below.
+- All: U+2028, U+2029, NUL and the bidirectional control characters
+  (U+202A to U+202E, U+2066 to U+2069) are escaped; other non-printable
+  characters are written as escapes.
+- **Map keys** are always escaped quoted strings, never bare identifiers,
+  because a tag key such as `aws:cloudformation:stack-name` is not an
+  identifier. Pulumi YAML refuses a key that starts with `fn::`, because such
+  a key calls a built-in function. TypeScript refuses `__proto__`,
+  `constructor` and `prototype` as keys.
 
 Each encoder has a test with a hostile corpus: quotes and backslashes,
 `${...}`, `%{...}`, `#{...}`, backticks, `"; os.system("...")`,
-`"); System.exit(1); ("`, `*/`, newlines, the bidirectional controls, a
-string of 1 MiB. The test encodes each string, parses the result with the
-parser of the language, and checks that the value is equal and that the
-parsed tree is one literal. At run time, the runner and the server parse
-each rendered file again before any plan or preview runs, and refuse a file
-whose literal count differs from the edits.
+`"); System.exit(1); ("`, `*/`, `\u000a` as six characters, newlines, the
+bidirectional controls, `fn::` and `__proto__` keys, a string of 1 MiB. The
+test encodes each string, parses the result with the parser of the
+language, and checks that the value is equal and that the parsed tree is one
+literal. At run time, the runner and the server parse each rendered file
+again before any plan or preview runs, and refuse a file whose literal count
+differs from the edits.
 
-**The change to ADR 101 decision 4.** A draft for the ADR that accepts this
-RFC:
+**The hash comparison, and what it proves.** The runner reports, and the
+server computes, the SHA-256 of a record that holds the job ID, the Git blob
+ID of each base file at the job's commit, the encoder version, the digest of
+the edit set, and each rendered file. Equal hashes show only that the server
+renders the same text that the runner planned: they catch encoder drift. They
+do not show that a plan ran, because a hostile runner can compute the same
+hash with no plan. At delivery, the server refuses the write-back when a
+target file on the branch changed after the job's commit (its blob ID
+differs), because the text would then differ from what the runner planned.
+The person can start the job again.
+
+**The change to ADR 101 decisions 4 and 5.** A draft for the ADR that
+accepts this RFC:
 
 - Decision 4 keeps its rules for the edits of config and variable files.
 - It adds a second kind: **codification edits**, only for the write-back job
   of a `codify` change order. They are typed edits of `codify-edit/1`. The
-  server checks and renders them as above. The write-back executor writes
-  only the text that the server rendered, never text from a client or a
-  runner.
-- Every edit adds text. A codification edit never deletes or changes a line.
+  server checks their syntax and their binding to the findings, the
+  construct and type deny lists, the non-secret list, the file names and the
+  paths, the Pulumi symbols and the entry-file rule, all as above. The
+  write-back executor writes only the text that the server rendered, never
+  text from a client or a runner.
+- Every codification edit adds text. It never deletes or changes a line.
+- Decision 5 says that a write-back job changes data files. It changes to:
+  a write-back job changes data files, and a write-back job of a `codify`
+  change order also adds code through codification edits. It still runs no
+  tool, and it still delivers only.
 - The deliver phase waits for the person's confirmation in every mode, as for
   an agent (ADR 125, ADR 128).
 
 **The re-plan is not a security layer.** The no-change check and the plan of
 the review request check the result. A hostile runner can report a check
-that it did not run. The layers that stop harm are: the typed edits and
-their checks in the server, the server's own render, the secret checks in
-the server, the person's confirmation, and the plan of the review request
-in the sandbox of RFC 122.
+that it did not run. The layers that stop harm are: the typed edits and their
+binding to the findings in the server, the deny lists, the server's file
+names and its own render, the secret checks in the server, the person's
+confirmation, and the plan of the review request in the sandbox of RFC 122.
 
 ## Part C. Dusty
 
@@ -790,11 +980,11 @@ ADR 250 for each:
 | Secret values and unclear values | A4 steps 1 to 3. | Only in sandbox memory, the plan step's environment (masked in the log), and the sealed profile draft. | The digest key lives one job. | The profile attachment of the unit decides which profile secrets the job compares, and who may publish the draft. | The upload guard (A4 step 8) on the runner, and the digest, pattern and entropy checks in the server (A4 step 6, B9). One hit: nothing is written. |
 | The plan file and the plan JSON | Parsed strictly; unknown action values are a failure. | Sealed at rest as a job plan of ADR 102, with the `secret` flag; shown only masked. | Size limit. | An unmasked read needs `unit:read-secrets`. | Anything but the pass rule of A7 is a fail. |
 | The team's repository | Read only at the job's commit. | Read in the sandbox; the engine runs no code of the repository other than the plan that the job already runs. | Parse limits: file count, file size, nesting depth. | The job's checkout scope. | A parse error drops the site, never the check. |
-| Placement: provenance (`sourcePosition`, `stackTrace`, instance addresses) | A source position must name a file inside the code location; a stack frame outside it is ignored. | A position selects a file to read; it is never a path that the engine writes. | At most 10,000 resources and 64 frames for each resource. | The unit's own state, read with the job token. | A position outside the code location drops the site. |
+| Placement: provenance (`sourcePosition`, `stackTrace`, instance addresses) | A source position must name a file inside the code location; a stack frame outside it is ignored. | The engine opens the file through an `os.Root` at the code location, so a position with `..` or a link cannot read outside it. A position selects a file to read; it is never a path that the engine writes. | At most 10,000 resources and 64 frames for each resource. | The unit's own state, read with the job token. | A position outside the code location drops the site. |
 | Placement: the configuration JSON and the collection definition | Strict JSON parse; a collection is a site only when it is a literal map or list in a file of the code location. | The server parses the file again at the commit before it applies an `add-map-entry` (B9). | Parse limits. | - | A collection that is not a literal drops the site. |
 | Placement: siblings in other units (B6) | Only units of the same namespace. | Only the expression kinds and the non-sensitive attribute values; never a sensitive value. | At most 200 sibling units. | The person of the job must hold `unit:read` on each sibling unit, checked at the read. | A unit that the person cannot read is skipped, and counted in the evidence. |
 | Placement: a shared module or shared path | A path that another unit declares, or a module directory that another unit calls, is a shared path. | - | - | An edit of a shared path needs the owner of that module or path: a separate review request to that owner, or no placement there (question 6). | No owner, or no right: the site is dropped, and the evidence says why. |
-| The typed edits, at the server | The schema of B9, unknown fields refused; each `expr` against the grammar and the symbols. | The server renders the text itself with the encoders; the runner's text is never used. | The bounds of B9. | The deliver phase waits for the person; `unit:write-back`. | One failing edit refuses the whole set, with an audit entry, before a review request exists. |
+| The typed edits, at the server | The schema of B9, unknown fields refused; the binding of each edit to a finding of the job; the construct and type deny lists; the non-secret list and shapes; each `expr` against the grammar and the symbol set. | The server names every new file and renders the text itself with the encoders; the runner's text is never used; names of special meaning are refused. | The bounds of B9. | The deliver phase waits for the person; `unit:write-back`. | One failing edit refuses the whole set, with an audit entry, before a review request exists. |
 | Dusty's choice | Must name one of the verified candidates of the job. | - | - | The person's grants at the time of the call. | Another value is refused. |
 
 A hostile runner can send typed edits that passed no check, and report a
@@ -827,6 +1017,11 @@ Possibly. What would be new, against the work in "Research":
    candidate; top-1 and top-3 placement equal to the original (exact, or
    plan-equal); the number of plans; the time. Compare with the floor alone
    (always G1) and with an LLM that proposes edits under the same check.
+   Leave one out keeps the resource in state, so it tests placement and the
+   frame rule, not the import. A second, smaller benchmark tests the import
+   path: real `import` blocks and `pulumi import` against a local Kubernetes
+   cluster (kind) and a cloud emulator or a test cloud account, with the full
+   A7 check.
 
 What is not new: the floor (the tools have it), the plan as the check
 (aztfexport and NSync), anti-unification and string synthesis as methods.
@@ -947,7 +1142,7 @@ Each slice ends with a test that names its pass fact.
 
 | Slice | Content | Pass |
 | --- | --- | --- |
-| 0. Benchmark | The leave-one-out harness and corpus (public projects with loops and modules, their state). The floor of the tools measured: the share of generated resources that plan clean. No product code. | A report with the numbers, in `docs/research/`. |
+| 0. Benchmark | The leave-one-out harness and corpus (public projects with loops and modules, their state), and the import-path benchmark on kind and a test account. The floor of the tools measured: the share of generated resources that plan clean. No product code. | A report with the numbers, in `docs/research/`. |
 | 1. Floor, OpenTofu | `codify` job, A2 to A7, the typed edits and the encoders with their hostile corpus, the server checks of B9, the result as an artifact, the console shows the rendered diff. No write-back. | e2e: a bucket in no unit; its edits plan "import 1, change 0", other resources no-op; a tag value with `${...}` stays a string; a Lambda environment variable becomes a variable whose value is in a profile draft; the server refuses an edit set with a literal equal to a profile secret. |
 | 2. Floor, Pulumi | A8 for YAML, TypeScript and Python, then Go, C# and Java. | e2e for each language: the same pass rule with `pulumi preview`; no `secret("` literal in any file. |
 | 3. Write-back of code | ADR 101 decision 4 changed; change order with the typed edits; the plan of the review request runs the check again in the sandbox of RFC 122. | e2e: the review request opens; its plan passes; after the merge and the apply, the finding resolves. |
@@ -1002,17 +1197,21 @@ owner can change them in the review of this RFC.
    team's versions. B is more code and must follow every provider change.
    _ELI5: A: the toy makers have a drawing machine, and we use it. B: we
    build our own machine. C: we use theirs, and ours when theirs jams._
-3. **The HCL library.** May OpenDustpan link `github.com/hashicorp/hcl/v2`
-   (MPL-2.0)?
-   - A. In the runner and in the server. The server needs it to check and
-     apply an `add-map-entry` into an existing HCL file. **Recommended.**
+3. **The HCL library and the secret patterns.** May OpenDustpan link an HCL
+   library (MPL-2.0, with the dependencies that A9 lists), and use the
+   gitleaks rule file (MIT) as data for the secret patterns?
+   - A. Link `github.com/opentofu/hcl/v2`, the fork that OpenTofu builds
+     with, in the runner and in the server, and use the gitleaks rule file.
+     The server needs the parser to check and apply an `add-map-entry` into
+     an existing HCL file. **Recommended.**
    - B. In the runner only. The server applies only edits that need no HCL
      parse: new `.tf` files and `.tfvars.json` entries. A new entry of a
      `for_each` map in `locals` is then not possible.
    - C. Neither. We write a parser of the subset of HCL that we edit.
 
    Recommendation: A. B removes the main case of the ceiling. C is a parser
-   that must match HCL exactly, which is a security risk of its own.
+   that must match HCL exactly, which is a security risk of its own. With B
+   or C, the pattern set is a list of our own.
    _ELI5: we need one pair of scissors to cut paper of this shape. A: the
    helper and we both get scissors. B: only the helper, so we can only add
    whole new pages. C: we make our own scissors._
@@ -1023,12 +1222,22 @@ owner can change them in the review of this RFC.
    - B. Only the values that the provider marks sensitive, and the names
      that the credential words match, become references.
    - C. Only the values that the provider marks sensitive.
+   - D. Default-deny as in A, but a referenced value may also go into Git
+     encrypted, the native way of the Pulumi CLI (`pulumi config set
+     --secret`, a `secure:` value in the stack settings file), and for
+     OpenTofu only through a profile draft. The value lives with the code,
+     and the team needs no profile.
 
    Recommendation: A. B and C let a password in a Lambda environment
-   variable or in user data into Git.
+   variable or in user data into Git. D puts ciphertext in Git: a leak of
+   the repository and of the stack's secrets key together gives the value,
+   the ciphertext stays in the history after a rotation, and it works for
+   Pulumi only.
    _ELI5: A: nothing goes on the label unless we know it is safe; everything
    else goes into the locked drawer. B: we lock away what looks like a key.
-   C: we lock away only what the toy maker called a key._
+   C: we lock away only what the toy maker called a key. D: like A, but we
+   may also write the secret on the label in a code that only your own key
+   can read._
 5. **Protection of an imported resource.** Does a codified resource get
    protection from a delete?
    - A. Follow the siblings (B6): `prevent_destroy` or `protect` when the
