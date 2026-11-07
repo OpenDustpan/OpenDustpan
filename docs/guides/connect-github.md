@@ -210,7 +210,7 @@ Errors of a check:
 | --- | --- |
 | 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
-| 429 | The connection was checked more than once in 10 seconds, or the installation more than 30 times in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
+| 429 | The server limits the checks. It allows one check of a connection in 10 seconds, and 30 checks of an installation in a minute. It also allows 40 checks of all installations of the app together in a minute. All namespaces share the app, so a check in one namespace can use the budget of another. The header `Retry-After` gives the wait time, at most 60 seconds. |
 | 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds. |
 
 The check takes no `Idempotency-Key`. A retry is safe.

@@ -685,7 +685,9 @@ func TestCheckLimitsTheCallsOfOneInstallation(t *testing.T) {
 
 	r := newRig(t)
 	conn := ready(t, r)
-	limits := forge.CheckLimits{PerConnection: time.Second, PerInstallation: 3, Window: time.Minute}
+	limits := forge.CheckLimits{
+		PerConnection: time.Second, PerInstallation: 3, PerApp: forge.DefaultCheckPerApp, Window: time.Minute,
+	}
 
 	svc, err := forge.NewService(forge.Config{
 		Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
@@ -720,30 +722,109 @@ func TestCheckLimitsTheCallsOfOneInstallation(t *testing.T) {
 	}
 }
 
+// TestCheckLimitsTheCallsOfOneApp checks two installations of one app, in two
+// namespaces. The limits of a connection and of an installation are loose, so
+// only the app-wide limit can refuse the fourth Check: the installations share
+// one budget.
+func TestCheckLimitsTheCallsOfOneApp(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	limits := forge.CheckLimits{PerConnection: time.Second, PerInstallation: 10, PerApp: 3, Window: time.Minute}
+
+	svc, err := forge.NewService(forge.Config{
+		Store: r.store, Namespaces: newNamespaces("acme", "beta"), Secrets: r.sealer, Audit: r.audit,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
+		CheckLimits: &limits, Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	r.register(t)
+	r.assign(t, "101", "acme")
+	r.assign(t, "202", "beta")
+
+	a := r.connect(t, "acme", "101")
+	b := r.connect(t, "beta", "202")
+
+	for i, c := range []struct {
+		ns namespace.Name
+		id string
+	}{{"acme", a.Record.ID}, {"beta", b.Record.ID}, {"acme", a.Record.ID}} {
+		if _, checkErr := svc.Check(t.Context(), callerEntry(), c.ns, c.id); checkErr != nil {
+			t.Fatalf("check %d: %v", i, checkErr)
+		}
+
+		r.advance(time.Second)
+	}
+
+	calls := len(r.opener.calls())
+
+	// The installation 202 used 1 of its 10 checks; the app used 3 of 3.
+	_, err = svc.Check(t.Context(), callerEntry(), "beta", b.Record.ID)
+	if !errors.Is(err, forge.ErrRateLimited) {
+		t.Fatalf("fourth check of the app = %v, want ErrRateLimited", err)
+	}
+
+	if wait, ok := forge.RateLimitWait(err); !ok || wait != 57*time.Second {
+		t.Fatalf("wait = %v, %v, want 57s: the first check leaves the window after a minute", wait, ok)
+	}
+
+	if len(r.opener.calls()) != calls {
+		t.Fatal("a check over the app limit opened the connection")
+	}
+
+	r.advance(57 * time.Second)
+
+	if _, err := svc.Check(t.Context(), callerEntry(), "beta", b.Record.ID); err != nil {
+		t.Fatalf("check after the window: %v", err)
+	}
+}
+
 // invalidCheckLimits are the limits that turn the limiter off or break it.
 func invalidCheckLimits() map[string]forge.CheckLimits {
 	good := forge.DefaultCheckLimits()
 
 	return map[string]forge.CheckLimits{
-		"zero":                  {PerConnection: 0, PerInstallation: 0, Window: 0},
-		"zero per installation": {PerConnection: good.PerConnection, PerInstallation: 0, Window: good.Window},
-		"negative per installation": {
-			PerConnection: good.PerConnection, PerInstallation: -1, Window: good.Window,
+		"zero": {PerConnection: 0, PerInstallation: 0, PerApp: good.PerApp, Window: 0},
+		"zero per installation": {
+			PerConnection:   good.PerConnection,
+			PerInstallation: 0,
+			PerApp:          good.PerApp,
+			Window:          good.Window,
 		},
-		"zero per connection": {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
+		"negative per installation": {
+			PerConnection: good.PerConnection, PerInstallation: -1, PerApp: good.PerApp, Window: good.Window,
+		},
+		"zero per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: 0, Window: good.Window,
+		},
+		"negative per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: -1, Window: good.Window,
+		},
+		"zero per connection": {
+			PerConnection:   0,
+			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
+			Window:          good.Window,
+		},
 		"negative per connection": {
 			PerConnection:   -time.Second,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          good.Window,
 		},
 		"zero window": {
 			PerConnection:   good.PerConnection,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          0,
 		},
 		"negative window": {
 			PerConnection:   good.PerConnection,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          -time.Minute,
 		},
 	}
