@@ -17,7 +17,7 @@ The benchmark of 2026-11-01 found two families that miss this measure. Both run 
 
 A person or a CLI waits for neither family. The cost that counts for a background family is the run time of the whole job. The delay to other work counts too. RFC 116 asks if the per-operation measure fits these families.
 
-On 7 November 2026 the owner chose option A of RFC 116. This is option 2 in the list of that RFC.
+On 7 November 2026 the owner chose option A of RFC 116. This is option 2 in the list of that RFC. Its text is: accept the background cost. Background families are measured by total job time.
 
 ## Decision
 
