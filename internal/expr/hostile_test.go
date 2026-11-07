@@ -294,8 +294,15 @@ func TestGroupsLayer(t *testing.T) {
 
 // TestFromLoopsWithinTheLimits checks that the slowest rules that the limits
 // allow still run: 1,000 groups in a closure, and a regular expression.
+// It uses the default evaluator, with its default time limit, because the
+// test is about that limit. A loaded machine (the race detector, many CPUs)
+// can stop one run at the time limit, so each source gets up to three runs
+// and the test passes on the first run that returns true. A source that the
+// limits refuse fails all three runs.
 func TestFromLoopsWithinTheLimits(t *testing.T) {
 	t.Parallel()
+
+	const attempts = 3
 
 	env := hostileEnv()
 	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups-1)
@@ -306,9 +313,20 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 		"count(request.requester.groups, # == '') == 999",
 		"inputs.long matches '^(a|aa)+$'",
 	} {
-		got, err := newPatientEvaluator(t).Bool(t.Context(), source, env)
+		var (
+			got bool
+			err error
+		)
+
+		for range attempts {
+			got, err = newEvaluator(t).Bool(t.Context(), source, env)
+			if err == nil && got {
+				break
+			}
+		}
+
 		if err != nil || !got {
-			t.Fatalf("Bool(%q) = %v, %v, want true", source, got, err)
+			t.Fatalf("Bool(%q) = %v, %v after %d runs, want true", source, got, err, attempts)
 		}
 	}
 }
