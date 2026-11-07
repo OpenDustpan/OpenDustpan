@@ -21,13 +21,25 @@ import (
 //nolint:gochecknoglobals // A frozen list, never mutated.
 var demoNamespaces = []namespace.Name{devNamespace, "demo-platform", "demo-data"}
 
+// demoNamespaceNames answers the names of demoNamespaces as strings.
+func demoNamespaceNames() []string {
+	names := make([]string, 0, len(demoNamespaces))
+	for _, name := range demoNamespaces {
+		names = append(names, name.String())
+	}
+
+	return names
+}
+
 // errDemoStore reports a store that cannot keep the demo person.
 var errDemoStore = errors.New("this store cannot keep the demo person")
 
 // seedDemo sets up the demo person when --demo is set, and prints its sign-in
 // once to stderr. Only dev passes the demo seed: serve has no flag, variable
 // or key for it. Each start sets a new password.
-func (r *devRun) seedDemo(ctx context.Context, st store) error {
+func (r *devRun) seedDemo(ctx context.Context, in runInputs) error {
+	st := in.st
+
 	if !r.flags.demo {
 		return nil
 	}
@@ -77,10 +89,8 @@ func (r *devRun) seedDemo(ctx context.Context, st store) error {
 		return fmt.Errorf("demo seed: %w", err)
 	}
 
-	for _, name := range demoNamespaces[1:] {
-		if _, namedErr := r.ensureNamed(ctx, st, name); namedErr != nil {
-			return namedErr
-		}
+	if namesErr := r.ensureDemoNamespaces(ctx, in); namesErr != nil {
+		return namesErr
 	}
 
 	password, err := seed.Run(ctx, demoNamespaces)
@@ -89,6 +99,26 @@ func (r *devRun) seedDemo(ctx context.Context, st store) error {
 	}
 
 	return writeDemoSignIn(r.stderr, password)
+}
+
+// ensureDemoNamespaces makes the two demo namespaces that do not exist, and
+// the placement rule in each one that it makes.
+func (r *devRun) ensureDemoNamespaces(ctx context.Context, in runInputs) error {
+	for _, name := range demoNamespaces[1:] {
+		created, err := r.ensureNamed(ctx, in.st, name)
+		if err != nil {
+			return err
+		}
+
+		// As for the namespace dev, the rule comes with the namespace only.
+		if created {
+			if seedErr := r.seedPlacement(ctx, in, name); seedErr != nil {
+				return seedErr
+			}
+		}
+	}
+
+	return nil
 }
 
 // writeDemoSignIn prints the sign-in of the demo person. The password is

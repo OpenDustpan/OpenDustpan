@@ -126,3 +126,49 @@ func TestDevLaterStartKeepsARemovedRule(t *testing.T) {
 		t.Fatalf("a later start prints a Rule line:\n%s", second.stderr.String())
 	}
 }
+
+// TestDevDemoMakesThePlacementRuleInEachNamespace proves that dev --demo makes
+// the collection and the catch-all rule in the namespace dev and in each demo
+// namespace that it makes, that the banner names the three namespaces, and
+// that a first stack create in each of them succeeds.
+func TestDevDemoMakesThePlacementRuleInEachNamespace(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	r := mustStartDev(t, newDevTestProcess(false), t.TempDir(), append(trialArgs(t, dir), "--demo")...)
+	token := readToken(t, dir)
+
+	for _, ns := range []string{"dev", "demo-platform", "demo-data"} {
+		status, body := devGet(t, http.DefaultClient, r.url+"/api/dustpan/v1/namespaces/"+ns+"/placement-rules", token)
+		if status != http.StatusOK || !strings.Contains(body, `"collection":"everything"`) {
+			t.Errorf("rules of %s = %d %s, want the rule for everything", ns, status, body)
+		}
+
+		req, err := http.NewRequestWithContext(
+			t.Context(), http.MethodPost, r.url+"/api/stacks/"+ns+"/app", strings.NewReader(`{"stackName":"first"}`),
+		)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+
+		req.Header.Set("Authorization", "token "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("create the first stack in %s: %v", ns, err)
+		}
+
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Fatalf("close body: %v", closeErr)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("the first stack in %s answers %d, want 200", ns, resp.StatusCode)
+		}
+	}
+
+	banner := r.stderr.String()
+	if !strings.Contains(banner, "dev, demo-platform, demo-data") {
+		t.Errorf("the banner does not name the three namespaces:\n%s", banner)
+	}
+}

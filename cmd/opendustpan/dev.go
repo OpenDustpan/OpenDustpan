@@ -752,12 +752,12 @@ func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Conte
 		// Dev makes the rule on the first start only, so a later start never
 		// makes a rule that the developer deleted.
 		if created {
-			if seedErr := r.seedPlacement(ctx, in); seedErr != nil {
+			if seedErr := r.seedPlacement(ctx, in, devNamespace); seedErr != nil {
 				return seedErr
 			}
 		}
 
-		if err := r.seedDemo(ctx, in.st); err != nil {
+		if err := r.seedDemo(ctx, in); err != nil {
 			return err
 		}
 
@@ -821,15 +821,15 @@ type placementPorts interface {
 	collection.PlacementStore
 }
 
-// seedPlacement makes the collection devCollection in the namespace dev and one
+// seedPlacement makes the collection devCollection in the namespace ns and one
 // placement rule that puts each new Pulumi stack in it. The server refuses a
 // new stack that no rule places, so the first "pulumi stack init" of a trial
 // needs the rule. The server itself makes no rule: this is a step of the dev
 // command, as the administrator of dev, and the audit log holds both entries.
-func (r *devRun) seedPlacement(ctx context.Context, in runInputs) error {
+func (r *devRun) seedPlacement(ctx context.Context, in runInputs, ns namespace.Name) error {
 	ports, ok := in.st.(placementPorts)
 	if !ok {
-		return fmt.Errorf("make the placement rule of %s: %w", devNamespace, errDevPlacementStore)
+		return fmt.Errorf("make the placement rule of %s: %w", ns, errDevPlacementStore)
 	}
 
 	admin, err := in.authn.AuthenticateToken(ctx, r.token.value)
@@ -849,7 +849,6 @@ func (r *devRun) seedPlacement(ctx context.Context, in runInputs) error {
 		return fmt.Errorf("placement service: %w", err)
 	}
 
-	ns := namespace.Name(devNamespace)
 	entry := func(action identity.Action, object string) audit.Entry {
 		e := cli.SettingsEntry(audit.ChannelStartup, admin.Subject, r.proc.now(), nil)
 		e.Namespace = ns
@@ -867,10 +866,10 @@ func (r *devRun) seedPlacement(ctx context.Context, in runInputs) error {
 	}
 
 	in2 := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: devCollection, Position: 0}
-	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+devNamespace)
+	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
 	if _, err = rules.Create(ctx, ns, in2, ruled); err != nil {
-		return fmt.Errorf("make the placement rule of %s: %w", devNamespace, err)
+		return fmt.Errorf("make the placement rule of %s: %w", ns, err)
 	}
 
 	return nil
@@ -884,10 +883,15 @@ func (r *devRun) placementLine(serverURL string) string {
 		return ""
 	}
 
-	path := serverURL + "/api/dustpan/v1/namespaces/" + devNamespace + "/placement-rules"
+	where := "in the namespace " + devNamespace
+	if r.flags.demo {
+		where = "in each of the namespaces " + strings.Join(demoNamespaceNames(), ", ")
+	}
 
-	return `a rule puts each new Pulumi stack of the namespace ` + devNamespace + ` in the collection ` + devCollection +
-		`. List it with: curl -H "Authorization: Bearer $TOKEN" ` + path +
+	path := serverURL + "/api/dustpan/v1/namespaces/<namespace>/placement-rules"
+
+	return where + `, a rule puts each new Pulumi stack in the collection ` +
+		devCollection + `. List it with: curl -H "Authorization: Bearer $TOKEN" ` + path +
 		`; delete it with: curl -X DELETE -H "Authorization: Bearer $TOKEN" ` + path + `/<id>`
 }
 
