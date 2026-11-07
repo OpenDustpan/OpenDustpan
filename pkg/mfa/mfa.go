@@ -36,6 +36,29 @@ const (
 	// for each start, so no limit by source address bounds the table when
 	// many sources send. Over this count, a new start stores no row.
 	MaxOpenSignInChallenges = 10_000
+	// MaxOpenSignInChallengesPerSource is the most open challenges of passkey
+	// sign-ins that one source holds. A source is an IPv4 address or the /64
+	// of an IPv6 address. The count is far below MaxOpenSignInChallenges, so
+	// one source cannot use the whole budget of the installation and block
+	// the sign-in of every person, break-glass accounts included: to fill the
+	// installation, a sender needs many sources.
+	MaxOpenSignInChallengesPerSource = 20
+	// MaxOpenSignInChallengesPerSourceGroup is the most open challenges of
+	// passkey sign-ins that one site group holds. A site group is an IPv4
+	// address or the /48 of an IPv6 address; an IPv4 address is its own group.
+	// One /48 holds 65,536 ranges of /64, so a count for each /64 alone lets
+	// one allocation fill the installation: 10,000 / 20 = 500 ranges. The
+	// count is 4 times the count of one source, so one /48 holds a share of
+	// at most 80 / 10,000 = 0.8 % of the installation total, and a sender
+	// needs 125 /48 ranges, not one, to fill it.
+	MaxOpenSignInChallengesPerSourceGroup = 4 * MaxOpenSignInChallengesPerSource
+	// MaxSourceBytes is the most bytes of the source of a sign-in challenge.
+	MaxSourceBytes = 64
+	// UnknownSource is the source of a sign-in challenge that has no valid
+	// source (and group). All such challenges share the one budget of this
+	// source, so a
+	// request with no address is limited too and never has an open budget.
+	UnknownSource = "unknown"
 	// ChallengeBytes is the count of random bytes of a WebAuthn challenge.
 	ChallengeBytes = 32
 	// ChallengeLifetime is the lifetime of a WebAuthn ceremony.
@@ -90,6 +113,11 @@ var (
 	// MaxOpenSignInChallenges. It wraps ErrUnavailable, so the adapters
 	// answer 503. The store wrote no row.
 	ErrChallengeLimit = fmt.Errorf("%w: too many open sign-in challenges", ErrUnavailable)
+	// ErrSourceChallengeLimit reports a start of a passkey sign-in from a
+	// source that holds MaxOpenSignInChallengesPerSource open challenges. The
+	// store wrote no row. The adapters answer 429. It also reports a start from
+	// a site group that holds MaxOpenSignInChallengesPerSourceGroup open ones.
+	ErrSourceChallengeLimit = errors.New("too many open sign-in challenges from this source")
 )
 
 // Passkey is one stored WebAuthn credential of a person. ID has the prefix
@@ -140,6 +168,14 @@ type Challenge struct {
 	PersonID  string
 	PendingID string
 	SessionID string
+	// Source is the budget key of the source address of a sign-in start: an
+	// IPv4 address, the /64 of an IPv6 address, or UnknownSource. A
+	// CeremonySignIn needs it. Every other kind has none.
+	Source string
+	// SourceGroup is the key of the site group of the source: the /48 of an
+	// IPv6 address, or the IPv4 address. A CeremonySignIn needs it. Every
+	// other kind has none.
+	SourceGroup string
 }
 
 // Digest is a SHA-256 digest of a secret: a challenge, a recovery code or
@@ -189,7 +225,12 @@ type PasskeyStore interface {
 	RemovePasskey(ctx context.Context, personID, id string, e audit.Entry) error
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that
-	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken.
+	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken. For a
+	// CeremonySignIn it counts the open ones of the source of c first, and
+	// returns ErrSourceChallengeLimit at MaxOpenSignInChallengesPerSource, or at
+	// MaxOpenSignInChallengesPerSourceGroup for its site group, then
+	// counts all open ones and returns ErrChallengeLimit at
+	// MaxOpenSignInChallenges. A refusal stores no row.
 	CreateChallenge(ctx context.Context, c Challenge, d Digest) error
 	// TakeChallenge deletes the challenge d and returns it, so that a
 	// challenge works once. It returns ErrNotFound when no challenge has the
