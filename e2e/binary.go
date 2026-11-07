@@ -1296,7 +1296,6 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
-
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
@@ -1313,20 +1312,21 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 		home:          filepath.Join(in.dir, "home"),
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
-		steps:         nil, skipped: nil,
-		tls:         true,
-		binPath:     bin,
-		backupDir:   "",
-		backendCfg:  cfg,
-		backendPort: "",
-		backendCmd:  nil,
-		backendLogs: nil,
-		ha:          cluster,
-		certBundle:  "",
-		dbProxy:     dbProxy,
-		dbURL:       cfg.dbURL,
-		signIn:      signIn,
-		claimers:    nil,
+		steps:         nil,
+		skipped:       nil,
+		tls:           true,
+		binPath:       bin,
+		backupDir:     "",
+		backendCfg:    cfg,
+		backendPort:   "",
+		backendCmd:    nil,
+		backendLogs:   nil,
+		ha:            cluster,
+		certBundle:    "",
+		dbProxy:       dbProxy,
+		dbURL:         cfg.dbURL,
+		signIn:        signIn,
+		claimers:      nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)

@@ -404,15 +404,6 @@ func deliveryStates(body string) (map[string]string, error) {
 func subscriptionSteps(t *testing.T, env *e2e.Env, hook sinkDoc) {
 	t.Helper()
 
-	// The history steps store deliveries through the notification store of the
-	// in-process server. No route makes a delivery, and the server binary holds
-	// its database open, so the test cannot seed one in a binary run.
-	if e2e.UseBinaryServer() {
-		env.SkipScenario(t, "notification subscription history",
-			"a seeded delivery needs the in-process server")
-		t.SkipNow()
-	}
-
 	sub := subscriptionMakeSteps(t, env, hook)
 	history := subscriptionsBase + "/" + sub.ID + "/deliveries"
 
@@ -427,7 +418,17 @@ func subscriptionSteps(t *testing.T, env *e2e.Env, hook sinkDoc) {
 			return nil
 		}))
 
-	delivered := redeliverSteps(t, env, sub, history)
+	// The redeliver steps store deliveries through the notification store of
+	// the in-process server. No route makes a delivery, and the server binary
+	// holds its database open, so a binary run cannot seed one. Only these steps
+	// skip there. The other steps of the subscription keep their coverage.
+	delivered := ""
+
+	if e2e.UseBinaryServer() {
+		env.SkipScenario(t, "notification redeliver steps", "a seeded delivery needs the in-process server")
+	} else {
+		delivered = redeliverSteps(t, env, sub, history)
+	}
 
 	sinkStep(t, env, sinkCase("a stale version is refused", http.MethodPut, subscriptionsBase+"/"+sub.ID,
 		http.StatusConflict).withBody(`{"version":9,"sink":"`+hook.ID+`","state":"active"}`))
@@ -551,7 +552,8 @@ func redeliverSteps(t *testing.T, env *e2e.Env, sub subscriptionDoc, history str
 }
 
 // subscriptionAuditStep proves that the audit log holds the actions of the
-// subscription steps, with the IDs of their objects.
+// subscription steps, with the IDs of their objects. An empty delivery means
+// that the redeliver steps did not run, so it checks no redeliver entry.
 func subscriptionAuditStep(t *testing.T, env *e2e.Env, sub, delivery string) {
 	t.Helper()
 
@@ -561,13 +563,21 @@ func subscriptionAuditStep(t *testing.T, env *e2e.Env, sub, delivery string) {
 		t.Fatalf("list audit entries = %d, %v (%s)", status, err, body)
 	}
 
-	for _, action := range []string{"subscription:create", "subscription:update", "delivery:redeliver"} {
+	actions := []string{"subscription:create", "subscription:update"}
+	ids := []string{sub}
+
+	if delivery != "" {
+		actions = append(actions, "delivery:redeliver")
+		ids = append(ids, delivery)
+	}
+
+	for _, action := range actions {
 		if !strings.Contains(body, `"action":"`+action+`"`) {
 			t.Errorf("audit log holds no entry with the action %s", action)
 		}
 	}
 
-	for _, id := range []string{sub, delivery} {
+	for _, id := range ids {
 		if !strings.Contains(body, id) {
 			t.Errorf("audit log holds no entry for %s", id)
 		}
