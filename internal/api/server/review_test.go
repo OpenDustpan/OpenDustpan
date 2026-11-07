@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1001,5 +1002,105 @@ func TestReviewFailsClosedWithoutItsEntry(t *testing.T) {
 		if _, ok := answer["grants"]; ok {
 			t.Fatalf("%s with a failed audit entry = %v, want no rows", path, answer)
 		}
+	}
+}
+
+// reviewEntryCase is one request of TestReviewFailureWritesAnAuditEntry and
+// the read-access entries that the request must write.
+type reviewEntryCase struct {
+	name        string
+	entries     func(st *sqlite.Store) auditStore
+	path        string
+	wantStatus  int
+	wantEntries int
+	wantOutcome audit.Outcome
+	wantObject  string
+}
+
+// TestReviewFailureWritesAnAuditEntry checks the audit entry of an export
+// that fails: one entry of kind read-access with the failure outcome and
+// the object of the export, as a success writes one with the success
+// outcome. An export that fails and whose entry also fails answers the
+// status of the error of the export.
+func TestReviewFailureWritesAnAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
+	clock := &envClock{mu: sync.Mutex{}, now: at}
+
+	tests := []reviewEntryCase{
+		{
+			name:       "a failed export writes one failure entry",
+			entries:    nil,
+			path:       "/api/server/access-review?cursor=" + handMadeCursor(),
+			wantStatus: http.StatusBadRequest, wantEntries: 1,
+			wantOutcome: audit.OutcomeFailure, wantObject: "access-review @server snapshot",
+		},
+		{
+			name:       "a successful export writes one success entry",
+			entries:    nil,
+			path:       "/api/server/access-review",
+			wantStatus: http.StatusOK, wantEntries: 1,
+			wantOutcome: audit.OutcomeSuccess,
+			wantObject:  "access-review @server snapshot asOf=" + strconv.FormatInt(at.UnixMilli(), 10),
+		},
+		{
+			name:       "a failed export whose entry fails answers the export error",
+			entries:    func(*sqlite.Store) auditStore { return failingAudit{} },
+			path:       "/api/server/access-review?cursor=" + handMadeCursor(),
+			wantStatus: http.StatusBadRequest, wantEntries: 0,
+			wantOutcome: "", wantObject: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			entries := tc.entries
+			if entries == nil {
+				entries = func(st *sqlite.Store) auditStore { return st }
+			}
+
+			f := newAccessFixtureClock(t, entries, clock.Now)
+			f.as(t, "ann", apiCall{http.MethodGet, tc.path, "", tc.wantStatus}, nil)
+			checkReviewEntry(t, f, tc, at)
+		})
+	}
+}
+
+// checkReviewEntry checks the read-access entries that the request of tc
+// wrote in @server.
+func checkReviewEntry(t *testing.T, f accessFixture, tc reviewEntryCase, at time.Time) {
+	t.Helper()
+
+	listing, err := f.store.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	got := make([]audit.Entry, 0, 1)
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Kind == audit.KindReadAccess {
+			got = append(got, listing.Entries[i])
+		}
+	}
+
+	if len(got) != tc.wantEntries {
+		t.Fatalf("read-access entries = %+v, want %d", got, tc.wantEntries)
+	}
+
+	if tc.wantEntries == 0 {
+		return
+	}
+
+	e := got[0]
+	if e.Outcome != tc.wantOutcome || e.Subject != "ann" ||
+		e.Action != string(identity.ActionServerReadAccess) ||
+		e.Object != tc.wantObject || !e.At.Equal(at) {
+		t.Fatalf("entry = %+v, want %s by ann %q at %s", e, tc.wantOutcome, tc.wantObject, at)
 	}
 }

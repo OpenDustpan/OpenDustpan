@@ -123,6 +123,19 @@ func newAccessFixtureFull(
 	return newAccessFixtureSignIn(t, entries, passkeys, nil)
 }
 
+// accessFixtureParts holds the optional parts of a fixture: its audit store,
+// its passkey service, the change of its console sign-in, its link service and
+// the clock of its access service. A nil passkey service gets a real one over
+// the store, a nil link service mounts no link route, and a nil clock is
+// time.Now.
+type accessFixtureParts struct {
+	entries  func(st *sqlite.Store) auditStore
+	passkeys apiserver.PasskeyService
+	tweak    func(in *apiserver.SignIn, st *sqlite.Store)
+	links    func(*sqlite.Store) *forgelink.Service
+	now      func() time.Time
+}
+
 // newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
 // tweak change the console sign-in before the handler reads it. With nil, the
 // sign-in stays as it is.
@@ -132,7 +145,9 @@ func newAccessFixtureSignIn(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, passkeys, tweak, noGitHostLinks)
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks, now: nil,
+	})
 }
 
 // noGitHostLinks gives no link service: the routes of the links are not mounted.
@@ -151,20 +166,31 @@ func newAccessFixtureLinks(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, nil, nil, links)
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: nil, tweak: nil, links: links, now: nil,
+	})
 }
 
-// newAccessFixtureAll builds the fixture with the passkey service passkeys, the
-// sign-in change tweak and the link service that links gives for the store.
-func newAccessFixtureAll(
-	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
-	tweak func(in *apiserver.SignIn, st *sqlite.Store), links func(*sqlite.Store) *forgelink.Service,
+// newAccessFixtureClock is newAccessFixtureWith with the clock now of the
+// access service, which stamps the audit entry of an export.
+func newAccessFixtureClock(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, now func() time.Time,
 ) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks, now: now,
+	})
+}
+
+// newAccessFixtureAll builds the fixture with the parts of a fixture.
+func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	st := openServerTemplateStore(t, path)
 
+	passkeys := parts.passkeys
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
 	}
@@ -188,7 +214,7 @@ func newAccessFixtureAll(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: parts.now, NewID: nil,
 		BootstrapAdmins: []string{"admin"},
 	})
 	if err != nil {
@@ -231,8 +257,13 @@ func newAccessFixtureAll(
 		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
 		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 	}
-	if tweak != nil {
-		tweak(signIn, st)
+	if parts.tweak != nil {
+		parts.tweak(signIn, st)
+	}
+
+	links := parts.links
+	if links == nil {
+		links = noGitHostLinks
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
@@ -261,7 +292,7 @@ func newAccessFixtureAll(
 		Principals:       principals,
 		Tokens:           tokens,
 		Access:           grants,
-		Audit:            entries(st),
+		Audit:            parts.entries(st),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
