@@ -154,6 +154,23 @@ func DevPreferencesRow(principalID string) map[string]any {
 	}
 }
 
+// DevForgeLinkRow returns a forge_account_links row.
+func DevForgeLinkRow(principalID string) map[string]any {
+	return map[string]any{
+		"kind": "github", "host": "github.com", "account_id": "42", "login": "dev", "principal_id": principalID,
+		"linked_at_ms": 1,
+	}
+}
+
+// DevForgeLinkRequestRow returns a forge_link_requests row.
+func DevForgeLinkRequestRow(principalID string) map[string]any {
+	return map[string]any{
+		"token_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "principal_id": principalID,
+		"created_at_ms": 1, "expires_at_ms": 300001, "proved_kind": "", "proved_host": "", "proved_account_id": "",
+		"proved_login": "", "proved_delivery_id": "", "proved_at_ms": 0, "used_at_ms": 0,
+	}
+}
+
 // DevLocalUserRow returns a local_users row with a password hash.
 func DevLocalUserRow(id, principalID string) map[string]any {
 	return map[string]any{

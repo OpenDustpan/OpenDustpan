@@ -209,6 +209,32 @@ CREATE TABLE durable_steps (
     done_at_ms bigint NOT NULL
 );
 
+CREATE TABLE forge_account_links (
+    kind text NOT NULL,
+    host text NOT NULL,
+    account_id text NOT NULL,
+    login text NOT NULL,
+    principal_id text NOT NULL,
+    linked_at_ms bigint NOT NULL,
+    CONSTRAINT forge_account_links_kind_check CHECK ((kind = ANY (ARRAY['github'::text, 'gitlab'::text])))
+);
+
+CREATE TABLE forge_link_requests (
+    token_sha256 text NOT NULL,
+    principal_id text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    proved_kind text NOT NULL,
+    proved_host text NOT NULL,
+    proved_account_id text NOT NULL,
+    proved_login text NOT NULL,
+    proved_delivery_id text NOT NULL,
+    proved_at_ms bigint NOT NULL,
+    used_at_ms bigint NOT NULL,
+    CONSTRAINT forge_link_requests_check CHECK (((expires_at_ms > created_at_ms) AND (proved_at_ms >= 0) AND (used_at_ms >= 0))),
+    CONSTRAINT forge_link_requests_token_sha256_check CHECK ((length(token_sha256) = 64))
+);
+
 CREATE TABLE gate_objects (
     namespace_id text NOT NULL,
     scope_key text NOT NULL,
@@ -1462,6 +1488,12 @@ ALTER TABLE ONLY durable_steps
 ALTER TABLE ONLY durable_steps
     ADD CONSTRAINT durable_steps_pkey PRIMARY KEY (operation_id, name);
 
+ALTER TABLE ONLY forge_account_links
+    ADD CONSTRAINT forge_account_links_pkey PRIMARY KEY (kind, host, account_id);
+
+ALTER TABLE ONLY forge_link_requests
+    ADD CONSTRAINT forge_link_requests_pkey PRIMARY KEY (token_sha256);
+
 ALTER TABLE ONLY gate_objects
     ADD CONSTRAINT gate_objects_pkey PRIMARY KEY (namespace_id, scope_key, kind, id);
 
@@ -1817,6 +1849,10 @@ CREATE INDEX durable_operations_created ON durable_operations USING btree (creat
 
 CREATE INDEX durable_operations_open ON durable_operations USING btree (created_at_ms, id) WHERE (state = ANY (ARRAY['pending'::text, 'running'::text]));
 
+CREATE INDEX forge_account_links_principal ON forge_account_links USING btree (principal_id);
+
+CREATE INDEX forge_link_requests_principal ON forge_link_requests USING btree (principal_id, expires_at_ms);
+
 CREATE INDEX gate_objects_kind_id ON gate_objects USING btree (kind, id);
 
 CREATE INDEX gate_objects_namespace ON gate_objects USING btree (namespace_id, level);
@@ -1999,6 +2035,12 @@ ALTER TABLE ONLY drift_results
 
 ALTER TABLE ONLY durable_steps
     ADD CONSTRAINT durable_steps_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES durable_operations(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY forge_account_links
+    ADD CONSTRAINT forge_account_links_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
+
+ALTER TABLE ONLY forge_link_requests
+    ADD CONSTRAINT forge_link_requests_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY gate_references
     ADD CONSTRAINT gate_references_namespace_id_scope_key_owner_kind_owner_id_fkey FOREIGN KEY (namespace_id, scope_key, owner_kind, owner_id) REFERENCES gate_objects(namespace_id, scope_key, kind, id) ON DELETE CASCADE;

@@ -38,7 +38,7 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 				backupColCreatedBy,
 				backupColCreatedAtMs,
 				backupColExpiresAtMs,
-				"used_at_ms",
+				backupColUsedAtMs,
 				"used_by",
 				backupColRevokedAtMs,
 			},
@@ -86,7 +86,7 @@ func sqliteRunnerControlTables() []sqliteBackupTable {
 				"runner_id",
 				"issued_at_ms",
 				backupColExpiresAtMs,
-				"used_at_ms",
+				backupColUsedAtMs,
 			},
 		},
 		{

@@ -66,6 +66,8 @@ import {
   decodeGitHostConnection,
   decodeGitHostCredentialSet,
   decodeGitHostInstallation,
+  decodeGitHostLink,
+  decodeGitHostLinkAccount,
   decodeIssuerCopyCheck,
   decodeIssuerCopyStep,
   decodeIssuerExportFile,
@@ -96,6 +98,7 @@ import {
   decodeListGatesResponse,
   decodeListGitHostConnectionsResponse,
   decodeListGitHostInstallationsResponse,
+  decodeListGitHostLinksResponse,
   decodeListJobsResponse,
   decodeListModuleReleasesResponse,
   decodeListNotificationDeliveriesResponse,
@@ -339,6 +342,8 @@ import type {
   GitHostConnection,
   GitHostCredentialSet,
   GitHostInstallation,
+  GitHostLink,
+  GitHostLinkAccount,
   IssuerCopyCheck,
   IssuerCopyStep,
   IssuerExportFile,
@@ -369,6 +374,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListGitHostLinksResponse,
   ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationDeliveriesResponse,
@@ -843,6 +849,16 @@ export interface DeleteGitHostInstallationInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation deleteGitHostLink. */
+export interface DeleteGitHostLinkInput {
+  readonly path: {
+    readonly kind: string;
+    readonly host: string;
+    readonly account: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation deleteNamespaceContext. */
 export interface DeleteNamespaceContextInput {
   readonly path: {
@@ -878,6 +894,17 @@ export interface DeletePlacementRuleInput {
   readonly path: {
     readonly namespace: string;
     readonly rule: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation deletePrincipalGitHostLink. */
+export interface DeletePrincipalGitHostLinkInput {
+  readonly path: {
+    readonly principal: string;
+    readonly kind: string;
+    readonly host: string;
+    readonly account: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1504,6 +1531,11 @@ export interface ListGitHostConnectionsInput {
 
 /** The input of the operation listGitHostInstallations. */
 export interface ListGitHostInstallationsInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listGitHostLinks. */
+export interface ListGitHostLinksInput {
   readonly signal?: AbortSignal;
 }
 
@@ -2713,6 +2745,23 @@ export const operations = {
     },
     undefined,
   ),
+  deleteGitHostLink: operation<void>(
+    {
+      id: "deleteGitHostLink",
+      method: "DELETE",
+      path: "/api/dustpan/v1/me/linked-accounts/{kind}/{host}/{account}",
+      pathParameters: ["kind", "host", "account"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
   deleteNamespaceContext: operation<void>(
     {
       id: "deleteNamespaceContext",
@@ -2770,6 +2819,23 @@ export const operations = {
       method: "DELETE",
       path: "/api/dustpan/v1/namespaces/{namespace}/placement-rules/{rule}",
       pathParameters: ["namespace", "rule"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  deletePrincipalGitHostLink: operation<void>(
+    {
+      id: "deletePrincipalGitHostLink",
+      method: "DELETE",
+      path: "/api/dustpan/v1/principals/{principal}/linked-accounts/{kind}/{host}/{account}",
+      pathParameters: ["principal", "kind", "host", "account"],
       queryParameters: [],
       security: "caller",
       idempotencyKey: "none",
@@ -3919,6 +3985,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListGitHostInstallationsResponse),
+  ),
+  listGitHostLinks: operation<ListGitHostLinksResponse>(
+    {
+      id: "listGitHostLinks",
+      method: "GET",
+      path: "/api/dustpan/v1/me/linked-accounts",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListGitHostLinksResponse),
   ),
   listJobs: operation<ListJobsResponse>(
     {

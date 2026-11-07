@@ -198,6 +198,29 @@ type DurableStep struct {
 	DoneAtMs    int64
 }
 
+type ForgeAccountLink struct {
+	Kind        string
+	Host        string
+	AccountID   string
+	Login       string
+	PrincipalID string
+	LinkedAtMs  int64
+}
+
+type ForgeLinkRequest struct {
+	TokenSha256      string
+	PrincipalID      string
+	CreatedAtMs      int64
+	ExpiresAtMs      int64
+	ProvedKind       string
+	ProvedHost       string
+	ProvedAccountID  string
+	ProvedLogin      string
+	ProvedDeliveryID string
+	ProvedAtMs       int64
+	UsedAtMs         int64
+}
+
 type GateObject struct {
 	NamespaceID string
 	ScopeKey    string

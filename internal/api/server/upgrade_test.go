@@ -156,9 +156,10 @@ func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigrat
 func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -224,9 +225,10 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -286,9 +288,10 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -373,9 +376,10 @@ func TestUpgradeCheckNeedsToken(t *testing.T) {
 func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -443,9 +447,10 @@ func (s stubJournal) CountRunningJournaledUpdates(_ context.Context) (int64, err
 func newJournalHandler(t *testing.T, journaled int64) testHandler {
 	t.Helper()
 
-	cfg := apiserver.Config{
+	cfg := &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,

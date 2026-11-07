@@ -233,6 +233,14 @@ _Avoid_: VCS provider, SCM, VCS (alone). In user-facing text: forge
 The credentials that let the server use one forge for a namespace. With them, the server reads files, takes webhooks, posts results and, if allowed, pushes. The server keeps them sealed, not as a setting. The credentials of a token connection, and the key and event secret of a per-namespace GitHub App, are namespace credentials. The key and event secret of the installation-level GitHub App, the default for GitHub, are installation credentials. The operator sets them, and a connection of a namespace holds no credential set of its own. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text names the service ("GitHub connection"). Where a generic term is needed, it says Git host connection.
 _Avoid_: VCS integration, VCS provider, app (alone)
 
+**Git host account link**:
+A row that maps one account of a Git host to one principal. Only an account that a person linked can run a comment command, and the command runs as that principal with its actions. A person makes the link from a console session. The account proves itself with a signed event of the Git host. The key of the account is the kind of the Git host, the host name and the stable ID that the Git host gives. The login of the account is text for a person to read and is never compared. A link never replaces another link silently. In code: `forgelink.Link`.
+_Avoid_: Identity mapping, user mapping, forge link (in user-facing text)
+
+**Git host link request**:
+The one-time request that makes a Git host account link. A person in a console session starts it and gets a token one time. The server keeps only the SHA-256 of the token. A signed event of the Git host that carries the token proves the account. The person then accepts the account that proved itself. A request is good for 5 minutes and for one accept. In code: `forgelink.Request`.
+_Avoid_: Pairing code, invite
+
 **Review request**:
 A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. One change order carries each review request. The review mode of its units decides which approvals count and who merges (ADR 299).
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
