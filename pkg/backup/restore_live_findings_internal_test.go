@@ -432,6 +432,17 @@ func TestFindingsOfBoundsTheKeys(t *testing.T) {
 	}
 }
 
+// keysOf returns the keys of blobs, in order.
+func keysOf(blobs []ManifestBlob) []string {
+	out := make([]string, 0, len(blobs))
+
+	for _, ref := range blobs {
+		out = append(out, ref.Key)
+	}
+
+	return out
+}
+
 // TestFindingsOfCountsEachKeyOnce proves that Named counts each key once,
 // also a key that more than one list names, and that the missing-blob limit
 // result stays the same for a manifest whose keys no two lists share.
@@ -466,6 +477,12 @@ func TestFindingsOfCountsEachKeyOnce(t *testing.T) {
 			blobs: heldBlobs(6), unverified: nil,
 			damaged: append(missingEntries(3), entryOf(liveKey+"/damaged", DamageMismatch)),
 			named:   10, missing: 3, mismatched: 1, exceeded: true,
+		},
+		{
+			name:  "shared keys in the blobs and the unverified keys still exceed the limit",
+			blobs: heldBlobs(7), unverified: keysOf(heldBlobs(7)),
+			damaged: missingEntries(3),
+			named:   10, missing: 3, mismatched: 0, exceeded: true,
 		},
 	} {
 		manifest := testManifest(t, tc.blobs, tc.damaged)
