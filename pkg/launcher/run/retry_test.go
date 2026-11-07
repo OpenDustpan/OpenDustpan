@@ -7,27 +7,44 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/launcher"
 	"opendustpan.org/opendustpan/pkg/launcher/session"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
 // TestRetryHonorsRetryAfter checks that the retry of a call that got a 429
-// or a 503 waits at least the Retry-After of the answer, even when the
-// backoff wait is shorter. The waits are recorded by the injected sleep;
-// the test never waits on the clock.
+// or a 503 waits for the Retry-After of the answer, up to runner.MinLease. A
+// longer Retry-After gives the cap. The waits are recorded by the injected
+// sleep; the test never waits on the clock.
 func TestRetryHonorsRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	const retryWait = time.Minute
+	unavailable := func(after time.Duration) *session.Response {
+		r := refusal(503, protocol.ErrorUnavailable)
+		r.RetryAfter = after
 
-	unavailable := refusal(503, protocol.ErrorUnavailable)
-	unavailable.RetryAfter = retryWait
+		return r
+	}
 
 	cases := []struct {
-		name   string
-		answer *session.Response
+		name     string
+		answer   *session.Response
+		wantWait time.Duration
 	}{
-		{"429 with no protocol body", &session.Response{Status: 429, Body: []byte("slow down"), RetryAfter: retryWait}},
-		{"503", unavailable},
+		{
+			"429 with no protocol body within the cap",
+			&session.Response{Status: 429, Body: []byte("slow down"), RetryAfter: 10 * time.Second},
+			10 * time.Second,
+		},
+		{
+			"503 above the cap",
+			unavailable(time.Minute),
+			runner.MinLease,
+		},
+		{
+			"503 far above the cap",
+			unavailable(24 * time.Hour),
+			runner.MinLease,
+		},
 	}
 
 	for _, tc := range cases {
@@ -54,8 +71,8 @@ func TestRetryHonorsRetryAfter(t *testing.T) {
 			}
 
 			for i, d := range waits {
-				if d < retryWait {
-					t.Errorf("wait %d = %s, want at least the Retry-After of %s", i, d, retryWait)
+				if d != tc.wantWait {
+					t.Errorf("wait %d = %s, want %s", i, d, tc.wantWait)
 				}
 			}
 		})
