@@ -4949,12 +4949,139 @@
         "type": "object"
       },
       "SelfServiceBlueprint": {
+        "properties": {
+          "delivery": {
+            "$ref": "#/components/schemas/SelfServiceDelivery"
+          },
+          "description": {
+            "type": "string"
+          },
+          "exprVersion": {
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/SelfServiceInput"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SelfServicePlatform"
+          },
+          "policy": {
+            "items": {
+              "$ref": "#/components/schemas/SelfServicePolicyRule"
+            },
+            "type": "array"
+          },
+          "program": {
+            "$ref": "#/components/schemas/SelfServiceProgram"
+          },
+          "quotas": {
+            "items": {
+              "$ref": "#/components/schemas/SelfServiceQuotaRule"
+            },
+            "type": "array"
+          },
+          "schemaVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sourcePrincipal": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivery",
+          "inputs",
+          "name",
+          "platform",
+          "program",
+          "schemaVersion",
+          "title",
+          "tool",
+          "unitName"
+        ],
+        "type": "object"
+      },
+      "SelfServiceChoice": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/SelfServiceSource"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SelfServiceComponent": {
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "package",
+          "type",
+          "version"
+        ],
+        "type": "object"
+      },
+      "SelfServiceDelivery": {
+        "properties": {
+          "default": {
+            "enum": [
+              "git",
+              "opendustpan"
+            ],
+            "type": "string"
+          },
+          "git": {
+            "$ref": "#/components/schemas/SelfServiceGitDelivery"
+          },
+          "homes": {
+            "items": {
+              "enum": [
+                "git",
+                "opendustpan"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "default",
+          "homes"
+        ],
         "type": "object"
       },
       "SelfServiceDraft": {
         "properties": {
           "blueprint": {
-            "type": "object"
+            "$ref": "#/components/schemas/SelfServiceBlueprint"
           },
           "version": {
             "format": "int64",
@@ -4979,6 +5106,201 @@
         ],
         "type": "object"
       },
+      "SelfServiceFilter": {
+        "properties": {
+          "equals": {
+            "$ref": "#/components/schemas/SelfServiceOperand"
+          },
+          "output": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "equals",
+          "output"
+        ],
+        "type": "object"
+      },
+      "SelfServiceGitDelivery": {
+        "properties": {
+          "deliveries": {
+            "items": {
+              "enum": [
+                "review-request",
+                "direct-push"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "repositories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SelfServiceInput": {
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/SelfServiceChoice"
+          },
+          "default": {
+            "description": "Any JSON value."
+          },
+          "description": {
+            "type": "string"
+          },
+          "maps": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "integer",
+              "number",
+              "boolean",
+              "string-list"
+            ],
+            "type": "string"
+          },
+          "validate": {
+            "items": {
+              "$ref": "#/components/schemas/SelfServiceRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "maps",
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "SelfServiceModule": {
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SelfServiceOperand": {
+        "properties": {
+          "input": {
+            "type": "string"
+          },
+          "value": {
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+          }
+        },
+        "type": "object"
+      },
+      "SelfServiceOutputRef": {
+        "properties": {
+          "output": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "output"
+        ],
+        "type": "object"
+      },
+      "SelfServicePlatform": {
+        "properties": {
+          "pool": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "description": "Any JSON value."
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SelfServicePolicyRule": {
+        "properties": {
+          "approvals": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "effect": {
+            "enum": [
+              "allow",
+              "approve",
+              "deny"
+            ],
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "message": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "effect",
+          "when"
+        ],
+        "type": "object"
+      },
+      "SelfServiceProgram": {
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/SelfServiceComponent"
+          },
+          "module": {
+            "$ref": "#/components/schemas/SelfServiceModule"
+          }
+        },
+        "type": "object"
+      },
       "SelfServicePublishRequest": {
         "properties": {
           "draftVersion": {
@@ -4988,6 +5310,83 @@
         },
         "required": [
           "draftVersion"
+        ],
+        "type": "object"
+      },
+      "SelfServiceQuotaRule": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "units",
+              "requests",
+              "expr"
+            ],
+            "type": "string"
+          },
+          "max": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "namespace",
+              "requester"
+            ],
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SelfServiceRule": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "rule"
+        ],
+        "type": "object"
+      },
+      "SelfServiceSource": {
+        "properties": {
+          "blueprint": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "label": {
+            "$ref": "#/components/schemas/SelfServiceOutputRef"
+          },
+          "value": {
+            "$ref": "#/components/schemas/SelfServiceOutputRef"
+          },
+          "where": {
+            "items": {
+              "$ref": "#/components/schemas/SelfServiceFilter"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -6456,7 +6855,7 @@
             "type": "boolean"
           },
           "value": {
-            "description": "Any JSON value of a plain output."
+            "description": "Any JSON value."
           }
         },
         "required": [
@@ -6898,16 +7297,16 @@
       "UpdateNamespaceIssuerRequest": {
         "properties": {
           "allowBlockSubjects": {
-            "description": "Any JSON value of a plain output."
+            "description": "Any JSON value."
           },
           "includeActorName": {
-            "description": "Any JSON value of a plain output."
+            "description": "Any JSON value."
           },
           "issuerURL": {
-            "description": "Any JSON value of a plain output."
+            "description": "Any JSON value."
           },
           "subjectTemplate": {
-            "description": "Any JSON value of a plain output."
+            "description": "Any JSON value."
           }
         },
         "required": [

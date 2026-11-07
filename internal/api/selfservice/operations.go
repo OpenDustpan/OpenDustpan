@@ -13,20 +13,15 @@ const tag = "self-service"
 // namespaceRead is the action that every route checks on the namespace first.
 const namespaceRead = "namespace:read"
 
-// blueprintDocument is the Go type of the body of a draft write. Its JSON is
-// an object: the handler parses it with the strict blueprint reader.
-type blueprintDocument struct{}
-
 // operationLabels names the routes of this adapter. The server refuses to
 // start without a label for a route under apidesc.Prefix.
 func operationLabels() map[string]apidesc.Label {
-	// The blueprint document is an object. Its fields are not described yet:
-	// the schema names only the object.
-	document := apidesc.Declare[selfservice.Blueprint](map[string]any{"type": "object"})
-	documentBody := apidesc.Typed[blueprintDocument]("SelfServiceBlueprint",
-		apidesc.Declare[blueprintDocument](map[string]any{"type": "object"}))
+	// The blueprint document is the body of a draft write, and the draft of a
+	// read names the same type. The write parses it with the strict reader.
+	blueprint := apidesc.Typed[selfservice.Blueprint]("SelfServiceBlueprint", blueprintTypes()...)
 	version := apidesc.Typed[versionMetadata]("SelfServiceVersion")
-	draft := apidesc.Typed[draftResponse]("SelfServiceDraft", document)
+	draftDeclared := append(blueprintTypes(), apidesc.Named[selfservice.Blueprint]("SelfServiceBlueprint"))
+	draft := apidesc.Typed[draftResponse]("SelfServiceDraft", draftDeclared...)
 	write := apidesc.Typed[writeResponse]("SelfServiceDraftWrite")
 	publish := apidesc.Typed[publishBody]("SelfServicePublishRequest")
 
@@ -40,7 +35,7 @@ func operationLabels() map[string]apidesc.Label {
 			WithBodies(apidesc.NoBody, draft),
 		apidesc.Pattern(http.MethodPut, DraftPath): apidesc.Name("writeBlueprintDraft", tag).
 			On(apidesc.KindNamespace).
-			WithBodies(documentBody, write),
+			WithBodies(blueprint, write),
 		apidesc.Pattern(http.MethodPost, VersionsPath): apidesc.Name("publishBlueprint", tag).
 			On(apidesc.KindNamespace).
 			WithBodies(publish, version),
