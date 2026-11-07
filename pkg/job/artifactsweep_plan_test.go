@@ -15,6 +15,13 @@ import (
 // planOperation is the operation of the plan phase of the cases.
 const planOperation = durable.ID("op-plan")
 
+// sweepFixedNow is the time of the database and of the instance in the cases.
+// It is far after the time of any blob that a case writes, so every such blob is
+// older than the grace period, and no case reads a wall clock.
+func sweepFixedNow() time.Time {
+	return time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC)
+}
+
 // errOperationRead is the failure of a read of an operation in the cases.
 var errOperationRead = errors.New("read of the operation failed")
 
@@ -61,8 +68,8 @@ func planRig(
 	t.Helper()
 
 	r := newSweepRig(t, sweepSetup{
-		names: sweepNames{names: names, err: nil}, ahead: sweepAhead, instance: 0, wrap: nil, jobs: nil,
-		ops: ops,
+		names: sweepNames{names: names, err: nil}, ahead: 0, instance: 0, wrap: nil, jobs: nil,
+		ops: ops, at: sweepFixedNow(),
 	})
 
 	r.jobs.j.State = state
@@ -86,7 +93,7 @@ func runningOp(token int64, lease time.Duration) durable.Operation {
 	op := noOperation()
 	op.State = durable.StateRunning
 	op.Claim = durable.Claim{
-		Operation: planOperation, Owner: "", Token: token, ExpiresAt: time.Now().Add(sweepAhead + lease),
+		Operation: planOperation, Owner: "", Token: token, ExpiresAt: sweepFixedNow().Add(lease),
 	}
 
 	return op
