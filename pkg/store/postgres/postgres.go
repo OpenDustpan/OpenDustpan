@@ -436,7 +436,11 @@ func (s *Store) CreateStackPlaced(
 			return err
 		}
 
-		return setUnitCollection(ctx, q, placementMove(st, p), e)
+		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
+			return placementCollectionError(p.Collection.Name, err)
+		}
+
+		return nil
 	})
 }
 

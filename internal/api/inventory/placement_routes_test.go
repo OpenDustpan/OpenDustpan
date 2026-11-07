@@ -39,7 +39,7 @@ func (m *memPlacements) CreatePlacementRule(
 	defer m.mu.Unlock()
 
 	if r.Collection.Key() != "payments" && r.Collection.Key() != "sandbox" {
-		return collection.ErrNotFound
+		return collection.ErrPlacementCollectionMissing
 	}
 
 	if err := r.Validate(); err != nil {

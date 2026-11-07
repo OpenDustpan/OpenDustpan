@@ -1080,7 +1080,10 @@ func testCreateStackPlacedRefused(t *testing.T, s Store) {
 	missing := newCollection(t, ns.Name, "absent")
 
 	refusals := []placedRefusal{
-		{"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(), collection.ErrNotFound},
+		{
+			"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(),
+			collection.ErrPlacementCollectionMissing,
+		},
 		{"a collection with another ID", placement(reborn, ns.Fence()), ns.Fence(), collection.ErrCollectionChanged},
 		{"a stale fence", placement(c, stale), stale, namespace.ErrFenced},
 		{"an audit entry of another namespace", foreign, ns.Fence(), audit.ErrInvalidEntry},

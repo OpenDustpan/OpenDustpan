@@ -227,21 +227,59 @@ func testRuleInvalidPosition(t *testing.T, s PlacementStore) {
 	wantProjects(t, s, ns.Name, "a")
 }
 
+// testRuleMissingCollection checks that a rule write that names a collection
+// the namespace does not hold returns ErrPlacementCollectionMissing, and not
+// the plain ErrNotFound of every other missing collection.
 func testRuleMissingCollection(t *testing.T, s PlacementStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
-	r := collection.Rule{
-		CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns.Name, Tool: collection.ToolPulumi,
-		Project: "a", Stack: "*", Collection: mustName(t, "nowhere"), CreatedBy: testSubject, Position: 1,
+	stored := mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
+	missing := mustName(t, "nowhere")
+
+	tests := []struct {
+		name string
+		rule collection.Rule
+		run  func(r collection.Rule) error
+	}{
+		{
+			name: "create",
+			rule: collection.Rule{
+				CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns.Name, Tool: collection.ToolPulumi,
+				Project: "b", Stack: "*", Collection: missing, CreatedBy: testSubject, Position: 1,
+			},
+			run: func(r collection.Rule) error {
+				return s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
+			},
+		},
+		{
+			name: "update",
+			rule: stored,
+			run: func(r collection.Rule) error {
+				return s.UpdatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
+			},
+		},
 	}
 
-	err := s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
-	if !errors.Is(err, collection.ErrNotFound) {
-		t.Errorf("err = %v, want collection.ErrNotFound", err)
+	for i := range tests {
+		tt := &tests[i]
+
+		t.Run(tt.name, func(t *testing.T) {
+			r := tt.rule
+			r.Collection = missing
+
+			err := tt.run(r)
+			if !errors.Is(err, collection.ErrPlacementCollectionMissing) {
+				t.Errorf("err = %v, want ErrPlacementCollectionMissing", err)
+			}
+
+			if errors.Is(err, collection.ErrNotFound) {
+				t.Errorf("err = %v matches the plain ErrNotFound too", err)
+			}
+		})
 	}
 
-	wantProjects(t, s, ns.Name)
+	wantProjects(t, s, ns.Name, "a")
 }
 
 func testRuleCollectionCase(t *testing.T, s PlacementStore) {

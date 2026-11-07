@@ -92,6 +92,10 @@ func TestRequestAndCollectionErrorsHaveCodes(t *testing.T) {
 		},
 		{"collection not found", collection.ErrNotFound, http.StatusNotFound, code(errcode.CollectionNotFound)},
 		{
+			"placement rule collection not found", collection.ErrPlacementCollectionMissing,
+			http.StatusNotFound, code(errcode.CollectionNotFound),
+		},
+		{
 			"collection exists", collection.ErrAlreadyExists, http.StatusConflict,
 			code(errcode.CollectionAlreadyExists),
 		},
