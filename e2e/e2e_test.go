@@ -1268,6 +1268,10 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiMaskedStateScenario(t, env, org)
 
 	pulumiDiffScenario(t, env, org)
+
+	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
+		pulumiUnitWithoutCollectionRefused(t, env)
+	})
 }
 
 // pulumiRenameWithCheckpointScenario proves that a stack with a checkpoint and
@@ -3559,6 +3563,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	// The audit entries of the kind tool-operation for state the CLI reads.
 	tofuAuditScenario(ctx, t, env)
+
+	// The last scenario: it replaces the configuration of the project.
+	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
+		tofuUnitWithoutCollectionRefused(t, env)
+	})
 }
 
 // tofuAuditSecretConfig is the configuration that stores a sensitive output:

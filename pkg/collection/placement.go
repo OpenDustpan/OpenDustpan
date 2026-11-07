@@ -47,13 +47,17 @@ const (
 	MaxPlacementRules = 200
 )
 
-// ToolPulumi is the tool whose new units a placement rule places. OpenTofu
-// does not use rules: the project of its cloud block names the collection.
-const ToolPulumi = "pulumi"
+// The tools whose new units a placement rule places. A rule for ToolOpenTofu
+// matches a new workspace with the project "*" and the workspace name in the
+// stack pattern, because a workspace has no project.
+const (
+	ToolPulumi   = "pulumi"
+	ToolOpenTofu = "opentofu"
+)
 
 // PlacementTools lists the tools that placement rules support.
 func PlacementTools() []string {
-	return []string{ToolPulumi}
+	return []string{ToolPulumi, ToolOpenTofu}
 }
 
 // Pattern is a validated pattern for a project name or a stack name. It is a

@@ -1479,6 +1479,7 @@ func newTofuHTTPHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1583,6 +1584,7 @@ func newTFEHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
