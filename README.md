@@ -373,6 +373,8 @@ How-to guides:
   that each instance shares, for the target design.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
   provider.
+- [Sign-in with an LDAP directory](docs/guides/ldap-sign-in.md): the
+  settings, the TLS rules, the subject and the groups of an LDAP provider.
 - [CAS sign-in](docs/guides/cas-sign-in.md): the checks of a sign-in through
   a CAS server.
 
