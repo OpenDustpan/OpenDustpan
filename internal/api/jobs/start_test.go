@@ -510,6 +510,37 @@ func TestStartMapsTheErrorsOfTheService(t *testing.T) {
 	}
 }
 
+// TestStartAnswersApplyAndDestroyAsUnsupported proves that the route passes the
+// operation of an apply and of a destroy to the service, and that the answer
+// of the service for them ("plans only") reaches the caller as 422 with the
+// code job.unsupported.
+func TestStartAnswersApplyAndDestroyAsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	for _, op := range []job.Operation{job.OperationApply, job.OperationDestroy} {
+		t.Run(string(op), func(t *testing.T) {
+			t.Parallel()
+
+			starter := newFakeStarter(t)
+			starter.err = fmt.Errorf("%w: this server starts plan jobs only, not %s", job.ErrUnsupported, op)
+			h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, nil)
+
+			body := strings.Replace(goodBody, `"operation":"plan"`, `"operation":"`+string(op)+`"`, 1)
+
+			rec := post(t, h, testToken, body)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d %s, want 422", rec.Code, rec.Body.String())
+			}
+
+			checkErrorBody(t, rec.Body.String(), "job.unsupported", "plan jobs only")
+
+			if len(starter.requests) != 1 || starter.requests[0].Operation != op {
+				t.Fatalf("the service saw %+v, want one request with the operation %s", starter.requests, op)
+			}
+		})
+	}
+}
+
 func checkErrorBody(t *testing.T, body, wantCode, wantText string) {
 	t.Helper()
 

@@ -3913,6 +3913,18 @@ decisions:
   accepted_artifact: "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
   evidence:
   - "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
+- id: "adr-0355"
+  title: "ADR 355: Gate configuration paths and errors as shipped"
+  decision: "1. The unit scope of the gate routes is `/api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}`. The segment `by-name` is part of the path. Each variable segment is percent-encoded. For example, the Pulumi stack `web/prod` of the namespace `acme` is `.../namespaces/acme/units/by-name/pulumi/web%2Fprod`. The other scopes of ADR 230 decision 3 do not change.\n2. A gate configuration error that wraps `gate.ErrNotFound` has the status 404 and the code `gate.not-found`. The object does not exist at the scope. A gate configuration error that wraps `gate.ErrConflict` has the status 409 and the code `gate.version-conflict`. The stored version is not the version of `If-Match`. This decision adds two rows to the error table of ADR 230 decision 4. The other rows do not change."
+  reason: "ADR 230 decision 3 gives the unit path of the gate routes as `.../units/{tool}/{name}`. The server and the reference document use `.../units/by-name/{tool}/{name}`. The segment `by-name` keeps a path by name apart from the routes of a unit by its stable ID."
+  scope:
+  - "docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md"
+  evidence:
+  - "docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md"
 - id: "adr-0360"
   title: "ADR 360: Catalog: three paths to a new blueprint version, and time to live of units"
   decision: "1. **Three paths to a new blueprint version (owner, 2026-10-18).** A Catalog request moves to a new blueprint version by one of three paths: 1. **Requester upgrade.** The server maps the answers by name. The requester fills the new required inputs. 2. **Migrations and batch upgrades.** The blueprint declares migrations, written in Expr. The platform team can run batch upgrades. 3. **Publisher edits of answers.** The publisher edits the answers.\n2. **Time to live is a unit setting (owner, 2026-10-18).** The time to live is a setting of a unit. A blueprint gives a default for it. A namespace gives a maximum for it."

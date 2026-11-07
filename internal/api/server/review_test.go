@@ -534,6 +534,81 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 	}
 }
 
+// TestReviewMembershipFields checks the source and suspension fields in JSON.
+func TestReviewMembershipFields(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []reviewMembershipCase{
+		{subject: "bob", source: "local", sourceID: "", suspended: false},
+		{subject: "olga", source: "scim", sourceID: "scim-token-1", suspended: true},
+	} {
+		t.Run(c.source, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			seedOpsGrants(t, f)
+			seedSuspendedReviewMember(t, f)
+
+			path := "/api/server/access-review?subject=principal:prn-" + c.subject
+			rows := reviewRowsAsMap(t, f, "ann", path)
+			checkReviewMembershipJSON(t, rows, c)
+		})
+	}
+}
+
+// reviewMembershipCase is one membership that the JSON of a review must show.
+type reviewMembershipCase struct {
+	subject   string
+	source    string
+	sourceID  string
+	suspended bool
+}
+
+// checkReviewMembershipJSON checks that the membership fields are present, including empty and false values.
+func checkReviewMembershipJSON(t *testing.T, rows []map[string]any, want reviewMembershipCase) {
+	t.Helper()
+
+	count := 0
+
+	for _, row := range rows {
+		if row["via"] == nil {
+			continue
+		}
+
+		via, ok := row["via"].(map[string]any)
+		if !ok {
+			t.Fatalf("via = %v, want an object", row["via"])
+		}
+
+		count++
+		if via["memberSource"] != want.source || via["memberSourceId"] != want.sourceID ||
+			via["memberSuspended"] != want.suspended {
+			t.Fatalf("via = %v, want source %q, source ID %q and suspended %t",
+				via, want.source, want.sourceID, want.suspended)
+		}
+	}
+
+	if count != 1 {
+		t.Fatalf("review has %d membership rows, want 1", count)
+	}
+}
+
+// seedSuspendedReviewMember makes olga a suspended member of ops from SCIM.
+func seedSuspendedReviewMember(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 13, 0, 0, 0, time.UTC)
+	m := principal.Membership{
+		AddedAt: at, SuspendedAt: at.Add(time.Minute), GroupID: "grp-ops", PrincipalID: "prn-olga",
+		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
+		State: principal.MembershipStateSuspended, Pinned: false,
+	}
+	joined := storetest.ServerChange(at, "group:grp-ops#member:prn-olga")
+	if err := f.store.AddMember(t.Context(), m, joined, nil); err != nil {
+		t.Fatalf("seed suspended member: %v", err)
+	}
+}
+
 // callerGrantRows returns each row of doc as its subject, subject name,
 // role, object and membership.
 func callerGrantRows(doc reviewDoc) []string {

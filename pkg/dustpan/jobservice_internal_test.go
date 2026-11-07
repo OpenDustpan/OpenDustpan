@@ -381,6 +381,36 @@ func TestJobPlannerRequest(t *testing.T) {
 			"",
 		},
 		{
+			"a refresh that is no drift check",
+			pools,
+			nil,
+			func(q *job.StartRequest) { q.Operation = job.OperationRefresh },
+			job.ErrUnsupported,
+			"",
+		},
+		{
+			"an apply with edits",
+			pools,
+			nil,
+			func(q *job.StartRequest) {
+				q.Operation = job.OperationApply
+				q.Edits = []job.FileEdit{{Path: "main.tf", Keys: nil}}
+			},
+			job.ErrUnsupported,
+			"",
+		},
+		{
+			"an apply with a delivery",
+			pools,
+			nil,
+			func(q *job.StartRequest) {
+				q.Operation = job.OperationApply
+				q.Delivery = job.DeliveryDirectPush
+			},
+			job.ErrUnsupported,
+			"",
+		},
+		{
 			"write-back",
 			pools,
 			nil,
@@ -409,6 +439,30 @@ func TestJobPlannerRequest(t *testing.T) {
 			"",
 		},
 	})
+}
+
+// TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer proves that an apply and
+// a destroy get the answer "plans only" through the planner of the job service,
+// which is the layer under the service: no step list, pool or location
+// check can change it.
+func TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+
+	for _, op := range []job.Operation{job.OperationApply, job.OperationDestroy} {
+		p := jobPlanner{pools: pools, connections: nil}
+		unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+		req := plannerRequest(unit)
+		req.Operation = op
+
+		spec, err := p.Plan(t.Context(), unit, &req)
+
+		want := "this server starts plan jobs only, not " + string(op)
+		if !errors.Is(err, job.ErrUnsupported) || !strings.Contains(err.Error(), want) || len(spec.Steps) != 0 {
+			t.Errorf("Plan(%s) = %+v, %v; want ErrUnsupported with %q and no step", op, spec, err, want)
+		}
+	}
 }
 
 func TestPlanSteps(t *testing.T) {
