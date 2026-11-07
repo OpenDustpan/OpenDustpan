@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -68,6 +69,31 @@ func checkContracts(t *testing.T, dir string) {
 	}
 }
 
+// binaryModeGaps returns, by route, the statuses that only an in-process run can
+// produce. The state.write gate steps of OpenTofu make the 403 of the lock
+// route. They need the decision records, which have no route, so they do not
+// run against the server binary. A binary run must not fail for a status that
+// its steps cannot make. The in-process run still checks every one of them.
+func binaryModeGaps() map[string][]int {
+	return map[string][]int{
+		"POST /api/v2/workspaces/{id}/actions/lock": {403},
+	}
+}
+
+// inBinaryGap reports whether line, a result of Contract.Missing, names a
+// status that binaryModeGaps returns.
+func inBinaryGap(line string) bool {
+	for route, statuses := range binaryModeGaps() {
+		for _, status := range statuses {
+			if line == route+": "+fmt.Sprintf("the status %d is gone", status) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // compareContract checks got against the contract file of its version. It
 // fails the test for each thing the file wants that is gone. For a version with
 // no file it returns the lines of the new reads, compared with the newest file
@@ -89,6 +115,10 @@ func compareContract(t *testing.T, got e2e.Contract) string {
 	index := slices.IndexFunc(files, func(c e2e.Contract) bool { return c.Version == got.Version })
 	if index >= 0 {
 		for _, line := range files[index].Missing(got) {
+			if e2e.UseBinaryServer() && inBinaryGap(line) {
+				continue
+			}
+
 			t.Errorf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
 		}
 
