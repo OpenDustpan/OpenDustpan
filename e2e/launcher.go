@@ -14,6 +14,8 @@ import (
 	iofs "io/fs"
 	"net/http"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -355,6 +357,172 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 	}
 
 	return string(text)
+}
+
+// MaxStepLogReport is the most bytes of one step log that LogJobStepsOnFailure
+// prints.
+const MaxStepLogReport = 4096
+
+// LogJobStepsOnFailure registers a cleanup of tb: when tb has failed by then,
+// it prints the stored log of each step of the job, so that the output of a
+// CI run shows why a step ended. Each log is cut at MaxStepLogReport bytes and
+// every text of secrets is replaced (see StepLogReport). The read stops the
+// binary server, so the cleanup runs after all other work of the test. It
+// prints a note and does not fail the test when the logs cannot be read, and
+// it prints nothing when the server runs in the process of the test or the
+// blob store is not a directory.
+func (e *Env) LogJobStepsOnFailure(tb testing.TB, ns, jobID string, secrets ...string) {
+	tb.Helper()
+
+	tb.Cleanup(func() {
+		if !tb.Failed() || e.InProcess() || e.backendCfg.blobStore != "" {
+			return
+		}
+
+		// The context of the test is canceled before its cleanups run.
+		ctx := context.WithoutCancel(tb.Context())
+
+		tb.Log(e.jobStepLogReport(ctx, tb, ns, jobID, secrets))
+	})
+}
+
+// jobStepLogReport returns the report of the step logs of the job, or the
+// reason why it cannot read them. It never fails tb.
+func (e *Env) jobStepLogReport(ctx context.Context, tb testing.TB, ns, jobID string, secrets []string) string {
+	tb.Helper()
+
+	if reason := e.killServerForReport(tb); reason != "" {
+		return fmt.Sprintf("step logs of job %s: not read, %s", jobID, reason)
+	}
+
+	parts, shut := e.openJobParts(ctx, tb)
+
+	defer func() {
+		if err := shut(); err != nil {
+			tb.Logf("close the stopped database: %v", err)
+		}
+	}()
+
+	got, err := parts.jobs.Get(ctx, job.ID(jobID))
+	if err != nil {
+		return fmt.Sprintf("step logs of job %s: cannot read the job: %v", jobID, err)
+	}
+
+	src := stepLogSource{reader: e.newJobLogReader(tb, parts), ns: ns, jobID: jobID, secrets: secrets}
+
+	var report strings.Builder
+
+	for p := range got.Phases {
+		for i := range got.Phases[p].Steps {
+			if rec := &got.Phases[p].Steps[i]; rec.Log != nil {
+				report.WriteString(src.entry(ctx, rec))
+			}
+		}
+	}
+
+	if report.Len() == 0 {
+		return fmt.Sprintf("step logs of job %s: the job holds no step log", jobID)
+	}
+
+	return report.String()
+}
+
+// killServerForReport ends the server process and waits for its end, so that
+// the database file is free. The test has failed: the context of the test killed
+// the server before the cleanups run, or the kill here does it, and a graceful
+// stop would fail the test a second time. It returns the reason why it cannot
+// end the server, or "".
+func (e *Env) killServerForReport(tb testing.TB) string {
+	tb.Helper()
+
+	if e.ha != nil || e.backendCmd == nil || e.backendCmd.Process == nil {
+		return "the server is not a single binary process"
+	}
+
+	if err := e.backendCmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Sprintf("kill the server: %v", err)
+	}
+
+	// The error of a killed process is the expected one.
+	var exit *exec.ExitError
+	if err := e.backendCmd.Wait(); err != nil && !errors.As(err, &exit) {
+		return fmt.Sprintf("wait for the killed server: %v", err)
+	}
+
+	return ""
+}
+
+// stepLogSource reads the step logs of one job for a report.
+type stepLogSource struct {
+	reader  *job.ArtifactReads
+	ns      string
+	jobID   string
+	secrets []string
+}
+
+// entry returns the report of the log of one step, or the reason why it cannot
+// read the log.
+func (src stepLogSource) entry(ctx context.Context, rec *job.StepRecord) string {
+	rc, err := src.reader.OpenLog(ctx, namespace.Name(src.ns), rec.Log.ID)
+	if err != nil {
+		return fmt.Sprintf("step log %s of job %s: cannot open: %v\n", rec.Name, src.jobID, err)
+	}
+
+	// The read goes past the cap by the longest secret and one byte, so that a
+	// secret at the cap is whole when StepLogReport replaces it, and so that the
+	// report can show that the log is longer than the cap.
+	text, readErr := io.ReadAll(io.LimitReader(rc, int64(MaxStepLogReport+1+longest(src.secrets))))
+	if closeErr := rc.Close(); readErr != nil || closeErr != nil {
+		return fmt.Sprintf("step log %s of job %s: cannot read: %v %v\n", rec.Name, src.jobID, readErr, closeErr)
+	}
+
+	return fmt.Sprintf("step log %s of job %s (exit code %d):\n%s\n",
+		rec.Name, src.jobID, rec.ExitCode, StepLogReport(text, src.secrets...))
+}
+
+// longest returns the length in bytes of the longest text of texts.
+func longest(texts []string) int {
+	n := 0
+
+	for _, s := range texts {
+		n = max(n, len(s))
+	}
+
+	return n
+}
+
+// StepLogReport returns text for a report: at most MaxStepLogReport bytes,
+// with each non-empty text of secrets replaced by [redacted] and each control
+// character other than the newline and the tab replaced by "?". It ends with a
+// note when it cut text. A secret that the cut splits is not a whole text any
+// more, so the replacement runs on the whole input first.
+func StepLogReport(text []byte, secrets ...string) string {
+	out := string(text)
+
+	for _, s := range secrets {
+		if s != "" {
+			out = strings.ReplaceAll(out, s, "[redacted]")
+		}
+	}
+
+	cut := len(out) > MaxStepLogReport
+	if cut {
+		out = strings.ToValidUTF8(out[:MaxStepLogReport], "")
+	}
+
+	out = strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && (r < ' ' || r == 0x7f) {
+			return '?'
+		}
+
+		return r
+	}, out)
+
+	if cut {
+		out += "\n[cut at " + strconv.Itoa(MaxStepLogReport) + " bytes]"
+	}
+
+	return out
 }
 
 // stepLogVersion returns the ID of the log version of the step in j, or "".

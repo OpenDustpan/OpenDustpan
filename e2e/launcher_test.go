@@ -69,6 +69,7 @@ func onePhase(t *testing.T, env *e2e.Env, bin string) {
 	t.Helper()
 
 	c := claimAPhase(t, env)
+	env.LogJobStepsOnFailure(t, e2e.Namespace, c.job, c.handoff)
 
 	code, stderr := runLauncher(t, env, bin, c.handoff)
 	if code != int(launcher.ExitOK) {
