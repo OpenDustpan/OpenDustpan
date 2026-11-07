@@ -469,6 +469,62 @@ exports:
 	}
 }
 
+// TestRoutingChangesReadsOfExportsFiles sends changes of values that
+// exports.files reads straight to RoutingChanges. A value that a file export
+// reads, directly or through an expression, decides which secret goes into
+// the file, so each change must be a routing change.
+func TestRoutingChangesReadsOfExportsFiles(t *testing.T) {
+	t.Parallel()
+
+	base := `schemaVersion: 1
+values:
+  dbPassword: "${ values.source }"
+  source: { $secret: abc }
+  other: { $secret: def }
+  note: hello
+exports:
+  files:
+    DB_PASSWORD_FILE: "${ values.dbPassword }"
+`
+
+	tests := []struct {
+		name  string
+		after string
+		want  []string
+	}{
+		{"same", base, nil},
+		{"value that no export reads", strings.Replace(base, "note: hello", "note: bye", 1), nil},
+		{
+			"value that a file export reads, moved to another secret",
+			strings.Replace(base, `dbPassword: "${ values.source }"`, `dbPassword: "${ values.other }"`, 1),
+			[]string{"values.dbPassword"},
+		},
+		{
+			"value that a file export reads through an expression",
+			strings.Replace(base, "source: { $secret: abc }", "source: { $secret: xyz }", 1),
+			[]string{"values.source"},
+		},
+		{
+			"file export text",
+			strings.Replace(base, "DB_PASSWORD_FILE", "OTHER_FILE", 1),
+			[]string{"exports"},
+		},
+	}
+
+	before := mustDoc(t, base)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := profile.RoutingChanges(before, mustDoc(t, tc.after))
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("RoutingChanges() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func FuzzParseProxyExport(f *testing.F) {
 	f.Add(proxyMap(profile.MaxProxyExports), "header", "name", "X-Key", "value", "${ values.t }")
 	f.Add(proxyMap(profile.MaxProxyExports+1), "header", "name", "Authorization", "value", "${ values[\"t\"] }")
