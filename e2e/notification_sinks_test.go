@@ -404,6 +404,15 @@ func deliveryStates(body string) (map[string]string, error) {
 func subscriptionSteps(t *testing.T, env *e2e.Env, hook sinkDoc) {
 	t.Helper()
 
+	// The history steps store deliveries through the notification store of the
+	// in-process server. No route makes a delivery, and the server binary holds
+	// its database open, so the test cannot seed one in a binary run.
+	if e2e.UseBinaryServer() {
+		env.SkipScenario(t, "notification subscription history",
+			"a seeded delivery needs the in-process server")
+		t.Skip("a seeded delivery needs the in-process server")
+	}
+
 	sub := subscriptionMakeSteps(t, env, hook)
 	history := subscriptionsBase + "/" + sub.ID + "/deliveries"
 

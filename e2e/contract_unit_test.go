@@ -14,7 +14,7 @@ import (
 func contractRun(store e2e.Store, requests ...e2e.Entry) e2e.Run {
 	return e2e.Run{
 		Tool: e2e.ToolPulumi, Label: "3.1.0", Store: store, Blobs: "fs", Version: "3.1.0",
-		ChecksumSource: "", Steps: nil, Requests: requests,
+		ChecksumSource: "", Steps: nil, Requests: requests, Skipped: nil,
 	}
 }
 
@@ -220,5 +220,49 @@ func TestScenarioRunsLeavesOutTheRunsOfOtherTests(t *testing.T) {
 
 	if want := []string{"3.1.0", "latest-delta-on", "3.1.0-delta-off"}; !slices.Equal(got, want) {
 		t.Errorf("labels = %v, want %v", got, want)
+	}
+}
+
+func TestSplitGapsExplainsOnlyLinesOfASkippedScenario(t *testing.T) {
+	t.Parallel()
+
+	gap := e2e.Gap{Route: "POST /api/v2/workspaces/{id}/actions/lock", Status: 403}
+	want := e2e.Contract{Tool: e2e.ToolTofu, Version: "1.12.7", Routes: []e2e.ContractRoute{
+		{Route: gap.Route, Answers: []e2e.ContractAnswer{
+			{Status: 200, ResponseKeys: nil, Headers: nil, Cut: false},
+			{Status: 403, ResponseKeys: nil, Headers: nil, Cut: false},
+		}},
+		{
+			Route:   "GET /api/v2/ping",
+			Answers: []e2e.ContractAnswer{{Status: 200, ResponseKeys: nil, Headers: nil, Cut: false}},
+		},
+	}}
+	got := e2e.Contract{Tool: e2e.ToolTofu, Version: "1.12.7", Routes: []e2e.ContractRoute{
+		{Route: gap.Route, Answers: []e2e.ContractAnswer{{Status: 200, ResponseKeys: nil, Headers: nil, Cut: false}}},
+		{
+			Route:   "GET /api/v2/ping",
+			Answers: []e2e.ContractAnswer{{Status: 200, ResponseKeys: nil, Headers: nil, Cut: false}},
+		},
+	}}
+	skipped := []e2e.SkippedScenario{{Name: "gates", Reason: "binary", Gaps: []e2e.Gap{gap}}}
+
+	// Binary run: the scenario skipped and named the 403, so nothing fails.
+	split := e2e.SplitGaps(want.Missing(got), skipped)
+	failed, notChecked := split.Failed, split.NotChecked
+	if len(failed) != 0 || len(notChecked) != 1 || !strings.Contains(notChecked[0], "scenario gates skipped") {
+		t.Errorf("binary run: failed = %v, notChecked = %v, want only the 403 not checked", failed, notChecked)
+	}
+
+	// In-process run: no scenario skipped, so the missing 403 fails.
+	split = e2e.SplitGaps(want.Missing(got), nil)
+	failed, notChecked = split.Failed, split.NotChecked
+	if len(failed) != 1 || len(notChecked) != 0 || failed[0] != gap.Line() {
+		t.Errorf("in-process run: failed = %v, notChecked = %v, want the 403 to fail", failed, notChecked)
+	}
+
+	// A skipped scenario does not explain a status it did not name.
+	other := []e2e.SkippedScenario{{Name: "other", Reason: "binary", Gaps: []e2e.Gap{{Route: gap.Route, Status: 404}}}}
+	if failed = e2e.SplitGaps(want.Missing(got), other).Failed; len(failed) != 1 {
+		t.Errorf("an unrelated gap hid the 403: failed = %v", failed)
 	}
 }

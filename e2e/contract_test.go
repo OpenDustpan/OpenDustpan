@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -51,7 +50,7 @@ func checkContracts(t *testing.T, dir string) {
 	var report strings.Builder
 
 	for _, got := range observed {
-		report.WriteString(compareContract(t, got))
+		report.WriteString(compareContract(t, got, skippedScenarios(runs, got)))
 	}
 
 	if report.Len() == 0 {
@@ -69,36 +68,26 @@ func checkContracts(t *testing.T, dir string) {
 	}
 }
 
-// binaryModeGaps returns, by route, the statuses that only an in-process run can
-// produce. The state.write gate steps of OpenTofu make the 403 of the lock
-// route. They need the decision records, which have no route, so they do not
-// run against the server binary. A binary run must not fail for a status that
-// its steps cannot make. The in-process run still checks every one of them.
-func binaryModeGaps() map[string][]int {
-	return map[string][]int{
-		"POST /api/v2/workspaces/{id}/actions/lock": {403},
-	}
-}
+// skippedScenarios returns the scenarios that the runs of got skipped. A
+// scenario that skipped in this mode may explain a contract line that the
+// mode cannot produce. See Env.SkipScenario.
+func skippedScenarios(runs []e2e.Run, got e2e.Contract) []e2e.SkippedScenario {
+	var out []e2e.SkippedScenario
 
-// inBinaryGap reports whether line, a result of Contract.Missing, names a
-// status that binaryModeGaps returns.
-func inBinaryGap(line string) bool {
-	for route, statuses := range binaryModeGaps() {
-		for _, status := range statuses {
-			if line == route+": "+fmt.Sprintf("the status %d is gone", status) {
-				return true
-			}
+	for i := range runs {
+		if runs[i].Tool == got.Tool && runs[i].Version == got.Version {
+			out = append(out, runs[i].Skipped...)
 		}
 	}
 
-	return false
+	return out
 }
 
 // compareContract checks got against the contract file of its version. It
 // fails the test for each thing the file wants that is gone. For a version with
 // no file it returns the lines of the new reads, compared with the newest file
 // of the tool.
-func compareContract(t *testing.T, got e2e.Contract) string {
+func compareContract(t *testing.T, got e2e.Contract, skipped []e2e.SkippedScenario) string {
 	t.Helper()
 
 	files, err := e2e.ReadContracts(e2e.ContractDir, got.Tool)
@@ -114,12 +103,13 @@ func compareContract(t *testing.T, got e2e.Contract) string {
 
 	index := slices.IndexFunc(files, func(c e2e.Contract) bool { return c.Version == got.Version })
 	if index >= 0 {
-		for _, line := range files[index].Missing(got) {
-			if e2e.UseBinaryServer() && inBinaryGap(line) {
-				continue
-			}
-
+		split := e2e.SplitGaps(files[index].Missing(got), skipped)
+		for _, line := range split.Failed {
 			t.Errorf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
+		}
+
+		for _, line := range split.NotChecked {
+			t.Logf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
 		}
 
 		return ""

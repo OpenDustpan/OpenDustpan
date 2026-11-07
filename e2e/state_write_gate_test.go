@@ -229,7 +229,9 @@ func tofuStateWriteGateScenario(t *testing.T, env *e2e.Env) {
 	// in-process server. The server binary holds its database open, so in the
 	// binary mode the steps do not run, and the rest of the scenario still does.
 	if e2e.UseBinaryServer() {
-		t.Log("skip the state.write gate steps: gate writes need the in-process server")
+		env.SkipScenario(t, "tofu state.write gates",
+			"the steps read decision records, which have no route, so they need the in-process server",
+			e2e.Gap{Route: "POST /api/v2/workspaces/{id}/actions/lock", Status: http.StatusForbidden})
 
 		return
 	}
