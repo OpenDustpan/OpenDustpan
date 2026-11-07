@@ -78,6 +78,50 @@ func TestFirstRequestWithoutAPlacerOrRuleIsRefused(t *testing.T) {
 	}
 }
 
+// TestLostCreateRereadIsChecked proves that the re-read after a lost create
+// meets the same collection check as the first read. The workspace is hidden
+// from the first read, so the request tries a create, finds the workspace
+// there, and reads it again. The workspace is in no collection, so the LOCK
+// answers 409 and locks nothing.
+func TestLostCreateRereadIsChecked(t *testing.T) {
+	t.Parallel()
+
+	units := newFakeUnits(true)
+	units.hideOnce = true
+
+	h := newPlacedHandler(t, units, &tofuunit.Placer{
+		Rules: fixedRules{none: true}, Collections: fixedCollections{missing: true},
+	})
+
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "unit-collection") {
+		t.Fatalf("LOCK = %d %q, want 409 naming the move command", rec.Code, rec.Body.String())
+	}
+
+	if len(units.lockJobs) != 0 {
+		t.Fatalf("workspace took %d locks, want none", len(units.lockJobs))
+	}
+}
+
+// TestWriteToAWorkspaceWithoutPlacerIsRefused proves that a handler with no
+// Placer cannot check the collection of an existing workspace, so it refuses
+// the LOCK with 501 and locks nothing.
+func TestWriteToAWorkspaceWithoutPlacerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	units := newFakeUnits(true)
+	h := newPlacedHandler(t, units, nil)
+
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("LOCK = %d %q, want 501", rec.Code, rec.Body.String())
+	}
+
+	if len(units.lockJobs) != 0 {
+		t.Fatalf("workspace took %d locks, want none", len(units.lockJobs))
+	}
+}
+
 // TestWriteToAWorkspaceInNoCollectionIsRefused proves that a LOCK of an
 // existing workspace that no collection holds answers 409, names the move
 // command, and locks nothing.

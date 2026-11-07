@@ -846,7 +846,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
-		Placer:        nil,
+		Placer:        testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -891,7 +891,7 @@ func TestOverrideRefusalsAreAudited(t *testing.T) {
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
-		Placer:        nil,
+		Placer:        testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -971,7 +971,7 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 				Gate: nil, OnAuditFailure: nil,
 				DenialLimiter: nil,
 				StateGuard:    stategate.Off("the test keeps no gates"),
-				Placer:        nil,
+				Placer:        testPlacer(),
 			})
 			if err != nil {
 				t.Fatalf("new handler: %v", err)

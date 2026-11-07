@@ -303,8 +303,8 @@ func TestRequire(t *testing.T) {
 			placerOf(collectionsStub{id: "", found: false, err: nil}), true, collection.ErrNoCollection,
 		},
 		{"store failure", placerOf(collectionsStub{id: "", found: false, err: errStoreDown}), true, errStoreDown},
-		{"no collections port", new(tofuunit.Placer), false, nil},
-		{"nil placer", nil, false, nil},
+		{"no collections port", new(tofuunit.Placer), true, tofuunit.ErrPlacementOff},
+		{"nil placer", nil, true, tofuunit.ErrPlacementOff},
 	}
 
 	for _, tc := range cases {

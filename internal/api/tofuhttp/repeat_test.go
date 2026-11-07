@@ -145,7 +145,7 @@ func newRepeatEnv(t *testing.T) repeatEnv {
 		Audit:          newTestAudit(),
 		Gate:           nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
-		Placer:         nil,
+		Placer:         testPlacer(),
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 	})

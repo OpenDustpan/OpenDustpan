@@ -266,25 +266,41 @@ func (h *Handler) workspaceOf(
 ) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
-		if err != nil {
-			return ws, err
-		}
-
-		// A workspace that no collection holds takes no LOCK and no state.
-		obj, objErr := unitObject(c.ref)
-		if objErr != nil {
-			return workspace.Workspace{}, objErr
-		}
-
-		return ws, h.placer.Require(ctx, obj)
+		return h.requireCollection(ctx, c, ws, err)
 	}
 
 	ws, err = h.createWorkspace(ctx, c, admit)
 	if errors.Is(err, workspace.ErrAlreadyExists) {
-		return h.ws.Get(ctx, c.ref)
+		// The workspace that the winning create made is read again. It meets the
+		// same check as a workspace that the first read found.
+		ws, err = h.ws.Get(ctx, c.ref)
+
+		return h.requireCollection(ctx, c, ws, err)
 	}
 
 	return ws, err
+}
+
+// requireCollection returns ws and err unchanged when err is set. Else it
+// refuses a workspace that no collection holds: such a workspace takes no LOCK
+// and no state.
+func (h *Handler) requireCollection(
+	ctx context.Context, c call, ws workspace.Workspace, err error,
+) (workspace.Workspace, error) {
+	if err != nil {
+		return ws, err
+	}
+
+	obj, objErr := unitObject(c.ref)
+	if objErr != nil {
+		return workspace.Workspace{}, objErr
+	}
+
+	if reqErr := h.placer.Require(ctx, obj); reqErr != nil {
+		return workspace.Workspace{}, reqErr
+	}
+
+	return ws, nil
 }
 
 // createWorkspace creates the workspace of the path for a first LOCK or POST, after the caller

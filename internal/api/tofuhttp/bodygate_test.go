@@ -34,7 +34,7 @@ func newGateHandler(t *testing.T, units tofuhttp.WorkspaceService, gate *bodygat
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
-		Placer:         nil,
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

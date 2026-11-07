@@ -103,7 +103,7 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 				Sessions:       nil,
 				SessionPolicy:  nil,
 				StateGuard:     stategate.Off("the test keeps no gates"),
-				Placer:         nil,
+				Placer:         testPlacer(),
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

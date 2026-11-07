@@ -106,7 +106,7 @@ func newDownloadHandler(t *testing.T, p identity.Principal, store audit.Store) h
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
-		Placer:         nil,
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -249,7 +249,7 @@ func TestStateReadAnswersNoContentWhenTheEntryIsLost(t *testing.T) {
 		OnAuditFailure: func() { failures++ },
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
-		Placer:         nil,
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -292,7 +292,7 @@ func TestStateReadNeedsTheSecretAction(t *testing.T) {
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
-		Placer:         nil,
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

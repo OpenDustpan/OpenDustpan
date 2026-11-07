@@ -127,7 +127,8 @@ func (p *Placer) Place(ctx context.Context, req PlaceRequest) (workspace.Placeme
 // Require refuses a write to the existing workspace obj when the workspace is
 // in no collection. It returns an error that matches collection.ErrNoCollection
 // and names the command that moves the workspace into a collection. It writes
-// nothing. A nil Placer holds no collections and checks nothing.
+// nothing. It fails closed: a nil Placer, or a Placer with no collections,
+// cannot check the workspace, so it returns ErrPlacementOff, as Place does.
 //
 // Defense in depth: the authorizer already finds no collection grant for a
 // unit in no collection, but a grant on the namespace still allows the write.
@@ -135,7 +136,7 @@ func (p *Placer) Place(ctx context.Context, req PlaceRequest) (workspace.Placeme
 // holds.
 func (p *Placer) Require(ctx context.Context, obj identity.Object) error {
 	if p == nil || p.Collections == nil {
-		return nil
+		return fmt.Errorf("write to %s: %w", obj, ErrPlacementOff)
 	}
 
 	_, found, err := p.Collections.CollectionOf(ctx, obj)
