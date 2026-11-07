@@ -493,8 +493,14 @@ setting of a Git host connection (ADR 271 decision 12 item 5):
   address, also inside a range.
 - The server refuses a prefix shorter than /8 for IPv4 or /32 for IPv6.
 - A range opens an address for the connection to the upstream proxy and to
-  a gateway only. A chat sink and the target of a connection on a vendor
-  host get no private address from it.
+  a gateway only. A chat sink and the target of a connection, a Matrix
+  homeserver too, get no private address from it.
+- A self-hosted Mattermost server or Matrix homeserver on a private network
+  is reachable only when the operator sets its base URL as
+  `chat-gateway-mattermost` or `chat-gateway-matrix`. That path has the
+  fresh MFA step and the audit entry of "Who can set them". A holder of
+  `namespace:manage-chat-connections` can never point a connection at an
+  internal host alone.
 - The outbound guard checks the resolved address against the ranges when the
   connection opens, as it checks every other address.
 
@@ -566,7 +572,8 @@ check removed; a webhook sink URL on `slack.com` at both checks, which must
 still answer 400 `sink.platform-host`; a connection `target` on a host that
 is not in the Web API list, at the save check of P1 and at the send check,
 each with the other check removed; a Matrix homeserver host that resolves to
-a private address outside `chat-allowed-ranges`; a range wider than /8, a
+a private address, inside or outside `chat-allowed-ranges`, when it is not
+the host of `chat-gateway-matrix`; a range wider than /8, a
 range that holds a loopback or a metadata address, and `0.0.0.0/0`, at the
 setting boundary and at the outbound guard; a proxy that answers a
 `CONNECT` with a redirect; a proxy address in the link-local range; a
