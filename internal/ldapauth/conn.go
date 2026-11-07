@@ -55,6 +55,12 @@ func dialControl(rules egress.Rules, rule plainRule) func(network, address strin
 			return err
 		}
 
+		// The egress guard runs first. It refuses a loopback address unless
+		// the rules set LoopbackForTests. With the production rules, a plain
+		// connection to a loopback address is refused by the guard, and the
+		// plainLoopbackOnly rule has no effect. The rule has an effect only
+		// when the egress rules allow loopback, which only tests do.
+		//
 		// Defense in depth: Verify refuses a plain URL whose host is not a
 		// loopback IP address before it dials. This check stays so that a
 		// name that resolves to another address cannot pass with no TLS.
