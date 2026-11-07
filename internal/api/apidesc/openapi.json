@@ -1504,6 +1504,7 @@
           "state-version.too-large",
           "state-version.upload-denied",
           "store.failover-setting-invalid",
+          "store.server-version-unsupported",
           "storecheck.cooldown",
           "storecheck.invalid-target",
           "storecheck.no-target",
