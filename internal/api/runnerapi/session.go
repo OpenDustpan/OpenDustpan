@@ -348,6 +348,7 @@ func (h *Handler) sessionResponse(r *http.Request, sess *runner.Session) (protoc
 			Namespace: unit.Namespace().String(), Unit: unit.String(), Tool: unit.Tool(), Job: string(j.ID),
 			Phase: string(kind), Sweep: "", ServerURL: h.serverURL, Source: nil, Steps: stepsOf(j.Spec.Steps, kind),
 			Plan: nil, GitCredentials: gitModeOf(sp.pool.GitCredentials), GitHelper: sp.pool.GitCredentials.Helper,
+			Profile: j.Spec.Profile,
 		},
 	}, nil
 }

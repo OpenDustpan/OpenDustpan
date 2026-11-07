@@ -30,8 +30,8 @@ const memoryDir = "/dev/shm"
 
 // TestLauncher drives the real launcher binary against the server of each
 // store: a fake runner claims the phase of a started job and hands the
-// handoff token to the launcher on a pipe. The launcher refuses the tool
-// step of the phase, records its log and finishes the phase.
+// handoff token to the launcher on a pipe. The launcher runs the steps of
+// the phase, sends their logs and finishes the phase.
 func TestLauncher(t *testing.T) {
 	t.Parallel()
 
@@ -64,9 +64,7 @@ func TestLauncher(t *testing.T) {
 }
 
 // onePhase starts a plan job, claims its phase, runs the launcher on it and
-// reads the phase and the log back. The first step of the plan is a tool
-// step: this launcher release cannot get its credentials, so the step fails
-// before its program starts and the phase fails.
+// reads the phase and the log back.
 func onePhase(t *testing.T, env *e2e.Env, bin string) {
 	t.Helper()
 
@@ -93,17 +91,18 @@ func onePhase(t *testing.T, env *e2e.Env, bin string) {
 		t.Fatal("the server log holds the handoff token")
 	}
 
-	// The default plan steps of OpenTofu run the program "tofu". The
-	// launcher refuses the tool step before the program starts, so the log
-	// holds the note of the refusal only.
-	want := "dustpan-launcher: this launcher release does not run a tool step\n"
+	// The default plan steps of OpenTofu run the program "tofu", which is a
+	// link to echo here: the log holds the arguments of the step after the
+	// lines of the launcher.
+	want := "dustpan-launcher: this launcher release gives no credentials to a tool step\n" +
+		"init -input=false\n"
 	if got := env.JobStepLog(t.Context(), t, e2e.Namespace, c.job, "init"); got != want {
 		t.Fatalf("stored log of init = %q, want %q", got, want)
 	}
 }
 
-// readsThePhase reads the job through the API: the phase failed at its first
-// step, which has the exit code -1 and a closed log.
+// readsThePhase reads the job through the API: the phase has the records of
+// its two steps with the exit code 0 and a closed log each.
 func readsThePhase(t *testing.T, env *e2e.Env, jobID string) {
 	t.Helper()
 
@@ -117,7 +116,6 @@ func readsThePhase(t *testing.T, env *e2e.Env, jobID string) {
 // launcherJob is the part of the job document that the launcher test reads.
 type launcherJob struct {
 	State  string          `json:"state"`
-	Reason string          `json:"reason"`
 	Phases []launcherPhase `json:"phases"`
 }
 
@@ -140,30 +138,30 @@ type launcherLog struct {
 	Closed bool `json:"closed"`
 }
 
-// checkLauncherJob checks that the plan phase ended, that its first step
-// failed before its program started, and that the phase failed with the
-// refusal.
+// checkLauncherJob checks that the plan phase ended and that its two steps
+// ended with the exit code 0, each with a closed log.
 func checkLauncherJob(body string) error {
 	var doc launcherJob
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
 		return fmt.Errorf("decode job: %w", err)
 	}
 
-	// A failed phase has no end time: the server sets it only when a phase
-	// ends with success. The job state and its reason are checked below.
-	if len(doc.Phases) == 0 || doc.Phases[0].Kind != "plan" {
+	if len(doc.Phases) == 0 || doc.Phases[0].Kind != "plan" || doc.Phases[0].FinishedAt == nil {
 		return fmt.Errorf("%w: state %s, phases %s", errLauncherRun, doc.State, body)
 	}
 
-	steps := doc.Phases[0].Steps
-	if len(steps) != 1 || steps[0].Name != "init" || steps[0].ExitCode != -1 ||
-		steps[0].Log == nil || !steps[0].Log.Closed {
-		return fmt.Errorf("%w: steps %+v; want init with the exit code -1 and a closed log", errLauncherRun, steps)
+	names := make([]string, 0, len(doc.Phases[0].Steps))
+
+	for _, s := range doc.Phases[0].Steps {
+		if s.ExitCode != 0 || s.Log == nil || !s.Log.Closed {
+			return fmt.Errorf("%w: step %s: exit %d, log %+v", errLauncherRun, s.Name, s.ExitCode, s.Log)
+		}
+
+		names = append(names, s.Name)
 	}
 
-	const reason = "this launcher release does not run a tool step"
-	if doc.State != "failed" || !strings.Contains(doc.Reason, reason) {
-		return fmt.Errorf("%w: state %s, reason %q; want failed with %q", errLauncherRun, doc.State, doc.Reason, reason)
+	if strings.Join(names, ",") != "init,plan" || doc.State != "succeeded" {
+		return fmt.Errorf("%w: state %s, steps %v; want succeeded with init and plan", errLauncherRun, doc.State, names)
 	}
 
 	return nil

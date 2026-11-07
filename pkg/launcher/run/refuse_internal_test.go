@@ -38,7 +38,7 @@ func TestRefuseStepAfterALostClaim(t *testing.T) {
 			step.Name, step.Role, step.Args = "hook", string(job.RoleHook), []string{"true"}
 
 			r := &phaseRun{
-				cfg: &cfg, log: slog.New(slog.DiscardHandler), sess: nil, mu: sync.Mutex{},
+				cfg: &cfg, log: slog.New(slog.DiscardHandler), sess: nil, profile: "", mu: sync.Mutex{},
 				lost: false, canceled: false, events: make(chan struct{}, 1), checkout: "", home: "", tmp: "",
 			}
 

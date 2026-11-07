@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -116,12 +117,17 @@ const claimLostReason = "the claim is lost"
 // refuseStep returns the fail-closed result of a step that this release must
 // not start, and whether the step is refused. It starts no process.
 func (r *phaseRun) refuseStep(step *protocol.Step, log launcher.Masker) (stepResult, bool) {
-	// This release cannot ask for the credentials of a tool step, so a tool
-	// step fails closed before its program starts.
-	if step.Role == string(job.RoleTool) {
-		r.note(log, "this launcher release does not run a tool step")
+	// This release cannot deliver the credentials of a tool step that needs
+	// a profile, so the step fails closed before its program starts. A tool
+	// step with no profile needs no credentials, and it runs.
+	if step.Role == string(job.RoleTool) && r.profile != "" {
+		// The profile name comes from the assignment, so it may hold CR or
+		// LF: remove both before the name goes into the reason and the log.
+		name := strings.NewReplacer("\r", "", "\n", "").Replace(r.profile)
+		reason := fmt.Sprintf("this launcher release cannot deliver the credentials of profile %q", name)
+		r.note(log, reason)
 
-		return stepResult{exitCode: -1, reason: "this launcher release does not run a tool step"}, true
+		return stepResult{exitCode: -1, reason: reason}, true
 	}
 
 	// This release cannot upload declared outputs, so a step with an output
@@ -173,6 +179,13 @@ func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launch
 		r.note(log, err.Error())
 
 		return stepResult{exitCode: -1, reason: err.Error()}
+	}
+
+	// This release does not deliver credentials. A tool step whose
+	// assignment names a profile was refused above, so a tool step that
+	// reaches this point runs with no credentials.
+	if step.Role == string(job.RoleTool) {
+		r.note(log, "this launcher release gives no credentials to a tool step")
 	}
 
 	pr, pw, err := os.Pipe()

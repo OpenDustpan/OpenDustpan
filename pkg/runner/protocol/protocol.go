@@ -347,6 +347,9 @@ type Assignment struct {
 	// the helper of the mode custom.
 	GitCredentials string `json:"gitCredentials"`
 	GitHelper      string `json:"gitHelper,omitempty"`
+	// Profile names the profile whose credentials the tool steps need, or is
+	// empty when they need none.
+	Profile string `json:"profile,omitempty"`
 }
 
 // Source names one source snapshot.

@@ -100,6 +100,7 @@ func newFake(steps ...protocol.Step) *fakeServer {
 		assignment: protocol.Assignment{
 			Namespace: "acme", Unit: "opentofu/acme/net", Tool: "opentofu", Job: "job-1", Phase: "plan", Sweep: "",
 			ServerURL: server, Source: nil, Steps: steps, Plan: nil, GitCredentials: "none", GitHelper: "",
+			Profile: "",
 		},
 		openAnswer: nil, renew: nil, begin: nil, finishAnswer: nil, renewals: 0, begun: nil,
 		logs: map[string][][]byte{}, ends: map[string]protocol.StepEnd{}, finish: nil, finishes: 0,

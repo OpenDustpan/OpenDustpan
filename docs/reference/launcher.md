@@ -148,10 +148,14 @@ A helper mode stops with 0 when it answered, and with 1 when it failed.
   download, because the runner does the same with the claim in both cases.
   Each step runs in an empty checkout directory.
 - **Credentials.** The launcher does not ask for the credentials of a tool
-  step, and does not serve the helper socket. A tool step fails before its
-  program starts, with the reason "this launcher release does not run a tool
-  step". Its log holds the line `dustpan-launcher: this launcher release
-  does not run a tool step`.
+  step, and does not serve the helper socket. A tool step whose assignment
+  names a profile fails before its program starts, with the reason
+  `this launcher release cannot deliver the credentials of profile "<name>"`,
+  where `<name>` is the name of the profile. Its log holds the line
+  `dustpan-launcher: this launcher release cannot deliver the credentials of
+  profile "<name>"`. A tool step with no profile runs with no credential,
+  and its log starts with the line `dustpan-launcher: this launcher release
+  gives no credentials to a tool step`.
 - **Plans.** The launcher does not upload the outputs of a step. A step
   with a declared output fails before its program starts, with the reason
   "this launcher release does not upload declared outputs". Its log holds

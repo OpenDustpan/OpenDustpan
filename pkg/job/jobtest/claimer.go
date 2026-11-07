@@ -324,6 +324,10 @@ func checkAssigned(t *testing.T, h Harness, a *job.Assignment) {
 			a.Job.State, a.Job.Phases[0].Claims, a.Job.Phases[0].Executor, a.Plan)
 	}
 
+	if a.Profile == "" || a.Profile != a.Job.Spec.Profile {
+		t.Fatalf("assignment profile = %q, want the profile %q of the job", a.Profile, a.Job.Spec.Profile)
+	}
+
 	if got := jobOf(t, h, a.Claim.Job); got.State != job.StateRunning || got.Version != a.Job.Version {
 		t.Fatalf("stored job = %s, version %d; want running, version %d", got.State, got.Version, a.Job.Version)
 	}

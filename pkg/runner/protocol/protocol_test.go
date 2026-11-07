@@ -84,3 +84,65 @@ func TestSweepReportIsASessionPath(t *testing.T) {
 		t.Fatalf("PathSessionSweepReport = %s", protocol.PathSessionSweepReport)
 	}
 }
+
+// TestAssignmentProfile checks the wire shape of the profile of an
+// assignment: a named profile survives a round trip, and an empty profile is
+// left out of the JSON.
+func TestAssignmentProfile(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		profile string
+		member  bool
+	}{
+		{name: "a named profile", profile: "prod", member: true},
+		{name: "no profile", profile: "", member: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			member, got := roundTripProfile(t, tc.profile)
+			if member != tc.member {
+				t.Fatalf("JSON has the member profile = %t, want %t", member, tc.member)
+			}
+
+			if got != tc.profile {
+				t.Fatalf("round trip profile = %q, want %q", got, tc.profile)
+			}
+		})
+	}
+}
+
+// roundTripProfile encodes an assignment with the profile, and returns
+// whether the JSON has the member profile and the profile that the decode
+// gives back.
+func roundTripProfile(t *testing.T, profile string) (bool, string) {
+	t.Helper()
+
+	in := protocol.Assignment{
+		Namespace: "acme", Unit: "", Tool: "", Job: "", Phase: "", Sweep: "", ServerURL: "",
+		Source: nil, Steps: nil, Plan: nil, GitCredentials: "", GitHelper: "", Profile: profile,
+	}
+
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(b, &members); err != nil {
+		t.Fatalf("Unmarshal into a map: %v", err)
+	}
+
+	var out protocol.Assignment
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	_, member := members["profile"]
+
+	return member, out.Profile
+}

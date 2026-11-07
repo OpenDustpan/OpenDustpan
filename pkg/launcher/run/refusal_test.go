@@ -84,26 +84,70 @@ func TestHostileStepsNeverStart(t *testing.T) {
 	}
 }
 
-// TestToolStepCredentialsFailClosed checks that a tool step fails closed:
-// this release cannot get the credentials of a tool step, so the step fails
-// the phase before its program starts.
+// TestToolStepCredentialsFailClosed checks that a tool step whose assignment
+// names a profile fails closed: this release cannot deliver the credentials
+// of the profile, so the step fails the phase before its program starts. A
+// tool step with no profile needs no credentials, and it runs.
 func TestToolStepCredentialsFailClosed(t *testing.T) {
 	t.Parallel()
 
-	marker := filepath.Join(t.TempDir(), "started")
-
-	s := step("plan", "touch", marker)
-	s.Role = string(job.RoleTool)
-
-	f := newFake(s)
-	wantExit(t, config(t, f), launcher.ExitOK)
-
-	if f.finish == nil || f.finish.Succeeded ||
-		f.finish.Message != "step plan: this launcher release does not run a tool step" {
-		t.Fatalf("finish = %+v, want the fail-closed reason of the tool step", f.finish)
+	cases := []struct {
+		name    string
+		profile string
+		refused bool
+		reason  string
+	}{
+		{
+			"a profile", "prod", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{
+			"a profile with a line feed", "pro\nd", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{
+			"a profile with a carriage return", "pro\rd", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{"no profile", "", false, ""},
 	}
 
-	if got := f.log("plan"); got != "dustpan-launcher: this launcher release does not run a tool step\n" {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			marker := filepath.Join(t.TempDir(), "started")
+
+			s := step("plan", "touch", marker)
+			s.Role = string(job.RoleTool)
+
+			f := newFake(s)
+			f.assignment.Profile = tc.profile
+			wantExit(t, config(t, f), launcher.ExitOK)
+
+			if tc.refused {
+				checkRefusedToolStep(t, f, marker, tc.reason)
+			} else {
+				checkToolStepRan(t, f, marker)
+			}
+		})
+	}
+}
+
+// checkRefusedToolStep checks the failed phase of a tool step that the
+// launcher refused before its program started.
+func checkRefusedToolStep(t *testing.T, f *fakeServer, marker, reason string) {
+	t.Helper()
+
+	if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step plan: "+reason {
+		t.Fatalf("finish = %+v, want failed with %q", f.finish, reason)
+	}
+
+	if strings.ContainsAny(f.finish.Message, "\r\n") {
+		t.Fatalf("the reason holds CR or LF: %q", f.finish.Message)
+	}
+
+	if got := f.log("plan"); got != "dustpan-launcher: "+reason+"\n" {
 		t.Fatalf("log = %q, want the note of the refusal", got)
 	}
 
@@ -112,48 +156,50 @@ func TestToolStepCredentialsFailClosed(t *testing.T) {
 	}
 }
 
+// checkToolStepRan checks that the tool step started and that the phase
+// reports the exit code of its program.
+func checkToolStepRan(t *testing.T, f *fakeServer, marker string) {
+	t.Helper()
+
+	if f.finish == nil || !f.finish.Succeeded {
+		t.Fatalf("finish = %+v, want the phase of the tool step to succeed", f.finish)
+	}
+
+	if end := f.ends["plan"]; end.ExitCode != 0 {
+		t.Fatalf("end = %+v, want the exit code 0", end)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the program of the tool step did not start: %v", err)
+	}
+}
+
 // TestUnsupportedStepFeaturesFailClosed checks that a step this release
-// cannot serve fails the phase before its program starts: a tool step (no
-// credentials) and a step with a declared output (no upload).
+// cannot serve fails the phase before its program starts: a step with a
+// declared output (no upload).
 func TestUnsupportedStepFeaturesFailClosed(t *testing.T) {
 	t.Parallel()
 
 	marker := filepath.Join(t.TempDir(), "started")
 
-	tool := step("bad", "touch", marker)
-	tool.Role = string(job.RoleTool)
-
 	output := step("bad", "touch", marker)
 	output.Outputs = []protocol.Output{{Kind: "plan-display", Path: "tfplan.json"}}
 
-	cases := []struct {
-		name   string
-		step   protocol.Step
-		reason string
-	}{
-		{"tool step", tool, "this launcher release does not run a tool step"},
-		{"declared output", output, "this launcher release does not upload declared outputs"},
+	f := newFake(output)
+	wantExit(t, config(t, f), launcher.ExitOK)
+
+	const reason = "this launcher release does not upload declared outputs"
+
+	if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step bad: "+reason {
+		t.Fatalf("finish = %+v, want failed with %q", f.finish, reason)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	if !strings.Contains(f.log("bad"), reason) {
+		t.Fatalf("log = %q, want the note of the refusal", f.log("bad"))
+	}
 
-			f := newFake(tc.step)
-			wantExit(t, config(t, f), launcher.ExitOK)
-
-			if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step bad: "+tc.reason {
-				t.Fatalf("finish = %+v, want failed with %q", f.finish, tc.reason)
-			}
-
-			if !strings.Contains(f.log("bad"), tc.reason) {
-				t.Fatalf("log = %q, want the note of the refusal", f.log("bad"))
-			}
-
-			if _, err := os.Stat(marker); err == nil {
-				t.Fatal("the program of the refused step started")
-			}
-		})
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the program of the refused step started")
 	}
 }
 
