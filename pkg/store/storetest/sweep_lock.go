@@ -25,7 +25,7 @@ func testSweepLock(t *testing.T, store Store) {
 		t.Fatalf("first TryLockSweep: %v", err)
 	}
 
-	release = sweepReleaseOnce(release)
+	release = SweepReleaseOnce(release)
 	t.Cleanup(release)
 
 	if _, heldErr := s.TryLockSweep(t.Context()); !errors.Is(heldErr, inventory.ErrSweepRunning) {
@@ -39,7 +39,7 @@ func testSweepLock(t *testing.T, store Store) {
 		t.Fatalf("TryLockSweep after the release: %v", err)
 	}
 
-	release = sweepReleaseOnce(release)
+	release = SweepReleaseOnce(release)
 	t.Cleanup(release)
 
 	release()
@@ -51,7 +51,7 @@ func testSweepLock(t *testing.T, store Store) {
 		t.Fatalf("TryLockSweep after all releases: %v", err)
 	}
 
-	release = sweepReleaseOnce(release)
+	release = SweepReleaseOnce(release)
 	t.Cleanup(release)
 
 	release()
@@ -87,7 +87,7 @@ func testSweepLockRace(t *testing.T, s inventory.SweepLocker) {
 
 			won.Add(1)
 
-			rel = sweepReleaseOnce(rel)
+			rel = SweepReleaseOnce(rel)
 			t.Cleanup(rel)
 
 			holding <- struct{}{}
@@ -110,9 +110,9 @@ func testSweepLockRace(t *testing.T, s inventory.SweepLocker) {
 	}
 }
 
-// sweepReleaseOnce makes a sweep release idempotent: the first call gives the
+// SweepReleaseOnce makes a sweep release idempotent: the first call gives the
 // lock back, and a later call from a t.Cleanup does nothing.
-func sweepReleaseOnce(release func()) func() {
+func SweepReleaseOnce(release func()) func() {
 	var once sync.Once
 
 	return func() { once.Do(release) }
