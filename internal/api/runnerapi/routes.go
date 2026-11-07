@@ -41,12 +41,18 @@ const (
 // from the table that buildRoutes returns, so a route without a row is never
 // served.
 //
-// A route of ScopeAuthorized runs the checks in this order. A refusal of the
-// first answers the 404 of an unknown namespace, so a caller learns nothing
-// about a namespace that it cannot read:
+// A route of ScopeAuthorized runs the checks in this order:
 //
-//  1. identity.ActionNamespaceRead on the namespace of the path.
-//  2. Actions on the namespace of the path. A refusal answers 403.
+//  1. The credential is authenticated. A request without a valid credential
+//     answers 401, a refused session answers 403, and too many failed
+//     sign-ins answer 429.
+//  2. The client address is checked against the IP allowlist of the namespace
+//     of the path. A refused address answers 403.
+//  3. The namespace of the path is read. An unknown namespace answers 404.
+//  4. identity.ActionNamespaceRead on the namespace. A refusal answers 404,
+//     the answer of an unknown namespace, so a caller learns nothing about a
+//     namespace that it cannot read.
+//  5. Actions on the namespace of the path. A refusal answers 403.
 //
 // A route of the other scopes checks its credential, and Actions names the
 // action that the credential holds on its pool.
