@@ -611,6 +611,8 @@ func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*e
 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	// Set before Start: os/exec reads WaitDelay in its context watcher.
+	cmd.WaitDelay = stepLogWaitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start server binary: %w", err)
