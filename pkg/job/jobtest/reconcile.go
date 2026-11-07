@@ -33,6 +33,7 @@ func reconcileCases() []suiteCase {
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
 		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
+		{"the reconcile fails a queued job whose plan phase stored no plan, and never replans it", testReconcileNoPlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
 		{"the reconcile ends the orphans and no other job", testReconcileOrphans},
@@ -314,6 +315,48 @@ func testReconcileStalePlan(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, fresh.ID, job.StateDispatched)
+}
+
+// testReconcileNoPlan proves that a job whose plan phase stored no plan ends
+// failed with the reason job.ReasonNoPlan, once, and that no run of the
+// reconcile sends it back to its plan phase.
+func testReconcileNoPlan(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	j := newJob(f.unit, job.OperationApply, "")
+	j.Current = 1
+	j.Phases[0].StateVersion = svOne
+	noPlan := create(t, h, f, j, nil)
+
+	if res := runReconcile(t, h, 0); res.Ended != 1 || res.Replanned != 0 || res.Dispatched != 0 {
+		t.Fatalf("reconcile of a job whose plan phase stored no plan = %+v; want one ended job and no replan", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), noPlan.ID)
+	if err != nil || got.State != job.StateFailed || got.Reason != job.ReasonNoPlan || got.Current != 1 {
+		t.Fatalf("job after the reconcile = %s, phase %d, reason %q, %v; want failed at the apply phase with %q",
+			got.State, got.Current, got.Reason, err, job.ReasonNoPlan)
+	}
+
+	checkNoLaterChange(t, h)
+
+	if n := reconcileEntries(t, h, f, noPlan.ID); n != 1 {
+		t.Fatalf("reconcile audit entries for the job = %d, want 1", n)
+	}
+}
+
+// checkNoLaterChange runs the reconcile twice and proves that it changes
+// nothing: a failed job is final, so it never plans again.
+func checkNoLaterChange(t *testing.T, h Harness) {
+	t.Helper()
+
+	for range 2 {
+		if res := runReconcile(t, h, 0); res.Ended != 0 || res.Replanned != 0 || res.Dispatched != 0 {
+			t.Fatalf("later reconcile = %+v; want no change", res)
+		}
+	}
 }
 
 // expiryFixture holds one job for each timeout of the reconcile, each on its
