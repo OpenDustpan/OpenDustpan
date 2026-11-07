@@ -12,6 +12,7 @@ Changed by:
   check.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 342 extends decision 4: state facts for three more writes.
 
 ## Context
 

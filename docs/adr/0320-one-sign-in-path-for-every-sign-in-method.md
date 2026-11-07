@@ -1,6 +1,10 @@
 # 320. One sign-in path for every sign-in method
 
 Status: accepted · 2026-11-02. The design is the proposal P1 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md), with decisions of the PM under the owner's delegation, marked "(PM)". The owner accepts them with the merge. A decision marked "(owner, ADR N)" repeats an owner decision of that ADR. The rule that maps a group value of an identity provider to a group waits for an owner decision
+Changed by:
+
+- ADR 332 changes decision 12: the group mapping is a rule for each provider, with explicit single mappings.
+
 
 Changes:
 

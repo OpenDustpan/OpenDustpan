@@ -9,6 +9,10 @@ Changed by:
   failover.
 - ADR 313 extends decision 1: the authorization object of a profile.
 - ADR 317 changes decision 1: the key of the gate rows of a unit.
+- ADR 335 extends decision 9: the engine port stays pluggable.
+- ADR 335 extends decision 13: a deny gate stays, and a break-glass for a gate comes later.
+- ADR 335 changes decision 16: the unlocked state version through the TFE-compatible API meets `unlocked-write`.
+- ADR 342 changes decision 16: state facts for three more writes.
 
 ## Context
 
