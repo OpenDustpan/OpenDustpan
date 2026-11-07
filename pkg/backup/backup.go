@@ -196,8 +196,8 @@ var Tables = []string{
 	"item_keys",
 	"settings",
 	"settings_state",
-	"catalog_blueprints",
-	"catalog_blueprint_versions",
+	"self_service_blueprints",
+	"self_service_blueprint_versions",
 	TableTrustRules,
 }
 

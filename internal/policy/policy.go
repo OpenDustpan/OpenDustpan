@@ -52,16 +52,16 @@ type Kind string
 
 // The kinds of input.
 const (
-	// KindCatalogRequest is a revision of a Catalog request at a recheck
+	// KindSelfServiceRequest is a revision of a self-service request at a recheck
 	// point.
-	KindCatalogRequest Kind = "catalog.request"
+	KindSelfServiceRequest Kind = "self-service.request"
 	// KindJobStart is the start of a job.
 	KindJobStart Kind = "job.start"
 )
 
 // Valid reports whether k is one of the kinds of this package.
 func (k Kind) Valid() bool {
-	return k == KindCatalogRequest || k == KindJobStart
+	return k == KindSelfServiceRequest || k == KindJobStart
 }
 
 // Input is what an engine decides on. Document is the JSON document of Kind

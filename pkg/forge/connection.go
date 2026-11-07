@@ -381,7 +381,7 @@ type AssignmentStore interface {
 // Consumers returns every consumer of the port, in a fixed order.
 func Consumers() []Consumer {
 	return slices.Clone([]Consumer{
-		ConsumerWriteBack, ConsumerWriteBackReview, ConsumerFetch, ConsumerRunnerGit, ConsumerCatalog,
+		ConsumerWriteBack, ConsumerWriteBackReview, ConsumerFetch, ConsumerRunnerGit, ConsumerSelfService,
 		ConsumerCauseDiff,
 	})
 }

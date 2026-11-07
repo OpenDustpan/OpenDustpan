@@ -269,8 +269,8 @@ func TestInputValidate(t *testing.T) {
 		ok   bool
 	}{
 		{
-			"catalog request",
-			policy.Input{Kind: policy.KindCatalogRequest, SchemaVersion: 1, Document: []byte("{}")},
+			"self-service request",
+			policy.Input{Kind: policy.KindSelfServiceRequest, SchemaVersion: 1, Document: []byte("{}")},
 			true,
 		},
 		{"job start", policy.Input{Kind: policy.KindJobStart, SchemaVersion: 1, Document: []byte("{}")}, true},
@@ -297,7 +297,7 @@ func TestSignVerify(t *testing.T) {
 	secret := []byte(strings.Repeat("s", policy.MinSecretBytes))
 	older := []byte(strings.Repeat("o", policy.MinSecretBytes))
 	other := []byte(strings.Repeat("x", policy.MinSecretBytes))
-	body := []byte(`{"kind":"catalog.request","schemaVersion":1,"document":{}}`)
+	body := []byte(`{"kind":"self-service.request","schemaVersion":1,"document":{}}`)
 	at := time.Unix(1_790_000_000, 0)
 
 	header, err := policy.Sign(body, at, secret, older)
@@ -435,7 +435,7 @@ func TestWebhookCallDocumentIsJSON(t *testing.T) {
 	t.Parallel()
 
 	call := policy.WebhookCall{
-		Kind: policy.KindCatalogRequest, Document: json.RawMessage(`{"name":"orders-db"}`), SchemaVersion: 1,
+		Kind: policy.KindSelfServiceRequest, Document: json.RawMessage(`{"name":"orders-db"}`), SchemaVersion: 1,
 	}
 
 	got, err := json.Marshal(call)
@@ -443,7 +443,7 @@ func TestWebhookCallDocumentIsJSON(t *testing.T) {
 		t.Fatalf("Marshal() = %v", err)
 	}
 
-	const want = `{"kind":"catalog.request","document":{"name":"orders-db"},"schemaVersion":1}`
+	const want = `{"kind":"self-service.request","document":{"name":"orders-db"},"schemaVersion":1}`
 	if string(got) != want {
 		t.Fatalf("Marshal() = %s, want %s", got, want)
 	}
@@ -466,9 +466,10 @@ func TestCedar(t *testing.T) {
 	t.Parallel()
 
 	resource := policy.CedarEntity{Type: policy.CedarBlueprint, ID: "payments/postgres"}
-	reqs := policy.CedarRequests("alice", []string{"dev"}, policy.KindCatalogRequest, resource, []byte("{}"))
+	reqs := policy.CedarRequests("alice", []string{"dev"}, policy.KindSelfServiceRequest, resource, []byte("{}"))
 
-	if reqs[0].Action.ID != "catalog.request" || reqs[1].Action.ID != "catalog.request"+policy.CedarWithoutApproval {
+	if reqs[0].Action.ID != "self-service.request" ||
+		reqs[1].Action.ID != "self-service.request"+policy.CedarWithoutApproval {
 		t.Fatalf("actions = %q, %q", reqs[0].Action.ID, reqs[1].Action.ID)
 	}
 

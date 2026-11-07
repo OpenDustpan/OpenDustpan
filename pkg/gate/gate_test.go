@@ -27,7 +27,7 @@ func TestParseDecisionPoint(t *testing.T) {
 		}
 	}
 
-	for _, in := range []string{"", "job.start", "catalog.request", "changeorder.review", "State.write", "access"} {
+	for _, in := range []string{"", "job.start", "self-service.request", "changeorder.review", "State.write", "access"} {
 		if _, err := gate.ParseDecisionPoint(in); !errors.Is(err, gate.ErrInvalid) {
 			t.Fatalf("ParseDecisionPoint(%q): err = %v, want ErrInvalid", in, err)
 		}

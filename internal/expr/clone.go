@@ -4,7 +4,7 @@ import (
 	"maps"
 	"slices"
 
-	"opendustpan.org/opendustpan/internal/catalog"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
 // cloneEnv returns a deep copy of env. A run that ends at the time limit
@@ -15,7 +15,7 @@ import (
 // checkEnvSize has accepted env, so each value is a JSON value: nil, a
 // boolean, a number, a string, a list or an object. Strings are immutable
 // and are shared.
-func cloneEnv(env *catalog.Env) catalog.Env {
+func cloneEnv(env *selfservice.Env) selfservice.Env {
 	out := *env
 	out.Value = cloneValue(env.Value)
 	out.Input = cloneValue(env.Input)
