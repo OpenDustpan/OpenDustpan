@@ -2358,6 +2358,8 @@ export interface WriteBlueprintDraftInput {
     readonly blueprint: string;
   };
   readonly body: SelfServiceBlueprint;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
   readonly signal?: AbortSignal;
 }
 
@@ -5330,7 +5332,7 @@ export const operations = {
       queryParameters: [],
       security: "caller",
       idempotencyKey: "none",
-      ifMatch: "none",
+      ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/json",
       requestBodyRequired: true,

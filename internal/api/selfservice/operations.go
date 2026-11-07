@@ -33,7 +33,7 @@ func operationLabels() map[string]apidesc.Label {
 		apidesc.Pattern(http.MethodGet, DraftPath): apidesc.Name("getBlueprintDraft", tag).
 			On(apidesc.KindNamespace).
 			WithBodies(apidesc.NoBody, draft),
-		apidesc.Pattern(http.MethodPut, DraftPath): apidesc.Name("writeBlueprintDraft", tag).
+		apidesc.Pattern(http.MethodPut, DraftPath): apidesc.Name("writeBlueprintDraft", tag).WithIfMatchRequired().
 			On(apidesc.KindNamespace).
 			WithBodies(blueprint, write),
 		apidesc.Pattern(http.MethodPost, VersionsPath): apidesc.Name("publishBlueprint", tag).
@@ -53,19 +53,19 @@ func operationLabels() map[string]apidesc.Label {
 // wrapper checks before the actions of the route. Every action of a row is
 // checked on the namespace that holds the blueprint.
 func (h *Handler) Operations() []apidesc.Operation {
-	rows := h.rows()
+	rows := h.Routes()
 	described := make([]apidesc.Row, 0, len(rows))
 
 	for i := range rows {
 		rw := &rows[i]
 
-		actions := make([]string, 0, 1+len(rw.reads)+len(rw.writes))
+		actions := make([]string, 0, 1+len(rw.Reads)+len(rw.Actions))
 		actions = append(actions, namespaceRead)
-		for _, action := range rw.reads {
+		for _, action := range rw.Reads {
 			actions = append(actions, string(action))
 		}
 
-		for _, action := range rw.writes {
+		for _, action := range rw.Actions {
 			actions = append(actions, string(action))
 		}
 
@@ -76,10 +76,4 @@ func (h *Handler) Operations() []apidesc.Operation {
 	}
 
 	return apidesc.Collect(described, operationLabels())
-}
-
-// RegisteredPatterns returns the ServeMux patterns that the handler serves, in
-// registration order. The description checks them against the route table.
-func (h *Handler) RegisteredPatterns() []string {
-	return h.mux.Patterns()
 }

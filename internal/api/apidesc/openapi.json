@@ -17079,6 +17079,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
         "requestBody": {

@@ -110,7 +110,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		mux:        route.NewMux(),
 	}
 
-	rows := h.rows()
+	rows := h.Routes()
 	for i := range rows {
 		h.mux.HandleFunc(rows[i].Method+" "+rows[i].Path, h.enforce(rows[i]))
 	}
@@ -123,6 +123,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+// RegisteredPatterns returns the ServeMux patterns that the handler serves, in
+// registration order. The route test compares them with the route table.
+func (h *Handler) RegisteredPatterns() []string {
+	return h.mux.Patterns()
+}
+
 // target is what a row acts on: the namespace of the path, the blueprint
 // reference, and the version number where the path names one.
 type target struct {
@@ -131,50 +137,54 @@ type target struct {
 	version int
 }
 
-// row is one row of the route table.
-type row struct {
+// Route is one row of the route table. Reads are the read actions of the row:
+// a refused read answers 404, so that the API does not reveal that a blueprint
+// exists. Actions are the write actions of the row: a refused write answers
+// 403. Every action is checked on the namespace of the path.
+type Route struct {
 	Method string
 	Path   string
 	Scope  route.Scope
-	// reads are the read actions of the row. A refused read answers 404.
-	reads []identity.Action
-	// writes are the write actions of the row. A refused write answers 403.
-	writes  []identity.Action
+	Reads  []identity.Action
+	// Actions are the write actions of the row.
+	Actions []identity.Action
+
 	resolve func(http.ResponseWriter, *http.Request) (target, error)
 	serve   func(http.ResponseWriter, *http.Request, identity.Principal, target)
 }
 
-// rows returns the route table.
-func (h *Handler) rows() []row {
-	return []row{
+// Routes returns the route table. The rows are built on each call, so a caller
+// can not change the handler through the result.
+func (h *Handler) Routes() []Route {
+	return []Route{
 		{
 			Method: http.MethodGet, Path: BlueprintsPath, Scope: route.ScopeAuthorized,
-			reads: []identity.Action{selfservice.ActionBlueprintRead}, writes: nil,
+			Reads: []identity.Action{selfservice.ActionBlueprintRead}, Actions: nil,
 			resolve: resolveNamespace, serve: h.list,
 		},
 		{
 			Method: http.MethodGet, Path: DraftPath, Scope: route.ScopeAuthorized,
-			reads: []identity.Action{selfservice.ActionBlueprintRead}, writes: nil,
+			Reads: []identity.Action{selfservice.ActionBlueprintRead}, Actions: nil,
 			resolve: resolveBlueprint, serve: h.readDraft,
 		},
 		{
 			Method: http.MethodPut, Path: DraftPath, Scope: route.ScopeAuthorized,
-			reads: nil, writes: []identity.Action{selfservice.ActionBlueprintPublish},
+			Reads: nil, Actions: []identity.Action{selfservice.ActionBlueprintPublish},
 			resolve: resolveBlueprint, serve: h.writeDraft,
 		},
 		{
 			Method: http.MethodPost, Path: VersionsPath, Scope: route.ScopeAuthorized,
-			reads: nil, writes: []identity.Action{selfservice.ActionBlueprintPublish},
+			Reads: nil, Actions: []identity.Action{selfservice.ActionBlueprintPublish},
 			resolve: resolveBlueprint, serve: h.publish,
 		},
 		{
 			Method: http.MethodGet, Path: VersionPath, Scope: route.ScopeAuthorized,
-			reads: []identity.Action{selfservice.ActionBlueprintRead}, writes: nil,
+			Reads: []identity.Action{selfservice.ActionBlueprintRead}, Actions: nil,
 			resolve: resolveVersion, serve: h.readVersion,
 		},
 		{
 			Method: http.MethodPost, Path: RetirePath, Scope: route.ScopeAuthorized,
-			reads: nil, writes: []identity.Action{selfservice.ActionBlueprintRetire},
+			Reads: nil, Actions: []identity.Action{selfservice.ActionBlueprintRetire},
 			resolve: resolveVersion, serve: h.retire,
 		},
 	}
@@ -182,26 +192,26 @@ func (h *Handler) rows() []row {
 
 // enforce wraps one row in the shared route enforcement. The namespace read
 // comes first for every row, as in the other APIs.
-func (h *Handler) enforce(rw row) http.HandlerFunc {
+func (h *Handler) enforce(rw Route) http.HandlerFunc {
 	guard := route.Guard{Tokens: h.authn, Sessions: h.sessions, Refusals: h.guard}
 
 	return route.Enforce(guard, h.writeError, route.Steps[target]{
 		Scope:   rw.Scope,
-		Actions: slices.Concat([]identity.Action{identity.ActionNamespaceRead}, rw.reads, rw.writes),
+		Actions: slices.Concat([]identity.Action{identity.ActionNamespaceRead}, rw.Reads, rw.Actions),
 		Resolve: rw.resolve,
 		Authorize: func(r *http.Request, p identity.Principal, t target) error {
 			obj := identity.NamespaceObject(t.ns)
 
 			return guard.AuthorizeObject(r.Context(), r, p, obj, route.Checks{
 				Namespace: obj,
-				Reads:     append([]identity.Action{identity.ActionNamespaceRead}, rw.reads...),
-				Actions:   rw.writes,
+				Reads:     append([]identity.Action{identity.ActionNamespaceRead}, rw.Reads...),
+				Actions:   rw.Actions,
 				NotFound:  selfservice.ErrNotFound,
 				// Defense in depth: a write row declares its action in Actions, so
 				// an empty list fails closed here. A read row declares its action in
 				// Reads, which the helper checks first; Actions is empty for it, so
 				// the requirement applies to write rows only.
-				RequireAction: len(rw.writes) > 0,
+				RequireAction: len(rw.Actions) > 0,
 			})
 		},
 		Serve: rw.serve,

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
@@ -125,7 +126,7 @@ func (h *Handler) writeDraft(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	version, err := parseIfMatch(r.Header.Get("If-Match"))
+	version, err := parseIfMatch(apidesc.Header(r, "If-Match"))
 	if err != nil {
 		h.writeError(r.Context(), w, errIfMatch)
 
