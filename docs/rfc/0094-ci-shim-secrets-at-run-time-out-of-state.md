@@ -7,7 +7,8 @@ created: 2026-10-20
 
 # RFC 94. The CI shim, which gives secrets to a tool in a team's own CI at run time, keeps them out of state, and encrypts the local plan and state files at rest
 
-Status: draft. The scope decisions of section K are decided (ADR 350). Nothing
+Status: draft. The scope decisions of section K, and the log redaction and
+memory limits of K9 and K10, are decided (ADR 350). Nothing
 else in this RFC is decided. No code exists for the shim. The owner answers
 the questions at the end.
 
@@ -1098,7 +1099,7 @@ finds exact copies only.
 | Secret delivery and the trust token (A to C) | 1 | the theme |
 | The CI run record, names only (F) | 1 | small, and needed to show what a CI run read |
 | A manual lock check before the tool starts | 1 | one read of the lock. The server refuses the lock request of the tool (an OpenTofu lock, or the start of a Pulumi update) anyway (ADR 213 decision 10). It does not refuse the state write of a tool that already holds its lock. So this gives a clear message before the tool starts. |
-| Encryption at rest of the local plan and state files (K) | 2 (2a to 2c) | needs the key entry of a profile and the shim. Owner scope decision of 2026-11-07. |
+| Encryption at rest of the local plan and state files (K) | 2 (2a to 2d) | needs the key entry of a profile and the shim. Owner scope decision of 2026-11-07. |
 | The leak check (E) | 2 | needs the walk of each state format |
 | The client trace ID (RFC 92, A4.1) | 2 | one header |
 | The scanner upload (RFC 90, A1) | 2 | the upload route exists then, and the trust token is the credential |
@@ -1223,7 +1224,7 @@ as a shared credentials file.
 - Bridge write-only behavior per version: how the bridge version under test
   stores a write-only value (facts, the third case above).
 
-Slice 1 sets no encryption at rest. The slices 2a to 2c of section K add it,
+Slice 1 sets no encryption at rest. The slices 2a to 2d of section K add it,
 each with its own e2e step. A KMS key provider (K3 option 3) comes after login
 blocks.
 
@@ -1370,7 +1371,8 @@ the shim list these in the first lines of the page, next to H.
 
 - **The memory of the tool.** The tool decrypts the plan and the state to
   use them. The decrypted data is in its memory, and in swap or a core dump
-  if the CI host allows it. The code that the tool runs can read it.
+  if the CI host allows it. The code that the tool runs can read it. The
+  shim cannot encrypt process memory. It can apply the mitigations of K10.
 - **The logs and the output.** `tofu show`, `tofu output`, `tofu plan`
   output, `TF_LOG` debug output, `pulumi preview --show-secrets` and
   `--logtostderr` can print values in plain text. The shim mask finds exact
@@ -1394,6 +1396,63 @@ the shim list these in the first lines of the page, next to H.
   `dustpan-ci run --unit <unit> -- tofu plan -out=plan` (the exact form is for
   the design, B3).
 
+**K9. Logs: capture, redaction and storage (owner, 2026-11-07).** The shim
+runs the tool as a child process and captures its standard output and
+standard error.
+
+- **What it redacts.** Every secret value that the shim knows: the profile
+  values that it injected, and the at-rest key (K3). For each value it
+  redacts the raw form, the standard base64 form, the URL-safe base64 form
+  and the URL-encoded form. Each line of a multi-line value is redacted by
+  itself. It keeps the minimum length of 4 bytes of the mask (H) and handles a
+  value that spans two chunks (`launcher.Masker`, extended for the encoded
+  forms). The replacement is `[masked]`.
+- **What it sends.** The full redacted log, to the backend, as part of the
+  CI run record (F). It sends the redacted stream only, never the raw bytes.
+  A person reads it with a read grant on the unit. The proposed action is
+  `unit:read-ci-log`. Each read writes an audit entry without a value. The
+  server seals the log at rest with a key of the CI run record, like the
+  other stored logs (ADR 151). An upload has a size limit. A log that is
+  longer gets a marker and the CI run record notes it.
+- **What the CI log shows.** A shim setting, `--ci-log`, has two values:
+  `redacted` (the redacted stream) and `summary` (the exit code, the
+  counts, and a link to the full redacted log in the backend). The
+  recommendation is `summary` as the default: the CI log is often readable by
+  more people than the unit, and the backend log has a read grant. The owner
+  can set the default to `redacted`.
+- **If the upload fails.** The shim retries from a file on the memory-backed
+  directory. If it still fails, it exits with code 3 and one line that names
+  the failure. It never writes the raw stream to the CI log as a fallback.
+- **Limits.** A secret that the tool changes into a form that the shim does
+  not know is not caught: a hash, a part of a string, a reversed or
+  encrypted value, a value cut into pieces by output of several lines or
+  separate writes, a value in another encoding. The redaction is a
+  convenience layer, like the mask of H. The server can also run the
+  fingerprints of E over a stored log later. This is not in the first slice
+  of K.
+
+**K10. Mitigations for process memory.** The shim cannot encrypt the memory
+of the tool. These mitigations reduce the exposure, where the platform
+allows them. Each is best effort. The shim logs a line for each one that it
+could not apply, and the CI run record notes it.
+
+- `RLIMIT_CORE=0` for the shim and, by inheritance, for the tool. No core
+  dump holds the decrypted plan, the state or the key.
+- On Linux, `PR_SET_DUMPABLE=0` for the shim process, so another process of
+  the same user cannot read its memory through `/proc`. The setting does not
+  pass to the tool after `exec`. Linux and macOS only (ADR 278).
+- No swap where the platform allows it: the shim locks the pages that hold
+  the key (`mlock`), and the run directory is memory-backed. The shim cannot
+  turn off swap for the tool or for the host. Swap is a setting of the CI
+  host.
+- The key and the decrypted files stay for the shortest time: the shim
+  deletes the run directory when the tool ends, also on a signal.
+
+**Out of scope for the shim: confidential computing.** SEV-SNP and TDX
+protect memory from the host. They are a property of the runner
+infrastructure that the team chooses, not of the shim. The docs mention them
+only as a choice of the infrastructure.
+
 **K7. One-way doors.** Each item below is hard to change after a tag ships it.
 
 - The names in `TF_ENCRYPTION` and the fixed `encrypted_metadata_alias`
@@ -1404,6 +1463,9 @@ the shim list these in the first lines of the page, next to H.
   days must open after an upgrade of the shim.
 - `enforced = true` as the default. A team that shipped with it cannot
   easily turn it off, because plain data is then a failure.
+- The names and forms of the redaction (K9): the replacement text and the set
+  of encoded forms. A tool or a script of a team may parse `[masked]`.
+- The action name `unit:read-ci-log` and the meaning of `--ci-log`.
 - That the key lives in a profile. A later key store (a KMS) would add a
   provider next to it and would not replace it.
 
@@ -1415,6 +1477,7 @@ the shim list these in the first lines of the page, next to H.
 | 2a | OpenTofu: `TF_ENCRYPTION` with `external` and `pbkdf2` (K2, K3 option 2), `enforced`, the key from the profile, the fixed alias. | The test runs real `tofu init`, `plan -out` and `apply` of each supported version from 1.11 through the shim. It checks: the plan file has no canary and is not valid JSON of a plan (`tofu show` without the shim fails); the apply of the same file through the shim works; a plain plan file made without the shim makes `apply` fail; the environment of the tool holds no key value; a pre-set `TF_ENCRYPTION` stops the shim with exit code 2; a code `encryption` block with other names merges as the docs say; the open of the key entry writes one audit entry without a value. |
 | 2b | Rotation (K4). | The test rotates the key entry, then applies a plan file made with the old revision: it works. It applies a file two revisions old: it fails closed. |
 | 2c | Pulumi: the file format and the path rewrite (K5). | The test runs real `pulumi preview --save-plan` and `up --plan` through the shim. It checks: the stored file has the magic number and holds no canary; `up --plan` with a plain file or a file for another unit fails before the tool starts; the plain file is gone after the run, also after `SIGTERM`; the form `--save-plan=path` and `--save-plan path` both work; an unknown form stops. It also lists what a default plan file holds, to close the open e2e item of the facts. |
+| 2d | Logs (K9) and the memory mitigations (K10). | The test runs a module that prints the canary raw, in standard base64, in URL-safe base64 and URL-encoded, on standard output and on standard error, also across a chunk boundary. It checks: none of the four forms is in the CI log or in the stored log; a hex copy and a reversed copy are not masked, on purpose, to show the limit; the stored log needs the read grant, and a read writes one audit entry without a value; `--ci-log=summary` shows the link only; a failed upload exits with code 3 and writes no raw stream; `/proc/<pid>/limits` of the tool shows a core limit of 0; the open item `unit:read-ci-log` is in the route table. |
 | 3 | A KMS key provider (K3 option 3), after login blocks. | A test with a local OpenBao transit engine: the data key is new for each file, and a second unit with another key cannot open the file. |
 
 The e2e suite checks the OpenTofu minimum version of the docs for the
@@ -1529,5 +1592,6 @@ The owner keeps these. Each recommendation is the author's.
 Empty until the RFC is accepted (link the ADR) or dropped (say why).
 
 Partly decided: [ADR 350](../adr/0350-the-ci-shim-encrypts-the-plan-and-state-files-of-the-team-ci-at-rest.md)
-(owner, 2026-11-07) decides the scope of section K. The rest of this RFC stays
+(owner, 2026-11-07) decides the scope of section K, the log redaction of K9
+and the memory mitigations of K10. The rest of this RFC stays
 open.
