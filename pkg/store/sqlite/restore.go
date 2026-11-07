@@ -506,10 +506,18 @@ var keepControlStatements = []string{
 	`INSERT INTO main.installation (id, state, kind) SELECT id, state, kind FROM live.installation`,
 	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
 		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
+	// A handoff token and a job session name the runner of the claim of a
+	// live durable operation. The restored data can predate that runner, so
+	// the copy keeps the credential only while the staged file holds its
+	// runner: a credential of a runner that the restored data does not hold
+	// names no runner, and a later use must fail as unknown, never with a
+	// store error.
 	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +
-		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens`,
+		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
 	`INSERT INTO main.runner_sessions (` + runnerSessionColumns + `) ` +
-		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions`,
+		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
 	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
 		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
 	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
@@ -531,7 +539,8 @@ const nameLockColumns = `scope, name, sub, failures, locked_until_ms, level, las
 
 // The columns of the control tables of the runner protocol, for the copy of
 // the control tables. A restore keeps the live handoff tokens and job
-// sessions, because they name the claims of the live durable operations.
+// sessions, because they name the claims of the live durable operations, and
+// drops the ones whose runner the restored data does not hold.
 const (
 	runnerClaimColumns   = `operation_id, token, claimed_at_ms, job_id, phase`
 	runnerHandoffColumns = `sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms`

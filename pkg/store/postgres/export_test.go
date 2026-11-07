@@ -45,18 +45,40 @@ func WriteSourceFilterInTx(ctx context.Context, s *Store, w SourceFilterWrite) e
 	return SourceFilterStore{s: s}.writeFilter(ctx, w.Namespace, w.Text, w.Fence, w.Entry)
 }
 
-// runnerControlStatements write one row in each control table of the runner
-// protocol. The control rows of a live session need a durable operation, so
-// the test writes them through SQL.
-//
-//nolint:gochecknoglobals // Fixed SQL of the test hook, read only.
-var runnerControlStatements = []string{
-	`INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase) VALUES ('op-control', 1, 1, '', 0)`,
-	`INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms)
-		VALUES ('control-hash', 'op-control', 1, 'rn-control', 1, 2, 0)`,
-	`INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms)
-		VALUES ('control-session', 'op-control', 1, 'rn-control', decode('00', 'hex'), 1, 1)`,
-	`INSERT INTO runner_nonces (subject, nonce, expires_at_ms) VALUES ('control', 'nonce', 2)`,
+// runnerControlStatement is one write of the control rows of the runner
+// protocol of the test hook: the SQL and its arguments.
+type runnerControlStatement struct {
+	stmt string
+	args []any
+}
+
+// runnerControlStatements returns one row for each control table of the
+// runner protocol, for the runner runnerID in the rows that name one. The
+// control rows of a live session need a durable operation, so the test writes
+// them through SQL.
+func runnerControlStatements(runnerID string) []runnerControlStatement {
+	return []runnerControlStatement{
+		{
+			stmt: `INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase) ` +
+				`VALUES ('op-control', 1, 1, '', 0)`,
+			args: nil,
+		},
+		{
+			stmt: `INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, ` +
+				`expires_at_ms, used_at_ms) VALUES ('control-hash', 'op-control', 1, $1, 1, 2, 0)`,
+			args: []any{runnerID},
+		},
+		{
+			stmt: `INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, ` +
+				`key_created_at_ms, created_at_ms) VALUES ('control-session', 'op-control', 1, $1, ` +
+				`decode('00', 'hex'), 1, 1)`,
+			args: []any{runnerID},
+		},
+		{
+			stmt: `INSERT INTO runner_nonces (subject, nonce, expires_at_ms) VALUES ('control', 'nonce', 2)`,
+			args: nil,
+		},
+	}
 }
 
 // runnerControlTableNames lists the control tables that SeedRunnerControlRows
@@ -66,10 +88,10 @@ var runnerControlStatements = []string{
 var runnerControlTableNames = []string{"runner_claims", "runner_handoff_tokens", "runner_sessions", "runner_nonces"}
 
 // SeedRunnerControlRows writes one row in each control table of the runner
-// protocol.
-func SeedRunnerControlRows(ctx context.Context, s *Store) error {
-	for _, stmt := range runnerControlStatements {
-		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+// protocol, for the runner runnerID in the rows that name one.
+func SeedRunnerControlRows(ctx context.Context, s *Store, runnerID string) error {
+	for _, stmt := range runnerControlStatements(runnerID) {
+		if _, err := s.pool.Exec(ctx, stmt.stmt, stmt.args...); err != nil {
 			return fmt.Errorf("seed runner control row: %w", err)
 		}
 	}
