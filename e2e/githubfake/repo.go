@@ -102,6 +102,8 @@ type repo struct {
 	protected     map[string]bool
 	// statuses maps a commit ID to the statuses that were set on it, oldest first.
 	statuses map[string][]CommitStatus
+	// comments holds the comments of the pull requests, oldest first.
+	comments []*issueComment
 }
 
 // idLength is the number of hex digits in an ID of a blob or a commit. It
@@ -182,6 +184,7 @@ func (f *Fake) AddRepo(fullName string, files map[string][]byte) (Commit, error)
 		tags:          map[string]string{},
 		protected:     map[string]bool{},
 		statuses:      map[string][]CommitStatus{},
+		comments:      nil,
 	}
 	f.repos[fullName] = r
 
@@ -218,6 +221,7 @@ func (f *Fake) CloneRepo(src, dst string) error {
 		tags:          maps.Clone(from.tags),
 		protected:     maps.Clone(from.protected),
 		statuses:      map[string][]CommitStatus{},
+		comments:      nil,
 	}
 
 	return nil

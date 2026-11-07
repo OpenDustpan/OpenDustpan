@@ -92,6 +92,7 @@ func (f *Fake) AddFork(parent, fork string) error {
 
 	f.repos[fork] = &repo{
 		statuses:      map[string][]CommitStatus{},
+		comments:      nil,
 		name:          fork,
 		id:            f.nextRepoID(),
 		defaultBranch: src.defaultBranch,
@@ -448,7 +449,7 @@ func (f *Fake) pullsOf(w http.ResponseWriter, r *http.Request, level string) (*r
 // installation token, and the user otherwise. The caller holds the lock.
 func (f *Fake) actor(r *http.Request) Account {
 	if f.bearerToken(r) != nil {
-		return Account{ID: BotAccountID, Login: "dustpan-test[bot]"}
+		return Account{ID: BotAccountID, Login: f.AppLogin()}
 	}
 
 	return f.cfg.User

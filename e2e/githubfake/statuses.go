@@ -37,11 +37,11 @@ const (
 // statusStates are the states that GitHub accepts.
 func statusStates() []string { return []string{"error", "failure", "pending", "success"} }
 
-// statusesOf checks the credential of a call on commit statuses: the metadata
-// read and the permission "statuses" at level. It does not need the permission
-// for the contents, as GitHub does not. It returns the repository and true, or
-// answers and returns false. The caller holds the lock.
-func (f *Fake) statusesOf(w http.ResponseWriter, r *http.Request, level string) (*repo, bool) {
+// permissionOf checks the credential of a call that needs the metadata read
+// and the permission perm at level, and no permission for the contents, as
+// GitHub does for the commit statuses and the issues. It returns the repository
+// and true, or answers and returns false. The caller holds the lock.
+func (f *Fake) permissionOf(w http.ResponseWriter, r *http.Request, perm, level string) (*repo, bool) {
 	if !f.authorize(w, r, BearerInstallation, BearerUser) {
 		return nil, false
 	}
@@ -55,7 +55,7 @@ func (f *Fake) statusesOf(w http.ResponseWriter, r *http.Request, level string) 
 		return nil, false
 	}
 
-	if !f.permitted(r, full, "statuses", level) {
+	if !f.permitted(r, full, perm, level) {
 		f.message(w, http.StatusForbidden, "Resource not accessible by integration")
 
 		return nil, false
@@ -68,7 +68,7 @@ func (f *Fake) statusesOf(w http.ResponseWriter, r *http.Request, level string) 
 // not known, for a commit that the repository does not have and for a commit
 // and a context that have the most statuses.
 func (f *Fake) createStatus(w http.ResponseWriter, r *http.Request) {
-	rp, ok := f.statusesOf(w, r, levelNameWrite)
+	rp, ok := f.permissionOf(w, r, "statuses", levelNameWrite)
 	if !ok {
 		return
 	}

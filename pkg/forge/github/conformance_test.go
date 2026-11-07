@@ -95,6 +95,60 @@ func (x *hostFixture) PushEntry(
 	return commitOf(c), nil
 }
 
+func commentOf(c githubfake.IssueComment, review string) forge.Comment {
+	return forge.Comment{
+		ID: strconv.Itoa(c.ID), ReviewID: review, URL: "", AuthorID: strconv.FormatInt(c.AuthorID, 10), Body: c.Body,
+		Truncated: false,
+	}
+}
+
+func (x *hostFixture) Comments(_ context.Context, id string) ([]forge.Comment, error) {
+	n, err := reviewNumber(id)
+	if err != nil {
+		return nil, err
+	}
+
+	shown, err := x.host.Comments(x.repo, n)
+	if err != nil {
+		return nil, fmt.Errorf("read the comments of the fake: %w", err)
+	}
+
+	out := make([]forge.Comment, 0, len(shown))
+	for _, c := range shown {
+		out = append(out, commentOf(c, id))
+	}
+
+	return out, nil
+}
+
+func (x *hostFixture) AddComment(_ context.Context, id, body string) (forge.Comment, error) {
+	n, err := reviewNumber(id)
+	if err != nil {
+		return forge.Comment{}, err
+	}
+
+	c, err := x.host.AddComment(x.repo, n, githubfake.OtherAuthor, body)
+	if err != nil {
+		return forge.Comment{}, fmt.Errorf("add a comment to the fake: %w", err)
+	}
+
+	return commentOf(c, id), nil
+}
+
+func (x *hostFixture) Reactions(_ context.Context, commentID string) ([]string, error) {
+	n, err := strconv.Atoi(commentID)
+	if err != nil {
+		return nil, fmt.Errorf("the comment ID %q is not a number: %w", commentID, err)
+	}
+
+	got, err := x.host.Reactions(x.repo, n)
+	if err != nil {
+		return nil, fmt.Errorf("read the reactions of the fake: %w", err)
+	}
+
+	return got, nil
+}
+
 func (x *hostFixture) Statuses(_ context.Context, commitID string) ([]forge.Status, error) {
 	shown, err := x.host.Statuses(x.repo, commitID)
 	if err != nil {
@@ -285,7 +339,7 @@ func newHost(t *testing.T) *githubfake.Fake {
 
 	return newHostWith(t, func(c *githubfake.Config) {
 		c.Permissions = map[string]string{
-			"contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write",
+			"contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write", "issues": "write",
 		}
 	})
 }
