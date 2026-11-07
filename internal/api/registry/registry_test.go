@@ -193,7 +193,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 
 	handler, err := apiregistry.NewHandler(apiregistry.Config{
 		Service: svc, Authenticator: testAuthn{}, Authorizer: authz, MaxUploadBytes: maxUpload, Audit: store,
-		Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: idem,
+		Namespaces: namespaces, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Idempotency: idem,
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
