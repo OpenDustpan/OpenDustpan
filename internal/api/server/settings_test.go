@@ -70,8 +70,8 @@ func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action
 // console sign-in, the audit log of st and the service svc.
 func settingsConfig(
 	st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
-) apiserver.Config {
-	return apiserver.Config{
+) *apiserver.Config {
+	return &apiserver.Config{
 		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
 		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -81,7 +81,7 @@ func settingsConfig(
 		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
 		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
 		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
-		StoreChecks: nil,
+		StoreChecks: nil, GitHostLinks: nil,
 	}
 }
 

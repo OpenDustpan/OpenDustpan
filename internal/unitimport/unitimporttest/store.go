@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -105,7 +106,7 @@ func testCreateInvalid(t *testing.T, h Harness) {
 		{"other namespace", func(i *unitimport.Import) { i.Namespace = "other" }, unitimport.ErrInvalid},
 		{
 			"address with userinfo",
-			func(i *unitimport.Import) { i.Address = "https://u:p@host/x" },
+			func(i *unitimport.Import) { i.Address = fakecred.URL("https", "u", "p", "host", "/x") },
 			unitimport.ErrAddressInvalid,
 		},
 		{

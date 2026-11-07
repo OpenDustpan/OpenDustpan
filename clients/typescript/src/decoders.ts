@@ -84,6 +84,8 @@ import type {
   GitHostConnection,
   GitHostCredentialSet,
   GitHostInstallation,
+  GitHostLink,
+  GitHostLinkAccount,
   IssuerCopyCheck,
   IssuerCopyStep,
   IssuerExportFile,
@@ -114,6 +116,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListGitHostLinksResponse,
   ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationDeliveriesResponse,
@@ -805,6 +808,21 @@ export const decodeGitHostInstallation: Decoder<GitHostInstallation> = object<Gi
   version: int64,
 });
 
+/** The validator of GitHostLink. */
+export const decodeGitHostLink: Decoder<GitHostLink> = object<GitHostLink>("GitHostLink", {
+  account: ref(() => decodeGitHostLinkAccount),
+  linkedAt: dateTime,
+  principal: string,
+});
+
+/** The validator of GitHostLinkAccount. */
+export const decodeGitHostLinkAccount: Decoder<GitHostLinkAccount> = object<GitHostLinkAccount>("GitHostLinkAccount", {
+  host: string,
+  id: string,
+  kind: string,
+  login: string,
+});
+
 /** The validator of IssuerCopyCheck. */
 export const decodeIssuerCopyCheck: Decoder<IssuerCopyCheck> = object<IssuerCopyCheck>("IssuerCopyCheck", {
   at: string,
@@ -1062,6 +1080,11 @@ export const decodeListGitHostConnectionsResponse: Decoder<ListGitHostConnection
 /** The validator of ListGitHostInstallationsResponse. */
 export const decodeListGitHostInstallationsResponse: Decoder<ListGitHostInstallationsResponse> = object<ListGitHostInstallationsResponse>("ListGitHostInstallationsResponse", {
   installations: array(ref(() => decodeGitHostInstallation)),
+});
+
+/** The validator of ListGitHostLinksResponse. */
+export const decodeListGitHostLinksResponse: Decoder<ListGitHostLinksResponse> = object<ListGitHostLinksResponse>("ListGitHostLinksResponse", {
+  links: array(ref(() => decodeGitHostLink)),
 });
 
 /** The validator of ListJobsResponse. */

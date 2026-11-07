@@ -9,6 +9,7 @@ Changed by:
 - ADR 150 changes: the rebuild of the inventory.
 - ADR 247 extends: labels and consoleUrl on the inventory entry.
 - ADR 265 extends: a set of unit states replaces the one status.
+- ADR 337 extends: the field `lastRelease` leaves the inventory entry.
 
 ## Context
 

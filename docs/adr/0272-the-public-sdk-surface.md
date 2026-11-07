@@ -6,7 +6,7 @@ Status: accepted · 2026-10-22. Decisions 1 to 3 are owner decisions. Supersedes
 
 ADR 35 puts the SDK in `pkg/`. It lists the entry point, the domain packages,
 the conformance suites and the built-in adapters. Since then, each new package
-went into `pkg/`. On `main` at 2729ea2, 135 importable packages hold 6,800
+went into `pkg/`. On `main` at bbdde60, 135 importable packages hold 6,800
 exported names. The port closure of `pkg/dustpan` reaches only 40 packages. At
 1.0, each exported name in an importable package is a promise. No one can say
 which names are a promise today.

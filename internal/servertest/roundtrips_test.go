@@ -1273,15 +1273,33 @@ func backupModel() costModel {
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
 // passkey ceremonies, which a restore leaves empty.
+//
+// The fixed part takes 2 off for group_mappings. The run makes 5 round trips
+// for that table, 2 fewer than the cost of a table in the model: the dev strip
+// counts no rows in it, and the other statements for it are the staging count
+// and the read of the backup.
+//
+// The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
+// of the two Git host classes that a principal owns, one statement for each,
+// as it counts the eleven classes that were there before them.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        346,
+		fixed:        344 + forgeStripClassTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// forgeStripClassTrips is the number of round trips of the two classes of the
+// Git host links that the dev strip counts for each principal class: the links
+// (forge_account_links) and the link requests (forge_link_requests). The strip
+// runs one COUNT per class, once for each run and once for each attempt of the
+// swap step, and not once for each row or unit. The restore counts at 3 and at
+// 30 units both hold these 2 round trips, so the count does not grow with the
+// units.
+const forgeStripClassTrips = 2
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

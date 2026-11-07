@@ -9,9 +9,14 @@ import (
 // holds server:restore-access. The constants give every list one source:
 // AccessTables, Tables and the portable spec share them.
 const (
-	TablePrincipals        = "principals"
-	TablePrincipalGroups   = "principal_groups"
-	TableGroupMembers      = "group_members"
+	TablePrincipals      = "principals"
+	TablePrincipalGroups = "principal_groups"
+	TableGroupMembers    = "group_members"
+	// TableGroupMappings holds the explicit mappings from the group values of
+	// an identity provider to groups. A mapping decides who joins a group, so
+	// a restore without server:restore-access keeps the current rows. Each row
+	// names a group by a foreign key, so the table moves with the groups.
+	TableGroupMappings     = "group_mappings"
 	TableTempAdmins        = "temp_admins"
 	TableAccessTokens      = "access_tokens"
 	TableRoles             = "roles"
@@ -44,6 +49,13 @@ const (
 	// principals table: a restore that kept the principals and took the
 	// preferences of the backup would leave rows with no person.
 	TablePersonPreferences = "person_preferences"
+	// TableForgeAccountLinks and TableForgeLinkRequests hold the links from
+	// accounts of a Git host to principals and the one-time requests that make
+	// them. A link gives the account the actions of its principal, so a restore
+	// without server:restore-access keeps the current rows. Both tables name
+	// principals by a foreign key, so they move with the principals table.
+	TableForgeAccountLinks = "forge_account_links"
+	TableForgeLinkRequests = "forge_link_requests"
 	// TableLocalUsers holds the user name and the password hash of each
 	// local user. A row names a principal by a foreign key and is a
 	// credential of that principal, so the table moves with the principals
@@ -76,6 +88,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TablePrincipals,
 	TablePrincipalGroups,
 	TableGroupMembers,
+	TableGroupMappings,
 	TableAccessTokens,
 	TableRoles,
 	TableGrants,
@@ -89,6 +102,8 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableGitHostAppRegistrations,
 	TableGitHostInstallations,
 	TablePersonPreferences,
+	TableForgeAccountLinks,
+	TableForgeLinkRequests,
 	TableLocalUsers,
 	TableSessionGenerations,
 	TablePasskeys,

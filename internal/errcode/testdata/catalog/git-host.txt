@@ -1,0 +1,12 @@
+git-host.link-account-invalid
+git-host.link-body-invalid
+git-host.link-body-too-large
+git-host.link-conflict
+git-host.link-limit
+git-host.link-not-found
+git-host.link-not-proved
+git-host.link-person-required
+git-host.link-request-expired
+git-host.link-request-not-found
+git-host.link-request-used
+git-host.link-unavailable

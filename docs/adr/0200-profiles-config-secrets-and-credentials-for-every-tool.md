@@ -4,6 +4,7 @@ Status: accepted · 2026-10-18 · ADRs 201 to 209 give the parts · accepts part
 
 Changed by:
 
+- ADR 347 extends decision 10: warn, do not block, for choices that the operator owns.
 - ADR 210 changes decision 9: the replay record holds a keyed hash.
 - ADR 222 changes decision 3: profile checks become gates.
 - ADR 224 changes decision 3: profile rules become gates, with ADR 225.

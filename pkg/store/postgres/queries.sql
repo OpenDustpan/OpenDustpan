@@ -1589,6 +1589,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = $1 AND principal_id = $2 AND removed_at_ms = $3;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -1667,6 +1673,38 @@ SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = $1 AND source_id = $2 AND claim_value = $3 AND group_id = $4;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = $1 AND source_id = $2
+ORDER BY claim_value COLLATE "C", group_id COLLATE "C";
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = $1 AND m.source_id = $2 AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value COLLATE "C", m.group_id COLLATE "C";
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = $1 AND removed_at_ms IS NULL
+ORDER BY group_id COLLATE "C";
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
@@ -1831,6 +1869,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1843,7 +1885,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1882,7 +1924,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1921,6 +1963,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -4410,6 +4456,84 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
+-- name: CountOpenForgeLinkRequests :one
+SELECT COUNT(*) AS open_requests FROM forge_link_requests
+WHERE forge_link_requests.principal_id = sqlc.arg(principal_id) AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.expires_at_ms > sqlc.arg(now_ms);
+
+-- name: DeleteExpiredForgeLinkRequestsOf :exec
+DELETE FROM forge_link_requests
+WHERE forge_link_requests.principal_id = sqlc.arg(principal_id) AND forge_link_requests.expires_at_ms <= sqlc.arg(before_ms);
+
+-- name: DeleteForgeAccountLink :execrows
+DELETE FROM forge_account_links
+WHERE forge_account_links.kind = sqlc.arg(kind) AND forge_account_links.host = sqlc.arg(host)
+  AND forge_account_links.account_id = sqlc.arg(account_id);
+
+-- name: DeleteForgeAccountLinksOfPrincipal :exec
+DELETE FROM forge_account_links WHERE forge_account_links.principal_id = sqlc.arg(principal_id);
+
+-- name: DeleteForgeLinkRequestsOfPrincipal :exec
+DELETE FROM forge_link_requests WHERE forge_link_requests.principal_id = sqlc.arg(principal_id);
+
+-- name: GetForgeAccountLink :one
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.kind = sqlc.arg(kind) AND l.host = sqlc.arg(host) AND l.account_id = sqlc.arg(account_id);
+
+-- name: GetForgeLinkRequest :one
+SELECT r.token_sha256, r.principal_id, r.created_at_ms, r.expires_at_ms, r.proved_kind, r.proved_host,
+    r.proved_account_id, r.proved_login, r.proved_delivery_id, r.proved_at_ms, r.used_at_ms
+FROM forge_link_requests AS r
+WHERE r.token_sha256 = sqlc.arg(token_sha256);
+
+-- name: InsertForgeAccountLink :exec
+INSERT INTO forge_account_links (kind, host, account_id, login, principal_id, linked_at_ms)
+VALUES (sqlc.arg(kind), sqlc.arg(host), sqlc.arg(account_id), sqlc.arg(login), sqlc.arg(principal_id),
+    sqlc.arg(linked_at_ms));
+
+-- name: InsertForgeLinkRequest :exec
+INSERT INTO forge_link_requests (
+    token_sha256, principal_id, created_at_ms, expires_at_ms, proved_kind, proved_host, proved_account_id,
+    proved_login, proved_delivery_id, proved_at_ms, used_at_ms
+) VALUES (
+    sqlc.arg(token_sha256), sqlc.arg(principal_id), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms), '', '', '', '', '',
+    0, 0
+);
+
+-- name: ListForgeAccountLinksOf :many
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.principal_id = sqlc.arg(principal_id)
+ORDER BY l.kind COLLATE "C", l.host COLLATE "C", l.account_id COLLATE "C";
+
+-- name: ProveForgeLinkRequest :execrows
+-- The first proof wins: the statement changes a row only while it has no proof
+-- and no accept, and before its expiry.
+UPDATE forge_link_requests
+SET proved_kind = sqlc.arg(proved_kind), proved_host = sqlc.arg(proved_host),
+    proved_account_id = sqlc.arg(proved_account_id), proved_login = sqlc.arg(proved_login),
+    proved_delivery_id = sqlc.arg(proved_delivery_id), proved_at_ms = sqlc.arg(proved_at_ms)
+WHERE forge_link_requests.token_sha256 = sqlc.arg(token_sha256) AND forge_link_requests.proved_at_ms = 0
+  AND forge_link_requests.used_at_ms = 0 AND forge_link_requests.expires_at_ms > sqlc.arg(now_ms);
+
+-- name: ReplaceForgeAccountLink :execrows
+-- Replaces the link only while it names the principal that the person saw.
+UPDATE forge_account_links
+SET login = sqlc.arg(login), principal_id = sqlc.arg(principal_id), linked_at_ms = sqlc.arg(linked_at_ms)
+WHERE forge_account_links.kind = sqlc.arg(kind) AND forge_account_links.host = sqlc.arg(host)
+  AND forge_account_links.account_id = sqlc.arg(account_id)
+  AND forge_account_links.principal_id = sqlc.arg(previous_principal_id);
+
+-- name: UseForgeLinkRequest :execrows
+-- The accept wins once: the statement changes a row only for the principal that
+-- started it, after a proof, before its expiry, and while it has no accept.
+UPDATE forge_link_requests
+SET used_at_ms = sqlc.arg(used_at_ms)
+WHERE forge_link_requests.token_sha256 = sqlc.arg(token_sha256) AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.proved_at_ms > 0 AND forge_link_requests.expires_at_ms > sqlc.arg(used_at_ms)
+  AND forge_link_requests.principal_id = sqlc.arg(principal_id);
+
 -- name: GetNotificationSink :one
 -- The caller compares the scope of the row with the scope of the request.
 SELECT id, scope AS namespace, kind, name, platform, target, created_by, version
@@ -4960,7 +5084,6 @@ INSERT INTO settings_state (scope_id, revision, static_digest)
 VALUES (sqlc.arg(scope_id), sqlc.arg(revision), sqlc.arg(static_digest))
 ON CONFLICT (scope_id) DO UPDATE SET revision = excluded.revision, static_digest = excluded.static_digest;
 
-
 -- name: GetUnitSettings :one
 -- The namespace is part of the key: a row of the same unit ID in another
 -- namespace reads as no row.
@@ -5023,7 +5146,6 @@ SET pool = sqlc.arg(pool), version = sqlc.arg(expected)::bigint + 1, updated_at_
 WHERE version = sqlc.arg(expected)::bigint
   AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
-
 -- name: CreatePlacementRule :exec
 -- The caller checks the fence in the same transaction and renumbers the list
 -- after the insert.
@@ -5074,7 +5196,6 @@ ORDER BY position, id;
 -- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
 WHERE namespace = $1 AND collection_key = $2;
-
 
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
@@ -5319,8 +5440,6 @@ SELECT kind, namespace, COALESCE(deleted_at_ms, 0) AS deleted_at_ms, COALESCE(di
 FROM principals
 WHERE id = sqlc.arg(id)
 FOR SHARE;
-
-
 
 -- name: GetLocalUserPrincipal :one
 -- The kind, the break-glass flag and the subject of a principal that exists,
@@ -5587,7 +5706,6 @@ INSERT INTO name_lock_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING;
 -- name: GetNameLockKey :one
 SELECT key FROM name_lock_key WHERE id = 1;
 
-
 -- name: GetPrincipalState :one
 -- The state of a principal that each request with an access cookie reads:
 -- the owner, its activity by the account rule of the inactivity disable, the
@@ -5610,4 +5728,3 @@ LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE p.id = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
-

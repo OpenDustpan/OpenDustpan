@@ -41,6 +41,8 @@ const (
 	pgColNameKey     = "name_key"
 	pgColCreatedAtMs = "created_at_ms"
 	pgColCreatedBy   = "created_by"
+	pgColGroupID     = "group_id"
+	pgColSourceID    = "source_id"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
@@ -66,6 +68,7 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColUsedAtMs    = "used_at_ms"
 	pgColTarget      = "target"
 	pgColObject      = "object"
 	pgColSubject     = "subject"
@@ -120,6 +123,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopyForgeLinkTables()...)
 	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
@@ -600,10 +604,17 @@ func pgCopyPrincipalTables() []pgCopyTable {
 		{
 			table: backup.TableGroupMembers,
 			columns: []string{
-				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
+				pgColGroupID, pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, pgColSourceID,
 				pgColState, "suspended_at_ms", "pinned",
 			},
-			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
+			orderBy: []string{pgColGroupID, pgColPrincipalID, "added_at_ms"},
+		},
+		{
+			table: backup.TableGroupMappings,
+			columns: []string{
+				pgColSource, pgColSourceID, "claim_value", pgColGroupID, pgColCreatedBy, pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColSource, pgColSourceID, "claim_value", pgColGroupID},
 		},
 		{
 			table: backup.TableTempAdmins,
@@ -1967,5 +1978,9 @@ func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string)
 		return err
 	}
 
-	return checkStagedTrustRules(ctx, pool, staging)
+	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedForgeLinks(ctx, pool, staging)
 }

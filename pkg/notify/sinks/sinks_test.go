@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -450,7 +451,11 @@ func TestCreateRefused(t *testing.T) {
 		{"a chat URL on the metadata address", chat("https://169.254.169.254/" + canary), true},
 		{"a chat URL on a private address", chat("https://10.0.0.5/services/" + canary), true},
 		{"a chat URL on a private IPv6 address", chat("https://[fd00::1]/services/" + canary), true},
-		{"a chat URL with user information", chat("https://user:pw@hooks.slack.com/" + canary), true},
+		{
+			"a chat URL with user information",
+			chat(fakecred.URL("https", "user", "pw", "hooks.slack.com", "/") + canary),
+			true,
+		},
 		{"a chat URL with a fragment", chat("https://hooks.slack.com/x#" + canary), true},
 		{"a chat URL in a number host", chat("https://2130706433/" + canary), true},
 		{"a chat URL that does not parse", chat("https://hooks.slack.com/%zz" + canary), true},
@@ -492,7 +497,11 @@ func TestCreateRefused(t *testing.T) {
 		{"a webhook on loopback", hook("https://127.0.0.1:8443/" + canary), true},
 		{"a webhook on the metadata address", hook("https://169.254.169.254/latest/" + canary), true},
 		{"a webhook on IPv6 loopback", hook("https://[::1]/" + canary), true},
-		{"a webhook with user information", hook("https://u:p@hooks.example.com/" + canary), true},
+		{
+			"a webhook with user information",
+			hook(fakecred.URL("https", "u", "p", "hooks.example.com", "/") + canary),
+			true,
+		},
 		{"a webhook with no target", hook(""), true},
 		{
 			"an email sink with a url",

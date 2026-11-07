@@ -7,6 +7,7 @@ Changed by:
 - ADR 248 changes decision 11: resume continues on the new primary
   installation.
 - ADR 313 extends: Kubernetes operators as import sources.
+- ADR 343 changes decisions 2 and 3: an import that needs the CLI of a tool is a runner job.
 
 ## Context
 

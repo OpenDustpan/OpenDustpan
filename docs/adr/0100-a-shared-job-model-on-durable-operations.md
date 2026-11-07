@@ -28,7 +28,8 @@ Changed by:
   failover.
 - ADR 299 changes decisions 12 and 15: the `job.review-watch` poll ends.
 - ADR 314 extends: what a job is for.
-
+- ADR 353 extends decision 4: a fifth phase kind, check.
+.
 ## Context
 
 The project owner decided that two executors come in parallel, on one job

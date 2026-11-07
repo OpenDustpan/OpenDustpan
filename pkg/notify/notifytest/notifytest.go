@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -872,7 +873,13 @@ func testRecordClaim(t *testing.T, h Harness) {
 	stranger.Owner = "instance-2"
 
 	leak := attempt(d, now())
-	leak.State, leak.LastError = notify.DeliveryAbandoned, "dial tcp 10.0.0.1: https://user:pw@x"
+	leak.State, leak.LastError = notify.DeliveryAbandoned, "dial tcp 10.0.0.1: "+fakecred.URL(
+		"https",
+		"user",
+		"pw",
+		"x",
+		"",
+	)
 
 	cases := []struct {
 		name string

@@ -8,7 +8,9 @@ Changed by:
   of a person of a plain OAuth 2.0 provider or a trusted header.
 - ADR 320 extends decision 1: the request and the check of a fresh
   authentication for each method, bound to the person of the session.
-
+- ADR 339 extends decision 6: the first administrator is made by a one-time code and a fresh authentication.
+- ADR 354 extends: an agent never has a fresh authentication.
+.
 ## Context
 
 Five rules ask for a fresh authentication, with different windows and two

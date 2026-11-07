@@ -77,6 +77,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -875,6 +876,7 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	authz := allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
+			identity.ActionCallerManageGitHostLinks,
 		},
 	}}, cfg.ipAllowlists)
 
@@ -2863,6 +2865,30 @@ type installationParts struct {
 	handler     http.Handler
 	restores    *backup.RestoreService
 	storeChecks *storecheck.Service
+}
+
+// forgeLinkStore is what a SQL store gives for the links from Git host accounts
+// to principals.
+type forgeLinkStore interface {
+	ForgeLinks() forgelink.Store
+}
+
+// newForgeLinkService builds the service of the Git host account links from the
+// namespace store, or returns nil when the store keeps no links or no
+// principals. Both SQL adapters keep both. A nil service makes the routes
+// answer 501.
+func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelink.Service {
+	store, ok := st.(forgeLinkStore)
+	if !ok {
+		return nil
+	}
+
+	people, ok := st.(forgelink.People)
+	if !ok {
+		return nil
+	}
+
+	return forgelink.NewService(store.ForgeLinks(), people, now, nil)
 }
 
 // auditStoreOf returns the audit store of the namespace store. It answers

@@ -98,7 +98,7 @@ previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.
 
-**Status.** Met on 2026-10-12 on main 60f8163, with the upgrade exception
+**Status.** Met on 2026-10-12 on main 7fcc35b, with the upgrade exception
 below. The e2e suite passes the exit-test steps for both tools, on each
 version in the matrix, on SQLite and on PostgreSQL, through the real binary over TLS. The backup and
 restore steps also pass with the blobs on an S3-compatible server, and
@@ -431,7 +431,7 @@ Out of scope: replication between installations, promotion and forwarding
 (ADR 248); active-active across sites; SQLite with more than one instance; the
 shared cache (ADR 72 decision 9); a flag for the lease period.
 
-**Minimum supported topology.** Two or more instances; PostgreSQL 16 or
+**Minimum supported topology.** Two or more instances; PostgreSQL 18 or
 later; an S3-compatible object store, with no requirement for conditional
 writes; a backup target on an S3-compatible store. The Helm chart refuses the
 `fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
@@ -548,6 +548,11 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
 - [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
 - [x] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
+- [ ] The shapes that are one-way doors for agents are fixed. The feature
+  comes after the first tag (milestone 10), but the shapes cannot change after
+  it: the meaning of `principal.kind`, the agent block in the audit hash
+  chain, and the `agent` key in the `sub` of the job identity token. If RFC 121
+  is not accepted by then, this is an open item of the gate.
 - [ ] Install docs, with TLS from files and a reverse proxy
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [ ] Release workflows for the binaries, the image and the console tarball
@@ -725,6 +730,60 @@ the fact that it names.
    failed unit has a failed apply job and no new state version, and the other
    2 units show the result that RFC 115 decides.
 
+## Milestone 10. Agents: Dusty, MCP and agent principals
+
+**Goal.** A person can delegate work to an agent, and the agent can act only
+inside that delegation. Dusty, the built-in agent, and agents of other
+vendors use the same principals, grants, jobs and audit log as a person.
+Every step that an agent takes is audited, and a person confirms each change
+that matters. The owner decided on 7 November 2026 that Dusty has its own
+milestone.
+
+Milestone 10 comes after milestone 9. No release waits on this milestone. It
+is not in the gate of the first release
+([ADR 279](adr/0279-no-release-before-milestone-7.md)). The design comes from
+wide research and from the review loop of RFC 121, which is in design.
+
+**Design first.** RFC 121 (agent principals and delegations) comes before any
+code. It must be accepted as an ADR before the code of this milestone starts.
+
+**Scope.**
+
+- Agent principals and delegations (RFC 121, in design): who an agent is, who
+  delegates to it, what the delegation allows, and how a person revokes it.
+- Dusty runs and tools: Dusty runs as a job on the shared job model. Its tools
+  call the same REST API as every other client, under the grants of the
+  delegation.
+- The MCP endpoint with OAuth, and the stdio proxy, so that an agent of
+  another vendor can connect.
+- "Ask the person" approvals: an agent that needs a decision stops and asks a
+  person. The answer is a record in the audit log.
+- The design of ADR 120 to 127 (the built-in agent, the MCP endpoint and the
+  stdio proxy). It has its ports and conformance suites in `pkg/`, and no
+  adapter yet.
+
+**Exit test.** On Linux, on PostgreSQL, through the real binary over TLS, the
+e2e suite does these steps. Each step passes or fails on the fact that it
+names.
+
+1. **A person delegates to Dusty.** Pass: 1 delegation is a stored record
+   with a holder, a scope, a creator and a time. A person can list it and
+   revoke it.
+2. **Dusty proposes a change order.** Pass: the change order exists in state
+   "proposed"; its proposer is the person who delegated, and it names the
+   agent and the delegation.
+3. **A person confirms it.** Pass: the change order moves on only after the
+   confirmation of a person. With a two-person approval rule on the namespace,
+   the person who delegated cannot be the second approver.
+   The audit log has no apply step before it.
+4. **Every step is audited.** Pass: each step has an audit entry that names
+   the agent, the delegation and the reason. The hash chain of the namespace
+   verifies.
+5. **A revoke stops the work.** The person revokes the delegation while Dusty
+   has running and scheduled work. Pass: all running work of the delegation
+   stops, no scheduled work of it starts, and the next request of the agent
+   is denied and written to the audit log.
+
 ## Accepted designs that wait for adapters
 
 The owner accepted these designs on 17 and 18 October 2026. Each has its
@@ -736,7 +795,6 @@ design is in its ADRs.
 |----------------------------------------------------------------|------------|----------------------------------------------------------------------------|
 | The shared job model (`pkg/job`)                               | 100 to 103 | the Catalog, Dusty, the runner protocol and the write-back executor        |
 | Runners, the runner protocol, the launcher and sources         | 130 to 138 | remote runs on runners (RFC 6), cloud sweeps (ADR 164)                      |
-| Dusty, the built-in agent, the MCP endpoint and the stdio proxy | 120 to 127 | agent runs and agent changes through jobs                                   |
 | Unit history, redaction, history policy and safe delete        | 150 to 153 | blame, point-in-time views, redaction, retention of job artifacts          |
 | Context, the context read API, the graph and Sweep             | 160 to 165 | the context API, the graph and focus view, the state check, Sweep, findings |
 
@@ -766,6 +824,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |
 | [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification                        | runs (milestone 5)                                              |
+| [RFC 124](rfc/0124-codegen-for-discovered-resources.md) Code for unmanaged resources               | the sweep plugin milestone (RFC 123) for slices 0 to 6; the agents milestone (milestone 10) for slices 7 and 8 |
 | [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code                              | a stable REST API for groups and roles (milestone 4)            |
 | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
 | [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git                                    | runs (milestone 5)                                              |
