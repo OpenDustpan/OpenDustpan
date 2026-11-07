@@ -1168,6 +1168,8 @@ type CountActiveMembershipsInGroupsParams struct {
 }
 
 // The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+// Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+// membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
 func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountActiveMembershipsInGroupsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countActiveMembershipsInGroups, arg.PrincipalID, arg.GroupIds)
 	var count int64

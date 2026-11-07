@@ -1440,6 +1440,8 @@ WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
 
 -- name: CountActiveMembershipsInGroups :one
 -- The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+-- Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+-- membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
 SELECT COUNT(*)
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL AND m.state = 'active'
