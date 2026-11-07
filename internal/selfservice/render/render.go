@@ -105,6 +105,14 @@ func precheck(ctx context.Context, in selfservice.RenderInput, tool string) (*se
 		)
 	}
 
+	// The operation of a render comes from the unit, so both renderers
+	// refuse a value that is not a unit of their tool. Defense in depth: the
+	// core resolves the unit before the render, and this check stays so that
+	// a caller cannot give a unit of another tool.
+	if !in.Unit.IsUnit() || in.Unit.Tool() != tool {
+		return nil, fmt.Errorf("%w: a render of %s needs a unit of %s", selfservice.ErrInvalid, tool, tool)
+	}
+
 	// The limits come first, before any work on the maps, so that an input
 	// of 10,000 keys costs a length check and no more.
 	if err := checkLimits(b, in.Document); err != nil {

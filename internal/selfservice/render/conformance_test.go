@@ -27,7 +27,9 @@ func TestTofuConformance(t *testing.T) {
 			}),
 		Failures: slices.Concat(
 			sharedFailures(base, "source", "count"),
-			tofuFailures(base),
+			tofuFailures(
+				unit(t, selfservice.ToolPulumi, "orders-db", ""), identity.NamespaceObject(testNamespace(t)), base,
+			),
 			textFailures(base, "module version", func(in *selfservice.RenderInput, s string) {
 				m := *in.Version.Blueprint.Program.Module
 				m.Version = s
@@ -71,7 +73,9 @@ func TestPulumiConformance(t *testing.T) {
 			}),
 		Failures: slices.Concat(
 			sharedFailures(base, "a:b:c", ":a", "a:"),
-			pulumiFailures(unit(t, selfservice.ToolOpenTofu, "orders-site", ""), base),
+			pulumiFailures(
+				unit(t, selfservice.ToolOpenTofu, "orders-site", ""), identity.NamespaceObject(testNamespace(t)), base,
+			),
 			textFailures(base, "version", component(func(c *selfservice.Component, s string) { c.Version = s })),
 			textFailures(base, "package", component(func(c *selfservice.Component, s string) { c.Package = s })),
 			textFailures(base, "type", component(func(c *selfservice.Component, s string) { c.Type = s })),
@@ -197,13 +201,25 @@ func textFailures(
 	return out
 }
 
-func tofuFailures(base selfservice.RenderInput) []selfservicetest.RenderFailure {
+func tofuFailures(otherUnit, notUnit identity.Object, base selfservice.RenderInput) []selfservicetest.RenderFailure {
 	otherProgram := func(p selfservice.Program) func(*selfservice.RenderInput) {
 		return func(in *selfservice.RenderInput) { in.Version.Blueprint.Program = p }
 	}
 	component := &selfservice.Component{Package: "p", Version: "1.0.0", Type: "p:index:T"}
 
 	return []selfservicetest.RenderFailure{
+		{
+			Name: "unit of another tool", Err: selfservice.ErrInvalid,
+			Input: variant(base, func(in *selfservice.RenderInput) { in.Unit = otherUnit }),
+		},
+		{
+			Name: "no unit", Err: selfservice.ErrInvalid,
+			Input: variant(base, func(in *selfservice.RenderInput) { in.Unit = identity.Object{} }),
+		},
+		{
+			Name: "unit that is a namespace", Err: selfservice.ErrInvalid,
+			Input: variant(base, func(in *selfservice.RenderInput) { in.Unit = notUnit }),
+		},
 		{
 			Name: "one home: input and platform value",
 			Err:  selfservice.ErrOneHome,
@@ -263,7 +279,7 @@ func tofuFailures(base selfservice.RenderInput) []selfservicetest.RenderFailure 
 	}
 }
 
-func pulumiFailures(otherUnit identity.Object, base selfservice.RenderInput) []selfservicetest.RenderFailure {
+func pulumiFailures(otherUnit, notUnit identity.Object, base selfservice.RenderInput) []selfservicetest.RenderFailure {
 	otherProgram := func(p selfservice.Program) func(*selfservice.RenderInput) {
 		return func(in *selfservice.RenderInput) { in.Version.Blueprint.Program = p }
 	}
@@ -313,6 +329,10 @@ func pulumiFailures(otherUnit identity.Object, base selfservice.RenderInput) []s
 		{
 			Name: "no unit", Err: selfservice.ErrInvalid,
 			Input: variant(base, func(in *selfservice.RenderInput) { in.Unit = identity.Object{} }),
+		},
+		{
+			Name: "unit that is a namespace", Err: selfservice.ErrInvalid,
+			Input: variant(base, func(in *selfservice.RenderInput) { in.Unit = notUnit }),
 		},
 		{
 			Name:  "null platform value",
