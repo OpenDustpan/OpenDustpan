@@ -37,6 +37,17 @@ type Recorder interface {
 	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string, where Where) error
 }
 
+// IntegrityRecorder records that a call refused a blob because its bytes do
+// not match the size and the hash that the record of the blob names. A store
+// that replaced the object, or an attacker with write access to the store, can
+// cause this. A recorder never holds the key or the bytes of the blob.
+type IntegrityRecorder interface {
+	// RecordMismatch records one refusal in the namespace ns, for the
+	// operation op. Only "get" is an operation of a mismatch. It returns an
+	// error when it cannot record the refusal.
+	RecordMismatch(ctx context.Context, ns namespace.ID, op string) error
+}
+
 // Where says where a refused key was: outside the namespace of the call,
 // inside the namespace and outside the directory of the blobs of the call, or
 // inside that directory and outside the directory of the unit of the call.
@@ -103,6 +114,9 @@ func PlaceOf(v *blob.Scoped, key blob.Key) Where {
 const (
 	// ActionOutOfScope is the action of the audit entry of a refusal.
 	ActionOutOfScope = "blob:out-of-scope"
+	// ActionMismatch is the action of the audit entry of a blob that does not
+	// match its record.
+	ActionMismatch = "blob:mismatch"
 	// subject is the subject of that entry: the server itself.
 	subject = "server"
 )
@@ -117,7 +131,10 @@ type Audit struct {
 	now     func() time.Time
 }
 
-var _ Recorder = (*Audit)(nil)
+var (
+	_ Recorder          = (*Audit)(nil)
+	_ IntegrityRecorder = (*Audit)(nil)
+)
 
 // New returns an Audit that appends to entries, for the blobs of family. now
 // may be nil; it then is time.Now.
@@ -163,13 +180,36 @@ func (a *Audit) RecordOutOfScope(ctx context.Context, ns namespace.ID, op string
 		return fmt.Errorf("record out-of-scope refusal: %w", err)
 	}
 
+	return a.append(ctx, ns, ActionOutOfScope, a.family.Blobs+" "+op+" refused: key "+place)
+}
+
+// RecordMismatch appends the entry of a blob that does not match its record.
+// The object is the ID of the namespace of the call. The entry never holds the
+// key or the bytes of the blob.
+func (a *Audit) RecordMismatch(ctx context.Context, ns namespace.ID, op string) error {
+	// The allowlist keeps the reason to a fixed text: a read is the only
+	// operation that compares the bytes with the record.
+	if op != "get" {
+		return fmt.Errorf("%w: operation %q", ErrInvalidRecord, op)
+	}
+
+	if _, err := namespace.ParseID(ns.String()); err != nil {
+		return fmt.Errorf("record blob mismatch: %w", err)
+	}
+
+	return a.append(ctx, ns, ActionMismatch,
+		a.family.Blobs+" "+op+" refused: the size or the MD5 of the blob does not match its record")
+}
+
+// append writes one entry of the kind security with the outcome denied.
+func (a *Audit) append(ctx context.Context, ns namespace.ID, action, reason string) error {
 	entry := audit.Entry{
 		At:            a.now().UTC(),
 		Namespace:     audit.ServerScope,
 		Subject:       subject,
 		IDPSubject:    "",
 		TokenID:       "",
-		Action:        ActionOutOfScope,
+		Action:        action,
 		Object:        ns.String(),
 		Version:       "",
 		ValuePath:     "",
@@ -188,7 +228,7 @@ func (a *Audit) RecordOutOfScope(ctx context.Context, ns namespace.ID, op string
 		FenceVersion:  0,
 		PrincipalKind: "",
 		JobID:         "",
-		Reason:        a.family.Blobs + " " + op + " refused: key " + place,
+		Reason:        reason,
 	}
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {

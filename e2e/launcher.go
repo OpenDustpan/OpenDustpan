@@ -301,6 +301,10 @@ func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopea
 	return nil
 }
 
+func (noRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
+	return nil
+}
+
 // jobParts are the stores of the jobs of one database.
 type jobParts struct {
 	jobs interface {
@@ -388,7 +392,7 @@ func (e *Env) newJobLogReader(tb testing.TB, parts jobParts) *job.ArtifactReads 
 		tb.Fatalf("artifact blobs: %v", err)
 	}
 
-	itemBlobs, err := secret.NewItemKeyBlobs(blobStore, noRefusals{})
+	itemBlobs, err := secret.NewItemKeyBlobs(blobStore, noRefusals{}, noRefusals{})
 	if err != nil {
 		tb.Fatalf("item key blobs: %v", err)
 	}
