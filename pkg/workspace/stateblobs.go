@@ -259,6 +259,9 @@ func (b *stateBlobs) refuse(
 // redactedError reports a store error whose blob key is replaced in its text.
 // The chain is kept, so errors.Is and errors.As still see every sentinel that
 // the store error carries.
+//
+// Unwrap exposes the original text, which holds the key. A caller must log or
+// return this error, never the unwrapped error.
 type redactedError struct {
 	text string
 	err  error
@@ -269,6 +272,10 @@ func (e *redactedError) Error() string { return e.text }
 
 // Unwrap returns the store error, so the chain of errors.Is and errors.As holds.
 func (e *redactedError) Unwrap() error { return e.err }
+
+// Redacted marks the error as a redaction, so a reader of the chain, such as
+// the log of a 500, skips it and names the error it wraps.
+func (e *redactedError) Redacted() {}
 
 // redactKey returns err with the blob key replaced by a placeholder in its
 // text. The chain of err is kept, so errors.Is and errors.As still match. The
