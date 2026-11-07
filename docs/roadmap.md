@@ -824,6 +824,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |
 | [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification                        | runs (milestone 5)                                              |
+| [RFC 124](rfc/0124-codegen-for-discovered-resources.md) Code for unmanaged resources               | the sweep plugin milestone (RFC 123) for slices 0 to 6; the agents milestone (milestone 10) for slices 7 and 8 |
 | [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code                              | a stable REST API for groups and roles (milestone 4)            |
 | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
 | [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git                                    | runs (milestone 5)                                              |
