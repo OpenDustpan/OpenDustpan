@@ -13,7 +13,9 @@ import (
 )
 
 // TestTimeLayer checks that the time limit ends the run. The limit is 1 ns,
-// so the run cannot finish first, and the error names the deadline.
+// so the run cannot finish first, and the error names the deadline. This
+// test does not prove that the caller gets control back while the program
+// still runs; TestUncountedWorkEndsWithinTheLimit proves that.
 func TestTimeLayer(t *testing.T) {
 	t.Parallel()
 
