@@ -44,18 +44,102 @@ concurrency:
 # restore, so they cannot change the cache that main uses. GitHub removes the
 # least recently used entries when the repository is above its cache limit.
 
+# Which jobs run (the changes job sets the outputs):
+# - merge_group, push and schedule: every job (schedule keeps its own limits).
+# - pull_request with the label full-ci: every job. The label applies from the
+#   next push to the pull request; a re-run reads the labels of the old event.
+# - pull_request that changes only docs: lint and scan. lint holds docs-lint
+#   and the ADR index check.
+# - other pull_request: lint, golangci-lint, golangci-lint-journal, nilaway,
+#   go and scan, plus each suite whose own files changed.
+# A job that its condition skips reports "skipped", and a required check
+# accepts "skipped". The merge queue runs every job, so it gates each change
+# on the full set. If the changes job fails, each job runs (fail closed).
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      e2e: ${{ steps.classify.outputs.e2e }}
+      store: ${{ steps.classify.outputs.store }}
+      bench: ${{ steps.classify.outputs.bench }}
+      journal: ${{ steps.classify.outputs.journal }}
+      chart: ${{ steps.classify.outputs.chart }}
+    steps:
+      # The checkout of a pull_request event is the merge commit of the pull
+      # request on top of its base. Its first parent is the base, so depth 2
+      # is enough for the diff.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Classify the changed paths
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FULL_CI_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          set -uo pipefail
+          outputs="code e2e store bench journal chart"
+          run_all() {
+            for o in $outputs; do echo "$o=true" >> "$GITHUB_OUTPUT"; done
+            echo "Every job runs: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          [ "$EVENT_NAME" = pull_request ] || run_all "event $EVENT_NAME"
+          [ "$FULL_CI_LABEL" = true ] && run_all "label full-ci"
+          git rev-parse --verify -q 'HEAD^2' >/dev/null || run_all "HEAD is not a merge commit"
+          files=$(git diff --name-only --no-renames 'HEAD^1' HEAD) || run_all "git diff failed"
+          [ -n "$files" ] || run_all "no changed path"
+          code=false e2e=false store=false bench=false journal=false chart=false
+          while IFS= read -r f; do
+            case "$f" in
+              .github/*|Makefile|go.mod|go.sum) run_all "$f changed" ;;
+            esac
+            # Docs only: docs/, .repowise/ and Markdown files at the root.
+            # Go tests read the three docs files below, so they are code.
+            case "$f" in
+              docs/tfe-api.md|docs/reference/configuration.md|docs/reference/helm-values.md) code=true ;;
+              docs/*|.repowise/*) ;;
+              */*) code=true ;;
+              *.md) ;;
+              *) code=true ;;
+            esac
+            case "$f" in
+              e2e/*|internal/api/pulumi/*|internal/api/tfe/*|internal/pulumijournal/*|pkg/dustpan/*|cmd/opendustpan/*|pkg/store/*/migrations/*|scripts/e2e-*|scripts/toxiproxy.sh) e2e=true ;;
+            esac
+            case "$f" in
+              pkg/store/*|internal/store/*|internal/pgtest/*|pkg/*test/*) store=true ;;
+            esac
+            case "$f" in
+              pkg/stack/*|pkg/store/sqlite/*) bench=true ;;
+            esac
+            case "$f" in
+              internal/api/pulumi/*|internal/pulumijournal/*|pkg/dustpan/*|pkg/stack/*) journal=true ;;
+            esac
+            case "$f" in
+              deploy/helm/*|scripts/chart-lint.sh) chart=true ;;
+            esac
+          done <<< "$files"
+          {
+            echo "code=$code"; echo "e2e=$e2e"; echo "store=$store"
+            echo "bench=$bench"; echo "journal=$journal"; echo "chart=$chart"
+          } >> "$GITHUB_OUTPUT"
+          echo "code=$code e2e=$e2e store=$store bench=$bench journal=$journal chart=$chart" >> "$GITHUB_STEP_SUMMARY"
+
   # The checks that need no database. They run apart from the tests.
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
-      # The job index keeps the two store jobs apart. go.mod holds the Go
-      # version, so a new toolchain starts from a new prefix.
+      # The job id keeps the jobs apart. go.mod holds the Go version, so a
+      # new toolchain starts from a new prefix.
       - &go-cache-restore
         name: Restore the Go caches
         id: go-cache
@@ -121,8 +205,10 @@ jobs:
   # job. A new commit is needed to change their result, so they do not run on
   # the schedule.
   golangci-lint:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -144,8 +230,10 @@ jobs:
   # (make journal-guard) stays clean. The install-only step puts
   # golangci-lint on the PATH and skips the lint cache of the action.
   golangci-lint-journal:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -163,8 +251,10 @@ jobs:
       - *go-cache-save
 
   nilaway:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -179,7 +269,10 @@ jobs:
       - *go-cache-save
 
   go:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -220,8 +313,10 @@ jobs:
   # and a new commit is needed to change their result, so they do not run on
   # the schedule.
   bench:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.bench == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -236,7 +331,8 @@ jobs:
   # The tests of the journal recording build. This build has its own tag, so
   # the go job does not run these tests. The make target holds the tag.
   journal-test:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.journal == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -253,18 +349,36 @@ jobs:
   # The SQLite and PostgreSQL store packages are the two longest test
   # packages, and both are CPU-bound. Each one runs in a job of its own, so
   # that it does not share the cores of a runner with the other or with the
-  # rest of go test.
-  store:
+  # rest of go test. They are two jobs and not a matrix: a matrix job that its
+  # condition skips reports one check named "store", and the required checks
+  # "store (sqlite)" and "store (postgres)" would wait forever.
+  store-sqlite:
+    name: store (sqlite)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.store == 'true') }}
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        store: [ sqlite, postgres ]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - *go-cache-restore
+      - name: Test
+        run: make test-ci-store STORE=sqlite ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
+      - *go-cache-save
+
+  store-postgres:
+    name: store (postgres)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.store == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     services:
       postgres:
-        # The same image as the go job. An empty image starts no service, so
-        # the sqlite job has no PostgreSQL.
-        image: ${{ matrix.store == 'postgres' && 'postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336' || '' }}
+        # The same image as the go job.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
         env:
           POSTGRES_PASSWORD: postgres
         ports: [ "5432:5432" ]
@@ -285,7 +399,6 @@ jobs:
       # PostgreSQL keeps after a crash of the machine, not what a query
       # returns. The crash-test job keeps the defaults.
       - name: Turn off fsync in the test PostgreSQL
-        if: ${{ matrix.store == 'postgres' }}
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
@@ -296,12 +409,15 @@ jobs:
             -c "SELECT pg_reload_conf()"
       # The runner throws the service container away after the job, so the
       # PostgreSQL tests keep their database at the end
-      # (DUSTPAN_TEST_SKIP_FINAL_DROP). A local run drops it.
+      # (DUSTPAN_TEST_SKIP_FINAL_DROP). The variable also keeps the test
+      # database and the template of a run that fails. Set it only for a
+      # disposable server that is isolated to one run, never for a shared
+      # server. A local run drops the database.
       - name: Test
         env:
-          DUSTPAN_TEST_POSTGRES_URL: ${{ matrix.store == 'postgres' && format('postgres://postgres:postgres@localhost:{0}/postgres?sslmode=disable', job.services.postgres.ports['5432']) || '' }}
-          DUSTPAN_TEST_SKIP_FINAL_DROP: ${{ matrix.store == 'postgres' && '1' || '' }}
-        run: make test-ci-store STORE=${{ matrix.store }} ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+          DUSTPAN_TEST_SKIP_FINAL_DROP: "1"
+        run: make test-ci-store STORE=postgres ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
       - *go-cache-save
 
   # Trivy and TruffleHog (make trivy, make trufflehog). The binaries come from
@@ -310,6 +426,7 @@ jobs:
   scan:
     if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -351,8 +468,10 @@ jobs:
   # The runner image has Helm. kubeconform is built from the pinned version of
   # its module, as make nilaway and make vuln build their tools.
   chart-lint:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.chart == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -371,7 +490,8 @@ jobs:
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     services:
@@ -445,7 +565,8 @@ jobs:
   # upgrade, a crash and network faults. Each one runs in a job of its own,
   # next to the e2e suite.
   e2e-journal:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     services:
@@ -468,7 +589,8 @@ jobs:
       - *go-cache-save
 
   upgrade-test:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -502,7 +624,8 @@ jobs:
       - *go-cache-save
 
   crash-test:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -525,7 +648,8 @@ jobs:
       - *go-cache-save
 
   faults:
-    if: ${{ github.event_name != 'schedule' }}
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
