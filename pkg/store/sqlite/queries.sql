@@ -1630,6 +1630,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1642,7 +1646,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(sqlc.arg('history') AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1683,7 +1687,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(sqlc.arg('history') AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1725,6 +1729,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id

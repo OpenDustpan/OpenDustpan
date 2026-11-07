@@ -277,6 +277,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(?1 AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -334,6 +338,9 @@ type CallerGrantsRow struct {
 	MemberRemovedAtMs sql.NullInt64
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -379,6 +386,9 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {
@@ -1443,7 +1453,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?1 AS TEXT) <> '' AND m.principal_id = CAST(?1 AS TEXT))
     OR (CAST(?1 AS TEXT) = '' AND CAST(?2 AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(?3 AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?4 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?5 AS INTEGER)
@@ -19134,6 +19144,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(?1 AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -19146,7 +19160,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?2 AS TEXT) <> '' AND m.principal_id = CAST(?2 AS TEXT))
     OR (CAST(?2 AS TEXT) = '' AND CAST(?3 AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(?4 AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
@@ -19222,6 +19236,9 @@ type ReviewGrantsRow struct {
 	MemberRemovedAtMs sql.NullInt64
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -19280,6 +19297,9 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {
