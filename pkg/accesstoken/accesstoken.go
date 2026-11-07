@@ -329,10 +329,11 @@ func ValidateName(s string) error {
 		return fmt.Errorf("%w: name starts or ends with white space", ErrInvalid)
 	}
 
-	// Defense in depth: the HTTP adapters validate the name too; this check
-	// stays so that a new caller of the domain cannot skip it.
-	if ident.HasHidden(s) {
-		return fmt.Errorf("%w: name holds a control, format or separator character", ErrInvalid)
+	// Defense in depth: the token routes in internal/api/server refuse a
+	// hidden character in the name before they call the service. This check
+	// does not rely on them, so that a new caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: name holds the control, format or separator character %U", ErrInvalid, r)
 	}
 
 	return nil

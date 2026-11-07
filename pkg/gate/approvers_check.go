@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 )
@@ -191,20 +192,28 @@ func (s *ConfigService) resolveGroups(ctx context.Context, names []string, fresh
 }
 
 // checkUserName returns an error that wraps ErrApprovers for a user name that is
-// not a name: one with a control or format character, or with white space at
-// its start or its end. The name of a user from an identity provider can hold
-// characters that an API subject cannot, so the check is not stricter.
+// not a name: one that is not UTF-8, one with a control, format or separator
+// character, or one with white space at its start or its end. The name of a
+// user from an identity provider can hold characters that an API subject
+// cannot, so the check is not stricter.
 func checkUserName(name string) error {
+	if !utf8.ValidString(name) {
+		return newApproversError(ApproversUserInvalid,
+			fmt.Sprintf("the user name %q is not UTF-8", name))
+	}
+
 	if strings.TrimSpace(name) != name {
 		return newApproversError(ApproversUserInvalid,
 			fmt.Sprintf("the user name %q starts or ends with white space", name))
 	}
 
-	// Defense in depth: the HTTP adapters validate the name too; this check
-	// stays so that a new caller of the domain cannot skip it.
-	if ident.HasHidden(name) {
+	// Defense in depth: the approval default and rule routes in
+	// internal/api/server refuse a hidden character in an approver user name
+	// before they call the store. This check does not rely on them, so that a
+	// new caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(name); found {
 		return newApproversError(ApproversUserInvalid,
-			fmt.Sprintf("the user name %q holds a control, format or separator character", name))
+			fmt.Sprintf("the user name %q holds the control, format or separator character %U", name, r))
 	}
 
 	return nil

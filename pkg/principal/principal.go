@@ -501,10 +501,12 @@ func validateText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	// Defense in depth: the HTTP adapters validate the text too; this check
-	// stays so that a new caller of the domain cannot skip it.
-	if ident.HasHidden(s) {
-		return fmt.Errorf("%w: %s holds a control, format or separator character", ErrInvalid, field)
+	// Defense in depth: the principal and group routes in internal/api/server
+	// refuse a hidden character in the display name and the description before
+	// they call the service. This check does not rely on them, so that a new
+	// caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: %s holds the control, format or separator character %U", ErrInvalid, field, r)
 	}
 
 	return nil

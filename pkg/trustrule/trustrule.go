@@ -363,8 +363,8 @@ func checkText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: the %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	if ident.HasHidden(s) {
-		return fmt.Errorf("%w: the %s holds a control, format or separator character", ErrInvalid, field)
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: the %s holds the control, format or separator character %U", ErrInvalid, field, r)
 	}
 
 	return nil

@@ -155,6 +155,10 @@ func createNamespacePrincipal(
 		return failed("principals"), errNamespacePrincipalBody
 	}
 
+	if hidden := refuseHiddenPtr("displayName", req.DisplayName); hidden != nil {
+		return failed("principals"), hidden
+	}
+
 	in := principal.NamespaceInput{Subject: *req.Subject, DisplayName: ""}
 	if req.DisplayName != nil {
 		in.DisplayName = *req.DisplayName
@@ -221,6 +225,10 @@ func changeNamespacePrincipal(
 	err := decodeChange(w, r, &req, errPrincipalChangeBody, func() bool { return req.DisplayName == nil })
 	if err != nil {
 		return failed(object), err
+	}
+
+	if hidden := refuseHiddenPtr("displayName", req.DisplayName); hidden != nil {
+		return failed(object), hidden
 	}
 
 	p, err := svc.UpdateNamespacePrincipal(r.Context(), c.e, c.obj.Namespace(), id,

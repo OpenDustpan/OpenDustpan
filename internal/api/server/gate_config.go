@@ -140,6 +140,18 @@ func (b approversBody) domain() gate.Approvers {
 	return gate.Approvers{Groups: nonNil(b.Groups), GroupIDs: nil, Users: nonNil(b.Users), UnitOwners: b.UnitOwners}
 }
 
+// refuseHiddenUsers returns an error that wraps errHiddenText for an approver
+// user name with a hidden character.
+func (b approversBody) refuseHiddenUsers() error {
+	for _, u := range b.Users {
+		if err := refuseHidden("approver user name", u); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func approversOf(a gate.Approvers) approversBody {
 	return approversBody{Groups: nonNil(a.Groups), Users: nonNil(a.Users), UnitOwners: a.UnitOwners}
 }
@@ -337,6 +349,12 @@ func (h *Handler) writeApprovalDefault(
 		return
 	}
 
+	if err := in.Approvers.refuseHiddenUsers(); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	fresh, err := freshOf(in.FreshAuthSeconds)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -528,6 +546,10 @@ func (h *Handler) writeApprovalRule(
 
 // approvalRuleFrom builds the rule of a request body.
 func approvalRuleFrom(scope gate.Scope, id gate.ID, in approvalRuleBody) (gate.ApprovalRule, error) {
+	if err := in.Approvers.refuseHiddenUsers(); err != nil {
+		return gate.ApprovalRule{}, err
+	}
+
 	fresh, err := freshOf(in.FreshAuthSeconds)
 	if err != nil {
 		return gate.ApprovalRule{}, err

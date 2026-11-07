@@ -4,9 +4,14 @@ rules:
     severity: ERROR
     message: >-
       Do not write your own hidden-character check. Call ident.IsHiddenRune or
-      ident.HasHidden. A copy with unicode.Cf can miss the categories Zl and Zp
-      (U+2028 and U+2029).
-    pattern: unicode.Cf
+      ident.HasHidden. A copy that names unicode.Cf, the category "Cf" or
+      unicode.Cc can miss the categories Zl and Zp (U+2028 and U+2029). The
+      rule finds these forms only: it does not find every incomplete check.
+    pattern-either:
+      - pattern: unicode.Cf
+      - pattern: unicode.Categories["Cf"]
+      - pattern: unicode.Is(unicode.Cc, ...)
+      - pattern: unicode.In($R, ..., unicode.Cc, ...)
     paths:
       exclude:
         # The one definition of the check.

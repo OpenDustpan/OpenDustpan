@@ -39,3 +39,31 @@ func TestHasHidden(t *testing.T) {
 		})
 	}
 }
+
+func TestFirstHidden(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		s     string
+		want  rune
+		found bool
+	}{
+		{"empty", "", 0, false},
+		{"plain", "alpha", 0, false},
+		{"line separator", "a\u2028b", 0x2028, true},
+		{"first of two", "a\u202eb\x07", 0x202e, true},
+		{"invalid UTF-8 is not hidden", "a\xffb", 0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, found := ident.FirstHidden(tc.s)
+			if got != tc.want || found != tc.found {
+				t.Errorf("FirstHidden(%q) = %U, %v, want %U, %v", tc.s, got, found, tc.want, tc.found)
+			}
+		})
+	}
+}

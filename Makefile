@@ -65,7 +65,6 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
-		--config .semgrep \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--x-ignore-semgrepignore-files --config .semgrep .
