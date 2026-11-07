@@ -609,7 +609,9 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 
 // hostilePart returns a valid part of kind k, which the cases change.
 func hostilePart(k job.OutputKind) job.PlanPart {
-	return job.PlanPart{Kind: k, Size: 1, SHA256: emptySHA256, Secret: false, StoredSize: 0, StoredMD5: ""}
+	return job.PlanPart{
+		Kind: k, Size: 1, SHA256: emptySHA256, Secret: k == job.OutputPlanApply, StoredSize: 0, StoredMD5: "",
+	}
 }
 
 // hostilePartCases returns the lists of parts that the store refuses, by what
