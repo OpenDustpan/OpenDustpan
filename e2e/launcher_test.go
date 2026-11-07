@@ -149,7 +149,9 @@ func checkLauncherJob(body string) error {
 		return fmt.Errorf("decode job: %w", err)
 	}
 
-	if len(doc.Phases) == 0 || doc.Phases[0].Kind != "plan" || doc.Phases[0].FinishedAt == nil {
+	// A failed phase has no end time: the server sets it only when a phase
+	// ends with success. The job state and its reason are checked below.
+	if len(doc.Phases) == 0 || doc.Phases[0].Kind != "plan" {
 		return fmt.Errorf("%w: state %s, phases %s", errLauncherRun, doc.State, body)
 	}
 
