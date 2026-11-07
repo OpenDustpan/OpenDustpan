@@ -21,6 +21,11 @@ import (
 func commandTable() cli.Table {
 	return cli.Table{
 		cli.NamespaceCreateCommand(client.CreateNamespace),
+		cli.CollectionCreateCommand(client.CollectionCreate),
+		cli.CollectionListCommand(client.CollectionList),
+		cli.PlacementAddCommand(client.PlacementAdd),
+		cli.PlacementListCommand(client.PlacementList),
+		cli.PlacementDeleteCommand(client.PlacementDelete),
 		cli.UpgradeCheckCommand(func(
 			ctx context.Context, args []string, stdout, stderr io.Writer,
 		) error {
