@@ -9,6 +9,7 @@ Changed by:
 - ADR 299 changes decisions 4, 9, 10, 12 and 14: authors, the apply after a
   merge, and review requests.
 - ADR 300 changes decision 10: a merge queue entry is a request to apply, and the account that queued it is the requester.
+- ADR 344 changes decision 14: an agent can draft a change order, and a person confirms it.
 
 ## Context
 
