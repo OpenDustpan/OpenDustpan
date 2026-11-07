@@ -25,12 +25,12 @@ then, every new package went into `pkg/`. Go semantic versioning makes each
 exported name in an importable package a promise at 1.0. Today no one can
 tell which exported names are a promise.
 
-Measured on `main` at 2729ea2 (2026-10-22):
+Measured on `main` at bbdde60 (2026-10-22):
 
 - `go list ./pkg/...` lists **148 packages**. 13 of them are under a
   `pkg/store/.../internal/` path, so the Go toolchain already stops other
   modules from importing them. **135 packages are importable.** (The review
-  counted 147 at 9464ad0. One package came after it.)
+  counted 147 at 7b4ac09. One package came after it.)
 - The 148 packages hold **6,800 exported top-level names** (types, functions,
   variables, constants). This count leaves out methods and fields. The
   review's 7,491 counts in a different way. Both numbers say the same thing.
@@ -42,7 +42,7 @@ Measured on `main` at 2729ea2 (2026-10-22):
   embedder or a third-party store cannot name these types, so it cannot
   implement or call these APIs. The list is in "Measured state".
 - **74 files in 31 packages import `internal/ident`** (59 non-test files). The
-  review counted 27. `git grep -l` at 9464ad0 gives 71, so the difference
+  review counted 27. `git grep -l` at 7b4ac09 gives 71, so the difference
   is in the method, not in the code. These imports are implementation only:
   `internal/ident` exports no type, and no exported signature names it. Under
   the rule below they are allowed.

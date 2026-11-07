@@ -20,7 +20,8 @@ Changed by:
 - ADR 300 changes decision 2: a plan that starts from the Git host never gets the secrets of the first bullet.
 - ADR 300 changes decision 10: a manual lock can cover the whole installation.
 - ADR 309 extends decision 5: the batch record and the first bulk actions.
-
+- ADR 353 changes decision 2: a trusted source needs more than a branch name, and a team can turn on proxy-only credentials.
+.
 ## Context
 
 Decided by the project manager under the owner's decision rule, 2026-10-18.

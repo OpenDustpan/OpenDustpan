@@ -611,6 +611,8 @@ func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*e
 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	// Set before Start: os/exec reads WaitDelay in its context watcher.
+	cmd.WaitDelay = stepLogWaitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start server binary: %w", err)
@@ -1222,6 +1224,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           true,
 		binPath:       bin,
 		backupDir:     "",
@@ -1295,7 +1298,6 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
-
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
@@ -1313,6 +1315,7 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           true,
 		binPath:       bin,
 		backupDir:     "",

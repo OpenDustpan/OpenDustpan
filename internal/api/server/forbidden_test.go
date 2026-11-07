@@ -31,9 +31,10 @@ func forbiddenHandler(t *testing.T, err error) testHandler {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
 
-	handler, newErr := newCheckedHandler(t, apiserver.Config{
+	handler, newErr := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,

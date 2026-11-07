@@ -21,7 +21,7 @@ type testHandler struct {
 func (h testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.served.ServeHTTP(w, r) }
 
 // newCheckedHandler is NewHandler with the check of the success statuses.
-func newCheckedHandler(t *testing.T, cfg apiserver.Config) (testHandler, error) {
+func newCheckedHandler(t *testing.T, cfg *apiserver.Config) (testHandler, error) {
 	t.Helper()
 
 	h, err := apiserver.NewHandler(cfg)

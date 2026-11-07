@@ -277,6 +277,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(?1 AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -334,6 +338,9 @@ type CallerGrantsRow struct {
 	MemberRemovedAtMs sql.NullInt64
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -379,6 +386,9 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {
@@ -1197,6 +1207,24 @@ func (q *Queries) CountNotificationsByID(ctx context.Context, id string) (int64,
 	return count, err
 }
 
+const countOpenForgeLinkRequests = `-- name: CountOpenForgeLinkRequests :one
+SELECT COUNT(*) AS open_requests FROM forge_link_requests
+WHERE forge_link_requests.principal_id = ?1 AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.expires_at_ms > ?2
+`
+
+type CountOpenForgeLinkRequestsParams struct {
+	PrincipalID string
+	NowMs       int64
+}
+
+func (q *Queries) CountOpenForgeLinkRequests(ctx context.Context, arg CountOpenForgeLinkRequestsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenForgeLinkRequests, arg.PrincipalID, arg.NowMs)
+	var open_requests int64
+	err := row.Scan(&open_requests)
+	return open_requests, err
+}
+
 const countOpenJobsOfNamespace = `-- name: CountOpenJobsOfNamespace :one
 SELECT COUNT(*) FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
@@ -1425,7 +1453,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?1 AS TEXT) <> '' AND m.principal_id = CAST(?1 AS TEXT))
     OR (CAST(?1 AS TEXT) = '' AND CAST(?2 AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(?3 AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?4 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?5 AS INTEGER)
@@ -2883,6 +2911,21 @@ func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error
 	return err
 }
 
+const deleteExpiredForgeLinkRequestsOf = `-- name: DeleteExpiredForgeLinkRequestsOf :exec
+DELETE FROM forge_link_requests
+WHERE forge_link_requests.principal_id = ?1 AND forge_link_requests.expires_at_ms <= ?2
+`
+
+type DeleteExpiredForgeLinkRequestsOfParams struct {
+	PrincipalID string
+	BeforeMs    int64
+}
+
+func (q *Queries) DeleteExpiredForgeLinkRequestsOf(ctx context.Context, arg DeleteExpiredForgeLinkRequestsOfParams) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredForgeLinkRequestsOf, arg.PrincipalID, arg.BeforeMs)
+	return err
+}
+
 const deleteExpiredIdempotencyRecord = `-- name: DeleteExpiredIdempotencyRecord :exec
 DELETE FROM idempotency_records
 WHERE principal = ?1 AND method = ?2 AND path = ?3
@@ -2958,6 +3001,44 @@ DELETE FROM runner_nonces WHERE expires_at_ms < ?1
 
 func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredRunnerNonces, beforeMs)
+	return err
+}
+
+const deleteForgeAccountLink = `-- name: DeleteForgeAccountLink :execrows
+DELETE FROM forge_account_links
+WHERE forge_account_links.kind = ?1 AND forge_account_links.host = ?2
+  AND forge_account_links.account_id = ?3
+`
+
+type DeleteForgeAccountLinkParams struct {
+	Kind      string
+	Host      string
+	AccountID string
+}
+
+func (q *Queries) DeleteForgeAccountLink(ctx context.Context, arg DeleteForgeAccountLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteForgeAccountLink, arg.Kind, arg.Host, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteForgeAccountLinksOfPrincipal = `-- name: DeleteForgeAccountLinksOfPrincipal :exec
+DELETE FROM forge_account_links WHERE forge_account_links.principal_id = ?1
+`
+
+func (q *Queries) DeleteForgeAccountLinksOfPrincipal(ctx context.Context, principalID string) error {
+	_, err := q.db.ExecContext(ctx, deleteForgeAccountLinksOfPrincipal, principalID)
+	return err
+}
+
+const deleteForgeLinkRequestsOfPrincipal = `-- name: DeleteForgeLinkRequestsOfPrincipal :exec
+DELETE FROM forge_link_requests WHERE forge_link_requests.principal_id = ?1
+`
+
+func (q *Queries) DeleteForgeLinkRequestsOfPrincipal(ctx context.Context, principalID string) error {
+	_, err := q.db.ExecContext(ctx, deleteForgeLinkRequestsOfPrincipal, principalID)
 	return err
 }
 
@@ -3084,6 +3165,31 @@ type DeleteGroupParams struct {
 
 func (q *Queries) DeleteGroup(ctx context.Context, arg DeleteGroupParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteGroup, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteGroupMapping = `-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = ? AND source_id = ? AND claim_value = ? AND group_id = ?
+`
+
+type DeleteGroupMappingParams struct {
+	Source     string
+	SourceID   string
+	ClaimValue string
+	GroupID    string
+}
+
+func (q *Queries) DeleteGroupMapping(ctx context.Context, arg DeleteGroupMappingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteGroupMapping,
+		arg.Source,
+		arg.SourceID,
+		arg.ClaimValue,
+		arg.GroupID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -5508,6 +5614,58 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getForgeAccountLink = `-- name: GetForgeAccountLink :one
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.kind = ?1 AND l.host = ?2 AND l.account_id = ?3
+`
+
+type GetForgeAccountLinkParams struct {
+	Kind      string
+	Host      string
+	AccountID string
+}
+
+func (q *Queries) GetForgeAccountLink(ctx context.Context, arg GetForgeAccountLinkParams) (ForgeAccountLink, error) {
+	row := q.db.QueryRowContext(ctx, getForgeAccountLink, arg.Kind, arg.Host, arg.AccountID)
+	var i ForgeAccountLink
+	err := row.Scan(
+		&i.Kind,
+		&i.Host,
+		&i.AccountID,
+		&i.Login,
+		&i.PrincipalID,
+		&i.LinkedAtMs,
+	)
+	return i, err
+}
+
+const getForgeLinkRequest = `-- name: GetForgeLinkRequest :one
+SELECT r.token_sha256, r.principal_id, r.created_at_ms, r.expires_at_ms, r.proved_kind, r.proved_host,
+    r.proved_account_id, r.proved_login, r.proved_delivery_id, r.proved_at_ms, r.used_at_ms
+FROM forge_link_requests AS r
+WHERE r.token_sha256 = ?1
+`
+
+func (q *Queries) GetForgeLinkRequest(ctx context.Context, tokenSha256 string) (ForgeLinkRequest, error) {
+	row := q.db.QueryRowContext(ctx, getForgeLinkRequest, tokenSha256)
+	var i ForgeLinkRequest
+	err := row.Scan(
+		&i.TokenSha256,
+		&i.PrincipalID,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.ProvedKind,
+		&i.ProvedHost,
+		&i.ProvedAccountID,
+		&i.ProvedLogin,
+		&i.ProvedDeliveryID,
+		&i.ProvedAtMs,
+		&i.UsedAtMs,
+	)
+	return i, err
 }
 
 const getGateDeletedUnit = `-- name: GetGateDeletedUnit :one
@@ -9473,6 +9631,60 @@ func (q *Queries) InsertFirstSessionGeneration(ctx context.Context, principalID 
 	return result.RowsAffected()
 }
 
+const insertForgeAccountLink = `-- name: InsertForgeAccountLink :exec
+INSERT INTO forge_account_links (kind, host, account_id, login, principal_id, linked_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5,
+    ?6)
+`
+
+type InsertForgeAccountLinkParams struct {
+	Kind        string
+	Host        string
+	AccountID   string
+	Login       string
+	PrincipalID string
+	LinkedAtMs  int64
+}
+
+func (q *Queries) InsertForgeAccountLink(ctx context.Context, arg InsertForgeAccountLinkParams) error {
+	_, err := q.db.ExecContext(ctx, insertForgeAccountLink,
+		arg.Kind,
+		arg.Host,
+		arg.AccountID,
+		arg.Login,
+		arg.PrincipalID,
+		arg.LinkedAtMs,
+	)
+	return err
+}
+
+const insertForgeLinkRequest = `-- name: InsertForgeLinkRequest :exec
+INSERT INTO forge_link_requests (
+    token_sha256, principal_id, created_at_ms, expires_at_ms, proved_kind, proved_host, proved_account_id,
+    proved_login, proved_delivery_id, proved_at_ms, used_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, '', '', '', '', '',
+    0, 0
+)
+`
+
+type InsertForgeLinkRequestParams struct {
+	TokenSha256 string
+	PrincipalID string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) InsertForgeLinkRequest(ctx context.Context, arg InsertForgeLinkRequestParams) error {
+	_, err := q.db.ExecContext(ctx, insertForgeLinkRequest,
+		arg.TokenSha256,
+		arg.PrincipalID,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
+}
+
 const insertGateObject = `-- name: InsertGateObject :exec
 INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, unit_id, version, body, updated_at_ms)
 VALUES (?1, ?2, ?3, ?4, CAST(?5 AS TEXT), ?6,
@@ -12146,6 +12358,52 @@ func (q *Queries) ListCollections(ctx context.Context, namespace string) ([]List
 	return items, nil
 }
 
+const listCurrentMembershipsOfPrincipal = `-- name: ListCurrentMembershipsOfPrincipal :many
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = ? AND removed_at_ms IS NULL
+ORDER BY group_id
+`
+
+type ListCurrentMembershipsOfPrincipalRow struct {
+	GroupID  string
+	Source   string
+	SourceID string
+	State    string
+	Pinned   bool
+}
+
+// Each current membership of the principal, whatever its source, so that a
+// group claim changes only the memberships of its own source and source ID.
+func (q *Queries) ListCurrentMembershipsOfPrincipal(ctx context.Context, principalID string) ([]ListCurrentMembershipsOfPrincipalRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentMembershipsOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCurrentMembershipsOfPrincipalRow
+	for rows.Next() {
+		var i ListCurrentMembershipsOfPrincipalRow
+		if err := rows.Scan(
+			&i.GroupID,
+			&i.Source,
+			&i.SourceID,
+			&i.State,
+			&i.Pinned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeletedInventory = `-- name: ListDeletedInventory :many
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
@@ -12512,6 +12770,43 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.SensitiveMarks,
 			&i.FencedBy,
 			&i.UnlockedWrite,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listForgeAccountLinksOf = `-- name: ListForgeAccountLinksOf :many
+SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
+FROM forge_account_links AS l
+WHERE l.principal_id = ?1
+ORDER BY l.kind, l.host, l.account_id
+`
+
+func (q *Queries) ListForgeAccountLinksOf(ctx context.Context, principalID string) ([]ForgeAccountLink, error) {
+	rows, err := q.db.QueryContext(ctx, listForgeAccountLinksOf, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ForgeAccountLink
+	for rows.Next() {
+		var i ForgeAccountLink
+		if err := rows.Scan(
+			&i.Kind,
+			&i.Host,
+			&i.AccountID,
+			&i.Login,
+			&i.PrincipalID,
+			&i.LinkedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -12913,6 +13208,48 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 			&i.CreatedBy,
 			&i.HolderName,
 			&i.HolderKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupMappings = `-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = ? AND source_id = ?
+ORDER BY claim_value, group_id
+`
+
+type ListGroupMappingsParams struct {
+	Source   string
+	SourceID string
+}
+
+func (q *Queries) ListGroupMappings(ctx context.Context, arg ListGroupMappingsParams) ([]GroupMapping, error) {
+	rows, err := q.db.QueryContext(ctx, listGroupMappings, arg.Source, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GroupMapping
+	for rows.Next() {
+		var i GroupMapping
+		if err := rows.Scan(
+			&i.Source,
+			&i.SourceID,
+			&i.ClaimValue,
+			&i.GroupID,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -14309,6 +14646,49 @@ func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSeque
 			return nil, err
 		}
 		items = append(items, sequence)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveGroupMappings = `-- name: ListLiveGroupMappings :many
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = ? AND m.source_id = ? AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value, m.group_id
+`
+
+type ListLiveGroupMappingsParams struct {
+	Source   string
+	SourceID string
+}
+
+type ListLiveGroupMappingsRow struct {
+	ClaimValue string
+	GroupID    string
+}
+
+// The mappings of the source and the source ID whose group exists and was
+// not deleted. A mapping of a deleted group stays in the table for the record
+// and never answers here.
+func (q *Queries) ListLiveGroupMappings(ctx context.Context, arg ListLiveGroupMappingsParams) ([]ListLiveGroupMappingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveGroupMappings, arg.Source, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveGroupMappingsRow
+	for rows.Next() {
+		var i ListLiveGroupMappingsRow
+		if err := rows.Scan(&i.ClaimValue, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -17727,6 +18107,45 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const proveForgeLinkRequest = `-- name: ProveForgeLinkRequest :execrows
+UPDATE forge_link_requests
+SET proved_kind = ?1, proved_host = ?2,
+    proved_account_id = ?3, proved_login = ?4,
+    proved_delivery_id = ?5, proved_at_ms = ?6
+WHERE forge_link_requests.token_sha256 = ?7 AND forge_link_requests.proved_at_ms = 0
+  AND forge_link_requests.used_at_ms = 0 AND forge_link_requests.expires_at_ms > ?8
+`
+
+type ProveForgeLinkRequestParams struct {
+	ProvedKind       string
+	ProvedHost       string
+	ProvedAccountID  string
+	ProvedLogin      string
+	ProvedDeliveryID string
+	ProvedAtMs       int64
+	TokenSha256      string
+	NowMs            int64
+}
+
+// The first proof wins: the statement changes a row only while it has no proof
+// and no accept, and before its expiry.
+func (q *Queries) ProveForgeLinkRequest(ctx context.Context, arg ProveForgeLinkRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, proveForgeLinkRequest,
+		arg.ProvedKind,
+		arg.ProvedHost,
+		arg.ProvedAccountID,
+		arg.ProvedLogin,
+		arg.ProvedDeliveryID,
+		arg.ProvedAtMs,
+		arg.TokenSha256,
+		arg.NowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pruneEndedNameLocks = `-- name: PruneEndedNameLocks :many
 DELETE FROM name_locks
 WHERE rowid IN (
@@ -17946,6 +18365,36 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) (i
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const putGroupMapping = `-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type PutGroupMappingParams struct {
+	Source      string
+	SourceID    string
+	ClaimValue  string
+	GroupID     string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
+func (q *Queries) PutGroupMapping(ctx context.Context, arg PutGroupMappingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, putGroupMapping,
+		arg.Source,
+		arg.SourceID,
+		arg.ClaimValue,
+		arg.GroupID,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
@@ -18518,6 +18967,41 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected()
 }
 
+const replaceForgeAccountLink = `-- name: ReplaceForgeAccountLink :execrows
+UPDATE forge_account_links
+SET login = ?1, principal_id = ?2, linked_at_ms = ?3
+WHERE forge_account_links.kind = ?4 AND forge_account_links.host = ?5
+  AND forge_account_links.account_id = ?6
+  AND forge_account_links.principal_id = ?7
+`
+
+type ReplaceForgeAccountLinkParams struct {
+	Login               string
+	PrincipalID         string
+	LinkedAtMs          int64
+	Kind                string
+	Host                string
+	AccountID           string
+	PreviousPrincipalID string
+}
+
+// Replaces the link only while it names the principal that the person saw.
+func (q *Queries) ReplaceForgeAccountLink(ctx context.Context, arg ReplaceForgeAccountLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceForgeAccountLink,
+		arg.Login,
+		arg.PrincipalID,
+		arg.LinkedAtMs,
+		arg.Kind,
+		arg.Host,
+		arg.AccountID,
+		arg.PreviousPrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :execrows
 UPDATE idempotency_server_key
 SET wrapped_key = ?1, wrapper_id = ?2
@@ -18533,6 +19017,27 @@ type ReplaceIdempotencyServerKeyParams struct {
 // It changes no row when another process replaced the key first.
 func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const restoreGroupMember = `-- name: RestoreGroupMember :execrows
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms = ?
+`
+
+type RestoreGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+	RemovedAtMs sql.NullInt64
+}
+
+// Undoes RemoveGroupMember in the same transaction, for a removal that the
+// last-site-administrator rule refuses.
+func (q *Queries) RestoreGroupMember(ctx context.Context, arg RestoreGroupMemberParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreGroupMember, arg.GroupID, arg.PrincipalID, arg.RemovedAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -18639,6 +19144,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(?1 AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -18651,7 +19160,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?2 AS TEXT) <> '' AND m.principal_id = CAST(?2 AS TEXT))
     OR (CAST(?2 AS TEXT) = '' AND CAST(?3 AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(?4 AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
@@ -18727,6 +19236,9 @@ type ReviewGrantsRow struct {
 	MemberRemovedAtMs sql.NullInt64
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -18785,6 +19297,9 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {
@@ -21778,6 +22293,30 @@ func (q *Queries) UpsertUnitCollection(ctx context.Context, arg UpsertUnitCollec
 		arg.AssignedAtMs,
 	)
 	return err
+}
+
+const useForgeLinkRequest = `-- name: UseForgeLinkRequest :execrows
+UPDATE forge_link_requests
+SET used_at_ms = ?1
+WHERE forge_link_requests.token_sha256 = ?2 AND forge_link_requests.used_at_ms = 0
+  AND forge_link_requests.proved_at_ms > 0 AND forge_link_requests.expires_at_ms > ?1
+  AND forge_link_requests.principal_id = ?3
+`
+
+type UseForgeLinkRequestParams struct {
+	UsedAtMs    int64
+	TokenSha256 string
+	PrincipalID string
+}
+
+// The accept wins once: the statement changes a row only for the principal that
+// started it, after a proof, before its expiry, and while it has no accept.
+func (q *Queries) UseForgeLinkRequest(ctx context.Context, arg UseForgeLinkRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, useForgeLinkRequest, arg.UsedAtMs, arg.TokenSha256, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const useRunnerHandoffToken = `-- name: UseRunnerHandoffToken :exec

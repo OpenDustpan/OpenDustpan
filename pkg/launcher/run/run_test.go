@@ -111,7 +111,11 @@ func TestTheStepEnvironment(t *testing.T) {
 
 	want := "DUSTPAN_JOB_ID DUSTPAN_NAMESPACE DUSTPAN_PHASE DUSTPAN_SERVER_URL DUSTPAN_STEP DUSTPAN_UNIT HOME LANG " +
 		helperVar + " PATH TMPDIR\n"
-	if got := f.log("names"); got != want {
+	// A test binary that was built with -cover prints this line to stderr when
+	// it starts as the step program and GOCOVERDIR is not set. The launcher
+	// contract hides GOCOVERDIR from the step, so the line is not a variable.
+	got := strings.ReplaceAll(f.log("names"), "warning: GOCOVERDIR not set, no coverage data emitted\n", "")
+	if got != want {
 		t.Fatalf("variables = %q, want %q", got, want)
 	}
 }

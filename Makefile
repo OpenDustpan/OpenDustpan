@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
@@ -57,10 +58,16 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The rule packs come from the Semgrep registry on each run. No metrics are sent.
 # use-of-md5 is excluded: gosec reports the same lines, and each one has a
 # nolint with its reason.
+#
+# The second scan runs the local rules in .semgrep. It ignores .semgrepignore
+# files and the Semgrep default ignores, which skip test files, because the
+# rules in .semgrep are about test files.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
+	semgrep scan --error --metrics=off --disable-version-check --quiet \
+		--x-ignore-semgrepignore-files --config .semgrep .
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -97,17 +104,15 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 	trivy fs $(TRIVY_LICENSE_FLAGS) --format json --output bin/trivy-canary.json testdata/trivy-canary
 	python3 -I scripts/trivy-license-gate.py canary bin/trivy-canary.json
 
-# Scans the commits of every local branch, not the uncommitted files. Each
+# Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
-# Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector, two API reference pages, and
-# test files whose fake URLs with a user name and a password test the refusal
-# or the masking of credentials. Four of these files no longer exist, but
-# their history still holds a fake credential.
+# Each entry stays only because an old commit holds a fake credential in that
+# path. A test builds a fake credential with internal/fakecred, and a raw one
+# carries a trufflehog:ignore tag with a reason. Do not add a path.
 # Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
@@ -128,18 +133,24 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 # Words that claim quality instead of showing it, and emoji. The list and its
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
+ADR_DECISIONS := python3 -I scripts/adr-decisions.py
 
 # The change links between ADRs and the generated docs/adr/INDEX.md. ADR 296
 # is the first ADR with a "Changes:" list. The older ADRs have only the
 # "Changed by:" items of their links.
 ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 296
 
-docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
+docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisions file of the ADRs, for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
+	$(ADR_DECISIONS) --selftest
+	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+
+adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
+	$(ADR_DECISIONS)
 
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another
@@ -208,6 +219,19 @@ test-ci-other: ## Go tests as in test, without the two store packages; the go jo
 	go list ./... >/dev/null
 	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
 
+# COVER_FLAGS: a fast coverage pass has no -race and no -count. Set mode
+# counts a block once, and that is enough for a percentage. Atomic mode is
+# needed only with -race.
+COVER_FLAGS ?= -covermode=set
+
+cover: ## Fast coverage pass for the packages of test-ci-other, without -race: writes coverage.out and prints a table, also when a test fails. The exit status is the one of go test. In CI, GITHUB_STEP_SUMMARY gets the same table.
+	go list ./... >/dev/null
+	python3 -I scripts/cover-summary.py --selftest
+	status=0; \
+	go test $(COVER_FLAGS) -coverprofile=coverage.out -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS))) || status=$$?; \
+	python3 -I scripts/cover-summary.py coverage.out || test $$status -ne 0 || status=1; \
+	exit $$status
+
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
 	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
@@ -224,6 +248,9 @@ load: ## Run the load harness against a self-started server and write load-repor
 
 bench-s3: ## S3 latency benchmark: MinIO, Garage, PostgreSQL 18 and Toxiproxy in containers pinned by digest (needs Docker; BENCH_S3_ARGS, BENCH_S3_OUT; see docs/reference/s3-latency-benchmark.md). Not part of check.
 	scripts/bench-s3.sh
+
+bench-s3-protocol: ## Protocol run of the blob families: old and new path, 10,000 operations and 5 alternating runs each (needs Docker; see docs/reference/blob-write-benchmark-record.md). Not part of check.
+	BENCH_S3_MODE=protocol scripts/bench-s3.sh
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
@@ -287,7 +314,10 @@ BASELINE_REF ?= origin/main
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
+zones-generate: ## Regenerate pkg/preferences/zones_gen.go, the list of zone names, from the time zone archive of the Go toolchain. Run it after a Go upgrade.
+	go run ./cmd/zonegen -out pkg/preferences/zones_gen.go
+
+generate: zones-generate ## Regenerate sqlc query code after editing queries.sql or migrations, the zone list after a Go upgrade, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1

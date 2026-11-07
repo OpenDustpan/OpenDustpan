@@ -69,6 +69,7 @@ func onePhase(t *testing.T, env *e2e.Env, bin string) {
 	t.Helper()
 
 	c := claimAPhase(t, env)
+	env.LogJobStepsOnFailure(t, e2e.Namespace, c.job, c.handoff)
 
 	code, stderr := runLauncher(t, env, bin, c.handoff)
 	if code != int(launcher.ExitOK) {
@@ -199,14 +200,10 @@ func runLauncher(t *testing.T, env *e2e.Env, bin, handoff string) (int, string) 
 		t.Fatalf("make the test shim directory: %v", err)
 	}
 
-	echo, err := exec.LookPath("echo")
-	if err != nil {
-		t.Fatalf("find echo: %v", err)
-	}
-
-	if err = os.Symlink(echo, filepath.Join(tools, "tofu")); err != nil {
-		t.Fatalf("link the tofu test shim: %v", err)
-	}
+	// The shim is a script and not a link to echo: on a host where echo is a
+	// multi-call binary, a link with another name fails with exit code 1.
+	shim := "#!/bin/sh\necho \"$@\"\n"
+	writeShim(t, tools, shim)
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -290,4 +287,31 @@ func onMemoryVolume(dir string) bool {
 	}
 
 	return os.Remove(made) == nil
+}
+
+// writeShim writes the executable script "tofu" with the text body in dir.
+func writeShim(t *testing.T, dir, body string) {
+	t.Helper()
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open the test shim directory: %v", err)
+	}
+
+	f, err := root.OpenFile("tofu", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatalf("create the tofu test shim: %v", err)
+	}
+
+	if _, err = f.WriteString(body); err != nil {
+		t.Fatalf("write the tofu test shim: %v", err)
+	}
+
+	if err = f.Close(); err != nil {
+		t.Fatalf("close the tofu test shim: %v", err)
+	}
+
+	if err = root.Close(); err != nil {
+		t.Fatalf("close the test shim directory: %v", err)
+	}
 }

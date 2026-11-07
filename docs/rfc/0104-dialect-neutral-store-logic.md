@@ -88,7 +88,7 @@ each query parameter in each dialect, although the two types are often equal.
 
 ## Measured state
 
-Measured on `main` at 48f4e31 (2026-10-22), on the files that are not tests.
+Measured on `main` at 00b31b4 (2026-10-22), on the files that are not tests.
 A "line" is a line that is not blank and not a comment.
 
 ### How it was measured

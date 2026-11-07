@@ -34,6 +34,7 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 
 	seed := seedBackupStore(t, s)
 	createKeepSession(t, ports)
+	putKeepMapping(t, ports.mappings, "backup-team")
 	backupAccess := readBackupAccess(t, ports)
 
 	sink, sum, files := exportPortable(t, ports.stager)
@@ -73,6 +74,7 @@ type keepAccessPorts struct {
 	principals principal.Store
 	sessions   session.Store
 	sessionPol session.PolicyStore
+	mappings   principal.GroupMappingStore
 	providers  keepProviderPorts
 }
 
@@ -116,7 +118,13 @@ func keepAccessStores(t *testing.T, s RestoreStore) keepAccessPorts {
 		t.Skip("the store keeps no session policy")
 	}
 
+	mappings, ok := s.(principal.GroupMappingStore)
+	if !ok {
+		t.Skip("the store keeps no group mappings")
+	}
+
 	return keepAccessPorts{
+		mappings:   mappings,
 		stager:     ps,
 		keeper:     keeper,
 		tokens:     tokens,
@@ -271,7 +279,76 @@ func mutateAccessForKeepTest(t *testing.T, s RestoreStore, ports keepAccessPorts
 	createLiveSignInRequest(t, ports.sessions)
 	updateKeepTokenPolicy(t, ports.tokens)
 	updateKeepSessionPolicy(t, ports.sessionPol)
+	changeKeepMappings(t, ports.mappings)
 	mutateKeepProviders(t, ports.providers)
+}
+
+// keepMappingKey names the mapping of the value to grp-ops for the sign-in
+// provider oidc-keep.
+func keepMappingKey(value string) principal.GroupMappingKey {
+	return principal.GroupMappingKey{
+		Source: principal.MembershipSourceClaim, SourceID: "oidc-keep", ClaimValue: value, GroupID: "grp-ops",
+	}
+}
+
+// putKeepMapping stores the mapping of the value to grp-ops.
+func putKeepMapping(t *testing.T, mappings principal.GroupMappingStore, value string) {
+	t.Helper()
+
+	m := principal.GroupMapping{
+		CreatedAt: now(), Source: principal.MembershipSourceClaim, SourceID: "oidc-keep", ClaimValue: value,
+		GroupID: "grp-ops", CreatedBy: "admin",
+	}
+
+	if err := mappings.PutGroupMapping(t.Context(), m, ServerChange(now(), "group-mapping:"+value)); err != nil {
+		t.Fatalf("put group mapping %q: %v", value, err)
+	}
+}
+
+// changeKeepMappings deletes the mapping of the backup and stores another,
+// so the keep restore must keep the new one and the replacing restore must
+// bring the old one back.
+func changeKeepMappings(t *testing.T, mappings principal.GroupMappingStore) {
+	t.Helper()
+
+	removal := ServerChange(now().Add(3*time.Hour), "group-mapping:backup-team")
+	if err := mappings.DeleteGroupMapping(t.Context(), keepMappingKey("backup-team"), removal); err != nil {
+		t.Fatalf("delete group mapping: %v", err)
+	}
+
+	putKeepMapping(t, mappings, "changed-team")
+}
+
+// checkKeptMappings proves the restore without server:restore-access left the
+// group mappings as they were: the new mapping stays and the deleted one of
+// the backup does not come back.
+func checkKeptMappings(t *testing.T, mappings principal.GroupMappingStore) {
+	t.Helper()
+
+	requireMappingValues(t, mappings, "after a keep restore", "changed-team")
+}
+
+// checkReplacedMappings proves the restore with server:restore-access brought
+// the mappings of the backup back.
+func checkReplacedMappings(t *testing.T, mappings principal.GroupMappingStore) {
+	t.Helper()
+
+	requireMappingValues(t, mappings, "after a restore that replaces the access tables", "backup-team")
+}
+
+// requireMappingValues fails unless the mappings of oidc-keep hold exactly
+// the one value.
+func requireMappingValues(t *testing.T, mappings principal.GroupMappingStore, when, value string) {
+	t.Helper()
+
+	got, err := mappings.ListGroupMappings(t.Context(), principal.MembershipSourceClaim, "oidc-keep")
+	if err != nil {
+		t.Fatalf("list group mappings %s: %v", when, err)
+	}
+
+	if len(got) != 1 || got[0].ClaimValue != value {
+		t.Fatalf("group mappings %s = %+v, want only %q", when, got, value)
+	}
 }
 
 // revokeAccessForKeepTest revokes one token and one grant, so the keep
@@ -500,6 +577,7 @@ func checkKeptAccess(t *testing.T, ports keepAccessPorts, want backupAccess) {
 	checkKeptRole(t, ports.grants, want)
 	checkKeptGroup(t, ports.principals, want)
 	checkKeptMemberRemoved(t, ports.principals)
+	checkKeptMappings(t, ports.mappings)
 	checkKeptRecreatedPrincipal(t, ports.principals)
 	checkKeptSessionEnded(t, ports.sessions)
 	checkKeptLiveRequest(t, ports.sessions)
@@ -641,6 +719,7 @@ func checkReplacedAccess(t *testing.T, ports keepAccessPorts, want backupAccess)
 	checkReplacedRole(t, ports.grants, want)
 	checkReplacedGroup(t, ports.principals, want)
 	checkReplacedMember(t, ports.principals, want)
+	checkReplacedMappings(t, ports.mappings)
 	checkReplacedPrincipal(t, ports.principals)
 	checkReplacedSession(t, ports.sessions)
 	checkReplacedRequest(t, ports.sessions)

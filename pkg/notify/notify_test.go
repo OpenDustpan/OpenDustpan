@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -602,7 +603,7 @@ func TestChatHost(t *testing.T) {
 		{"https://hooks.example.com/services/T0/B0/secret", "hooks.example.com", nil},
 		{"https://Hooks.Example.com:8443/x", "hooks.example.com:8443", nil},
 		{"http://hooks.example.com/x", "", egress.ErrRefused},
-		{"https://user:pw@hooks.example.com/x", "", egress.ErrRefused},
+		{fakecred.URL("https", "user", "pw", "hooks.example.com", "/x"), "", egress.ErrRefused},
 		{"https://169.254.169.254/x", "", egress.ErrRefused},
 		{"https://[2606:4700::1111]:8443/x", "[2606:4700::1111]:8443", nil},
 		{"https://hooks%2eexample.com/x", "", egress.ErrRefused},
@@ -866,7 +867,9 @@ func TestAttemptValidate(t *testing.T) {
 		{"a class", func(*notify.Attempt) {}, true},
 		{
 			"the text of an error",
-			func(a *notify.Attempt) { a.LastError = "dial tcp 10.0.0.1: https://user:pw@x" },
+			func(a *notify.Attempt) {
+				a.LastError = "dial tcp 10.0.0.1: " + fakecred.URL("https", "user", "pw", "x", "")
+			},
 			false,
 		},
 		{"an unknown state", func(a *notify.Attempt) { a.State = "bogus" }, false},
@@ -1001,7 +1004,7 @@ func TestWebhookHost(t *testing.T) {
 	}{
 		{"a path and a query", "https://Hooks.Example.com/a/SECRET?token=SECRET", "hooks.example.com", nil},
 		{"a port", "https://hooks.example.com:8443/SECRET", "hooks.example.com:8443", nil},
-		{"user information", "https://user:SECRET@hooks.example.com/x", "", egress.ErrRefused},
+		{"user information", fakecred.URL("https", "user", "SECRET", "hooks.example.com", "/x"), "", egress.ErrRefused},
 		{"a fragment", "https://hooks.example.com/x#SECRET", "", egress.ErrRefused},
 		{"no path", "https://hooks.example.com", "hooks.example.com", nil},
 		{"http", "http://hooks.example.com/SECRET", "", egress.ErrRefused},

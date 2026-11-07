@@ -240,6 +240,8 @@ func (r *reporter) dangling(ctx context.Context, q Querier) error {
 		{table: "sessions", where: "principal_id " + missing},
 		{table: "access_tokens", where: "principal_id " + missing},
 		{table: "person_preferences", where: "principal_id " + missing},
+		{table: "forge_account_links", where: "principal_id " + missing},
+		{table: "forge_link_requests", where: "principal_id " + missing},
 		{table: backup.TableTrustRules, where: "principal_id " + missing},
 		{table: backup.TableLocalUsers, where: "principal_id " + missing},
 		{table: backup.TableSessionGenerations, where: "principal_id " + missing},

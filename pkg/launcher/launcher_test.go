@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/launcher"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -73,7 +74,7 @@ func TestParse(t *testing.T) {
 			"stdin",
 		}, "", false},
 		{"server with user", []string{
-			"dustpan-launcher", "run", "--server", "https://u:p@dustpan.example.com",
+			"dustpan-launcher", "run", "--server", fakecred.URL("https", "u", "p", "dustpan.example.com", ""),
 			"--handoff", "stdin",
 		}, "", false},
 		{"unknown handoff", []string{"dustpan-launcher", "run", "--server", server, "--handoff", "env"}, "", false},

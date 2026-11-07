@@ -148,8 +148,10 @@ empty, these routes answer `429` until it refills.
 ## Lockout by user name
 
 Each instance on one database shares the counts of failed attempts. The
-server adds a failure before it compares the password, and only a full
-sign-in clears the counts of its name. Two counts apply to each user name:
+server adds a failure before it compares the password. A full sign-in
+clears the failure counts of its name from its own source, and the counts of
+the name from every source. A lock of the name from another source stays.
+Two counts apply to each user name:
 
 | Count | Lock |
 | --- | --- |
@@ -271,6 +273,12 @@ current password:
 Send it to `POST /api/dustpan/v1/me/password`. A session with a recent
 sign-in can leave `currentPassword` empty. The change ends every other
 session of the person. The browser of the change gets a new session cookie.
+
+The request needs two headers. `Origin` must equal the public URL of the
+server. `X-Dustpan-CSRF` must hold the `csrfToken` value of
+`GET /api/server/session`. Without `Origin` the server answers `403` with the
+code `session.other-site`. Without `X-Dustpan-CSRF` it answers `403` with the
+code `session.csrf`.
 
 A wrong current password answers `403` with the error code
 `local-user.current-password-wrong`. When the server has no memory for the

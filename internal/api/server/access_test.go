@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -74,7 +75,11 @@ type grantListDoc struct {
 
 // accessFixture is a handler that decides with grants, over one store.
 type accessFixture struct {
-	store    *sqlite.Store
+	store *sqlite.Store
+	// path is the database file of store. A test opens a second connection to
+	// it to plant a row that no port writes.
+	path string
+
 	sessions *session.Sessions
 	handler  testHandler
 	// passwords is the password budget of the handler: it counts each
@@ -127,7 +132,38 @@ func newAccessFixtureSignIn(
 ) accessFixture {
 	t.Helper()
 
-	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	return newAccessFixtureAll(t, entries, passkeys, tweak, noGitHostLinks)
+}
+
+// noGitHostLinks gives no link service: the routes of the links are not mounted.
+func noGitHostLinks(*sqlite.Store) *forgelink.Service { return nil }
+
+// gitHostLinksOf gives the link service of the store: the routes of the links
+// are mounted.
+func gitHostLinksOf(st *sqlite.Store) *forgelink.Service {
+	return forgelink.NewService(st.ForgeLinks(), st, nil, nil).WithIntake()
+}
+
+// newAccessFixtureLinks is newAccessFixtureWith with the link service that links
+// gives for the store.
+func newAccessFixtureLinks(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, links func(*sqlite.Store) *forgelink.Service,
+) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, entries, nil, nil, links)
+}
+
+// newAccessFixtureAll builds the fixture with the passkey service passkeys, the
+// sign-in change tweak and the link service that links gives for the store.
+func newAccessFixtureAll(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
+	tweak func(in *apiserver.SignIn, st *sqlite.Store), links func(*sqlite.Store) *forgelink.Service,
+) accessFixture {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	st := openServerTemplateStore(t, path)
 
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
@@ -199,9 +235,10 @@ func newAccessFixtureSignIn(
 		tweak(signIn, st)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
+		GitHostLinks:     links(st),
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -242,7 +279,7 @@ func newAccessFixtureSignIn(
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, sessions: sessions, handler: handler, passwords: passwords}
+	f := accessFixture{store: st, path: path, sessions: sessions, handler: handler, passwords: passwords}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())

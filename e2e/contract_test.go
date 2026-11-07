@@ -50,7 +50,7 @@ func checkContracts(t *testing.T, dir string) {
 	var report strings.Builder
 
 	for _, got := range observed {
-		report.WriteString(compareContract(t, got))
+		report.WriteString(compareContract(t, got, skippedScenarios(runs, got)))
 	}
 
 	if report.Len() == 0 {
@@ -68,11 +68,26 @@ func checkContracts(t *testing.T, dir string) {
 	}
 }
 
+// skippedScenarios returns the scenarios that the runs of got skipped. A
+// scenario that skipped in this mode may explain a contract line that the
+// mode cannot produce. See Env.SkipScenario.
+func skippedScenarios(runs []e2e.Run, got e2e.Contract) []e2e.SkippedScenario {
+	var out []e2e.SkippedScenario
+
+	for i := range runs {
+		if runs[i].Tool == got.Tool && runs[i].Version == got.Version {
+			out = append(out, runs[i].Skipped...)
+		}
+	}
+
+	return out
+}
+
 // compareContract checks got against the contract file of its version. It
 // fails the test for each thing the file wants that is gone. For a version with
 // no file it returns the lines of the new reads, compared with the newest file
 // of the tool.
-func compareContract(t *testing.T, got e2e.Contract) string {
+func compareContract(t *testing.T, got e2e.Contract, skipped []e2e.SkippedScenario) string {
 	t.Helper()
 
 	files, err := e2e.ReadContracts(e2e.ContractDir, got.Tool)
@@ -88,8 +103,13 @@ func compareContract(t *testing.T, got e2e.Contract) string {
 
 	index := slices.IndexFunc(files, func(c e2e.Contract) bool { return c.Version == got.Version })
 	if index >= 0 {
-		for _, line := range files[index].Missing(got) {
+		split := e2e.SplitGaps(files[index].Missing(got), skipped)
+		for _, line := range split.Failed {
 			t.Errorf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
+		}
+
+		for _, line := range split.NotChecked {
+			t.Logf("%s %s: the contract file wants %s", got.Tool, got.Version, line)
 		}
 
 		return ""

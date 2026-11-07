@@ -11,6 +11,9 @@ Changed by:
   is `caller:manage-sign-in`.
 - ADR 320 extends decision 21: the rule of the fresh step of a password
   applies to LDAP too.
+- ADR 333 changes decision 16: a ceiling of lock alerts for each installation and hour.
+- ADR 333 extends decision 23: the audit kind sign-in.name-lock-ended.
+- ADR 333 extends decision 20: the passkey challenge is a sealed cookie.
 
 ## Context
 
@@ -35,7 +38,7 @@ owner accepted it. The owner also approved the modules
 and `github.com/beevik/etree`. OpenDustpan has no users and no data yet, so
 this decision needs no migration of data and no compatibility path.
 
-Facts on `main` at a50ab96:
+Facts on `main` at 906805a:
 
 - No code stores a password. `pkg/session` has the providers `oidc` and
   `oauth` only.

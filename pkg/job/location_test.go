@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -86,12 +87,18 @@ func TestLocationValidateRepository(t *testing.T) {
 		repository string
 		ok         bool
 	}{
-		"a path":                              {"acme/infra", true},
-		"an https URL":                        {"https://git.example.com/acme/infra.git", true},
-		"an https URL with a port":            {"https://git.example.com:8443/acme/infra", true},
-		"an https URL with a password":        {"https://user:hunter2@git.example.com/acme/infra.git", false},
-		"an https URL with a user name":       {"https://user@git.example.com/acme/infra.git", false},
-		"an https URL with an empty password": {"https://user:@git.example.com/acme/infra.git", false},
+		"a path":                   {"acme/infra", true},
+		"an https URL":             {"https://git.example.com/acme/infra.git", true},
+		"an https URL with a port": {"https://git.example.com:8443/acme/infra", true},
+		"an https URL with a password": {
+			fakecred.URL("https", "user", "hunter2", "git.example.com", "/acme/infra.git"),
+			false,
+		},
+		"an https URL with a user name": {"https://user@git.example.com/acme/infra.git", false},
+		"an https URL with an empty password": {
+			fakecred.URL("https", "user", "", "git.example.com", "/acme/infra.git"),
+			false,
+		},
 		"an http URL":                         {"http://git.example.com/acme/infra.git", false},
 		"a file URL":                          {"file:///etc", false},
 		"an ssh URL":                          {"ssh://git.example.com/acme/infra.git", false},
