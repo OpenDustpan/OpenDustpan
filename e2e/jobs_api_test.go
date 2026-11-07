@@ -159,8 +159,57 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	refusesBadStarts(ctx, t, env)
 	defaultsAndPools(ctx, t, env)
 	missingJobsAnswerNotFound(ctx, t, env, started)
+	approvalsRefuseWhatDoesNotWait(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
 	aGateStopsAClaim(ctx, t, env)
+}
+
+// approvalsRoute returns the route that records the verdicts of the job id.
+func approvalsRoute(ns, id string) string { return jobPath(ns, id) + "/approvals" }
+
+// approvalsRefuseWhatDoesNotWait proves the approvals route of the server for
+// the cases that this API can make today: the API starts plan jobs only, and a
+// plan job waits for no approval. So a verdict on the started job answers 409,
+// and a verdict that is not valid, or for a job that does not exist, or with a
+// key that the route does not take, is refused before it writes anything. The
+// two-approver path has its tests in the job service and in the store suites.
+func approvalsRefuseWhatDoesNotWait(ctx context.Context, t *testing.T, env *e2e.Env, started jobDoc) {
+	t.Helper()
+
+	for _, step := range []struct {
+		name, id, body string
+		want           int
+		code           string
+	}{
+		{
+			"a verdict on a job that waits for no approval", started.ID, `{"verdict":"reject","comment":"e2e"}`,
+			http.StatusConflict, "job.not-awaiting-approval",
+		},
+		{
+			"a verdict that is not valid", started.ID, `{"verdict":"approve; drop"}`, http.StatusUnprocessableEntity,
+			"job.invalid",
+		},
+		{
+			"a verdict with a field that the route does not know", started.ID, `{"verdict":"reject","agent":"dusty"}`,
+			http.StatusBadRequest, "request.body-invalid",
+		},
+		{
+			"a verdict on a job that does not exist", "job-doesnotexistdoesnot", `{"verdict":"reject"}`,
+			http.StatusNotFound, "job.not-found",
+		},
+	} {
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			UserAgent: jobsAgent, Name: step.name, Method: http.MethodPost,
+			Path: approvalsRoute(e2e.Namespace, step.id), Body: step.body, Want: step.want, Scheme: "token",
+			Check: codeCheck(step.code),
+		})
+	}
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "a verdict with an Idempotency-Key", Method: http.MethodPost,
+		Path: approvalsRoute(e2e.Namespace, started.ID), Body: `{"verdict":"reject"}`,
+		Want: http.StatusBadRequest, Scheme: "token", Check: codeCheck("request.idempotency-key-invalid"),
+	}, map[string]string{"Idempotency-Key": "approve-e2e-key"})
 }
 
 // startsAJob starts the plan job, starts it again with the same key, and
