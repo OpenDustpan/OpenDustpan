@@ -18,7 +18,8 @@ Changed by:
 - ADR 222 supersedes decision 9: attribute conditions on grants.
 - ADR 223 supersedes decision 9: attribute conditions are access limits.
 - ADR 223 extends decision 10: the access-review export lists the limits.
-
+- ADR 354 extends decisions 1, 3 and 4: a fourth record kind, agent.
+.
 ## Context
 
 ADR 6 leaves users, teams and roles as "next identity work". Today one static

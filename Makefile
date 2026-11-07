@@ -58,10 +58,16 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The rule packs come from the Semgrep registry on each run. No metrics are sent.
 # use-of-md5 is excluded: gosec reports the same lines, and each one has a
 # nolint with its reason.
+#
+# The second scan runs the local rules in .semgrep. It ignores .semgrepignore
+# files and the Semgrep default ignores, which skip test files, because the
+# rules in .semgrep are about test files.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
+	semgrep scan --error --metrics=off --disable-version-check --quiet \
+		--x-ignore-semgrepignore-files --config .semgrep .
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -308,7 +314,10 @@ BASELINE_REF ?= origin/main
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
+zones-generate: ## Regenerate pkg/preferences/zones_gen.go, the list of zone names, from the time zone archive of the Go toolchain. Run it after a Go upgrade.
+	go run ./cmd/zonegen -out pkg/preferences/zones_gen.go
+
+generate: zones-generate ## Regenerate sqlc query code after editing queries.sql or migrations, the zone list after a Go upgrade, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1

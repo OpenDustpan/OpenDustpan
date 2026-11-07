@@ -20,7 +20,8 @@ Changed by:
 - ADR 320 extends decision 12: LDAP memberships have the source `ldap`. SAML, CAS and trusted-header persons have their own principal source.
 - ADR 321 extends decision 19: an LDAP sync applies a disabled entry at once. A search that misses more persons than a bound waits for a site administrator.
 - ADR 332 extends decisions 12, 14, 16 and 22: a claim rule records its rule. The rules are a sensitive setting.
-
+- ADR 354 changes decision 13: a delegation is a new edge kind.
+.
 ## Context
 
 Issue #531 showed that an access token can give its maker authority that no

@@ -77,6 +77,8 @@ Say what changed and why, and link the issue. Say how you tested the change.
 A reviewer can ask for changes. When CI is green and the review passes, the
 project owner decides whether it merges.
 
+List the files and headings whose wording the owner approved. Reviewers check only structure, lint and facts about the code there.
+
 ## Documentation
 
 A change that a user can see includes its page in the user documentation,
