@@ -384,16 +384,22 @@ decides that.
 ### P4. The channel
 
 The check at the boundary is an allowlist: one regular expression for each
-form, matched against the whole value. No pattern below is in a source that
-we read. Each one is marked "not verified: derived from observed IDs", and
-the implementation checks it against the platform before it ships.
+form, matched against the whole value, with a length limit. The table gives
+the source of each form. Where no source gives the format, the row says "not
+verified", and the implementation checks the pattern against the platform
+before it ships.
 
-| Form | Pattern | Length | Status |
+| Form | Pattern | Length | Source |
 | --- | --- | --- | --- |
-| Slack channel ID | `^[CGD][A-Z0-9]{8,20}$` | 9 to 21 bytes | not verified: derived from observed IDs |
-| Mattermost channel ID (mode `token`) | `^[a-z0-9]{26}$` | 26 bytes | not verified: derived from observed IDs |
-| Mattermost channel name (mode `webhook`) | `^[a-z0-9][a-z0-9_-]{0,63}$` | 1 to 64 bytes | not verified: derived from observed names |
-| Matrix room ID | `^![A-Za-z0-9._=/+-]{1,200}:[A-Za-z0-9.-]{1,230}(:[0-9]{1,5})?$` | at most 255 bytes | not verified: derived from observed IDs |
+| Slack channel ID | `^[CGD][A-Z0-9]{8,20}$` | 9 to 21 bytes | Not verified: derived from observed IDs. The Slack Web API documentation shows only examples, such as `C123ABC456` (<https://docs.slack.dev/apis/web-api/>), and documents no format. |
+| Mattermost channel ID (mode `token`) | `^[ybndrfg8ejkmcpqxot1uwisza345h769]{26}$` | 26 bytes | `NewId` encodes a random UUID with the alphabet `ybndrfg8ejkmcpqxot1uwisza345h769` and no padding, and `IsValidId` requires 26 characters (`server/public/model/utils.go`, <https://github.com/mattermost/mattermost/blob/master/server/public/model/utils.go>). `IsValidId` accepts any Unicode letter or digit. The pattern here accepts only the alphabet of `NewId`, which is narrower. |
+| Mattermost channel name (mode `webhook`) | `^[a-z0-9]+([a-z_0-9-]+\|(__)?)[a-z0-9]*$` | 1 to 64 bytes | `IsValidChannelIdentifier` uses this expression (`validSimpleAlphaNum` in `utils.go`), and `ChannelNameMaxLength` is 64 (`server/public/model/channel.go`, <https://github.com/mattermost/mattermost/blob/master/server/public/model/channel.go>). Our read did not find the length check in `Channel.IsValid`. The limit of 64 here is ours. |
+| Matrix room ID, room versions with a domain | `^![A-Za-z0-9]{1,200}:` followed by a server name: a DNS name of `[A-Za-z0-9.-]`, an IPv4 address or `[` an IPv6 address `]`, with an optional `:` and 1 to 5 digits | at most 255 bytes | "Combined, the localpart, domain, and `!` sigil MUST NOT exceed 255 bytes." The localpart "SHOULD only consist of alphanumeric characters (`A-Z`, `a-z`, `0-9`) when generating them". The server name grammar is in the section "Server Name" (<https://spec.matrix.org/latest/appendices/#room-ids>, <https://spec.matrix.org/latest/appendices/#server-name>). The spec allows more characters in a localpart. The pattern here accepts only the generated form, which is narrower. |
+| Matrix room ID, room version 12 | `^![A-Za-z0-9_-]{43}$` | 44 bytes | In room version 12, a room ID is the event ID of the `m.room.create` event with `!` as the sigil, and an event ID is a reference hash "encoded using URL-safe unpadded Base64" (<https://spec.matrix.org/latest/rooms/v12/>). The length of 43 characters is derived from the example `!Nhcu5BS-UMnFX7hBVfVSoXiD7OgH6iRT-xyIuqDnpYQ` on that page and the length of a SHA-256 hash, and is not verified. |
+
+A pattern that is narrower than the platform refuses some identifiers that
+the platform accepts. Such a value answers 400, and the error names the
+form. This is the fail-closed direction of ADR 250.
 
 - **Slack.** A channel ID, for example `C0123ABCDEF`. A name such as `#ops`
   is refused, because a rename in Slack would move the messages without a
