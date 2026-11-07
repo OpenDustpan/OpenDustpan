@@ -21,12 +21,34 @@ import (
 func TestEveryOperationMarksItsBodies(t *testing.T) {
 	t.Parallel()
 
-	ops := newEveryModuleServer(t).Operations()
+	servers := []struct {
+		name string
+		ops  []apidesc.Operation
+	}{
+		{"every module", newEveryModuleServer(t).Operations()},
+		{"dev module", newDevModuleServer(t).Operations()},
+	}
+
+	for _, srv := range servers {
+		t.Run(srv.name, func(t *testing.T) {
+			t.Parallel()
+			checkOperationMarks(t, srv.ops)
+		})
+	}
+}
+
+// checkOperationMarks proves that each operation marks its bodies and names an
+// object kind for each action.
+func checkOperationMarks(t *testing.T, ops []apidesc.Operation) {
+	t.Helper()
+
 	if len(ops) == 0 {
 		t.Fatal("the server lists no operation")
 	}
 
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
+
 		if err := op.ValidateBodies(); err != nil {
 			t.Errorf("%s %s: %v", op.Method, op.Path, err)
 		}
