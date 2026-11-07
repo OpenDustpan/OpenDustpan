@@ -5,7 +5,6 @@ internal/api/apidesc/openapi.json
 clients/typescript/
 internal/clientgen/golang/testdata/golden/
 internal/clientgen/typescript/testdata/golden/
-internal/db/
 pkg/store/postgres/internal/db/
 pkg/store/sqlite/internal/db/
 internal/pulumijournal/entry_gen.go
