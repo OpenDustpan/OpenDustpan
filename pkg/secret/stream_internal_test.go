@@ -144,7 +144,7 @@ func TestOpenLegacyStream(t *testing.T) {
 	stream = append(stream, sealed...)
 
 	reader := &openReader{
-		mu: sync.Mutex{}, closed: false,
+		mu: sync.Mutex{}, closed: false, reading: false,
 		currentOnly: false,
 		dek:         bytes.Clone(dek), scope: scope, binding: nil, src: bytes.NewReader(stream),
 		aead: nil, version: 0, nonce: nil, header: nil, counter: 0,

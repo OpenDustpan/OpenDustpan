@@ -227,7 +227,7 @@ func (s *Service) OpenStream(ctx context.Context, scope Scope, binding []byte, r
 // has no binding, and an item never had it.
 func openStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader, current bool) *openReader {
 	return &openReader{
-		mu: sync.Mutex{}, closed: false,
+		mu: sync.Mutex{}, closed: false, reading: false,
 		dek: dek, scope: scope, binding: bytes.Clone(binding), src: r, currentOnly: current,
 		aead: nil, version: 0, nonce: nil, header: nil, counter: 0,
 		pending: nil, final: false, sealedBuf: nil, plainBuf: nil,
@@ -452,9 +452,12 @@ func (r *sealReader) sealNext() error {
 // openReader opens one sealed stream chunk at a time. It is not safe for
 // concurrent reads, but Close can run at the same time as a Read.
 type openReader struct {
-	// mu guards dek and closed, which Close changes.
+	// mu guards dek, closed and reading. Close changes them.
 	mu     sync.Mutex
 	closed bool
+	// reading is true while a Read runs. Close then leaves the stream
+	// state to that Read, which releases it when it returns.
+	reading bool
 	// currentOnly refuses the legacy stream format.
 	currentOnly bool
 	// dek is the raw key until the header is read or until Close. Then it is
@@ -494,14 +497,20 @@ func (r *openReader) Close() error {
 	clear(r.dek)
 	r.dek = nil
 
+	if !r.reading {
+		r.release()
+	}
+
 	return nil
 }
 
 // Read opens the next chunk when its buffer runs dry.
 func (r *openReader) Read(p []byte) (int, error) {
-	if r.isClosed() {
+	if !r.begin() {
 		return 0, ErrStreamClosed
 	}
+
+	defer r.end()
 
 	for len(r.pending) == 0 {
 		done, err := r.openNext()
@@ -530,12 +539,45 @@ func (r *openReader) dropKey() {
 	r.dek = nil
 }
 
-// isClosed reports whether Close ran.
-func (r *openReader) isClosed() bool {
+// begin marks a Read as running. It reports false after Close.
+func (r *openReader) begin() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.closed
+	if r.closed {
+		r.release()
+
+		return false
+	}
+
+	r.reading = true
+
+	return true
+}
+
+// end marks the Read as done. When Close ran during the Read, end releases
+// the stream state that Close left to it.
+func (r *openReader) end() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.reading = false
+
+	if r.closed {
+		r.release()
+	}
+}
+
+// release drops the stream cipher, which holds the key schedule, and clears
+// and drops the buffers of sealed and plain bytes. The caller holds mu, and no
+// Read runs.
+func (r *openReader) release() {
+	r.aead = nil
+	r.pending = nil
+	clear(r.plainBuf[:cap(r.plainBuf)])
+	r.plainBuf = nil
+	clear(r.sealedBuf[:cap(r.sealedBuf)])
+	r.sealedBuf = nil
 }
 
 // takeKey returns the raw key and removes it from the reader, so that only

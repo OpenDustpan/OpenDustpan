@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -280,13 +281,31 @@ const (
 	itemContentAADLabel = "opendustpan/item-content/v1"
 )
 
+// itemAADLengthBase is the base of the length before each part of itemAAD.
+const itemAADLengthBase = 10
+
 // itemAAD is the associated data of one purpose, label, for the item ref and
-// the item key record id. The parts are separated by a zero byte: the
-// namespace, the scope ID, the kind, the item ID and the record ID never
-// hold one.
+// the item key record id. Each part has its length before it, in decimal
+// digits and then a colon, so the encoding alone keeps the parts apart: no
+// value of one part, a zero byte or a colon included, can move bytes into the
+// next part.
+//
+// Defense in depth: NewItemRef and ParseItemKeyID refuse a part with a zero
+// byte. The length prefix stays so that the encoding does not rely on them.
 func itemAAD(label string, ref ItemRef, id ItemKeyID) []byte {
-	return []byte(label + "\x00" + ref.Scope.Namespace.String() + "\x00" + ref.Scope.ID + "\x00" +
-		string(ref.Kind) + "\x00" + ref.Item + "\x00" + string(id))
+	parts := []string{
+		label, ref.Scope.Namespace.String(), ref.Scope.ID, string(ref.Kind), ref.Item, string(id),
+	}
+
+	var aad []byte
+
+	for _, p := range parts {
+		aad = strconv.AppendInt(aad, int64(len(p)), itemAADLengthBase)
+		aad = append(aad, ':')
+		aad = append(aad, p...)
+	}
+
+	return aad
 }
 
 // itemKeyAAD is the associated data that binds a wrapped item key to the

@@ -289,6 +289,22 @@ func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, bi
 	return out, nil
 }
 
+// openRefused opens content that the case expects to be refused, and returns
+// the error. When the open succeeds, it closes the reader, so that the failed
+// case does not also keep a key.
+func openRefused(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding []byte) error {
+	t.Helper()
+
+	rd, err := s.OpenContent(t.Context(), ref, binding, strings.NewReader("x"))
+	if rd != nil {
+		if closeErr := rd.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}
+
+	return err
+}
+
 // keyBlobs lists the object keys of the item key directory of ns.
 func keyBlobs(t *testing.T, r *SealerRig, ns namespace.ID) []blob.Object {
 	t.Helper()
@@ -462,7 +478,7 @@ func testSealerNoKey(t *testing.T, r *SealerRig) {
 		t.Errorf("seal with no key err = %v, want ErrKeyNotFound", err)
 	}
 
-	if _, err := r.Sealer.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+	if err := openRefused(t, r.Sealer, ref, sealerBinding()); !errors.Is(
 		err, secret.ErrKeyNotFound,
 	) {
 		t.Errorf("open with no key err = %v, want ErrKeyNotFound", err)
@@ -611,7 +627,7 @@ func testSealerBinding(t *testing.T, r *SealerRig) {
 			t.Errorf("seal with a binding of %d bytes err = %v, want ErrInvalidBinding", len(binding), err)
 		}
 
-		if _, err := r.Sealer.OpenContent(t.Context(), ref, binding, strings.NewReader("x")); !errors.Is(
+		if err := openRefused(t, r.Sealer, ref, binding); !errors.Is(
 			err, secret.ErrInvalidBinding,
 		) {
 			t.Errorf("open with a binding of %d bytes err = %v, want ErrInvalidBinding", len(binding), err)
@@ -930,7 +946,7 @@ func testSealerUnkeyed(t *testing.T, r *SealerRig) {
 		t.Errorf("seal with no wrapper err = %v, want ErrKeyNotConfigured", err)
 	}
 
-	if _, err := r.Unkeyed.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+	if err := openRefused(t, r.Unkeyed, ref, sealerBinding()); !errors.Is(
 		err, secret.ErrKeyNotConfigured,
 	) {
 		t.Errorf("open with no wrapper err = %v, want ErrKeyNotConfigured", err)
@@ -961,7 +977,7 @@ func testSealerBadRef(t *testing.T, r *SealerRig) {
 			t.Errorf("seal of %+v succeeded", ref)
 		}
 
-		if _, err := r.Sealer.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); err == nil {
+		if err := openRefused(t, r.Sealer, ref, sealerBinding()); err == nil {
 			t.Errorf("open of %+v succeeded", ref)
 		}
 	}

@@ -267,8 +267,9 @@ func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, I
 	}
 
 	// Defense in depth: the store adapter and the blob view check the record
-	// ID too. This check stays so that a record ID that is not valid never
-	// reaches the associated data, which separates its parts with a zero byte.
+	// ID too, and the associated data puts a length before each part. This
+	// check stays so that a record ID that is not valid never reaches the
+	// associated data.
 	if _, idErr := ParseItemKeyID(string(rec.ID)); idErr != nil {
 		return nil, "", fmt.Errorf("%w: the record of %s has an ID that is not valid", ErrDecrypt, ref)
 	}

@@ -10,8 +10,8 @@ import (
 
 // The vectors come from an independent Python run, not from this code.
 const (
-	katItemKeyAAD     = "6f70656e6475737470616e2f6974656d2d6b65792f76310061636d650073636f70652d3100706c616e00706c6e2d6b617400696b2d6b6174"
-	katItemContentAAD = "6f70656e6475737470616e2f6974656d2d636f6e74656e742f76310061636d650073636f70652d3100706c616e00706c6e2d6b617400696b2d6b6174"
+	katItemKeyAAD     = "32333a6f70656e6475737470616e2f6974656d2d6b65792f7631343a61636d65373a73636f70652d31343a706c616e373a706c6e2d6b6174363a696b2d6b6174"
+	katItemContentAAD = "32373a6f70656e6475737470616e2f6974656d2d636f6e74656e742f7631343a61636d65373a73636f70652d31343a706c616e373a706c6e2d6b6174363a696b2d6b6174"
 )
 
 // katItemRef returns the item reference of the known-answer vectors.
@@ -52,6 +52,58 @@ func TestItemAADKnownAnswer(t *testing.T) {
 
 	if got := (itemContent{ref: ref, id: "ik-kat"}).aad(); !bytes.Equal(got, mustHex(t, katItemContentAAD)) {
 		t.Errorf("item content associated data = %x", got)
+	}
+}
+
+// TestItemAADSplitFields sends hostile parts straight to the encoding, as if
+// every check of the reference and of the record ID had failed: two inputs
+// that move bytes from one part to the next must not give the same
+// associated data.
+func TestItemAADSplitFields(t *testing.T) {
+	t.Parallel()
+
+	scope := Scope{Namespace: "acme", ID: "scope-1"}
+
+	cases := []struct {
+		name       string
+		ref1, ref2 ItemRef
+		id1, id2   ItemKeyID
+	}{
+		{
+			name: "item and record ID, zero byte",
+			ref1: ItemRef{Scope: scope, Kind: ItemKindPlan, Item: "x\x00ik-1"}, id1: "ik-2",
+			ref2: ItemRef{Scope: scope, Kind: ItemKindPlan, Item: "x"}, id2: "ik-1\x00ik-2",
+		},
+		{
+			name: "item and record ID, colon and length",
+			ref1: ItemRef{Scope: scope, Kind: ItemKindPlan, Item: "x4:ik-1"}, id1: "ik-2",
+			ref2: ItemRef{Scope: scope, Kind: ItemKindPlan, Item: "x"}, id2: "4:ik-14:ik-2",
+		},
+		{
+			name: "kind and item",
+			ref1: ItemRef{Scope: scope, Kind: "plan\x00a", Item: "b"}, id1: "ik-1",
+			ref2: ItemRef{Scope: scope, Kind: "plan", Item: "a\x00b"}, id2: "ik-1",
+		},
+		{
+			name: "namespace and scope ID",
+			ref1: ItemRef{Scope: Scope{Namespace: "acme\x00s", ID: "1"}, Kind: ItemKindPlan, Item: "p"}, id1: "ik-1",
+			ref2: ItemRef{Scope: Scope{Namespace: "acme", ID: "s\x001"}, Kind: ItemKindPlan, Item: "p"}, id2: "ik-1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if bytes.Equal(itemKeyAAD(tc.ref1, tc.id1), itemKeyAAD(tc.ref2, tc.id2)) {
+				t.Error("two different item keys have the same associated data")
+			}
+
+			c1, c2 := itemContent{ref: tc.ref1, id: tc.id1}, itemContent{ref: tc.ref2, id: tc.id2}
+			if bytes.Equal(c1.aad(), c2.aad()) {
+				t.Error("two different item contents have the same associated data")
+			}
+		})
 	}
 }
 
@@ -226,6 +278,19 @@ func checkClose(t *testing.T, tc closeCase, src itemContent, sealed []byte) {
 	if n, err := rd.Read(make([]byte, 8)); n != 0 || !errors.Is(err, ErrStreamClosed) {
 		t.Errorf("read after Close = %d, %v; want 0, ErrStreamClosed", n, err)
 	}
+
+	checkReleased(t, rd)
+}
+
+// checkReleased fails when a closed reader still holds its stream cipher or a
+// buffer of sealed or plain bytes.
+func checkReleased(t *testing.T, rd *openReader) {
+	t.Helper()
+
+	if rd.aead != nil || rd.pending != nil || rd.plainBuf != nil || rd.sealedBuf != nil {
+		t.Errorf("closed reader holds aead %t, pending %d, plain %d, sealed %d bytes",
+			rd.aead != nil, len(rd.pending), cap(rd.plainBuf), cap(rd.sealedBuf))
+	}
 }
 
 // TestOpenReaderTakeKeyAfterClose sends a reader that is marked closed, but
@@ -303,6 +368,80 @@ func (b *blockingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// gatedReader reads data, and stops before the byte at gate: it closes
+// entered and waits for release.
+type gatedReader struct {
+	entered chan struct{}
+	release chan struct{}
+	data    []byte
+	off     int
+	gate    int
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	if g.off == g.gate {
+		close(g.entered)
+		<-g.release
+	}
+
+	if g.off >= len(g.data) {
+		return 0, io.EOF
+	}
+
+	end := len(g.data)
+	if g.off < g.gate {
+		end = g.gate
+	}
+
+	n := copy(p, g.data[g.off:end])
+	g.off += n
+
+	return n, nil
+}
+
+// TestOpenReaderCloseDuringRead closes a reader while its Read waits for a
+// frame, after the header set up the stream cipher. The Read that runs must
+// release the cipher and the buffers when it returns.
+func TestOpenReaderCloseDuringRead(t *testing.T) {
+	t.Parallel()
+
+	src := itemContent{ref: katItemRef(t, "pln-1"), id: "ik-a"}
+	sealed := sealItemContent(t, bytes.Repeat([]byte{0x66}, dataKeyBytes), src, []byte("content"))
+
+	gated := &gatedReader{
+		entered: make(chan struct{}), release: make(chan struct{}),
+		data: sealed, off: 0, gate: 1 + streamSaltSize,
+	}
+	rd := openStreamWith(bytes.Repeat([]byte{0x66}, dataKeyBytes), src, []byte("bind-1"), gated, true)
+
+	done := make(chan error, 1)
+
+	// One Read only: a later Read would release the state itself.
+	go func() {
+		_, err := rd.Read(make([]byte, 64))
+		done <- err
+	}()
+
+	<-gated.entered
+
+	if err := rd.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	close(gated.release)
+
+	// The Read that ran finishes its chunk.
+	if err := <-done; err != nil {
+		t.Fatalf("read err = %v, want nil", err)
+	}
+
+	checkReleased(t, rd)
+
+	if _, err := rd.Read(make([]byte, 64)); !errors.Is(err, ErrStreamClosed) {
+		t.Fatalf("read after Close err = %v, want ErrStreamClosed", err)
+	}
+}
+
 // TestOpenReaderConcurrentClose runs Close while a Read is in progress. The
 // race detector checks the access to the key, and the key is cleared at the
 // end whichever ran first.
@@ -347,5 +486,7 @@ func TestOpenReaderConcurrentClose(t *testing.T) {
 		if !bytes.Equal(dek, make([]byte, dataKeyBytes)) {
 			t.Fatalf("key after a concurrent Close = %x, want zeros", dek)
 		}
+
+		checkReleased(t, rd)
 	}
 }
