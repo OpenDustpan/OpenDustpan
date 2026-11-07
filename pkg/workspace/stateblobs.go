@@ -281,6 +281,12 @@ func (e *redactedError) Redacted() {}
 // text. The chain of err is kept, so errors.Is and errors.As still match. The
 // caller passes the key it used; an empty key or an error without it returns
 // err unchanged.
+//
+// This is best-effort. It replaces only the exact key text. A store error that
+// holds the key in another form, such as percent-encoded or split into a
+// directory and a name, keeps that form, and an error from reading the stream
+// after get returns is not redacted here. Callers must not log the unwrapped
+// error.
 func redactKey(err error, key blob.Key) error {
 	if err == nil || key.String() == "" || !strings.Contains(err.Error(), key.String()) {
 		return err
