@@ -104,6 +104,39 @@ func TestStepLogReportHostile(t *testing.T) {
 	})
 }
 
+// TestStepLogReportOverlap checks that secrets whose matches overlap, nest or
+// touch leave no part of any secret in the report.
+func TestStepLogReportOverlap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      string
+		secrets []string
+		want    string
+	}{
+		{"overlapping_secrets", "abXYcd", []string{"abXY", "XYcd"}, "[redacted]"},
+		{"overlapping_secrets_reversed", "abXYcd", []string{"XYcd", "abXY"}, "[redacted]"},
+		{"one_secret_inside_another", "a-abcdef-b", []string{"cd", "abcdef"}, "a-[redacted]-b"},
+		{"adjacent_secrets", "abcd", []string{"ab", "cd"}, "[redacted]"},
+		{"separated_secrets", "ab-cd", []string{"ab", "cd"}, "[redacted]-[redacted]"},
+		{"repeated_with_overlap", "x-aaa-y", []string{"aa"}, "x-[redacted]-y"},
+		{"repeated_with_overlap_long", "aaaaa", []string{"aa"}, "[redacted]"},
+		{"empty_secret_is_ignored", "abc", []string{"", "b"}, "a[redacted]c"},
+		{"no_match", "abc", []string{"zz"}, "abc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := e2e.StepLogReport([]byte(tt.in), tt.secrets...); got != tt.want {
+				t.Fatalf("report = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // openError is the text of an error of a LogOpener.
 type openError string
 

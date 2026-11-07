@@ -475,9 +475,7 @@ func (e *Env) killServerForReport(tb testing.TB) string {
 
 	// The error of a killed process is the expected one. A child of the server
 	// that keeps the output open must not hang the wait: ErrWaitDelay is the
-	// bounded end of that wait.
-	e.backendCmd.WaitDelay = stepLogWaitDelay
-
+	// bounded end of that wait. spawnBinaryBackend sets WaitDelay before Start.
 	var exit *exec.ExitError
 	if err := e.backendCmd.Wait(); err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Sprintf("wait for the killed server: %v", err)
@@ -612,30 +610,67 @@ func cleanReport(in string, secrets []string, mapRune func(rune) rune) string {
 	return out
 }
 
-// redactSecrets replaces each non-empty text of secrets in s by [redacted] in
-// one pass. The longest text goes first, so that a secret that is the start of
-// another secret does not leave the rest of the longer one in the output.
+// byteRange is the half-open byte range [start, end) of s.
+type byteRange struct{ start, end int }
+
+// redactSecrets replaces each non-empty text of secrets in s by [redacted].
+// It finds every occurrence of every secret, including occurrences that
+// overlap, merges the ranges that overlap or touch, and writes [redacted]
+// once for each merged range. No part of a secret stays in the output.
 func redactSecrets(s string, secrets []string) string {
-	ordered := make([]string, 0, len(secrets))
+	var ranges []byteRange
 
 	for _, text := range secrets {
-		if text != "" {
-			ordered = append(ordered, text)
+		if text == "" {
+			continue
+		}
+
+		for from := 0; from <= len(s)-len(text); from++ {
+			at := strings.Index(s[from:], text)
+			if at < 0 {
+				break
+			}
+
+			start := from + at
+			ranges = append(ranges, byteRange{start: start, end: start + len(text)})
+			from = start // The loop adds 1: the next search can overlap this match.
 		}
 	}
 
-	if len(ordered) == 0 {
+	if len(ranges) == 0 {
 		return s
 	}
 
-	slices.SortStableFunc(ordered, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+	slices.SortFunc(ranges, func(a, b byteRange) int { return cmp.Compare(a.start, b.start) })
 
-	pairs := make([]string, 0, len(ordered)+len(ordered))
-	for _, text := range ordered {
-		pairs = append(pairs, text, "[redacted]")
+	var out strings.Builder
+
+	pos := 0
+	cur := ranges[0]
+
+	flush := func() {
+		out.WriteString(s[pos:cur.start])
+		out.WriteString("[redacted]")
+
+		pos = cur.end
 	}
 
-	return strings.NewReplacer(pairs...).Replace(s)
+	for _, r := range ranges[1:] {
+		if r.start <= cur.end {
+			cur.end = max(cur.end, r.end)
+
+			continue
+		}
+
+		flush()
+
+		cur = r
+	}
+
+	flush()
+	out.WriteString(s[pos:])
+
+	return out.String()
 }
 
 // dropSecretStart removes from the end of s the longest text that is a proper
