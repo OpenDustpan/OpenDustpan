@@ -238,6 +238,33 @@ type env struct {
 	ids    map[namespace.Name]namespace.ID
 	caller *service.Caller
 	now    time.Time
+	aud    *memAudit
+}
+
+// memAudit is an audit store for a test. It holds the appended entries in
+// memory, and it fails every append when err is set.
+type memAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+	err     error
+}
+
+func newMemAudit() *memAudit {
+	return &memAudit{mu: sync.Mutex{}, entries: nil, err: nil}
+}
+
+// Append records e, or returns the error of the audit store.
+func (m *memAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.err != nil {
+		return audit.Entry{}, m.err
+	}
+
+	m.entries = append(m.entries, e)
+
+	return e, nil
 }
 
 // principalOf returns a person with the given subject.
@@ -282,6 +309,12 @@ func namespaceOf(name namespace.Name, id namespace.ID, now time.Time) namespace.
 
 // config returns the service config of a test over the given stores.
 func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.Config {
+	return configAudit(store, blobs, ns, at, newMemAudit())
+}
+
+// configAudit returns the service config of a test over the given stores and
+// audit store.
+func configAudit(store *memStore, blobs blob.Store, ns nsStub, at time.Time, aud service.Auditor) service.Config {
 	v := pgpverify.Verifier{Now: func() time.Time { return at }}
 
 	return service.Config{
@@ -291,6 +324,7 @@ func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.
 		Inspector:             v,
 		Blobs:                 blobs,
 		Namespaces:            ns,
+		Audit:                 aud,
 		Now:                   func() time.Time { return at },
 		MaxArchiveBytes:       1 << 20,
 		MaxReleaseBytes:       3 << 20,
@@ -320,12 +354,14 @@ func newEnv(t *testing.T, flip bool) *env {
 		ns[name] = namespaceOf(name, ids[name], now)
 	}
 
-	svc, err := service.New(config(store, blobs, ns, now))
+	aud := newMemAudit()
+
+	svc, err := service.New(configAudit(store, blobs, ns, now, aud))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 
-	return &env{svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now}
+	return &env{svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud}
 }
 
 // trust registers the key of s in ns, through the service.

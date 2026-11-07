@@ -67,6 +67,11 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 
 	verifier := pgpverify.Verifier{Now: nil}
 
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
 	svc, err := service.New(service.Config{
 		Store:                 cfg.registry.releases,
 		Keys:                  cfg.registry.keys,
@@ -74,6 +79,7 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 		Inspector:             verifier,
 		Blobs:                 cfg.blobStore,
 		Namespaces:            cfg.namespaceStore,
+		Audit:                 entries,
 		Now:                   cfg.now,
 		MaxArchiveBytes:       0,
 		MaxReleaseBytes:       0,

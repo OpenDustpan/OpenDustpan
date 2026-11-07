@@ -163,6 +163,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		Inspector:             verifier,
 		Blobs:                 blobs,
 		Namespaces:            store,
+		Audit:                 store,
 		Now:                   nil,
 		MaxArchiveBytes:       maxUpload,
 		MaxReleaseBytes:       8 * maxUpload,

@@ -86,12 +86,12 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 	}
 
 	if measureErr := s.measureModule(ctx, view, &f); measureErr != nil {
-		return registry.Release{}, measureErr
+		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, measureErr)
 	}
 
 	format, err := modulecheck.Check(f.bytes)
 	if err != nil {
-		return registry.Release{}, fmt.Errorf("check the module archive: %w", err)
+		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, fmt.Errorf("check the module archive: %w", err))
 	}
 
 	f.Name = moduleArchiveName(addr, req.Version, format)
@@ -99,14 +99,16 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 	rel := s.stagedModuleRelease(c, addr, req.Version, f)
 
 	if err = rel.Validate(); err != nil {
-		return registry.Release{}, fmt.Errorf("check the release: %w", err)
+		return registry.Release{}, s.refusal(
+			ctx, c, rec, req.Version, fmt.Errorf("check the release: %w: %w", errReleaseRefused, err),
+		)
 	}
 
 	p := modulePublishing(view, req, addr, rec)
 
 	// The check runs before promote, so a refused publish writes no content key.
 	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
-		return registry.Release{}, refuseErr
+		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, refuseErr)
 	}
 
 	f.bytes = nil

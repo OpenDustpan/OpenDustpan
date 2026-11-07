@@ -86,6 +86,8 @@ type Config struct {
 	Inspector  registry.KeyInspector
 	Blobs      blob.Store
 	Namespaces Namespaces
+	// Audit is required: it records the refused publishes.
+	Audit Auditor
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// MaxArchiveBytes and MaxReleaseBytes override the defaults when above zero.
@@ -93,6 +95,11 @@ type Config struct {
 	MaxReleaseBytes int64
 	// MaxModuleArchiveBytes overrides DefaultMaxModuleArchiveBytes when above zero.
 	MaxModuleArchiveBytes int64
+}
+
+// Auditor appends the entries of refused publishes. audit.Store satisfies it.
+type Auditor interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
 }
 
 // Service implements the use cases of the registry.
@@ -103,6 +110,7 @@ type Service struct {
 	inspector  registry.KeyInspector
 	blobs      blob.Store
 	namespaces Namespaces
+	auditor    Auditor
 	now        func() time.Time
 	maxFile    int64
 	maxRelease int64
@@ -124,12 +132,14 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit", ErrMissingDependency)
 	}
 
 	s := &Service{
 		store: cfg.Store, keys: cfg.Keys, verifier: cfg.Verifier, inspector: cfg.Inspector, blobs: cfg.Blobs,
-		namespaces: cfg.Namespaces, now: cfg.Now, maxFile: cfg.MaxArchiveBytes, maxRelease: cfg.MaxReleaseBytes,
-		maxModule: cfg.MaxModuleArchiveBytes,
+		namespaces: cfg.Namespaces, auditor: cfg.Audit, now: cfg.Now, maxFile: cfg.MaxArchiveBytes,
+		maxRelease: cfg.MaxReleaseBytes, maxModule: cfg.MaxModuleArchiveBytes,
 	}
 
 	if s.now == nil {
