@@ -617,6 +617,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -666,6 +667,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -2857,6 +2859,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -2900,6 +2903,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

@@ -10,12 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 const (
@@ -113,6 +116,8 @@ func startFaultServer(t *testing.T) *faultServer {
 		t.Fatalf("create namespace: %v", err)
 	}
 
+	seedCatchAllPlacement(t, st, faultNamespace.Name)
+
 	addr, ok := ts.Listener.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("test server address %s is not TCP", ts.Listener.Addr())
@@ -145,4 +150,44 @@ func listenForToxiproxy(t *testing.T, ts *httptest.Server) {
 	}
 
 	ts.Listener = ln
+}
+
+// seedCatchAllPlacement makes a collection and a placement rule for Pulumi
+// stacks of any project and any name in the namespace ns. The server refuses a
+// new stack that no rule places.
+func seedCatchAllPlacement(t *testing.T, st *sqlite.Store, ns namespace.Name) {
+	t.Helper()
+
+	entry := func(action identity.Action, object string) audit.Entry {
+		e := storetest.ServerChange(time.Now(), object)
+		e.Namespace = ns
+		e.Action = string(action)
+
+		return e
+	}
+
+	collections, err := collection.NewService(collection.Config{Store: st, Namespaces: st, Now: nil})
+	if err != nil {
+		t.Fatalf("collection service: %v", err)
+	}
+
+	const name = "everything"
+
+	created := entry(identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+name)
+
+	if _, err = collections.Create(t.Context(), collection.Ref{Namespace: ns, Name: name}, created); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+
+	rules, err := collection.NewPlacementService(collection.PlacementConfig{Store: st, Namespaces: st, Now: nil})
+	if err != nil {
+		t.Fatalf("placement service: %v", err)
+	}
+
+	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: name, Position: 0}
+	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+
+	if _, err = rules.Create(t.Context(), ns, in, ruled); err != nil {
+		t.Fatalf("create placement rule: %v", err)
+	}
 }

@@ -96,6 +96,8 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 		t.Fatalf("create namespace: %v", createErr)
 	}
 
+	seedCatchAllPlacement(t, st, nsName)
+
 	list, err := ipallow.ParseList([]string{"198.51.100.0/24"})
 	if err != nil {
 		t.Fatalf("parse list: %v", err)

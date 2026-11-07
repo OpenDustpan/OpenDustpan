@@ -109,11 +109,21 @@ later rule does not apply.
 A pattern is a glob. A `*` matches any run of characters, and nothing else is a
 wildcard. The full rules are in the [placement rules reference](../reference/placement-rules-api.md).
 
-> The server does not apply the rules yet when a Pulumi CLI makes a stack. The
-> CLI sends the namespace, the project name and the stack name, and it does not
-> send a collection. A later release adds the step that applies the rules.
-> Until then, the rules are stored and listed, and they do not choose the
-> collection of a new stack.
+When the Pulumi CLI makes a stack, for example with `pulumi stack init`, the
+server puts the new stack in the collection of the first rule that matches. The
+CLI sends no collection, and you do not set one.
+
+- The caller needs `collection:create-unit` on that collection. Without it, the
+  answer is `403`, and the server makes no stack.
+- When no rule matches, the server refuses to make the stack. The answer is
+  `422` with the code `placement.no-match`. The message names the placement
+  rules and the route that adds a rule. The server does not use a default
+  collection. To allow every stack, add a last rule with the patterns `*` and
+  `*`.
+- The server makes the stack and its place in the collection in one
+  transaction. A stack never exists without its collection.
+- A server that keeps no placement rules makes no stack. The answer is `501`
+  with the code `placement.unavailable`.
 
 ### Routes and actions
 
@@ -175,3 +185,5 @@ stack.
 | `collection.changed` | `409` | The source collection of a move is not the one the caller expects. |
 | `unit.no-collection` | `409` | A step needs a unit that is in a collection, and the unit is in none. |
 | `placement.conflict` | `409` | A rule is hidden by an earlier rule. |
+| `placement.no-match` | `422` | No rule matches a new stack, so the server does not make it. |
+| `placement.unavailable` | `501` | The server keeps no placement rules, so it cannot place a new stack. |

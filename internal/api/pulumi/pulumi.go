@@ -45,6 +45,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -137,6 +138,10 @@ type Config struct {
 	// stack. It is required. A server whose store keeps no gates gives the
 	// guard of stategate.Off with its reason.
 	StateGuard stategate.Guard
+	// Placer chooses the collection of each new stack from the first placement
+	// rule that matches it. Nil means the server keeps no placement rules: it
+	// then refuses to make a stack.
+	Placer *Placer
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -161,6 +166,7 @@ type Handler struct {
 	// admit asks the state guard about each write of state and writes the
 	// audit entry of each refusal.
 	admit  *stategate.Admitter
+	placer *Placer
 	mux    *patternMux
 	routes []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
@@ -234,6 +240,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditFailure: cfg.OnAuditFailure,
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
 		admit:          admit,
+		placer:         cfg.Placer,
 		mux:            newPatternMux(),
 		routes:         nil,
 		deltaCutoff:    cfg.CheckpointDeltaCutoff,
@@ -638,7 +645,19 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if _, err := h.stacks.Create(ctx, ref, req.Tags); err != nil {
+	at, ok := h.choosePlacement(w, r, p, ref)
+	if !ok {
+		return
+	}
+
+	placed, err := stackPlacement(r, p, ref, at)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := h.stacks.CreatePlaced(ctx, ref, req.Tags, placed); err != nil {
 		h.writeNamespaceNotFound(ctx, w, p, ref.Namespace, err)
 
 		return
@@ -1064,7 +1083,7 @@ func classifyAuth(err error) (failure, bool) {
 // material.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyAuth, classifyNamespace, classifyRequest, classifyMinimum, classifyStack,
+		classifyAuth, classifyNamespace, classifyRequest, classifyMinimum, classifyStack, classifyPlacement,
 	} {
 		if f, ok := try(err); ok {
 			return f
@@ -1159,6 +1178,22 @@ func classifyStack(err error) (failure, bool) {
 		return coded(http.StatusConflict, err.Error(), errcode.StackAlreadyExists), true
 	case errors.Is(err, stack.ErrOtherSecretsProvider):
 		return coded(http.StatusConflict, err.Error(), errcode.StackOtherSecretsProvider), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyPlacement maps the errors of the placement of a new stack. ok is
+// false for any other error.
+func classifyPlacement(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, collection.ErrNoPlacement):
+		return coded(http.StatusUnprocessableEntity, err.Error(), errcode.PlacementNoMatch), true
+	case errors.Is(err, errPlacementOff), errors.Is(err, stack.ErrPlacementUnsupported):
+		return coded(http.StatusNotImplemented, err.Error(), errcode.PlacementUnavailable), true
+	case errors.Is(err, collection.ErrNotFound):
+		// The rule names a collection that does not exist (any more).
+		return coded(http.StatusConflict, err.Error(), errcode.CollectionNotFound), true
 	}
 
 	return unmatched(), false
