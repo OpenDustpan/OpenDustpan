@@ -721,7 +721,8 @@ func ValidateRestoreEvent(object string) error {
 // a summary event: once the other places are full, each new object adds one
 // to the count of that summary instead, so a forced enter that cancels more
 // units than the limit still records each cancel, and never fails for the
-// limit. It returns ErrRestoreEventInvalid for an object that
+// limit. The count is an upper bound: an omitted event that a caller sends
+// again adds one again. It returns ErrRestoreEventInvalid for an object that
 // ValidateRestoreEvent refuses, and ErrCorrupt for stored text that
 // DecodeRestoreEvents refuses.
 func AddRestoreEvent(stored, object string) (string, bool, error) {
@@ -765,17 +766,18 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 }
 
 // restoreEventOverflowHead starts the summary event of the events past the
-// limit.
-const restoreEventOverflowHead = "restore audit events past the limit of 999: "
+// limit. The count that follows is an upper bound on the omitted events.
+const restoreEventOverflowHead = "restore audit events past the limit of 999: up to "
 
 // restoreEventOverflow returns the summary event of count events past the
-// limit.
+// limit. count is an upper bound: an omitted event that a caller sends again
+// adds one again.
 func restoreEventOverflow(count int64) string {
 	return restoreEventOverflowHead + strconv.FormatInt(count, 10) + " more cancels or refusals, in the log lines"
 }
 
 // restoreEventOverflowCount returns the count of a summary event, and
-// whether event is one.
+// whether event is one. The count is an upper bound on the omitted events.
 func restoreEventOverflowCount(event string) (int64, bool) {
 	rest, ok := strings.CutPrefix(event, restoreEventOverflowHead)
 	if !ok {

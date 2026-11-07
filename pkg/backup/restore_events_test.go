@@ -11,7 +11,7 @@ import (
 
 // TestAddRestoreEventPastTheLimit proves that the events of a restore never
 // refuse a cancel or a repair for the limit: past the limit, the last place
-// holds one summary event with the count of the events that did not fit.
+// holds one summary event with an upper bound of the events that did not fit.
 func TestAddRestoreEventPastTheLimit(t *testing.T) {
 	t.Parallel()
 
@@ -73,7 +73,7 @@ func checkRestoreEventSummary(t *testing.T, stored string, wantCount int) {
 	}
 
 	if summary := events[len(events)-1]; wantCount > 0 &&
-		!strings.Contains(summary, ": "+strconv.Itoa(wantCount)+" more") {
+		!strings.Contains(summary, "up to "+strconv.Itoa(wantCount)+" more") {
 		t.Fatalf("summary event = %q, want the count %d", summary, wantCount)
 	}
 
@@ -89,7 +89,7 @@ func checkRestoreEventSummary(t *testing.T, stored string, wantCount int) {
 func TestAddRestoreEventRefusesTheSummaryForm(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := backup.AddRestoreEvent("[]", "restore audit events past the limit of 999: 5 more cancels")
+	_, _, err := backup.AddRestoreEvent("[]", "restore audit events past the limit of 999: up to 5 more cancels")
 	if !errors.Is(err, backup.ErrRestoreEventInvalid) {
 		t.Fatalf("add the summary form: err = %v, want ErrRestoreEventInvalid", err)
 	}
