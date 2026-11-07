@@ -73,6 +73,11 @@ cmd_create() {
         -f title="$title" -f head="$branch" -f base="$base" \
         -F body=@"$bodies/${branch//\//-}.md" -F draft=true --jq '.number')"
       echo "Opened draft PR $number: $branch -> $base"
+      if gh api -X POST "repos/$REPO/pulls/$number/ccr/ready_for_review" >/dev/null; then
+        echo "PR $number is ready for review."
+      else
+        echo "stack.sh: PR $number stays a draft. Mark it ready by hand." >&2
+      fi
     fi
     numbers+=("$number")
     base="$branch"

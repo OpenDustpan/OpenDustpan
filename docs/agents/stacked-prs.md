@@ -36,7 +36,7 @@ Use `scripts/stack.sh`. It uses `gh api` (REST) only.
    - links the PRs as one stack, bottom to top;
    - prints the stack URL.
 5. Run `scripts/stack.sh status` to list the stacks and the state of each PR.
-6. Make each PR ready for review in the web interface. REST cannot do this.
+6. The command marks each new PR ready for review with `gh api -X POST repos/OpenDustpan/OpenDustpan/pulls/<n>/ccr/ready_for_review`. If this call fails, the PR stays a draft. Mark it ready by hand.
 
 ## Merge rule
 
@@ -66,7 +66,7 @@ A test used throwaway branches `stacktest/base`, `a`, `b`, `c` and `d`, and four
 ## Known limits
 
 - A squash merge of the bottom PR can cause conflicts in the next branch when both change the same lines. Expect to resolve them by hand.
-- REST cannot make a draft PR ready for review.
-- The result of a squash merge on the rest of the stack is not tested. Run `scripts/stack.sh status` after each merge.
+- The result of a squash merge of the bottom PR on the rest of the stack is unknown (known gap). Run `scripts/stack.sh status` after each merge.
+- The call that marks a PR ready is not tested on an open draft. On a closed draft PR it returned HTTP 403.
 - The commands need `gh` and `jq`.
 - The cloud proxy blocks GraphQL and the deletion of branches.
