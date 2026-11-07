@@ -67,11 +67,9 @@ type publishBody struct {
 	DraftVersion int64 `json:"draftVersion"`
 }
 
-// publishResponse is the answer of a publish.
-type publishResponse struct {
-	versionMetadata
-
-	BlueprintVersion int `json:"blueprintVersion"`
+// listResponse is the answer of a list: the newest version of each blueprint.
+type listResponse struct {
+	Versions []versionMetadata `json:"versions"`
 }
 
 // list answers the newest version of each blueprint of the namespace.
@@ -88,7 +86,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, p identity.Princi
 		result = append(result, metadata(versions[i]))
 	}
 
-	h.writeJSON(r.Context(), w, http.StatusOK, result)
+	h.writeJSON(r.Context(), w, http.StatusOK, listResponse{Versions: result})
 }
 
 // readDraft answers the draft of the blueprint, with its version as the ETag.
@@ -176,10 +174,7 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
-	h.writeJSON(r.Context(), w, http.StatusCreated, publishResponse{
-		versionMetadata:  metadata(v),
-		BlueprintVersion: v.Number,
-	})
+	h.writeJSON(r.Context(), w, http.StatusCreated, metadata(v))
 }
 
 // readVersion answers one published version.

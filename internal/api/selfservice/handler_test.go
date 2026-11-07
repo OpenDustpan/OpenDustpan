@@ -276,6 +276,19 @@ func checkNoStore(t *testing.T, tc *httpCase, env *testEnv) {
 	}
 }
 
+// listAnswer is the list answer as the tests read it.
+type listAnswer struct {
+	Versions []listedVersion `json:"versions"`
+}
+
+// listedVersion is one version of a list answer.
+type listedVersion struct {
+	Namespace   string `json:"namespace"`
+	Blueprint   string `json:"blueprint"`
+	ExprVersion string `json:"exprVersion"`
+	PublishedAt string `json:"publishedAt"`
+}
+
 // checkList checks the metadata of the list answer.
 func checkList(t *testing.T, tc *httpCase, w *httptest.ResponseRecorder) {
 	t.Helper()
@@ -284,21 +297,16 @@ func checkList(t *testing.T, tc *httpCase, w *httptest.ResponseRecorder) {
 		return
 	}
 
-	var result []struct {
-		Namespace   string `json:"namespace"`
-		Blueprint   string `json:"blueprint"`
-		ExprVersion string `json:"exprVersion"`
-		PublishedAt string `json:"publishedAt"`
-	}
+	var result listAnswer
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}
 
-	if len(result) != 1 {
-		t.Fatalf("list length = %d, want 1", len(result))
+	if len(result.Versions) != 1 {
+		t.Fatalf("list length = %d, want 1", len(result.Versions))
 	}
 
-	got := result[0]
+	got := result.Versions[0]
 	if got.Namespace != "namespace-a" || got.Blueprint != "blueprint-a" ||
 		got.ExprVersion != "v1.0.0" || got.PublishedAt != "2026-11-07T12:00:00Z" {
 		t.Errorf("list metadata = %+v", got)
