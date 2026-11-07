@@ -37,6 +37,10 @@ Consider a change done only when `make check` passes with zero findings:
   comment that gives a real reason. The target also fails on a dependency
   with a forbidden, restricted or unknown license (for example GPL or AGPL).
 - `make trufflehog` finds no secret in the Git history.
+  A test builds a fake credential with `internal/fakecred`, so that the text
+  `user:pass@` is not in the source. A raw fake credential that must stay gets
+  `trufflehog:ignore` and a reason on its line. Do not add a new path to
+  `.trufflehog-exclude-paths.txt`.
 - `make licenses` finds a license file for each module that the binary links.
   The release archives and the container image ship these files.
 - `go test -race ./...` passes, including the conformance suites. When you run

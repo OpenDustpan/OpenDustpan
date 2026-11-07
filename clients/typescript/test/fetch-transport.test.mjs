@@ -131,7 +131,7 @@ test("the base URL must be http or https with a host and no query", async () => 
     "file:///x",
     "http://api.test/?a=1",
     "http://api.test/#x",
-    "http://u:p@api.test",
+    "http://u:p@api.test", // trufflehog:ignore fake user and password; the test needs this exact text
     "javascript:alert(1)",
   ];
   for (const baseUrl of bad) {

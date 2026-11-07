@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -52,7 +53,9 @@ func TestProviderConfigValidateOAuth(t *testing.T) {
 		{"http user-info URL", func(p *session.ProviderConfig) { p.OAuth.UserinfoURL = "http://api.hub.example/user" }},
 		{"no token URL", func(p *session.ProviderConfig) { p.OAuth.TokenURL = "" }},
 		{"relative authorization URL", func(p *session.ProviderConfig) { p.OAuth.AuthorizationURL = "/authorize" }},
-		{"user in the URL", func(p *session.ProviderConfig) { p.OAuth.UserinfoURL = "https://a:b@api.hub.example/user" }},
+		{"user in the URL", func(p *session.ProviderConfig) {
+			p.OAuth.UserinfoURL = fakecred.URL("https", "a", "b", "api.hub.example", "/user")
+		}},
 		{"fragment", func(p *session.ProviderConfig) { p.OAuth.UserinfoURL = "https://api.hub.example/user#x" }},
 		{"long URL", func(p *session.ProviderConfig) { p.OAuth.UserinfoURL += "/" + strings.Repeat("a", 512) }},
 		{"no subject claim", func(p *session.ProviderConfig) { p.OAuth.SubjectClaim = "" }},

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 )
 
@@ -121,7 +122,7 @@ func TestRulesURLLayer(t *testing.T) {
 		{"https://10.1.2.3/api", true},
 		{"https://127.0.0.1:8443/api/v3", false},
 		{"http://10.1.2.3/api", false},
-		{"https://user:pw@10.1.2.3/", false},
+		{fakecred.URL("https", "user", "pw", "10.1.2.3", "/"), false},
 		{"https://10.1.2.3/#frag", false},
 		{"https://localhost/", false},
 		{"https://2130706433/", false},
