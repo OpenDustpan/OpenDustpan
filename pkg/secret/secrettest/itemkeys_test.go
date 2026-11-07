@@ -88,7 +88,7 @@ func (t memItemKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret
 	}
 
 	if b := k.Blob; b.Version < 1 || b.Version > secret.MaxItemKeyVersion || b.Size < 1 ||
-		b.Size > secret.MaxWrappedItemKeyBytes {
+		b.Size > secret.MaxWrappedItemKeyBytes || !secret.ValidItemKeyAttempt(b.Attempt) {
 		return secret.ItemKey{}, secret.ErrInvalidItemRef
 	}
 
@@ -128,8 +128,11 @@ func (t memItemKeyTx) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.
 }
 
 // InItemKeyTx runs fn on a copy of the records and keeps the copy only when fn
-// returns nil, so a failed function leaves no record.
-func (m *memItemKeys) InItemKeyTx(_ context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+// returns nil before the attempt deadline, so a failed or late function leaves
+// no record.
+func (m *memItemKeys) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	deadline := secret.AttemptDeadline(ctx, time.Now())
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -140,6 +143,12 @@ func (m *memItemKeys) InItemKeyTx(_ context.Context, fence namespace.Fence, fn f
 	before := maps.Clone(m.keys)
 
 	if err := fn(memItemKeyTx{m: m, fence: fence}); err != nil {
+		m.keys = before
+
+		return err
+	}
+
+	if err := secret.CheckAttemptDeadline(deadline, time.Now()); err != nil {
 		m.keys = before
 
 		return err
