@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -114,6 +116,15 @@ type moduleToken struct {
 	After string `json:"a"`
 }
 
+// The causes of the four refusals of a module page token. Each guard wraps
+// its own cause, so the caller and a test can tell which guard refused.
+var (
+	errModuleTokenLength  = errors.New("module page token is over the length limit")
+	errModuleTokenDecode  = errors.New("module page token does not decode")
+	errModuleTokenEmpty   = errors.New("module page token holds no key")
+	errModuleTokenAddress = errors.New("module page token holds no module address")
+)
+
 // moduleQuery is one validated list request: the page size and the cursor of
 // the module after which the page starts. After is empty for the first page.
 type moduleQuery struct {
@@ -159,24 +170,24 @@ func parseModuleToken(raw string, ns namespace.Name) (string, error) {
 	// Defense in depth: pagetoken.Decode checks the length too; this cap
 	// stays so that the handler refuses a long token before the decode.
 	if len(raw) > pagetoken.MaxLen {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errModuleTokenLength, errProviderPageToken)
 	}
 
 	var token moduleToken
 	if err := pagetoken.Decode(raw, &token); err != nil {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errModuleTokenDecode, errProviderPageToken)
 	}
 
 	// The first page carries no token: a token that holds no key is not a
 	// page token of this list.
 	if token.After == "" {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errModuleTokenEmpty, errProviderPageToken)
 	}
 
 	// Defense in depth: the store checks the cursor too; this check stays so
 	// that the handler refuses a bad token before the store call.
 	if _, err := registry.ParseAddressKey(ns, registry.KindModule, token.After); err != nil {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errModuleTokenAddress, errProviderPageToken)
 	}
 
 	return token.After, nil

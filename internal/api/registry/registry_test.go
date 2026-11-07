@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -106,12 +109,32 @@ func (testAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity
 	return identity.AdminScope(p), nil
 }
 
+// countingRegistryStore wraps the registry store of the fixture and counts
+// the calls of the address list, so a test can prove that a hostile page
+// token never reaches the store.
+type countingRegistryStore struct {
+	registry.Store
+
+	addresses atomic.Int64
+}
+
+// Addresses counts the call and passes it to the wrapped store.
+func (c *countingRegistryStore) Addresses(
+	ctx context.Context, ns namespace.Name, kind registry.Kind, after string, limit int,
+) ([]registry.Address, string, error) {
+	c.addresses.Add(1)
+
+	return c.Store.Addresses(ctx, ns, kind, after, limit)
+}
+
 type fixture struct {
 	handler *apiregistry.Handler
 	// served is the handler that the tests call: it fails a test when a
 	// handler answers a success status that the description does not give.
 	served http.Handler
 	store  *sqlite.Store
+	// registry counts the calls that reach the address list of the store.
+	registry *countingRegistryStore
 }
 
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -157,9 +180,10 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 	})
 
 	verifier := pgpverify.Verifier{Now: nil}
+	registryStore := &countingRegistryStore{Store: store.Registry(), addresses: atomic.Int64{}}
 
 	svc, err := service.New(service.Config{
-		Store:                 store.Registry(),
+		Store:                 registryStore,
 		Keys:                  store.RegistryKeys(),
 		Verifier:              verifier,
 		Inspector:             verifier,
@@ -201,7 +225,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: store}
+	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: store, registry: registryStore}
 }
 
 const base = "/api/dustpan/v1/namespaces/acme/registry"
@@ -1006,8 +1030,63 @@ func TestListProvidersHostileQuery(t *testing.T) {
 			got := f.call(t, "reader", http.MethodGet, base+"/providers"+tt.query, nil)
 			wantCode(t, tt.name, got, http.StatusBadRequest)
 
+			if calls := f.registry.addresses.Load(); calls != 0 {
+				t.Errorf("the store got %d address list calls, want none", calls)
+			}
+
 			if !strings.Contains(got.body, `"errorCode"`) {
 				t.Errorf("answer has no error code: %s", got.body)
+			}
+		})
+	}
+}
+
+// TestParseProviderTokenGuards proves each guard of the provider page token
+// parser alone: each row sends a token that only one guard refuses, and
+// asserts the cause of that guard. The last row proves that the guards accept
+// a valid token.
+func TestParseProviderTokenGuards(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		raw   string
+		cause error
+		after string
+	}{
+		{
+			"a token over the length limit",
+			strings.Repeat("A", pagetoken.MaxLen+1),
+			apiregistry.ErrProviderTokenLength,
+			"",
+		},
+		{"a token that is not a page token", "!!!", apiregistry.ErrProviderTokenDecode, ""},
+		{"a token with an empty cursor", providerTokenOf(t, ""), apiregistry.ErrProviderTokenEmpty, ""},
+		{
+			"a token whose cursor is no provider name",
+			providerTokenOf(t, "Payments"),
+			apiregistry.ErrProviderTokenAddress,
+			"",
+		},
+		{"a token of a provider", providerTokenOf(t, "payments"), nil, "payments"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			after, err := apiregistry.ParseProviderPageToken(tt.raw, "acme")
+
+			if tt.cause != nil {
+				if !errors.Is(err, tt.cause) {
+					t.Fatalf("parse %q = %q, %v, want %v", tt.raw, after, err, tt.cause)
+				}
+
+				return
+			}
+
+			if err != nil || after != tt.after {
+				t.Fatalf("parse %q = %q, %v, want %q", tt.raw, after, err, tt.after)
 			}
 		})
 	}

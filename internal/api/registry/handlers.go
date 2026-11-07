@@ -269,6 +269,13 @@ var (
 	errProviderPageToken = problem.BadRequest(
 		errcode.RequestPageTokenInvalid, "invalid page token: provide the nextPageToken of the page before",
 	)
+	// The causes of the four refusals of a provider page token. Each guard
+	// wraps its own cause, so the caller and a test can tell which guard
+	// refused.
+	errProviderTokenLength  = errors.New("provider page token is over the length limit")
+	errProviderTokenDecode  = errors.New("provider page token does not decode")
+	errProviderTokenEmpty   = errors.New("provider page token holds no name")
+	errProviderTokenAddress = errors.New("provider page token holds no provider name")
 )
 
 // providerToken is the opaque page token of the provider list: the name of
@@ -319,25 +326,25 @@ func parseProviderToken(raw string, ns namespace.Name) (string, error) {
 	// Defense in depth: pagetoken.Decode checks the length too; this cap
 	// stays so that the handler refuses a long token before the decode.
 	if len(raw) > pagetoken.MaxLen {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errProviderTokenLength, errProviderPageToken)
 	}
 
 	var token providerToken
 	if err := pagetoken.Decode(raw, &token); err != nil {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errProviderTokenDecode, errProviderPageToken)
 	}
 
 	// The first page carries no token: a token that holds no name is not a
 	// page token of this list.
 	if token.After == "" {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errProviderTokenEmpty, errProviderPageToken)
 	}
 
 	// Defense in depth: the store checks the cursor too; this check stays so
 	// that the handler refuses a bad token before the store call.
 	addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: token.After, System: ""}
 	if addr.Validate() != nil {
-		return "", errProviderPageToken
+		return "", fmt.Errorf("%w: %w", errProviderTokenAddress, errProviderPageToken)
 	}
 
 	return addr.Name, nil
