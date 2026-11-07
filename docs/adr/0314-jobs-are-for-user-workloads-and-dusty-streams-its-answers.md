@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 October 2026
 
+Changed by:
+
+- ADR 357 extends decision 2: the design of the stream.
+
 Changes:
 
 - Extends ADR 100: what a job is for.
