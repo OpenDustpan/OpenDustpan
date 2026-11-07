@@ -1,10 +1,17 @@
 package forge
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrAppBudget reports that the key of an app signed as many calls as its
+// budget allows in the window. An adapter wraps it together with an
+// UnavailableError that holds the time to wait, so that errors.Is finds
+// ErrUnavailable too.
+var ErrAppBudget = errors.New("the app used its budget of signed calls")
 
 // AppBudget bounds the calls that the key of an app signs. All connections of
 // one app share it, whatever their installation and their namespace, because

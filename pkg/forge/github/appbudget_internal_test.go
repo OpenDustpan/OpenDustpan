@@ -119,8 +119,8 @@ func signedCalls() map[string]func(ctx context.Context, f *gitHub) error {
 }
 
 // TestEverySignedCallSpendsTheAppBudget sends each signed call of the adapter
-// with the budget of the app spent: each one fails with ErrUnavailable and a
-// wait, and makes no request. With budget left, each one makes its request.
+// with the budget of the app spent: each one fails with ErrAppBudget,
+// ErrUnavailable and a wait, and makes no request. With budget left, each one makes its request.
 func TestEverySignedCallSpendsTheAppBudget(t *testing.T) {
 	t.Parallel()
 
@@ -143,8 +143,9 @@ func TestEverySignedCallSpendsTheAppBudget(t *testing.T) {
 
 			// The budget is spent: no request.
 			err := call(t.Context(), f)
-			if wait, ok := forge.RetryAfter(err); !errors.Is(err, forge.ErrUnavailable) || !ok || wait <= 0 {
-				t.Fatalf("call over the budget = %v, want ErrUnavailable with a wait", err)
+			wait, ok := forge.RetryAfter(err)
+			if !errors.Is(err, forge.ErrAppBudget) || !errors.Is(err, forge.ErrUnavailable) || !ok || wait <= 0 {
+				t.Fatalf("call over the budget = %v, want ErrAppBudget and ErrUnavailable with a wait", err)
 			}
 
 			if got := r.calls.Load(); got != 1 {
@@ -180,8 +181,8 @@ func TestTheAppBudgetIsSharedByItsInstallations(t *testing.T) {
 		}
 	}
 
-	if _, err := second.installationOwner(t.Context()); !errors.Is(err, forge.ErrUnavailable) {
-		t.Fatalf("another installation of the app = %v, want ErrUnavailable", err)
+	if _, err := second.installationOwner(t.Context()); !errors.Is(err, forge.ErrAppBudget) {
+		t.Fatalf("another installation of the app = %v, want ErrAppBudget", err)
 	}
 
 	if got := r.calls.Load(); got != 2 {

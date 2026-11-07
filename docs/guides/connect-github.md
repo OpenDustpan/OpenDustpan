@@ -211,7 +211,7 @@ Errors of a check:
 | 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
 | 429 | The server limits the checks. It allows one check of a connection in 10 seconds, and 30 checks of an installation in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
-| 503 | GitHub did not answer, or limited the rate. Or the app used its budget of signed calls (see below). The header `Retry-After` gives the wait time when the server or GitHub gave one, at most 60 seconds. |
+| 503 | GitHub did not answer, or limited the rate. Or the app used its budget of signed calls (see below): then the message says so and gives the wait. The header `Retry-After` gives the wait time when the server or GitHub gave one, at most 60 seconds. |
 
 ### The budget of the app
 
