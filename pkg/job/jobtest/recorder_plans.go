@@ -631,6 +631,12 @@ func hostilePartCases() map[string][]job.PlanPart {
 
 	unknown := hostilePart(valueOther)
 
+	notSecret := hostilePart(job.OutputPlanApply)
+	notSecret.Secret = false
+
+	secretDisplay := hostilePart(job.OutputPlanDisplay)
+	secretDisplay.Secret = true
+
 	cases := map[string][]job.PlanPart{
 		"no part": nil,
 		"three parts": {
@@ -638,12 +644,14 @@ func hostilePartCases() map[string][]job.PlanPart {
 			hostilePart(job.OutputPlanApply),
 			hostilePart(job.OutputPlanApply),
 		},
-		"an unknown kind":        {unknown},
-		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
-		"a hash in capitals":     {upper},
-		"a short hash":           {short},
-		"a negative size":        {negative},
-		"a size above the limit": {huge},
+		"an unknown kind":                  {unknown},
+		"a kind twice":                     {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"a hash in capitals":               {upper},
+		"a short hash":                     {short},
+		"a negative size":                  {negative},
+		"a size above the limit":           {huge},
+		"an apply part that is not secret": {notSecret},
+		"a display part that is secret":    {secretDisplay},
 	}
 
 	return cases
