@@ -113,7 +113,7 @@ that the named part applies, and the later ADR adds to it.
 | [130](0130-runner-pools-runners-and-coordinators.md) | Runner pools, runners and coordinators | accepted | extends ADR 100; extends ADR 101 decisions 12 and 14 | ADR 164 changes decision 5; ADR 300 changes | this ADR, with ADR 164, 300 |
 | [131](0131-the-runner-protocol.md) | The runner protocol | accepted | extends ADR 101 decisions 2, 13 and 15 | ADR 139 extends decision 6 | this ADR, with ADR 139 |
 | [132](0132-runner-protocol-versions-and-skew.md) | Versions of the runner protocol and the skew between releases | accepted | - | - | this ADR |
-| [133](0133-runner-identities-and-tokens.md) | Runner identities, join tokens, handoff tokens and job sessions | accepted | changes ADR 101 decision 10; extends ADR 101 | ADR 204 extends | this ADR, with ADR 204 |
+| [133](0133-runner-identities-and-tokens.md) | Runner identities, join tokens, handoff tokens and job sessions | accepted | changes ADR 101 decision 10; extends ADR 101 | ADR 204 extends; ADR 350 extends decision 2 | this ADR, with ADR 204, 350 |
 | [134](0134-the-launcher-contract.md) | The launcher contract | accepted | extends ADR 101 decisions 7, 10 and 13 | ADR 199 changes decisions 4 and 6; ADR 330 extends decision 6 | this ADR, with ADR 199, 330 |
 | [135](0135-the-source-pipeline.md) | The source pipeline: snapshots of git packs | accepted | extends ADR 100 decision 5 | ADR 199 extends decision 1; ADR 213 extends decision 6; ADR 220 changes decision 9; ADR 222 changes decision 6; ADR 226 changes decision 6 | this ADR, with ADR 199, 213, 220, 222, 226 |
 | [136](0136-the-kubernetes-coordinator.md) | The Kubernetes coordinator | accepted | - | ADR 139 extends decision 9; ADR 305 extends | this ADR, with ADR 139, 305 |
@@ -220,7 +220,7 @@ that the named part applies, and the later ADR adds to it.
 | [251](0251-copy-rules-for-user-facing-text.md) | Copy rules for user-facing text | accepted | extends ADR 14; extends ADR 66 | - | this ADR |
 | [252](0252-the-dev-sign-in-person-and-the-reserved-dev-prefix.md) | The dev sign-in person and the reserved dev prefix | accepted | changes ADR 237 decision 12 | ADR 253 extends decision 7 | this ADR, with ADR 253 |
 | [253](0253-dev-data-does-not-reach-a-production-installation.md) | Dev data does not reach a production installation | accepted | changes ADR 42 decision 4; extends ADR 252 decision 7 | - | this ADR |
-| [254](0254-speculative-remote-plans-for-opentofu-first.md) | Remote execution for OpenTofu starts with speculative plans on runners | accepted | changes ADR 25 decisions 1 and 3 | ADR 300 changes decision 6; ADR 310 extends decision 4; ADR 310 extends decision 5 | this ADR, with ADR 300, 310 |
+| [254](0254-speculative-remote-plans-for-opentofu-first.md) | Remote execution for OpenTofu starts with speculative plans on runners | accepted | changes ADR 25 decisions 1 and 3 | ADR 300 changes decision 6; ADR 310 extends decision 4; ADR 310 extends decision 5; ADR 350 changes decision 4 | this ADR, with ADR 300, 310, 350 |
 | [255](0255-client-encrypted-opentofu-state-stays-unread.md) | Client-encrypted OpenTofu state stays unread, and the server holds no key for it | accepted | - | - | this ADR |
 | [256](0256-pulumi-policy-packs-are-not-served-to-the-cli.md) | The server enforces resource policy, and the Pulumi adapter serves no required policy packs | accepted | - | - | this ADR |
 | [257](0257-the-tools-own-registry-protocols-first-no-oci-endpoint.md) | Providers and modules: the tools' own registry protocols first, and no OCI endpoint now | accepted | extends ADR 170; extends ADR 177 | - | this ADR |
@@ -297,3 +297,4 @@ that the named part applies, and the later ADR adds to it.
 | [329](0329-placement-rules-match-opentofu-unit-names.md) | Placement rules match OpenTofu unit names | accepted | extends ADR 61 decisions 1 and 3 | - | this ADR |
 | [330](0330-the-job-proxy-core-decisions.md) | The job proxy: core decisions P1 to P12 | accepted | extends ADR 134 decision 6; extends ADR 137 decision 6; extends ADR 327 | - | this ADR |
 | [331](0331-environment-promotion-is-in-milestone-6.md) | Environment promotion is in milestone 6 | accepted | extends ADR 318 decisions 1 and 3 | - | this ADR |
+| [350](0350-opendustpan-runners-replace-hcp-terraform-agents.md) | OpenDustpan runners replace HCP Terraform agents, and a gap in security is a documented gap | accepted | extends ADR 133 decision 2; changes ADR 254 decision 4 | - | this ADR |
