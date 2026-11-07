@@ -119,8 +119,9 @@ Facts from `main` at commit `fa62d37`:
 - **Peers**: a static list in the static layer of RFC 68. Each entry has an
   installation name, a small installation index (1 to 99, unique in the
   list, B3), a public URL, an internal URL, the identity of its TLS client
-  certificate, its public transport key (B7) and its public signing key for
-  the failover history (B3). The static layer only,
+  certificate, its public transport key (B7) and its public signing keys for
+  the failover history (B3a): one current key, and the retired and revoked
+  keys, each with its key ID and its time. The static layer only,
   because an entry decides where client tokens and namespace keys go
   (RFC 37 design point 1, "Security").
 - **Placement entries for namespaces that this installation does not hold**:
@@ -430,10 +431,15 @@ a list (`pkg/backup/portable_tables.go`). This design reuses it.
   index.
 - **The failover history.** Each namespace has a table
   `namespace_failovers (namespace_id, failover_version, primary_installation,
-  fork_seq, kind, at_ms, actor, reason, signer, signature)`. `fork_seq` is
-  the last `seq` of the earlier version that the new version contains. Each
-  failover, each restore and each forced failover appends a row, and the row
-  replicates in the log like any other row.
+  fork_seq, kind, at_ms, actor, reason, prev_row_sha256, signer,
+  signing_key_id, signature)`. `fork_seq` is the last `seq` of the earlier
+  version that the new version contains. `prev_row_sha256` chains each row to
+  the row before it, so one valid signature on a row also covers the history
+  before it. Each failover, each restore and each forced failover appends a
+  row, and the row replicates in the log like any other row. A primary that
+  adds a replica appends a row of the kind `replica-added`, and one of the
+  kind `replica-removed` when it removes it. So the history names each
+  replica of record.
 - **Proof of a version.** A bare number from a peer proves nothing. One peer
   that an attacker controls could otherwise draw forwards and their tokens
   to itself, make a returning primary refuse writes, and block each restore.
@@ -446,13 +452,90 @@ a list (`pkg/backup/portable_tables.go`). This design reuses it.
   - the signer is that new primary (forced failover, restore), or the
     primary of the previous history row (planned failover); and
   - the signature over the namespace ID, the version, the primary, the
-    `fork_seq` and the kind is valid.
+    `fork_seq`, the kind, `prev_row_sha256` and `signing_key_id` is valid,
+    with the key of that ID in the local peer entry of the signer, under the
+    rules of B3a; and
+  - for a forced failover, the signer is a replica of record in the verified
+    history (residual risk, B3a).
 
   Each refused claim writes an audit entry with the peer. The placement
   read answers the signed history rows, never only a number.
 - **No divergence on a claim alone.** An installation marks a namespace
   `diverged` only on a history row that passes the proof. A row signed by the
   new primary is the confirmation of the new primary.
+
+### B3a. The signing key of the failover history
+
+**Custody.** The private signing key of an installation stays on that
+installation. It is in the static layer as a key file that only the server
+process can read, or it is a key in a KMS that only the role of the server
+can use for a signature. It is never in a database row, a replicated row, a
+namespace backup or an installation backup. The server uses it only to sign
+history rows. The operator who can change the static layer rotates it. No
+API route reads it or changes it.
+
+**The key ID.** Each key has an ID: the first 16 bytes of the SHA-256 of the
+public key, in hex. Each history row holds `signing_key_id`, and the
+signature covers it.
+
+**The peer entry** of each installation holds:
+- `current`: the key that the installation signs with now;
+- `retired`: earlier keys, each with the time it was retired;
+- `revoked`: keys that must not be trusted, each with the time of
+  revocation in the local peer list.
+
+**Rules for a row that arrives** (in a stream, in a copy or from the placement
+read):
+- A current key verifies it.
+- A retired key verifies a row that the key signed. A retired key is
+  retired, not doubted, so old rows still verify after a rotation, and
+  replication of those namespaces goes on.
+- A revoked key verifies no row that arrives after the time of revocation in
+  the local list, whatever time the row states, because the holder of a
+  stolen key can state any time. A row that this installation accepted
+  before that time stays accepted, because it is already stored and its hash
+  is in the chain.
+
+**Rotation**, with an overlap, as for the transport key (B7):
+1. The installation makes a new key pair, and the operator adds the public
+   key to its peer entry in each peer as `current`, and moves the old key to
+   `retired`.
+2. When each peer has the new entry, the installation signs with the new key.
+3. The old key stays in `retired` as long as any history row it signed
+   exists. Each step writes an audit entry.
+
+**After a compromise:**
+1. The operator moves the key ID to `revoked` in the peer entry of that
+   installation, in each peer. Each peer writes an audit entry.
+2. The installation makes a new key and adds it as `current`, as in a
+   rotation.
+3. For each namespace whose history holds a row signed by the revoked key,
+   the primary installation of the namespace appends a row of the kind
+   `re-attest`, signed with a key that is not revoked. Its `prev_row_sha256`
+   covers the history before it. A copy or a new replica then accepts the
+   history through the chain of that row. When the primary is the
+   installation whose key was revoked, it signs the `re-attest` row with its
+   new key after step 2.
+4. Each history row that a peer refused in the meantime is in its audit log.
+   The operator reviews each one. A forced failover that the stolen key
+   signed and that a peer accepted before step 1 is a failover that the
+   operator undoes with a planned or forced failover of their own.
+
+**Residual risk.** A peer with a valid key can still sign a forced failover
+that names itself as primary. The proof shows who signed, not that an
+operator wanted it. These rules bound it:
+- a peer accepts a forced failover only from a replica of record in the
+  verified history, so an installation that never held a copy cannot claim
+  the namespace;
+- each accepted forced failover writes an audit entry and an alert on each
+  peer, so the operators of the namespace see it at once;
+- the row holds the actor and the reason of the failover record of the
+  operator on the new primary.
+
+A stronger bound is that each peer accepts a forced failover only after its
+own operator confirms it. That adds an operator step on each peer, but no
+write waits for it. It is an option in question B-3. A quorum of peers is
+not proposed, because ADR 248 decision 9 rules out a quorum.
 - **The cursor** of a replica is `(failover version, seq)` of the last
   entry that it applied.
 - **Divergence.** A replica that changes its source, or that reads a
@@ -520,14 +603,20 @@ typically seconds.
 0. **Fence the old primary first.** A removal from the peer lists alone is
    not a fence: CLIs that reach the old primary through DNS still write to
    it, and those writes are lost. So the operator either stops the old
-   primary, or cuts it off from clients (DNS or the load balancer). ADR 248
-   asks for this in its consequences. The failover route needs the field
+   primary, or cuts it off from clients. ADR 248 asks for this in its
+   consequences. The load balancer or a firewall is the better way to cut
+   it off. A change of DNS reaches a client only when the time to live of
+   the record ends, so with DNS the operator keeps the old primary isolated
+   for at least that time, and states it. The failover route needs the field
    `oldPrimaryFenced` with the value `stopped` or `isolated-from-clients`,
    and the audit entry records it. The server cannot check it, so this is
    the statement of the operator. Question B-3.
 
    The operator also moves the old primary from the peer list of each other
-   installation to its list of **fenced peers**. A fenced peer:
+   installation to its list of **fenced peers**. The list of fenced peers is
+   in the static layer, next to the peer list, so the operator who can change
+   the static layer of an installation changes it. The API shows it, and
+   cannot change it. A fenced peer:
    - gets no forwards, and its forwards are refused;
    - gets no log entries and no wraps of a namespace key (B7);
    - has its tokens refused, also tokens of namespace principals that it
@@ -764,7 +853,7 @@ each item below needs a migration with a data conversion, or cannot change.
 | 4 | IDs | Random, 20 characters, no placement. | Keep. Never add an installation or a region to an ID. A test checks that `ident.NewID` holds no setting. |
 | 5 | The class of each table | Implicit. | The four classes of B2, with the tests of B2. A namespace row may name a row of the installation scope only by its stable ID, and must work when that ID is missing on a replica. |
 | 6 | Blob keys | Under `namespaces/<namespace ID>/`, with `blob.Scoped`. | Keep. A conformance test checks that each namespace blob uses the scoped view. |
-| 7 | The failover version | `int64`, raised by one at each restore. | The index form of B3: monotonic, never reset, and the last two digits name the new primary installation of that version. With no peer list the step is 100. Each history row is signed by the installation that wrote it. |
+| 7 | The failover version | `int64`, raised by one at each restore. | The index form of B3: monotonic, never reset, and the last two digits name the new primary installation of that version. With no peer list the step is 100. Each history row holds `prev_row_sha256`, `signer`, `signing_key_id` and `signature`, and is signed by the installation that wrote it (B3a). |
 | 8 | Order between installations | No code depends on it today. | Order across installations is `(failover version, seq)`, never a wall clock. Timestamps stay data. |
 | 9 | The issuer base URL | Per installation. | Docs: a namespace that may move needs a movable host name before it issues its first token (B9). |
 | 10 | Rows of `mixed` tables | `access_tokens` holds `principal_id`; `idempotency_records` holds the principal and the path; `durable_operations` holds no namespace column. | Each row of a `mixed` table names its namespace ID, or an empty value for the installation scope, in a column of its own, so that the predicate of B1a layer 3 needs no parse of a path or an input. |
@@ -858,7 +947,8 @@ The changes are:
   namespace, and should also check that this installation owns the
   namespace;
 - the version number should end in two digits that name the installation
-  that owns that version, with a signature, so that two installations never
+  that owns that version, with a signature and the ID of the signing key,
+  so that two installations never
   make the same number and no one can claim a number without proof.
 
 ELI5: today the lock on each secret box has the namespace's name on it. If
@@ -896,8 +986,12 @@ old one cannot get in any more.
 - Option 3: the server stops the old primary with an API call to it. This
   works only when the old primary answers, and then a planned failover is
   the better tool.
+- Option 4, which can be added to option 1: each other installation accepts
+  a forced failover only after its own operator confirms it. This stops a
+  copy whose signing key was stolen from naming itself the new owner. It
+  costs one operator step on each installation, and no write waits for it.
 - **Recommendation: option 1, with the check of option 2 as a second
-  layer.** The architecture decision of the federation (ADR 248) already
+  layer.** Option 4 is a setting that is off by default. The architecture decision of the federation (ADR 248) already
   tells the operator to stop the old primary first. A removal from the peer
   lists alone is not enough, because clients can still reach the old primary.
 
