@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -71,15 +72,24 @@ func withoutCatchAllRule(t *testing.T, env *e2e.Env, tool string, fn func()) {
 		t.Fatalf("DELETE the %s rule = %d %s: %v, want 204", tool, status, body, err)
 	}
 
+	// The rule comes back whether fn passes or fails. A failed step stops the
+	// test with t.Fatal, and a rule that stayed deleted would fail every later
+	// scenario of the shared server with a misleading placement error. The
+	// context of the test is canceled before a cleanup runs, so the restore
+	// uses a context that is not canceled.
+	t.Cleanup(func() {
+		again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collection":` +
+			strconv.Quote(e2e.CatchAllCollection) + `}`
+
+		restoreStatus, restoreBody, restoreErr := env.ServerAPIStatus(
+			context.WithoutCancel(ctx), http.MethodPost, rulesPath, again,
+		)
+		if restoreErr != nil || restoreStatus != http.StatusCreated {
+			t.Errorf("POST the %s rule again = %d %s: %v, want 201", tool, restoreStatus, restoreBody, restoreErr)
+		}
+	})
+
 	fn()
-
-	again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collection":` +
-		strconv.Quote(e2e.CatchAllCollection) + `}`
-
-	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, rulesPath, again)
-	if err != nil || status != http.StatusCreated {
-		t.Fatalf("POST the %s rule again = %d %s: %v, want 201", tool, status, body, err)
-	}
 }
 
 // pulumiUnitWithoutCollectionRefused proves that the Pulumi CLI cannot make a

@@ -1,6 +1,7 @@
 package tofuhttp_test
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,10 +10,31 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // newPlacedHandler returns a handler over units whose Placer is placer.
 func newPlacedHandler(t *testing.T, units *fakeUnits, placer *tofuunit.Placer) http.Handler {
+	t.Helper()
+
+	return newPlacedHandlerIn(t, units, placer, fakeNamespaces{})
+}
+
+// notHomeNamespaces reads the namespace as fakeNamespaces does, and refuses a
+// write, because another installation owns the namespace.
+type notHomeNamespaces struct {
+	fakeNamespaces
+}
+
+func (notHomeNamespaces) WritableHere(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, namespace.ErrNotHome
+}
+
+// newPlacedHandlerIn returns a handler over units whose Placer is placer and
+// whose namespaces are namespaces.
+func newPlacedHandlerIn(
+	t *testing.T, units *fakeUnits, placer *tofuunit.Placer, namespaces tofuhttp.NamespaceService,
+) http.Handler {
 	t.Helper()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
@@ -20,7 +42,7 @@ func newPlacedHandler(t *testing.T, units *fakeUnits, placer *tofuunit.Placer) h
 		Authorizer:     userAuthz{},
 		Logger:         slog.New(slog.DiscardHandler),
 		Workspaces:     units,
-		Namespaces:     fakeNamespaces{},
+		Namespaces:     namespaces,
 		Audit:          newTestAudit(),
 		Gate:           nil,
 		OnAuditFailure: nil,
@@ -69,6 +91,39 @@ func TestFirstRequestWithoutAPlacerOrRuleIsRefused(t *testing.T) {
 			rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
 			if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), tc.wantText) {
 				t.Fatalf("LOCK = %d %q, want %d naming %q", rec.Code, rec.Body.String(), tc.wantStatus, tc.wantText)
+			}
+
+			if units.created != 0 {
+				t.Fatalf("created %d workspaces, want none", units.created)
+			}
+		})
+	}
+}
+
+// TestFirstRequestInANamespaceOfAnotherInstallation proves that a first LOCK in
+// a namespace that another installation owns answers 421 and not the error of
+// a missing rule, with or without a rule, and makes no workspace.
+func TestFirstRequestInANamespaceOfAnotherInstallation(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		placer *tofuunit.Placer
+	}{
+		{"no rule", &tofuunit.Placer{Rules: fixedRules{none: true}, Collections: fixedCollections{missing: false}}},
+		{"no placer", nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(false)
+			h := newPlacedHandlerIn(t, units, tc.placer, notHomeNamespaces{fakeNamespaces: fakeNamespaces{}})
+
+			rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+			if rec.Code != http.StatusMisdirectedRequest {
+				t.Fatalf("LOCK = %d %q, want 421", rec.Code, rec.Body.String())
 			}
 
 			if units.created != 0 {

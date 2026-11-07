@@ -821,7 +821,7 @@ type placementPorts interface {
 	collection.PlacementStore
 }
 
-// seedPlacement makes the collection devCollection in the namespace ns and one
+// seedPlacement makes the collection devCollection in the namespace ns and
 // two placement rules that put each new Pulumi stack and each new OpenTofu
 // workspace in it. The server refuses a new stack or workspace that no rule
 // places, so the first "pulumi stack init" or "tofu init" of a trial needs the
