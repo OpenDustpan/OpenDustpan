@@ -136,6 +136,22 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/server/namespaces/acme/access-review?expand=members"
 ```
 
+## Where a membership comes from
+
+Each `via` object has `memberSource`, `memberSourceId` and `memberSuspended`.
+The `memberSource` field has one of these values:
+
+- `local`: The membership was made through the API. Check who made it in the audit log.
+  The `memberSourceId` field is empty.
+- `scim`: A SCIM call kept the membership. The source ID names the identity in the directory.
+  Check the directory group.
+- `claim`: The membership came from a group claim at sign-in. The source ID names the identity.
+  Check the identity provider's group claim.
+
+In a snapshot, `memberSuspended: true` means the membership was suspended at the snapshot time and grants nothing.
+A membership suspended after the snapshot time shows `false`.
+In a history, only active memberships are listed, so `memberSuspended` is always `false`.
+
 ## Save the review
 
 The review has no file format. Each read answers JSON. The server has no CSV

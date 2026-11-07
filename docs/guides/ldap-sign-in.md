@@ -164,6 +164,18 @@ sign in, turn groups off, or put each person in a group. In Active
 Directory, the primary group of a user, for example `Domain Users`, is not
 in `memberOf`.
 
+### Mappings
+
+The server does not apply the groups of a directory to the memberships of a
+person yet. A sign-in reads the groups, but it changes no membership. A person
+who signs in keeps the memberships that a person made with the API.
+
+The server can store mappings. A mapping names the sign-in provider, one group
+name from the directory and one group of OpenDustpan. The server compares the
+name byte for byte: `Eng` and `eng` are two names. No route to read or write a
+mapping exists yet. A backup holds the mappings. A restore brings them back
+only for a caller with the `server:restore-access` action.
+
 ## Limits
 
 | Limit | Value |
