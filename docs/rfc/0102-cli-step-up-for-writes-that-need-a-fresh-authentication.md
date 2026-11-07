@@ -763,6 +763,22 @@ provider apply, with these limits:**
      of the list above. Test: a window credential on a token create gets
      `mfa.step-up-mismatch`.
 
+  **The limit of the literal filter.** The filter of layer 4 refuses a
+  literal paste only: the header name `Dustpan-Step-Up` or a value with the
+  prefix `stp-`. It does not find a credential that is encoded (for example
+  base64) or split into parts. Do not use layer 4 alone to keep a pasted
+  step-up credential out of a job. Layer 1 and layer 3 stop it:
+  - **Challenge eligibility (layer 1).** The server makes a challenge only
+    for a person with a console session or an interactive CLI sign-in token.
+    A job token or an issued token cannot get a credential to paste.
+  - **Credential binding (layer 3).** At each use, the server compares the
+    credential with the access token or session of the challenge. A step-up
+    credential in a job, with a job token or an issued token, fails with
+    `mfa.step-up-mismatch`. The credential authenticates nothing alone.
+
+  So a pasted step-up credential alone gives no step-up claim and no fresh
+  authentication to a job token or an issued token.
+
   The CLI does a step-up only when stdin and stdout are a terminal. This is
   a usability guard, not a layer: `script`, `expect` or `docker run -t`
   gives a terminal, and an attacker can write their own client. With no
