@@ -4,18 +4,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// The errors of the read of the groups of an approver.
-var (
-	ErrNoPrincipalStore = errNoPrincipalStore
-	ErrTooManyGroups    = errTooManyGroups
-)
-
-// JobGroupsPage is the size of one page of the read of the groups of a
-// principal.
-const JobGroupsPage = jobGroupsPage
-
-// JobGroupsMaxPages is the most pages that the read covers.
-const JobGroupsMaxPages = jobGroupsMaxPages
+// ErrNoPrincipalStore is the error of a reader with no principal store.
+var ErrNoPrincipalStore = errNoPrincipalStore
 
 // JobGroups is the reader of the groups of an approver.
 type JobGroups = jobGroups

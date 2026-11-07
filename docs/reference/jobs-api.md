@@ -170,8 +170,8 @@ the request, and the server writes nothing to the job.
    person, unless the gate has `allowSelf`. That person can reject.
 5. A person who approved this phase already cannot approve it again. The server answers 409
    with the code `job.already-approved`. A person who approved can still reject.
-6. If a gate names groups, the caller must be an enabled member of at least one of its
-   groups. The server compares the immutable ID of the group,
+6. If a gate names groups, the caller must be an enabled person with an active membership
+   in at least one of its groups. A suspended or ended membership does not count. The server compares the immutable ID of the group,
    so a group that someone renamed still matches, and a group that someone made again with
    the same name does not. A caller who is not a member, a server that cannot read the
    membership, and a gate that names groups with no group IDs all answer 403 with the

@@ -90,6 +90,8 @@ func Run(t *testing.T, newStore Factory) {
 			name: "a break-glass flag on a person with a local password fails with ErrBreakGlassPassword",
 			test: testBreakGlassPasswordRefused,
 		},
+		{name: "only an active membership counts for IsActiveMemberOfAny", test: testActiveMemberOfAny},
+		{name: "IsActiveMemberOfAny refuses too many group IDs", test: testActiveMemberOfAnyBound},
 	}
 
 	for _, tc := range cases {

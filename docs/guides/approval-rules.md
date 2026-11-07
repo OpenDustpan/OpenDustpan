@@ -179,7 +179,8 @@ The rules:
 
 - A gate of two approvals needs two different people. A person who approves a
   second time gets 409 with the error code `job.already-approved`.
-- A default that names groups lets only enabled members of those groups approve. The
+- A default that names groups lets only enabled members of those groups approve. A
+  suspended membership gives no rights, so it does not count. The
   server compares the ID of the group, so a group that someone renamed still matches,
   and a group that someone made again with the same name does not. If the server
   cannot read the membership, it refuses the approval.

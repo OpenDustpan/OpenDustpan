@@ -1438,6 +1438,14 @@ WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
 
+-- name: CountActiveMembershipsInGroups :one
+-- The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id IN (sqlc.slice('group_ids'));
+
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?)

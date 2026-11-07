@@ -4,26 +4,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 var errPrincipalsDown = errors.New("principal store is down")
 
-// groupsStore is a principal.Store that answers the two reads of the adapter.
-// The groups of a principal are in the order of the key of the list: their
-// lower-case names.
+// membership is one membership of a principal in a group, as the fake store
+// keeps it.
+type membership struct {
+	groupID string
+	state   principal.MembershipState
+}
+
+// groupsStore is a principal.Store that answers the two reads of the adapter,
+// with the rules of the port: only an active membership counts, and more than
+// principal.MaxMembershipGroupIDs group IDs are ErrInvalid.
 type groupsStore struct {
 	principal.Store
 
-	people map[string]principal.Principal
-	groups map[string][]principal.Group
-	err    error
-	pages  int
+	people      map[string]principal.Principal
+	memberships map[string][]membership
+	err         error
 }
 
 func (s *groupsStore) GetPrincipalBySubject(_ context.Context, subject string) (principal.Principal, error) {
@@ -39,22 +48,22 @@ func (s *groupsStore) GetPrincipalBySubject(_ context.Context, subject string) (
 	return p, nil
 }
 
-func (s *groupsStore) ListGroupsOf(_ context.Context, id string, q principal.Query) ([]principal.Group, int64, error) {
-	s.pages++
-
+func (s *groupsStore) IsActiveMemberOfAny(_ context.Context, id string, groupIDs []string) (bool, error) {
 	if s.err != nil {
-		return nil, 0, s.err
+		return false, s.err
 	}
 
-	var rows []principal.Group
+	if len(groupIDs) > principal.MaxMembershipGroupIDs {
+		return false, principal.ErrInvalid
+	}
 
-	for _, g := range s.groups[id] {
-		if strings.ToLower(g.Name) > q.After && len(rows) < q.Limit {
-			rows = append(rows, g)
+	for _, m := range s.memberships[id] {
+		if m.state == principal.MembershipStateActive && slices.Contains(groupIDs, m.groupID) {
+			return true, nil
 		}
 	}
 
-	return rows, int64(len(s.groups[id])), nil
+	return false, nil
 }
 
 // person returns a principal record for subject.
@@ -75,23 +84,20 @@ func disabledPerson(subject string) principal.Principal {
 	return p
 }
 
-func groupOf(id, name string) principal.Group {
-	return principal.Group{
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
-	}
-}
-
 func newGroupsStore() *groupsStore {
+	active := principal.MembershipStateActive
+
 	return &groupsStore{
 		Store: nil,
 		people: map[string]principal.Principal{
-			"carol": person("carol"), "dave": disabledPerson("dave"),
+			"carol": person("carol"), "dave": disabledPerson("dave"), "bo": person("bo"),
 		},
-		groups: map[string][]principal.Group{"prn-carol": {groupOf("grp-1", "platform")}, "prn-dave": {
-			groupOf("grp-1", "platform"),
-		}},
-		err: nil, pages: 0,
+		memberships: map[string][]membership{
+			"prn-carol": {{groupID: "grp-1", state: active}},
+			"prn-dave":  {{groupID: "grp-1", state: active}},
+			"prn-bo":    {{groupID: "grp-1", state: principal.MembershipStateSuspended}},
+		},
+		err: nil,
 	}
 }
 
@@ -110,9 +116,10 @@ func TestJobGroupsMatchesByID(t *testing.T) {
 		{"no group in the question", "carol", nil, false},
 		{"a disabled member", "dave", []string{"grp-1"}, false},
 		{"a subject with no principal", "erin", []string{"grp-1"}, false},
-		// The group "platform" of the store has the ID grp-1. A group that
-		// someone made again with the same name has another ID, so a gate that
-		// names grp-9 does not match it.
+		// A suspended membership gives no rights, so it is not a membership.
+		{"a member whose membership is suspended", "bo", []string{"grp-1"}, false},
+		// A group that someone made again with the name of the group of the gate
+		// has another ID, so a gate that names grp-9 does not match it.
 		{"a group with the name of the group of the gate and another ID", "carol", []string{"grp-9"}, false},
 	}
 
@@ -125,18 +132,6 @@ func TestJobGroupsMatchesByID(t *testing.T) {
 				t.Fatalf("MemberOfAny = %v, %v; want %v and no error", got, err, tc.want)
 			}
 		})
-	}
-}
-
-func TestJobGroupsKeepsMatchingARenamedGroup(t *testing.T) {
-	t.Parallel()
-
-	store := newGroupsStore()
-	store.groups["prn-carol"] = []principal.Group{groupOf("grp-1", "platform-engineering")}
-
-	got, err := dustpan.NewJobGroups(store).MemberOfAny(t.Context(), "carol", []string{"grp-1"})
-	if err != nil || !got {
-		t.Fatalf("MemberOfAny after a rename = %v, %v; want true", got, err)
 	}
 }
 
@@ -155,36 +150,106 @@ func TestJobGroupsFailsClosed(t *testing.T) {
 	if got || !errors.Is(err, dustpan.ErrNoPrincipalStore) {
 		t.Fatalf("MemberOfAny with no store = %v, %v; want false and ErrNoPrincipalStore", got, err)
 	}
+
+	// More group IDs than the store takes: an error that denies, never true.
+	ids := make([]string, principal.MaxMembershipGroupIDs+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("grp-%03d", i)
+	}
+
+	ids[0] = "grp-1"
+
+	got, err = dustpan.NewJobGroups(newGroupsStore()).MemberOfAny(t.Context(), "carol", ids)
+	if got || !errors.Is(err, principal.ErrInvalid) {
+		t.Fatalf("MemberOfAny with too many group IDs = %v, %v; want false and ErrInvalid", got, err)
+	}
 }
 
-func TestJobGroupsReadsEveryPageUpToTheBound(t *testing.T) {
-	t.Parallel()
+// storeEntry returns a valid audit entry for a write to the principal store.
+func storeEntry() audit.Entry {
+	return audit.Entry{
+		At: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Namespace: audit.ServerScope, Subject: "admin",
+		IDPSubject: "", TokenID: "", Action: "server:manage-principals", Object: "principal:prn-test", Version: "",
+		ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "jobgroups-test",
+		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+	}
+}
 
-	many := func(n int) []principal.Group {
-		groups := make([]principal.Group, n)
-		for i := range groups {
-			groups[i] = groupOf(fmt.Sprintf("grp-%05d", i), fmt.Sprintf("g%05d", i))
+// openSQLite opens a real store in a temporary directory.
+func openSQLite(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the store: %v", closeErr)
+		}
+	})
+
+	return st
+}
+
+// seedMemberships makes the group grp-platform and three people in it: one with
+// an active membership, one with a suspended one, and one whose membership
+// ended.
+func seedMemberships(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	group := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: "grp-platform", Name: "platform", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+
+	if err := st.CreateGroup(t.Context(), group, storeEntry()); err != nil {
+		t.Fatalf("create the group: %v", err)
+	}
+
+	for _, name := range []string{"active", "suspended", "ended"} {
+		state, suspendedAt := principal.MembershipStateActive, time.Time{}
+		if name == "suspended" {
+			state, suspendedAt = principal.MembershipStateSuspended, at
 		}
 
-		return groups
+		m := principal.Membership{
+			AddedAt: at, SuspendedAt: suspendedAt, GroupID: "grp-platform", PrincipalID: "prn-" + name,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: state, Pinned: false,
+		}
+
+		if err := st.CreatePrincipal(t.Context(), person(name), storeEntry()); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+
+		if err := st.AddMember(t.Context(), m, storeEntry(), nil); err != nil {
+			t.Fatalf("add %s: %v", name, err)
+		}
 	}
 
-	// A match on the last group of the third page.
-	store := newGroupsStore()
-	store.groups["prn-carol"] = many(2*dustpan.JobGroupsPage + 5)
-
-	got, err := dustpan.NewJobGroups(store).MemberOfAny(t.Context(), "carol",
-		[]string{fmt.Sprintf("grp-%05d", 2*dustpan.JobGroupsPage+4)})
-	if err != nil || !got || store.pages != 3 {
-		t.Fatalf("MemberOfAny = %v, %v after %d pages; want true after 3", got, err, store.pages)
+	if err := st.RemoveMember(t.Context(), "grp-platform", "prn-ended", storeEntry()); err != nil {
+		t.Fatalf("remove the member: %v", err)
 	}
+}
 
-	// More groups than the bound covers, and no match: an error, not false.
-	store = newGroupsStore()
-	store.groups["prn-carol"] = many(dustpan.JobGroupsMaxPages*dustpan.JobGroupsPage + 1)
+// TestJobGroupsOnTheSQLiteStore reads the memberships of a real store: an
+// active membership counts, and a suspended one, an ended one and one of a
+// person with no record do not.
+func TestJobGroupsOnTheSQLiteStore(t *testing.T) {
+	t.Parallel()
 
-	got, err = dustpan.NewJobGroups(store).MemberOfAny(t.Context(), "carol", []string{"grp-none"})
-	if got || !errors.Is(err, dustpan.ErrTooManyGroups) {
-		t.Fatalf("MemberOfAny past the bound = %v, %v; want false and ErrTooManyGroups", got, err)
+	st := openSQLite(t)
+	seedMemberships(t, st)
+
+	reader := dustpan.NewJobGroups(st)
+
+	for name, want := range map[string]bool{"active": true, "suspended": false, "ended": false, "nobody": false} {
+		got, err := reader.MemberOfAny(t.Context(), name, []string{"grp-platform"})
+		if err != nil || got != want {
+			t.Errorf("MemberOfAny(%q) = %v, %v; want %v and no error", name, got, err, want)
+		}
 	}
 }
