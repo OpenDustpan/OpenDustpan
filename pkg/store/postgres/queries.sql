@@ -2569,6 +2569,16 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1;
 
+-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3;
+
+-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= $1;
+
 -- name: GetSessionPolicy :one
 SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
 
