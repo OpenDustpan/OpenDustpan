@@ -9,13 +9,19 @@ import (
 	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
-// tofuSourceExtra and tofuVersionExtra are the bytes, besides ASCII letters
-// and digits, that a module source and a module version can hold in the
-// text of a root module. They hold no quote, no backslash, no '$', no '%',
-// no '{' and no white space, so the text cannot start a template sequence.
+// tofuVersionExtra is the bytes, besides ASCII letters and digits, that a
+// module version can hold in the text of a root module. They hold no quote,
+// no backslash, no '$', no '%', no '{' and no white space, so the text
+// cannot start a template sequence.
+const tofuVersionExtra = "._+-"
+
+// Bounds of the parts of a registry address.
 const (
-	tofuSourceExtra  = "._~/:@+=?&,#-"
-	tofuVersionExtra = "._+-"
+	maxRegistryPartBytes = 64
+	maxHostLabelBytes    = 63
+	minHostLabels        = 2
+	registryNameParts    = 3
+	registryHostedParts  = 4
 )
 
 // Tofu is the renderer of OpenTofu. It holds no state.
@@ -77,8 +83,62 @@ func (Tofu) Render(ctx context.Context, in selfservice.RenderInput) (selfservice
 	return finish(in, files, []string{fileTofuProgram, fileTofuValues}, settings)
 }
 
+// registrySource reports whether s is a registry address:
+// [<host>/]<namespace>/<name>/<system>. The namespace and the name are 1 to
+// 64 ASCII letters, digits, '_' and '-'. The system is 1 to 64 ASCII
+// letters and digits. The host is a DNS name with a dot. So s is never a
+// local path, a go-getter address with a '::' or a scheme, a shorthand for
+// a Git host such as github.com/x/y, or an address with a '?', a '#' or an
+// '@'. Defense in depth: OpenTofu refuses a version on a module that is
+// not from a registry, and this check does not rely on that.
+func registrySource(s string) bool {
+	if len(s) > maxSourceBytes {
+		return false
+	}
+
+	parts := strings.Split(s, "/")
+
+	switch len(parts) {
+	case registryNameParts:
+	case registryHostedParts:
+		if !dnsName(parts[0]) {
+			return false
+		}
+
+		parts = parts[1:]
+	default:
+		return false
+	}
+
+	return registryWord(parts[0], "_-") && registryWord(parts[1], "_-") && registryWord(parts[2], "")
+}
+
+// registryWord reports whether s is 1 to 64 ASCII letters and digits and
+// the bytes of extra.
+func registryWord(s, extra string) bool {
+	return len(s) <= maxRegistryPartBytes && allowedText(s, extra, maxRegistryPartBytes)
+}
+
+// dnsName reports whether s is a host name with at least one dot, and
+// labels of 1 to 63 ASCII letters, digits and '-' that do not start or end
+// with '-'.
+func dnsName(s string) bool {
+	labels := strings.Split(s, ".")
+	if len(labels) < minHostLabels {
+		return false
+	}
+
+	for _, label := range labels {
+		if !allowedText(label, "-", maxHostLabelBytes) || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
 // tofuModule returns the module of p, when p is one module from a registry
-// source with text that the allowlists accept.
+// source with text that the checks accept.
 func tofuModule(p *selfservice.Program) (*selfservice.Module, error) {
 	m := p.Module
 
@@ -90,9 +150,9 @@ func tofuModule(p *selfservice.Program) (*selfservice.Module, error) {
 			"%w: this render reads a module from a registry source, not from git",
 			selfservice.ErrInvalid,
 		)
-	case !allowedText(m.Source, tofuSourceExtra, maxSourceBytes):
+	case !registrySource(m.Source):
 		return nil, fmt.Errorf(
-			"%w: the module source %q has a byte that a source cannot have",
+			"%w: the module source %q is not a registry address of the form [host/]namespace/name/system",
 			selfservice.ErrInvalid,
 			m.Source,
 		)

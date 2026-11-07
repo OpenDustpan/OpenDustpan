@@ -37,7 +37,13 @@ func TestTofuConformance(t *testing.T) {
 				m := *in.Version.Blueprint.Program.Module
 				m.Source = s
 				in.Version.Blueprint.Program.Module = &m
-			}),
+			},
+				"../../../../etc/x", "../x", "./x", "/abs/x", "git::https://example.com/r.git?ref=main",
+				"git::https://example.com/r.git", "s3::https://bucket.example.com/m.zip", "gcs::https://example.com/m",
+				"http://example.com/m.zip", "https://example.com/m.zip", "github.com/x/y", "a/b", "a/b/c/d/e",
+				"ns/name/sys?ref=x", "ns/name/sys#x", "ns@x/name/sys", "ns/../sys", "host/ns/name/sys",
+				"reg.example.com/../a/b", "reg.example.com:443/ns/name/sys",
+			),
 		),
 	})
 }
@@ -173,11 +179,11 @@ func sharedFailures(base selfservice.RenderInput, extraKeys ...string) []selfser
 // writes into the input: a value that would end a string or start a
 // template or a YAML construct.
 func textFailures(
-	base selfservice.RenderInput, what string, set func(*selfservice.RenderInput, string),
+	base selfservice.RenderInput, what string, set func(*selfservice.RenderInput, string), more ...string,
 ) []selfservicetest.RenderFailure {
-	texts := []string{
+	texts := append([]string{
 		"1.0\"\n}\nresource \"x\" \"y\" {}", "${x}", "%{if true}", "a b", "", "a\\b", "!!str", "a: b",
-	}
+	}, more...)
 
 	out := make([]selfservicetest.RenderFailure, 0, len(texts))
 

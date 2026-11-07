@@ -2,6 +2,7 @@ package render
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
@@ -61,16 +62,97 @@ func TestAllowedText(t *testing.T) {
 	t.Parallel()
 
 	for _, s := range []string{"", "a b", "a\"b", "a\\b", "a$b", "a{b", "a%b", "a\nb", "a\x00b", "é"} {
-		if allowedText(s, tofuSourceExtra, maxSourceBytes) {
+		if allowedText(s, tofuVersionExtra, maxSourceBytes) {
 			t.Errorf("allowedText(%q) = true, want false", s)
 		}
 	}
 
-	if allowedText("aaa", tofuSourceExtra, 2) {
+	if allowedText("aaa", tofuVersionExtra, 2) {
 		t.Error("allowedText over the limit = true, want false")
 	}
 
-	if !allowedText("registry.example.com/a/b-c", tofuSourceExtra, maxSourceBytes) {
-		t.Error("allowedText of a registry source = false, want true")
+	if !allowedText("1.2.3-rc.1+b5", tofuVersionExtra, maxVersionBytes) {
+		t.Error("allowedText of a version = false, want true")
+	}
+}
+
+// TestRegistrySource sends hostile module sources to the registry check
+// directly, as if every other check had failed.
+func TestRegistrySource(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range hostileSources() {
+		if registrySource(s) {
+			t.Errorf("registrySource(%q) = true, want false", s)
+		}
+	}
+
+	for _, s := range []string{
+		"registry.example.com/platform/postgres/aws", "hashicorp/consul/aws", "ns_1/my-name/aws2",
+		"a-b.example.com/ns/name/sys",
+	} {
+		if !registrySource(s) {
+			t.Errorf("registrySource(%q) = false, want true", s)
+		}
+	}
+}
+
+// hostileSources are module sources that OpenTofu reads as a local path, a
+// go-getter address or a shorthand for a Git host, or that break the form of
+// a registry address.
+func hostileSources() []string {
+	return []string{
+		"",
+		"../../../../etc/x",
+		"../x",
+		"./x",
+		"/abs/x",
+		"/",
+		"//",
+		"a//b",
+		"a/b/",
+		"/a/b/c",
+		"git::https://example.com/r.git",
+		"git::https://example.com/r.git?ref=main",
+		"s3::https://bucket.example.com/m.zip",
+		"gcs::https://example.com/m",
+		"hg::https://example.com/m",
+		"http://example.com/m.zip",
+		"https://example.com/m.zip",
+		"file:///etc/x",
+		"github.com/x/y",
+		"github.com/x/y/z/w",
+		"bitbucket.org/x/y",
+		"a/b",
+		"a/b/c/d/e",
+		"ns/name/sys?ref=x",
+		"ns/name/sys#x",
+		"ns@x/name/sys",
+		"ns/name/sys@v1",
+		"ns/./sys",
+		"ns/name/..",
+		"ns/../sys",
+		"../ns/name/sys",
+		"host/ns/name/sys",
+		"-bad.example.com/ns/name/sys",
+		"bad-.example.com/ns/name/sys",
+		"a..b.example.com/ns/name/sys",
+		"reg.example.com/../a/b",
+		"reg.example.com/./a/b",
+		"ns/name/sys\n",
+		"ns/na me/sys",
+		"ns/name/sys\x00",
+		"ns/name/s_ys",
+		"ns/name/s-ys",
+		"ns/na.me/sys",
+		"n.s/name/sys",
+		"reg.example.com:443/ns/name/sys",
+		"ns/name/${sys}",
+		"ns/name/%{sys}",
+		"ns/\"name/sys",
+		"ns/name\\x/sys",
+		"ns/name/é",
+		"ns/name/" + strings.Repeat("a", maxRegistryPartBytes+1),
+		strings.Repeat("a", maxSourceBytes+1) + "/b/c",
 	}
 }
