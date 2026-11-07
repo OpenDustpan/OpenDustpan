@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -95,11 +94,12 @@ func runTeamAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReady(ctx, t, env)
 
 	t.Run("ldap_sign_in", func(t *testing.T) {
-		teamAccessBlocked(t, env, "ldap_sign_in", "M4-33b")
+		teamAccessBlocked(t, env, "ldap_sign_in", "blocked: LDAP sign-in is not built")
 	})
 
 	t.Run("group_rule_maps_payments", func(t *testing.T) {
-		teamAccessBlocked(t, env, "group_rule_maps_payments", "M4-26b")
+		teamAccessBlocked(t, env, "group_rule_maps_payments",
+			"blocked: group rules do not map groups to collections yet")
 	})
 
 	t.Run("placement_pulumi", func(t *testing.T) {
@@ -107,33 +107,35 @@ func runTeamAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	})
 
 	t.Run("placement_tofu_http", func(t *testing.T) {
-		teamAccessBlocked(t, env, "placement_tofu_http", "M4-1")
+		teamAccessBlocked(t, env, "placement_tofu_http",
+			"blocked: a unit with no collection is still accepted")
 	})
 
 	t.Run("cli_up_and_apply_with_token", func(t *testing.T) {
-		teamAccessBlocked(t, env, "cli_up_and_apply_with_token", "M4-33b", "M4-26b")
+		teamAccessBlocked(t, env, "cli_up_and_apply_with_token",
+			"blocked: LDAP sign-in and group rules are not built")
 	})
 
 	t.Run("outsider_403_names_collection", func(t *testing.T) {
-		teamAccessBlocked(t, env, "outsider_403_names_collection", "M4-1")
+		teamAccessBlocked(t, env, "outsider_403_names_collection",
+			"blocked: a unit with no collection is still accepted")
 	})
 
 	t.Run("access_review_lists_group_member", func(t *testing.T) {
 		teamAccessReviewExport(ctx, t, env)
-		teamAccessBlocked(t, env, "access_review_lists_group_member", "M4-26b")
+		teamAccessBlocked(t, env, "access_review_lists_group_member",
+			"blocked: group rules do not map groups to collections yet")
 	})
 
 	t.Run("console_members_view", func(t *testing.T) {
-		teamAccessBlocked(t, env, "console_members_view", "M4-51")
+		teamAccessBlocked(t, env, "console_members_view", "blocked: the console members view is not built")
 	})
 }
 
 // teamAccessBlocked records that the step name does not run in this mode, and
-// skips it. The reason names the plan items that the step waits for.
-func teamAccessBlocked(t *testing.T, env *e2e.Env, name string, items ...string) {
+// skips it. The reason names the missing capability.
+func teamAccessBlocked(t *testing.T, env *e2e.Env, name, reason string) {
 	t.Helper()
-
-	reason := "blocked by " + strings.Join(items, ", ")
 
 	env.SkipScenario(t, teamAccessTest+"/"+name, reason)
 	t.Skip(reason)

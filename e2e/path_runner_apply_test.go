@@ -13,7 +13,6 @@
 package e2e_test
 
 import (
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -53,40 +52,40 @@ func runRunnerApplyOnStore(t *testing.T, store e2e.Store) {
 	env := e2e.NewEnv(t.Context(), t, e2e.NoCLI(), store)
 
 	t.Run("pool_and_join", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "pool_and_join", "M5-4a")
+		runnerApplyBlocked(t, env, "pool_and_join", "blocked: no runner joins a pool yet")
 	})
 
 	t.Run("apply_job_starts", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "apply_job_starts", "M5-8a")
+		runnerApplyBlocked(t, env, "apply_job_starts", "blocked: apply jobs do not start yet")
 	})
 
 	t.Run("plan_runs_on_runner", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "plan_runs_on_runner", "M5-2", "M5-3b", "M5-5", "M5-19", "M5-50")
+		runnerApplyBlocked(t, env, "plan_runs_on_runner", "blocked: plans do not run on a runner yet")
 	})
 
 	t.Run("gate_waits_for_two", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "gate_waits_for_two", "M5-9", "M5-10")
+		runnerApplyBlocked(t, env, "gate_waits_for_two",
+			"blocked: enforce gates do not wait for two approvers yet")
 	})
 
 	t.Run("stored_plan_applies", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "stored_plan_applies", "M5-2", "M5-8b")
+		runnerApplyBlocked(t, env, "stored_plan_applies", "blocked: a stored plan does not apply yet")
 	})
 
 	t.Run("log_and_decision_read", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "log_and_decision_read", "M5-18")
+		runnerApplyBlocked(t, env, "log_and_decision_read",
+			"blocked: the run log and decision record are not readable yet")
 	})
 
 	t.Run("console_run_page", func(t *testing.T) {
-		runnerApplyBlocked(t, env, "console_run_page", "M5-55", "M5-56")
+		runnerApplyBlocked(t, env, "console_run_page", "blocked: the console run page is not built")
 	})
 }
 
 // runnerApplyBlocked records that the step name does not run in this mode, and
-// skips it. The reason names the plan items that the step waits for.
-func runnerApplyBlocked(t *testing.T, env *e2e.Env, name string, items ...string) {
+// skips it. The reason names the missing capability.
+func runnerApplyBlocked(t *testing.T, env *e2e.Env, name, reason string) {
 	t.Helper()
-
-	reason := "blocked by " + strings.Join(items, ", ")
 
 	env.SkipScenario(t, runnerApplyTest+"/"+name, reason)
 	t.Skip(reason)
