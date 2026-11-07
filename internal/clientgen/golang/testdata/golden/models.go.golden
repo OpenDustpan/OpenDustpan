@@ -145,6 +145,7 @@ const (
 	ErrorCodeJobGateEnforced                       ErrorCode = "job.gate-enforced"
 	ErrorCodeJobInvalid                            ErrorCode = "job.invalid"
 	ErrorCodeJobLimit                              ErrorCode = "job.limit"
+	ErrorCodeJobLogNotAvailable                    ErrorCode = "job.log-not-available"
 	ErrorCodeJobNotFound                           ErrorCode = "job.not-found"
 	ErrorCodeJobPolicyDenied                       ErrorCode = "job.policy-denied"
 	ErrorCodeJobUnsupported                        ErrorCode = "job.unsupported"

@@ -52,6 +52,9 @@ func newPoolHandler(
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
 		Jobs:           jobs,
+		Artifacts:      nil,
+		Logs:           nil,
+		Cursors:        nil,
 		Starter:        starter,
 		Workers:        nil,
 		Pools:          pools,

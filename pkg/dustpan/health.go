@@ -52,6 +52,8 @@ type readiness struct {
 	// answers 503 and runs no check, so a load balancer stops its requests
 	// while the requests in flight complete.
 	draining atomic.Bool
+	// streamStop tells the log streams that the process drains, or is nil.
+	streamStop *streamStop
 }
 
 // The names of the checks and the states in the readiness body.
@@ -109,6 +111,8 @@ type readinessSettings struct {
 	timeout  time.Duration
 	failures *metrics.Counter
 	logger   *slog.Logger
+	// streamStop tells the log streams that the process drains, or is nil.
+	streamStop *streamStop
 }
 
 // newReadinessHandler returns the readiness probe over store and blobs. Each
@@ -120,12 +124,13 @@ func newReadinessHandler(
 	logger *slog.Logger,
 ) http.Handler {
 	return &readiness{
-		checks:   []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
-		timeout:  timeout,
-		failures: failures,
-		logger:   logger,
-		parts:    nil,
-		draining: atomic.Bool{},
+		checks:     []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
+		timeout:    timeout,
+		failures:   failures,
+		logger:     logger,
+		parts:      nil,
+		draining:   atomic.Bool{},
+		streamStop: nil,
 	}
 }
 
@@ -140,12 +145,13 @@ func newReadinessHandler(
 // processes to stay in the pool of the Service.
 func newComponentReadiness(cfg readinessSettings) *readiness {
 	rd := &readiness{
-		checks:   nil,
-		timeout:  cfg.timeout,
-		failures: cfg.failures,
-		logger:   cfg.logger,
-		parts:    nil,
-		draining: atomic.Bool{},
+		checks:     nil,
+		timeout:    cfg.timeout,
+		failures:   cfg.failures,
+		logger:     cfg.logger,
+		parts:      nil,
+		draining:   atomic.Bool{},
+		streamStop: cfg.streamStop,
 	}
 
 	if cfg.components.Has(ComponentAPI) {
@@ -324,6 +330,7 @@ func (rd *readiness) ServeOne(w http.ResponseWriter, r *http.Request) {
 // drain makes every later probe answer 503 with the failed check "draining".
 func (rd *readiness) drain() {
 	rd.draining.Store(true)
+	rd.streamStop.stop()
 }
 
 // writeDraining answers a probe of a draining process. It is not a failure of

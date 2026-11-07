@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // TestHeaderFlagsMatchTheHandler proves that the header flags of each
@@ -42,6 +43,15 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 			h := newHandler(t, newAuthorizer(holdsBoth()...), newFakeJobs(runningJob(t, testJob)))
 
 			return probe(h, http.MethodGet, jobPath("acme", testJob), "")
+		},
+		"listJobs": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			jobs := newFakeJobs()
+			jobs.listed = func(job.Filter) []job.Job { return nil }
+			h := newHandler(t, newAuthorizer(readsNamespace()...), jobs)
+
+			return probe(h, http.MethodGet, jobsURL, "")
 		},
 		"startJob": func(t *testing.T) headertest.Probe {
 			t.Helper()

@@ -63,6 +63,7 @@ import type {
   GetGitHostConnectionInput,
   GetGitHostInstallationInput,
   GetJobInput,
+  GetJobLogInput,
   GetLocalUserLocksInput,
   GetLocalUserPolicyInput,
   GetModuleReleaseInput,
@@ -100,6 +101,7 @@ import type {
   ListGatesInput,
   ListGitHostConnectionsInput,
   ListGitHostInstallationsInput,
+  ListJobsInput,
   ListModuleReleasesInput,
   ListNotificationSinksInput,
   ListPasskeysInput,
@@ -241,6 +243,7 @@ import type {
   JobLocation,
   JobLocationRequest,
   JobLog,
+  JobLogEntry,
   JobPhase,
   JobPlan,
   JobPlanPart,
@@ -256,6 +259,7 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListJobsResponse,
   ListModuleReleasesResponse,
   ListNotificationSinksResponse,
   ListPasskeysResponse,
@@ -670,6 +674,10 @@ export class Client {
     return execute(this.transport, operations.getJob, input);
   }
 
+  getJobLog(input: GetJobLogInput): Promise<Answer<JobLogEntry>> {
+    return execute(this.transport, operations.getJobLog, input);
+  }
+
   getLocalUserLocks(input: GetLocalUserLocksInput = {}): Promise<Answer<LocalUserLocks>> {
     return execute(this.transport, operations.getLocalUserLocks, input);
   }
@@ -816,6 +824,10 @@ export class Client {
 
   listGitHostInstallations(input: ListGitHostInstallationsInput = {}): Promise<Answer<ListGitHostInstallationsResponse>> {
     return execute(this.transport, operations.listGitHostInstallations, input);
+  }
+
+  listJobs(input: ListJobsInput): Promise<Answer<ListJobsResponse>> {
+    return execute(this.transport, operations.listJobs, input);
   }
 
   listModuleReleases(input: ListModuleReleasesInput): Promise<Answer<ListModuleReleasesResponse>> {

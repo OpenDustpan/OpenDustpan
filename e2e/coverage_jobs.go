@@ -20,6 +20,9 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Namespaces:     namespaces,
 		Workers:        nil,
 		Jobs:           struct{ job.Store }{nil},
+		Artifacts:      struct{ job.ArtifactReader }{nil},
+		Logs:           nil,
+		Cursors:        nil,
 		Starter:        struct{ job.Starter }{nil},
 		Pools:          nil,
 		Authenticator:  coverageAuthenticator{},
@@ -37,14 +40,15 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	routes := handler.Routes()
 	out := make([]RouteRef, 0, len(routes))
 
-	for _, route := range routes {
-		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	for i := range routes {
+		out = append(out, RouteRef{Method: routes[i].Method, Path: routes[i].Path})
 	}
 
 	return out
 }
 
-// jobAllowEntries covers the routes that start and read a job. No CLI calls
+// jobAllowEntries covers the routes that start, list and read a job, and read
+// its log. No CLI calls
 // them: the console and the clients of the API do. The harness steps of
 // TestJobsAPI start a plan job, start it again with the same key, refuse
 // starts that are not valid, and read a job, a job that the caller may not
@@ -57,6 +61,11 @@ func jobAllowEntries() []AllowEntry {
 
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/logs/{phase}",
+			CoveringTest: test, Reason: why,
+		},
 		{
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
 			CoveringTest: test, Reason: why,

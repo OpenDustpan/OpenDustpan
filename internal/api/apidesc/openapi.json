@@ -1275,6 +1275,7 @@
           "job.gate-enforced",
           "job.invalid",
           "job.limit",
+          "job.log-not-available",
           "job.not-found",
           "job.policy-denied",
           "job.unsupported",
@@ -2430,6 +2431,26 @@
         ],
         "type": "object"
       },
+      "JobLogEntry": {
+        "properties": {
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "step": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "step",
+          "text"
+        ],
+        "type": "object"
+      },
       "JobPhase": {
         "properties": {
           "approvals": {
@@ -2745,6 +2766,23 @@
         },
         "required": [
           "installations"
+        ],
+        "type": "object"
+      },
+      "ListJobsResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobs"
         ],
         "type": "object"
       },
@@ -10366,6 +10404,112 @@
       }
     },
     "/api/dustpan/v1/namespaces/{namespace}/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of jobs on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same query.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the jobs with this purpose. The only value is drift-check.",
+            "in": "query",
+            "name": "purpose",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the jobs in this state. One of the states must match.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Keeps the jobs that this run trigger started.",
+            "in": "query",
+            "name": "trigger",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keeps the jobs of the unit with this unit ID.",
+            "in": "query",
+            "name": "unit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListJobsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          }
+        ]
+      },
       "post": {
         "operationId": "startJob",
         "parameters": [
@@ -10491,6 +10635,86 @@
           },
           {
             "action": "job:read",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/logs/{phase}": {
+      "get": {
+        "operationId": "getJobLog",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "phase",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The seq of the last entry that the client has. The stream starts after it.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLogEntry"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          },
+          {
+            "action": "job:read-logs",
             "object": "unit"
           }
         ]
