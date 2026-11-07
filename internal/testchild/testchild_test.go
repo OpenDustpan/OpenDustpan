@@ -31,6 +31,15 @@ func TestChildProbe(t *testing.T) {
 	case "badvalue":
 		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\nb")
 		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "noequals":
+		out, err := testchild.Run(t, "^TestChildProbe$", "lower")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "valuenul":
+		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\x00b")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "valuecr":
+		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\rb")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
 	default:
 		t.Fatalf("unknown probe mode %q", os.Getenv(childMode))
 	}
@@ -93,6 +102,9 @@ func TestRunRefusesABadEnvironmentEntry(t *testing.T) {
 	}{
 		{name: "NameWithLowercase", mode: "badname", want: `environment name does not match`},
 		{name: "ValueWithLF", mode: "badvalue", want: "environment value has NUL, CR or LF"},
+		{name: "EntryWithoutEquals", mode: "noequals", want: `environment entry has no "="`},
+		{name: "ValueWithNUL", mode: "valuenul", want: "environment value has NUL, CR or LF"},
+		{name: "ValueWithCR", mode: "valuecr", want: "environment value has NUL, CR or LF"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
