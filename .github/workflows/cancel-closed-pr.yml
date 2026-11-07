@@ -20,6 +20,6 @@ jobs:
     # This job never runs: the run only has to join the group. The workflow
     # starts only for a closed pull request, so this condition is always false.
     if: ${{ github.event.action != 'closed' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: "true"
