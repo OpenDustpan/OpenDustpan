@@ -33,7 +33,8 @@ func pgCopyLocalUserTables() []pgCopyTable {
 // ceremonies, which a backup leaves out.
 func pgPasskeyChallengeColumns() []string {
 	return []string{
-		pgColDigest, pgColKind, pgColPrincipalID, "pending_id", "session_id", pgColCreatedAtMs, "expires_at_ms",
+		pgColDigest, pgColKind, pgColPrincipalID, "pending_id", "session_id", pgColSource, "source_group",
+		pgColCreatedAtMs, "expires_at_ms",
 	}
 }
 

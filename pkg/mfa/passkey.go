@@ -179,6 +179,10 @@ func (c Challenge) Validate() error {
 		{name: "session ID", value: c.SessionID, set: want[2]},
 	}
 
+	if err := c.validateSource(); err != nil {
+		return err
+	}
+
 	for _, f := range fields {
 		if !f.set {
 			if f.value != "" {
@@ -191,6 +195,29 @@ func (c Challenge) Validate() error {
 		if err := validID(f.name, f.value); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// ValidSource reports whether source is 1 to MaxSourceBytes printable ASCII
+// characters.
+func ValidSource(source string) bool {
+	return source != "" && len(source) <= MaxSourceBytes &&
+		!strings.ContainsFunc(source, func(r rune) bool { return r < ' ' || r > '~' })
+}
+
+// validateSource returns ErrInvalid unless only a CeremonySignIn has a source,
+// and that source is 1 to MaxSourceBytes printable ASCII characters. The
+// source goes to a count by source and to the audit log, so it holds no line
+// break and no control character.
+func (c Challenge) validateSource() error {
+	if (c.Kind == CeremonySignIn) != (c.Source != "") || (c.Kind == CeremonySignIn) != (c.SourceGroup != "") {
+		return fmt.Errorf("%w: only a %s ceremony has a source and a source group", ErrInvalid, CeremonySignIn)
+	}
+
+	if (c.Source != "" && !ValidSource(c.Source)) || (c.SourceGroup != "" && !ValidSource(c.SourceGroup)) {
+		return fmt.Errorf("%w: challenge source is not %d printable ASCII bytes or fewer", ErrInvalid, MaxSourceBytes)
 	}
 
 	return nil

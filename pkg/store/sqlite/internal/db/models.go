@@ -765,6 +765,8 @@ type PasskeyChallenge struct {
 	PrincipalID string
 	PendingID   string
 	SessionID   string
+	Source      string
+	SourceGroup string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
