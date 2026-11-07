@@ -1399,6 +1399,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms = ?;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -1437,6 +1443,38 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
+
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = ? AND source_id = ? AND claim_value = ? AND group_id = ?;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = ? AND source_id = ?
+ORDER BY claim_value, group_id;
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = ? AND m.source_id = ? AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value, m.group_id;
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = ? AND removed_at_ms IS NULL
+ORDER BY group_id;
 
 -- name: CountActiveMembershipsInGroups :one
 -- The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
@@ -1602,6 +1640,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1614,7 +1656,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(sqlc.arg('history') AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1655,7 +1697,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (CAST(sqlc.arg('history') AS BOOLEAN) = 0 AND m.state = 'suspended'))
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1697,6 +1739,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
   CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(m.source, '') AS TEXT) AS member_source,
+  CAST(COALESCE(m.source_id, '') AS TEXT) AS member_source_id,
+  CAST(CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+    THEN 1 ELSE 0 END AS INTEGER) AS member_suspended,
   CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id

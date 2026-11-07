@@ -176,6 +176,10 @@ var transitions = map[State]map[Event]State{
 		// The plan of the next phase is stale: the job moves back to the
 		// plan phase and stays queued.
 		EventReplan: StateQueued,
+		// The plan phase stored no plan, so the next phase cannot run and a
+		// new plan phase would store none either. No claim and no durable
+		// operation is open in this state.
+		EventPhaseFailed: StateFailed,
 	},
 	StateAwaitingApproval: {
 		// An approval goes back to queued, so that the freeze and the

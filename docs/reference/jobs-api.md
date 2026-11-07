@@ -5,7 +5,9 @@ apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, list jobs, read a job, its phases and the records of its phases, read
 the log of a phase, and approve or reject a job that waits for approval.
 
-This version starts plan jobs of OpenTofu workspaces on runners. The server defines the plan
+This version starts plan jobs of OpenTofu workspaces on runners. It does not accept an
+apply or a destroy yet: a start with the operation `apply` or `destroy` fails with 422 and
+the code `job.unsupported`. The server defines the plan
 step of a Pulumi stack too, but no runner runs it yet. No route
 cancels jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.

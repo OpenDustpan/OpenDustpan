@@ -1589,6 +1589,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = $1 AND principal_id = $2 AND removed_at_ms = $3;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -1677,6 +1683,38 @@ SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = $1 AND source_id = $2 AND claim_value = $3 AND group_id = $4;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = $1 AND source_id = $2
+ORDER BY claim_value COLLATE "C", group_id COLLATE "C";
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = $1 AND m.source_id = $2 AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value COLLATE "C", m.group_id COLLATE "C";
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = $1 AND removed_at_ms IS NULL
+ORDER BY group_id COLLATE "C";
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
@@ -1841,6 +1879,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1853,7 +1895,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1892,7 +1934,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1931,6 +1973,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id

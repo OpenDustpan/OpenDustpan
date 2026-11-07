@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -23,6 +24,10 @@ const (
 	maxExtractBytes = 4 << 30
 	dirMode         = 0o750
 	fileMode        = 0o750
+	// downloadAttempts is how many times a download of an archive is tried.
+	// The wait before attempt n+1 is n times downloadRetryWait.
+	downloadAttempts  = 3
+	downloadRetryWait = 2 * time.Second
 )
 
 // Errors returned while downloading and unpacking a CLI.
@@ -190,7 +195,7 @@ func (f *Fetcher) download(ctx context.Context, rel release) error {
 	defer ignoreErr(func() error { return os.Remove(tmp.Name()) })
 	defer ignoreErr(tmp.Close)
 
-	gotSum, err := f.fetchTo(ctx, rel.url, tmp)
+	gotSum, err := f.fetchWithRetry(ctx, rel.url, tmp)
 	if err != nil {
 		return err
 	}
@@ -230,31 +235,73 @@ func (f *Fetcher) download(ctx context.Context, rel release) error {
 	return nil
 }
 
+// fetchWithRetry calls fetchTo up to downloadAttempts times. It tries again
+// only after a network error or a 5xx answer, and empties dst before each
+// new attempt. A checksum mismatch is not retried: download checks the sum
+// after this returns.
+func (f *Fetcher) fetchWithRetry(ctx context.Context, url string, dst *os.File) (string, error) {
+	for attempt := 1; ; attempt++ {
+		if err := dst.Truncate(0); err != nil {
+			return "", fmt.Errorf("empty download file: %w", err)
+		}
+
+		if _, err := dst.Seek(0, io.SeekStart); err != nil {
+			return "", fmt.Errorf("rewind download file: %w", err)
+		}
+
+		sum, retry, err := f.fetchTo(ctx, url, dst)
+		if err == nil {
+			return sum, nil
+		}
+
+		if !retry {
+			return "", err
+		}
+
+		if attempt == downloadAttempts {
+			return "", fmt.Errorf("%w (attempt %d of %d)", err, attempt, downloadAttempts)
+		}
+
+		timer := time.NewTimer(time.Duration(attempt) * downloadRetryWait)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return "", fmt.Errorf("%w (attempt %d of %d): %w", err, attempt, downloadAttempts, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 // fetchTo streams url into dst and returns the sha256 of what was written.
-func (f *Fetcher) fetchTo(ctx context.Context, url string, dst io.Writer) (string, error) {
+// The bool is true when the error may not happen again: a network error or
+// a 5xx answer.
+func (f *Fetcher) fetchTo(ctx context.Context, url string, dst io.Writer) (string, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return "", fmt.Errorf("build request for %s: %w", url, err)
+		return "", false, fmt.Errorf("build request for %s: %w", url, err)
 	}
 
 	resp, err := f.Client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("get %s: %w", url, err)
+		return "", true, fmt.Errorf("get %s: %w", url, err)
 	}
 
 	defer func() { ignoreErr(resp.Body.Close) }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get %s: %w: %d", url, ErrUnexpectedStatus, resp.StatusCode)
+		return "", resp.StatusCode >= http.StatusInternalServerError,
+			fmt.Errorf("get %s: %w: %d", url, ErrUnexpectedStatus, resp.StatusCode)
 	}
 
 	hash := sha256.New()
 
 	if _, err := io.Copy(io.MultiWriter(dst, hash), io.LimitReader(resp.Body, maxArchiveBytes)); err != nil {
-		return "", fmt.Errorf("download %s: %w", url, err)
+		return "", true, fmt.Errorf("download %s: %w", url, err)
 	}
 
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), false, nil
 }
 
 // extract unpacks a gzipped tarball into dir. Only directories and regular
