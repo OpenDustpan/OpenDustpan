@@ -26,11 +26,19 @@ const canaryEnv = "CONFORMANCE_CANARY_SECRET"
 // runFakeAdapter reads one request on each line, and answers as the mode says.
 func runFakeAdapter(mode string) {
 	switch mode {
-	case "noread", "sleeper":
-		// An adapter that never reads its input, and the child of an adapter.
+	case "noread":
+		// An adapter that never reads its input.
 		<-time.After(time.Minute)
 
 		return
+	case "sleeper":
+		// The child of an adapter. It blocks until a kill ends it.
+		runSleeper()
+
+		return
+	case "grandchildclean":
+		// An adapter that starts a child and then answers as the default mode.
+		startGrandchild()
 	default:
 	}
 

@@ -20,3 +20,7 @@ func killGroup(p *os.Process) error {
 
 	return nil
 }
+
+// waitForExitNoReap does nothing: this platform has no waitid. The adapter is
+// reaped by the wait that follows.
+func waitForExitNoReap(int) error { return nil }

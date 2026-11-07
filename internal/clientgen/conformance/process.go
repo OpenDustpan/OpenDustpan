@@ -225,6 +225,20 @@ func (a *ProcessAdapter) read(stdout io.Reader) {
 		a.stderr.note(err)
 	}
 
+	// Wait until the adapter has exited without reaping it, so that its
+	// process ID stays reserved and its group cannot belong to another
+	// process. Then stop the processes that the adapter left behind: an
+	// adapter that exits on its own does not stop them.
+	if a.cmd.Process != nil {
+		if err := waitForExitNoReap(a.cmd.Process.Pid); err != nil {
+			a.stderr.note(err)
+		}
+
+		if err := killGroup(a.cmd.Process); err != nil {
+			a.stderr.note(err)
+		}
+	}
+
 	a.waitErr = a.cmd.Wait()
 }
 
