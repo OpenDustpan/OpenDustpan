@@ -66,9 +66,11 @@ func (s *Service) refusal(ctx context.Context, c *Caller, rec namespace.Namespac
 	e.Changes = nil
 
 	if _, appendErr := s.auditor.Append(ctx, rec.Fence(), e); appendErr != nil {
+		// The cause is a fixed text: the error of the audit store can hold a host,
+		// a user or a statement, and the log must not carry it.
 		s.logger.ErrorContext(ctx, "audit append failed for a refused publish",
 			slog.String("namespace", rec.Name.String()), slog.String("reason", reason),
-			slog.String("cause", appendErr.Error()))
+			slog.String("cause", "audit store append failed"))
 		s.onAudit()
 	}
 
