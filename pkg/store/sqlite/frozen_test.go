@@ -133,6 +133,9 @@ func checkTagDir(t *testing.T, dir string) {
 	for _, entry := range entries {
 		name := entry.Name()
 
+		// Defense in depth: the regular-file check below also skips a
+		// directory. This check stays so that the copy check never sees a
+		// directory, even if the regular-file check changes.
 		if entry.IsDir() {
 			continue
 		}
