@@ -325,7 +325,7 @@ func (f *gitHub) mintStatus(level string) func(response) error {
 		var e errorBody
 		if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
 			missing := "the installation does not have the permission to " + missingPermission(level)
-			if level == levelWrite || level == levelReview || level == levelStatus {
+			if level == levelWrite || level == levelReview || level == levelStatus || level == levelComment {
 				return fmt.Errorf("%w: %s", forge.ErrRefused, missing)
 			}
 
@@ -343,6 +343,10 @@ func missingPermission(level string) string {
 	switch level {
 	case levelStatus:
 		return "write the commit statuses"
+	case levelComment:
+		return "write the issues"
+	case levelCommentRead:
+		return "read the issues"
 	case levelReview:
 		return "write the contents and the pull requests"
 	case levelReviewRead:
@@ -387,12 +391,23 @@ func (f *gitHub) reviewReadBearer(ctx context.Context, r repoName) (string, erro
 	return f.bearer(ctx, r, levelReviewRead)
 }
 
+// hasOwnKey reports whether the tokens of the level have a key of their own,
+// apart from the token that reads the contents.
+func hasOwnKey(level string) bool {
+	switch level {
+	case levelWrite, levelReview, levelReviewRead, levelStatus, levelComment, levelCommentRead:
+		return true
+	default:
+		return false
+	}
+}
+
 // tokenKey is the key of the installation token of repository r at level in
 // the token map. A repository name has no "#", so the keys of two levels never
 // meet.
 func tokenKey(r repoName, level string) string {
 	key := r.owner + "/" + r.name
-	if level == levelWrite || level == levelReview || level == levelReviewRead || level == levelStatus {
+	if hasOwnKey(level) {
 		key += "#" + level
 	}
 
@@ -560,6 +575,10 @@ func tokenPermissions(level string) map[string]string {
 		return map[string]string{permContents: levelRead, permPulls: levelRead}
 	case levelStatus:
 		return map[string]string{permStatuses: levelWrite}
+	case levelComment:
+		return map[string]string{permIssues: levelWrite}
+	case levelCommentRead:
+		return map[string]string{permIssues: levelRead}
 	}
 
 	return map[string]string{permContents: level}
@@ -623,6 +642,8 @@ func (f *gitHub) forget(r repoName, err error) error {
 		delete(f.readTokens, tokenKey(r, levelReview))
 		delete(f.readTokens, tokenKey(r, levelReviewRead))
 		delete(f.readTokens, tokenKey(r, levelStatus))
+		delete(f.readTokens, tokenKey(r, levelComment))
+		delete(f.readTokens, tokenKey(r, levelCommentRead))
 		f.mu.Unlock()
 	}
 

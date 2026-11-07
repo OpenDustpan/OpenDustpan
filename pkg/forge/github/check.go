@@ -77,10 +77,15 @@ func (f *gitHub) learn(login string, permissions map[string]string) {
 		statuses = contentsGranted
 	}
 
+	issues := contentsMissing
+	if permissions[permIssues] == levelWrite {
+		issues = contentsGranted
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.owner, f.contents, f.writes, f.pulls, f.statuses = login, read, write, pulls, statuses
+	f.owner, f.contents, f.writes, f.pulls, f.statuses, f.issues = login, read, write, pulls, statuses, issues
 }
 
 // The names of the permission and of its levels that the adapter reads.
@@ -89,6 +94,7 @@ const (
 	permMetadata = "metadata"
 	permPulls    = "pull_requests"
 	permStatuses = "statuses"
+	permIssues   = "issues"
 	levelRead    = "read"
 	levelWrite   = "write"
 	// levelReview is the level of a token for the review request calls. It is
@@ -102,6 +108,13 @@ const (
 	// status. It is not a permission level of GitHub: it asks for the write of
 	// the commit statuses and nothing else.
 	levelStatus = "status"
+	// levelComment is the level of a token for the calls that write comments
+	// and reactions. It is not a permission level of GitHub: it asks for the
+	// write of the issues and nothing else.
+	levelComment = "comment"
+	// levelCommentRead is the level of a token for the call that reads a
+	// comment: the read of the issues.
+	levelCommentRead = "comment-read"
 )
 
 // installation is the part of the installation answer that Check reads.
