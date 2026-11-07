@@ -1,13 +1,105 @@
 package workspace
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
+
+// keyedStore is a blob store whose every call fails with an error that names
+// the key, as the fs store does. It embeds a nil blob.Store, so only the three
+// calls below are ever made.
+type keyedStore struct {
+	blob.Store
+}
+
+// Put implements blob.Store.
+func (keyedStore) Put(_ context.Context, key blob.Key, _ io.Reader) error {
+	return keyedFailure("put", key)
+}
+
+// Get implements blob.Store.
+func (keyedStore) Get(_ context.Context, key blob.Key) (io.ReadCloser, error) {
+	return nil, keyedFailure("get", key)
+}
+
+// Delete implements blob.Store.
+func (keyedStore) Delete(_ context.Context, key blob.Key) error {
+	return keyedFailure("delete", key)
+}
+
+// keyedFailure is the error of one call. It wraps blob.ErrInvalidKey, which
+// blob.DeleteRetried does not retry.
+func keyedFailure(op string, key blob.Key) error {
+	return fmt.Errorf("%s %s: %w", op, key, blob.ErrInvalidKey)
+}
+
+// TestBlobStorePathsRedactTheKey proves that each store path of stateBlobs
+// (put, get, delete and the retried delete of the sweep) returns an error whose
+// text does not hold the blob key, and that blob.ErrInvalidKey still matches.
+// Each case fails when its own redactKey call is removed.
+func TestBlobStorePathsRedactTheKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns = namespace.ID("ns-acmeacmeacmeacmeacme")
+		ws = ID("ws-1")
+		sv = StateVersionID("sv-1")
+	)
+
+	blobs := &stateBlobs{store: keyedStore{Store: nil}, refusals: nil}
+
+	key, err := blobs.attemptKey(ns, ws, sv)
+	if err != nil {
+		t.Fatalf("attempt key: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"put", func() error {
+			return blobs.put(t.Context(), ns, ws, key, strings.NewReader("body"))
+		}},
+		{"get", func() error {
+			_, err := blobs.get(t.Context(), ns, ws, key)
+
+			return err
+		}},
+		{"delete", func() error {
+			return blobs.delete(t.Context(), ns, ws, key)
+		}},
+		{"deleteRetried", func() error {
+			return blobs.deleteRetried(t.Context(), ns, ws, key)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.call()
+			if err == nil {
+				t.Fatal("err = nil, want the store failure")
+			}
+
+			if strings.Contains(err.Error(), key.String()) {
+				t.Errorf("error %q names the blob key", err)
+			}
+
+			if !errors.Is(err, blob.ErrInvalidKey) {
+				t.Errorf("error %q does not match blob.ErrInvalidKey", err)
+			}
+		})
+	}
+}
 
 // errStoreDown is a store failure that names no key.
 var errStoreDown = errors.New("store down")
