@@ -167,3 +167,4 @@ both together.
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
+| [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | discussing |
