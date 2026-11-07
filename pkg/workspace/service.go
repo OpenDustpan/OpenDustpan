@@ -1870,7 +1870,8 @@ func (s *Service) followedState(ctx context.Context, w Workspace, in NewState) (
 
 // rejectEncryptedState fails with ErrClientEncrypted when state is a state
 // file the client encrypted: the resource routes cannot read it, while the
-// outputs list still works.
+// outputs list still works. A state that the check cannot classify is refused
+// with the error of the check: the state never reads as plaintext.
 func rejectEncryptedState(state []byte, id StateVersionID) error {
 	encrypted, err := IsClientEncrypted(state)
 	if err != nil {

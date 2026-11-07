@@ -586,8 +586,8 @@ func stubResourceState() string {
 // stubEncryptedState is a state file the client encrypted: the resources
 // hide inside the envelope, so the resource routes answer 409.
 func stubEncryptedState() string {
-	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
+	return `{"serial":3,"lineage":"seed-lineage","meta":{},` +
+		`"encrypted_data":"x","encryption_version":"v0"}`
 }
 
 // stubResourceMarks are the kept json-state marks of the stub state: the
