@@ -101,7 +101,7 @@ func registrySource(s string) bool {
 	switch len(parts) {
 	case registryNameParts:
 	case registryHostedParts:
-		if !dnsName(parts[0]) {
+		if !dnsName(parts[0]) || gitHost(parts[0]) {
 			return false
 		}
 
@@ -121,7 +121,9 @@ func registryWord(s, extra string) bool {
 
 // dnsName reports whether s is a host name with at least one dot, and
 // labels of 1 to 63 ASCII letters, digits and '-' that do not start or end
-// with '-'.
+// with '-'. The last label has a letter, so an IPv4 address such as
+// 127.0.0.1 is not a host name. An IPv6 address has ':' and '[', which no
+// label can have.
 func dnsName(s string) bool {
 	labels := strings.Split(s, ".")
 	if len(labels) < minHostLabels {
@@ -134,7 +136,14 @@ func dnsName(s string) bool {
 		}
 	}
 
-	return true
+	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
+}
+
+// gitHost reports whether host is a Git host for which OpenTofu reads an
+// address as a shorthand and not as a registry address. It compares without
+// case, because a host name has no case.
+func gitHost(host string) bool {
+	return strings.EqualFold(host, "github.com") || strings.EqualFold(host, "bitbucket.org")
 }
 
 // tofuModule returns the module of p, when p is one module from a registry

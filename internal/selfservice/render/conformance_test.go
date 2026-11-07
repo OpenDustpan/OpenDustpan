@@ -35,16 +35,43 @@ func TestTofuConformance(t *testing.T) {
 				m.Version = s
 				in.Version.Blueprint.Program.Module = &m
 			}),
-			textFailures(base, "module source", func(in *selfservice.RenderInput, s string) {
-				m := *in.Version.Blueprint.Program.Module
-				m.Source = s
-				in.Version.Blueprint.Program.Module = &m
-			},
-				"../../../../etc/x", "../x", "./x", "/abs/x", "git::https://example.com/r.git?ref=main",
-				"git::https://example.com/r.git", "s3::https://bucket.example.com/m.zip", "gcs::https://example.com/m",
-				"http://example.com/m.zip", "https://example.com/m.zip", "github.com/x/y", "a/b", "a/b/c/d/e",
-				"ns/name/sys?ref=x", "ns/name/sys#x", "ns@x/name/sys", "ns/../sys", "host/ns/name/sys",
-				"reg.example.com/../a/b", "reg.example.com:443/ns/name/sys",
+			textFailures(
+				base,
+				"module source",
+				func(in *selfservice.RenderInput, s string) {
+					m := *in.Version.Blueprint.Program.Module
+					m.Source = s
+					in.Version.Blueprint.Program.Module = &m
+				},
+				"../../../../etc/x",
+				"../x",
+				"./x",
+				"/abs/x",
+				"git::https://example.com/r.git?ref=main",
+				"git::https://example.com/r.git",
+				"s3::https://bucket.example.com/m.zip",
+				"gcs::https://example.com/m",
+				"http://example.com/m.zip",
+				"https://example.com/m.zip",
+				"github.com/x/y",
+				"a/b",
+				"a/b/c/d/e",
+				"ns/name/sys?ref=x",
+				"ns/name/sys#x",
+				"ns@x/name/sys",
+				"ns/../sys",
+				"host/ns/name/sys",
+				"reg.example.com/../a/b",
+				"reg.example.com:443/ns/name/sys",
+				"github.com/x/y/z",
+				"GitHub.com/x/y/z",
+				"bitbucket.org/x/y/z",
+				"BITBUCKET.ORG/x/y/z",
+				"GitHub.com/x/y",
+				"127.0.0.1/x/y/z",
+				"10.0.0.1/ns/name/sys",
+				"[::1]/x/y/z",
+				"::1/x/y/z",
 			),
 		),
 	})
@@ -340,12 +367,16 @@ func pulumiFailures(otherUnit, notUnit identity.Object, base selfservice.RenderI
 			Input: variant(base, setPlatform("aws:region", `null`)),
 		},
 		{
-			Name: "encoding: noncharacter in an answer", Err: selfservice.ErrInvalid,
-			Input: variant(base, func(in *selfservice.RenderInput) { in.Document.Inputs["size"] = raw(`"a￾b"`) }),
+			Name: "encoding: noncharacter in an answer",
+			Err:  selfservice.ErrInvalid,
+			Input: variant(
+				base,
+				func(in *selfservice.RenderInput) { in.Document.Inputs["size"] = raw("\"a\xef\xbf\xbeb\"") },
+			),
 		},
 		{
 			Name: "encoding: noncharacter in a platform value", Err: selfservice.ErrInvalid,
-			Input: variant(base, setPlatform("aws:region", `"￿"`)),
+			Input: variant(base, setPlatform("aws:region", "\"\xef\xbf\xbf\"")),
 		},
 	}
 }

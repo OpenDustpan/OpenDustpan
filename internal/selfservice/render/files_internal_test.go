@@ -89,7 +89,8 @@ func TestRegistrySource(t *testing.T) {
 
 	for _, s := range []string{
 		"registry.example.com/platform/postgres/aws", "hashicorp/consul/aws", "ns_1/my-name/aws2",
-		"a-b.example.com/ns/name/sys",
+		"a-b.example.com/ns/name/sys", "gitlab.com/ns/name/sys", "githubx.com/ns/name/sys", "git.hub.com/ns/name/sys",
+		"registry.example.com/ns/name/sys",
 	} {
 		if !registrySource(s) {
 			t.Errorf("registrySource(%q) = false, want true", s)
@@ -123,6 +124,23 @@ func hostileSources() []string {
 		"github.com/x/y",
 		"github.com/x/y/z/w",
 		"bitbucket.org/x/y",
+		"github.com/x/y/z",
+		"GitHub.com/x/y/z",
+		"GITHUB.COM/x/y/z",
+		"bitbucket.org/x/y/z",
+		"BitBucket.Org/x/y/z",
+		"BITBUCKET.ORG/x/y/z",
+		"GitHub.com/x/y",
+		"BITBUCKET.ORG/x/y",
+		"10.0.0.1/x/y/z",
+		"127.0.0.1/x/y/z",
+		"1.2.3.4/ns/name/sys",
+		"0.0.0.0/ns/name/sys",
+		"2130706433/ns/name/sys",
+		"[::1]/x/y/z",
+		"::1/x/y/z",
+		"[2001:db8::1]/ns/name/sys",
+		"2001:db8::1/ns/name/sys",
 		"a/b",
 		"a/b/c/d/e",
 		"ns/name/sys?ref=x",

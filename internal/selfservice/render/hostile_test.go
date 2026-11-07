@@ -30,7 +30,8 @@ func hostileAnswers(tb testing.TB) []json.RawMessage {
 		"- x\n- y",
 		"\" # \\",
 		"---\n...\n",
-		"  \u0085\u007f\U0001f600é\x00\x1b",
+		// U+2028, U+2029, U+0085, DEL, U+1F600, a visible letter, NUL and ESC.
+		"\xe2\x80\xa8\xe2\x80\xa9\xc2\x85\x7f\xf0\x9f\x98\x80\xc3\xa9\x00\x1b",
 		"",
 		"null",
 		"~",
