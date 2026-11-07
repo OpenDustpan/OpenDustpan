@@ -35,9 +35,9 @@ type placementRuleList struct {
 }
 
 // TestPlacementRuleAPI proves the placement rule routes of a namespace through
-// the real server on each store. No CLI reads or writes a rule, and the server
-// does not apply the rules to a new stack yet, so the steps call the routes
-// only. The steps make, list, read, replace, move and delete rules, refuse a
+// the real server on each store. No CLI reads or writes a rule, so the steps call
+// the routes only. TestPlacement proves that the server applies the rules to a
+// new stack. The steps make, list, read, replace, move and delete rules, refuse a
 // rule that a hidden rule would make, and refuse a caller that holds no
 // namespace:manage-placement-rules.
 func TestPlacementRuleAPI(t *testing.T) {
@@ -352,4 +352,167 @@ func placementRuleOf(t *testing.T, body string) placementRule {
 	}
 
 	return r
+}
+
+// TestPlacement proves that the server puts a new Pulumi stack in the
+// collection of the first placement rule that matches it, and refuses a stack
+// that no rule matches, with the real Pulumi CLI on each store. The e2e
+// namespace of the harness holds a catch-all rule for the other scenarios; the
+// steps here use a namespace with no rule but their own.
+func TestPlacement(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	scenarios := []struct {
+		name string
+		run  func(ctx context.Context, t *testing.T, env *e2e.Env)
+	}{
+		{"pulumi", placementPulumiPlaces},
+		{"refused", placementPulumiRefused},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, db := range databases {
+				t.Run(string(db), func(t *testing.T) {
+					t.Parallel()
+
+					if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
+						t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+					}
+
+					ctx := t.Context()
+					env := e2e.NewEnv(ctx, t, cli, db)
+
+					checkReady(ctx, t, env)
+					sc.run(ctx, t, env)
+				})
+			}
+		})
+	}
+}
+
+// placementSetup makes the namespace of the placement steps with the
+// collections in collections.
+func placementSetup(ctx context.Context, t *testing.T, env *e2e.Env, collections ...string) {
+	t.Helper()
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"` + placementNamespace + `"}`, http.StatusCreated,
+	}, nil)
+
+	for _, name := range collections {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, placementBase + "/collections", collectionBody(t, name), http.StatusCreated,
+		}, nil)
+	}
+}
+
+// placementUnitList is the part of the unit list that the placement steps read.
+type placementUnitList struct {
+	Units []placementUnit `json:"units"`
+}
+
+// placementUnit is one unit of the unit list.
+type placementUnit struct {
+	Reference  string `json:"reference"`
+	Collection string `json:"collection"`
+}
+
+// placementCollectionOf returns the collection of the Pulumi stack stackName
+// of the e2e project in the placement namespace, and false when the namespace
+// holds no such unit.
+func placementCollectionOf(ctx context.Context, t *testing.T, env *e2e.Env, stackName string) (string, bool) {
+	t.Helper()
+
+	var doc placementUnitList
+
+	body := placementCall(ctx, t, env, principalStep{http.MethodGet, placementBase + "/units", "", http.StatusOK})
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode the unit list %s: %v", body, err)
+	}
+
+	want := "pulumi:" + placementNamespace + "/" + e2e.Project + "/" + stackName
+
+	for _, u := range doc.Units {
+		if u.Reference == want {
+			return u.Collection, true
+		}
+	}
+
+	return "", false
+}
+
+// placementPulumiPlaces makes two rules, runs "pulumi stack init" for a stack
+// of each rule, and reads the collection of each new unit from the unit list.
+func placementPulumiPlaces(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	placementSetup(ctx, t, env, "payments", "payments-prod")
+
+	for _, rule := range []string{
+		`{"tool":"pulumi","project":"` + e2e.Project + `","stack":"prod*","collection":"payments-prod"}`,
+		`{"tool":"pulumi","project":"` + e2e.Project + `","stack":"*","collection":"payments"}`,
+	} {
+		placementCall(ctx, t, env, principalStep{http.MethodPost, placementRules, rule, http.StatusCreated})
+	}
+
+	env.Step(ctx, t, step("login", contains(env.URL), "login"))
+
+	for _, c := range []struct{ stack, collection string }{
+		{"prod-eu", "payments-prod"},
+		{"dev", "payments"},
+	} {
+		env.Step(ctx, t, step("stack init "+c.stack, nil,
+			"stack", "init", placementNamespace+"/"+e2e.Project+"/"+c.stack, "--no-select"))
+
+		got, found := placementCollectionOf(ctx, t, env, c.stack)
+		if !found || got != c.collection {
+			t.Fatalf("stack %s is in collection %q (found %t), want %q", c.stack, got, found, c.collection)
+		}
+	}
+}
+
+// placementPulumiRefused runs "pulumi stack init" for a stack that no rule
+// matches. The CLI fails with the error that names the rules, and the server
+// makes no unit.
+func placementPulumiRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	placementSetup(ctx, t, env, "payments")
+
+	placementCall(ctx, t, env, principalStep{
+		http.MethodPost, placementRules,
+		`{"tool":"pulumi","project":"another-project","stack":"*","collection":"payments"}`,
+		http.StatusCreated,
+	})
+
+	env.Step(ctx, t, step("login", contains(env.URL), "login"))
+	env.Step(ctx, t, failStep("stack init with no matching rule", outputContains("no placement rule matches"),
+		"stack", "init", placementNamespace+"/"+e2e.Project+"/dev", "--no-select"))
+
+	if got, found := placementCollectionOf(ctx, t, env, "dev"); found {
+		t.Fatalf("the refused stack exists in collection %q, want no unit", got)
+	}
 }

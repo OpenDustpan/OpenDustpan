@@ -14,6 +14,13 @@ opendustpan dev
 
 The command keeps its data in a directory for each user and listens on `127.0.0.1:8080` with plain HTTP.
 It makes the namespace `dev`, so the first stack or workspace needs no other command.
+At the first start of a data directory, it also makes the collection `everything` in the namespace `dev`.
+It makes one placement rule that puts each new Pulumi stack in that collection.
+The server refuses a new Pulumi stack that no placement rule matches, so the rule lets `pulumi stack init` work at once.
+The `dev` command makes the rule as the administrator of dev, with the same audit entries as the API.
+The server itself makes no rule.
+With `--demo`, it makes the same collection and rule in each of `demo-platform` and `demo-data` when it makes that namespace.
+A later start makes no rule, also after you delete it.
 It prints a banner to stderr before the first log line:
 
 ```text
@@ -22,11 +29,13 @@ Data:     /home/alex/.local/share/opendustpan/dev
 Server:   http://127.0.0.1:8080
 Sign in:  http://localhost:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 10 minutes)
 Token:    in the file /home/alex/.local/share/opendustpan/dev/dev.token
+Rule:     in the namespace dev, a rule puts each new Pulumi stack in the collection everything. List it with: curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/dustpan/v1/namespaces/<namespace>/placement-rules; delete it with: curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/dustpan/v1/namespaces/<namespace>/placement-rules/<id>
 Settings: . /home/alex/.local/share/opendustpan/dev/dev.env
 The key-encryption key is in the data directory. A backup of this directory holds the key.
 For production, run: opendustpan serve --help
 ```
 
+The `Rule` line shows at the first start only.
 The banner never shows the administrator token.
 A signal ends the server: press Ctrl+C.
 

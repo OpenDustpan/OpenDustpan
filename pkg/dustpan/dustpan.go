@@ -2512,6 +2512,7 @@ func newPulumiHandler(
 		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 		StateGuard:              svc.stateWrite.guard,
+		Placer:                  newStackPlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)

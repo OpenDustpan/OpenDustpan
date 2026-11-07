@@ -190,6 +190,20 @@ func (t *TableWriter) Close() (PortableFile, error) {
 	}, nil
 }
 
+// integerValue converts the integer of a dialect to int64. A PostgreSQL column
+// of the type integer arrives as int32, and a column of the type bigint as
+// int64. Any other type is a coverage error.
+func integerValue(value any) (int64, error) {
+	switch n := value.(type) {
+	case int64:
+		return n, nil
+	case int32:
+		return int64(n), nil
+	default:
+		return 0, fmt.Errorf("value %T is not an integer: %w", value, ErrCoverage)
+	}
+}
+
 // portableValue converts one dialect value to its portable JSON form.
 func portableValue(column Column, value any) (any, error) {
 	if value == nil {
@@ -200,12 +214,7 @@ func portableValue(column Column, value any) (any, error) {
 	case KindText:
 		return textValue(value)
 	case KindInteger, KindTime:
-		n, ok := value.(int64)
-		if !ok {
-			return nil, fmt.Errorf("value %T is not an integer: %w", value, ErrCoverage)
-		}
-
-		return n, nil
+		return integerValue(value)
 	case KindBool:
 		return boolValue(value)
 	case KindBytes:

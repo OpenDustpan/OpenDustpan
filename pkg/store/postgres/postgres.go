@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -417,29 +418,63 @@ func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, erro
 // stack_tags table, keyed by the new stack ID. The inventory entry is written
 // in the same transaction.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
-	row := codec.ToStackRow(st)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		n, err := q.CreateStack(ctx, db.CreateStackParams(row))
-		if err != nil {
-			return fmt.Errorf("insert stack: %w", err)
-		}
+		return createStackRows(ctx, q, st)
+	})
+}
 
-		if n == 0 {
-			return stack.ErrAlreadyExists
-		}
+// CreateStackPlaced implements stack.PlacedStore. The stack, its tags, its
+// inventory entry, its membership of the collection and the audit entry of the
+// placement share one fenced transaction.
+func (s *Store) CreateStackPlaced(
+	ctx context.Context, st stack.Stack, p stack.Placement, fence namespace.Fence,
+) error {
+	e := p.Entry
 
-		if err := insertStackTags(ctx, q, row.ID, st.Tags); err != nil {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		if err := createStackRows(ctx, q, st); err != nil {
 			return err
 		}
 
-		return publishStackInventory(
-			ctx,
-			q,
-			st.Ref,
-			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
-		)
+		return setUnitCollection(ctx, q, placementMove(st, p), e)
 	})
+}
+
+// placementMove returns the move that puts the new stack st in the collection
+// of p: the stack has no collection yet.
+func placementMove(st stack.Stack, p stack.Placement) collection.Move {
+	return collection.Move{
+		Unit: collection.UnitRef{
+			Namespace: st.Ref.Namespace, Tool: "pulumi", Name: st.Ref.Project.String() + "/" + st.Ref.Stack.String(),
+		},
+		From: "", To: p.Collection, ToID: p.CollectionID, EndsLock: false,
+	}
+}
+
+// createStackRows inserts the stack, its tags and its inventory entry in the
+// transaction of q.
+func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
+	row := codec.ToStackRow(st)
+
+	n, err := q.CreateStack(ctx, db.CreateStackParams(row))
+	if err != nil {
+		return fmt.Errorf("insert stack: %w", err)
+	}
+
+	if n == 0 {
+		return stack.ErrAlreadyExists
+	}
+
+	if err := insertStackTags(ctx, q, row.ID, st.Tags); err != nil {
+		return err
+	}
+
+	return publishStackInventory(
+		ctx,
+		q,
+		st.Ref,
+		unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+	)
 }
 
 // GetStack implements stack.Store. One statement reads the stack and its

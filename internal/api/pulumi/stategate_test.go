@@ -449,6 +449,7 @@ func newHandlerWithGuard(t *testing.T, guard stategate.Guard) (*pulumi.Handler, 
 	}
 
 	return pulumi.NewHandler(pulumi.Config{
+		Placer: nil,
 		Stacks: stacks, Updates: newEnforcingUpdates(t, namespaces), Secrets: newTestSecrets(t, namespaces),
 		Namespaces: namespaces, Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), Sessions: nil,
 		SessionPolicy: nil, AddressGate: nil, Logger: slog.New(slog.DiscardHandler), BaseURL: baseurl.Resolver{},
