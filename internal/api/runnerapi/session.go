@@ -158,7 +158,7 @@ func (h *Handler) checkSession(r *http.Request, rt Route, c *call) error {
 // session request signs: the hash of the JSON body, which it reads, or for an
 // upload the value of the header, which leaves the body to the handler.
 func (h *Handler) signedHash(r *http.Request, rt Route, c *call) ([]byte, error) {
-	if rt.Path == protocol.PathSessionLog {
+	if isUpload(rt.Path) {
 		if err := h.checkRelease(r); err != nil {
 			return nil, err
 		}
