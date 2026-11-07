@@ -6,12 +6,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/localuser"
@@ -101,14 +100,16 @@ var errBoundary = errors.New("sign-in input fails the boundary check")
 
 // checkCredentials is the boundary check of the user name and the password
 // of a sign-in: a user name of 1 to session.MaxUserName bytes of UTF-8 with
-// no control character, and a password that is not empty. The checks of the
-// form in SignIn stay as a second layer.
+// no control, format or separator character, and a password that is not
+// empty. The checks of the form in SignIn stay as a second layer.
 func checkCredentials(userName, password string) error {
 	switch {
 	case userName == "" || len(userName) > session.MaxUserName || !utf8.ValidString(userName) ||
-		strings.ContainsFunc(userName, unicode.IsControl):
-		return fmt.Errorf("%w: the user name must have 1 to %d bytes of UTF-8 and no control character",
-			errBoundary, session.MaxUserName)
+		ident.HasHidden(userName):
+		return fmt.Errorf(
+			"%w: the user name must have 1 to %d bytes of UTF-8 and no control, format or separator character",
+			errBoundary, session.MaxUserName,
+		)
 	case password == "":
 		return fmt.Errorf("%w: the password is empty", errBoundary)
 	default:

@@ -677,6 +677,10 @@ func createPrincipal(
 		return failed("principals"), err
 	}
 
+	if hidden := refuseHiddenPtr("displayName", req.DisplayName); hidden != nil {
+		return failed("principals"), hidden
+	}
+
 	in := principal.Input{Subject: *req.Subject, DisplayName: "", Kind: kind}
 	if req.DisplayName != nil {
 		in.DisplayName = *req.DisplayName
@@ -742,6 +746,10 @@ func changePrincipal(
 	err := decodeChange(w, r, &req, errPrincipalChangeBody, func() bool { return req.DisplayName == nil })
 	if err != nil {
 		return failed(object), err
+	}
+
+	if hidden := refuseHiddenPtr("displayName", req.DisplayName); hidden != nil {
+		return failed(object), hidden
 	}
 
 	p, err := svc.UpdatePrincipal(r.Context(), e, r.PathValue("id"), principal.Change{DisplayName: req.DisplayName})
@@ -845,6 +853,10 @@ func createGroup(
 		return failed("groups"), errGroupBody
 	}
 
+	if hidden := refuseHiddenPtr("description", req.Description); hidden != nil {
+		return failed("groups"), hidden
+	}
+
 	in := principal.GroupInput{Name: *req.Name, Description: ""}
 	if req.Description != nil {
 		in.Description = *req.Description
@@ -900,6 +912,10 @@ func changeGroup(
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
 	if err != nil {
 		return failed(object), err
+	}
+
+	if hidden := refuseHiddenPtr("description", req.Description); hidden != nil {
+		return failed(object), hidden
 	}
 
 	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{

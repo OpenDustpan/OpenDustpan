@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -330,10 +329,11 @@ func ValidateName(s string) error {
 		return fmt.Errorf("%w: name starts or ends with white space", ErrInvalid)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: name holds the control or format character %U", ErrInvalid, c)
-		}
+	// Defense in depth: the token routes in internal/api/server refuse a
+	// hidden character in the name before they call the service. This check
+	// does not rely on them, so that a new caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: name holds the control, format or separator character %U", ErrInvalid, r)
 	}
 
 	return nil

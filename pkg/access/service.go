@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -273,7 +272,7 @@ func validateRole(r Role) error {
 		return fmt.Errorf("%w: %q is the name of a built-in role", ErrInvalid, r.Name)
 	}
 
-	if len(r.Description) > maxRoleDescriptionLength || strings.IndexFunc(r.Description, unicode.IsControl) >= 0 {
+	if len(r.Description) > maxRoleDescriptionLength || ident.HasHidden(r.Description) {
 		return fmt.Errorf("%w: role description", ErrInvalid)
 	}
 

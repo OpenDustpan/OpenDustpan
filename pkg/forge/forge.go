@@ -27,6 +27,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Sentinel errors returned by the port. An adapter wraps one of them with
@@ -979,15 +981,15 @@ func ValidateStatus(s Status) error {
 }
 
 // validateStatusText checks one line of text: at most limit bytes, valid
-// UTF-8 and no control character.
+// UTF-8 and no control, format or separator character.
 func validateStatusText(text string, limit int) error {
 	switch {
 	case len(text) > limit:
 		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, limit)
 	case !utf8.ValidString(text):
 		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
-	case strings.ContainsFunc(text, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }):
-		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	case ident.HasHidden(text):
+		return fmt.Errorf("%w: the text has a control, format or separator character", ErrInvalid)
 	}
 
 	return nil

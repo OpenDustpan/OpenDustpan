@@ -705,6 +705,8 @@ func classifyRequest(err error) (failure, bool) {
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
 	case errors.Is(err, errInvalidBody):
 		return failCoded(http.StatusBadRequest, errInvalidBody.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, errHiddenText):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errOverrideSwitchesBody):
 		return failCoded(http.StatusBadRequest, errOverrideSwitchesBody.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errCheckpointsOff):

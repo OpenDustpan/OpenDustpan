@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -138,6 +139,24 @@ type approvalRuleListBody struct {
 
 func (b approversBody) domain() gate.Approvers {
 	return gate.Approvers{Groups: nonNil(b.Groups), GroupIDs: nil, Users: nonNil(b.Users), UnitOwners: b.UnitOwners}
+}
+
+// errHiddenApprover reports an approver user name with a hidden character.
+// classifyGateConfig maps it to the answer of an invalid approver user name,
+// the same one that the gate domain gives.
+var errHiddenApprover = errors.New("invalid approver user name")
+
+// refuseHiddenUsers returns an error that wraps errHiddenApprover for an
+// approver user name with a hidden character.
+func (b approversBody) refuseHiddenUsers() error {
+	for _, u := range b.Users {
+		if r, found := ident.FirstHidden(u); found {
+			return fmt.Errorf("%w: the name holds the control, format or separator character %U",
+				errHiddenApprover, r)
+		}
+	}
+
+	return nil
 }
 
 func approversOf(a gate.Approvers) approversBody {
@@ -337,6 +356,12 @@ func (h *Handler) writeApprovalDefault(
 		return
 	}
 
+	if err := in.Approvers.refuseHiddenUsers(); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	fresh, err := freshOf(in.FreshAuthSeconds)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -528,6 +553,10 @@ func (h *Handler) writeApprovalRule(
 
 // approvalRuleFrom builds the rule of a request body.
 func approvalRuleFrom(scope gate.Scope, id gate.ID, in approvalRuleBody) (gate.ApprovalRule, error) {
+	if err := in.Approvers.refuseHiddenUsers(); err != nil {
+		return gate.ApprovalRule{}, err
+	}
+
 	fresh, err := freshOf(in.FreshAuthSeconds)
 	if err != nil {
 		return gate.ApprovalRule{}, err
@@ -635,6 +664,8 @@ func classifyGateConfig(err error) (failure, bool) {
 			errcode.GateVersionConflict), true
 	case errors.Is(err, gate.ErrFinal):
 		return failCoded(http.StatusConflict, err.Error(), errcode.GateFinal), true
+	case errors.Is(err, errHiddenApprover):
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversUserInvalid), true
 	case errors.Is(err, errApproversUnmet):
 		return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
 	case errors.Is(err, gate.ErrApprovers):

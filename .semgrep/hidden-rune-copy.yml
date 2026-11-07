@@ -1,0 +1,27 @@
+rules:
+  - id: hidden-rune-copy
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Do not write your own hidden-character check. Call ident.IsHiddenRune or
+      ident.HasHidden. A copy that names unicode.Cf, the category "Cf" or
+      unicode.Cc can miss the categories Zl and Zp (U+2028 and U+2029). The
+      rule finds these forms only: it does not find every incomplete check.
+    pattern-either:
+      - pattern: unicode.Cf
+      - pattern: unicode.Categories["Cf"]
+      - pattern: unicode.Is(unicode.Cc, ...)
+      - pattern: unicode.In($R, ..., unicode.Cc, ...)
+    paths:
+      exclude:
+        # The one definition of the check.
+        - internal/ident/
+        # CleanSubject does not refuse a hidden character. It drops each one
+        # from a subject that it reports, so it is not a copy of the refusal
+        # check.
+        - pkg/backup/devsubject.go
+        # rpcMessage changes a hidden character to a space. It does not
+        # refuse the text, so it is not a copy of the refusal check.
+        - internal/clientgen/conformance/
+        # A test may name the category to build hostile input.
+        - "*_test.go"
