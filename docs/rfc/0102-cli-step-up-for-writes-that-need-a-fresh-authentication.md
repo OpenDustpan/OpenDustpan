@@ -13,7 +13,7 @@ PM decisions of 21 October 2026 as decided, and does not reopen them. It asks
 six questions, each with options and a recommendation, and lists the points
 that stay open for the owner. The step-up credential is a new credential type,
 so the owner accepts it in an ADR before work starts. The package
-`pkg/stepup` holds the proposed ports and the names of the conformance cases,
+`internal/stepup` holds the proposed ports and the names of the conformance cases,
 with no implementation.
 
 ## Problem
@@ -543,6 +543,8 @@ level (D1).**
   authentication of the administrator. It deletes the keys and the TOTP
   factor of the person, and revokes each step-up credential of the person,
   from a key or from TOTP. A window credential never covers it (Q4). The
+  section "First key enrollment from the no-factor state" proposes the level
+  `key` for the reset of a person who holds a step-up key. The
   only route that adds a factor for another person is the admin enrollment
   of the first key (D6).
 - **Notifications.** The server sends an email to the person (the SMTP of
@@ -946,6 +948,7 @@ The errors of the step-up itself:
 | `stepup.ErrInvalid` | 422 | `mfa.step-up-invalid` |
 | `stepup.ErrLimit` | 422 | `mfa.step-up-key-limit` |
 | `stepup.ErrConflict` | 409 | `mfa.step-up-key-conflict` |
+| `stepup.ErrBootstrapClosed` (proposed) | 409 | `mfa.step-up-bootstrap-closed` |
 | `stepup.ErrChallengeLimit` | 429 | `mfa.step-up-challenge-limit` |
 | `stepup.ErrCounterRegressed` | 403 | `mfa.step-up-failed` |
 
@@ -1036,8 +1039,10 @@ So no person can add a first key (D5), and no administrator can enroll one
 level `key` cannot be reached until a key exists, and a key cannot exist
 until a person reaches the level `key`.
 
-The same state comes back when a person revokes the last key, or when an
-administrator resets the MFA of the last key holder.
+The same state can come back when the last key of the installation goes
+away: a person revokes it, an administrator resets the MFA of its holder, or
+an administrator deletes its holder. The section "The way back to the
+no-factor state" below treats this path.
 
 Two existing paths do not close the gap:
 
@@ -1060,34 +1065,114 @@ each option below enrolls one key, for one person who holds the action
 `server:enroll-step-up-key` through a stored grant, and only in the
 no-factor state. After that, D5 and D6 apply with no change.
 
-Each option is an exception to D5. "No magic" in `CLAUDE.md` asks for no
-hidden rule. So the exception has an entry in the catalog of code rules, an
-audit entry for each use, and an email to each installation administrator.
+**The rules that each option overrides.** Options A, B and D let a person
+add their own first key with no fresh authentication at the level `key`.
+That overrides two rules:
 
-The state check is the same for each option. The service checks it, and the
-store checks it again in the transaction of the add, with the lock of
-`EnrollFirstKey` (Q2):
+- D5: a key add needs a factor at the level `key`.
+- D6: the first key comes from a WebAuthn assertion in the console or from
+  an administrator at the level `key`, and an administrator never enrolls
+  their own account.
 
-- The installation holds zero step-up keys, also suspended keys.
-- The installation holds zero passkeys of a person who is not a break-glass
-  account.
+Option C overrides owner decision 4 instead (see option C). "No magic" in
+`CLAUDE.md` asks for no hidden rule. So the catalog of code rules gets one
+entry for the chosen option. The entry names each rule that the option
+overrides, the no-factor state as its only condition, and the audit entry of
+each use.
 
-A store error or an unknown value counts as "not in the no-factor state",
-and the server refuses.
+**The no-factor check is installation-wide, under one lock.** The check
+reads these counts:
+
+- the step-up keys of the installation, of each person and in each state,
+  suspended keys included.
+- the passkeys of each person who is not a break-glass account.
+
+The check passes only when both counts are zero. The service checks it at
+the issue of an offer and at the redeem. The store checks it again in the
+transaction of the add. A store error or an unknown value counts as "not in
+the no-factor state", and the server refuses.
+
+`KeyStore.EnrollFirstKey` (Q2) checks one person only, so its lock is not
+enough. Each option uses a new store method that takes the **step-up
+installation lock** first: the write lock of the database for SQLite, and
+for PostgreSQL READ COMMITTED with the advisory lock of the step-up scope of
+the installation, as ADR 245 decision 8 does for the host recovery. These
+writes also take the same lock before they change a count:
+`AddKey`, `EnrollFirstKey`, `RevokeKey`, the admin MFA reset, the delete of
+a principal who holds a key or a passkey, and the passkey add of
+`mfa.PasskeyStore`. So two redeems for two persons, a redeem and an admin
+enrollment, or a redeem and a passkey add never both see the no-factor
+state. Of two such writes, the second reads the rows of the first in a new
+statement snapshot.
+
+The ports change in "The proposed ports": `KeyStore` gets
+`EnrollBootstrapKey`, and a new port `BootstrapStore` holds the offers
+(the codes of option A and the nonces of option D). Their conformance cases:
+
+- "two bootstrap redeems for two persons at the same time: one key".
+- "a bootstrap redeem and a first-key enrollment at the same time: one key".
+- "a bootstrap redeem and a passkey add at the same time: the redeem
+  refuses or the passkey add sees one key".
+- "a bootstrap redeem refuses when a person who is not a break-glass
+  account holds a passkey".
+- "a bootstrap redeem refuses when a suspended key exists".
+- "a spent, voided or expired code refuses, and a new code voids the old
+  code".
+- "a used nonce refuses".
+- "a failed audit append stores no key and spends no code".
+
+### The way back to the no-factor state
+
+Q2 does not give the level of the admin MFA reset. If it is `any`, this
+path exists:
+
+1. An administrator does a fresh authentication with `fresh=1`, which is
+   the level `any` (D7).
+2. The administrator resets the MFA of each key holder, or deletes each key
+   holder. The installation is in the no-factor state again.
+3. The administrator gets an offer (the bootstrap admin token of option A,
+   or a signed request of option D) and enrolls their own key.
+
+The administrator then holds a factor at the level `key`, from a fresh
+authentication at the level `any`. That is what D7 forbids. The email to
+the administrators detects it after the fact. It does not stop it.
+
+**Proposal: the last-key guard.** These writes need a fresh authentication
+at the level `key` of the caller:
+
+- the admin MFA reset of a person who holds a step-up key, in any state.
+  A reset of a person who holds TOTP only stays at the level of Q2.
+- the delete of a principal who holds a step-up key.
+
+The store also refuses, under the step-up installation lock, each write
+that takes the count of step-up keys of the installation to zero, unless
+the write carries a fresh authentication at the level `key`. The holder's
+own revoke of their last key carries one (D5), so it passes. A
+deprovision by the identity provider or by SCIM disables the principal and
+revokes its credentials, and it does not delete the keys, so the keys still
+count. Test: the store refuses a reset that removes the last key with a
+fresh step at the level `any`, with the service check skipped.
+
+With the guard, only a caller at the level `key` can bring the installation
+back to the no-factor state. Such a caller can already enroll a key for each
+person through D6, so the way back gives that caller nothing new. This is
+the reason for the recommendation "no marker" in the questions below.
+Without the guard, the recommendation changes to a permanent marker.
 
 ### Benchmarks
 
-The author read the pages on 2026-11-07. Check them again at the time of the
-decision.
+The author read the pages on 2026-11-07. Check them again at the time of
+the decision.
 
 | System | How the first strong factor gets enrolled | What it shows |
 | --- | --- | --- |
-| GitHub | A security key or a passkey cannot be the first two-factor method. The person sets up a TOTP app or SMS first. Then the person adds the key. GitHub says that keys are easy to lose. It also says that they do not sync across enough devices ([configuring 2FA](https://docs.github.com/en/authentication/securing-your-account-with-two-factor-authentication-2fa/configuring-two-factor-authentication), [mandatory 2FA](https://docs.github.com/en/authentication/securing-your-account-with-two-factor-authentication-2fa/about-mandatory-two-factor-authentication)). | A weaker factor enrolls the first phishing-resistant factor. |
-| Google Workspace | An administrator who enforces 2-Step Verification sets a new-user enrollment period of 1 day to 6 months. In that period, a user signs in with a password only. In the "only security key" mode, the user cannot make backup codes. An administrator generates them, and a new set voids the old set ([deploy 2SV](https://support.google.com/a/answer/9176657), [user security settings](https://support.google.com/a/answer/2537800), [avoid lockouts](https://support.google.com/a/answer/9176805)). | A time-bounded weak window, and a one-time code from an administrator. |
-| AWS root user | The root user signs in with the email address and the password. Then the root user assigns a passkey or a security key, in the console only, never from the CLI or the API ([root passkey](https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-fido-mfa-for-root.html)). AWS asks for MFA registration within a fixed time after the first sign-in. Its pages give 14 days on one page and 35 days on another ([root MFA](https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-mfa-for-root.html), [MFA for identities](https://docs.aws.amazon.com/IAM/latest/UserGuide/gs-identities-mfa.html)). | A password-only authentication enrolls the first key, in a fixed time, in the console only. |
+| GitHub | The steps to add a security key or a passkey say that the person must already have two-factor authentication with a TOTP app or SMS. The key is an extra method ([configuring 2FA](https://docs.github.com/en/authentication/securing-your-account-with-two-factor-authentication-2fa/configuring-two-factor-authentication)). | A weaker factor comes first, then the key. |
+| Google Workspace | An administrator who enforces 2-Step Verification sets a new-user enrollment period of 1 day to 6 months. In that period, a user signs in with a password only ([deploy 2SV](https://support.google.com/a/answer/9176657)). | A time-bounded weak window. |
+| AWS root user | The root user signs in with the email address and the password. Then the root user assigns a passkey or a security key, in the console only, never from the CLI or the API ([root passkey](https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-fido-mfa-for-root.html)). The root user must register MFA within 14 days of the first sign-in attempt ([root MFA](https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-mfa-for-root.html), [MFA for identities](https://docs.aws.amazon.com/IAM/latest/UserGuide/gs-identities-mfa.html)). | A password-only authentication enrolls the first key, in a fixed time, in the console only. |
 | Okta Identity Engine | A temporary access code is a code that an administrator generates for a user. It can be optional or disabled, never required ([temporary access code](https://help.okta.com/oie/en-us/content/topics/identity-engine/authenticators/configure-temporary-access-code.htm)). Okta also gives a rule of the account management policy for the first phishing-resistant authenticator. The rule asks for two enrolled authenticators, a trusted network zone and a low risk ([first phishing-resistant enrollment](https://help.okta.com/oie/en-us/content/topics/identity-engine/policies/oamp-configure-first-pr-enrollment.htm)). | An administrator code, or weaker factors with context conditions. |
-| Microsoft Entra | The Temporary Access Pass of ADR 301 decision 14: an administrator issues a code with a fixed life time. | An administrator code. |
-| Keycloak, HashiCorp Vault | `kc.sh bootstrap-admin` and `vault operator generate-root` recover an administrator from the host (ADR 245 decision 1). | The host is the root of trust. |
+| Microsoft Entra | The Temporary Access Pass of ADR 301 decision 14: an administrator issues a code with a fixed life time ([Temporary Access Pass](https://learn.microsoft.com/en-us/entra/identity/authentication/howto-authentication-temporary-access-pass)). | An administrator code. |
+| Keycloak | `kc.sh bootstrap-admin` makes a temporary administrator from the host (ADR 245 decision 1). | The host is the root of trust. |
+| HashiCorp Vault | `vault operator generate-root` makes a root token only with a quorum of the unseal key shares or the recovery key shares. | Several holders of offline secrets, not the host. |
 
 None of these systems asks for a phishing-resistant factor to enroll the
 first phishing-resistant factor. Each one starts from a weaker proof, and
@@ -1096,8 +1181,8 @@ limits it in time, in use or by a second party.
 ### Option A. A one-time bootstrap code from the bootstrap admin token
 
 The bootstrap admin token makes an offer. The person takes the offer with a
-fresh authentication at the identity provider. This is the shape of ADR 339
-for the first administrator.
+new authentication at the identity provider that starts after the offer.
+This is the shape of ADR 339 for the first administrator.
 
 **The sequence.**
 
@@ -1111,98 +1196,114 @@ for the first administrator.
    and a `dev:` subject. The reason must have no control (Unicode Cc) or
    format (Unicode Cf) characters.
 3. The server makes a code of 32 bytes from `crypto/rand`, stores its
-   SHA-256 hash, and answers the code one time in the `201` body. One code
-   is open at a time. A new code voids the old code. The code lives 10
-   minutes and works one time.
+   SHA-256 hash and its issue time, and answers the code one time in the
+   `201` body. One code is open at a time. A new code voids the old code.
+   The code lives 10 minutes and works one time.
 4. The operator gives the code to the person through a channel that the
-   operator chooses.
-5. The person signs in to the console and does a fresh authentication at the
-   identity provider (`fresh=1`, ADR 320 decision 16). The server binds the
-   fresh step to the person of the session (ADR 320 decision 18).
-6. The console makes a `key-add` challenge (Q1) for the person. The person
+   operator chooses. The RFC cannot make that channel safe. A person who
+   reads the code on the way holds half of the proof. Step 6 makes sure that
+   this half alone is not enough. The owner decides whether the RFC names a
+   channel (question 6).
+5. The person signs in to the console and sends the code to
+   `POST /api/dustpan/v1/me/step-up-keys/bootstrap/start`. The server checks
+   the code and starts a **bootstrap fresh request**. The request records
+   the code ID, the principal ID, the sign-in ID of the session and its own
+   start time. The server keeps it for 5 minutes.
+6. The server redirects to the identity provider with the fresh request of
+   ADR 320 decision 16 (`max_age=0` for OIDC, `ForceAuthn` for SAML,
+   `renew=true` for CAS). The fresh step passes only when all of these hold:
+   - the authentication time is not before the start of the bootstrap fresh
+     request, so it is also after the issue of the code (ADR 320 decision
+     16).
+   - the assertion names the person of the session, and the sign-in ID is
+     the sign-in ID of the request (ADR 320 decision 18).
+
+   A fresh step that the session had before the request does not count, so
+   a stolen session in its fresh window cannot redeem the code. The thief
+   must also authenticate as the person at the identity provider.
+7. The console makes a `key-add` challenge (Q1) for the person. The person
    signs its text with the new key, with `ssh-keygen -Y sign` and the
    key-add namespace, and pastes the public key and the signature. This is
    the console SSH fallback of ADR 301 decision 16.
-7. The console sends `POST /api/dustpan/v1/me/step-up-keys/bootstrap` with
-   the code, the public key, the name, the `key-add` challenge ID and the
-   signature.
-8. In one store transaction, the server checks the no-factor state again,
-   spends the code, adds the key and appends the audit entries. `EnrolledBy`
-   holds the ID of the bootstrap admin principal.
+8. The console sends `POST /api/dustpan/v1/me/step-up-keys/bootstrap` with
+   the ID of the bootstrap fresh request, the code, the public key, the
+   name, the `key-add` challenge ID and the signature.
+9. `KeyStore.EnrollBootstrapKey` takes the step-up installation lock, checks
+   the no-factor state again, checks the code and the bootstrap fresh
+   request, spends both, adds the key and appends the audit entry, in one
+   transaction. `EnrolledBy` holds the ID of the bootstrap admin principal.
 
 **The authorization conditions.** All of these hold at the time of the add:
 
 - the installation is in the no-factor state.
-- the code exists, is not spent, is not expired and names the principal of
-  the session.
-- the session is a console session of that person, and its authentication
-  is fresh at the identity provider.
+- the code exists, is not spent, voided or expired, and names the principal
+  of the session.
+- the bootstrap fresh request exists, is not spent or expired, names the
+  code, the person and the sign-in ID of the session, and its fresh step
+  passed as in step 6.
+- the session is a console session of that person.
 - the person holds `server:enroll-step-up-key` through a stored grant.
 - the `key-add` signature verifies with the public key of the request, and
   the `principal` line names the person.
 
 **Why an unauthorized caller cannot use it.** The caller needs two things
-that come from two roots of trust: the bootstrap admin token, from the
-configuration of the host, and a fresh authentication of the person at the
-identity provider. Each layer stops the attack alone:
+from two roots of trust: the bootstrap admin token, from the configuration
+of the host, and a new authentication of the person at the identity
+provider after the offer. Each layer stops the attack alone, and each test
+sends the hostile input to that layer with the other layers off:
 
-1. **Check at the boundary.** A strict decoder for each body. The code is 43
-   characters of base64url, the principal ID and the challenge ID have
-   their prefixes, the key type is in the allowlist of Q2, and the reason
-   has no Cc or Cf character. The server refuses each other value and does
-   not change it. Test: a code with 42 characters, a key type `ssh-dss` and
-   a reason with U+202E each get `422`.
-2. **Encode or contain.** The code goes in a `POST` body only, never in a
-   URL. The server never logs it, stores its hash only and compares in
-   constant time. The SQL uses placeholders. The `key-add` text comes from
-   the record of the server, and its signature namespace keeps it apart from
-   each other signature. Test: a code in the query string gets `400`, and
-   the log of the issue holds no code.
-3. **Limit the effect.** One code at a time, 10 minutes, one use, one key,
-   for one person, and only in the no-factor state. A wrong code counts in
-   the factor lock of the person (ADR 301 decision 14). The key adds no
-   grant. Test: a second redeem of a spent code fails, and a redeem after a
-   key exists fails.
-4. **Authorization at the point of use.** The issue route accepts only the
-   bootstrap admin token. The redeem route accepts only a console session,
-   never an access token, also not a CLI sign-in token. It checks the
-   stored grant of the person, the fresh step of the session and the
-   principal of the code. The store checks the no-factor state and the code
-   again in the transaction. Test: the store refuses a redeem for a second
-   person while the first person holds a key, with each service check
-   skipped.
-5. **Fail closed.** An unknown state, a store error or a failed audit write
-   refuses the request. Each refusal writes an audit entry. All refusals of
-   the redeem give the same answer, `403` `mfa.step-up-failed`, so a caller
-   cannot tell a wrong code from a closed state. The audit entry holds the
-   real reason. Test: a store that returns an unknown error gives `403` and
-   one audit entry.
+| Layer | The check | Tests |
+| --- | --- | --- |
+| 1. Check at the boundary | A strict decoder for each body. The code is 43 characters of base64url. The principal ID, the challenge ID and the fresh request ID have their prefixes. The key type is in the allowlist of Q2. The reason has no Cc or Cf character. The server refuses each other value and does not change it. | A code of 42 characters, a key type `ssh-dss`, a reason with U+202E and an unknown field each get `422`. |
+| 2. Encode or contain | The code goes in a `POST` body only, never in a URL. The server never logs it, stores its hash only and compares the hashes with `crypto/subtle`. The SQL uses placeholders. The `key-add` text comes from the record of the server, and its signature namespace keeps it apart from each other signature. | A code in the query string gets `400`. The captured log of an issue and of a redeem holds no code. An AST test fails when the compare of the code uses an operator other than `subtle.ConstantTimeCompare`. A reason and a key name with `'`, `;` and `--` store and read back unchanged. |
+| 3. Limit the effect | One code at a time, 10 minutes, one use, one key, for one person, and only in the no-factor state. A bootstrap fresh request lives 5 minutes and works one time. A wrong code counts in the factor lock of the person (ADR 301 decision 14). The key adds no grant. | A second redeem of a spent code fails. A redeem after a key exists fails. A code after 10 minutes on a fake clock fails. A new code voids the old code. The tenth wrong code locks the factor, and the eleventh gets `mfa.factor-locked`. |
+| 4. Authorization at the point of use | The issue route accepts only the bootstrap admin token. The redeem routes accept only a console session, never an access token. They check the stored grant, the bootstrap fresh request and its sign-in ID, and the principal of the code. The store checks the no-factor state, the code and the fresh request again in the transaction. | Each with the service checks off: a CLI sign-in token gets `403`. A job token gets `403`. A fresh step that started before the code issue gets `403`. A fresh step of another sign-in ID of the same person gets `403`. The code of person X in a session of person Y gets `403`. A person with no stored grant gets `403`. The store refuses a redeem while a key exists. |
+| 5. Fail closed | An unknown state, a store error or a failed audit write refuses the request and stores nothing. Each refusal writes an audit entry. All refusals of the redeem give the same answer, `403` `mfa.step-up-failed`, so a caller cannot tell a wrong code from a closed state. The audit entry holds the real reason. | A store that returns an unknown error gives `403` and one refusal entry. A failed audit append gives `403`, stores no key and does not spend the code. The bodies of a wrong code, a spent code and a closed state are byte for byte the same. |
 
 **The audit records.** In the scope `audit.ServerScope`:
 
 - `step-up.bootstrap-code-issued`: the bootstrap admin principal, the
-  person, the reason, the code ID and its expiry. Never the code.
+  person, the reason, the code ID, its issue time and its expiry. Never the
+  code.
 - `step-up.bootstrap-code-voided`: when a new code voids an open code, and
   at the expiry.
+- `step-up.bootstrap-fresh-started`: the code ID, the person and the
+  sign-in ID.
 - `step-up.bootstrap-key-enrolled`, of the kind `security`: the person, the
-  session ID, the fresh kind and its time, the code ID, the key ID and its
-  fingerprint. It is in the same transaction as the add.
+  sign-in ID, the fresh request ID, the fresh kind and its time, the code
+  ID, the key ID and its fingerprint. It is in the same transaction as the
+  add.
 - `step-up.bootstrap-refused`: each refusal, with the real reason.
 
 The server sends the email of Q2 to the person and to each installation
-administrator.
+administrator. The email is a detective control only. With no SMTP sender
+(ADR 301 decision 15 allows none), question 9 applies.
 
-**How it fits the level `key`.** The code and the fresh step together take
-the place of the factor at the level `key`, for one add only. Neither one
-alone adds a key. The code is not a factor, and it never passes a step-up.
-After the add, the person has a factor at the level `key`, and D5 and D6
-apply to each later add, with no exception.
+**How it fits the level `key`.** The code and the new authentication
+together take the place of the factor at the level `key`, for one add only.
+Neither one alone adds a key. The code is not a factor, and it never passes
+a step-up. After the add, the person has a factor at the level `key`, and D5
+and D6 apply to each later add, with no exception.
+
+**What option A takes from ADR 339.** It uses the same offer and redeem
+shape, the same bootstrap admin token, the same form of code (32 bytes, a
+hash, a constant-time compare, 10 minutes, one use) and the same refusal of
+a break-glass person, a temporary administrator, a service and a `dev:`
+subject. It has its own code store and does not use the marker of ADR 339.
+ADR 339 leaves open two points that option A also depends on:
+
+- whether the person needs a second factor besides the fresh
+  authentication. Option A has no second factor: the fresh step and the
+  code are the proof. If the owner asks for one in ADR 339, the same answer
+  applies here, and option A then needs a factor that the no-factor state
+  does not have.
+- whether the redeem ends the bootstrap admin token (ADR 53 decision 9).
+  Question 8 asks it for option A.
 
 **Costs.**
 
-- ADR 53 decision 9 asks the operator to retire the bootstrap admin token.
-  After that, the operator sets a token again (ADR 57 mode 1) to use this
-  path.
+- After the operator retires the bootstrap admin token (ADR 53 decision 9),
+  the operator sets a token again to use this path.
 - The hosted service has no host-side token for a tenant. It needs the
   support path of ADR 70 decision 28.
 - The trust stays with the host and the identity provider. A person who
@@ -1235,40 +1336,41 @@ only.
    level `key` for a first key. It is empty by default. CAS has no such
    claim, so this option does not exist for CAS.
 2. The person starts the add in the console. The server checks the
-   no-factor state and the stored grant of the person.
+   no-factor state and the stored grant of the person, and starts a fresh
+   request bound to the person and the sign-in ID, as in option A.
 3. The server redirects to the identity provider with `max_age=0` and
    `acr_values`, and asks for `acr` as an essential claim (OpenID Connect
    Core 1.0, sections 3.1.2.1 and 5.5.1.1). For SAML, it sends
    `ForceAuthn="true"` and a `RequestedAuthnContext` with the comparison
    `exact`.
 4. The server checks the answer: `auth_time` is not before the start of the
-   request (ADR 320 decision 16), the subject is the person of the session
-   (ADR 320 decision 18), and `acr` is in the list. It refuses a missing
-   claim.
-5. The person signs the `key-add` challenge and the console sends the add.
-   One transaction checks the no-factor state again, adds the key and
-   appends the audit entry. The step works one time: the transaction stores
-   the use of the claim, with the ID token `jti` or the SAML assertion
-   ID.
+   fresh request (ADR 320 decision 16), the subject is the person of the
+   session (ADR 320 decision 18), and `acr` is in the list. It refuses a
+   missing claim.
+5. The answer must have an ID: the `jti` of the ID token, or the `ID` of the
+   SAML assertion. `jti` is optional in OIDC, and some providers do not send
+   it. The server refuses an ID token with no `jti`, so this option does not
+   work with such a provider.
+6. The person signs the `key-add` challenge and the console sends the add.
+   `KeyStore.EnrollBootstrapKey` takes the step-up installation lock, checks
+   the no-factor state again, inserts the token ID with a unique key in
+   `BootstrapStore`, adds the key and appends the audit entry, in one
+   transaction.
 
 **The authorization conditions.** The no-factor state, a non-empty list on
-the provider, the stored grant of the person, a fresh authentication with an
-accepted claim, and a valid `key-add` proof.
+the provider, the stored grant of the person, a fresh request of the person
+and the sign-in, a new authentication after its start with an accepted
+claim and an ID, and a valid `key-add` proof.
 
 **Why an unauthorized caller cannot use it.**
 
-1. **Check at the boundary.** The server accepts an `acr` value only from
-   the list, compared byte for byte, and refuses an empty list.
-2. **Encode or contain.** The claim comes only from a signed ID token or a
-   signed assertion that the method port verified. The server never reads
-   it from the request of the browser.
-3. **Limit the effect.** One key, one time, only in the no-factor state. The
-   claim is spent in the transaction of the add.
-4. **Authorization at the point of use.** The route checks the stored grant,
-   the person of the fresh step and the claim. The store checks the state
-   again.
-5. **Fail closed.** A missing claim, an unknown value, a token with no
-   `auth_time` or a store error refuses, with an audit entry.
+| Layer | The check | Tests |
+| --- | --- | --- |
+| 1. Check at the boundary | The server accepts an `acr` value only from the list, compared byte for byte, and refuses an empty list. | A value that differs only in letter case gets `403`. An empty list refuses each answer. |
+| 2. Encode or contain | The claim comes only from a signed ID token or a signed assertion that the method port verified. The server never reads it from the request of the browser. | A callback with an `acr` query value and a token with no `acr` gets `403`. A token with a bad signature gets `403`. |
+| 3. Limit the effect | One key, one time, only in the no-factor state. The token ID is a unique-key insert in the transaction of the add. | The same `jti` twice: the second gets `403`. An ID token with no `jti` gets `403`. A SAML assertion with no `ID` gets `403`. A redeem while a key exists gets `403`. |
+| 4. Authorization at the point of use | The route checks the stored grant, the fresh request, its sign-in ID and the claim. The store checks the state again. | Each with the service checks off: an `auth_time` before the start gets `403`. The subject of another person gets `403`. A person with no stored grant gets `403`. The store refuses while a key exists. |
+| 5. Fail closed | A missing claim, an unknown value, a token with no `auth_time`, a store error or a failed audit write refuses, with an audit entry. | A token with no `auth_time` gets `403`. A store error gives `403` and one entry. A failed audit append stores no key and inserts no token ID. |
 
 **The audit records.** `step-up.bootstrap-key-enrolled`, of the kind
 `security`, with the provider ID, the `acr` value, the `auth_time`, the
@@ -1286,8 +1388,9 @@ and a fresh step can set the list to a value that the provider always sends,
 and then add a key. In that case, option B gives no more than "`fresh=1`
 adds the first key".
 
-**Costs.** It does not work for CAS, a plain OAuth 2.0 provider or a
-trusted header. Each provider needs its own list. The owner reopens D7.
+**Costs.** It does not work for CAS, a plain OAuth 2.0 provider, a trusted
+header, or an OIDC provider that sends no `jti`. Each provider needs its own
+list. The owner reopens D7.
 
 ### Option C. A temporary administrator enrolls the first factor
 
@@ -1317,7 +1420,8 @@ the boundary checks of the reason (decision 17), the one transaction
 (decision 7), the expiry (decisions 10 and 13), the store check of the
 principal (decisions 8 and 9) and the fail-closed off switch (decision 5).
 The admin enrollment adds the layers of Q2: the store refuses a person who
-holds a key, and the own account.
+holds a key, and the own account. This RFC does not recommend option C, so
+it gives no test table for it.
 
 **The audit records.** The four entries of the create (ADR 245 decision 7),
 the entry of the admin enrollment of Q2, and the expiry entry. The review of
@@ -1335,37 +1439,50 @@ Two forms are possible:
 
 - **D1. The recovery codes of a person** (ADR 46 decision 4). These do not
   fit. A person of OIDC, SAML or CAS has no built-in MFA and so no recovery
-  codes. A recovery code never passes a fresh step and never adds a factor
-  at the level `key` (Q5, ADR 301 decision 9).
+  codes. Where a person has them, ADR 301 decision 9 says that a recovery
+  code lets the person enroll one replacement factor, one time, and never
+  passes a fresh step. A key add needs a fresh authentication at the level
+  `key` (D5), and Q5 says that a sign-in with a recovery code gives no
+  fresh authentication for a factor add.
 - **D2. A request that the offline operator key signs.** This is the key of
   ADR 57 mode 2 and ADR 295. The rest of this option is D2.
 
 **The sequence.**
 
-1. The person makes the `key-add` challenge in the console after a fresh
-   step at the identity provider, and signs it with the new key. The
-   console shows a request text: the origin, the principal ID, the key
-   fingerprint, the challenge ID, a nonce of 32 bytes and a not-after time
-   of at most 10 minutes.
-2. The operator signs the request text offline with the operator key.
-3. The person sends the request, the operator signature and the `key-add`
+1. The person signs in to the console and starts a fresh request bound to
+   the person and the sign-in ID, as in option A. The fresh step at the
+   identity provider must start after the fresh request.
+2. The person makes the `key-add` challenge and signs it with the new key.
+   The console shows a request text: the origin, the principal ID, the key
+   fingerprint, the challenge ID, the fresh request ID, a nonce of 32 bytes
+   and a not-after time of at most 10 minutes.
+3. The operator signs the request text offline with the operator key.
+4. The person sends the request, the operator signature and the `key-add`
    signature to `POST /api/dustpan/v1/me/step-up-keys/bootstrap` in the
    same console session.
-4. One transaction checks the no-factor state, inserts the nonce with a
-   unique key (ADR 295 decision 3), adds the key and appends the audit
-   entry.
+5. `KeyStore.EnrollBootstrapKey` takes the step-up installation lock, checks
+   the no-factor state, inserts the nonce with a unique key in
+   `BootstrapStore` (as ADR 295 decision 3), adds the key and appends the
+   audit entry, in one transaction.
 
 **The authorization conditions.** The stored recovery mode is
 `signed-request`, the stored operator key verifies the request, the nonce is
-new, the time is before the not-after time, the session is fresh and is of
-the person that the request names, and the no-factor state holds.
+new, the time is before the not-after time, the fresh request is of the
+person and the sign-in that the request names, and the no-factor state
+holds.
 
-**Why an unauthorized caller cannot use it.** The layers of ADR 295 apply:
-the unique nonce (decision 3), the shared rate limit (decision 4), one
-answer for each refusal (decision 5) and fail closed (decision 10). The
-request binds the person, the key fingerprint and the challenge, so a
-signature for one person or one key never adds another. The fresh step of
-the person is a second root of trust, as in option A.
+**Why an unauthorized caller cannot use it.** The request binds the person,
+the key fingerprint, the challenge and the fresh request, so a signature for
+one person or one key never adds another. The fresh step of the person is a
+second root of trust, as in option A.
+
+| Layer | The check | Tests |
+| --- | --- | --- |
+| 1. Check at the boundary | A strict decoder. The nonce is 32 bytes, the not-after time is at most 10 minutes after the server time, and each ID has its prefix. | A nonce of 31 bytes gets `422`. A not-after time 11 minutes ahead gets `422`. |
+| 2. Encode or contain | The server builds the request text from its own fields, one value on each line. It verifies the operator signature with the stored key only, never with a key in the request. | A field with an LF gets `422`. A request signed by another key, with that key in the request, gets `403`. |
+| 3. Limit the effect | One key, one nonce, one use, only in the no-factor state. The rate limit of ADR 295 decision 4 applies. | The same nonce twice: the second gets `403`. A request after its not-after time gets `403`. One request above the rate limit from one /64 gets `403`. |
+| 4. Authorization at the point of use | The route checks the stored mode, the person and the sign-in of the session against the request, and the key fingerprint against the `key-add` proof. The store checks the state again. | Each with the service checks off: a session of another person gets `403`. A mode other than `signed-request` gets `403`. A fingerprint that differs from the proof gets `403`. The store refuses while a key exists. |
+| 5. Fail closed | Each refusal gives one answer (ADR 295 decision 5) and writes an audit entry. A store error or a failed audit write stores nothing. | The bodies of a bad signature, a used nonce and a wrong mode are byte for byte the same. A failed audit append stores no key and inserts no nonce. |
 
 **The audit records.** As option A, with the fingerprint of the operator
 key and the nonce in place of the code ID.
@@ -1379,27 +1496,52 @@ the store keeps the recovery mode and the key. Mode 1 is the default
 of the operator key alone adds no key, because the fresh step of the person
 is also needed.
 
+### The recovery mode `none`
+
+ADR 57 decision 1 calls mode 3 "no break-glass", with a restore from a
+backup. ADR 245 decision 2 refuses the host command in mode 3, because the
+operator chose no break-glass and the command must not override that
+choice. ADR 57 decision 4 says that the token of mode 1 works for one
+recovery. The Consequences of ADR 57 say that mode 3 still needs the
+bootstrap admin token on the empty installation that receives the backup.
+
+A first-key offer is not a recovery, and it does not make an administrator.
+But it is a path from the host configuration to the level `key`, outside the
+factors of the persons. An operator who chose mode 3 chose no such path.
+
+**Proposal.** An explicit mode 3 closes options A and D. The issue route of
+option A refuses with `409` `mfa.step-up-bootstrap-closed` and names the
+mode. An installation in mode 3 with SSO and with break-glass off then has
+no way to the level `key`. The setup and the console say so, and the user
+guide tells such an operator to keep a break-glass account or to choose
+another mode. A first-key offer does not use up the mode 1 token for a
+recovery, so it does not count against ADR 57 decision 4. Question 8 asks
+whether it retires the token.
+
 ### Comparison
 
 | | A. Bootstrap code | B. SSO `acr` | C. Temporary administrator | D. Signed request |
 | --- | --- | --- | --- | --- |
 | Roots of trust | host configuration and identity provider | identity provider only | host shell only | offline key and identity provider |
-| Works for OIDC, SAML, CAS | yes | OIDC and SAML only | yes | yes |
+| Works for OIDC, SAML, CAS | yes | OIDC with `jti` and SAML only | yes | yes |
 | Works with no shell (container, Helm) | yes | yes | no | yes |
-| Changes an owner or PM decision | no, an exception to D5 | reopens D7 | breaks owner decision 4 | no, an exception to D5 |
+| Overrides | D5 and D6 | D5, D6, and reopens D7 | owner decision 4 | D5 and D6 |
 | A break-glass use | no | no | yes | no |
+| Works in mode 3 | no (proposal) | yes | no | no |
 | Available today | after the route ships | after the claim check ships | the host command exists | after ADR 295 decision 8 |
-| Benchmark | Google backup codes, Okta code, Entra pass | Okta context rule, AWS password-only first key | Keycloak, Vault | Vault, ADR 295 |
+| Benchmark | Okta code, Entra pass | Okta context rule, AWS password-only first key | Keycloak | Vault quorum, ADR 295 |
 
 ### Recommendation
 
 Option A, in the form of the route of ADR 339, with option D as a second
-source of the offer when the installation uses mode 2.
+source of the offer when the installation uses mode 2. Both need the
+last-key guard and the installation-wide lock above.
 
 - Option A keeps D7, owner decision 4 and the break-glass rules. Its
-  exception to D5 is narrow: one key, one person with the stored grant, in
-  the no-factor state, with two roots of trust that an attacker must both
-  hold.
+  override of D5 and D6 is narrow: one key, one person with the stored
+  grant, in the no-factor state, with two roots of trust that an attacker
+  must both hold. The new authentication must start after the offer, so a
+  stolen session and an intercepted code are not enough.
 - Option B makes the level `key` depend on a value that an administrator at
   the level `any` can change, so it adds no strength over `fresh=1`. It also
   reopens a PM decision.
@@ -1409,8 +1551,8 @@ source of the offer when the installation uses mode 2.
   configuration, but only in mode 2.
 
 The benchmarks support this: none of them asks for a strong factor to
-enroll the first strong factor, and Google, Okta and Entra use a one-time
-code from an administrator.
+enroll the first strong factor, and Okta and Entra use a one-time code from
+an administrator.
 
 ### Questions for the owner
 
@@ -1420,24 +1562,41 @@ code from an administrator.
    later loss of each key goes through recovery (ADR 57, ADR 245), and
    recovery has no path to the level `key` either. With no marker, the path
    opens each time the installation is in the no-factor state again.
-   Recommendation: no marker, because the path still needs the bootstrap
-   admin token or the operator key, and each use writes an audit entry and
-   emails each administrator.
+   Recommendation: no marker, but only with the last-key guard of question
+   5. Without the guard, a marker.
 3. **Do break-glass passkeys count?** The proposed no-factor state ignores
    the passkeys of break-glass accounts, so that a routine first setup needs
    no break-glass use. The other choice counts them, and then an
    installation with break-glass on uses a break-glass sign-in for its
    first key. Recommendation: ignore them.
-4. **Does the recovery mode `none` close option A?** Mode 3 means "no
-   break-glass". A first-key bootstrap is not a recovery, but it uses the
-   same bootstrap admin token. Recommendation: mode 3 does not close it,
-   because the first setup needs the token in each mode (ADR 57,
-   "Consequences").
-5. **Does option A also replace the break-glass path of the default
-   configuration?** With break-glass on, D6 already works through a
-   break-glass sign-in. Recommendation: offer option A in each installation
-   in the no-factor state, so that the first setup never needs a
-   break-glass use.
+4. **Does the recovery mode `none` close options A and D?**
+   Recommendation: yes, as in "The recovery mode `none`".
+5. **The level of the admin MFA reset.** Recommendation: the level `key` for
+   the reset of a person who holds a step-up key, and for the delete of
+   such a principal, with the store guard of "The way back to the no-factor
+   state". The level of Q2 stays for a person with TOTP only.
+6. **The delivery channel of the code.** The RFC leaves the channel to the
+   operator, and the new authentication after the offer makes an
+   intercepted code alone useless. Should the RFC also name a channel, for
+   example the code in the console of the person after a sign-in, never in
+   a message? Recommendation: leave the channel to the operator, and state
+   the risk in the user guide.
+7. **Should option A wait for a second factor?** ADR 339 leaves open
+   whether the first administrator needs a second factor besides the fresh
+   authentication. Recommendation: decide both together, and keep option A
+   with no second factor, because the no-factor state has none.
+8. **Does a redeem retire the bootstrap admin token?** ADR 339 leaves this
+   open for its own redeem (ADR 53 decision 9). Recommendation: no. The
+   console asks the operator to retire it, as ADR 53 decision 9 says, and
+   the audit entry of each issue shows each use.
+9. **What happens with no SMTP sender?** The email to the administrators is
+   a stated control, and ADR 301 decision 15 allows an installation with no
+   SMTP sender. The options: refuse the issue of a code (fail closed), or
+   allow it with a console banner for each administrator and an entry in
+   the admin access report (ADR 70 decision 29). Recommendation: allow it
+   with the banner and the report entry. The email detects only and stops
+   nothing, and the audit entry is the record. The answer of the issue
+   route says that no email goes out.
 
 ## Security layers (ADR 250)
 
@@ -1450,21 +1609,25 @@ code from an administrator.
 | 5. Fail closed | An unknown factor, an unknown level, a store error or a missing setting refuses, and writes a failure entry to the audit log. |
 
 Each step gets its own test, as `CLAUDE.md` says. The conformance case names
-in `pkg/stepup/stepuptest` hold the store part and the verifier part of them.
+in `internal/stepup/stepuptest` hold the store part and the verifier part of them.
 
 ## The proposed ports
 
-`pkg/stepup` holds the domain types, the sentinel errors and five ports. Each
-port has a conformance suite in `pkg/stepup/stepuptest`. The suites hold the
+`internal/stepup` holds the domain types, the sentinel errors and five ports.
+The section "First key enrollment from the no-factor state" proposes a
+sixth port, `BootstrapStore`, and the method `KeyStore.EnrollBootstrapKey`.
+They are not in the package yet. Each
+port has a conformance suite in `internal/stepup/stepuptest`. The suites hold the
 case names only, and each case skips until an adapter exists.
 
 | Port | Methods | Errors |
 | --- | --- | --- |
-| `KeyStore` | `AddKey`, `EnrollFirstKey`, `Keys`, `Key`, `RevokeKey` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict` |
+| `KeyStore` | `AddKey`, `EnrollFirstKey`, `EnrollBootstrapKey` (proposed), `Keys`, `Key`, `RevokeKey` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict`, `ErrBootstrapClosed` (proposed) |
 | `ChallengeStore` | `CreateChallenge`, `Challenge`, `AcceptChallenge`, `CompleteChallenge`, `RecordFailure` | `ErrNotFound`, `ErrInvalid`, `ErrExpired`, `ErrUsed`, `ErrChallengeLimit`, `ErrFactorRefused`, `ErrCounterRegressed` |
 | `CredentialStore` | `UseCredential`, `RevokeCredentialsOfKey`, `RevokeCredentialsOfTOTP`, `RevokeCredentialsOfPerson` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrMismatch`, `ErrFactorRefused` |
 | `TOTPStore` | `EnrollTOTP`, `ConfirmTOTP`, `TOTP`, `BeginTOTPAttempt`, `AcceptStep`, `ResetTOTP` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrLocked`, `ErrDisabled` |
 | `Verifier` | `Verify` | `ErrBadAnswer`, `ErrInvalid` |
+| `BootstrapStore` (proposed) | `IssueCode`, `VoidCode`, `Code`, `StartFresh`, `InsertOfferID` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrBootstrapClosed` |
 
 **Atomicity.** `CompleteChallenge` does the whole answer in one transaction,
 in this order: it checks the state of the challenge, then, for a key answer,
@@ -1481,7 +1644,9 @@ saves no credential, so a cloned key never gets one. No separate counter
 method exists. `RevokeKey`, `ResetTOTP` and `ConfirmTOTP` revoke the
 credentials and append their entry in the same transaction.
 `EnrollFirstKey` checks that the person holds no key in the same transaction
-as the add. `UseCredential` uses the credential up in its own transaction
+as the add. `EnrollBootstrapKey` takes the step-up installation lock, checks
+the no-factor state of the whole installation, spends the code or inserts
+the offer ID, adds the key and appends its entry, in one transaction. `UseCredential` uses the credential up in its own transaction
 before the write (Q4).
 
 ## Proposed terms
@@ -1502,6 +1667,14 @@ The terms go to `GLOSSARY.md` with the ADR.
   same OpenPGP key.
 - **Step-up factor level**: `any` or `key`, the weakest factor that a
   namespace or the installation accepts for a step-up.
+- **No-factor state**: the state of an installation in which no person holds
+  a step-up key, in any state, and no person who is not a break-glass
+  account holds a passkey. No person can reach the level `key` in it.
+- **Step-up bootstrap code**: a one-time code that the bootstrap admin token
+  issues for one person in the no-factor state. With a new authentication of
+  the person, it adds one first step-up key. It is not a factor. Avoid
+  "enrollment code", which names the code of an administrator for a person
+  of a plain OAuth 2.0 provider or a trusted header.
 
 ## Open points for the owner
 
