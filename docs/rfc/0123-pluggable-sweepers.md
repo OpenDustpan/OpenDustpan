@@ -36,8 +36,9 @@ proposes:
    plugin code. The repository needs its own ADR, because ADR 343 decision 6
    gives no other component a repository.
 3. **On the runner**, the launcher fetches a sweep plugin from the server by
-   digest, checks its signature against keys pinned in the runner
-   configuration, and runs it in the sandbox of the pool. The job proxy
+   digest, checks that the bytes are the admitted bytes, and runs it in the
+   sandbox of the pool. Whether a release may be admitted is the
+   administrator's policy over provenance facts (ADR 351). The job proxy
    holds a short-lived read-only credential whose token binds the target
    and the plugin. What else the host can reach, for example a write
    identity, is the operator's responsibility (owner, 2026-11-07). The server treats the report as
@@ -107,11 +108,12 @@ proposes:
 | ADR 327, ADR 330, RFC 16 | The job proxy: one process next to each job, the only exit of the sandbox, proxy rules as plain data, and credentials that only the proxy holds (way A ends TLS and adds the credential). RFC 16 puts AWS Signature Version 4 out of scope. | A sweep plugin runs behind the job proxy. Option D must treat AWS apart. |
 | RFC 93, ADR 269, ADR 349 | The vetted supply chain; private providers are uploaded as the archive set (zip files, `SHA256SUMS`, its signature); the OpenPGP library is allowed in the server registry. | A sweep plugin release can reuse the archive set and its check. |
 | ADR 204 | OpenDustpan is an OIDC issuer for profiles. Whether a sweep gets a token stays open. | Option D3. |
+| ADR 351 (PR #2587, open) | OpenDustpan computes provenance signals as facts, and the administrator writes the policy over them. Integrity (the admitted bytes, hashes, size limits) is code. Decision 6 names the sweep plugins of this RFC. | The signature of a plugin is a fact, not a rule (Option C). |
 | ADR 250 | Defense in depth for every input from outside the process. | Section "Security". |
 | ADR 347 | Warn, do not block, for choices that the operator owns. Security controls keep their own rules. | The signature check and the sandbox are security controls. |
 
 
-ADR 343 and ADR 347 are in pull request #2562, which is open on the day of
+ADR 351 is in pull request #2587, open too. ADR 343 and ADR 347 are in pull request #2562, which is open on the day of
 this RFC. This RFC reads them as the owner's decisions of 7 November 2026. If
 their text changes before the merge, this RFC changes with them.
 
@@ -258,8 +260,10 @@ release with a `SHA256SUMS` file and its OpenPGP signature. OpenTofu skips
 the check when the registry has no key, unless
 `OPENTOFU_ENFORCE_GPG_VALIDATION=true`. Steampipe documents no signature
 check. CloudQuery checks only a SHA-256 from its hub, and continues with a
-warning when the hub sends none. Source: the documentation pages of each. Our
-version is the stronger one: no check, no run (section "Security").
+warning when the hub sends none. Source: the documentation pages of each. In
+OpenDustpan the signature result is a provenance fact that the
+administrator's policy reads; the check that the bytes are the admitted
+bytes is fixed in code (Option C, ADR 351).
 
 The magic cookie of `go-plugin` "is not a security measure" (`server.go`).
 `SecureConfig` of `go-plugin` hashes the file by path and runs it later, so a
@@ -379,59 +383,77 @@ and 176, not part of this RFC.
 
 ### Option C. Distribution and trust
 
-- **C1. The archive set, admitted into the server and pinned on the runner
-  (recommended).** A sweep plugin release is the archive set of ADR 269: one
-  zip for each operating system and architecture, `SHA256SUMS`, and its
-  OpenPGP signature `SHA256SUMS.sig`. The zip holds the binary and the
-  manifest.
-  - **The archive.** At most 256 MiB compressed and 1 GiB unpacked, at most
-    64 files, regular files only: no symbolic link, no hard link, no device,
-    no absolute path, no `..` element, no name twice. The server and the
-    launcher each refuse an archive that breaks a rule, and do not repair
-    it.
-  - **Admission.** An operator admits a release into the installation, from
-    a file upload or from the release page of the project. The server checks
-    the hashes and the signature with the code of `pkg/registry/pgpverify`
-    (ADR 349), against the keys that the installation trusts for that
-    plugin name, and stores the archives by digest. A namespace administrator
-    then names an admitted release in a sweep target.
-  - **The runner has its own trust.** The coordinator configuration of a
-    pool pins its own keys, each bound to the plugin names that it may sign,
-    and its own list of revoked digests and keys. The server does not serve
-    this configuration. The launcher gets the archive from the server by
-    digest, checks the SHA-256, the signature against the pinned keys and
-    the names, and the two revocation lists (its own and the one that the
-    claim carries). So a compromised server cannot make the runner start a
-    binary that no pinned key signed for that name. A compromised server can
-    hold back its own revocation list; the runner list still holds.
-  - **A key signs names, not everything.** Each trusted key, on the server
-    and on the runner, has a list of name patterns, for example
-    `opendustpan/*` for the project key and `acme/*` for a key of a team. A
-    key cannot sign `opendustpan/aws-resource-explorer` unless its patterns
-    allow it.
-  - **Revocation.** A revoke of a release, as ADR 269 decision 11, or of a
-    key. The server refuses a revoked release at admission, at a change of a
-    target and when it makes a claim. The launcher refuses it at the start.
-    An audit entry records each revoke.
-  - **Where the keys belong.** ADR 269 decision 9 keeps keys for each
+- **C1. The archive set: fixed integrity, and provenance as facts with a
+  policy that the administrator writes (recommended).** This follows ADR 351
+  (in PR #2587, open on the day of this RFC), whose decision 6 names the
+  sweep plugins of this RFC. A sweep plugin release is the archive set of
+  ADR 269: one zip for each operating system and architecture, `SHA256SUMS`,
+  and its OpenPGP signature `SHA256SUMS.sig`. The zip holds the binary and
+  the manifest.
+  - **Integrity is code, and no administrator can turn it off** (ADR 351
+    decision 5):
+    - **The archive.** At most 256 MiB compressed and 1 GiB unpacked, at
+      most 64 files, regular files only: no symbolic link, no hard link, no
+      device, no absolute path, no `..` element, no name twice. The server
+      and the launcher each refuse an archive that breaks a rule, and do not
+      repair it.
+    - **Only the admitted bytes.** The server stores the archives of an
+      admitted release by digest and serves only those bytes. The claim
+      names the digest. The launcher checks the SHA-256 of what it got
+      against the claim and against `SHA256SUMS`, with no trust in the
+      server's check, and refuses any difference.
+    - **Revocation.** A revoke of a release, as ADR 269 decision 11. The
+      server refuses a revoked release at a change of a target and when it
+      makes a claim, and the claim carries the revocation list. The launcher
+      also reads a revocation list from the coordinator configuration, which
+      the server does not serve, so a compromised server that holds back its
+      list does not stop a revoke that the operator of the runner made. An
+      audit entry records each revoke.
+    - **The start.** The launcher starts the checked binary from a file
+      descriptor that it opened for the check (`execveat` with
+      `AT_EMPTY_PATH`), not by a path. For `firecracker`, the launcher runs
+      inside the microVM, so it fetches and checks the archive inside the
+      microVM. The launcher runs only on Linux (ADR 130), so no other system
+      is in scope.
+  - **Provenance is facts, and the administrator writes the policy**
+    (ADR 351 decisions 1 to 4):
+    - At admission the server computes the signals as facts: the signature
+      result (`verified`, `unsigned`, `unknown-key` or `failed`, with the
+      code of `pkg/registry/pgpverify`, ADR 349), the key ID and its
+      fingerprint, whether the key changed since an earlier release of the
+      same name, the publisher, the plugin name, the manifest (kinds, types,
+      egress hosts, read permissions), and the age of the release.
+    - A gate over those facts (ADR 222 to ADR 230), at the installation or
+      the namespace, decides the admission. Each allow and each deny names
+      the policy and the facts that it read.
+    - **Example policies** that OpenDustpan ships as data to copy and edit,
+      not as defaults: "only `verified` signatures"; "the project key only
+      for names under `opendustpan/`, and a key of the team only for names
+      under `acme/`" (a key bound to names, so a team key cannot sign
+      `opendustpan/aws-resource-explorer`); "a person approves each new
+      key"; and, for a regulated organization, a record of each approved
+      release.
+    - **The runner may hold its own policy.** The coordinator configuration
+      may pin keys, each bound to plugin names. When it does, the launcher
+      also checks the signature against those keys before the start. This
+      check is a choice of the operator of the runner, and it is the only
+      signature check that holds when the server is compromised. The guide
+      recommends it.
+  - **Where the policy belongs.** ADR 269 decision 9 keeps keys for each
     namespace, because a namespace uploads its own providers. A sweep plugin
-    gets a cloud credential, and an operator decides which code may get one,
-    so this RFC keeps the server keys for each installation and the runner
-    keys for each pool. A namespace chooses only among admitted releases.
-  - **The start.** The launcher starts the checked binary from a file
-    descriptor that it opened for the check (`execveat` with
-    `AT_EMPTY_PATH`), not by a path. For `firecracker`, the launcher runs
-    inside the microVM, so it fetches and checks the archive inside the
-    microVM. The launcher runs only on Linux (ADR 130), so no other system
-    is in scope.
+    gets a cloud credential, so this RFC proposes that an installation
+    administrator admits releases, and that a namespace chooses only among
+    admitted releases. ADR 351 lets the gate sit at the installation or the
+    namespace, so the follow-up of RFC 93 may change this.
   - **The project key.** The release workflow of `sweep-plugins` signs only
     on a protected tag, through a GitHub environment with required
     reviewers. The key stays in a hardware or cloud key service that only
     that environment can call. No workflow of a pull request can reach it.
     The new-repository ADR decides the details.
-  - Costs: the launcher needs an OpenPGP library, a dependency that needs the
-    owner's approval for the runner repository (ADR 316 approves it only for
-    the provider kit, ADR 349 for the server registry).
+  - Costs: a runner that pins keys needs an OpenPGP library in the launcher,
+    a dependency that needs the owner's approval for the runner repository
+    (ADR 316 approves it only for the provider kit, ADR 349 for the server
+    registry).
 - **C2. Sigstore keyless signatures and SLSA provenance.** Stronger
   provenance, but a new trust root, a transparency log on the public
   internet (an installation with no internet cannot check it online) and a
@@ -441,8 +463,8 @@ and 176, not part of this RFC.
   OpenDustpan. This stays for a custom command (see "Proposal"), not for an
   admitted plugin.
 
-A plugin with no valid signature never runs. This is a security control, so
-ADR 347 decision 4 applies, not "warn, do not block".
+The check of the admitted bytes is fixed in code. Whether a signature, a key
+or a publisher is enough is the administrator's policy, by ADR 351.
 
 ### Option D. Credentials, now that a pool may have more than one purpose
 
@@ -683,10 +705,12 @@ marks each kind that it may not list as `not-swept`.
    report of version 2. The contract has its own version, apart from the
    report version.
 2. **B1**: the repository `OpenDustpan/sweep-plugins`, with its own ADR.
-3. **C1**: the archive set, admitted into the installation with keys bound to
-   plugin names, checked again by the launcher against keys pinned in the
-   runner configuration, with revocation on both sides, and started from a
-   file descriptor.
+3. **C1**: the archive set. Integrity is fixed in code: only the admitted
+   bytes, checked by the server and again by the launcher, archive rules,
+   revocation on both sides, and a start from a file descriptor. Provenance
+   is facts (the signature among them) with a policy that the administrator
+   writes (ADR 351), and example policies that bind keys to plugin names.
+   The runner may pin its own keys.
 4. **D4**: a short-lived token for each sweep on a pool with more than one
    purpose, whose subject binds the target and the plugin; the host identity
    only on a pool with the sweep purpose only; never a long-lived key.
@@ -726,8 +750,8 @@ the cloud APIs to the plugin. For each, the five steps of ADR 250:
 
 | Input | 1. Check at the boundary | 2. Contain | 3. Limit | 4. Authorize at use | 5. Fail closed |
 | --- | --- | --- | --- | --- | --- |
-| The archive | The server checks the hashes, the signature, the names that the key may sign, the revocation list, the size and the paths at admission. | Stored by digest; opened only in the sandbox. | 256 MiB compressed, 1 GiB unpacked, 64 regular files, no links, no `..`. | `server:admit-sweep-plugin` (new) at admission; `namespace:manage-sweeps` to name it in a target. | No valid signature, a key outside its names, or a revoked release: no admission and no run, and an audit entry. |
-| The archive at the runner | The launcher checks the SHA-256, the signature against the keys pinned in the runner configuration, the names and both revocation lists, with no trust in the server's check. | Started from the file descriptor of the check (`execveat`); for `firecracker`, checked inside the microVM. | The same bounds. | The claim names the digest; the launcher refuses another. | A mismatch ends the sweep as `failed`, with the reason. |
+| The archive | Integrity, fixed: the hashes against `SHA256SUMS`, the size and the paths. Provenance: the signature result and the other signals as facts, read by the administrator's gate (ADR 351). | Stored by digest; served only as the admitted bytes; opened only in the sandbox. | 256 MiB compressed, 1 GiB unpacked, 64 regular files, no links, no `..`. | `server:admit-sweep-plugin` (new) and the admission gate; `namespace:manage-sweeps` to name it in a target. | A broken archive, a hash that differs or a revoked release: no admission and no run. A deny of the gate names the policy and the facts. An audit entry for each. |
+| The archive at the runner | The launcher checks the SHA-256 against the claim and `SHA256SUMS`, and both revocation lists, with no trust in the server's check; when the runner pins keys, also the signature and the names. | Started from the file descriptor of the check (`execveat`); for `firecracker`, checked inside the microVM. | The same bounds. | The claim names the digest; the launcher refuses another. | A mismatch ends the sweep as `failed`, with the reason. |
 | The manifest and `describe` | A strict JSON Schema; unknown fields refused; a manifest version that the launcher lists; the output of `describe` must equal the signed manifest. | `describe` runs with no network and no credential. | 1 MiB; a timeout of 30 seconds. | - | Any difference, or no shared contract version, fails the sweep. |
 | The host | The operator's choice (owner, 2026-11-07): the pool, its purposes and the identity of its hosts. | The sandbox of ADR 137; the documentation shows how to block metadata endpoints and to drop the service account token. | The CPU, memory and time limits of ADR 137 decision 7. | The pool purpose, checked at the claim. | The console warns on a target whose pool has more than one purpose. |
 | The egress of the plugin | Rules made by the server from the cloud, the services of the listed types and the regions of the target; the manifest cannot widen them. | On a pool with egress through the job proxy: only the proxy. On a pool with the network of the host: the operator's choice (see "The host identity"). | The rate and the count of requests of the proxy. | The proxy checks each request against the rules of this sweep. | A request outside the rules is denied and logged. |
@@ -821,7 +845,8 @@ ADR 343 decision 6 gives a repository only to the runner. The ADR for
 - **The `iac` key in the resource index**, with its provider address
   normalization, its account and region parts and its precedence. Once findings are stored with it,
   a change of its form needs a new match of every namespace.
-- **The project signing key.** Every installation trusts it. A rotation and a
+- **The project signing key.** The example policies and many installations
+  will trust it. A rotation and a
   revocation need a plan before the first release.
 - **The repository name** and the module path, in every import of a
   third-party plugin.
@@ -988,13 +1013,15 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
    _ELI5: for one shop, the visitor must hold the badge in their own hand.
    The guide says how to make the badge work only inside your building. Is
    a guide enough?_
-5. **Who may sign.** Should a plugin run only with the signature of the
-   project key, or also with a key that the operator adds for its own or a
-   third party's plugins? Each key may sign only the plugin names given to
-   it, and the runner pins its own keys. A plugin with no signature never
-   runs.
-   _ELI5: only toys with our sticker, or also toys with a sticker that your
-   parents trust? Toys with no sticker never come in._
+5. **The policy of the runner.** ADR 351 makes the signature a fact that
+   the administrator's policy reads, and keeps only the check of the
+   admitted bytes in code. Should the runner also offer keys pinned in its
+   own configuration, bound to plugin names, as the one signature check that
+   holds when the server is compromised? It needs an OpenPGP library in the
+   launcher.
+   _ELI5: the shop decides which stickers it trusts, and always checks that
+   the toy is the same toy it let in. Should the robot also carry its own
+   list of trusted stickers, in case someone breaks into the shop?_
 6. **Resolve only what was swept.** Should a finding resolve only when the
    plugin says it swept that type? This changes how version 1 reports
    behave only if they move to version 2.
