@@ -151,6 +151,50 @@ reserved. The body must not hold an `id`.
 
 A namespace holds at most 64 approval rules. The 65th answers 422.
 
+## Approve or reject a job that waits
+
+A job that an approval default covers waits in the state `awaiting-approval`.
+Each approver sends one request. The approver needs the action `job:approve` on
+the stack or workspace of the job, and `job:read` to see the job.
+
+First read the job. In its plan phase, take the `id` of the plan, the `sha256` of
+the `plan-display` part, the `sha256` of the `plan-apply` part, and the
+`stateVersion`. Then send the verdict with these values as the binding:
+
+```text
+POST /api/dustpan/v1/namespaces/acme/jobs/job-4kd9q2m7xw1ztr8bnhyc/approvals
+{
+  "verdict": "approve",
+  "planBinding": {
+    "plan": "pln-3fa7c1d0e9b24a68",
+    "displaySha256": "5d41402abc4b2a76b9719d911017c592a0f1a5d0cc66a4fbb4a47ab1d53f1c8e",
+    "applySha256": "7d793037a0760186574b0282f2f435e7b5e3b4d5a3c8c2a9f6c1e0d4b8a79f21",
+    "stateVersion": "sv-17"
+  },
+  "comment": "The plan adds two subnets and changes nothing else."
+}
+```
+
+The rules:
+
+- A gate of two approvals needs two different people. A person who approves twice
+  counts once.
+- The person who started the job cannot approve it, also when an agent started it
+  for that person. That person can reject it.
+- An agent cannot approve. An agent can reject.
+- The binding must be the binding of the stored plan. If a new plan replaces the
+  plan, the old approvals do not count, and the job waits again.
+- The approval of a `destroy` job needs a fresh MFA step. This version cannot read
+  the MFA step of a console session yet, so it refuses the approval of a destroy
+  with the error code `job.auth-stale`. A rejection works.
+- One `reject` ends the job in the state `rejected`.
+- This version checks the action `job:approve`. It does not check the groups that a
+  default names.
+
+When the last approval arrives, the job goes to `queued`, and the server dispatches
+the apply phase when no freeze, lock or other change holds the unit. The
+[jobs API reference](../reference/jobs-api.md) lists the errors.
+
 ## Roles and actions
 
 | Step | Action | Object | Roles |

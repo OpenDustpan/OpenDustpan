@@ -1,2 +1,9 @@
+job.auth-stale
+job.conflict
+job.finished
 job.log-not-available
+job.not-awaiting-approval
 job.not-found
+job.plan-changed
+job.plan-stale
+job.self-approval

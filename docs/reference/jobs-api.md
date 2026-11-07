@@ -2,12 +2,12 @@
 
 A job is work that the server asks an executor to do on one stack or workspace: a plan, an
 apply, a destroy or a refresh. The jobs API lets a person or a client start a
-plan job, list jobs, read a job, its phases and the records of its phases, and read
-the log of a phase.
+plan job, list jobs, read a job, its phases and the records of its phases, read
+the log of a phase, and approve or reject a job that waits for approval.
 
 This version starts plan jobs of OpenTofu workspaces on runners. The server defines the plan
 step of a Pulumi stack too, but no runner runs it yet. No route
-cancels or approves jobs yet. The [drift API](drift-api.md) starts a drift
+cancels jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
 
@@ -20,6 +20,7 @@ access token or a console session.
 | Method and path | Action | Answer |
 | --- | --- | --- |
 | `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan` on the workspace that the body names | The new job, with status 201 |
+| `POST /namespaces/{namespace}/jobs/{job_id}/approvals` | `namespace:read` on the namespace, and `job:read` and `job:approve` on the stack or workspace of the job | The job after the verdict, with status 201 |
 | `GET /namespaces/{namespace}/jobs` | `namespace:read` on the namespace. The server also checks `job:read` on the stack or workspace of each job | A page of jobs, newest first |
 | `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
 | `GET /namespaces/{namespace}/jobs/{job_id}/logs/{phase}` | `namespace:read` on the namespace, `job:read` on the stack or workspace of the job, and `job:read-logs` on the same object | The log of the phase, as a stream |
@@ -141,6 +142,90 @@ The `errorCode` is a stable code for a program.
 | 422 | `request.idempotency-key-reused` | The key names a job with another request |
 | 422 | `job.unsupported` | The operation or the tool is not available in this version. The namespace has no default pool, or has more than one. The request names no code location. |
 | 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |
+
+## Approve or reject a job
+
+A job with a gate of type `approval` in front of its current phase waits in the
+state `awaiting-approval`. `POST /namespaces/{namespace}/jobs/{job_id}/approvals`
+records the verdict of the caller on that gate. The route takes no
+`Idempotency-Key` header. A request with the header fails with 400.
+
+The body is one JSON object. A field that is not in this table fails the request.
+
+| Field | Meaning |
+| --- | --- |
+| `verdict` | `approve` or `reject`. Any other value fails with 422 and the code `job.invalid`. |
+| `planBinding` | The plan that the caller saw. Send it with `approve` when a plan phase comes before the current phase. It has the fields `plan`, `displaySha256`, `applySha256` and `stateVersion`. Take them from the plan in the job document: its `id`, the `sha256` of its `plan-display` part, the `sha256` of its `plan-apply` part, and its `stateVersion`. A `reject` needs no binding. |
+| `comment` | Optional text, at most 500 characters, with no control character and no line break. The server keeps it in the approval and in the audit log. |
+
+The server applies these rules in this order. The first rule that fails ends
+the request, and the server writes nothing to the job.
+
+1. The caller needs `job:read` and `job:approve` on the stack or workspace of the job.
+   A caller who cannot read the job gets 404.
+2. The job must wait for approval. A job that ended answers 409 with the code `job.finished`.
+   A job in another state answers 409 with the code `job.not-awaiting-approval`.
+3. An agent cannot approve. An agent can reject.
+4. The person who started the job cannot approve it, also when an agent started it for that
+   person, unless the gate has `allowSelf`. That person can reject.
+5. The plan binding must be the binding of the stored plan. Another plan answers 409
+   with the code `job.plan-changed`. A plan that is older than 24 hours, or that the
+   server redacted, answers 409 with the code `job.plan-stale`. A job that waits for a
+   plan that was never stored also answers `job.plan-stale`. If the state of the unit
+   changes after the plan, the server finds it when it dispatches the apply phase.
+6. The approval of a `destroy` job needs a fresh MFA step of the caller, at most 15
+   minutes old. A rejection needs none.
+
+One approval keeps the job in `awaiting-approval` until the gate has all the approvals
+that it needs from distinct people. A person who approves again counts once. The last
+approval moves the job to `queued`. A rejection moves the job to `rejected` at once.
+This version checks the action `job:approve`. It does not check the groups of the gate.
+Each verdict adds one entry of the kind `change` to the audit log of the namespace. The
+entry has the caller, the verdict, the phase, the comment and the event that followed.
+
+A refusal with the code `access.denied`, `job.agent-denied`, `job.self-approval`,
+`job.auth-stale`, `job.plan-changed` or `job.plan-stale` adds one entry with the outcome
+`denied` to the audit log. A request that is not valid, a job that does not wait, and a
+version conflict add none.
+
+This version cannot give the server the MFA step of a console session yet. So the
+server refuses the approval of a destroy with 403 and the code `job.auth-stale`, and
+changes nothing. A rejection of a destroy works.
+
+Example:
+
+```text
+POST /api/dustpan/v1/namespaces/acme/jobs/job-4kd9q2m7xw1ztr8bnhyc/approvals
+{
+  "verdict": "approve",
+  "planBinding": {
+    "plan": "pln-3fa7c1d0e9b24a68",
+    "displaySha256": "5d41402abc4b2a76b9719d911017c592a0f1a5d0cc66a4fbb4a47ab1d53f1c8e",
+    "applySha256": "7d793037a0760186574b0282f2f435e7b5e3b4d5a3c8c2a9f6c1e0d4b8a79f21",
+    "stateVersion": "sv-17"
+  },
+  "comment": "The plan adds two subnets and changes nothing else."
+}
+```
+
+The answer is the job document with status 201 and the header `ETag`.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object, has an unknown field, or has an `Idempotency-Key` header |
+| 401 | | The caller did not sign in |
+| 403 | `access.denied` | The caller lacks `job:approve` on the unit |
+| 403 | `job.agent-denied` | An agent tried to approve |
+| 403 | `job.self-approval` | The person who started the job tried to approve it |
+| 403 | `job.auth-stale` | The approval of a destroy has no fresh MFA step |
+| 404 | `job.not-found` | The namespace or the job does not exist, or the caller cannot read it |
+| 409 | `job.not-awaiting-approval` | The job waits for no approval |
+| 409 | `job.finished` | The job ended |
+| 409 | `job.plan-changed` | The plan binding is not the binding of the stored plan |
+| 409 | `job.plan-stale` | The stored plan is too old, the server redacted it, or no plan exists |
+| 409 | `job.conflict` | The job changed while the request ran: read the job again |
+| 413 | `request.body-too-large` | The body has more than 16 KiB |
+| 422 | `job.invalid` | The verdict is not `approve` or `reject`, the comment is not valid, or a text of `planBinding` is too long |
 
 ## List jobs
 

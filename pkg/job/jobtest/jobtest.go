@@ -174,7 +174,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases(), reconcileCases())
+	}, createRuleCases(), reconcileCases(), approveCases())
 
 	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases(), claimGateCases(), finalVersionCases()) {
 		t.Run(tc.name, func(t *testing.T) {

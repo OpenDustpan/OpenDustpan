@@ -5,6 +5,7 @@ import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
+  ApproveJobInput,
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
@@ -181,6 +182,7 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
@@ -259,6 +261,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -461,6 +464,10 @@ export class Client {
 
   addRegistryKey(input: AddRegistryKeyInput): Promise<Answer<RegistryKey>> {
     return execute(this.transport, operations.addRegistryKey, input);
+  }
+
+  approveJob(input: ApproveJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.approveJob, input);
   }
 
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {

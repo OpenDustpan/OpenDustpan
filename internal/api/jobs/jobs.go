@@ -254,8 +254,7 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 		return problem.Refused(err, http.StatusTooManyRequests, errcode.JobLimit), true
 	}
 
-	// Not a refusal of a job: package problem answers the error.
-	return problem.Pass()
+	return classifyApproval(err)
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
