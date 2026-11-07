@@ -27,6 +27,11 @@ const (
 	// pagingStacks is one more than a page of GET /api/user/stacks, so the
 	// CLI must read a second page with the continuationToken.
 	pagingStacks = 501
+	// pagingStackPrefix starts the name of each stack of pagingProject. The
+	// names are created as s0000 to s0500, so the name tells the project.
+	pagingStackPrefix = pagingNamespace + "/s"
+	// pagingOtherStackPrefix starts the name of each stack of pagingOtherProject.
+	pagingOtherStackPrefix = pagingNamespace + "/o"
 )
 
 // pulumiStackPagingScenario creates pagingStacks stacks in one project of a
@@ -89,11 +94,11 @@ func pulumiStackPagingScenario(t *testing.T, env *e2e.Env, clis []e2e.Install) {
 }
 
 // pagingStacksListed checks that stack ls --json lists each stack of the
-// paging project once.
+// paging project once. The CLI output carries no project field, so the name
+// tells the project: the other project's stacks are skipped here.
 func pagingStacksListed(r e2e.Result) error {
 	var stacks []struct {
-		Name        string `json:"name"`
-		ProjectName string `json:"projectName"`
+		Name string `json:"name"`
 	}
 
 	if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
@@ -103,10 +108,9 @@ func pagingStacksListed(r e2e.Result) error {
 	seen := map[string]bool{}
 
 	for _, s := range stacks {
-		// Defense in depth: the namespace and the project both select the stacks
-		// of this scenario, so a project of the same name in another namespace
-		// does not count.
-		if !strings.HasPrefix(s.Name, pagingNamespace+"/") || s.ProjectName != pagingProject {
+		// Defense in depth: the namespace and the name prefix both select the
+		// stacks of this scenario, so a stack of another namespace does not count.
+		if !strings.HasPrefix(s.Name, pagingNamespace+"/") || !strings.HasPrefix(s.Name, pagingStackPrefix) {
 			continue
 		}
 
@@ -130,12 +134,14 @@ func pagingStacksListed(r e2e.Result) error {
 	return nil
 }
 
-// pagingProjectStacksListed checks that stack ls lists each stack of
-// pagingProject once, and no stack of another project.
+// pagingProjectStacksListed checks that a project-filtered stack ls lists each
+// stack of pagingProject once, and no stack of another project. The CLI output
+// carries no project field, so the scenario's naming is the discriminator: a
+// stack of the paging project starts with pagingStackPrefix, and a stack of
+// the other project starts with pagingOtherStackPrefix.
 func pagingProjectStacksListed(r e2e.Result) error {
 	var stacks []struct {
-		Name        string `json:"name"`
-		ProjectName string `json:"projectName"`
+		Name string `json:"name"`
 	}
 
 	if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
@@ -145,14 +151,16 @@ func pagingProjectStacksListed(r e2e.Result) error {
 	seen := map[string]bool{}
 
 	for _, s := range stacks {
-		if s.ProjectName != pagingProject {
-			return fmt.Errorf(
-				"%w: stack %q is in project %q, want %q",
-				errUnexpected,
-				s.Name,
-				s.ProjectName,
-				pagingProject,
-			)
+		if !strings.HasPrefix(s.Name, pagingNamespace+"/") {
+			return fmt.Errorf("%w: stack %q is outside namespace %q", errUnexpected, s.Name, pagingNamespace)
+		}
+
+		if strings.HasPrefix(s.Name, pagingOtherStackPrefix) {
+			return fmt.Errorf("%w: stack %q of project %q is listed", errUnexpected, s.Name, pagingOtherProject)
+		}
+
+		if !strings.HasPrefix(s.Name, pagingStackPrefix) {
+			return fmt.Errorf("%w: stack %q is not a stack of project %q", errUnexpected, s.Name, pagingProject)
 		}
 
 		if seen[s.Name] {
