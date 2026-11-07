@@ -83,14 +83,36 @@ func checkRestoreEventSummary(t *testing.T, stored string, wantCount int) {
 	}
 }
 
-// TestAddRestoreEventRefusesTheSummaryForm proves that an object with the
-// form of the summary event cannot reach the events, so no caller can forge
-// the count.
+// TestAddRestoreEventRefusesTheSummaryForm proves that an object that starts
+// with the text of the summary event cannot reach the events, so no caller
+// can forge the count.
 func TestAddRestoreEventRefusesTheSummaryForm(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := backup.AddRestoreEvent("[]", "restore audit events past the limit of 999: up to 5 more cancels")
-	if !errors.Is(err, backup.ErrRestoreEventInvalid) {
-		t.Fatalf("add the summary form: err = %v, want ErrRestoreEventInvalid", err)
+	for _, tc := range []struct {
+		name   string
+		object string
+	}{
+		{
+			name:   "the old form",
+			object: "restore audit events past the limit of 999: 5 more cancels",
+		},
+		{
+			name:   "the new form",
+			object: "restore audit events past the limit of 999: up to 5 more cancels",
+		},
+		{
+			name:   "the prefix alone",
+			object: "restore audit events past the limit of 999: ",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := backup.AddRestoreEvent("[]", tc.object)
+			if !errors.Is(err, backup.ErrRestoreEventInvalid) {
+				t.Fatalf("add %q: err = %v, want ErrRestoreEventInvalid", tc.object, err)
+			}
+		})
 	}
 }

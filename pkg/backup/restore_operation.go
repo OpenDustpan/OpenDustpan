@@ -730,7 +730,7 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 		return "", false, err
 	}
 
-	if strings.HasPrefix(object, restoreEventOverflowHead) {
+	if strings.HasPrefix(object, restoreEventOverflowPrefix) {
 		return "", false, fmt.Errorf("%w: the object has the form of the summary event", ErrRestoreEventInvalid)
 	}
 
@@ -765,9 +765,13 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 	return string(out), true, nil
 }
 
+// restoreEventOverflowPrefix starts every summary event of the events past
+// the limit, with or without the upper bound that follows it.
+const restoreEventOverflowPrefix = "restore audit events past the limit of 999: "
+
 // restoreEventOverflowHead starts the summary event of the events past the
 // limit. The count that follows is an upper bound on the omitted events.
-const restoreEventOverflowHead = "restore audit events past the limit of 999: up to "
+const restoreEventOverflowHead = restoreEventOverflowPrefix + "up to "
 
 // restoreEventOverflow returns the summary event of count events past the
 // limit. count is an upper bound: an omitted event that a caller sends again
