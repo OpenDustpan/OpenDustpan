@@ -360,6 +360,7 @@ const (
 	ErrorCodeStateVersionTooLarge                  ErrorCode = "state-version.too-large"
 	ErrorCodeStateVersionUploadDenied              ErrorCode = "state-version.upload-denied"
 	ErrorCodeStoreFailoverSettingInvalid           ErrorCode = "store.failover-setting-invalid"
+	ErrorCodeStoreServerVersionUnsupported         ErrorCode = "store.server-version-unsupported"
 	ErrorCodeStorecheckCooldown                    ErrorCode = "storecheck.cooldown"
 	ErrorCodeStorecheckInvalidTarget               ErrorCode = "storecheck.invalid-target"
 	ErrorCodeStorecheckNoTarget                    ErrorCode = "storecheck.no-target"

@@ -271,10 +271,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	if err := checkConnection(ctx, pool); err != nil {
 		pool.Close()
 
-		return nil, fmt.Errorf("connect to postgres: %w", err)
+		return nil, err
 	}
 
 	s.pool = pool
