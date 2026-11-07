@@ -10,9 +10,9 @@
 #
 # The script skips its own file, because the marker text is in its code.
 #
-# Defense in depth: the diff can be empty or can fail, and the script
-# then stops with an error, not with a pass. The base ref is checked before
-# the diff runs.
+# Defense in depth: an empty diff finds no marker and passes. A failing
+# git diff stops the script with an error through set -e, so it never
+# passes. The base ref is checked before the diff runs.
 set -euo pipefail
 
 base="${1:-origin/main}"
