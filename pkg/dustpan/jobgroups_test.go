@@ -253,3 +253,106 @@ func TestJobGroupsOnTheSQLiteStore(t *testing.T) {
 		}
 	}
 }
+
+// joinGroup makes a person with the subject and an active membership in the
+// group, and creates the group when it does not exist yet.
+func joinGroup(t *testing.T, st *sqlite.Store, groupID, subject string) {
+	t.Helper()
+
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	id := "prn-" + subject
+
+	if err := st.CreatePrincipal(t.Context(), person(subject), storeEntry()); err != nil {
+		t.Fatalf("create %s: %v", subject, err)
+	}
+
+	group := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: groupID, Name: groupID, Description: "", Source: principal.SourceLocal,
+		MemberCount: 0,
+	}
+	if _, err := st.GetGroup(t.Context(), groupID); errors.Is(err, principal.ErrNotFound) {
+		if createErr := st.CreateGroup(t.Context(), group, storeEntry()); createErr != nil {
+			t.Fatalf("create group %s: %v", groupID, createErr)
+		}
+	}
+
+	m := principal.Membership{
+		AddedAt: at, SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: id,
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
+	if err := st.AddMember(t.Context(), m, storeEntry(), nil); err != nil {
+		t.Fatalf("add %s to %s: %v", subject, groupID, err)
+	}
+}
+
+// TestJobGroupsMatchesTheSubjectExactly proves on a real store that the subject
+// of the approver is compared exactly: another case of the letters, and a
+// subject that has the member's subject as its prefix (or the other way round),
+// are other people and are no members.
+func TestJobGroupsMatchesTheSubjectExactly(t *testing.T) {
+	t.Parallel()
+
+	st := openSQLite(t)
+
+	// Only "alice" is a member of grp-1, and only "Alice" is a member of grp-2.
+	joinGroup(t, st, "grp-1", "alice")
+	joinGroup(t, st, "grp-2", "Alice")
+
+	// Two more people in no group: a longer subject and a shorter one.
+	for _, subject := range []string{"alice2", "ali"} {
+		if err := st.CreatePrincipal(t.Context(), person(subject), storeEntry()); err != nil {
+			t.Fatalf("create %s: %v", subject, err)
+		}
+	}
+
+	reader := dustpan.NewJobGroups(st)
+
+	tests := []struct {
+		subject string
+		groupID string
+		want    bool
+	}{
+		{"alice", "grp-1", true},
+		{"alice", "grp-2", false},
+		{"Alice", "grp-2", true},
+		{"Alice", "grp-1", false},
+		{"ALICE", "grp-1", false},
+		{"ALICE", "grp-2", false},
+		{"alice2", "grp-1", false},
+		{"ali", "grp-1", false},
+		{"alic", "grp-1", false},
+	}
+
+	for _, tc := range tests {
+		got, err := reader.MemberOfAny(t.Context(), tc.subject, []string{tc.groupID})
+		if err != nil || got != tc.want {
+			t.Errorf("MemberOfAny(%q, %s) = %v, %v; want %v and no error", tc.subject, tc.groupID, got, err, tc.want)
+		}
+	}
+}
+
+// TestJobGroupsRefusesADisabledPersonOnTheSQLiteStore proves on a real store
+// that a person with an active membership gets false once an administrator
+// disables the account.
+func TestJobGroupsRefusesADisabledPersonOnTheSQLiteStore(t *testing.T) {
+	t.Parallel()
+
+	st := openSQLite(t)
+	joinGroup(t, st, "grp-1", "dora")
+
+	reader := dustpan.NewJobGroups(st)
+
+	got, err := reader.MemberOfAny(t.Context(), "dora", []string{"grp-1"})
+	if err != nil || !got {
+		t.Fatalf("MemberOfAny before the disable = %v, %v; want true", got, err)
+	}
+
+	if err = st.DisablePrincipal(t.Context(), "prn-dora", storeEntry()); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	got, err = reader.MemberOfAny(t.Context(), "dora", []string{"grp-1"})
+	if err != nil || got {
+		t.Fatalf("MemberOfAny after the disable = %v, %v; want false", got, err)
+	}
+}
