@@ -203,6 +203,7 @@ set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
 | `DUSTPAN_COMMIT` | The commit of the source that the job runs. |
 | `DUSTPAN_SERVER_URL` | The URL of the server that the step calls. |
 | `DUSTPAN_SWEEP_REPORT` | Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes its report to. The launcher uploads the file when the command ends. |
+| `DUSTPAN_HELPER_SOCKET` | Set for a tool step only: the path of the Unix socket on which the launcher answers its helpers for OpenTofu and git. The variable holds a path. |
 
 ## Client commands
 

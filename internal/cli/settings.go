@@ -598,6 +598,11 @@ var Settings = []*Setting{
 		"Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes "+
 			"its report to. The launcher uploads the file when the command ends.",
 	),
+	stepInput(
+		"DUSTPAN_HELPER_SOCKET",
+		"Set for a tool step only: the path of the Unix socket on which the launcher answers its helpers "+
+			"for OpenTofu and git. The variable holds a path.",
+	),
 }
 
 // stepInput declares a variable that the launcher sets for the process of a

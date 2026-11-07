@@ -205,6 +205,7 @@ func TestStepInputsMatchTheLauncher(t *testing.T) {
 	want := []string{
 		launcher.EnvJob, launcher.EnvPhase, launcher.EnvStep, launcher.EnvUnit,
 		launcher.EnvNamespace, launcher.EnvCommit, launcher.EnvServer, launcher.EnvSweepReport,
+		launcher.EnvHelperSocket,
 	}
 
 	var got []string
