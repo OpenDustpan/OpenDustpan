@@ -350,7 +350,9 @@ func ecdsaPoint(pub *ecdsa.PublicKey) ([]byte, error) {
 		return nil, fmt.Errorf("%w: ECDSA key that is not on P-256", ErrMalformed)
 	}
 
-	var point []byte
+	// The point starts from a non-nil base, so the result is never nil on
+	// success.
+	point := make([]byte, 0, ecdsaPointSize)
 
 	encoded := false
 
@@ -361,10 +363,13 @@ func ecdsaPoint(pub *ecdsa.PublicKey) ([]byte, error) {
 			}
 		}()
 
-		var err error
+		b, err := pub.Bytes()
+		if err != nil {
+			return
+		}
 
-		point, err = pub.Bytes()
-		encoded = err == nil
+		point = append(point, b...)
+		encoded = true
 	}()
 
 	if !encoded {
