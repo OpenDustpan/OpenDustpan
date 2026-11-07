@@ -6,10 +6,12 @@ TruffleHog sends each candidate to its provider for verification. An
 for example because the provider did not answer. A second run can verify
 such a candidate. This gate runs the scan again, at most two more times,
 when every result is unknown. A verified result fails at once. A command
-that exits with an error and gives no result fails at once.
+that exits with an error and gives no result fails at once. A line that is
+not a result object fails at once.
 
 The gate never prints the fields that can hold the secret: Raw, RawV2,
-Redacted and ExtraData.
+Redacted and ExtraData. It replaces each control character in a printed
+field with a question mark and cuts the field to a fixed length.
 
 Usage:
   trufflehog-gate.py scan -- <trufflehog command and arguments>
@@ -24,9 +26,13 @@ Standard library only.
 import json
 import subprocess
 import sys
+import unicodedata
 
 # The scan runs at most three times: the first run and two retries.
 MAX_RUNS = 3
+
+# Each field of a result message is cut to this many characters.
+MAX_FIELD = 200
 
 
 class ScanError(Exception):
@@ -35,6 +41,17 @@ class ScanError(Exception):
     def __init__(self, returncode):
         super().__init__("the scan command failed with exit code %d" % returncode)
         self.returncode = returncode
+
+
+class UnparsedOutputError(Exception):
+    """The scan printed lines that are not a result object."""
+
+    def __init__(self, count):
+        super().__init__(
+            "the scan command printed %d line%s that did not parse as a result object"
+            % (count, "" if count == 1 else "s")
+        )
+        self.count = count
 
 
 def with_json(command):
@@ -46,8 +63,12 @@ def with_json(command):
 
 
 def parse_results(text):
-    """Return each line of text that is a JSON object. Ignore the other lines."""
+    """Return each line of text that is a JSON object.
+
+    Raise UnparsedOutputError when a non-blank line is not a JSON object.
+    """
     results = []
+    unparsed = 0
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -55,9 +76,14 @@ def parse_results(text):
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
+            unparsed += 1
             continue
         if isinstance(value, dict):
             results.append(value)
+        else:
+            unparsed += 1
+    if unparsed:
+        raise UnparsedOutputError(unparsed)
     return results
 
 
@@ -65,6 +91,7 @@ def run_command(args):
     """Run one scan and return its results.
 
     Raise ScanError when the command exits with an error and gives no result.
+    Raise UnparsedOutputError when a line is not a result object.
     """
     result = subprocess.run(args, stdout=subprocess.PIPE, text=True, check=False)
     results = parse_results(result.stdout)
@@ -90,16 +117,25 @@ def nested(value, *keys):
     return "" if value is None else value
 
 
+def safe_field(value):
+    """Return value with each control character replaced and the length cut."""
+    text = "" if value is None else str(value)
+    safe = "".join(
+        "?" if unicodedata.category(char).startswith("C") else char for char in text
+    )
+    return safe[:MAX_FIELD]
+
+
 def result_line(state, result):
     """Return the message line of one result. Never print the secret fields."""
     return (
         "trufflehog-gate: %s result: detector %s, file %s, line %s, commit %s"
         % (
-            state,
-            nested(result, "DetectorName"),
-            nested(result, "SourceMetadata", "Data", "Git", "file"),
-            nested(result, "SourceMetadata", "Data", "Git", "line"),
-            nested(result, "SourceMetadata", "Data", "Git", "commit"),
+            safe_field(state),
+            safe_field(nested(result, "DetectorName")),
+            safe_field(nested(result, "SourceMetadata", "Data", "Git", "file")),
+            safe_field(nested(result, "SourceMetadata", "Data", "Git", "line")),
+            safe_field(nested(result, "SourceMetadata", "Data", "Git", "commit")),
         )
     )
 
@@ -121,9 +157,10 @@ def decide(run):
     """Return (exit code, message lines) for the scan.
 
     run() returns the list of results of one run. It raises ScanError when
-    the scan command fails and gives no result. A verified result fails at
-    once. A run with no result passes. Only unknown results give a retry,
-    at most two, and a third unknown result fails.
+    the scan command fails and gives no result. It raises UnparsedOutputError
+    when a line is not a result object. A verified result fails at once. A
+    run with no result passes. Only unknown results give a retry, at most
+    two, and a third unknown result fails.
     """
     runs = 0
     unknown = []
@@ -137,6 +174,8 @@ def decide(run):
                 "Run the trufflehog command by hand to see the error."
                 % (runs, err.returncode)
             ]
+        except UnparsedOutputError as err:
+            return 1, ["trufflehog-gate: run %d: %s" % (runs, err)]
         verified = [result for result in results if is_verified(result)]
         unknown = [result for result in results if not is_verified(result)]
         if verified:
@@ -188,6 +227,12 @@ def check_case(case):
     if len(made) != case["made"]:
         return "%d runs made, want %d" % (len(made), case["made"])
     text = "\n".join(lines)
+    if "text_lines" in case and len(text.splitlines()) != case["text_lines"]:
+        return "%d printed lines, want %d" % (len(text.splitlines()), case["text_lines"])
+    for prefix in case.get("no_prefix", []):
+        for line in text.splitlines():
+            if line.startswith(prefix):
+                return "a message line starts with %r" % prefix
     for fragment in case.get("shows", []):
         if fragment not in text:
             return "the message does not name %r" % fragment
@@ -290,6 +335,24 @@ CASES = [
         "hides": [RAW_VALUE, RAW_V2_VALUE, REDACTED_VALUE, EXTRA_VALUE],
     },
     {
+        "name": "control characters in the detector and the file name",
+        "runs": [
+            [
+                make_result(
+                    True,
+                    detector="D\r::warning::d\nforged\x1b[31m",
+                    file="x\n::error::forged\x1b[31m",
+                )
+            ]
+        ],
+        "code": 1,
+        "made": 1,
+        "text_lines": 2,
+        "no_prefix": ["::"],
+        "shows": ["D?::warning::d?forged?[31m", "x?::error::forged?[31m"],
+        "hides": ["\r", "\x1b"],
+    },
+    {
         "name": "the scan command fails and gives no result",
         "runs": [ScanError(2)],
         "code": 1,
@@ -309,11 +372,71 @@ def selftest():
                 file=sys.stderr,
             )
             return 1
-    parsed = parse_results(
-        '{"Verified": false}\na log line\n[1, 2]\n\n{"Verified": true}\n'
+    secret_text = "RAW" + "SECRET plain text finding"
+    code, lines = decide(
+        lambda: run_command([sys.executable, "-c", "print(%r)" % secret_text])
     )
+    text = "\n".join(lines)
+    if code != 1:
+        print(
+            "trufflehog-gate selftest: a plain text line passed with exit code %d" % code,
+            file=sys.stderr,
+        )
+        return 1
+    if secret_text in text:
+        print("trufflehog-gate selftest: a plain text line reached the message", file=sys.stderr)
+        return 1
+    if "1 line" not in text:
+        print(
+            "trufflehog-gate selftest: the message does not give the count of unparsed lines",
+            file=sys.stderr,
+        )
+        return 1
+    parsed = parse_results('{"Verified": false}\n\n{"Verified": true}\n')
     if parsed != [{"Verified": False}, {"Verified": True}]:
         print("trufflehog-gate selftest: parse_results gave %r" % (parsed,), file=sys.stderr)
+        return 1
+    try:
+        parse_results("plain\n[1, 2]\n")
+    except UnparsedOutputError as err:
+        if err.count != 2:
+            print(
+                "trufflehog-gate selftest: parse_results counted %d unparsed lines, want 2"
+                % err.count,
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        print(
+            "trufflehog-gate selftest: parse_results did not fail on unparsed lines",
+            file=sys.stderr,
+        )
+        return 1
+    if len(safe_field("a" * (MAX_FIELD + 1))) != MAX_FIELD:
+        print(
+            "trufflehog-gate selftest: safe_field did not cut the field to %d characters"
+            % MAX_FIELD,
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        run_command([sys.executable, "-c", "import sys; sys.exit(2)"])
+    except ScanError as err:
+        if err.returncode != 2:
+            print(
+                "trufflehog-gate selftest: the crashed scan gave exit code %d, want 2"
+                % err.returncode,
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        print(
+            "trufflehog-gate selftest: the crashed scan did not raise ScanError",
+            file=sys.stderr,
+        )
+        return 1
+    if run_command([sys.executable, "-c", "pass"]) != []:
+        print("trufflehog-gate selftest: the empty scan gave a result", file=sys.stderr)
         return 1
     args = with_json(["trufflehog", "git", "file://.", "--fail", "--results=verified,unknown"])
     if args != ["trufflehog", "git", "file://.", "--results=verified,unknown", "--json"]:
