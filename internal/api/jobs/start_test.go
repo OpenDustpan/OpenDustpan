@@ -148,8 +148,8 @@ func TestStartRouteIsDeclared(t *testing.T) {
 		}
 	}
 
-	if rec := post(t, without, testToken, goodBody); rec.Code != http.StatusNotFound {
-		t.Fatalf("POST without a job service = %d, want 404", rec.Code)
+	if rec := post(t, without, testToken, goodBody); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST without a job service = %d, want 405", rec.Code)
 	}
 }
 
@@ -159,9 +159,10 @@ func checkPostRoute(t *testing.T, h testHandler) {
 
 	var found *jobsapi.Route
 
-	for _, r := range h.Routes() {
-		if r.Method == http.MethodPost {
-			found = &r
+	routes := h.Routes()
+	for i := range routes {
+		if routes[i].Method == http.MethodPost {
+			found = &routes[i]
 		}
 	}
 

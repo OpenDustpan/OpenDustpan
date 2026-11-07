@@ -1335,6 +1335,25 @@ func (e *Env) APIStatusAs(ctx context.Context, token, method, path, body string)
 	return resp.StatusCode, string(respBody), nil
 }
 
+// OpenStream sends an authenticated GET and returns the response before its
+// body ends, so a test reads a stream line by line while the server still
+// writes it. The caller closes the body.
+func (e *Env) OpenStream(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.URL+path, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build GET %s: %w", path, err)
+	}
+
+	req.Header.Set("Authorization", "token "+e.token)
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", path, err)
+	}
+
+	return resp, nil
+}
+
 // APIResponse is the status, headers and body of one harness request.
 // Reveal checks read the headers: the value must travel with
 // Cache-Control: no-store.
