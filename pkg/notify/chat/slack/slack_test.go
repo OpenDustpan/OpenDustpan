@@ -383,6 +383,48 @@ func TestRenderShowsHostileAsPlainText(t *testing.T) {
 	}
 }
 
+// TestFallbackBreaksEachSeparator checks each ideographic, fullwidth and
+// halfwidth separator alone, so a change that drops one rune names it.
+func TestFallbackBreaksEachSeparator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		sep  rune
+	}{
+		{"ideographic full stop", '。'},
+		{"fullwidth full stop", '．'},
+		{"halfwidth ideographic full stop", '｡'},
+		{"fullwidth commercial at", '＠'},
+		{"fullwidth number sign", '＃'},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hostile := "x" + string(tt.sep) + "y"
+
+			req, err := slack.New().Render(content(func(c *chat.Content) {
+				c.Product, c.Title, c.Summary = hostile, hostile, hostile
+			}))
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+
+			var msg wireMessage
+			if err := json.Unmarshal(req.Body, &msg); err != nil {
+				t.Fatal(err)
+			}
+
+			want := "x" + string(tt.sep) + "​y"
+			if !strings.Contains(msg.Text, want) {
+				t.Errorf("fallback %q: %U is not followed by a zero-width space", msg.Text, tt.sep)
+			}
+		})
+	}
+}
+
 // checkVerbatim checks that every mrkdwn object of msg tells Slack to show
 // the text as it is, and that the label of a button is plain text.
 func checkVerbatim(t *testing.T, msg wireMessage) {
