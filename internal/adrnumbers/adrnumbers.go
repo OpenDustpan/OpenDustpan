@@ -41,15 +41,17 @@ var citation = regexp.MustCompile(`\bADR (\d+)\b`)
 // Check returns the problems in the numbering of the docs under root, sorted.
 // It reports a number that two files of docs/adr share, a number that two
 // files of docs/rfc share, and an ADR number that a .md file under docs/
-// cites when docs/adr has no file with that number. An empty result means
-// that the numbering is clean. Check returns an error when it cannot read the
-// tree, so a read error never looks like a clean result.
-func Check(root string) ([]string, error) {
+// cites when docs/adr has no file with that number. The exempt paths are
+// slash-separated paths from root of files whose citations are not checked;
+// the number checks still apply to them. An empty result means that the
+// numbering is clean. Check returns an error when it cannot read the tree, so
+// a read error never looks like a clean result.
+func Check(root string, exempt ...string) ([]string, error) {
 	repo, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", root, err)
 	}
-	findings, checkErr := checkFS(repo.FS())
+	findings, checkErr := checkFS(repo.FS(), exempt)
 	closeErr := repo.Close()
 	if checkErr != nil {
 		return nil, checkErr
@@ -61,7 +63,7 @@ func Check(root string) ([]string, error) {
 }
 
 // checkFS runs the checks of Check on the tree of fsys, which holds the docs.
-func checkFS(fsys fs.FS) ([]string, error) {
+func checkFS(fsys fs.FS, exempt []string) ([]string, error) {
 	adrs, err := numbered(fsys, adrDir)
 	if err != nil {
 		return nil, err
@@ -73,7 +75,7 @@ func checkFS(fsys fs.FS) ([]string, error) {
 	findings := duplicates(adrDir, adrs)
 	findings = append(findings, duplicates(rfcDir, rfcs)...)
 
-	cites, err := citedWithoutFile(fsys, adrs)
+	cites, err := citedWithoutFile(fsys, adrs, exempt)
 	if err != nil {
 		return nil, err
 	}
@@ -120,14 +122,14 @@ func duplicates(dir string, byNumber map[int][]string) []string {
 }
 
 // citedWithoutFile returns one finding for each ADR citation in a .md file
-// under docs/ whose number has no file in adrs.
-func citedWithoutFile(fsys fs.FS, adrs map[int][]string) ([]string, error) {
+// under docs/ whose number has no file in adrs. It skips the files in exempt.
+func citedWithoutFile(fsys fs.FS, adrs map[int][]string, exempt []string) ([]string, error) {
 	var findings []string
 	err := fs.WalkDir(fsys, docsDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !entry.Type().IsRegular() || filepath.Ext(path) != ".md" {
+		if !entry.Type().IsRegular() || filepath.Ext(path) != ".md" || slices.Contains(exempt, path) {
 			return nil
 		}
 		found, err := citationsIn(fsys, path, adrs)
