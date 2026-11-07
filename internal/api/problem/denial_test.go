@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -254,5 +256,113 @@ func TestKeepDeniedStatusContract(t *testing.T) {
 				t.Errorf("message = %q, want forbidden", body(t, rec).Message)
 			}
 		})
+	}
+}
+
+// The names of the object, of the subject and of the namespace of the denial
+// of TestDeniedErrorAnswersTheActionAndTheObjectKind. They are distinctive, so
+// a body that holds one of them fails the test.
+const (
+	deniedObject    = "secret-object-7f3"
+	deniedSubject   = "person-7f3"
+	deniedNamespace = "acme"
+)
+
+// TestDeniedErrorAnswersTheActionAndTheObjectKind checks that a denial of the
+// typed error answers 403 with access.denied, the missing action and the kind
+// of the object, and that the body names no part of the object. A denial that
+// is not the typed error keeps the fixed body.
+func TestDeniedErrorAnswersTheActionAndTheObjectKind(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", deniedNamespace, deniedObject)
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		err     error
+		message string
+		args    map[string]any
+	}{
+		{
+			name: "a collection",
+			err: &identity.DeniedError{
+				Subject: deniedSubject,
+				Action:  identity.ActionCollectionCreateUnit,
+				Object:  identity.CollectionObject(deniedNamespace, deniedObject),
+			},
+			message: "forbidden: you need the action collection:create-unit on this collection",
+			args:    map[string]any{"action": "collection:create-unit", "objectKind": "collection"},
+		},
+		{
+			name: "a wrapped unit",
+			err: fmt.Errorf("authorize: %w", &identity.DeniedError{
+				Subject: deniedSubject,
+				Action:  identity.ActionUnitRead,
+				Object:  unit,
+			}),
+			message: "forbidden: you need the action unit:read on this unit",
+			args:    map[string]any{"action": "unit:read", "objectKind": "unit"},
+		},
+		{
+			name: "a namespace",
+			err: &identity.DeniedError{
+				Subject: deniedSubject,
+				Action:  identity.ActionNamespaceRead,
+				Object:  identity.NamespaceObject(deniedObject),
+			},
+			message: "forbidden: you need the action namespace:read on this namespace",
+			args:    map[string]any{"action": "namespace:read", "objectKind": "namespace"},
+		},
+		{
+			name:    "a plain denial",
+			err:     identity.ErrDenied,
+			message: "forbidden",
+			args:    nil,
+		},
+		{
+			name:    "a wrapped plain denial",
+			err:     fmt.Errorf("authorize: %w", identity.ErrDenied),
+			message: "forbidden",
+			args:    nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkDeniedAnswer(t, tc.err, tc.message, tc.args)
+		})
+	}
+}
+
+// checkDeniedAnswer fails unless err answers 403 with the code access.denied,
+// message and args, and a body that names no part of the object of the denial.
+func checkDeniedAnswer(t *testing.T, err error, message string, args map[string]any) {
+	t.Helper()
+
+	rec := writeWith(t, problem.Writer{Logger: nil, Classify: nil, KeepDenied: nil}, err)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	got := body(t, rec)
+	if got.Code != http.StatusForbidden || got.ErrorCode != errcode.AccessDenied || got.Message != message {
+		t.Errorf("answer = %d %q %q, want %d %q %q",
+			got.Code, got.ErrorCode, got.Message, http.StatusForbidden, errcode.AccessDenied, message)
+	}
+
+	if !reflect.DeepEqual(got.ErrorArgs, args) {
+		t.Errorf("errorArgs = %v, want %v", got.ErrorArgs, args)
+	}
+
+	for _, absent := range []string{deniedObject, deniedSubject, deniedNamespace} {
+		if strings.Contains(rec.Body.String(), absent) {
+			t.Errorf("body holds %q: %s", absent, rec.Body.String())
+		}
 	}
 }

@@ -1027,7 +1027,10 @@ type Authenticator interface {
 // for an Authorizer that does not know it. An Authorizer that decides these
 // principals itself runs identitytest.RunNamespaceService.
 type Authorizer interface {
-	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
+	// Authorize returns nil if allowed and an error wrapping ErrDenied
+	// otherwise. An authorizer that knows the action and the object returns
+	// a *DeniedError, so that an answer names the missing action and the
+	// kind of the object and never the object itself.
 	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
 	// ListObjects returns the scope of the objects where p may perform
 	// action. Authorize allows p action on each object in the scope. A
@@ -1037,6 +1040,50 @@ type Authorizer interface {
 	// A decorator that does not filter the scope says so; its callers then
 	// Authorize the namespace of the list first.
 	ListObjects(ctx context.Context, p Principal, action Action) (Scope, error)
+}
+
+// DeniedError is the error of a denied action: the principal Subject may not
+// perform Action on Object. It unwraps to ErrDenied, so errors.Is(err,
+// ErrDenied) holds for it. ObjectKind names the kind of the object, so an
+// adapter can answer the missing action and the kind of the object without
+// naming the object, which the caller may not see.
+type DeniedError struct {
+	// Subject is the subject of the principal that the authorizer refused.
+	Subject string
+	// Action is the action that the principal lacks.
+	Action Action
+	// Object is the object of the action. The text of the error names it;
+	// an answer names its kind only.
+	Object Object
+}
+
+// Error returns the text of a denial: the sentinel, the subject, the action
+// and the object, as the text of an authorizer denial always read.
+func (e *DeniedError) Error() string {
+	return fmt.Sprintf("%s: %s may not %s on %q", ErrDenied, e.Subject, e.Action, e.Object.String())
+}
+
+// Unwrap returns ErrDenied.
+func (e *DeniedError) Unwrap() error { return ErrDenied }
+
+// ObjectKind returns the kind of the object of the denial in the words of
+// the API: "namespace", "unit", "collection", "principal", "caller" or
+// "server". It names no object.
+func (e *DeniedError) ObjectKind() string {
+	switch {
+	case e.Object.IsServer():
+		return "server"
+	case e.Object.IsCaller():
+		return "caller"
+	case e.Object.IsPrincipal():
+		return "principal"
+	case e.Object.IsUnit():
+		return "unit"
+	case e.Object.IsCollection():
+		return "collection"
+	default:
+		return "namespace"
+	}
 }
 
 // ExactScoper is an optional interface of an Authorizer. ScopeExact reports
@@ -1329,7 +1376,7 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 		return nil
 	}
 
-	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+	return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 }
 
 // ScopeExact reports that the scope is exact: Authorize and ListObjects
