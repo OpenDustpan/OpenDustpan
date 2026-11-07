@@ -259,10 +259,11 @@ func (m *Method) Strip(r *http.Request, peer netip.Addr) bool {
 
 // Consume removes the secret header of the plain mode from r after the
 // caller read the request facts and called FromRequest, and reports
-// whether it removed a header. The caller calls Consume after a successful
-// sign-in and after a refused one, so that no handler reads the shared
-// secret of the proxy. The jwt mode has no secret header, so Consume
-// removes nothing.
+// whether it removed a header. The HTTP adapter calls the methods in this
+// order: Strip, then FromRequest, then Consume after a successful sign-in
+// and after a refused one, then the next handler. So no handler reads the
+// shared secret of the proxy. The jwt mode has no secret header, so
+// Consume removes nothing.
 func (m *Method) Consume(r *http.Request) bool {
 	if r == nil || m.secretHeader == "" {
 		return false

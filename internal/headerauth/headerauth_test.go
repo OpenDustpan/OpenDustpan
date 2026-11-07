@@ -202,6 +202,66 @@ func TestTheSecretHeaderNeverReachesTheHandler(t *testing.T) {
 	}
 }
 
+// Consume removes only the secret header of the plain mode. The jwt mode
+// has no secret header: Consume reports false and removes nothing.
+func TestConsumeRemovesOnlyTheSecretHeader(t *testing.T) {
+	t.Parallel()
+
+	jwtCfg := headerauth.Config{
+		HTTPClient: http.DefaultClient, Now: fixedNow, ProviderID: providerID, Mode: headerauth.ModeJWT,
+		TrustedProxies: proxies(), Enabled: nil, UserHeader: "X-Auth-Token", GroupsHeader: "", SecretHeader: "",
+		Secret: session.NewPassword(""), KeyTimeout: 0,
+		JWT: headerauth.JWTConfig{
+			Preset: headerauth.PresetCustom, Issuer: customIss, Audience: audience,
+			KeyURL: "https://issuer.example.com/jwks", Region: "", SignerARN: "", ClientID: "", GroupsClaim: "",
+		},
+	}
+
+	tests := []struct {
+		cfg         headerauth.Config
+		header      http.Header
+		want        http.Header
+		name        string
+		wantRemoved bool
+	}{
+		{
+			name: "the plain mode", cfg: plainConfig(&atomic.Bool{}, groupsHeader), wantRemoved: true,
+			header: http.Header{"X-Auth-User": {"carol"}, "X-Proxy-Secret": {sharedSecret}},
+			want:   http.Header{"X-Auth-User": {"carol"}},
+		},
+		{
+			name: "the jwt mode", cfg: jwtCfg, wantRemoved: false,
+			header: http.Header{"X-Auth-Token": {"a.b.c"}, "X-Proxy-Secret": {sharedSecret}},
+			want:   http.Header{"X-Auth-Token": {"a.b.c"}, "X-Proxy-Secret": {sharedSecret}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := newMethod(t, tc.cfg)
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+			r.Header = tc.header.Clone()
+
+			if got := m.Consume(r); got != tc.wantRemoved {
+				t.Fatalf("Consume() = %v, want %v", got, tc.wantRemoved)
+			}
+
+			if len(r.Header) != len(tc.want) {
+				t.Fatalf("Consume left the headers %v, want %v", r.Header, tc.want)
+			}
+
+			for name, values := range tc.want {
+				if !slices.Equal(r.Header[name], values) {
+					t.Fatalf("Consume left %s = %v, want %v", name, r.Header[name], values)
+				}
+			}
+		})
+	}
+}
+
 // checkNoSecret fails when a spelling of the secret header stays in got.
 func checkNoSecret(t *testing.T, got http.Header) {
 	t.Helper()
