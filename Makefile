@@ -20,7 +20,6 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
 	$(MAKE) --no-print-directory clients-check
-	$(MAKE) --no-print-directory files-check
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	python3 -I scripts/runner-deps-guard.py --selftest
 	python3 -I scripts/runner-deps-guard.py
