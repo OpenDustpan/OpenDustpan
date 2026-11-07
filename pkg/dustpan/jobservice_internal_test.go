@@ -254,11 +254,21 @@ func checkPlanSpec(t *testing.T, spec *job.Spec, req *job.StartRequest, wantPool
 	t.Helper()
 
 	if spec.Pool != wantPool || spec.Unit.String() != req.Unit.String() || spec.Unit.UnitID() != "ws-1" ||
-		spec.Operation != job.OperationPlan || spec.Executor != job.ExecutorRunner ||
-		spec.Location != req.Location || len(spec.Steps) != 2 || spec.Profile != "" ||
+		spec.Operation != req.Operation || spec.Executor != job.ExecutorRunner ||
+		spec.Location != req.Location || len(spec.Steps) != wantStepCount(req.Operation) || spec.Profile != "" ||
 		len(spec.Edits) != 0 || spec.Delivery != "" {
-		t.Fatalf("spec = %+v, want a plan of web on pool %q at %+v", *spec, wantPool, req.Location)
+		t.Fatalf("spec = %+v, want a %s of web on pool %q at %+v", *spec, req.Operation, wantPool, req.Location)
 	}
+}
+
+// wantStepCount is the number of steps of an OpenTofu job of op: init and plan,
+// and for an apply or a destroy also init and apply.
+func wantStepCount(op job.Operation) int {
+	if op == job.OperationPlan {
+		return 2
+	}
+
+	return 4
 }
 
 func TestJobPlannerPools(t *testing.T) {
@@ -371,13 +381,36 @@ func TestJobPlannerRequest(t *testing.T) {
 	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
 
 	runPlannerCases(t, []plannerCase{
-		{"apply", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationApply }, job.ErrUnsupported, ""},
+		{"apply", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationApply }, nil, "pool-1"},
+		{"destroy", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationDestroy }, nil, "pool-1"},
 		{
-			"destroy",
+			"a refresh that is no drift check",
 			pools,
 			nil,
-			func(q *job.StartRequest) { q.Operation = job.OperationDestroy },
+			func(q *job.StartRequest) { q.Operation = job.OperationRefresh },
 			job.ErrUnsupported,
+			"",
+		},
+		{
+			"an apply with edits",
+			pools,
+			nil,
+			func(q *job.StartRequest) {
+				q.Operation = job.OperationApply
+				q.Edits = []job.FileEdit{{Path: "main.tf", Keys: nil}}
+			},
+			job.ErrInvalid,
+			"",
+		},
+		{
+			"an apply with a delivery",
+			pools,
+			nil,
+			func(q *job.StartRequest) {
+				q.Operation = job.OperationApply
+				q.Delivery = job.DeliveryDirectPush
+			},
+			job.ErrInvalid,
 			"",
 		},
 		{
