@@ -367,6 +367,61 @@ func TestDevResetRefusesADirectoryWithAnOldCopy(t *testing.T) {
 	}
 }
 
+// TestDevResetRefusesASymlinkedOldCopy makes the copy under the old suffix a
+// symbolic link to a file that stays. dev reset refuses the directory before
+// it moves any data, names the link, and keeps the link and its target.
+func TestDevResetRefusesASymlinkedOldCopy(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		devDBName + devResetSuffix + devResetOldSuffix,
+		devBlobsName + devResetSuffix + devResetOldSuffix,
+	} {
+		assertSymlinkedOldCopyRefused(t, name)
+	}
+}
+
+// assertSymlinkedOldCopyRefused links the copy name to a file outside the data
+// directory and checks that dev reset refuses the directory and keeps the link
+// and its target.
+func assertSymlinkedOldCopyRefused(t *testing.T, name string) {
+	t.Helper()
+
+	dir := resetTestDir(t, installation.KindDev)
+
+	target := filepath.Join(t.TempDir(), "backup")
+	if err := os.WriteFile(target, []byte("last good backup"), 0o600); err != nil {
+		t.Fatalf("write the target of %s: %v", name, err)
+	}
+
+	link := filepath.Join(dir, name)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("link %s: %v", name, err)
+	}
+
+	_, err := runReset(t, dir)
+	if err == nil {
+		t.Fatalf("reset with the link %s = nil, want a refusal that names it", name)
+	}
+
+	if !errors.Is(err, errDevResetOldCopy) || !strings.Contains(err.Error(), filepath.Join(dir, name)) {
+		t.Fatalf("reset with the link %s = %v, want a refusal that names it", name, err)
+	}
+
+	info, statErr := os.Lstat(link)
+	if statErr != nil {
+		t.Fatalf("link %s after the refusal: %v, want it in place", name, statErr)
+	}
+
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link %s after the refusal = %v, want a symbolic link", name, info.Mode())
+	}
+
+	if got := readResetFile(t, target); got != "last good backup" {
+		t.Fatalf("target of %s = %q after the refusal, want it kept", name, got)
+	}
+}
+
 // errInjectedRename is the error of a rename that a test makes fail.
 var errInjectedRename = errors.New("injected rename failure")
 

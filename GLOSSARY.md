@@ -1695,6 +1695,10 @@ _Avoid_: Scheme, theme (for branding)
 The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. They also hold the language, the formatting locale and the digits (ADR 181). They hold the clock (`hourCycle`), the date style, the first day of the week and the time zone too. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme. The server stores only the settings that a person changed, and a field that the person never set has its default. A `PATCH` is a JSON merge patch, and one that changes nothing writes no audit entry. A row belongs to a person, not to a namespace.
 _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
+**Home**:
+The first screen of a person in the console. It shows, in this order: failed runs, approvals that wait for the person, locks the person holds, and changes since the last visit (ADR 311). It is not the same as **Principal home**.
+_Avoid_: Dashboard, landing page, home installation, home region (see **Primary installation**)
+
 
 **Language** (of a person):
 The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 33 languages of ADR 181 and ADR 231. The language also sets the direction of the page: `ar` and `he` write from right to left. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.

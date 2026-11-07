@@ -130,7 +130,9 @@ linters:
           # The launcher contract is imported by the runner module, so it
           # imports no part of this server. It never imports internal code,
           # a SQL driver or the forge, so a move to another module is a move
-          # of files. Defense in depth: the domain rule also applies to it.
+          # of files. Defense in depth: the domain rule also applies to it. For
+          # pkg/launcher/proxy, which may import net/http, the launcherproxy
+          # rule below repeats the other denials of the domain rule.
           files:
             - "**/pkg/launcher/**"
             - "!**/*_test.go"
@@ -147,6 +149,31 @@ linters:
               desc: The launcher contract never links a SQL driver.
             - pkg: github.com/mattn/go-sqlite3
               desc: The launcher contract never links a SQL driver.
+        launcherproxy:
+          # The job proxy is an HTTP proxy, so the domain rule excludes it and
+          # it may import net/http. This rule puts back every other denial of
+          # the domain rule, so the job proxy keeps the same layers: no store,
+          # blob or notify adapter, no transport adapter, no metrics.
+          # Defense in depth: the launcher rule also applies to it, and
+          # deps_test.go checks every package that it links.
+          files:
+            - "**/pkg/launcher/proxy/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/pkg/store
+              desc: The job proxy depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/internal/api
+              desc: The job proxy must not import transport adapters.
+            - pkg: opendustpan.org/opendustpan/pkg/blob/
+              desc: The job proxy depends on the blob port, never on an adapter.
+            - pkg: opendustpan.org/opendustpan/pkg/notify/
+              desc: The job proxy depends on the notify.Sender port, never on a sender adapter.
+            - pkg: database/sql
+              desc: SQL belongs in store/, not in the job proxy.
+            - pkg: github.com/jackc/pgx
+              desc: SQL belongs in store/, not in the job proxy.
+            - pkg: opendustpan.org/opendustpan/internal/metrics
+              desc: The job proxy must not import metrics.
         jobproxy:
           # The launcher links the job proxy core, so it imports no part of
           # this server. It never imports internal code, a SQL driver or the
@@ -274,6 +301,10 @@ linters:
             - "**/internal/*svc/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
+            # The job proxy is an HTTP proxy, so it imports net/http on
+            # purpose. The launcher rule still applies to it: no internal
+            # code, no forge, no SQL driver.
+            - "!**/pkg/launcher/proxy/**"
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: Domain code depends on ports, never on store adapters.
@@ -367,6 +398,80 @@ linters:
               desc: Only the machine runner pulls and unpacks OCI images (ADR 139).
             - pkg: opendustpan.org/opendustpan/cmd/dustpan-runner
               desc: The runner module imports the server module, never the reverse (ADR 139).
+        faultlog:
+          files:
+            - "**/internal/api/faultlog/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/apidesc$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/refusal$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        apidesc:
+          files:
+            - "**/internal/api/apidesc/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/refusal$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        refusal:
+          files:
+            - "**/internal/api/refusal/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        admit:
+          files:
+            - "**/internal/api/admit/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        idempotent:
+          files:
+            - "**/internal/api/idempotent/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        problem:
+          files:
+            - "**/internal/api/problem/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        stategate:
+          files:
+            - "**/internal/api/stategate/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/pulumi$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/tfe$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/tofuhttp$
+              desc: The import goes against the layer order of the helper packages.
 
     dupl:
       threshold: 120

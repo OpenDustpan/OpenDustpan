@@ -54,6 +54,9 @@ type Config struct {
 	// Retry is the wait before the first retry of a call that got no
 	// answer. Zero takes DefaultRetry.
 	Retry time.Duration
+	// Sleep waits before a retry of a call and reports false when the
+	// wait ended before the duration. Nil waits on the clock.
+	Sleep func(ctx context.Context, d time.Duration) bool
 }
 
 // Defaults of Config.
@@ -244,6 +247,13 @@ func (r *phaseRun) runPhase(ctx context.Context) launcher.ExitCode {
 
 	outcome := r.runSteps(ctx)
 
+	// The renewal loop runs until the report ends, so that the retries of the
+	// report, which can wait up to a lease each, keep the claim.
+	code := launcher.ExitClaimLost
+	if !r.isLost() {
+		code = r.finish(ctx, outcome, launcher.ExitOK)
+	}
+
 	stopRenew()
 	<-done
 
@@ -253,7 +263,7 @@ func (r *phaseRun) runPhase(ctx context.Context) launcher.ExitCode {
 		return launcher.ExitClaimLost
 	}
 
-	return r.finish(ctx, outcome, launcher.ExitOK)
+	return code
 }
 
 // unsupported returns the reason why this release cannot run the
@@ -295,7 +305,9 @@ func (r *phaseRun) finish(ctx context.Context, f protocol.Finish, code launcher.
 }
 
 // retry calls call, and calls it again after a wait when it got no answer,
-// up to retries times.
+// up to retries times. A Retry-After of the answer that is longer than the
+// wait raises the wait, up to runner.MinLease: the shortest claim lease, so
+// one wait never outlasts a lease. The backoff of the next wait is unchanged.
 func (r *phaseRun) retry(ctx context.Context, call func() error) error {
 	wait := r.cfg.Retry
 	if wait <= 0 {
@@ -305,7 +317,16 @@ func (r *phaseRun) retry(ctx context.Context, call func() error) error {
 	err := call()
 
 	for i := 0; i < retries && errors.Is(err, session.ErrUnavailable); i++ {
-		if !sleep(ctx, nil, wait) {
+		d := wait
+
+		var serr *session.Error
+		// Defense in depth: the transport caps the header too; this cap
+		// stays so that another transport cannot stall a lease.
+		if errors.As(err, &serr) && serr.RetryAfter > d {
+			d = min(serr.RetryAfter, runner.MinLease)
+		}
+
+		if !r.sleep(ctx, d) {
 			return err
 		}
 
@@ -314,6 +335,16 @@ func (r *phaseRun) retry(ctx context.Context, call func() error) error {
 	}
 
 	return err
+}
+
+// sleep waits for d before a retry. The Sleep of the config replaces the
+// wait of the clock.
+func (r *phaseRun) sleep(ctx context.Context, d time.Duration) bool {
+	if r.cfg.Sleep != nil {
+		return r.cfg.Sleep(ctx, d)
+	}
+
+	return sleep(ctx, nil, d)
 }
 
 // renewLoop renews the claim until ctx ends. It records a cancel and a lost
