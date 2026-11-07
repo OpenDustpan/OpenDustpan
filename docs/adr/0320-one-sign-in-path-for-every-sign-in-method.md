@@ -153,7 +153,7 @@ not say how a group value of an identity provider finds a group.
    principal in their own records, with the code that exists:
    - The local password: `localusersvc.Service.SignIn` reads the local user
      by its user name, checks the password and the state of the principal,
-     and keeps the lockout of ADR 285 decisions 13 to 16. It returns the
+     and keeps the lockout of ADR 285 decisions 13, 14, 15 and 16. It returns the
      principal ID.
    - The passkey: the WebAuthn store of `pkg/mfa` reads the credential of
      the assertion and its person, and checks the state of the principal.

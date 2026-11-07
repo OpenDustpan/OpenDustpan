@@ -288,6 +288,7 @@ func cutRun(tool string, store e2e.Store, version, marker string) e2e.Run {
 		ChecksumSource: "pinned",
 		Steps:          steps,
 		Requests:       nil,
+		Skipped:        nil,
 	}
 }
 
@@ -345,5 +346,6 @@ func largeRun(tool string, store e2e.Store, version, marker, stderr string) e2e.
 		ChecksumSource: "pinned",
 		Steps:          steps,
 		Requests:       requests,
+		Skipped:        nil,
 	}
 }

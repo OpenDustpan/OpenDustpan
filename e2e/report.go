@@ -35,6 +35,29 @@ type Run struct {
 	ChecksumSource string       `json:"checksumSource"`
 	Steps          []StepResult `json:"steps"`
 	Requests       []Entry      `json:"requests"`
+	// Skipped lists the scenarios that did not run in this mode, each with the
+	// contract lines it would have produced.
+	Skipped []SkippedScenario `json:"skipped,omitempty"`
+}
+
+// Gap is one contract line that a skipped scenario would have produced: a
+// status of a route.
+type Gap struct {
+	Route  string `json:"route"`
+	Status int    `json:"status"`
+}
+
+// Line returns the text that Contract.Missing gives when the status is gone.
+func (g Gap) Line() string {
+	return g.Route + ": " + fmt.Sprintf(statusGoneFormat, g.Status)
+}
+
+// SkippedScenario records a scenario that did not run in this mode, why, and
+// the contract lines that only it produces.
+type SkippedScenario struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+	Gaps   []Gap  `json:"gaps,omitempty"`
 }
 
 // ReportDir returns where reports are written.
@@ -59,6 +82,7 @@ func NewRun(env *Env) Run {
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          env.Steps(),
 		Requests:       env.Recorder.Entries(),
+		Skipped:        env.Skipped(),
 	}
 }
 
@@ -89,6 +113,7 @@ func NotRun(tool, label string, store Store, reason string, skipped bool) Run {
 			Skipped:  skipped,
 		}},
 		Requests: nil,
+		Skipped:  nil,
 	}
 }
 
