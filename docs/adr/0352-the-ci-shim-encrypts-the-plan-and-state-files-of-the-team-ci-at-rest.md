@@ -1,4 +1,4 @@
-# 350. The CI shim encrypts the plan and state files of the team CI at rest
+# 352. The CI shim encrypts the plan and state files of the team CI at rest
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 

@@ -8,7 +8,7 @@ created: 2026-10-20
 # RFC 94. The CI shim, which gives secrets to a tool in a team's own CI at run time, keeps them out of state, and encrypts the local plan and state files at rest
 
 Status: draft. The scope decisions of section K, and the log redaction and
-memory limits of K9 and K10, are decided (ADR 350). Nothing
+memory limits of K9 and K10, are decided (ADR 352). Nothing
 else in this RFC is decided. No code exists for the shim. The owner answers
 the questions at the end.
 
@@ -70,7 +70,7 @@ is not a job: the server schedules no work and holds no claim.
   built for OpenTofu state: `pkg/workspace` has no reference to the item
   sealer. It is an open work item. The Pulumi update events use the item
   sealer (`pkg/stack/event_seal.go`).
-- **ADR 350 (owner, 2026-11-07).** The shim encrypts at rest the plan files
+- **ADR 352 (owner, 2026-11-07).** The shim encrypts at rest the plan files
   and state files that the tool writes in the team's CI. A team that runs the
   tool without the shim is out of scope. The docs say so in plain words and
   give the one command that adopts the shim. The shim stays a convenience
@@ -1233,7 +1233,7 @@ section I.
 
 ### K. Encryption at rest of the local plan and state files
 
-**Decided (owner, 2026-11-07, ADR 350).** The shim encrypts at rest the plan
+**Decided (owner, 2026-11-07, ADR 352).** The shim encrypts at rest the plan
 files and state files that the tool writes in the team's CI. A team that runs
 the tool without the shim is out of scope. The docs say so in plain words,
 and they give the one command that adopts the shim. The design below is a
@@ -1391,7 +1391,7 @@ the shim list these in the first lines of the page, next to H.
   handles a state that the client encrypted. An e2e item shows which one
   holds for the TFE-compatible API with the shim's `TF_ENCRYPTION`, and E4
   follows the result.
-- **A team that does not use the shim.** Out of scope (ADR 350). The docs say
+- **A team that does not use the shim.** Out of scope (ADR 352). The docs say
   it, and give the one command that adopts the shim, for example
   `dustpan-ci run --unit <unit> -- tofu plan -out=plan` (the exact form is for
   the design, B3).
@@ -1537,7 +1537,7 @@ The owner keeps these. Each recommendation is the author's.
     and login blocks next.
 
 **Questions added for section K (at most 4).** The scope of K is decided
-(ADR 350). These four open the design.
+(ADR 352). These four open the design.
 
 12. Who sets the key of the files, and where does the key come from? The
     options are K3 options 1 to 3. Recommendation: option 2 (the key is a
@@ -1591,7 +1591,7 @@ The owner keeps these. Each recommendation is the author's.
 
 Empty until the RFC is accepted (link the ADR) or dropped (say why).
 
-Partly decided: [ADR 350](../adr/0350-the-ci-shim-encrypts-the-plan-and-state-files-of-the-team-ci-at-rest.md)
+Partly decided: [ADR 352](../adr/0352-the-ci-shim-encrypts-the-plan-and-state-files-of-the-team-ci-at-rest.md)
 (owner, 2026-11-07) decides the scope of section K, the log redaction of K9
 and the memory mitigations of K10. The rest of this RFC stays
 open.
