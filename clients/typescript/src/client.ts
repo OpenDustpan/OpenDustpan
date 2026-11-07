@@ -16,6 +16,7 @@ import type {
   CreateLocalUserInput,
   CreateNamespaceIssuerKeysInput,
   CreateNotificationSinkInput,
+  CreateNotificationSubscriptionInput,
   CreatePlacementRuleInput,
   CreateProfileInput,
   CreateProfileRevisionInput,
@@ -34,6 +35,7 @@ import type {
   DeleteGitHostInstallationInput,
   DeleteNamespaceContextInput,
   DeleteNotificationSinkInput,
+  DeleteNotificationSubscriptionInput,
   DeletePlacementRuleInput,
   DeleteProfileInput,
   DeleteTriggerInput,
@@ -71,6 +73,7 @@ import type {
   GetNamespaceLockInput,
   GetNamespaceSettingsInput,
   GetNotificationSinkInput,
+  GetNotificationSubscriptionInput,
   GetOutputSharingInput,
   GetPlacementRuleInput,
   GetPreferencesInput,
@@ -101,7 +104,9 @@ import type {
   ListGitHostConnectionsInput,
   ListGitHostInstallationsInput,
   ListModuleReleasesInput,
+  ListNotificationDeliveriesInput,
   ListNotificationSinksInput,
+  ListNotificationSubscriptionsInput,
   ListPasskeysInput,
   ListPlacementRulesInput,
   ListProfileRevisionsInput,
@@ -126,9 +131,11 @@ import type {
   PutGitHostAppInput,
   PutGitHostInstallationInput,
   RedeemLocalUserCodeInput,
+  RedeliverNotificationInput,
   RemovePasskeyInput,
   RemoveRegistryKeyInput,
   ReplaceNotificationSinkInput,
+  ReplaceNotificationSubscriptionInput,
   ReplaceTriggerInput,
   ReplaceUnitDefaultsInput,
   ReplaceUnitSettingsInput,
@@ -199,6 +206,7 @@ import type {
   CreateLocalUserRequest,
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
+  CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -257,7 +265,9 @@ import type {
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
   ListModuleReleasesResponse,
+  ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
+  ListNotificationSubscriptionsResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -290,8 +300,12 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NotificationDelivery,
+  NotificationFilter,
+  NotificationFilterRequest,
   NotificationSink,
   NotificationSinkTest,
+  NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
   Passkey,
@@ -323,6 +337,7 @@ import type {
   RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
+  ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
   RequestBodyTooLargeErrorArgs,
   RequestIdempotencyKeyReplayedSecretError,
@@ -482,6 +497,10 @@ export class Client {
     return execute(this.transport, operations.createNotificationSink, input);
   }
 
+  createNotificationSubscription(input: CreateNotificationSubscriptionInput): Promise<Answer<NotificationSubscription>> {
+    return execute(this.transport, operations.createNotificationSubscription, input);
+  }
+
   createPlacementRule(input: CreatePlacementRuleInput): Promise<Answer<PlacementRule>> {
     return execute(this.transport, operations.createPlacementRule, input);
   }
@@ -552,6 +571,10 @@ export class Client {
 
   deleteNotificationSink(input: DeleteNotificationSinkInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteNotificationSink, input);
+  }
+
+  deleteNotificationSubscription(input: DeleteNotificationSubscriptionInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deleteNotificationSubscription, input);
   }
 
   deletePlacementRule(input: DeletePlacementRuleInput): Promise<Answer<void>> {
@@ -702,6 +725,10 @@ export class Client {
     return execute(this.transport, operations.getNotificationSink, input);
   }
 
+  getNotificationSubscription(input: GetNotificationSubscriptionInput): Promise<Answer<NotificationSubscription>> {
+    return execute(this.transport, operations.getNotificationSubscription, input);
+  }
+
   getOutputSharing(input: GetOutputSharingInput): Promise<Answer<OutputSharing>> {
     return execute(this.transport, operations.getOutputSharing, input);
   }
@@ -822,8 +849,16 @@ export class Client {
     return execute(this.transport, operations.listModuleReleases, input);
   }
 
+  listNotificationDeliveries(input: ListNotificationDeliveriesInput): Promise<Answer<ListNotificationDeliveriesResponse>> {
+    return execute(this.transport, operations.listNotificationDeliveries, input);
+  }
+
   listNotificationSinks(input: ListNotificationSinksInput): Promise<Answer<ListNotificationSinksResponse>> {
     return execute(this.transport, operations.listNotificationSinks, input);
+  }
+
+  listNotificationSubscriptions(input: ListNotificationSubscriptionsInput): Promise<Answer<ListNotificationSubscriptionsResponse>> {
+    return execute(this.transport, operations.listNotificationSubscriptions, input);
   }
 
   listPasskeys(input: ListPasskeysInput = {}): Promise<Answer<ListPasskeysResponse>> {
@@ -922,6 +957,10 @@ export class Client {
     return execute(this.transport, operations.redeemLocalUserCode, input);
   }
 
+  redeliverNotification(input: RedeliverNotificationInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.redeliverNotification, input);
+  }
+
   removePasskey(input: RemovePasskeyInput): Promise<Answer<void>> {
     return execute(this.transport, operations.removePasskey, input);
   }
@@ -932,6 +971,10 @@ export class Client {
 
   replaceNotificationSink(input: ReplaceNotificationSinkInput): Promise<Answer<NotificationSink>> {
     return execute(this.transport, operations.replaceNotificationSink, input);
+  }
+
+  replaceNotificationSubscription(input: ReplaceNotificationSubscriptionInput): Promise<Answer<NotificationSubscription>> {
+    return execute(this.transport, operations.replaceNotificationSubscription, input);
   }
 
   replaceTrigger(input: ReplaceTriggerInput): Promise<Answer<Trigger>> {

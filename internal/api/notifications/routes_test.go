@@ -15,7 +15,8 @@ import (
 
 // routeTarget fills the path values of a route.
 func routeTarget(rt apinotifications.Route) string {
-	return strings.NewReplacer("{namespace}", "acme", "{sink_id}", "snk-aaaaaaaaaaaaaaaaaaaa").Replace(rt.Path)
+	return strings.NewReplacer("{namespace}", "acme", "{sink_id}", "snk-aaaaaaaaaaaaaaaaaaaa",
+		"{subscription_id}", "sub-aaaaaaaaaaaaaaaaaaaa", "{delivery_id}", "dlv-aaaaaaaaaaaaaaaaaaaa").Replace(rt.Path)
 }
 
 // TestRoutesDeclareActions proves that each route is authorized, declares its
@@ -38,10 +39,15 @@ func TestRoutesDeclareActions(t *testing.T) {
 	}
 
 	// The routes of the design: the list and the get, the create, the replace,
-	// the delete and the test.
+	// the delete and the test of sinks, then the same for subscriptions, the
+	// delivery history and the redelivery.
 	want := replaceNamespace([]string{
 		"GET " + base, "POST " + base, "GET " + base + "/{sink_id}", "PUT " + base + "/{sink_id}",
 		"DELETE " + base + "/{sink_id}", "POST " + base + "/{sink_id}/test",
+		"GET " + subscriptionsBase, "POST " + subscriptionsBase, "GET " + subscriptionsBase + "/{subscription_id}",
+		"PUT " + subscriptionsBase + "/{subscription_id}", "DELETE " + subscriptionsBase + "/{subscription_id}",
+		"GET " + subscriptionsBase + "/{subscription_id}/deliveries",
+		"POST /api/dustpan/v1/namespaces/acme/deliveries/{delivery_id}/redeliver",
 	})
 
 	if len(byPattern) != len(want) {
@@ -181,6 +187,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		change func(cfg *apinotifications.Config)
 	}{
 		{"no service", func(cfg *apinotifications.Config) { cfg.Sinks = nil }},
+		{"no subscription service", func(cfg *apinotifications.Config) { cfg.Subscriptions = nil }},
 		{"no authenticator", func(cfg *apinotifications.Config) { cfg.Authenticator = nil }},
 		{"no authorizer", func(cfg *apinotifications.Config) { cfg.Authorizer = nil }},
 		{"no logger", func(cfg *apinotifications.Config) { cfg.Logger = nil }},
