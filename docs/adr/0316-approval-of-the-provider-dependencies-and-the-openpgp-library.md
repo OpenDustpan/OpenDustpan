@@ -7,6 +7,11 @@ Changes:
 - Extends ADR 176: the dependencies of the provider kit.
 - Extends ADR 177: the OpenPGP library.
 
+Changed by:
+
+- ADR 349 changes decision 1: the OpenPGP library is also allowed in the server registry.
+- ADR 349 extends decision 2: the approved versions apply in the server registry.
+
 ## Context
 
 The project owner made these decisions in the owner decision files of 18 and 20 October 2026. A check on 1 November 2026 found no ADR that states them. ADR 176 lists the dependencies as open.

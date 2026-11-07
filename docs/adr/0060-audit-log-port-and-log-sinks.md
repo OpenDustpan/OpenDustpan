@@ -20,6 +20,7 @@ Changed by:
 - ADR 210 changes decision 8: route paths, action names, query times and
   paging.
 - ADR 240 changes decision 4: the download route writes one of two kinds.
+- ADR 334 extends decision 12: non-finite floats as text in the OTLP and webhook sinks, and the `ca-file` option of the OTLP sink.
 
 ## Context
 

@@ -7,6 +7,7 @@ Changed by:
 - ADR 268 changes decision 3: the route DELETE of the approval default.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 335 extends decision 4: a save of a gate while locks are held answers 409.
 
 ## Context
 

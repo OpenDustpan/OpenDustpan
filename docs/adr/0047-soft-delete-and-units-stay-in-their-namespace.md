@@ -4,6 +4,7 @@ Status: accepted · 2026-10-12 · the final delete superseded in part by ADR 151
 
 Changed by:
 
+- ADR 346 extends decisions 5 and 7: no one-click move between namespaces. A move between collections lists what breaks.
 - ADR 151 changes decision 3: the final delete also shreds item keys and
   writes a tombstone.
 - ADR 153 extends decisions 1 and 3: dependents check, purge confirmation and
