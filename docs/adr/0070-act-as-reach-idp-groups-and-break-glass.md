@@ -19,7 +19,7 @@ Changed by:
 - ADR 306 extends decision 21: the limit and the window of the mass-suspension alert.
 - ADR 320 extends decision 12: LDAP memberships have the source `ldap`. SAML, CAS and trusted-header persons have their own principal source.
 - ADR 321 extends decision 19: an LDAP sync applies a disabled entry at once. A search that misses more persons than a bound waits for a site administrator.
-- ADR 332 extends decisions 12, 14, 16 and 22: a membership from a claim rule records the rule, and the rules are a sensitive setting.
+- ADR 332 extends decisions 12, 14, 16 and 22: a claim rule records its rule. The rules are a sensitive setting.
 
 ## Context
 
