@@ -123,13 +123,8 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 	// The two commands of the guide that make the collection and the rule. The
 	// test reads them from the guide and runs them with the built binary, so it
 	// fails when the guide loses a step or changes a flag.
-	caFile := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(caFile, []byte(env.CABundle()), quickstartFileMode); err != nil {
-		t.Fatalf("write the CA file: %v", err)
-	}
-
-	for _, args := range quickstartGuideCommands(t, quickstartHostPrefix, env.URL, caFile, quickstartNamespace) {
-		res := env.RunBinary(ctx, t, args...)
+	for _, args := range quickstartGuideCommands(t, quickstartHostPrefix, env.URL, env.CABundle(), quickstartNamespace) {
+		res := env.RunBinaryWithEnv(ctx, t, []string{"DUSTPAN_ADMIN_TOKEN=" + env.AdminToken()}, args...)
 		if res.ExitCode != 0 {
 			t.Fatalf("opendustpan %s: exit %d: %s", strings.Join(args, " "), res.ExitCode, res.Stderr)
 		}
@@ -215,6 +210,10 @@ func quickstartGuideCommands(
 			args = append(args, quickstartArg(field, serverURL, caFile, namespace))
 		}
 
+		if len(args) < 2 || !quickstartIsRuleCommand(args[0], args[1]) {
+			continue
+		}
+
 		commands = append(commands, args)
 	}
 
@@ -226,6 +225,13 @@ func quickstartGuideCommands(
 	}
 
 	return commands
+}
+
+// quickstartIsRuleCommand reports whether the first two words of a command of
+// the guide make the collection or the placement rule. Other commands of the
+// section, such as serve, are skipped.
+func quickstartIsRuleCommand(first, second string) bool {
+	return (first == "collection" && second == "create") || (first == "placement" && second == "add")
 }
 
 // quickstartArg returns one argument of a command of the guide, with the
