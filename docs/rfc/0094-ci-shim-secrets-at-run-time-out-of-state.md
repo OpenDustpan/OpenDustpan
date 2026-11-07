@@ -1,14 +1,21 @@
 ---
 rfc: 94
-title: The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state
+title: The CI shim, which gives secrets to a tool in a team's own CI at run time, keeps them out of state, and encrypts the local plan and state files at rest
 status: draft
 created: 2026-10-20
 ---
 
-# RFC 94. The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state
+# RFC 94. The CI shim, which gives secrets to a tool in a team's own CI at run time, keeps them out of state, and encrypts the local plan and state files at rest
 
-Status: draft. Nothing in this RFC is decided. No code exists for it. The
-owner answers the questions at the end.
+Status: draft. The scope decisions of section K, and the log redaction and
+memory limits of K9 and K10, are decided (ADR 352). Nothing
+else in this RFC is decided. No code exists for the shim. The owner answers
+the questions at the end.
+
+The shim has two jobs: secrets at run time that stay out of state (sections
+A to J), and encryption at rest of the plan files and state files that the
+tool writes in the team's CI (section K). A team that runs the tool without
+the shim is out of scope for both jobs.
 
 Read section H first. The shim runs in the same CI job as the code that it
 starts. It is a convenience layer, not a security boundary. Slice 1 moves a
@@ -44,12 +51,30 @@ This RFC asks:
    of each tool.
 4. What OpenDustpan can promise about secrets in state, and what it cannot.
 5. Which other uses of the shim come in the first slice, and which later.
+6. How the shim encrypts at rest the plan files and state files that the
+   tool writes in the team's CI, and what that cannot protect (K).
 
 In this RFC, a **CI run** is one start of the shim in a team's own CI. It
 is not a job: the server schedules no work and holds no claim.
 
 ## What is decided already
 
+- **ADR 41 decisions 2 and 10, and ADR 151 decision 7 (owner, 2026-10-11 and
+  2026-10-17).** A state read masks secret values. The server seals OpenTofu
+  state at rest. **Built or open?** Checked on main on 2026-11-07: the workspace
+  service seals each new OpenTofu state through the `workspace.Sealer` port
+  (`pkg/workspace/service.go`, `storeContent`), and `secret.Service` in
+  `pkg/secret` implements it with the data key of the workspace scope. The
+  `dustpan` package wires it. So the sealing of ADR 41 decision 10 is built.
+  The move to an item key for each state version (ADR 151 decision 7) is not
+  built for OpenTofu state: `pkg/workspace` has no reference to the item
+  sealer. It is an open work item. The Pulumi update events use the item
+  sealer (`pkg/stack/event_seal.go`).
+- **ADR 352 (owner, 2026-11-07).** The shim encrypts at rest the plan files
+  and state files that the tool writes in the team's CI. A team that runs the
+  tool without the shim is out of scope. The docs say so in plain words and
+  give the one command that adopts the shim. The shim stays a convenience
+  layer, not a security boundary.
 - **ADR 12, amended by ADR 209 decision 1.** OpenDustpan ships two client
   programs only: the OpenDustpan provider and the run command
   (`opendustpan profile run`). Each tool still connects through the
@@ -315,6 +340,86 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
   inputs) and the wish of that issue (no write to state) differ, and the
   current bridge behavior can change between versions. An e2e item checks
   the behavior of the bridge version under test (J).
+
+### OpenTofu state and plan encryption, and local plan files of Pulumi
+
+Checked on 2026-11-07. From <https://opentofu.org/docs/language/state/encryption/>
+(the page of the current docs, which lists OpenTofu 1.13 as the latest
+release), <https://opentofu.org/blog/opentofu-1-7-0/> and
+<https://www.pulumi.com/docs/iac/concepts/update-plans/>,
+<https://www.pulumi.com/docs/iac/concepts/secrets/>,
+<https://www.pulumi.com/docs/iac/cli/commands/pulumi_preview/>.
+
+- **Version.** The release blog of OpenTofu 1.7.0 has the title "OpenTofu 1.7.0
+  is out with State Encryption, ...". The docs page does not name a minimum
+  version in the text that we read. So "1.7 and later" rests on the release
+  blog.
+- **What it does.** "OpenTofu supports encrypting state and plan files at
+  rest, both for local storage and when using a backend." Configuration is
+  in a `terraform { encryption { ... } }` block, or in the environment
+  variable `TF_ENCRYPTION`. "Both solutions are equivalent and if you use
+  both, OpenTofu will merge the two configurations, overriding any
+  code-based settings with the environment ones."
+- **The block.** `key_provider "<type>" "<name>"`, `method "<type>" "<name>"`
+  with `keys = key_provider...`, and a `state {}` block and a `plan {}`
+  block, each with `method` and an optional `fallback { method = ... }`. The
+  only method is `aes_gcm`. `enforced = true` in `state` or `plan` stops
+  OpenTofu from writing plain data when the environment variable is absent.
+  The docs show it for the environment case: "to prevent unencrypted data
+  from being written in the absence of an environment variable".
+- **Key providers.** `pbkdf2` (passphrase of at least 16 characters, 200,000
+  iterations at least, 600,000 by default), `aws_kms`, `gcp_kms`,
+  `azure_vault`, `openbao` and `external`. For a key management system,
+  "OpenTofu generates a fresh data encryption key for each state or plan file
+  and wraps it with the key you reference". The docs advise a separate key
+  management key for each state file. The OpenBao provider reads `BAO_TOKEN`
+  and `BAO_ADDR`. `pbkdf2` takes `chain = key_provider...` to "receive the
+  passphrase from another key provider". The `external` provider runs a
+  command, and the docs say: "You can use this provider in conjunction with
+  the `chain` option in the PBKDF2 key provider to input a passphrase from an
+  external program." The protocol has three steps: the program writes a
+  one-line header (`{"magic":"OpenTofu-External-Key-Provider","version":1}`),
+  OpenTofu writes metadata to its standard input, and the program writes the
+  key information to its standard output.
+- **Why PBKDF2 and not a short static key.** "AES-GCM ... suffers from 'key
+  saturation'." The docs advise a key-derivation provider with "a long and
+  complex passphrase", or a key management system that rotates keys.
+- **Rollover.** A `fallback` block names the old method. OpenTofu reads with
+  the fallback when the new method fails, and always writes with the new
+  method. Do not rename a key provider or a method after data exists: the
+  encrypted data holds their names as metadata. The option
+  `encrypted_metadata_alias` fixes the metadata key, so a rename is safe.
+- **Plain data is refused.** With encryption on, OpenTofu refuses to read
+  plain data unless an `unencrypted` method is a `fallback`. The docs show the
+  migration in both directions.
+- **What it does not protect.** The docs say: "encryption does not protect
+  against data loss ... and it also does not protect against replay attack",
+  and "OpenTofu does not and cannot protect the sensitive values in the state
+  file from the person running the `tofu` command". Without the key, the
+  files "become unrecoverable".
+- **Remote backend.** ADR 41 records, from the source of the CLI, that the
+  `cloud` backend writes the state with the encryption, reads it back, and
+  sends plain state, `json-state` and `json-state-outputs` to the server. So
+  client-side encryption does not change what the server receives. It
+  protects the files in the work tree of the CI, and the saved plan.
+- **Pulumi plan file.** `pulumi preview --save-plan <path>` ("[PREVIEW]") saves
+  the proposed operations to a plan file. The page of update plans says that
+  the format is "currently experimental and subject to change", and shows a
+  JSON document with `manifest`, `config` and `resourcePlans`. The reference
+  of `pulumi preview` says: `--show-secrets` shows secrets in plain text in
+  the CLI output, and "if used with --save-plan the secrets will also be shown
+  in the plan file". So a default plan file does not hold plain secrets by
+  that flag, but the docs do not say what it holds for an unmarked value. An
+  e2e item. We found no option of the CLI that encrypts the plan file.
+- **Pulumi secrets provider and local files.** Secrets "are encrypted before
+  they're persisted". The providers are `default` (the service), `passphrase`,
+  `awskms`, `azurekeyvault`, `gcpkms` and `hashivault`. With the service
+  backend, the checkpoint stays on the server. The CLI keeps its credentials
+  in `~/.pulumi/credentials.json` (state and backends page), which is the
+  `PULUMI_HOME` file that the shim already puts in a throwaway directory (C3).
+  The stack config file `Pulumi.<stack>.yaml` holds secret values as
+  ciphertext (secrets page). The plan file is the one local file of Pulumi
+  that we know can hold values and has no CLI encryption.
 
 ### How a tool reads a credential from its environment
 
@@ -782,7 +887,7 @@ record routes.
 | A provider credential (a cloud key, a token) | yes | a credential file or a variable that the provider reads, or `ephemeral "opendustpan_profile"` into the provider block |
 | A value that a resource needs once (an initial password) | yes, where the provider has a write-only attribute | the ephemeral resource into the write-only attribute and its version attribute |
 | A value for a provisioner or a `connection` block | yes | an ephemeral value. Provisioner output is not masked by OpenTofu, so the shim mask is the only mask there. |
-| A value in `exports.opentofu` (a variables file) | **no**, unless the variable is `ephemeral = true` | OpenTofu keeps the values of non-ephemeral variables in a saved plan. A plan that a CI job saves with `-out` stays in the team's CI (an artifact, a cache). The server seals a plan that it stores itself (ADR 102 decision 4 and ADR 151), not a plan file of the team's CI. The docs say: "OpenTofu supports encrypting state and plan files at rest". Recommendation: the team turns on state and plan encryption (OpenTofu 1.7 and later) with `enforced = true`. |
+| A value in `exports.opentofu` (a variables file) | **no**, unless the variable is `ephemeral = true` | OpenTofu keeps the values of non-ephemeral variables in a saved plan. A plan that a CI job saves with `-out` stays in the team's CI (an artifact, a cache). The server seals a plan that it stores itself (ADR 102 decision 4 and ADR 151), not a plan file of the team's CI. The docs say: "OpenTofu supports encrypting state and plan files at rest". Recommendation, now decided in scope (owner, 2026-11-07): the shim turns on state and plan encryption (OpenTofu 1.7 and later) with `enforced = true` (K). A team without the shim is out of scope. |
 | The result of a data source (`data "opendustpan_profile"`, `data "external"`) | **no** | stored in plain text in the plan and the state |
 | A value that a resource makes or returns (a generated password, a new access key, a private key) | **no** | stored in the state. Only state encryption protects it. |
 | An attribute of a resource with no write-only form | **no** | stored |
@@ -811,6 +916,8 @@ ciphertext, not out of it (facts). So for Pulumi the promise is
   secrets provider.
 - The leak check (E) detects an exact copy of an injected value in a
   state that the server receives.
+- The plan files and state files that the tool writes in a CI run with the
+  shim are encrypted at rest with a key from a profile (K).
 
 **What OpenDustpan cannot promise.**
 
@@ -818,7 +925,9 @@ ciphertext, not out of it (facts). So for Pulumi the promise is
   the module decides that, through ephemeral values and write-only
   attributes.
 - That a value stays out of a plan file or a state file that the team
-  keeps elsewhere, for example a plan artifact of the CI.
+  keeps elsewhere, for example a plan artifact of the CI. The shim encrypts
+  these files at rest (K), but the value is still in the file, and in the
+  memory and the log of the tool (K6).
 - That the leak check finds a changed copy (base64, part of a string, a
   hash), a value shorter than its minimum length, or a value that the shim
   did not inject.
@@ -951,7 +1060,9 @@ and the variable named by `--id-token-env` from the environment of the tool,
 by name. That limits one path for the tool process. It is not a boundary. The
 boundary is the trust rule (its claim conditions, B5) and its scope (B4.2),
 what the trust token can open, and what the cloud trust policy accepts (ADR
-205 decision 4). The security docs say so in their first lines.
+205 decision 4). The security docs say so in their first lines. The same holds for the
+encryption at rest of section K: it protects a file that leaves the job, not
+the memory, the log or the code of the job (K6).
 
 **Blast radius of slice 1.** Slice 1 moves a long-lived cloud key from the
 CI settings into a profile. Each CI run that matches the rule, and the
@@ -988,6 +1099,7 @@ finds exact copies only.
 | Secret delivery and the trust token (A to C) | 1 | the theme |
 | The CI run record, names only (F) | 1 | small, and needed to show what a CI run read |
 | A manual lock check before the tool starts | 1 | one read of the lock. The server refuses the lock request of the tool (an OpenTofu lock, or the start of a Pulumi update) anyway (ADR 213 decision 10). It does not refuse the state write of a tool that already holds its lock. So this gives a clear message before the tool starts. |
+| Encryption at rest of the local plan and state files (K) | 2 (2a to 2d) | needs the key entry of a profile and the shim. Owner scope decision of 2026-11-07. |
 | The leak check (E) | 2 | needs the walk of each state format |
 | The client trace ID (RFC 92, A4.1) | 2 | one header |
 | The scanner upload (RFC 90, A1) | 2 | the upload route exists then, and the trust token is the credential |
@@ -1112,8 +1224,265 @@ as a shared credentials file.
 - Bridge write-only behavior per version: how the bridge version under test
   stores a write-only value (facts, the third case above).
 
+Slice 1 sets no encryption at rest. The slices 2a to 2d of section K add it,
+each with its own e2e step. A KMS key provider (K3 option 3) comes after login
+blocks.
+
 Later: the leak check (slice 2), login blocks with B6, the other uses of
 section I.
+
+### K. Encryption at rest of the local plan and state files
+
+**Decided (owner, 2026-11-07, ADR 352).** The shim encrypts at rest the plan
+files and state files that the tool writes in the team's CI. A team that runs
+the tool without the shim is out of scope. The docs say so in plain words,
+and they give the one command that adopts the shim. The design below is a
+proposal.
+
+**What is already true on the server.** State that reaches the server is
+sealed at rest, and a read masks secrets (ADR 41, decisions 2 and 10). The
+sealing of OpenTofu state with the data key of the workspace is built. The
+move to an item key is open work (what is decided already). Section K adds
+the files that never reach the server: they stay in the work tree, in a CI
+artifact or in a CI cache.
+
+**K1. Which files.**
+
+| Tool | File | Why it matters |
+| --- | --- | --- |
+| OpenTofu | the saved plan (`-out`) | holds the values of non-ephemeral variables and the result of data sources (D). Many teams keep it as an artifact between a plan job and an apply job. |
+| OpenTofu | a state file in the work tree | with the TFE-compatible backend the state lives on the server. A local copy appears from `tofu state pull`, or from a team that adds a local backend for a test. An e2e item lists the files that a real run leaves in the work tree. |
+| Pulumi | the plan file of `--save-plan` | JSON, experimental format, holds `config` and the plan of each resource (facts). The CLI has no option to encrypt it. |
+| Pulumi | the credentials file in `PULUMI_HOME` | the shim already puts it in a throwaway directory and deletes it (B3.1, C3) |
+
+The shim does not touch a file that the team writes by other means, for
+example the output of `pulumi stack export` that a script redirects to a
+file. It cannot know the path. The docs say so.
+
+**K2. OpenTofu: the `encryption` block, set by the shim.**
+
+The shim sets `TF_ENCRYPTION` for the tool process only. The value is code
+that OpenTofu reads, as in this example. The names are fixed by the shim.
+
+```hcl
+key_provider "external" "opendustpan" {
+  command = ["dustpan-ci", "key-provider"]
+}
+key_provider "pbkdf2" "opendustpan" {
+  chain                    = key_provider.external.opendustpan
+  encrypted_metadata_alias = "opendustpan"
+}
+method "aes_gcm" "opendustpan" {
+  keys = key_provider.pbkdf2.opendustpan
+}
+state {
+  method   = method.aes_gcm.opendustpan
+  enforced = true
+}
+plan {
+  method   = method.aes_gcm.opendustpan
+  enforced = true
+}
+```
+
+- **Why PBKDF2 and not a raw key.** The docs warn about AES-GCM key
+  saturation and advise a key-derivation provider with a long passphrase.
+  The profile entry is that passphrase (K3).
+- **Why `enforced = true`.** OpenTofu then refuses to write a plain plan or
+  plain state, also when the team leaves the shim out of a later step of the
+  job. A plain plan file that reaches an `apply` step fails there, which is
+  the failure that we want.
+- **Why a fixed `encrypted_metadata_alias`.** The encrypted data holds the
+  name of its key provider. A fixed alias lets a later version of the shim
+  rename the provider without breaking old plan files. This is a one-way
+  door (K7).
+- **If the team has its own `encryption` block.** OpenTofu merges the
+  environment configuration over the code, and the environment wins. The shim
+  cannot read the HCL of the team. So the shim stops with exit code 2 when
+  `TF_ENCRYPTION` is already set, and the docs say that the shim owns the
+  `encryption` configuration of a run. A team that wants its own KMS key
+  chooses K3 option 3 later. A code block with other names stays in the
+  merge. An e2e item shows the result.
+- **Existing plain files.** The first run on a unit that has plain local
+  state needs the `unencrypted` method as a `fallback` for one run. The shim
+  does that only with `--migrate-unencrypted`, and the CI run record notes
+  it. The default fails closed.
+
+**K3. Where the key comes from.** The key is one secret entry of a profile of
+the unit (`at-rest-key` by default, set by `--file-key-entry`). It has at
+least 32 random bytes, as base64. OpenTofu needs 16 characters at least for
+PBKDF2. The entry is opened with the trust token under the rules of ADR 203,
+so the open writes an audit entry without a value, and the CI run record
+names the profile, the revision and the path (F). Options for delivery to the
+tool:
+
+1. **The key in `TF_ENCRYPTION` as a `passphrase`.** Simplest. The key is in
+   the environment of the tool and of each provisioner. This breaks the rule
+   of C and question 5 (files only in slice 1).
+2. **The `external` key provider that runs the shim** (above). The key is a
+   file in the memory-backed run directory, mode 0600, and the environment
+   holds its path only. `dustpan-ci key-provider` follows the protocol of the
+   docs: header, metadata on standard input, key on standard output. The code
+   of the tool can still read the file, as it can read any file that the shim
+   gives (H).
+3. **A KMS key provider** (`aws_kms`, `gcp_kms`, `azure_vault`, `openbao`).
+   The profile holds the non-secret settings (the key ID, the region, the
+   address) and the cloud credential is delivered as in slice 1. OpenTofu
+   makes a new data key for each file, and the KMS policy decides who can
+   decrypt. The docs advise a separate KMS key for each state file. This
+   needs a cloud credential with a KMS permission, so it comes after login
+   blocks (ADR 207).
+
+**Recommendation.** Option 2 in slice 1, option 3 later, never option 1.
+
+**K4. Rotation.** A profile has numbered revisions. A run uses the newest
+revision as the `method`, and the previous revision as the `fallback` of the
+`state` block and the `plan` block, so a plan file from the last revision
+still opens. The number of older revisions is a setting of the shim (1 by
+default). OpenTofu always writes with the new method. A plan that waits for
+approval longer than the fallback window cannot open: the apply fails closed
+and the docs say so. A lost key means lost files, as the docs of OpenTofu
+say, so the key is the profile entry and the backup of the profile (ADR 30)
+holds it.
+
+**K5. Pulumi: a file format of our own.** The CLI has no encryption for the
+plan file, so the shim does it.
+
+- The shim reads the argument list of `preview` and `up` for `--save-plan
+  <path>` and `--plan <path>`. It accepts the exact forms `--flag path` and
+  `--flag=path` only, never a shell string. For another form it stops.
+- Before the tool starts, it replaces the path with a file in the run
+  directory. For `--save-plan`, the tool writes there. After the tool ends,
+  the shim seals that file into the path that the team named, and deletes the
+  plain file, also on a signal. For `--plan`, the shim opens the file that
+  the team named into the run directory first.
+- The format has a magic number, a version, a random 16-byte salt, a random
+  12-byte nonce and AES-256-GCM (`crypto/cipher`). The key is HKDF-SHA-256
+  (`crypto/hkdf`, already used in `pkg/secret`) of the profile entry with the
+  salt. The associated data are the header, the unit reference, and the
+  purpose `pulumi-plan`. A file for another unit or another purpose does not
+  open. No new dependency.
+- A file with no magic number is refused: the shim never passes a plain plan
+  to `--plan`, as `enforced = true` does for OpenTofu.
+- The same key, rotation and fallback rules as K3 and K4 apply.
+
+**K6. What encryption at rest cannot protect (residual risk).** The docs of
+the shim list these in the first lines of the page, next to H.
+
+- **The memory of the tool.** The tool decrypts the plan and the state to
+  use them. The decrypted data is in its memory, and in swap or a core dump
+  if the CI host allows it. The code that the tool runs can read it. The
+  shim cannot encrypt process memory. It can apply the mitigations of K10.
+- **The logs and the output.** `tofu show`, `tofu output`, `tofu plan`
+  output, `TF_LOG` debug output, `pulumi preview --show-secrets` and
+  `--logtostderr` can print values in plain text. The shim mask finds exact
+  copies only (H).
+- **The person and the job that run the tool.** OpenTofu says it cannot
+  protect values "from the person running the `tofu` command". The same CI
+  job holds the key (K3), so any step of the job that can reach the profile
+  entry can open the files. Encryption protects a file that leaves the job:
+  an artifact, a cache, a copy of a disk, a log that uploads the work tree.
+- **Replay and loss.** The docs of OpenTofu say that encryption does not
+  protect against an old file that an attacker puts back, or against loss of
+  the file. A lost key is a lost plan file.
+- **The leak check.** E4 says that a state that the client encrypts is not
+  readable by the leak check. ADR 41 records, from the source of the CLI,
+  that the `cloud` backend sends plain state, but its decision 8 also
+  handles a state that the client encrypted. An e2e item shows which one
+  holds for the TFE-compatible API with the shim's `TF_ENCRYPTION`, and E4
+  follows the result.
+- **A team that does not use the shim.** Out of scope (ADR 352). The docs say
+  it, and give the one command that adopts the shim, for example
+  `dustpan-ci run --unit <unit> -- tofu plan -out=plan` (the exact form is for
+  the design, B3).
+
+**K9. Logs: capture, redaction and storage (owner, 2026-11-07).** The shim
+runs the tool as a child process and captures its standard output and
+standard error.
+
+- **What it redacts.** Every secret value that the shim knows: the profile
+  values that it injected, and the at-rest key (K3). For each value it
+  redacts the raw form, the standard base64 form, the URL-safe base64 form
+  and the URL-encoded form. Each line of a multi-line value is redacted by
+  itself. It keeps the minimum length of 4 bytes of the mask (H) and handles a
+  value that spans two chunks (`launcher.Masker`, extended for the encoded
+  forms). The replacement is `[masked]`.
+- **What it sends.** The full redacted log, to the backend, as part of the
+  CI run record (F). It sends the redacted stream only, never the raw bytes.
+  A person reads it with a read grant on the unit. The proposed action is
+  `unit:read-ci-log`. Each read writes an audit entry without a value. The
+  server seals the log at rest with a key of the CI run record, like the
+  other stored logs (ADR 151). An upload has a size limit. A log that is
+  longer gets a marker and the CI run record notes it.
+- **What the CI log shows.** A shim setting, `--ci-log`, has two values:
+  `redacted` (the redacted stream) and `summary` (the exit code, the
+  counts, and a link to the full redacted log in the backend). The
+  recommendation is `summary` as the default: the CI log is often readable by
+  more people than the unit, and the backend log has a read grant. The owner
+  can set the default to `redacted`.
+- **If the upload fails.** The shim retries from a file on the memory-backed
+  directory. If it still fails, it exits with code 3 and one line that names
+  the failure. It never writes the raw stream to the CI log as a fallback.
+- **Limits.** A secret that the tool changes into a form that the shim does
+  not know is not caught: a hash, a part of a string, a reversed or
+  encrypted value, a value cut into pieces by output of several lines or
+  separate writes, a value in another encoding. The redaction is a
+  convenience layer, like the mask of H. The server can also run the
+  fingerprints of E over a stored log later. This is not in the first slice
+  of K.
+
+**K10. Mitigations for process memory.** The shim cannot encrypt the memory
+of the tool. These mitigations reduce the exposure, where the platform
+allows them. Each is best effort. The shim logs a line for each one that it
+could not apply, and the CI run record notes it.
+
+- `RLIMIT_CORE=0` for the shim and, by inheritance, for the tool. No core
+  dump holds the decrypted plan, the state or the key.
+- On Linux, `PR_SET_DUMPABLE=0` for the shim process, so another process of
+  the same user cannot read its memory through `/proc`. The setting does not
+  pass to the tool after `exec`. Linux and macOS only (ADR 278).
+- No swap where the platform allows it: the shim locks the pages that hold
+  the key (`mlock`), and the run directory is memory-backed. The shim cannot
+  turn off swap for the tool or for the host. Swap is a setting of the CI
+  host.
+- The key and the decrypted files stay for the shortest time: the shim
+  deletes the run directory when the tool ends, also on a signal.
+
+**Out of scope for the shim: confidential computing.** SEV-SNP and TDX
+protect memory from the host. They are a property of the runner
+infrastructure that the team chooses, not of the shim. The docs mention them
+only as a choice of the infrastructure.
+
+**K7. One-way doors.** Each item below is hard to change after a tag ships it.
+
+- The names in `TF_ENCRYPTION` and the fixed `encrypted_metadata_alias`
+  (`opendustpan`). A plan file keeps them as metadata.
+- The default key entry name `at-rest-key` and its length rule.
+- The Pulumi file format: the magic number, the version byte, the key
+  derivation and the associated data. A plan file that a CI job stores for
+  days must open after an upgrade of the shim.
+- `enforced = true` as the default. A team that shipped with it cannot
+  easily turn it off, because plain data is then a failure.
+- The names and forms of the redaction (K9): the replacement text and the set
+  of encoded forms. A tool or a script of a team may parse `[masked]`.
+- The action name `unit:read-ci-log` and the meaning of `--ci-log`.
+- That the key lives in a profile. A later key store (a KMS) would add a
+  provider next to it and would not replace it.
+
+**K8. Slices and e2e steps.** Each slice lands with its e2e step first
+(ADR 12).
+
+| Slice | Content | E2e step |
+| --- | --- | --- |
+| 2a | OpenTofu: `TF_ENCRYPTION` with `external` and `pbkdf2` (K2, K3 option 2), `enforced`, the key from the profile, the fixed alias. | The test runs real `tofu init`, `plan -out` and `apply` of each supported version from 1.11 through the shim. It checks: the plan file has no canary and is not valid JSON of a plan (`tofu show` without the shim fails); the apply of the same file through the shim works; a plain plan file made without the shim makes `apply` fail; the environment of the tool holds no key value; a pre-set `TF_ENCRYPTION` stops the shim with exit code 2; a code `encryption` block with other names merges as the docs say; the open of the key entry writes one audit entry without a value. |
+| 2b | Rotation (K4). | The test rotates the key entry, then applies a plan file made with the old revision: it works. It applies a file two revisions old: it fails closed. |
+| 2c | Pulumi: the file format and the path rewrite (K5). | The test runs real `pulumi preview --save-plan` and `up --plan` through the shim. It checks: the stored file has the magic number and holds no canary; `up --plan` with a plain file or a file for another unit fails before the tool starts; the plain file is gone after the run, also after `SIGTERM`; the form `--save-plan=path` and `--save-plan path` both work; an unknown form stops. It also lists what a default plan file holds, to close the open e2e item of the facts. |
+| 2d | Logs (K9) and the memory mitigations (K10). | The test runs a module that prints the canary raw, in standard base64, in URL-safe base64 and URL-encoded, on standard output and on standard error, also across a chunk boundary. It checks: none of the four forms is in the CI log or in the stored log; a hex copy and a reversed copy are not masked, on purpose, to show the limit; the stored log needs the read grant, and a read writes one audit entry without a value; `--ci-log=summary` shows the link only; a failed upload exits with code 3 and writes no raw stream; `/proc/<pid>/limits` of the tool shows a core limit of 0; the open item `unit:read-ci-log` is in the route table. |
+| 3 | A KMS key provider (K3 option 3), after login blocks. | A test with a local OpenBao transit engine: the data key is new for each file, and a second unit with another key cannot open the file. |
+
+The e2e suite checks the OpenTofu minimum version of the docs for the
+`encryption` block (1.7) against the supported versions, which start at 1.11
+for the first slice (J).
 
 ## Open questions
 
@@ -1167,6 +1536,41 @@ The owner keeps these. Each recommendation is the author's.
     first login block? Recommendation: slice 1 first, with the warning,
     and login blocks next.
 
+**Questions added for section K (at most 4).** The scope of K is decided
+(ADR 352). These four open the design.
+
+12. Who sets the key of the files, and where does the key come from? The
+    options are K3 options 1 to 3. Recommendation: option 2 (the key is a
+    secret entry of a profile, and the `external` key provider of OpenTofu
+    asks the shim for it), and a person creates the entry with one documented
+    command.
+    _ELI5:_ The files get a lock. The key to the lock must live somewhere.
+    We put it in the same locked cupboard as the other secrets, the profile.
+    The tool asks the shim for the key and never keeps it in its pocket (the
+    environment).
+13. Does `enforced = true` become the default, so that a plain plan file or
+    plain state file makes the tool fail? Recommendation: yes. It is a
+    one-way door (K7). A team with old plain files uses `--migrate-unencrypted`
+    for one run.
+    _ELI5:_ Should the door lock itself when you leave? If it does, nobody
+    leaves a plain plan lying around by mistake. The price: an old plain file
+    does not open until you say once that it is fine.
+14. May the shim own the `encryption` configuration of a run, and stop when
+    the team sets `TF_ENCRYPTION` itself (K2)? Recommendation: yes, and a team
+    with its own KMS key waits for K3 option 3.
+    _ELI5:_ Two people cannot both choose the lock for one door. The shim
+    chooses it. If you want to pick your own lock, tell us, and we add a way
+    to bring it later.
+15. Pulumi has no plan file encryption, so the shim writes a file format of
+    our own (K5), and the format is a one-way door (K7). Does the owner accept
+    a format of our own, or should Pulumi plan files stay out of scope until
+    the CLI has the option? Recommendation: accept the format. It uses the
+    standard library only, and a magic number and a version byte let it change
+    later.
+    _ELI5:_ Pulumi has no lock for its plan file, so we put the plan in our
+    own locked box. If we later find a better box, the label on the box
+    tells us which kind it is, so old boxes still open.
+
 ## Proposed glossary lines
 
 - **CI shim**: the optional client program that a team runs in its own
@@ -1176,6 +1580,9 @@ The owner keeps these. Each recommendation is the author's.
   runner (that is an OpenDustpan runner).
 - **CI run**: one start of the CI shim, recorded with the ID prefix `cir-`.
   It is not a job. _Avoid_: run (alone), job, pipeline.
+- **At-rest key**: the secret entry of a profile that the CI shim uses to
+  encrypt the plan files and state files that the tool writes in the team's
+  CI. _Avoid_: file password, state key (that is a key of the server).
 - **Leak check**: the server compares each whole string leaf of a state
   that a CI run writes with fingerprints of the secrets of that CI run, and
   records a finding for a match. _Avoid_: secret scanning, leak detection.
@@ -1183,3 +1590,8 @@ The owner keeps these. Each recommendation is the author's.
 ## Outcome
 
 Empty until the RFC is accepted (link the ADR) or dropped (say why).
+
+Partly decided: [ADR 352](../adr/0352-the-ci-shim-encrypts-the-plan-and-state-files-of-the-team-ci-at-rest.md)
+(owner, 2026-11-07) decides the scope of section K, the log redaction of K9
+and the memory mitigations of K10. The rest of this RFC stays
+open.
