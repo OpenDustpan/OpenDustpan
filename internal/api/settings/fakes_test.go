@@ -161,7 +161,7 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 
 func (m *memStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, _ namespace.Fence, e audit.Entry,
-) (unitsettings.Settings, error) {
+) (unitsettings.PutResult, error) {
 	if m.hold != nil {
 		m.hold()
 	}
@@ -170,26 +170,31 @@ func (m *memStore) Put(
 	defer m.mu.Unlock()
 
 	if m.failWith != nil {
-		return unitsettings.Settings{}, m.failWith
+		return unitsettings.PutResult{}, m.failWith
 	}
 
 	if m.records[s.Unit.UnitID()].Version != expected {
-		return unitsettings.Settings{}, unitsettings.ErrConflict
+		return unitsettings.PutResult{}, unitsettings.ErrConflict
 	}
 
 	next := *s
 	next.Version = expected + 1
 	next.UpdatedAt = e.At
 
-	if err := m.finish(ctx, next); err != nil {
-		return unitsettings.Settings{}, err
+	defaults := m.defaults
+	defaults.Namespace = s.Unit.Namespace()
+
+	out := unitsettings.PutResult{Settings: next, Defaults: defaults}
+
+	if err := m.finish(ctx, out); err != nil {
+		return unitsettings.PutResult{}, err
 	}
 
 	m.records[s.Unit.UnitID()] = next
 	m.entries = append(m.entries, e)
 	m.writes++
 
-	return next, nil
+	return out, nil
 }
 
 func (m *memStore) Delete(
