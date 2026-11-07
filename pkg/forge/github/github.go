@@ -153,9 +153,24 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 	}
 
 	f := &gitHub{
-		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
-		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
-		writes: contentsUnknown, pulls: contentsUnknown, statuses: contentsUnknown, identity: "",
+		o:              o,
+		base:           base,
+		push:           c.Push,
+		auth:           c.Auth,
+		appID:          "",
+		installationID: "",
+		token:          "",
+		key:            nil,
+		mu:             sync.Mutex{},
+		readTokens:     map[string]readToken{},
+		owner:          "",
+		contents:       contentsUnknown,
+		writes:         contentsUnknown,
+		pulls:          contentsUnknown,
+		statuses:       contentsUnknown,
+		issues:         contentsUnknown,
+		identity:       "",
+		identityID:     "",
 	}
 
 	switch c.Auth {
@@ -221,9 +236,13 @@ type gitHub struct {
 	writes     contentsAccess
 	pulls      contentsAccess
 	statuses   contentsAccess
+	issues     contentsAccess
 	// identity is the login that the connection commits as. FindCommit reads
 	// it once, see commitIdentity.
 	identity string
+	// identityID is the numeric ID of the account of identity. UpsertComment
+	// reads it once, see commentIdentity.
+	identityID string
 }
 
 // contentsAccess says whether an installation has the permission to read
@@ -259,7 +278,7 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 	caps := forge.Capabilities{}
 
 	if !app || f.contents != contentsMissing {
-		caps = append(caps, forge.CapFiles, forge.CapCompare)
+		caps = append(caps, forge.CapFiles, forge.CapCompare, forge.CapTree)
 	}
 
 	return append(caps, f.pushCapabilities()...)
@@ -307,6 +326,10 @@ func (f *gitHub) pushCapabilities() forge.Capabilities {
 
 	if !app || f.statuses != contentsMissing {
 		caps = append(caps, forge.CapStatus)
+	}
+
+	if !app || f.issues != contentsMissing {
+		caps = append(caps, forge.CapComment)
 	}
 
 	return caps
