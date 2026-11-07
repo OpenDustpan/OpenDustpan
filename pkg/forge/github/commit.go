@@ -842,9 +842,10 @@ func (f *gitHub) branchHead(ctx context.Context, r repoName, bearer, branch stri
 // there are more commits since the time than the adapter reads, so that it
 // never answers "not found" for a commit that it did not look at.
 //
-// base is the base commit of the request that made the commit. The commit
-// must also have a proof that opens for the trailer, the base commit and the
-// repository (see checkProof).
+// d is the delivery of the request that made the commit, and ref must be its
+// branch. The commit must also have a proof that opens for the repository,
+// the trailer, the base commit, the branch and the digest of the changes (see
+// checkProof).
 func (f *gitHub) FindCommit(
 	ctx context.Context, repo, ref string, d forge.Delivery, since time.Time,
 ) (forge.Commit, error) {
@@ -914,6 +915,14 @@ func checkFind(repo, ref string, d forge.Delivery) (repoName, error) {
 	// check stays so that a delivery that is not valid makes no call.
 	if deliveryErr := forge.ValidateDelivery(d); deliveryErr != nil {
 		return repoName{}, deliveryErr
+	}
+
+	// The proof binds the branch of the request. A search of another ref
+	// could find the commit after a merge, and the branch in the proof would
+	// then be a branch that the caller claims, not the branch that holds the
+	// commit.
+	if ref != d.Branch {
+		return repoName{}, fmt.Errorf("%w: the ref of the search is not the branch of the delivery", forge.ErrInvalid)
 	}
 
 	return r, nil

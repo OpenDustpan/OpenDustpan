@@ -56,9 +56,10 @@ func caseFindCommitNeedsTheProof(t *testing.T, h Harness) {
 
 	// Each row but the first ones differs from the good delivery in one part
 	// only, so only the binding of that part can stop it.
+	// A delivery of another branch never reaches the proof: FindCommit
+	// refuses a ref that is not the branch of the delivery (see
+	// caseFindCommitInvalidDelivery).
 	good60 := forge.DeliveryOf(genuineRequest(head.ID, "j-60"))
-	otherBranch := good60
-	otherBranch.Branch = "dustpan/j-60"
 	otherChanges := good60
 	otherChanges.Changes = forge.ChangesDigest([]forge.FileChange{writeFile("g-j-60.txt", "y\n")})
 	otherBase := good60
@@ -84,7 +85,6 @@ func caseFindCommitNeedsTheProof(t *testing.T, h Harness) {
 			forge.DeliveryOf(genuineRequest(head.ID, "j-63")),
 		},
 		{"the proof of another base commit", goodMessage, otherBase},
-		{"the proof of another branch", goodMessage, otherBranch},
 		{"the proof of other changes", goodMessage, otherChanges},
 		{
 			"two proofs", twiceMessage + "\n" + proofLineOf(twiceMessage),

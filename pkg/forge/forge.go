@@ -286,14 +286,22 @@ type Commits interface {
 	// "Key: value". A takeover of a write-back calls it before a second
 	// commit.
 	//
-	// d names the commit by the Trailer and the Base of the CommitRequest
-	// that made it. Commit adds a proof to the commit that binds the
-	// trailer, the base and the repository, and FindCommit counts a commit
-	// only when its proof opens for the same three values. A commit with no
-	// proof, or with the proof of another trailer, base or repository, is
-	// ErrUntrustedCommit. It returns ErrInvalid for a base that is not a
-	// full commit ID, and ErrUnsupported when the connection has no key to
+	// d names the commit by the Trailer, the Base, the Branch and the
+	// digest of the Changes of the CommitRequest that made it (see
+	// DeliveryOf). Commit adds a proof to the commit that binds the
+	// repository, the trailer, the base, the branch and the digest, and
+	// FindCommit counts a commit only when its proof opens for the same five
+	// values. A commit with no proof, or with the proof of another value of
+	// one of them, is ErrUntrustedCommit. ref must be d.Branch: FindCommit
+	// searches the branch that the request committed to, so the branch in
+	// the proof is the branch where the search finds the commit. It returns
+	// ErrInvalid for a ref that is not d.Branch, for a delivery that fails
+	// ValidateDelivery, and ErrUnsupported when the connection has no key to
 	// open the proof.
+	//
+	// The proof shows that the server made a commit for these changes. It
+	// does not show that the commit holds them: FindCommit does not compare
+	// the digest with the diff of the commit.
 	FindCommit(ctx context.Context, repo, ref string, d Delivery, since time.Time) (Commit, error)
 }
 

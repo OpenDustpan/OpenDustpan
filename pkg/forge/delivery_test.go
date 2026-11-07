@@ -137,6 +137,8 @@ func TestValidateDeliveryRefuses(t *testing.T) {
 		{"a short digest", func(d *forge.Delivery) { d.Changes = "sha256:" + hex64[:63] }},
 		{"a long digest", func(d *forge.Delivery) { d.Changes = "sha256:" + hex64 + "a" }},
 		{"a digest in upper case", func(d *forge.Delivery) { d.Changes = "sha256:" + strings.ToUpper(hex64) }},
+		{"a digest with letters after f", func(d *forge.Delivery) { d.Changes = "sha256:" + strings.Repeat("g", 64) }},
+		{"a digest with a z", func(d *forge.Delivery) { d.Changes = "sha256:" + hex64[:63] + "z" }},
 		{"a digest with a zero byte", func(d *forge.Delivery) { d.Changes = "sha256:" + hex64[:63] + "\x00" }},
 	}
 

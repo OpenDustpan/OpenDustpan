@@ -868,7 +868,7 @@ func TestFindCommitAsksForTheRefAndTheTime(t *testing.T) {
 			got, err := c.FindCommit(
 				t.Context(),
 				"acme/infra",
-				"dustpan/j-1",
+				rawBranch,
 				rawDelivery("Dustpan-Job: j-1", rawBase),
 				since,
 			)
@@ -879,7 +879,7 @@ func TestFindCommitAsksForTheRefAndTheTime(t *testing.T) {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 
-			want := "/repos/acme/infra/commits?sha=dustpan%2Fj-1&per_page=100&page=1&since=2026-01-01T00%3A00%3A07Z"
+			want := "/repos/acme/infra/commits?sha=main&per_page=100&page=1&since=2026-01-01T00%3A00%3A07Z"
 			if len(p.queries) != tt.wantCalls || p.queries[0] != want {
 				t.Fatalf("%d calls, want %d; first query %q, want %q", len(p.queries), tt.wantCalls, p.queries, want)
 			}

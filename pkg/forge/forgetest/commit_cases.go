@@ -398,7 +398,7 @@ func hostileCommits(base string) map[string]forge.CommitRequest {
 	requests := map[string]forge.CommitRequest{
 		"a path with ..":           onPath("../a.txt"),
 		"a path that leaves":       onPath("stacks/../../a.txt"),
-		"an absolute path":         onPath("/etc/passwd"),
+		"an absolute path":         onPath("/etc/hosts"),
 		"a path with a NUL":        onPath("a\x00b"),
 		"a path with a new line":   onPath("a\nb"),
 		"a path with a backslash":  onPath(`a\b`),
@@ -630,9 +630,10 @@ func caseFindCommitNoTrailer(t *testing.T, h Harness) {
 func caseFindCommitMissingRef(t *testing.T, h Harness) {
 	t.Helper()
 
-	_, err := h.Forge.FindCommit(
-		t.Context(), h.Repo, "no-such-ref", anyDelivery(jobTrailer("j-1"), anyBase), time.Unix(0, 0),
-	)
+	d := anyDelivery(jobTrailer("j-1"), anyBase)
+	d.Branch = "no-such-ref"
+
+	_, err := h.Forge.FindCommit(t.Context(), h.Repo, "no-such-ref", d, time.Unix(0, 0))
 	if !errors.Is(err, forge.ErrNotFound) {
 		t.Fatalf("FindCommit on a missing ref = %v, want ErrNotFound", err)
 	}
@@ -722,6 +723,14 @@ func caseFindCommitInvalidDelivery(t *testing.T, h Harness) {
 
 		if _, err := h.Forge.FindCommit(ctx, h.Repo, "main", d, time.Unix(0, 0)); !errors.Is(err, forge.ErrInvalid) {
 			t.Errorf("FindCommit with the branch %q = %v, want ErrInvalid", branch, err)
+		}
+	}
+
+	// The search is on the branch of the delivery, never on another ref.
+	for _, ref := range []string{"dustpan/j-1", "main2", "Main"} {
+		_, err := h.Forge.FindCommit(ctx, h.Repo, ref, anyDelivery(jobTrailer("j-1"), anyBase), time.Unix(0, 0))
+		if !errors.Is(err, forge.ErrInvalid) {
+			t.Errorf("FindCommit on the ref %q for a delivery of main = %v, want ErrInvalid", ref, err)
 		}
 	}
 
