@@ -4,6 +4,7 @@ Status: accepted · 2026-10-13 · the home region amended by ADR 248 (primary in
 
 Changed by:
 
+- ADR 346 extends decision 6: a move between collections lists what breaks.
 - ADR 61 extends decision 5: how a CLI names the collection of a new unit.
 - ADR 248 changes decision 2: a collection has no primary installation of its
   own.

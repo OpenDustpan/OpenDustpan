@@ -4,6 +4,7 @@ Status: accepted · 2026-10-18 · adds to ADR 58 decision 9 · decisions 1 to 3 
 
 Changed by:
 
+- ADR 348 extends decision 6: the mobile checks apply to responsive designs.
 - ADR 231 extends decision 3: the axe gate also runs right to left.
 - ADR 236 extends decisions 1, 2 and 3: an axe gate in the console checks and
   for every language.

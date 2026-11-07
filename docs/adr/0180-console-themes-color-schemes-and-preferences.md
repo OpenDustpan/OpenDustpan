@@ -4,6 +4,7 @@ Status: accepted · 2026-10-18. Adds to ADR 58. Route paths superseded in part b
 
 Changed by:
 
+- ADR 348 extends decision 4: responsive designs, no phone-only work.
 - ADR 181 extends decision 13: six new fields in the preferences document.
 - ADR 210 changes decision 13: the route paths and the time format.
 - ADR 212 extends decision 11: the branding preset as an installation setting.
