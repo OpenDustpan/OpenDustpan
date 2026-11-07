@@ -611,8 +611,8 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 	}
 
 	// The block can end while the issuer signs the token. The value does not
-	// reach the adapter, and the entry of the signing stays with the block.
-	// record reads the end of the block once, so the entry says Delivered only
+	// reach the adapter. The entry of the signing stays with the block, or goes
+	// to late when the block closed. record reads the end of the block once, so the entry says Delivered only
 	// for a value that this check lets go.
 	if refused {
 		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
