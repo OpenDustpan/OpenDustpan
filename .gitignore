@@ -1,5 +1,8 @@
-# Build output
+# Build output: make build and make build-launcher write bin/opendustpan and bin/dustpan-launcher.
 /bin/
+*.exe
+*.test
+*.out
 
 # Local databases and data
 *.db
