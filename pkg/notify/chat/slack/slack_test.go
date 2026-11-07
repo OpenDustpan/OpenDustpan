@@ -330,13 +330,23 @@ func TestCheck(t *testing.T) {
 }
 
 // plainHostile returns strings that Slack acts on in a plain text: they have
-// no markup that the renderer can encode, so only verbatim stops them.
+// no markup that the renderer can encode, so only verbatim stops them. The
+// fallback text has no verbatim, so it breaks their separators instead.
 func plainHostile() []string {
 	return []string{
 		"@here", "@channel", "#general", "https://evil.example", "evil.example",
 		"<!channel>", "<@U123>", "<https://evil|x>", "@everyone", "ops@evil.example",
+		"example。com", "example．com", "example｡com", "example＠com", "example＃com",
+		"user。example.com", "user．example.com", "user｡example.com", "user＠example.com",
+		"user＃example.com",
+		"。general", "．general", "｡general", "＠here", "＃general",
 	}
 }
+
+// fallbackSeparators are the characters that the fallback text must break:
+// @, #, a dot and a colon, and their ideographic, fullwidth and halfwidth
+// forms.
+const fallbackSeparators = "@#.:\u3002\uFF0E\uFF61\uFF20\uFF03"
 
 func TestRenderShowsHostileAsPlainText(t *testing.T) {
 	t.Parallel()
@@ -435,6 +445,17 @@ func checkFallback(t *testing.T, fallback, hostile, want string) {
 	for _, trigger := range []string{"@here", "@channel", "@everyone", "@U123", "#general", "://", "evil.example", hostile} {
 		if strings.Contains(fallback, trigger) {
 			t.Errorf("fallback %q holds the trigger %q", fallback, trigger)
+		}
+	}
+
+	rs := []rune(fallback)
+	for i, r := range rs {
+		if !strings.ContainsRune(fallbackSeparators, r) {
+			continue
+		}
+
+		if i+1 >= len(rs) || rs[i+1] != '\u200b' {
+			t.Errorf("fallback %q: %q is not followed by a zero-width space", fallback, r)
 		}
 	}
 
