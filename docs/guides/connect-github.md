@@ -208,6 +208,7 @@ Errors of a check:
 
 | Answer | Cause |
 | --- | --- |
+| 404 | The connection named in the path was not found. |
 | 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
 | 429 | The connection was checked more than once in 10 seconds, or the installation more than 30 times in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |

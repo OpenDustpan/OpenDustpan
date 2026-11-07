@@ -32,7 +32,9 @@ or belongs to another unit, and an ID that is not valid. A caller who lacks
 another action gets 403. A `follows` trigger needs `unit:read` on its source too.
 
 Only the fire route takes an `Idempotency-Key` header. It holds 1 to 255
-printable ASCII characters. Two fires by one person with one key give one job,
+printable ASCII characters. A key that starts with the prefix `drift-` is not
+valid: the fire route answers 400 with `request.idempotency-key-invalid`. Two
+fires by one person with one key give one job,
 also in two different minutes. The answer does not carry the header
 `Idempotent-Replayed`. A write to any other route with the header fails with 400
 and the code `request.idempotency-key-unsupported`.
@@ -88,7 +90,7 @@ last unit of a loop are the same unit.
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields, or is larger than 16 KiB |
 | 400 | `trigger.invalid` | A value fails validation: the kind, the frequency, the source, the reason or the location |
 | 400 | `request.idempotency-key-unsupported` | A route other than the fire route got an `Idempotency-Key` header |
-| 400 | `request.idempotency-key-invalid` | The `Idempotency-Key` header of a fire is not one valid key |
+| 400 | `request.idempotency-key-invalid` | The `Idempotency-Key` header of a fire is not one valid key, or it starts with `drift-` |
 | 403 | `trigger.saver-denied` | The person who saves or fires has no principal record that holds the actions of a start, or the last saver lost access. A new principal that has the subject of the last saver does not count as the last saver |
 | 401 | `auth.unauthenticated` | The request has no valid credential |
 | 429 | `auth.rate-limited` | Too many sign-ins from the address of the request failed |
