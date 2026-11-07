@@ -2891,6 +2891,24 @@ func (q *Queries) DeleteDriftResult(ctx context.Context, arg DeleteDriftResultPa
 	return err
 }
 
+const deleteEndedTicket = `-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = ? AND ticket_digest = ? AND until_ms <= ?
+`
+
+type DeleteEndedTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) DeleteEndedTicket(ctx context.Context, arg DeleteEndedTicketParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteEndedTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteEventsOfStack = `-- name: DeleteEventsOfStack :exec
 DELETE FROM update_events
 WHERE stack_id = ?
@@ -11329,6 +11347,25 @@ func (q *Queries) InsertSelfServiceBlueprintVersion(ctx context.Context, arg Ins
 	return err
 }
 
+const insertTicket = `-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
@@ -18089,6 +18126,18 @@ DELETE FROM sign_in_requests WHERE expires_at_ms <= ?
 
 func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const pruneUsedTickets = `-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= ?
+`
+
+func (q *Queries) PruneUsedTickets(ctx context.Context, untilMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneUsedTickets, untilMs)
 	if err != nil {
 		return 0, err
 	}
