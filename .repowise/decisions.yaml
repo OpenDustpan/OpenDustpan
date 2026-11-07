@@ -3913,3 +3913,15 @@ decisions:
   accepted_artifact: "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
   evidence:
   - "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
+- id: "adr-0356"
+  title: "ADR 356: Remove the unreachable trial message for a missing database"
+  decision: "1. **The trial variant of the database message goes (owner, 2026-11-07).** `serve` gives one message for a missing database. The message reads: \"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db\". The code removes `errNoDatabaseTrial`.\n2. **What stays (owner, 2026-11-07).** `serve` still checks the key first, then the database, and reports only the first missing one. The trial variant of the key message stays. The full key message and the full database message stay. The rule for which settings count as a setting of `serve` stays for the key message.\n\nLater changes, from the status line of ADR 356: Decided by the project owner on 7 November 2026."
+  reason: "ADR 238 decision 3 says that `serve` checks the key first, then the database. The trial hint is \"For a trial, run: opendustpan dev\". The hint can go in the message for a missing key and in the message for a missing database. It goes in the hint only when the operator set no setting of `serve` and stderr is a terminal."
+  scope:
+  - "cmd/opendustpan/key_test.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0356-remove-the-unreachable-trial-message-for-a-missing-database.md"
+  evidence:
+  - "docs/adr/0356-remove-the-unreachable-trial-message-for-a-missing-database.md"
