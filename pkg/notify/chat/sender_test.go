@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/chat"
@@ -265,7 +266,7 @@ func TestSendRefusesBeforeTheNetwork(t *testing.T) {
 			m.To, m.Sink.Target = "https://hooks.slack.com:8443"+hookPath, "hooks.slack.com:8443"
 		}, egress.ErrRefused},
 		{"user information", func(m *notify.Message) {
-			m.To = "https://user:pw@hooks.slack.com" + hookPath
+			m.To = fakecred.URL("https", "user", "pw", "hooks.slack.com", "") + hookPath
 		}, egress.ErrRefused},
 		{"http", func(m *notify.Message) { m.To = "http://hooks.slack.com" + hookPath }, egress.ErrRefused},
 		{"a fragment", func(m *notify.Message) { m.To = hookURL + "#x" }, egress.ErrRefused},
