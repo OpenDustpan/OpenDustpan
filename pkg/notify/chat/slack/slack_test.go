@@ -344,9 +344,9 @@ func plainHostile() []string {
 }
 
 // fallbackSeparators are the characters that the fallback text must break:
-// @, #, a dot and a colon, and their ideographic, fullwidth and halfwidth
-// forms.
-const fallbackSeparators = "@#.:\u3002\uFF0E\uFF61\uFF20\uFF03"
+// @, #, a dot and a colon, their ideographic, fullwidth, halfwidth and small
+// forms, the one dot leader and the fullwidth solidus.
+const fallbackSeparators = "@#.:\u3002\uFF0E\uFF61\uFF20\uFF03\uFE52\u2024\uFE6B\uFE5F\uFF1A\uFF0F"
 
 func TestRenderShowsHostileAsPlainText(t *testing.T) {
 	t.Parallel()
@@ -383,8 +383,9 @@ func TestRenderShowsHostileAsPlainText(t *testing.T) {
 	}
 }
 
-// TestFallbackBreaksEachSeparator checks each ideographic, fullwidth and
-// halfwidth separator alone, so a change that drops one rune names it.
+// TestFallbackBreaksEachSeparator checks each ideographic, fullwidth,
+// halfwidth and small separator alone, so a change that drops one rune names
+// it.
 func TestFallbackBreaksEachSeparator(t *testing.T) {
 	t.Parallel()
 
@@ -397,6 +398,12 @@ func TestFallbackBreaksEachSeparator(t *testing.T) {
 		{"halfwidth ideographic full stop", '｡'},
 		{"fullwidth commercial at", '＠'},
 		{"fullwidth number sign", '＃'},
+		{"small full stop", '﹒'},
+		{"one dot leader", '․'},
+		{"small commercial at", '﹫'},
+		{"small number sign", '﹟'},
+		{"fullwidth colon", '：'},
+		{"fullwidth solidus", '／'},
 	}
 
 	for _, tt := range tests {
@@ -417,7 +424,7 @@ func TestFallbackBreaksEachSeparator(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			want := "x" + string(tt.sep) + "​y"
+			want := "x" + string(tt.sep) + "\u200by"
 			if !strings.Contains(msg.Text, want) {
 				t.Errorf("fallback %q: %U is not followed by a zero-width space", msg.Text, tt.sep)
 			}
