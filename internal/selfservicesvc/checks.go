@@ -27,6 +27,14 @@ func ParseDraft(data []byte) (selfservice.Blueprint, error) {
 		return selfservice.Blueprint{}, fmt.Errorf("parse blueprint draft: %w: %w", selfservice.ErrInvalid, err)
 	}
 
+	// Defense in depth: a publish sets the Expr version from the server, and a
+	// draft leaves it empty; this check stays so that a caller of ParseDraft
+	// cannot store a version that the server did not compile.
+	if b.ExprVersion != "" {
+		return selfservice.Blueprint{}, fmt.Errorf("draft expression version is set by the server: %w",
+			selfservice.ErrInvalid)
+	}
+
 	return b, nil
 }
 

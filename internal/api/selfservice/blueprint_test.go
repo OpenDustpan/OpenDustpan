@@ -222,6 +222,31 @@ func TestOperandValueKinds(t *testing.T) {
 	}
 }
 
+// TestDraftRefusesAClientExprVersion sends a draft that names an Expr version.
+// The server sets that value at publish, so the draft is refused and nothing
+// is stored.
+func TestDraftRefusesAClientExprVersion(t *testing.T) {
+	t.Parallel()
+
+	draft := strings.Replace(draftJSON, `"schemaVersion": 1,`, `"schemaVersion": 1, "exprVersion": "v9.9.9",`, 1)
+
+	env := newEnv(t, allActions())
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPut, testDraftPath, strings.NewReader(draft))
+	r.Header.Set("Authorization", "Bearer token-a")
+	r.Header.Set("If-Match", `"1"`)
+
+	w := httptest.NewRecorder()
+	env.handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+
+	if env.store.callCount() != 0 {
+		t.Error("a draft with a client Expr version reached the store")
+	}
+}
+
 // TestInputTypeOutsideTheList sends an input type that the server does not
 // accept. The open enum of the description lists the accepted values only.
 func TestInputTypeOutsideTheList(t *testing.T) {

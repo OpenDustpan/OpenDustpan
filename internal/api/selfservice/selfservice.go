@@ -285,9 +285,38 @@ func NewNamespaceAuthorizer(a identity.Authorizer) NamespaceAuthorizer {
 	return NamespaceAuthorizer{authorizer: a}
 }
 
-// Authorize checks action for p on the namespace of object.
+// Authorize checks action for p on the object that object names for the
+// authorizer. A blueprint is checked on its namespace, and a principal on its
+// own reference, so that principal:manage-tokens on a source principal is
+// checked on that principal.
 func (a NamespaceAuthorizer) Authorize(
 	ctx context.Context, p identity.Principal, action identity.Action, object selfservice.Object,
 ) error {
-	return a.authorizer.Authorize(ctx, p, action, identity.NamespaceObject(object.Namespace))
+	target, err := authorizedObject(object)
+	if err != nil {
+		return err
+	}
+
+	return a.authorizer.Authorize(ctx, p, action, target)
+}
+
+// authorizedObject returns the object of the authorizer for object. It refuses
+// a kind that this adapter does not map, so that a new kind reaches the
+// authorizer only after a decision here.
+func authorizedObject(object selfservice.Object) (identity.Object, error) {
+	if object.Kind == selfservice.ObjectBlueprint || object.Kind == selfservice.ObjectNamespace {
+		return identity.NamespaceObject(object.Namespace), nil
+	}
+
+	if object.Kind == selfservice.ObjectPrincipal {
+		return object.Unit, nil
+	}
+
+	// The blueprint service maps no unit or collection, and no other kind.
+	return identity.Object{}, unmappedKind(object.Kind)
+}
+
+// unmappedKind is the denial of an object kind that the adapter does not map.
+func unmappedKind(kind selfservice.ObjectKind) error {
+	return fmt.Errorf("object kind %q has no authorization here: %w", kind, identity.ErrDenied)
 }

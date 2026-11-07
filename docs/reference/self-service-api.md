@@ -18,13 +18,19 @@ read the namespace gets `404`. The checks of each route are:
 | `/api/dustpan/v1/self-service/blueprints/{namespace}` | `GET` | `namespace:read`, `blueprint:read` | `404` |
 | `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft` | `GET` | `namespace:read`, `blueprint:read` | `404` |
 | `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft` | `PUT` | `namespace:read`, `blueprint:publish` | `403` |
-| `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions` | `POST` | `namespace:read`, `blueprint:publish` | `403` |
+| `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions` | `POST` | `namespace:read`, `blueprint:publish`, and `principal:manage-tokens` on the source principal of the blueprint | `403` |
 | `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}` | `GET` | `namespace:read`, `blueprint:read` | `404` |
 | `/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}/retire` | `POST` | `namespace:read`, `blueprint:retire` | `403` |
 
-A refused request is written to the audit log. The audit entry names the
-namespace of the path as its object, because that is the scope of the grant
-that the check used.
+The source principal of a blueprint is checked on that principal itself, not on
+the namespace: a grant on the namespace alone does not allow a publish that
+names the principal.
+
+A request that the route refuses is written to the audit log. For these
+refusals, the audit entry names the namespace of the path as its object,
+because that is the scope of the grant that the check used. A denial that the
+blueprint service makes after the route has passed is written with the
+blueprint reference as its object.
 
 ## Draft and versions
 
