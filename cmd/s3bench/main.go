@@ -26,7 +26,7 @@ const s3Region = "us-east-1"
 var errBadFlag = errors.New("bad flag")
 
 // errUsage reports a missing or unknown subcommand.
-var errUsage = errors.New("usage: s3bench setup|profiles|measure|render|reset [flags]")
+var errUsage = errors.New("usage: s3bench setup|profiles|measure|protocol|render|reset [flags]")
 
 // Store names of the -stores flag.
 const (
@@ -73,6 +73,8 @@ func run(ctx context.Context, logger *slog.Logger, args []string, stdout io.Writ
 		return listProfiles(opts, stdout)
 	case "measure":
 		return measure(ctx, logger, opts)
+	case "protocol":
+		return runProtocol(ctx, logger, opts)
 	case "render":
 		return render(opts)
 	case "reset":
@@ -101,6 +103,10 @@ type options struct {
 	limitDB      string
 	limitStore   string
 	only         string
+	protoOps     int
+	protoRuns    int
+	protoConc    int
+	families     string
 }
 
 // parseOptions parses the flags of subcommand cmd.
@@ -111,6 +117,7 @@ func parseOptions(cmd string, args []string) (options, error) {
 		out: "", secretsDir: "", toxiproxyAPI: "", listenHost: "", connectHost: "",
 		ports: map[string]int{}, upstreams: map[string]string{}, bucket: "", stores: nil,
 		profiles: "", profile: "", quick: false, limits: false, limitS3: "", limitDB: "", limitStore: "", only: "",
+		protoOps: 0, protoRuns: 0, protoConc: 0, families: "",
 	}
 
 	fs.StringVar(&o.out, "out", "bench-s3-out", "results `dir`: results.json, results.md and load/")
@@ -134,6 +141,11 @@ func parseOptions(cmd string, args []string) (options, error) {
 	fs.StringVar(&o.limitDB, "limit-db", "0,5,10,25,50,100,250,500,1000",
 		"PostgreSQL round trips of the limit sweep in `ms`")
 	fs.StringVar(&o.limitStore, "limit-store", storeMinIO, "`store` of the limit sweep")
+	fs.IntVar(&o.protoOps, "ops", defaultProtocolOps, "protocol: operations of each run")
+	fs.IntVar(&o.protoRuns, "runs", defaultProtocolRuns, "protocol: runs of each path")
+	fs.IntVar(&o.protoConc, "concurrency", defaultProtocolConc, "protocol: client `workers` of each run")
+	fs.StringVar(&o.families, "families", "",
+		"protocol: comma-separated family `slugs`, for example pulumi-checkpoint (default all)")
 	fs.StringVar(&o.only, "only", "", "measure: comma-separated `parts`: puts, sequences, sweep (default all)")
 
 	if err := fs.Parse(args); err != nil {
