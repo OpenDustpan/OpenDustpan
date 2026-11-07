@@ -12,6 +12,7 @@ Changed by:
 - ADR 300 changes decision 7: a third comment command, `dustpan plan`.
 - ADR 303 extends decision 11: OpenDustpan is not a Git host. The Forge port
   connects to Git hosts for repositories, pull requests and statuses.
+- ADR 336 extends: answers question 4, the author and the signature of a GitHub write-back commit, and the retry rule for a moved head.
 
 ## Context
 
