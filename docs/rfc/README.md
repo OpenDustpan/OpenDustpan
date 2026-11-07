@@ -170,3 +170,4 @@ both together.
 | [121](0121-agent-principals.md) | Agent principals, delegation and the kind agent | accepted |
 | [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | accepted |
 | [124](0124-codegen-for-discovered-resources.md) | Code for unmanaged resources: a verified floor in each language, and a placement engine | discussing |
+| [127](0127-chat-connections-channels-per-unit-and-an-operator-route.md) | Chat connections, channels per unit, and an operator route for chat traffic | discussing |
