@@ -98,7 +98,7 @@ previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.
 
-**Status.** Met on 2026-10-12 on main 60f8163, with the upgrade exception
+**Status.** Met on 2026-10-12 on main 7fcc35b, with the upgrade exception
 below. The e2e suite passes the exit-test steps for both tools, on each
 version in the matrix, on SQLite and on PostgreSQL, through the real binary over TLS. The backup and
 restore steps also pass with the blobs on an S3-compatible server, and

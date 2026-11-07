@@ -45,7 +45,7 @@ key and cannot read the secrets of the others.
 The cause is that one command serves two intents. A flag cannot fix that,
 because a flag is a choice the user makes after they chose the command.
 
-Facts from the code on `main` (commit `981056a`):
+Facts from the code on `main` (commit `8e86e04`):
 
 - The command table is in `cmd/opendustpan/commands.go`. Each row comes
   from `internal/cli`. `serve` is the only command that opens the database

@@ -25,7 +25,7 @@ of its own home only. ADR 227 gives one fresh-authentication window. ADR 297
 puts the state of a sign-in in sealed cookies. ADR 301 gives the fresh step
 to a person of plain OAuth 2.0 or of a trusted header.
 
-Facts on `main` at 6c35afa:
+Facts on `main` at 8c98c43:
 
 - `identity.Authenticator` has one method, `AuthenticateToken`. It resolves
   an access token. It cannot carry a redirect, a password or the facts of a
