@@ -270,22 +270,32 @@ it and adds six details that ADR 220 does not say.
   in transaction mode does not support a session `SET`
   (<https://www.pgbouncer.org/features.html>), and a local setting ends
   with the transaction.
-- **D2. Read the value with `missing_ok`.** The policy reads
-  `current_setting('dustpan.namespace_ids', true)`, which answers NULL when
-  no value is set. A NULL matches no row. This is the "no namespace set,
-  no row" rule of ADR 220 decision 3, with no error path that a caller can
-  catch and skip.
-- **D3. A restrictive policy.** Permissive policies combine with OR, and
-  `AS RESTRICTIVE` policies combine with AND
-  (<https://www.postgresql.org/docs/current/ddl-rowsecurity.html>). The
-  namespace policy is `AS RESTRICTIVE`, so a permissive policy that a later
-  change adds can never widen it.
+- **D2. Read the value with `missing_ok`, and treat an empty value as no
+  value.** `current_setting('dustpan.namespace_ids', true)` answers NULL
+  when the session never set the value. On a pooled connection that set it
+  in an earlier transaction, it answers the empty string after that
+  transaction ends. The reader of D7 maps NULL and `''` to NULL before any
+  cast, so neither raises an error, and a NULL matches no row. This is the
+  "no namespace set, no row" rule of ADR 220 decision 3. The
+  pooled-connection test of R5 checks both cases.
+- **D3. A permissive base policy and a restrictive namespace policy.**
+  Permissive policies combine with OR, and `AS RESTRICTIVE` policies
+  combine with AND
+  (<https://www.postgresql.org/docs/current/ddl-rowsecurity.html>). A
+  restrictive policy alone grants no row, so each table gets two policies:
+  - `CREATE POLICY base ON t AS PERMISSIVE FOR ALL TO dustpan_request USING (true) WITH CHECK (true)`,
+  - `CREATE POLICY namespace ON t AS RESTRICTIVE FOR ALL TO dustpan_request USING (namespace_id = ANY ((SELECT dustpan_guard.request_namespaces()))) WITH CHECK (namespace_id = ANY ((SELECT dustpan_guard.request_namespaces())))`.
+
+  `WITH CHECK` stops an insert or an update that writes a row into another
+  namespace. A permissive policy that a later change adds can never widen
+  the restrictive one.
 - **D4. Constraints bypass row-level security.** The PostgreSQL docs say
   that unique, primary key and foreign key checks "always bypass row
-  security". A unique constraint on a value that a tenant chooses tells the
-  tenant that another namespace holds the value. So each unique constraint
-  on a namespace table holds the namespace ID, except a constraint on a
-  random ID that the server makes. Namespace names stay unique in the
+  security". A unique constraint or an exclusion constraint on a value
+  that a tenant chooses tells the tenant that another namespace holds the
+  value. So each unique constraint and each exclusion constraint on a
+  namespace table holds the namespace ID, except a constraint on a random
+  ID that the server makes. Namespace names stay unique in the
   installation by design (ADR 215 decision 5).
 - **D5. Performance.** The namespace ID leads each index of a namespace
   table. The policy reads the setting once for each statement, in the form
@@ -295,10 +305,68 @@ it and adds six details that ADR 220 does not say.
   (<https://supabase.com/docs/guides/database/postgres/row-level-security-performance>).
   A test runs `EXPLAIN` on the hot queries and fails on a sequential scan
   of a namespace table.
+  - **Prepared statements.** A generic plan keeps the initplan
+    `(SELECT dustpan_guard.request_namespaces())` and runs it at each
+    execution, so a cached plan never keeps the namespaces of an earlier
+    request. The test of R5 runs one prepared statement for namespace A,
+    then for B, on one connection.
+  - **pgx behind PgBouncer in transaction mode.** The statement cache of
+    pgx needs PgBouncer `max_prepared_statements` above 0, or the pgx
+    simple protocol. The docs of the deployment name the setting.
 - **D6. Backups are never partial in silence.** The operator role with
   `BYPASSRLS` runs the installation backup. A backup that runs with any
   other role sets `row_security = off`, so that PostgreSQL raises an error
   instead of a filtered dump.
+- **D7. The threat model, and a value that the request role cannot
+  forge.** Each role can call `set_config` on a custom setting. So a
+  policy that trusts `dustpan.namespace_ids` alone stops a query that
+  forgets its filter, but not SQL injection or a hostile dynamic query:
+  the injected SQL sets the value to namespace B first. `CLAUDE.md` asks
+  that each layer stops the attack alone. So:
+  - At the start of each transaction, the server sets two values with
+    placeholders: `dustpan.namespace_ids` and `dustpan.namespace_mac`.
+    The MAC is the HMAC-SHA-256 of the length-prefixed encoding of the
+    sorted namespace IDs, `pg_backend_pid()` and `transaction_timestamp()`,
+    under the **request guard key**.
+  - The policy never reads the setting directly. It reads
+    `dustpan_guard.request_namespaces()`, a `SECURITY DEFINER` function
+    owned by the role `dustpan_guard`. The function reads the guard key
+    from a table that only `dustpan_guard` can read, checks the MAC, and
+    answers the IDs. A missing value, an empty value or a MAC that does not
+    match answers NULL, so the policy matches no row.
+  - The guard key is an installation secret, as the key file of ADR 41 is.
+    The server reads it at the start. The request role has no grant on the
+    key table, so SQL that runs as the request role cannot read the key or
+    compute a MAC for namespace B. The MAC holds the backend and the start
+    time of the transaction, so a value of another transaction does not
+    match.
+  - **Why not a role switch from the pool.** The pool could connect as a
+    role with no rights and run `SET LOCAL ROLE` to a role of the request.
+    Injected SQL can run `RESET ROLE` or `SET ROLE` again, so a role switch
+    does not stop injection alone. It stays a possible later layer, not
+    this one.
+  - The query filter of ADR 220 decision 5 stays. D7 and the filter each
+    stop a query that forgets its namespace. Only D7 stops injected SQL.
+- **D8. The hardening of `SECURITY DEFINER` functions.** ADR 220 decision 3
+  makes the lookups before the setting (a token by its hash, a namespace by
+  its name) `SECURITY DEFINER` functions. Their owner must see rows before
+  the setting exists, so it needs `BYPASSRLS`. That makes each such
+  function a bypass, so:
+  - The owner is `dustpan_lookup`: `BYPASSRLS`, no login, no table
+    ownership, and `SELECT` only on the columns that the lookups read. The
+    tables stay owned by the migration role, with `FORCE ROW LEVEL
+    SECURITY`, so the owner of a table meets the policies too.
+  - Each function sets `SET search_path = pg_catalog, dustpan`, uses
+    schema-qualified names, and runs no dynamic SQL.
+  - `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC`, because PostgreSQL grants
+    `EXECUTE` to `PUBLIC` by default. Then `GRANT EXECUTE` to the request
+    role only.
+  - The request role has no `CREATE` on any schema.
+  - A view runs with the rights of its owner and skips row-level security.
+    So the baseline has no view on a namespace table, or each such view has
+    `security_invoker = true`.
+  - Each function answers IDs only (namespace, principal, home), as ADR 220
+    decision 3 says.
 
 ### R3. Noisy neighbors
 
@@ -329,6 +397,13 @@ exemption for work in progress. The research adds:
   (<https://grafana.com/docs/mimir/latest/configure/about-runtime-configuration/>).
   ADR 220 decision 13 lets a namespace only lower a limit. Question 5 asks
   whether the operator can raise one limit for one namespace.
+- **A cap on work in progress.** ADR 220 decision 14 exempts the calls of
+  work in progress from shares. Nothing caps how much work a namespace can
+  start, so a namespace could hold many open updates and stay exempt. The
+  setting `limits.namespace.workInFlight` (50 by default, a proposal) caps
+  the count of open Pulumi update leases, held OpenTofu locks and running
+  job phases of one namespace. At the cap, the start of new work answers
+  429 with `Retry-After`. Work that already started is never stopped.
 - **A test with a heavy tenant.** AWS asks for tests where "a subset of
   your tenants place a disproportionate load on your system"
   (<https://aws.amazon.com/blogs/apn/testing-saas-solutions-on-aws/>). The
@@ -360,8 +435,48 @@ research adds one gap and one confirmation.
   and at each rotation, and calls `Status` each minute. KMS calls then do
   not grow with the count of namespaces. A customer key still wraps its own
   namespace key directly, so a customer revoke still works as ADR 217
-  decision 14 says. This changes the stored wrap chain, so it is a one-way
-  door.
+  decision 14 says.
+  - **The wrap record holds a chain.** Each wrapped namespace key version
+    records an ordered list of wrappers, each with its ID and version
+    (ADR 217 decision 4). With a chain in the record, a layer added later
+    is a rewrap job, not a new format. The chain format is the one-way
+    door (door 1). The installation key is the recommended first content
+    of the chain.
+  - **Rotation.** An installation key ID has the prefix `ik-` and versions
+    that start at 1. A schedule rotates it every 365 days by default, and
+    the operator can rotate it with a command. The new version wraps each
+    new namespace key version. A durable operation (ADR 72) then wraps
+    each namespace key version again under the new version. The server
+    keeps each old version, wrapped by the KMS, and destroys it only when
+    no live wrap uses it and no backup that the `backups` table holds names
+    it in its manifest. This is the rule of ADR 217 decision 18 for
+    namespace key versions.
+  - **Compromise.** Each instance holds the open installation key in
+    memory, and it opens each namespace key that has no customer key. A
+    rotation of the installation key alone does not contain a leak,
+    because the backups still hold wraps under the old version. The
+    response to a compromise is: rotate the installation key, rotate each
+    namespace key (ADR 217 decision 18), and run the full re-encryption
+    (ADR 217 decision 20) where the content must not open with the old
+    keys. A namespace with a customer key needs both keys to open (ADR
+    217 decision 2), so a leak of the installation key alone does not
+    open it. The docs of the operator give these steps.
+  - **Fail closed.** The server calls `Status` each minute.
+    - `ErrRevoked` (the operator disabled the KMS key, or the identity lost
+      access): each instance drops the open installation key after
+      `keys.installationGraceSeconds` (900 by default, 0 turns the grace
+      off), with the work-in-progress rule of ADR 217 decision 13. Then
+      each request that needs content answers 403, and the server writes an
+      audit entry in the `@server` scope and a WARN log line. An instance
+      that starts with a revoked key refuses to start.
+    - `ErrUnavailable`: the instance keeps the open key for at most
+      `keys.installationUnavailableHours` (24 by default), then drops it
+      and fails closed as above. The settings resource shows both values.
+  - **Less detail in the KMS audit log.** The KMS of the operator then
+    logs one call for each instance start and rotation, not one call for
+    each namespace. The audit log of the server keeps the record of each
+    open of a namespace key. This is a trade-off for the operator, not for
+    a tenant with a customer key, whose KMS still logs each open.
 - **The confirmation.** HCP Terraform "hold your own key" (generally
   available on 31 July 2025) makes a data key for each workspace and keeps
   the key-encryption key in the customer's KMS
@@ -383,7 +498,14 @@ ADR 220 decisions 16 to 22 give a test for each layer. The research adds:
   `namespace_id` filter of the queries deleted (a build tag of the test
   only), and once on SQLite, with no row-level security. Each run must
   pass alone. This is the rule of `CLAUDE.md` that each layer stops the
-  attack alone.
+  attack alone. The build tag exists in test files only. A test of the
+  build fails when a binary builds with that tag.
+- **A second layer on SQLite.** SQLite has no row-level security, so the
+  query filter of ADR 220 decision 5 is the only check there. A scoped
+  view of the store adds a second check: it compares the `namespace_id` of
+  each row that a query answers with the namespace set of the request, and
+  refuses the whole answer on a mismatch, as the blob view of ADR 220
+  decision 8 does for blob keys. It applies on PostgreSQL too.
 - **One pooled connection, two transactions.** A test runs a transaction
   of namespace A that fails at its end, then a transaction with no value on
   the same connection, and checks that the second sees no row.
@@ -391,7 +513,10 @@ ADR 220 decisions 16 to 22 give a test for each layer. The research adds:
   table of the baseline that has neither a namespace ID with the
   restrictive policy, nor a place on an explicit list of installation
   tables. A new table can then not skip row-level security by accident.
-- **A unique constraint test** for D4.
+- **A unique constraint test** for D4, and a catalog test for D7 and D8:
+  the owner, `search_path`, `PUBLIC` execute and the grants of each
+  `SECURITY DEFINER` function, no `CREATE` for the request role, and
+  `security_invoker` on each view.
 - **Canary namespaces.** OpenDustpan Cloud runs two namespaces of its own
   that try to read each other each minute through the public API, with the
   Pulumi CLI and OpenTofu. A success is an incident. AWS says that tests
@@ -428,7 +553,7 @@ A later RFC designs the claim of a name across installations.
   or returns all the personal data, at the choice of the controller
   (<https://gdpr-info.eu/art-28-gdpr/>). So a tenant must be able to take
   its data out before the delete. This supports exports in the `disabled`
-  state (question 2) and the decrypted export of section 5 (question 3).
+  state and the export of section 5 (both in question 2).
 - OWASP gives the order of an exit: block new work, revoke credentials,
   and delete a key only after each copy under it has passed its retention
   (<https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html>).
@@ -437,34 +562,63 @@ A later RFC designs the claim of a name across installations.
 
 ## Recommended design
 
-One line for each section of this RFC. Questions 1 to 5 below ask the
-owner for each one that is not settled.
+One line for each section of this RFC. The questions below ask the owner
+for each one that is not settled.
 
 | Section | Recommendation |
 | --- | --- |
 | 1. Path prefix in the backend URL | A: environment variables only. Measure B with `make e2e` later. |
 | 2. Move of a principal | A: no move. |
 | 3. `account-administrator` | A: delete the role. |
-| 4. Suspension notices | Notices on day 0, day 24, day 83 and day 89. Only the operator resumes. Exports work in `suspended` and in `disabled`. |
-| 5. Namespace backup | Restore as a copy into a new namespace: yes. Schedules: wait for the installation schedule. Exit: the decrypted export of option C before OpenDustpan Cloud opens. |
-| 6. KMS clients | B: hand-written clients on `net/http`, AWS KMS and Vault Transit first, plus the installation key of R4. The measurement of section 6 is the acceptance test of each adapter, not a gate before the choice. |
+| 4. Suspension notices | Notices on day 0, day 24, day 83 and day 89. Only the operator resumes. Exports work in `suspended` and in `disabled`. Credentials end as the table below says. |
+| 5. Namespace backup | Restore as a copy into a new namespace: yes. Schedules: wait for the installation schedule. Exit: the encrypted archive of option C, before OpenDustpan Cloud opens. |
+| 6. KMS clients | Measure first, as the owner asked: AWS KMS with options B and C (question 4). |
+| 6 and R4. The key layer | A chain of wrappers in each wrap record, with the installation key as its first content (question 3). |
 | 7. A new Pulumi data key | B: a second data key, with a key version in each new ciphertext. |
-| 8. SQLite | A: refuse `namespace` on SQLite. |
+| 8. SQLite | A: refuse `namespace` on SQLite. The scoped store view of R5 is the second layer. |
 | 9. A lock that turns a feature off on Cloud | A: keep ADR 59 decision 1. |
 | 10. Billing | Out of scope. |
-| 11. Cookies | A: one session cookie for each namespace ID. |
-| R2 | D1 to D6 become part of ADR 220 decision 3. |
-| R3 | Timeouts for each transaction. A heavy-tenant case in `make load`. |
+| 11. Cookies | A: one session cookie for each namespace ID, at most 20 in one browser. |
+| R2 | D1 to D8 become part of ADR 220 decision 3. |
+| R3 | Timeouts for each transaction, the cap on work in progress, and a heavy-tenant case in `make load`. |
 | R5 | The tests of R5, in the same change as the tests of ADR 220. |
 
-**Why option C for the export (section 5).** A tenant that leaves must get
-its state, its history and its secrets in a form that opens outside the
-installation. Option B needs a customer key, which most tenants do not
-have. Option C writes each history item decrypted into an archive, with
-the secret values encrypted again under a public key that the namespace
-administrator gives (an age X25519 recipient, for example). The archive
-then never holds a plain secret on the disk of the person who downloads it.
-It needs a fresh MFA step and writes an audit entry in the namespace scope.
+**The order of an exit, mapped to the states** (section 4, and the OWASP
+order of R7):
+
+| State | New work | Credentials | Data |
+| --- | --- | --- | --- |
+| `suspended` | refused | each token and session stays, so that people can export | readable, exportable |
+| `disabled` | refused | the server revokes each access token, each job token, each trust and each session, except the sessions of namespace administrators | exportable by a namespace administrator with a fresh MFA step |
+| `deleted` | refused | the server revokes the rest (ADR 215 decision 13) | the purge of ADR 47 runs |
+
+The notice of day 89 names the date of the delete and the date when the
+last backup copy that holds the namespace expires. After that date, the
+server destroys the namespace key versions (ADR 217 decision 18), and no
+copy opens.
+
+**The export of option C (section 5).** A tenant that leaves must get its
+state, its history, its secrets and its audit log in a form that opens
+outside the installation.
+
+- The archive holds each history item of each unit, decrypted, the
+  current state of each unit, the config of each Pulumi stack, and the
+  audit log of the namespace with its hash chain, so that the tenant can
+  check the chain outside the server.
+- **The whole archive is encrypted** to a public key that the namespace
+  administrator gives (an age X25519 recipient, for example). OpenTofu
+  state holds sensitive values as plain JSON, and `sensitive` only marks
+  them. So encryption of the secret values alone is not enough: each
+  history item, and the whole archive, is encrypted to the recipient.
+- **Pulumi secrets.** A checkpoint in the archive holds each secret as
+  plaintext in the secret form of the Pulumi deployment format, inside the
+  encrypted archive. `pulumi stack import` into another backend encrypts
+  them again with the secrets provider of the new stack. The secret config
+  values in `Pulumi.<stack>.yaml` stay encrypted under the old data key, so
+  the archive also lists each secret config value, and the docs give the
+  `pulumi config set --secret` step for each one. Slice 5 checks this.
+- The export needs a fresh MFA step and writes an audit entry in the
+  namespace scope.
 
 **Why the operator only resumes (section 4).** The operator suspended the
 namespace for a reason outside the namespace. A namespace administrator who
@@ -473,38 +627,46 @@ export, deprovision and read the notices.
 
 ## One-way doors before the first tag
 
-1. **The wrap chain of a namespace key version** (R4). The records and the
-   backups hold each wrap and its wrapper IDs (ADR 217 decision 4). An
-   installation key between the KMS and the namespace keys must exist from
-   the first tag, or each installation keeps the old chain for ever.
+1. **The wrap record holds a chain of wrappers** (R4). The records and the
+   backups hold each wrap and its wrapper IDs (ADR 217 decision 4). With a
+   chain in the record, a layer added later is a rewrap job. Without it, a
+   new layer is a new record format in each installation and each backup.
+   So the chain format must be in the first tag. The installation key
+   itself can come in the first tag or later (question 3).
 2. **The key version in each new Pulumi ciphertext** (section 7). The
    Pulumi CLI stores ciphertexts in `Pulumi.<stack>.yaml` in the
    repositories of the users. A format that a tag ships stays in those
    files. The tag of the key version must be in the first format.
 3. **The reserved namespace names** (ADR 215 decision 6). A name that a
    later release reserves breaks each namespace that holds it. Reserve the
-   names now that a console or a hosted site can need: for example `app`,
-   `www`, `admin`, `static`, `assets`, `docs`, `status`, `login`, `logout`,
-   `signup`, `settings`, `billing`, `support`, `help`, `new`, `explore`,
-   each name with a leading `.`, `-` or `_`, and each name of one or two
-   characters.
+   names now that a console, a sign-in flow or a hosted site can need: for
+   example `api`, `app`, `www`, `admin`, `auth`, `oauth`, `sso`, `saml`,
+   `scim`, `runner`, `metrics`, `static`, `assets`, `docs`, `status`,
+   `login`, `logout`, `signup`, `settings`, `billing`, `support`, `help`,
+   `new`, `explore`, each name with a leading `.`, `-` or `_`, and each
+   name of one or two characters.
 4. **The export format** (section 5, option C). A tenant keeps the archive
    and opens it with a later release. The archive has a format version in
    its manifest from the first release.
-5. **Unique constraints with the namespace ID** (D4). A constraint that a
-   tag ships without the namespace ID needs a migration later. ADR 322
-   lets the baseline change in place until the first tag.
+5. **Unique and exclusion constraints with the namespace ID** (D4). A
+   constraint that a tag ships without the namespace ID needs a migration
+   later. ADR 322 lets the baseline change in place until the first tag.
+6. **The request guard of D7.** The policies, the guard function and the
+   MAC encoding are in the baseline. A change after the first tag is a
+   migration of each policy.
 
 Not a door before the first tag: the name claim across installations (R6),
-the notice days (installation settings), the limits (settings), and the
-cookie names (a browser drops them at the end of the session).
+the notice days (installation settings), the limits (settings), the KMS
+client of section 6, and the cookie names (a browser drops them at the end
+of the session).
 
 ## Slices, each with its e2e step
 
-1. **Row-level security in the request path.** `set_config` with a
-   placeholder, the restrictive policies, the three roles, D1 to D6, and
-   the tests of ADR 220 decisions 16 to 22 and R5. **e2e:** the step of
-   ADR 220 decision 21. The Pulumi CLI and OpenTofu, each with the token of
+1. **Row-level security in the request path.** `set_config` with
+   placeholders, the base and restrictive policies, the request guard of
+   D7, the roles and hardening of D8, D1 to D6, the scoped store view, and
+   the tests of ADR 220 decisions 16 to 22 and R5. **e2e:** the step of ADR
+   220 decision 21. The Pulumi CLI and OpenTofu, each with the token of
    namespace A, list, read, lock and write in A, and get a not-found error
    for each stack and workspace of B.
 2. **Namespace states and notices** (ADR 215 decision 16, section 4).
@@ -512,21 +674,26 @@ cookie names (a browser drops them at the end of the session).
    the message of `namespace.suspended` with the date of the next state.
    `pulumi stack export` and `tofu state pull` work. `tofu apply` fails.
    An update that started before the suspension ends. In `disabled`, the
-   export of slice 5 still works for a namespace administrator.
+   access token of a member fails, and the export of slice 5 still works
+   for a namespace administrator.
 3. **Two namespaces on one host** (sections 1 and 11). **e2e:** one person
    with a principal in A and one in B sets `PULUMI_ACCESS_TOKEN` and
    `TF_TOKEN_<host>` for each project. Each CLI works in its namespace. The
    token of A on a path of B answers not found.
-4. **The installation key and the first KMS adapter** (section 6, R4).
-   **e2e:** HashiCorp Vault Transit in a container as the KMS of a customer
-   key. `pulumi config set --secret`, then `pulumi up` works. The step
-   disables the key in Vault. `pulumi preview` fails with the message of
-   `namespace.key-revoked` before the cache time plus the grace ends. The
-   step enables the key, and `pulumi preview` works again.
-5. **The decrypted export** (section 5, option C). **e2e:** export
-   namespace A, decrypt the archive with the test key, then
-   `pulumi stack import` and `tofu state push` into a fresh installation.
-   `pulumi preview` and `tofu plan` show no change.
+4. **The wrap chain, the installation key and the first KMS adapter**
+   (section 6, R4). **e2e:** HashiCorp Vault Transit in a container as the
+   KMS of a customer key. `pulumi config set --secret`, then `pulumi up`
+   works. The step disables the key in Vault. `pulumi preview` fails with
+   the message of `namespace.key-revoked` before the cache time plus the
+   grace ends. The step enables the key, and `pulumi preview` works again.
+   A second step disables the installation key in Vault, and checks that
+   each instance fails closed after the grace.
+5. **The encrypted export** (section 5, option C). **e2e:** export
+   namespace A, decrypt the archive with the test key, check the hash
+   chain of the audit log, then `pulumi stack import` and `tofu state push`
+   into a fresh installation. The step sets each secret config value again
+   from the list in the archive. `pulumi preview` and `tofu plan` show no
+   change.
 6. **A second Pulumi data key** (section 7). **e2e:** for each supported
    version of the Pulumi CLI, a secret set before the new data key still
    opens, a new `pulumi config set --secret` gets the new key version, and
@@ -536,61 +703,84 @@ cookie names (a browser drops them at the end of the session).
 
 Each question stands alone. The recommendation is first.
 
-### Question 1. Accept the recommendations that add no new mechanism?
+### Question 1. Accept six recommendations that add no new mechanism?
 
-Sections 1, 2, 3, 8, 9 and 11: environment variables and no path prefix
-for the CLI, no move of a principal, delete `account-administrator`,
-refuse `namespace` on SQLite, no lock that turns a feature off on
-OpenDustpan Cloud, and one session cookie for each namespace.
+| Section | Recommended | The other option | The trade-off of the recommendation |
+| --- | --- | --- | --- |
+| 1. CLI login on one host | A person in two namespaces sets a token for each project in the environment | B: a path for each namespace in the backend URL | One more step for a person in two namespaces. B works only if each Pulumi CLI version keeps the path, and never for OpenTofu. |
+| 2. Move of a principal | No move. People sign in again in the namespace, and an administrator gives the grants again | B: a move operation | More work for an operator who changes `principalHome`. No code for a rare case. |
+| 3. `account-administrator` | Delete the role | B: keep it for the installation directory | No role with the word "account", which the API does not use. |
+| 8. SQLite | Refuse `principalHome: namespace` on SQLite | B: allow it with the query filter and the store view | A team with tenants that own their members must run PostgreSQL. |
+| 9. A lock that turns a feature off on Cloud | Never on OpenDustpan Cloud (ADR 59 decision 1) | B: allow it for an experimental module | The hosted service cannot hide a module that is not ready. It uses the opt-in setting of ADR 59 decision 17. |
+| 11. Browser sessions | One session cookie for each namespace, at most 20 in one browser | B: one namespace for each browser session | The 21st namespace signs out the oldest one. |
 
 - **A. Accept all six (recommended).**
 - **B. Accept some.** Name the sections to discuss.
 
-**ELI5.** These six answers each say "do not build a new thing yet". We
-can build any of them later without breaking anything.
+**ELI5.** Each line says "do not build a new thing yet". The table says
+what each "not yet" costs.
 
-### Question 2. The suspension timeline
+### Question 2. What can a suspended or leaving tenant do?
 
 The owner gave 30 days read-only, `disabled` after 31 days, and a delete
 after 90 days.
 
-- **A (recommended).** Notices on day 0, day 24, day 83 and day 89. Only
-  the operator resumes. A namespace administrator can export in both
-  `suspended` and `disabled`, with a fresh MFA step.
-- **B.** The same notices, and a namespace administrator can also resume
-  after the cause ends.
-- **C.** No export in `disabled`.
+- **A (recommended).** Notices on day 0, day 24, day 83 and day 89, and
+  the last one names when the last backup copy expires. Only the operator
+  resumes. The server revokes the credentials of members at `disabled`.
+  A namespace administrator can export in `suspended` and in `disabled`,
+  with a fresh MFA step. The export is option C: an archive of each
+  history item, the state, the Pulumi config and the audit log with its
+  hash chain, all encrypted to a public key of the administrator.
+- **B.** As A, and a namespace administrator can also resume after the
+  cause ends.
+- **C.** As A, but the exit is only `pulumi stack export` and
+  `tofu state pull`. This gives the current state, with no history and no
+  audit log.
 
 **ELI5.** When a shop closes your account, you get letters before each
-step, and you can always take your things home until the last day. Only
-the shop opens the door again.
+step. Until the last day you can take every box home, in one case that
+only your own key opens. Only the shop opens the door again.
 
-### Question 3. How a tenant takes its data when it leaves
+### Question 3. One installation key between the KMS and the namespaces?
 
-- **A.** Document `pulumi stack export` and `tofu state pull` only. This
-  gives the current state, but no history and no audit log.
-- **B.** An export with item keys, only with a customer key.
-- **C (recommended).** A decrypted export of each history item of each
-  unit, with the secret values encrypted to a public key of the namespace
-  administrator, a fresh MFA step and an audit entry. Before OpenDustpan
-  Cloud opens.
+With the key-encryption key in the KMS of the operator, each open of a
+namespace key is one KMS call: about 1,300 calls each second for 10
+instances and 20,000 namespaces.
 
-**ELI5.** When you move out, you get every box, and the box with the
-jewelry is locked with your own padlock.
+- **A (recommended).** The wrap record holds a chain of wrappers from the
+  first tag (the one-way door). The KMS wraps one installation key with
+  versions, which wraps each namespace key version. KMS calls then do not
+  grow with the count of namespaces. The design of R4 gives its rotation,
+  its compromise steps and how it fails closed. The trade-off: the KMS
+  audit log of the operator no longer shows one call for each namespace.
+- **B.** The chain format only, with no installation key yet. The server
+  keeps one KMS call for each namespace key open, and adds the layer by a
+  rewrap job when the count of namespaces needs it.
+- **C.** Neither. A later layer is a new record format.
 
-### Question 4. KMS clients, and one installation key between the KMS and the namespaces
+**ELI5.** We keep one master key in the bank vault and take it out once in
+the morning, instead of going to the bank for each drawer. We also make
+sure that the key ring can hold more keys later.
 
-- **A (recommended).** Hand-written clients on `net/http` (no new
-  dependency), AWS KMS and Vault Transit first. The KMS of the operator
-  wraps one installation key, which wraps each namespace key version (R4).
-  The measurement of section 6 is the acceptance test of each adapter.
-- **B.** The SDK of each cloud. Asks the owner for four large
+### Question 4. Measure the KMS clients first, as asked?
+
+Section 6 says that the owner asked for a measurement before a choice. The
+first draft of this research recommended choosing hand-written clients
+now, with the measurement as an acceptance test. That reverses the
+owner's order, so this question asks it plainly.
+
+- **A (recommended).** Keep the owner's order: measure AWS KMS with
+  options B (hand-written on `net/http`) and C (an adapter outside the
+  server), with the table of section 6, then decide for all four KMS
+  services. The wrap chain of question 3 does not wait for it.
+- **B.** Choose B now. The measurement becomes the acceptance test of each
+  adapter.
+- **C.** Choose the SDK of each cloud, which asks the owner for four large
   dependencies.
-- **C.** Adapters outside the server, on a Unix socket.
 
-**ELI5.** We keep one master key in the bank vault and take it out once
-in the morning, instead of going to the bank for each drawer in the
-building.
+**ELI5.** You asked us to test-drive the cars before we buy one. We still
+think that is right, and the garage can be built while we test.
 
 ### Question 5. Can the operator raise one limit for one namespace?
 
