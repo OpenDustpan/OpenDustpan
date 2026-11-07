@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -213,7 +213,7 @@ func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status i
 	w.WriteHeader(status)
 
 	if _, err := w.Write(append(data, '\n')); err != nil {
-		h.logger.ErrorContext(ctx, "cannot write the response", slog.Any("error", err))
+		faultlog.LogFault(ctx, h.logger, "cannot write the response", faultlog.Cause(err), "selfservice.response")
 	}
 }
 
@@ -243,9 +243,8 @@ func classify(err error) (problem.Problem, bool) {
 	case errors.Is(err, selfservice.ErrAlreadyPublished):
 		return problem.New(http.StatusConflict, errcode.SelfServiceBlueprintAlreadyPublished,
 			selfservice.ErrAlreadyPublished.Error()), true
-	default:
-		var none problem.Problem
-
-		return none, false
 	}
+
+	// Not an error of the blueprint routes: package problem answers it.
+	return problem.Pass()
 }
