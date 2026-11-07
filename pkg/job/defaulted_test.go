@@ -15,6 +15,7 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 	t.Parallel()
 
 	named := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 
 	tests := []struct {
 		name    string
@@ -24,13 +25,32 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 		// plannerList is a list that the planner sets by itself.
 		plannerList []string
 		want        []string
+		wantSource  job.LocationSource
 	}{
-		{"names pool and location", "pool-1", named, "", nil, nil},
-		{"names no pool", "", named, "", nil, []string{"pool"}},
-		{"names neither", "", emptyLocation(), "", nil, []string{"pool", "location"}},
-		{"a profile from the unit settings", "pool-1", named, "prf-1", nil, []string{"profile"}},
-		{"all three", "", emptyLocation(), "prf-1", nil, []string{"pool", "location", "profile"}},
-		{"the service ignores a list of the planner", "pool-1", named, "", []string{"pool"}, nil},
+		{"names pool and location", "pool-1", named, "", nil, nil, job.LocationSourceRequest},
+		{"names no pool", "", named, "", nil, []string{"pool"}, job.LocationSourceRequest},
+		{"names neither", "", emptyLocation(), "", nil, []string{"pool", "location"}, job.LocationSourceUnit},
+		{
+			"names only a revision", "", revisionOnly, "", nil,
+			[]string{"pool", "location"},
+			job.LocationSourceUnit,
+		},
+		{
+			"a profile from the unit settings", "pool-1", named, "prf-1", nil,
+			[]string{"profile"},
+			job.LocationSourceRequest,
+		},
+		{
+			"all three", "", emptyLocation(), "prf-1", nil,
+			[]string{"pool", "location", "profile"},
+			job.LocationSourceUnit,
+		},
+		{
+			"the service ignores a list of the planner", "pool-1", named, "",
+			[]string{"pool"},
+			nil,
+			job.LocationSourceRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -41,8 +61,8 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 			r.planner.spec = func(u identity.Object, req *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
-					Location: named, Steps: nil, Pool: "pool-1", Profile: tt.profile, Edits: nil, Delivery: "",
-					Defaulted: tt.plannerList,
+					Location: named, LocationSource: "", Steps: nil, Pool: "pool-1", Profile: tt.profile, Edits: nil,
+					Delivery: "", Defaulted: tt.plannerList,
 				}
 			}
 
@@ -61,6 +81,10 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 
 			if !slices.Equal(stored.Spec.Defaulted, tt.want) {
 				t.Fatalf("Spec.Defaulted = %v, want %v", stored.Spec.Defaulted, tt.want)
+			}
+
+			if stored.Spec.LocationSource != tt.wantSource {
+				t.Fatalf("Spec.LocationSource = %q, want %q", stored.Spec.LocationSource, tt.wantSource)
 			}
 		})
 	}
@@ -89,8 +113,8 @@ func TestDefaultedStaysAfterTheSettingsChange(t *testing.T) {
 	r.planner.spec = func(u identity.Object, req *job.StartRequest) job.Spec {
 		return job.Spec{
 			Unit: u, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
-			Location: req.Location, Steps: nil, Pool: "pool-2", Profile: "prf-2", Edits: nil, Delivery: "",
-			Defaulted: nil,
+			Location: req.Location, LocationSource: "", Steps: nil, Pool: "pool-2", Profile: "prf-2", Edits: nil,
+			Delivery: "", Defaulted: nil,
 		}
 	}
 

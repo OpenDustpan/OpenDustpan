@@ -332,6 +332,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 						Directory:  "",
 						Revision:   "",
 					},
+					LocationSource: job.LocationSourceRequest,
 					Steps: []job.Step{
 						{
 							Name:             "plan",
@@ -717,8 +718,8 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
-					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
-					Defaulted: nil,
+					Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "p", Profile: "", Edits: nil,
+					Delivery: "", Defaulted: nil,
 				}
 			}
 		}},

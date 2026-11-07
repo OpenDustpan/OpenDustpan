@@ -2449,6 +2449,9 @@
           },
           "revision": {
             "type": "string"
+          },
+          "source": {
+            "type": "string"
           }
         },
         "type": "object"

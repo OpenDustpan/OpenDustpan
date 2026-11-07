@@ -950,6 +950,7 @@ export const decodeJobLocation: Decoder<JobLocation> = object<JobLocation>("JobL
   ref: optional(string),
   repository: optional(string),
   revision: optional(string),
+  source: optional(string),
 });
 
 /** The validator of JobLocationRequest. */
