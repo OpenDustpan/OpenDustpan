@@ -74,7 +74,7 @@ var caseNames = []string{
 	"an accepted challenge completes only for the console factor",
 	"an accept of a challenge that is not open fails with ErrUsed",
 	"a recorded failure of an open challenge counts it, appends its entry and returns nil",
-	"the recorded failure that reaches the limit makes the challenge void, appends its entry and returns nil",
+	"the recorded failure that reaches the limit makes the challenge void, appends its entry and one entry of the void, and returns nil",
 	"a recorded failure after the limit fails with ErrUsed, counts nothing and appends nothing",
 	"a recorded failure of a missing challenge or of another person fails with ErrNotFound, counts nothing and appends nothing",
 	"a recorded failure after the expiry fails with ErrExpired, counts nothing and appends nothing",

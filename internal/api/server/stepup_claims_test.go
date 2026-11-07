@@ -36,12 +36,15 @@ func TestStepUpCredentialAloneGivesNoFreshAuthentication(t *testing.T) {
 	h, _ := newServiceBackedHandlerOf(t, callers, allowAll{}, failedSeed())
 
 	for _, tc := range []struct {
-		name, token, value string
+		name, token string
+		values      []string
 	}{
-		{"a job token with a step-up credential", "t-job", stepUpValue},
-		{"a job token with the header twice", "t-job", stepUpValue + ", " + stepUpValue},
-		{"a personal access token with a step-up credential", "t-person", stepUpValue},
-		{"a trust token with a step-up credential", "t-trust", stepUpValue},
+		{"a job token with a step-up credential", "t-job", []string{stepUpValue}},
+		{"a job token with two values in one header line", "t-job", []string{stepUpValue + ", " + stepUpValue}},
+		{"a job token with two header lines", "t-job", []string{stepUpValue, stepUpValue}},
+		{"a personal access token with a step-up credential", "t-person", []string{stepUpValue}},
+		{"a personal access token with two header lines", "t-person", []string{stepUpValue, stepUpValue}},
+		{"a trust token with a step-up credential", "t-trust", []string{stepUpValue}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -49,7 +52,9 @@ func TestStepUpCredentialAloneGivesNoFreshAuthentication(t *testing.T) {
 			req := httptest.NewRequestWithContext(testContext(t), http.MethodPost,
 				"/api/server/principals/prn-ci-deploy/tokens", strings.NewReader(`{"name":"ci"}`))
 			req.Header.Set("Authorization", "Bearer "+tc.token)
-			req.Header.Set(stepUpHeader, tc.value)
+			for _, v := range tc.values {
+				req.Header.Add(stepUpHeader, v)
+			}
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)

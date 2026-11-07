@@ -455,8 +455,11 @@ type ChallengeStore interface {
 	//   - Open, below the failure limit: it counts the answer, appends e and
 	//     returns nil. The challenge stays open.
 	//   - Open, and this answer reaches the failure limit: it counts the
-	//     answer, makes the challenge void, appends e and returns nil. The
-	//     next call returns ErrUsed.
+	//     answer, makes the challenge void, appends e, and appends a second
+	//     entry that records the void of the challenge at the limit, and
+	//     returns nil. The void is an automatic action, so it has its own
+	//     entry, and e stays the record of the wrong answer. The next call
+	//     returns ErrUsed.
 	//   - Missing, or a challenge of another person: it returns ErrNotFound.
 	//   - After the expiry: it returns ErrExpired.
 	//   - Accepted, answered or void: it returns ErrUsed.
