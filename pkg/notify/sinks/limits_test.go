@@ -559,6 +559,11 @@ func TestTakeRefusesHostileIdentifiers(t *testing.T) {
 		},
 		{"long sink ID", validNS, notify.SinkIDPrefix + strings.Repeat("a", 100)},
 		{"no sink prefix", validNS, "b"},
+		{"uppercase sink ID", validNS, "snk-AAAAAAAAAAAAAAAAAAAA"},
+		{"non-ASCII in namespace", "shöp", validID},
+		{"non-ASCII in sink ID", validNS, "snk-äaaa"},
+		{"NUL in namespace", "a\x00b", validID},
+		{"NUL in sink ID", validNS, "snk-a\x00b"},
 	}
 
 	for _, tt := range tests {
@@ -598,8 +603,13 @@ func checkHostileTake(
 	}
 
 	_, err := sinks.TakeForTest(t.Context(), counter, hostileNS, hostileID, now)
-	if !errors.Is(err, sinks.ErrLimitUnavailable) {
-		t.Fatalf("TakeForTest(%q, %q) = %v, want ErrLimitUnavailable", hostileNS, hostileID, err)
+	if !errors.Is(err, notify.ErrInvalid) || errors.Is(err, sinks.ErrLimitUnavailable) {
+		t.Fatalf(
+			"TakeForTest(%q, %q) = %v, want notify.ErrInvalid and not ErrLimitUnavailable",
+			hostileNS,
+			hostileID,
+			err,
+		)
 	}
 
 	if got := counter.Adds(); got != adds {
@@ -639,8 +649,13 @@ func TestHostileIdentifiersCannotShareACounterKey(t *testing.T) {
 
 	for _, pair := range pairs {
 		_, err := sinks.TakeForTest(t.Context(), counter, pair.ns, pair.id, now)
-		if !errors.Is(err, sinks.ErrLimitUnavailable) {
-			t.Fatalf("TakeForTest(%q, %q) = %v, want ErrLimitUnavailable", pair.ns, pair.id, err)
+		if !errors.Is(err, notify.ErrInvalid) || errors.Is(err, sinks.ErrLimitUnavailable) {
+			t.Fatalf(
+				"TakeForTest(%q, %q) = %v, want notify.ErrInvalid and not ErrLimitUnavailable",
+				pair.ns,
+				pair.id,
+				err,
+			)
 		}
 	}
 
