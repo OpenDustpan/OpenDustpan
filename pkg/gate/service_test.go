@@ -247,6 +247,28 @@ func TestLimitedAuthorizer(t *testing.T) {
 	}
 }
 
+// TestLimitedAuthorizerKeepsAnInfrastructureFailure checks that a unit source
+// that does not answer fails the call with its own cause. It is a store
+// failure, not an access refusal, so it does not match identity.ErrDenied.
+func TestLimitedAuthorizerKeepsAnInfrastructureFailure(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swFailingUnits{}, nil)
+	auth := gate.LimitedAuthorizer(grants{allow: map[string]bool{"ci": true}}, e.svc)
+
+	unit, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = auth.Authorize(t.Context(), principal("ci", false), identity.ActionUnitWrite, unit)
+	if err == nil || !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errUnitsDown) ||
+		errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize(unit of an unreadable source) = %v, "+
+			"want ErrUnavailable with the source error and no identity.ErrDenied", err)
+	}
+}
+
 // TestLimitedAuthorizerErrorKinds checks the classes of the errors of the
 // access limits. A refusal of a limit matches ErrLimited and identity.ErrDenied.
 // A failure that is not a refusal keeps its own cause and does not match

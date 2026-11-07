@@ -526,6 +526,9 @@ func TestSharedBudgetStaysInItsScope(t *testing.T) {
 		t.Fatal("exhausted scope admitted within the shared window")
 	}
 
+	// One miss of the other scope: it counts under its own key, below the burst.
+	other.Fail(ctx)
+
 	if err := other.Admit(ctx); err != nil {
 		t.Fatalf("other scope refused by the shared budget of its own scope: %v", err)
 	}
@@ -533,7 +536,7 @@ func TestSharedBudgetStaysInItsScope(t *testing.T) {
 	counter.mu.Lock()
 	defer counter.mu.Unlock()
 
-	if counter.counts["192.0.2.1"] != 2 || counter.counts["signin|192.0.2.1"] != 0 {
-		t.Fatalf("counts = %v, want two misses under the exhausted scope and none under the other", counter.counts)
+	if counter.counts["192.0.2.1"] != 2 || counter.counts["signin|192.0.2.1"] != 1 {
+		t.Fatalf("counts = %v, want two misses under the exhausted scope and one under the other", counter.counts)
 	}
 }
