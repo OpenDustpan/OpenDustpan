@@ -236,6 +236,7 @@ func TestTheDialGuardChecksTheResolvedAddress(t *testing.T) {
 			"",
 		},
 		{"plain to loopback", "127.0.0.1:389", nil, private, ldapauth.PlainLoopbackOnlyForTest, "", ""},
+		{"plain to the IPv6 loopback", "[::1]:389", nil, private, ldapauth.PlainLoopbackOnlyForTest, "", ""},
 		{"TLS to a private address", "10.0.0.5:636", nil, private, ldapauth.PlainNotUsedForTest, "", ""},
 	}
 

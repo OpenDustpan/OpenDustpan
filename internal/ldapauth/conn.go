@@ -18,8 +18,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
-// ErrPlainRefused reports a connection with no TLS that the plain-transport
-// setting does not allow. It matches session.ErrMethodUnavailable too.
+// ErrPlainRefused reports a connection with no TLS to a host that is not a
+// loopback IP address, when the AllowPlain hook of the config does not allow
+// it. It matches session.ErrMethodUnavailable too.
 var ErrPlainRefused = errors.New("a connection with no TLS to the directory is not allowed")
 
 // plainRefused returns the error of a refused plain connection to address.
@@ -189,7 +190,7 @@ func (m *Method) closeConn(ctx context.Context, conn *ldap.Conn) {
 	}
 }
 
-// allowPlain reads the plain-transport setting. An error counts as false.
+// allowPlain calls the AllowPlain hook of the config. An error counts as false.
 func (m *Method) allowPlain(ctx context.Context) bool {
 	on, err := m.allowPlainFn(ctx)
 	if err != nil {
