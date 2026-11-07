@@ -133,6 +133,14 @@ func validName(name string) bool {
 		return false
 	}
 
+	// The names of the zone of the host and of host-only files are never zones.
+	first, _, _ := strings.Cut(name, "/")
+	switch strings.ToLower(first) {
+	case "local", "localtime", "posixrules", "posix", "right":
+		return false
+	default:
+	}
+
 	for i := range len(name) {
 		if !nameByte(name[i]) {
 			return false

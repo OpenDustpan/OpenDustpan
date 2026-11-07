@@ -112,6 +112,7 @@ func TestGenerateRefusesHostileEntry(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{
+		"Local", "localtime", "posixrules", "posix/UTC", "right/UTC",
 		"../etc/passwd", "/etc/passwd", "Europe//Berlin", "a b", "Europe/Zürich", "a\x00b", "a\"+x+\"", strings.Repeat("a", 65),
 	} {
 		if _, err := zonegen.Generate(archiveOf(t, name)); !errors.Is(err, zonegen.ErrBadName) {

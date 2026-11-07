@@ -79,6 +79,10 @@ func hostileZones() []zoneCase {
 		{"a very long name", strings.Repeat("Europe/", 1000), true, true, true},
 		{"the zone of the host", "Local", true, true, true},
 		{"empty", "", true, true, true},
+		{"the file of the host", "localtime", true, true, true},
+		{"a host rules file", "posixrules", true, true, true},
+		{"a posix directory", "posix/UTC", true, true, true},
+		{"a right directory", "right/UTC", true, true, true},
 		{"a directory", "America", true, false, false},
 	}
 }

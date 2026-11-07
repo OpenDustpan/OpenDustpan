@@ -38,7 +38,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	if *check {
 		have, rerr := readFile(*out)
-		if rerr != nil || !bytes.Equal(have, want) {
+		if rerr != nil {
+			reportf(stderr, "zonegen: read %s: %v", *out, rerr)
+
+			return exitFailure
+		}
+
+		if !bytes.Equal(have, want) {
 			reportf(stderr, "zonegen: %s is out of date; run make zones-generate", *out)
 
 			return exitFailure

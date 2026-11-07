@@ -178,7 +178,10 @@ func timeZone(value string) error {
 // differently on two hosts, for example for a name in the wrong case on a file
 // system that ignores case.
 func zoneLoads(value string) bool {
-	if value == "" || value == "Local" {
+	// Defense in depth: knownZone and zoneShape refuse these names too; this
+	// layer repeats the rule so that it stops them alone, before it calls
+	// time.LoadLocation, which reads the zone files of the host.
+	if value == "" || hostZoneName(value) {
 		return false
 	}
 
@@ -208,14 +211,20 @@ func zoneShape(value string) bool {
 		return false
 	}
 
-	// "Local" names the zone of the host, and the other names are files that
-	// some hosts have and the embedded database does not.
+	return !hostZoneName(value)
+}
+
+// hostZoneName reports whether the first segment of value names the zone of the
+// host ("Local", "localtime") or a file that only some hosts have
+// ("posixrules", "posix/", "right/"). The embedded database has none of them.
+func hostZoneName(value string) bool {
 	first, _, _ := strings.Cut(value, "/")
+
 	switch strings.ToLower(first) {
 	case "local", "localtime", "posixrules", "posix", "right":
-		return false
-	default:
 		return true
+	default:
+		return false
 	}
 }
 
