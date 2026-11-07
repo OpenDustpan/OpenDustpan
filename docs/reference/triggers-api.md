@@ -49,7 +49,7 @@ and the code `request.idempotency-key-unsupported`.
 | `source` | For `follows`: `id`, `tool` and `name` of the source unit. `name` is empty when the inventory no longer knows the unit, or when you do not hold `unit:read` on the source. |
 | `enabled` | `false` for a trigger that starts nothing |
 | `lastSaver` | The subject of the person who saved the trigger last |
-| `needsNewSave` | `true` when the last saver no longer holds the actions of a start, or no longer holds `unit:read` on the source of a `follows` trigger. Such a trigger starts no plan. Save the trigger again. |
+| `needsNewSave` | `true` when the last saver no longer holds the actions of a start, or no longer holds `unit:read` on the source of a `follows` trigger. Also `true` when the source of a `follows` trigger no longer exists. Such a trigger starts no plan. Save the trigger again. |
 
 ## Save and replace
 

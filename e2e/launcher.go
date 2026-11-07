@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,6 +15,9 @@ import (
 	iofs "io/fs"
 	"net/http"
 	"os"
+	"os/exec"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -379,7 +383,10 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 
 	e.StopServer(ctx, tb)
 
-	parts, shut := e.openJobParts(ctx, tb)
+	parts, shut, openErr := e.openJobParts(ctx)
+	if openErr != nil {
+		tb.Fatalf("%v", openErr)
+	}
 
 	defer func() {
 		if err := shut(); err != nil {
@@ -397,7 +404,10 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 		tb.Fatalf("the job %s holds no log of the step %s", jobID, step)
 	}
 
-	reader := e.newJobLogReader(tb, parts)
+	reader, err := e.newJobLogReader(parts)
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
 
 	rc, err := reader.OpenLog(ctx, namespace.Name(ns), version)
 	if err != nil {
@@ -410,6 +420,330 @@ func (e *Env) JobStepLog(ctx context.Context, tb testing.TB, ns, jobID, step str
 	}
 
 	return string(text)
+}
+
+// MaxStepLogReport is the most bytes of one step log that LogJobStepsOnFailure
+// prints.
+const MaxStepLogReport = 4096
+
+// LogJobStepsOnFailure registers a cleanup of tb: when tb has failed by then,
+// it prints the stored log of each step of the job, so that the output of a
+// CI run shows why a step ended. Each log is cut at MaxStepLogReport bytes and
+// every text of secrets is replaced (see StepLogReport). The read stops the
+// binary server, so the cleanup runs after all other work of the test. It
+// prints a note and does not fail the test when the logs cannot be read, and
+// it prints nothing when the server runs in the process of the test or the
+// blob store is not a directory.
+func (e *Env) LogJobStepsOnFailure(tb testing.TB, ns, jobID string, secrets ...string) {
+	tb.Helper()
+
+	tb.Cleanup(func() {
+		if !tb.Failed() || e.InProcess() || e.backendCfg.blobStore != "" {
+			return
+		}
+
+		// The context of the test is canceled before its cleanups run. The
+		// report has a deadline, so that it never hangs the test.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), stepLogReportLimit)
+		defer cancel()
+
+		tb.Log(e.jobStepLogReport(ctx, tb, ns, jobID, secrets))
+	})
+}
+
+// errUnknownStore is the error of a store that holds no job log reader.
+var errUnknownStore = errors.New("unknown store")
+
+// stepLogReportLimit is the longest time that the cleanup of
+// LogJobStepsOnFailure may run.
+const stepLogReportLimit = 30 * time.Second
+
+// stepLogWaitDelay is the longest time that the cleanup waits for the output
+// of the killed server to close.
+const stepLogWaitDelay = 5 * time.Second
+
+// jobStepLogReport returns the report of the step logs of the job, or the
+// reason why it cannot read them. It never fails tb.
+func (e *Env) jobStepLogReport(ctx context.Context, tb testing.TB, ns, jobID string, secrets []string) string {
+	tb.Helper()
+
+	if reason := e.killServerForReport(tb); reason != "" {
+		return fmt.Sprintf("step logs of job %s: not read, %s", jobID, reason)
+	}
+
+	parts, shut, err := e.openJobParts(ctx)
+	if err != nil {
+		return fmt.Sprintf("step logs of job %s: not read, %s", jobID, ReportText(err.Error(), secrets...))
+	}
+
+	defer func() {
+		if closeErr := shut(); closeErr != nil {
+			tb.Logf("close the stopped database: %s", ReportText(closeErr.Error(), secrets...))
+		}
+	}()
+
+	got, err := parts.jobs.Get(ctx, job.ID(jobID))
+	if err != nil {
+		return fmt.Sprintf("step logs of job %s: cannot read the job: %s", jobID, ReportText(err.Error(), secrets...))
+	}
+
+	reader, err := e.newJobLogReader(parts)
+	if err != nil {
+		return fmt.Sprintf("step logs of job %s: not read, %s", jobID, ReportText(err.Error(), secrets...))
+	}
+
+	var report strings.Builder
+
+	for p := range got.Phases {
+		for i := range got.Phases[p].Steps {
+			if rec := &got.Phases[p].Steps[i]; rec.Log != nil {
+				ref := StepLogRef{
+					Namespace: ns, JobID: jobID, Name: rec.Name, Version: rec.Log.ID, ExitCode: rec.ExitCode,
+				}
+				report.WriteString(StepLogEntry(ctx, reader, ref, secrets))
+			}
+		}
+	}
+
+	if report.Len() == 0 {
+		return fmt.Sprintf("step logs of job %s: the job holds no step log", jobID)
+	}
+
+	return report.String()
+}
+
+// killServerForReport ends the server process and waits for its end, so that
+// the database file is free. The test has failed: the context of the test killed
+// the server before the cleanups run, or the kill here does it, and a graceful
+// stop would fail the test a second time. It returns the reason why it cannot
+// end the server, or "".
+func (e *Env) killServerForReport(tb testing.TB) string {
+	tb.Helper()
+
+	if e.ha != nil || e.backendCmd == nil || e.backendCmd.Process == nil {
+		return "the server is not a single binary process"
+	}
+
+	if err := e.backendCmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Sprintf("kill the server: %v", err)
+	}
+
+	// The error of a killed process is the expected one. A child of the server
+	// that keeps the output open must not hang the wait: ErrWaitDelay is the
+	// bounded end of that wait. spawnBinaryBackend sets WaitDelay before Start.
+	var exit *exec.ExitError
+	if err := e.backendCmd.Wait(); err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrWaitDelay) {
+		return fmt.Sprintf("wait for the killed server: %v", err)
+	}
+
+	return ""
+}
+
+// LogOpener opens the stored log of a step. *job.ArtifactReads is one.
+type LogOpener interface {
+	OpenLog(ctx context.Context, ns namespace.Name, version string) (io.ReadCloser, error)
+}
+
+// StepLogEntry returns the report of the log version of one step, or the reason
+// why it cannot read the log. The name, the job ID and each error text go
+// through ReportText, so that they hold no secret and no control character.
+func StepLogEntry(ctx context.Context, opener LogOpener, ref StepLogRef, secrets []string) string {
+	label := ReportText(ref.Name, secrets...)
+	jobLabel := ReportText(ref.JobID, secrets...)
+
+	rc, err := opener.OpenLog(ctx, namespace.Name(ref.Namespace), ref.Version)
+	if err != nil {
+		return fmt.Sprintf("step log %s of job %s: cannot open: %s\n",
+			label, jobLabel, ReportText(err.Error(), secrets...))
+	}
+
+	// The read goes past the cap by the longest secret and one byte, so that a
+	// secret at the cap is whole when StepLogReport replaces it, and so that the
+	// report can show that the log is longer than the cap.
+	text, readErr := io.ReadAll(io.LimitReader(rc, int64(readLimit(secrets))))
+
+	closeErr := rc.Close()
+	if readErr != nil || closeErr != nil {
+		return fmt.Sprintf("step log %s of job %s: cannot read: %s\n", label, jobLabel,
+			ReportText(errors.Join(readErr, closeErr).Error(), secrets...))
+	}
+
+	return fmt.Sprintf("step log %s of job %s (exit code %d):\n%s\n",
+		label, jobLabel, ref.ExitCode, StepLogReport(text, secrets...))
+}
+
+// StepLogRef names the log of one step for StepLogEntry.
+type StepLogRef struct {
+	Namespace string
+	JobID     string
+	Name      string
+	// Version is the ID of the log version of the step.
+	Version  string
+	ExitCode int
+}
+
+// readLimit returns the most bytes that StepLogEntry reads from one log.
+func readLimit(secrets []string) int {
+	return MaxStepLogReport + 1 + longest(secrets)
+}
+
+// ReportText returns s for a one-line part of a report (a name or an error
+// text): each text of secrets is replaced, each control character is replaced
+// by "?", and at most MaxStepLogReport bytes stay.
+func ReportText(s string, secrets ...string) string {
+	return cleanReport(s, secrets, flatRune)
+}
+
+// flatRune keeps a rune of a one-line text: every control character becomes "?".
+func flatRune(r rune) rune {
+	if r < ' ' || r == 0x7f {
+		return '?'
+	}
+
+	return r
+}
+
+// lineRune keeps a rune of a log: it keeps the newline and the tab.
+func lineRune(r rune) rune {
+	if r == '\n' || r == '\t' {
+		return r
+	}
+
+	return flatRune(r)
+}
+
+// longest returns the length in bytes of the longest text of texts.
+func longest(texts []string) int {
+	n := 0
+
+	for _, s := range texts {
+		n = max(n, len(s))
+	}
+
+	return n
+}
+
+// StepLogReport returns text for a report: at most MaxStepLogReport bytes,
+// with each non-empty text of secrets replaced by [redacted] and each control
+// character other than the newline and the tab replaced by "?". It ends with a
+// note when it cut text. A secret that the cut splits is not a whole text any
+// more, so the replacement runs on the whole input first.
+//
+// StepLogEntry reads at most readLimit bytes. When text has that length, the
+// log may go on, so the end of text may hold the start of a secret: that start
+// is dropped and the note is added.
+func StepLogReport(text []byte, secrets ...string) string {
+	return cleanReport(string(text), secrets, lineRune)
+}
+
+// cleanReport redacts in, drops a partial secret at its end when in may be the
+// start of a longer text, cuts the result at MaxStepLogReport bytes and
+// maps each rune with mapRune.
+func cleanReport(in string, secrets []string, mapRune func(rune) rune) string {
+	// The input has the read limit as its length: the text went on past it.
+	more := len(in) >= readLimit(secrets)
+
+	out := redactSecrets(in, secrets)
+
+	if more {
+		if rest, dropped := dropSecretStart(out, secrets); dropped {
+			out = strings.ToValidUTF8(rest, "")
+		}
+	}
+
+	cut := more || len(out) > MaxStepLogReport
+	if len(out) > MaxStepLogReport {
+		out = strings.ToValidUTF8(out[:MaxStepLogReport], "")
+	}
+
+	out = strings.Map(mapRune, out)
+
+	if cut {
+		out += "\n[cut at " + strconv.Itoa(MaxStepLogReport) + " bytes]"
+	}
+
+	return out
+}
+
+// byteRange is the half-open byte range [start, end) of s.
+type byteRange struct{ start, end int }
+
+// redactSecrets replaces each non-empty text of secrets in s by [redacted].
+// It finds every occurrence of every secret, including occurrences that
+// overlap, merges the ranges that overlap or touch, and writes [redacted]
+// once for each merged range. No part of a secret stays in the output.
+func redactSecrets(s string, secrets []string) string {
+	var ranges []byteRange
+
+	for _, text := range secrets {
+		if text == "" {
+			continue
+		}
+
+		for from := 0; from <= len(s)-len(text); from++ {
+			at := strings.Index(s[from:], text)
+			if at < 0 {
+				break
+			}
+
+			start := from + at
+			ranges = append(ranges, byteRange{start: start, end: start + len(text)})
+			from = start // The loop adds 1: the next search can overlap this match.
+		}
+	}
+
+	if len(ranges) == 0 {
+		return s
+	}
+
+	slices.SortFunc(ranges, func(a, b byteRange) int { return cmp.Compare(a.start, b.start) })
+
+	var out strings.Builder
+
+	pos := 0
+	cur := ranges[0]
+
+	flush := func() {
+		out.WriteString(s[pos:cur.start])
+		out.WriteString("[redacted]")
+
+		pos = cur.end
+	}
+
+	for _, r := range ranges[1:] {
+		if r.start <= cur.end {
+			cur.end = max(cur.end, r.end)
+
+			continue
+		}
+
+		flush()
+
+		cur = r
+	}
+
+	flush()
+	out.WriteString(s[pos:])
+
+	return out.String()
+}
+
+// dropSecretStart removes from the end of s the longest text that is a proper
+// start of a secret. It reports whether it removed text.
+func dropSecretStart(s string, secrets []string) (string, bool) {
+	drop := 0
+
+	for _, text := range secrets {
+		for k := min(len(text)-1, len(s)); k > drop; k-- {
+			if strings.HasSuffix(s, text[:k]) {
+				drop = k
+
+				break
+			}
+		}
+	}
+
+	return s[:len(s)-drop], drop > 0
 }
 
 // stepLogVersion returns the ID of the log version of the step in j, or "".
@@ -430,67 +764,61 @@ func stepLogVersion(j *job.Job, step string) string {
 
 // newJobLogReader builds the job log reader over parts and the blob directory
 // of the binary server, with the key-encryption key of the suite.
-func (e *Env) newJobLogReader(tb testing.TB, parts jobParts) *job.ArtifactReads {
-	tb.Helper()
-
+func (e *Env) newJobLogReader(parts jobParts) (*job.ArtifactReads, error) {
 	blobStore, err := fs.Open(e.backendCfg.blobDir)
 	if err != nil {
-		tb.Fatalf("open the blob directory: %v", err)
+		return nil, fmt.Errorf("open the blob directory: %w", err)
 	}
 
 	artifacts, err := job.NewArtifactBlobs(blobStore, noRefusals{})
 	if err != nil {
-		tb.Fatalf("artifact blobs: %v", err)
+		return nil, fmt.Errorf("artifact blobs: %w", err)
 	}
 
 	itemBlobs, err := secret.NewItemKeyBlobs(blobStore, noRefusals{})
 	if err != nil {
-		tb.Fatalf("item key blobs: %v", err)
+		return nil, fmt.Errorf("item key blobs: %w", err)
 	}
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte(testKeyEncryptionKey))
 	if err != nil {
-		tb.Fatalf("key-encryption key: %v", err)
+		return nil, fmt.Errorf("key-encryption key: %w", err)
 	}
 
 	sealer, err := secret.NewItemKeySealer(secret.ItemSealerConfig{
 		Index: parts.index, Blobs: itemBlobs, Wrapper: wrapper, Namespaces: parts.names, Now: time.Now,
 	})
 	if err != nil {
-		tb.Fatalf("item sealer: %v", err)
+		return nil, fmt.Errorf("item sealer: %w", err)
 	}
 
 	reader, err := job.NewArtifactReader(parts.jobs, artifacts, sealer, parts.names)
 	if err != nil {
-		tb.Fatalf("job log reader: %v", err)
+		return nil, fmt.Errorf("job log reader: %w", err)
 	}
 
-	return reader
+	return reader, nil
 }
 
 // openJobParts opens the database of the stopped binary server.
-func (e *Env) openJobParts(ctx context.Context, tb testing.TB) (jobParts, func() error) {
-	tb.Helper()
-
+func (e *Env) openJobParts(ctx context.Context) (jobParts, func() error, error) {
 	switch e.store {
 	case StoreSQLite:
 		st, err := sqlite.Open(ctx, strings.TrimPrefix(e.backendCfg.dbURL, "sqlite:"))
 		if err != nil {
-			tb.Fatalf("open the stopped database: %v", err)
+			return jobParts{jobs: nil, index: nil, names: nil}, nil, fmt.Errorf("open the stopped database: %w", err)
 		}
 
-		return jobParts{jobs: st.Jobs(), index: st, names: st}, st.Close
+		return jobParts{jobs: st.Jobs(), index: st, names: st}, st.Close, nil
 	case StorePostgres:
 		st, err := postgres.Open(ctx, e.backendCfg.dbURL)
 		if err != nil {
-			tb.Fatalf("open the stopped database: %v", err)
+			return jobParts{jobs: nil, index: nil, names: nil}, nil, fmt.Errorf("open the stopped database: %w", err)
 		}
 
-		return jobParts{jobs: st.Jobs(), index: st, names: st}, func() error { st.CloseContext(ctx); return nil }
+		return jobParts{jobs: st.Jobs(), index: st, names: st}, func() error { st.CloseContext(ctx); return nil }, nil
 	default:
-		tb.Fatalf("unknown store: %s", e.store)
-
-		return jobParts{jobs: nil, index: nil, names: nil}, nil
+		return jobParts{jobs: nil, index: nil, names: nil}, nil, fmt.Errorf("%w: %s", errUnknownStore, e.store)
 	}
 }
 

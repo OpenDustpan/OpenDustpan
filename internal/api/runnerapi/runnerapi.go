@@ -80,8 +80,12 @@ type Config struct {
 	// gives every adapter the same limiter, so its bound on keys holds for all
 	// of them. Nil means a limiter of this handler only.
 	DenialLimiter *denylimit.Limiter
-	Sessions      *sessionauth.Checker
-	Logger        *slog.Logger
+	// OnHandoffRefusalSuppressed, when set, runs once for each refused handoff
+	// token whose audit entry the DenialLimiter dropped, so the server can
+	// count it. The refusal itself is not dropped.
+	OnHandoffRefusalSuppressed func()
+	Sessions                   *sessionauth.Checker
+	Logger                     *slog.Logger
 
 	// Release is the release of this server. A runner of another release
 	// than the skew allows gets version-unsupported.
@@ -126,15 +130,20 @@ type Handler struct {
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	guard      *refusal.Recorder
-	sessions   *sessionauth.Checker
-	logger     *slog.Logger
-	release    runner.Release
-	serverURL  string
-	now        func() time.Time
-	interval   time.Duration
-	polls      sync.Map
-	mux        *patternMux
-	routes     []Route
+	audit      audit.Store
+	onAuditErr func()
+	// limiter bounds the audit entries of refused handoff tokens.
+	limiter             *denylimit.Limiter
+	onHandoffSuppressed func()
+	sessions            *sessionauth.Checker
+	logger              *slog.Logger
+	release             runner.Release
+	serverURL           string
+	now                 func() time.Time
+	interval            time.Duration
+	polls               sync.Map
+	mux                 *patternMux
+	routes              []Route
 	plans      job.PlanRecorder
 	artifacts  job.ArtifactReader
 }
@@ -210,28 +219,37 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	limiter := cfg.DenialLimiter
+	if limiter == nil {
+		limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	}
+
 	h := &Handler{
-		namespaces: cfg.Namespaces,
-		pools:      cfg.Pools,
-		members:    cfg.Members,
-		handoffs:   cfg.Handoffs,
-		claimer:    cfg.Claimer,
-		sweeps:     cfg.Sweeps,
-		operations: cfg.Operations,
-		recorder:   cfg.Recorder,
-		jobs:       cfg.Jobs,
-		authn:      cfg.Authenticator,
-		authz:      cfg.Authorizer,
-		sessions:   cfg.Sessions,
-		logger:     cfg.Logger,
-		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
-		release:    cfg.Release,
-		serverURL:  cfg.ServerURL,
-		now:        now,
-		interval:   interval,
-		polls:      sync.Map{},
-		mux:        newPatternMux(),
-		routes:     nil,
+		namespaces:          cfg.Namespaces,
+		pools:               cfg.Pools,
+		members:             cfg.Members,
+		handoffs:            cfg.Handoffs,
+		claimer:             cfg.Claimer,
+		sweeps:              cfg.Sweeps,
+		operations:          cfg.Operations,
+		recorder:            cfg.Recorder,
+		jobs:                cfg.Jobs,
+		authn:               cfg.Authenticator,
+		authz:               cfg.Authorizer,
+		sessions:            cfg.Sessions,
+		logger:              cfg.Logger,
+		guard:               recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
+		audit:               cfg.Audit,
+		onAuditErr:          cfg.OnAuditFailure,
+		limiter:             limiter,
+		onHandoffSuppressed: cfg.OnHandoffRefusalSuppressed,
+		release:             cfg.Release,
+		serverURL:           cfg.ServerURL,
+		now:                 now,
+		interval:            interval,
+		polls:               sync.Map{},
+		mux:                 newPatternMux(),
+		routes:              nil,
 		plans:      cfg.Plans,
 		artifacts:  cfg.Artifacts,
 	}

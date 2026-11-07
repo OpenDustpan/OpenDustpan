@@ -43,7 +43,7 @@ the schema part. ADR 323 records the API part. ADR 324 records the schema
 mismatch and the dev reset.
 
 OpenDustpan has no tag, no user, no installation and no data. On `main` at
-5d83294, each dialect had 64 numbered migrations, from `0100_baseline.sql` to
+b76ada6, each dialect had 64 numbered migrations, from `0100_baseline.sql` to
 `0167_inventory_last_release.sql`. The collapse made `0168_baseline.sql` from
 them. The runner recorded the version, the name and the
 minimum binary version of each migration. It compared versions only. A

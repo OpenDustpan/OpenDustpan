@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -286,6 +287,13 @@ func (b *syncBuffer) String() string {
 func newSessionEnv(t *testing.T, b backend) *sessionEnv {
 	t.Helper()
 
+	return newSessionEnvWith(t, b, nil)
+}
+
+// newSessionEnvWith is newSessionEnv with a change of the Config of the handler.
+func newSessionEnvWith(t *testing.T, b backend, mutate func(cfg *runnerapi.Config)) *sessionEnv {
+	t.Helper()
+
 	jobs := newSessionJobs()
 	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 	claimer := &sessionClaimer{opsClaimer: nil, finished: atomic.Int64{}, outcome: atomic.Pointer[job.Outcome]{}}
@@ -294,6 +302,7 @@ func newSessionEnv(t *testing.T, b backend) *sessionEnv {
 		claimer.opsClaimer = &opsClaimer{ops: s.operations, released: atomic.Int64{}}
 		o.claimer, o.recorder, o.jobs = claimer, jobs, jobs
 		o.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		o.mutate = mutate
 	})
 
 	pool := e.createPool()

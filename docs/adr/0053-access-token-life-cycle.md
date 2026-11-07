@@ -10,7 +10,8 @@ Changed by:
 - ADR 70 extends: who can rotate or revoke a personal token.
 - ADR 212 extends decision 11: the SMTP settings of the expiry email.
 - ADR 237 changes decision 9: no retire prompt while the kind is dev.
-
+- ADR 354 extends: delegated tokens, their lifetime and rotation.
+.
 ## Context
 
 ADR 6 says that OpenDustpan issues its own access tokens. It sets no kinds,

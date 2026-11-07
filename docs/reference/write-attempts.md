@@ -73,7 +73,7 @@ Each run of `job.artifact-sweep` keeps a record of what it did:
 | Record | Content |
 | --- | --- |
 | The output of the step of its durable operation | The number of jobs, of deleted blobs, of unknown blobs and of failed jobs. The full key of each deleted blob, at most 1,000 keys. `truncated` is `true` when the run deleted more. `skipped` gives the reason when the run deleted nothing. |
-| One audit entry in the scope `@server` | The action `job:artifact-sweep`, the object `job.artifact-sweep` and the counts. The reason is `unnamed job artifact older than the grace period`, or `deleted nothing:` with the reason of a run that deleted nothing. The entry names no blob key. |
+| One audit entry in the scope `@server` | The action `job:artifact-sweep`, the object `job.artifact-sweep` and the counts. The reason is `unnamed job artifact older than the grace period: N jobs swept, N blobs deleted, N kept unknown, N jobs failed`, where each N is a count. A run that reached the page limit adds `, capped at the page limit`. A run that deleted nothing has the reason `deleted nothing:` with the reason of that run. The entry names no blob key. |
 | One log line, `job artifact sweep` | The same counts. |
 
 A blob that the sweep keeps because its key is not a plan part or a chunk

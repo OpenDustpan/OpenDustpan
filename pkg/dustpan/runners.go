@@ -163,8 +163,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
-		Plans: deps.plans, Artifacts: deps.artifacts,
-	})
+		Plans: deps.plans, Artifacts: deps.artifacts, OnHandoffRefusalSuppressed: nil, })
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)
 	}

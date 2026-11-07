@@ -32,7 +32,7 @@ clients (Pulumi CLI, OpenTofu, console, API)
 The minimum topology is:
 
 - Two or more instances of one installation.
-- PostgreSQL 18 or later. The tests run on PostgreSQL 18 only.
+- PostgreSQL 18 or later. The tests run on PostgreSQL 18 only. Other versions are not tested.
 - An S3-compatible store for the blobs.
 - A backup target on an S3-compatible store.
 - A load balancer with a health check on `/health/ready`.
@@ -109,7 +109,7 @@ See [Roll out a new release](several-instances.md#roll-out-a-new-release).
 
 The load balancer takes the instance out of the pool when its health check fails.
 A client request that was in flight on a killed instance fails, and the client sends it again to another instance.
-The Pulumi CLI and OpenTofu retry a request that fails with 503.
+The OpenTofu CLI retries a request that fails with 503. The Pulumi CLI retries a request that fails with 503. It does not retry the requests that create a stack or an update, or the request that starts an update.
 
 The durable operations of the instance continue on another instance:
 
@@ -132,7 +132,7 @@ While an instance cannot reach the database:
 The Pulumi CLI retries one write for about 13 to 14 seconds before the command fails.
 OpenTofu retried for more than 30 seconds in the e2e suite.
 The [several instances guide](several-instances.md#how-long-a-cli-command-retries) gives the table of versions and the date of the measurement.
-A command that fails in a longer outage leaves no half-written state version and no lock.
+A command that fails in a longer outage leaves no half-written state version. Two cases can leave a lock or a running update. A lost answer to an OpenTofu lock request through the TFE-compatible API can leave the workspace locked. A Pulumi update stays running until its lease ends. The [several instances guide](several-instances.md#a-lost-answer-to-an-opentofu-lock-request) gives the remedies: `tofu force-unlock <lock id>` and `pulumi cancel`.
 
 Use `target_session_attrs=read-write` and a short `pool_max_conn_lifetime` in the database URL.
 See [Database settings for a failover](several-instances.md#database-settings-for-a-failover).
@@ -176,7 +176,7 @@ See [Back up, restore and upgrade](backup-restore-upgrade.md).
 ## What is not supported
 
 - More than one instance on SQLite. SQLite holds one instance.
-- Primary and replica installations, request forwarding, and replication between installations. These are a later milestone.
+- Primary and replica installations, request forwarding, and replication between installations. The project plans these for a later release.
 - Active-active across sites. One installation uses one database.
 - The `fs` blob store, a `dir:` backup target and a `file:` audit or log sink with several instances. Each writes to the disk of one host. The Helm chart refuses them.
 - PostgreSQL before version 18. Nobody tested it.

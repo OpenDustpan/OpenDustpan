@@ -138,15 +138,16 @@ type PlanBinding struct {
 // caller calls it only when a plan phase comes before the apply phase: an
 // apply phase with no plan phase, such as a refresh, has nothing to check.
 // It returns:
-//   - ErrPlanStale when the plan phase stored no plan, so the job plans
-//     again,
+//   - ErrNoPlan, which wraps ErrPlanStale, when the plan phase stored no
+//     plan: the reconcile schedule fails the job, because a new plan phase
+//     would store no plan either,
 //   - ErrPlanChanged when bound is not nil and is not the binding of p,
 //   - ErrPlanStale when p read another state version than current, was
 //     made before notBefore (now minus the maximum plan age), or was
 //     redacted.
 func CheckPlan(p *PlanRef, bound *PlanBinding, current string, notBefore time.Time) error {
 	if p == nil {
-		return fmt.Errorf("%w: the plan phase stored no plan", ErrPlanStale)
+		return fmt.Errorf("%w: %w", ErrPlanStale, ErrNoPlan)
 	}
 
 	if bound != nil && *bound != p.Binding() {
