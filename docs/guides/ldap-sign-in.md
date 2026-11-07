@@ -166,21 +166,15 @@ in `memberOf`.
 
 ### Mappings
 
-A group name from the directory joins a group of OpenDustpan only through a
-stored mapping. A mapping names the sign-in provider, one group name from the
-directory and one group. The server compares the name byte for byte: `Eng` and
-`eng` are two names. One name can map to more than one group. The server
-never makes a group, and it never joins a group because of a name that is
-equal to the name of a group.
-
-A sign-in provider with no mapping joins no group, and the server writes
-one audit entry that says so. A name with no mapping joins no group, and the
-server lists it, up to 20 names for each sign-in, in one audit entry.
-
-The routes to read and write mappings come later. Until then, the group
-membership of a sign-in stays off: the server does not apply the groups of a
-directory to the memberships of a person, also when mappings exist. A person
+The server does not apply the groups of a directory to the memberships of a
+person yet. A sign-in reads the groups, but it changes no membership. A person
 who signs in keeps the memberships that a person made with the API.
+
+The server can store mappings. A mapping names the sign-in provider, one group
+name from the directory and one group of OpenDustpan. The server compares the
+name byte for byte: `Eng` and `eng` are two names. No route to read or write a
+mapping exists yet. A backup holds the mappings. A restore brings them back
+only for a caller with the `server:restore-access` action.
 
 ## Limits
 

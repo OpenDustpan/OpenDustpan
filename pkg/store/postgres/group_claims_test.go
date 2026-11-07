@@ -8,7 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
@@ -180,6 +182,19 @@ func TestGroupClaimsConformance(t *testing.T) {
 				}, groupClaimsEntry("server:manage-temp-admins", "principal:"+principalID))
 				if err != nil {
 					t.Fatalf("create temporary administrator: %v", err)
+				}
+			},
+			GrantSiteAdministrator: func(t *testing.T, subject access.Subject) {
+				t.Helper()
+
+				err := s.CreateGrant(t.Context(), access.Grant{
+					CreatedAt: time.Date(2026, time.October, 13, 21, 0, 0, 0, time.UTC), Condition: nil,
+					Object: identity.ServerObject(), ID: "grt-adm-" + subject.ID, Role: access.RoleSiteAdministrator,
+					CreatedBy: "admin", Subject: subject,
+				}, namespace.Fence{Namespace: "", FailoverVersion: 0},
+					groupClaimsEntry("server:manage-access", "grant:grt-adm-"+subject.ID), nil)
+				if err != nil {
+					t.Fatalf("grant the site-administrator role: %v", err)
 				}
 			},
 			BreakMemberWrites: func(t *testing.T) {

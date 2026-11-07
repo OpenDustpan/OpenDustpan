@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -71,7 +72,10 @@ type Tx interface {
 	// AddMember inserts m, and reports false when a current membership of
 	// the principal in the group exists already.
 	AddMember(ctx context.Context, m principal.Membership) (bool, error)
-	// EndMember ends the current membership at at.
+	// EndMember ends the current membership at at. When the end would leave
+	// the installation with no site administrator, it keeps the membership
+	// and returns access.ErrLastSiteAdministrator. The transaction stays
+	// usable.
 	EndMember(ctx context.Context, groupID, principalID string, at time.Time) (bool, error)
 	// Append validates and appends one audit entry in the scope @server.
 	Append(ctx context.Context, e audit.Entry) error
@@ -369,6 +373,21 @@ func (r *run) remove(ctx context.Context, current []Membership, desired []string
 		}
 
 		ended, err := r.tx.EndMember(ctx, m.GroupID, r.c.PrincipalID, r.e.At)
+		if errors.Is(err, access.ErrLastSiteAdministrator) {
+			// The membership stays, because the end would leave the
+			// installation with no site administrator. The call carries on
+			// with the other groups.
+			r.res.Refused = append(r.res.Refused, m.GroupID)
+
+			err = r.tx.Append(ctx, r.entry(principal.AuditActionClaimRefuse, audit.OutcomeDenied,
+				"group:"+m.GroupID, change("reason", "the removal would leave no site administrator")))
+			if err != nil {
+				return err
+			}
+
+			continue
+		}
+
 		if err != nil {
 			return fmt.Errorf("end the membership in %s: %w", m.GroupID, err)
 		}

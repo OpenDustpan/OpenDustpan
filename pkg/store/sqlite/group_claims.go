@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -294,17 +295,45 @@ func (t claimTx) AddMember(ctx context.Context, m principal.Membership) (bool, e
 }
 
 // EndMember implements groupclaims.Tx.
+//
+// It uses the guard of RemoveMember. When the removal would leave the
+// installation with no site administrator, it undoes the removal in the same
+// transaction and returns access.ErrLastSiteAdministrator, so the caller can
+// keep the membership and carry on.
 func (t claimTx) EndMember(ctx context.Context, groupID, principalID string, at time.Time) (bool, error) {
-	n, err := t.q.RemoveGroupMember(ctx, db.RemoveGroupMemberParams{
-		RemovedAtMs: nullMillis(codec.Millis(at)),
-		GroupID:     groupID,
-		PrincipalID: principalID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("end group member: %w", err)
+	removedAt := nullMillis(codec.Millis(at))
+
+	var ended bool
+
+	err := guardSiteAdministrator(ctx, func(q *db.Queries) error {
+		n, removeErr := q.RemoveGroupMember(ctx, db.RemoveGroupMemberParams{
+			RemovedAtMs: removedAt, GroupID: groupID, PrincipalID: principalID,
+		})
+		if removeErr != nil {
+			return fmt.Errorf("end group member: %w", removeErr)
+		}
+
+		ended = n > 0
+
+		return nil
+	})(t.q)
+
+	if errors.Is(err, access.ErrLastSiteAdministrator) {
+		_, undoErr := t.q.RestoreGroupMember(ctx, db.RestoreGroupMemberParams{
+			GroupID: groupID, PrincipalID: principalID, RemovedAtMs: removedAt,
+		})
+		if undoErr != nil {
+			return false, fmt.Errorf("undo the end of a group member: %w", undoErr)
+		}
+
+		return false, err
 	}
 
-	return n > 0, nil
+	if err != nil {
+		return false, err
+	}
+
+	return ended, nil
 }
 
 // Append implements groupclaims.Tx.

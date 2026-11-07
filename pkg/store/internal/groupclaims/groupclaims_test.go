@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -266,6 +267,50 @@ func TestApplierEndsOnlyItsOwnMemberships(t *testing.T) {
 
 	if !slices.Equal(f.ended, []string{"g-own"}) || !slices.Equal(res.Removed, []string{"g-own"}) {
 		t.Fatalf("ended = %v, removed = %v, want only g-own", f.ended, res.Removed)
+	}
+}
+
+// endRefusingStore is a fakeStore whose EndMember refuses the end of the last
+// site administrator.
+type endRefusingStore struct {
+	*fakeStore
+}
+
+func (s endRefusingStore) EndMember(context.Context, string, string, time.Time) (bool, error) {
+	return false, access.ErrLastSiteAdministrator
+}
+
+func (s endRefusingStore) InTx(_ context.Context, _ audit.Entry, fn func(groupclaims.Tx) error) error {
+	return fn(s)
+}
+
+// TestApplierKeepsAMembershipThatTheStoreWillNotEnd proves a refused end is a
+// refusal with a denied entry, and that the call carries on.
+func TestApplierKeepsAMembershipThatTheStoreWillNotEnd(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeStore()
+	f.current = []groupclaims.Membership{
+		{
+			GroupID: "g-admin", Source: principal.MembershipSourceClaim, SourceID: testSourceID,
+			State: principal.MembershipStateActive, Pinned: false,
+		},
+	}
+
+	store := endRefusingStore{fakeStore: f}
+	mapper := fakeMapper{out: map[string][]string{}, err: nil}
+
+	res, err := groupclaims.NewApplier(store, mapper).ApplyGroupClaims(t.Context(), testEntry(), testClaims())
+	if err != nil {
+		t.Fatalf("ApplyGroupClaims: %v", err)
+	}
+
+	if len(res.Removed) != 0 || !slices.Equal(res.Refused, []string{"g-admin"}) {
+		t.Fatalf("result = %+v, want the group refused and not removed", res)
+	}
+
+	if len(f.appended) != 1 || f.appended[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("entries = %+v, want one denied entry", f.appended)
 	}
 }
 

@@ -19639,6 +19639,27 @@ func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceId
 	return result.RowsAffected(), nil
 }
 
+const restoreGroupMember = `-- name: RestoreGroupMember :execrows
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = $1 AND principal_id = $2 AND removed_at_ms = $3
+`
+
+type RestoreGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+	RemovedAtMs pgtype.Int8
+}
+
+// Undoes RemoveGroupMember in the same transaction, for a removal that the
+// last-site-administrator rule refuses.
+func (q *Queries) RestoreGroupMember(ctx context.Context, arg RestoreGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreGroupMember, arg.GroupID, arg.PrincipalID, arg.RemovedAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const restoreStack = `-- name: RestoreStack :execrows
 UPDATE stacks
 SET name = $1, deleted_name = NULL, deleted_at_ms = NULL, updated_at_ms = $2

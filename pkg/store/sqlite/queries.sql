@@ -1399,6 +1399,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms = ?;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -404,6 +405,9 @@ type GroupClaimsFixture struct {
 	WithMapper func(mapper principal.GroupMapper) principal.GroupClaimApplier
 	// MakeTempAdmin makes the principal a temporary administrator.
 	MakeTempAdmin func(t *testing.T, principalID string)
+	// GrantSiteAdministrator gives the subject the site-administrator role on
+	// the installation.
+	GrantSiteAdministrator func(t *testing.T, subject access.Subject)
 	// BreakMemberWrites makes each later insert of a membership fail.
 	BreakMemberWrites func(t *testing.T)
 	// BreakAuditAppends makes each later append to the audit log fail.
@@ -445,6 +449,9 @@ func RunGroupClaims(t *testing.T, fixture func(t *testing.T) GroupClaimsFixture)
 		{"TheMembershipRecordsTheSourceAndTheSourceID", "", testMembershipRecordsSource},
 		{"AMembershipThatIsAlreadyActiveIsNotAddedAgain", "", testNotAddedAgain},
 		{"AGroupMissingFromTheClaimsEndsTheMembership", "", testMissingGroupEnds},
+		{"AClaimNeverEndsTheMembershipOfTheLastSiteAdministrator", "", testLastSiteAdminKept},
+		{"AClaimMayEndTheMembershipOfASiteAdministratorWhenAnotherExists", "", testSiteAdminRemovedWithAnother},
+		{"OfTwoRemovalsThatEndTheLastSiteAdministratorTheSecondIsRefused", "", testSecondOfLastTwoRefused},
 		{"ALocalMembershipNeverChanges", "", testLocalNeverChanges},
 		{"AMembershipOfAnotherSourceIDNeverChanges", "", testOtherSourceIDNeverChanges},
 		{"APinnedMembershipNeverChanges", "", testPinnedNeverChanges},
@@ -797,6 +804,67 @@ func testMissingGroupEnds(t *testing.T, fx GroupClaimsFixture) {
 	}
 
 	equalStrings(t, "groups of the person", currentGroups(t, fx.Store), []string{"grp-eng"})
+}
+
+// groupSubject names the group as a subject of a grant.
+func groupSubject(id string) access.Subject {
+	return access.Subject{Kind: access.SubjectGroup, ID: id}
+}
+
+func testLastSiteAdminKept(t *testing.T, fx GroupClaimsFixture) {
+	t.Helper()
+
+	claimsWorld(t, fx)
+	fx.GrantSiteAdministrator(t, groupSubject(engGroup))
+	apply(t, fx, claims("eng-team"))
+
+	n := len(auditEntries(t, fx.Store))
+	res := apply(t, fx, claims())
+
+	if len(res.Removed) != 0 || !slices.Equal(res.Refused, []string{engGroup}) {
+		t.Fatalf("result = %+v, want the removal refused and the group kept", res)
+	}
+
+	if _, ok := memberOf(t, fx.Store, engGroup); !ok {
+		t.Fatal("the membership of the last site administrator ended")
+	}
+
+	got := entriesAfter(t, fx.Store, n)
+	if len(got) != 1 || got[0].Action != principal.AuditActionClaimRefuse || got[0].Outcome != audit.OutcomeDenied ||
+		got[0].Object != "group:"+engGroup {
+		t.Fatalf("entries = %+v, want one denied refusal for %s", got, engGroup)
+	}
+}
+
+func testSiteAdminRemovedWithAnother(t *testing.T, fx GroupClaimsFixture) {
+	t.Helper()
+
+	claimsWorld(t, fx)
+	mustCreatePrincipal(t, fx.Store, newPrincipal("prn-second", "bob", principal.KindPerson))
+	fx.GrantSiteAdministrator(t, groupSubject(engGroup))
+	fx.GrantSiteAdministrator(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-second"})
+	apply(t, fx, claims("eng-team"))
+
+	res := apply(t, fx, claims())
+	if !slices.Equal(res.Removed, []string{engGroup}) || len(res.Refused) != 0 {
+		t.Fatalf("result = %+v, want the removal allowed while another site administrator exists", res)
+	}
+}
+
+func testSecondOfLastTwoRefused(t *testing.T, fx GroupClaimsFixture) {
+	t.Helper()
+
+	claimsWorld(t, fx)
+	fx.GrantSiteAdministrator(t, groupSubject(engGroup))
+	fx.GrantSiteAdministrator(t, groupSubject(opsGroup))
+	apply(t, fx, claims("eng-team", "ops-team"))
+
+	res := apply(t, fx, claims())
+	if !slices.Equal(res.Removed, []string{engGroup}) || !slices.Equal(res.Refused, []string{opsGroup}) {
+		t.Fatalf("result = %+v, want the first removal allowed and the second refused", res)
+	}
+
+	equalStrings(t, "groups of the person", currentGroups(t, fx.Store), []string{opsGroup})
 }
 
 func testLocalNeverChanges(t *testing.T, fx GroupClaimsFixture) {
