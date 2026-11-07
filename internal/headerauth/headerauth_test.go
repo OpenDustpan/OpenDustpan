@@ -113,6 +113,124 @@ func checkStripped(t *testing.T, got http.Header) {
 	}
 }
 
+// The wiring of the HTTP adapter: it reads the facts of the request, runs
+// the sign-in, and removes the headers that no handler may read before the
+// next handler runs. The next handler reads no secret of the proxy, after
+// a sign-in and after each refusal.
+func TestTheSecretHeaderNeverReachesTheHandler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		header     http.Header
+		name       string
+		remoteAddr string
+		wantErr    error
+		off        bool
+	}{
+		{
+			name: "a sign-in of the proxy", remoteAddr: "10.0.0.5:4000", wantErr: nil, off: false,
+			header: http.Header{
+				"X-Auth-User": {"carol"}, "X-Auth-Groups": {"ops,dev"}, "X-Proxy-Secret": {sharedSecret},
+			},
+		},
+		{
+			name: "a wrong secret", remoteAddr: "10.0.0.5:4000", wantErr: session.ErrUntrustedSource, off: false,
+			header: http.Header{"X-Auth-User": {"carol"}, "X-Proxy-Secret": {"not-the-secret"}},
+		},
+		{
+			name: "no secret", remoteAddr: "10.0.0.5:4000", wantErr: session.ErrUntrustedSource, off: false,
+			header: http.Header{"X-Auth-User": {"carol"}},
+		},
+		{
+			name: "an untrusted peer with a forged secret", remoteAddr: "192.0.2.7:4000",
+			wantErr: session.ErrUntrustedSource, off: false,
+			header: http.Header{"X-Auth-User": {"admin"}, "X-Proxy-Secret": {sharedSecret}},
+		},
+		{
+			name: "a disabled provider", remoteAddr: "10.0.0.5:4000",
+			wantErr: session.ErrProviderDisabled, off: true,
+			header: http.Header{"X-Auth-User": {"carol"}, "X-Proxy-Secret": {sharedSecret}},
+		},
+		{
+			name: "a secret in two spellings", remoteAddr: "10.0.0.5:4000", wantErr: nil, off: false,
+			header: http.Header{
+				"X-Auth-User": {"carol"}, "X-Auth-Groups": {"ops"},
+				"X-Proxy-Secret": {sharedSecret}, "x_proxy_secret": {sharedSecret},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			off := &atomic.Bool{}
+			off.Store(tc.off)
+			m := newMethod(t, plainConfig(off, groupsHeader))
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+			r.RemoteAddr = tc.remoteAddr
+			r.Header = tc.header.Clone()
+
+			// The HTTP adapter reads the facts of the request and runs the
+			// sign-in.
+			if _, err := m.FromRequest(t.Context(), requestFacts(r, m)); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("FromRequest() = %v, want %v", err, tc.wantErr)
+			}
+
+			// Then it removes the headers that no handler may read: each
+			// header of the method for an untrusted peer, and the secret
+			// header that the sign-in consumed.
+			m.Strip(r, headerauth.PeerOf(r))
+			m.Consume(r)
+
+			var seen http.Header
+
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = r.Header.Clone() })
+			next.ServeHTTP(httptest.NewRecorder(), r)
+
+			if seen == nil {
+				t.Fatal("the next handler did not run")
+			}
+
+			checkNoSecret(t, seen)
+
+			if tc.wantErr == nil && seen.Get("X-Auth-User") != "carol" {
+				t.Fatalf("the next handler reads the user header %q, want %q", seen.Get("X-Auth-User"), "carol")
+			}
+		})
+	}
+}
+
+// checkNoSecret fails when a spelling of the secret header stays in got.
+func checkNoSecret(t *testing.T, got http.Header) {
+	t.Helper()
+
+	for name := range got {
+		if strings.EqualFold(strings.ReplaceAll(name, "_", "-"), "X-Proxy-Secret") {
+			t.Fatalf("the next handler reads the secret header %q", name)
+		}
+	}
+}
+
+// requestFacts returns the facts of r that the HTTP adapter builds: the
+// peer, the client address, and only the headers that the method names,
+// with canonical names.
+func requestFacts(r *http.Request, m *headerauth.Method) session.RequestFacts {
+	headers := make(map[string][]string)
+
+	for _, h := range m.Headers() {
+		if v, ok := r.Header[http.CanonicalHeaderKey(h)]; ok {
+			headers[h] = slices.Clone(v)
+		}
+	}
+
+	return session.RequestFacts{
+		ReceivedAt: fixedNow(), Headers: headers, ProviderID: providerID, ClientChain: nil,
+		Peer: headerauth.PeerOf(r), Client: netip.MustParseAddr("198.51.100.20"),
+	}
+}
+
 // Layer 5, fail closed: an empty proxy list turns the provider off and
 // strips the headers of every peer.
 func TestAnEmptyProxyListTurnsTheProviderOff(t *testing.T) {
