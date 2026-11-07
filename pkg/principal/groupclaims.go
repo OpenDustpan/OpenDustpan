@@ -11,9 +11,13 @@ import (
 // values of an identity provider to groups, and the one function that
 // applies those values to the memberships of one principal. A sign-in calls
 // it with the groups of its Assertion, and a SCIM change of the groups of a
-// user calls it too. No implementation exists yet. The conformance suites
-// RunGroupMapper and RunGroupClaims in package principaltest skip each case
-// until one exists.
+// user calls it too. The SQL stores implement both ports over the explicit
+// mappings of GroupMappingStore. The conformance suites RunGroupMapper and
+// RunGroupClaims in package principaltest check an implementation. The rules
+// for protected groups, for groups that a person closed to the identity
+// provider, for trusted groups and for full sync have no stored data yet, so
+// the cases of those rules stay skipped in RunGroupClaims, and the
+// implementations apply none of them.
 
 // ErrNoGroupMapping reports a source with no group mapping. The claims of
 // that source then map to no group: the server joins no group from them.
@@ -69,7 +73,9 @@ type GroupClaimResult struct {
 	Suspended []string
 	// Refused are the groups that the identity provider may not add a
 	// member to: a protected group that does not trust the identity
-	// provider, or a group that a person closed to it.
+	// provider, or a group that a person closed to it. A group that a
+	// mapping names but that does not exist, was deleted or is kept by a
+	// directory is refused too.
 	Refused []string
 	// Unmapped are the values that map to no group. With no mapping for
 	// the source, it holds each value.

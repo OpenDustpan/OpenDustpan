@@ -311,6 +311,15 @@ type Grant struct {
 	RevokedBy   string
 }
 
+type GroupMapping struct {
+	Source      string
+	SourceID    string
+	ClaimValue  string
+	GroupID     string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
 type GroupMember struct {
 	GroupID       string
 	PrincipalID   string
