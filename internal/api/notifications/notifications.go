@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -37,8 +39,8 @@ const (
 )
 
 // Config holds the dependencies of a Handler. Every field except Audit,
-// Namespaces, OnAuditFailure, DenialLimiter, Sessions and Idempotency is
-// required.
+// Namespaces, OnAuditFailure, DenialLimiter, Sessions, Idempotency and Now
+// is required.
 type Config struct {
 	Sinks *sinks.Service
 	// Subscriptions serves the subscription and delivery routes.
@@ -64,6 +66,10 @@ type Config struct {
 	// with the header answer 400.
 	Idempotency *idempotent.Middleware
 	Logger      *slog.Logger
+	// Now returns the current time. The handler uses it only for the window
+	// of the warning about a failed shared count of tests. Nil means
+	// time.Now.
+	Now func() time.Time
 }
 
 // Handler serves the sink API.
@@ -76,6 +82,7 @@ type Handler struct {
 	sessions      *sessionauth.Checker
 	idem          *idempotent.Middleware
 	logger        *slog.Logger
+	counterWarn   counterWarning
 	mux           *route.Mux
 	routes        []Route
 }
@@ -111,6 +118,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:      cfg.Sessions,
 		idem:          cfg.Idempotency,
 		logger:        cfg.Logger,
+		counterWarn:   counterWarning{mu: sync.Mutex{}, last: time.Time{}, suppressed: 0, now: cfg.Now},
 		mux:           route.NewMux(),
 		routes:        nil,
 	}
@@ -129,9 +137,61 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeError answers err through the shared error module of the
-// tool-neutral APIs, with the classes of the sink service.
+// tool-neutral APIs, with the classes of the sink service. A failed shared
+// count of tests logs one bounded warning before the answer; the answer
+// stays the same.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if errors.Is(err, sinks.ErrLimitUnavailable) {
+		h.counterWarn.record(ctx, h.logger)
+	}
+
 	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: sinkErrors}.Write(ctx, w, err)
+}
+
+// counterWarningText is the fixed text of the warning about a failed shared
+// count of the tests of notification destinations. The text names no cause:
+// the cause can hold the detail of a database error.
+const counterWarningText = "the server cannot count the tests of notification destinations"
+
+// counterWarningWindow is the window of the warning about a failed shared
+// count of tests. The limiter logs one line in each window and counts the
+// events that it does not log.
+const counterWarningWindow = time.Minute
+
+// counterWarning bounds the warning about a failed shared count of tests. It
+// holds the time of its last warning, the count of the events that it did
+// not log, and the clock of the handler.
+type counterWarning struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+	now        func() time.Time
+}
+
+// record logs one warning about a failed shared count of tests when the
+// window since the last warning ended, and counts the event when it does
+// not. A logged line names the count of the events that the window
+// suppressed, and the count starts again.
+func (w *counterWarning) record(ctx context.Context, logger *slog.Logger) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	now := w.now
+	if now == nil {
+		// Nil means time.Now, as for Config.Now.
+		now = time.Now
+	}
+
+	at := now()
+	if !w.last.IsZero() && at.Sub(w.last) < counterWarningWindow {
+		w.suppressed++
+
+		return
+	}
+
+	w.last = at
+	logger.WarnContext(ctx, counterWarningText, slog.Int("suppressed", w.suppressed))
+	w.suppressed = 0
 }
 
 // sinkErrors maps the errors of the sink service. The text of a sink error
@@ -152,11 +212,13 @@ func sinkErrors(err error) (problem.Problem, bool) {
 
 	switch {
 	case errors.Is(err, sinks.ErrLimitUnavailable):
-		// Defense in depth: a limit failure can wrap a shared class (the
-		// maintenance mode or a schema minimum), and the shared class must keep
-		// its own answer. The shared classifier does not rely on the order of
-		// this switch: this check stays so that no reorder of the sink cases
-		// can hide a shared answer.
+		// problem.Writer.Problem calls this classifier before
+		// problem.Shared, so this check is what keeps the answer of a shared
+		// class (the maintenance mode or a schema minimum) that a limit
+		// failure wraps.
+		//
+		// Defense in depth: this check stays so that a shared class keeps its
+		// own answer.
 		if shared, ok := problem.Shared(err); ok {
 			return shared, true
 		}
