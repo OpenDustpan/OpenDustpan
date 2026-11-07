@@ -93,20 +93,20 @@ func seedPerson(t *testing.T, st *sqlite.Store, id, subject string) {
 }
 
 // grantTo gives the caller the role on obj.
-func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object, role string) {
+func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object) {
 	t.Helper()
 
 	at := time.Date(2026, time.November, 7, 12, 0, 0, 0, time.UTC)
 
 	grt := access.Grant{
-		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-" + role + "-" + obj.String(),
-		Role: role, CreatedBy: "admin",
+		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-" + access.RoleAccountAdministrator + "-" + obj.String(),
+		Role: access.RoleAccountAdministrator, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ann"},
 	}
 
 	fence, e := storetest.GrantWrite(t, env.store, obj, at, "grant:"+grt.ID)
 	if err := env.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
-		t.Fatalf("grant %s on %s: %v", role, obj, err)
+		t.Fatalf("grant %s on %s: %v", access.RoleAccountAdministrator, obj, err)
 	}
 }
 
@@ -116,7 +116,10 @@ func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object, role string
 func sourceRequirement(t *testing.T, source string) selfservice.Requirement {
 	t.Helper()
 
-	bp := selfservice.Blueprint{Name: "blueprint-a", SourcePrincipal: source}
+	var bp selfservice.Blueprint
+
+	bp.Name = "blueprint-a"
+	bp.SourcePrincipal = source
 
 	reqs := selfservice.PublishRequirements(parseNamespace(t, "acme"), &bp)
 	if len(reqs) != 2 {
@@ -141,7 +144,7 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			name: "a grant on the source principal allows",
 			grant: func(t *testing.T, env *authorizerEnv) {
 				t.Helper()
-				env.grantTo(t, identity.PrincipalObject("prn-source"), access.RoleAccountAdministrator)
+				env.grantTo(t, identity.PrincipalObject("prn-source"))
 			},
 			allowed: true,
 		},
@@ -149,7 +152,7 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			name: "a grant on another principal denies",
 			grant: func(t *testing.T, env *authorizerEnv) {
 				t.Helper()
-				env.grantTo(t, identity.PrincipalObject("prn-other"), access.RoleAccountAdministrator)
+				env.grantTo(t, identity.PrincipalObject("prn-other"))
 			},
 			allowed: false,
 		},
@@ -157,7 +160,7 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			name: "a grant on the namespace alone denies the principal requirement",
 			grant: func(t *testing.T, env *authorizerEnv) {
 				t.Helper()
-				env.grantTo(t, identity.NamespaceObject("acme"), access.RoleAccountAdministrator)
+				env.grantTo(t, identity.NamespaceObject("acme"))
 			},
 			allowed: false,
 		},
@@ -194,7 +197,7 @@ func TestUnmappedObjectKindIsRefused(t *testing.T) {
 	t.Parallel()
 
 	env := newAuthorizerEnv(t)
-	env.grantTo(t, identity.NamespaceObject("acme"), access.RoleAccountAdministrator)
+	env.grantTo(t, identity.NamespaceObject("acme"))
 
 	obj := selfservice.Object{
 		Unit:      identity.Object{},

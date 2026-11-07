@@ -10,6 +10,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// keyDescription is the schema member that holds the text of a description.
+const keyDescription = "description"
+
 // blueprintTypes declares the types of the blueprint document: a name for
 // each nested object, the closed value sets of the string types, and the
 // untyped values. The schema of each type comes from its Go struct and its
@@ -42,13 +45,13 @@ func blueprintTypes() []apidesc.Declaration {
 		apidesc.DeclareOpenEnum[job.Delivery]("SelfServiceJobDelivery", "review-request", "direct-push"),
 		// The shared declaration of any JSON value, as the inventory API
 		// states it. A declaration of the same type must be equal everywhere.
-		apidesc.Declare[json.RawMessage](map[string]any{"description": "Any JSON value."}),
+		apidesc.Declare[json.RawMessage](map[string]any{keyDescription: "Any JSON value."}),
 		apidesc.Declare[selfservice.ExprVersionName](map[string]any{
-			"type":        "string",
-			"description": "The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused.",
+			"type":         "string",
+			keyDescription: "The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused.",
 		}),
 		apidesc.Declare[selfservice.ScalarValue](map[string]any{
-			"description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+			keyDescription: "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
 		}),
 	}
 }
