@@ -872,12 +872,51 @@ func (s *Store) ArtifactNames(ctx context.Context, ns namespace.Name, id job.ID)
 			return err
 		}
 
-		out = job.ArtifactNames{Plans: plans, ChunkKeys: chunks}
+		parts, err := storedPartKinds(ctx, tx, ns, plans)
+		if err != nil {
+			return err
+		}
+
+		out = job.ArtifactNames{Plans: plans, Parts: parts, ChunkKeys: chunks}
 
 		return nil
 	})
 	if err != nil {
 		return job.ArtifactNames{}, err
+	}
+
+	return out, nil
+}
+
+// storedPartKinds returns, for each plan of ids that has parts, the kinds of its
+// parts. A reserved plan has no entry. A row that does not decode is
+// ErrDamaged, so the sweep deletes nothing for a job whose plan it cannot read.
+func storedPartKinds(ctx context.Context, tx Tx, ns namespace.Name, ids []string) (map[string][]job.OutputKind, error) {
+	out := make(map[string][]job.OutputKind, len(ids))
+
+	for _, id := range ids {
+		row, ok, err := tx.Plan(ctx, ns, id)
+		if err != nil {
+			return nil, err
+		}
+
+		if !ok {
+			continue
+		}
+
+		var body planBody
+		if err = json.Unmarshal([]byte(row.Body), &body); err != nil {
+			return nil, fmt.Errorf("%w: plan %s: %w", ErrDamaged, id, err)
+		}
+
+		plan := decodePlan(&body)
+		if plan == nil {
+			return nil, fmt.Errorf("%w: plan %s: no plan in the row", ErrDamaged, id)
+		}
+
+		for i := range plan.Parts {
+			out[id] = append(out[id], plan.Parts[i].Kind)
+		}
 	}
 
 	return out, nil

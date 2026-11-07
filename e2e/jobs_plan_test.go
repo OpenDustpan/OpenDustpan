@@ -51,6 +51,29 @@ func planPartsScenario(t *testing.T, env *e2e.Env) {
 		return upload("Plan-Apply", []byte("x"))
 	})
 
+	// A body that is not the signed body is refused as bad-proof and stores
+	// nothing: a commit that names the signed content finds no part.
+	signed := []byte("the content that the proof signs")
+
+	status, body := run.launcher.PutTampered(ctx, t, planPartPath(protocol.PathSessionPlanUpload, "plan-apply"),
+		signed, []byte("another content on the wire"))
+	if status != http.StatusUnauthorized || !strings.Contains(string(body), protocol.ErrorBadProof) {
+		t.Fatalf("upload with a body that is not the signed body = %d %s, want 401 %s", status, body,
+			protocol.ErrorBadProof)
+	}
+
+	wantInvalid(t, "commit of the part that was refused", func() (int, []byte) {
+		return commit(planPartOf("plan-apply", signed))
+	})
+
+	// A plan phase reads no plan part, and a name that is no plan part is refused.
+	wantInvalid(t, "read of a plan part in a plan phase", func() (int, []byte) {
+		return run.launcher.Get(ctx, t, planPartPath(protocol.PathSessionPlanPart, "plan-apply"))
+	})
+	wantInvalid(t, "read of a log as a plan part", func() (int, []byte) {
+		return run.launcher.Get(ctx, t, planPartPath(protocol.PathSessionPlanPart, "log"))
+	})
+
 	wantNoContent(t, "upload display", func() (int, []byte) { return upload("plan-display", []byte(planDisplayText)) })
 	wantNoContent(t, "upload apply", func() (int, []byte) { return upload("plan-apply", []byte(applyText)) })
 	wantNoContent(t, "upload display again", func() (int, []byte) {

@@ -768,11 +768,17 @@ func (m *memDB) ArtifactNames(_ context.Context, ns namespace.Name, id job.ID) (
 		return job.ArtifactNames{}, job.ErrNotFound
 	}
 
-	out := job.ArtifactNames{Plans: []string{}, ChunkKeys: []string{}}
+	out := job.ArtifactNames{Plans: []string{}, Parts: map[string][]job.OutputKind{}, ChunkKeys: []string{}}
 
 	for planID := range m.records.plans {
-		if m.records.plans[planID].job == id {
-			out.Plans = append(out.Plans, planID)
+		if m.records.plans[planID].job != id {
+			continue
+		}
+
+		out.Plans = append(out.Plans, planID)
+
+		for _, part := range m.records.plans[planID].plan.Parts {
+			out.Parts[planID] = append(out.Parts[planID], part.Kind)
 		}
 	}
 

@@ -218,10 +218,15 @@ server answers `conflict` and stores no plan. The staged parts stay, and the
 launcher can send the right commit. When all match, the server stores the plan
 with the state version of the phase, in one transaction. A plan that read an
 old state version fails the phase, and the answer is `plan-stale`. A second
-commit with the same parts changes nothing and answers 204. A commit with other
-parts, and an upload after the commit, get `conflict`. A part that no commit
-names stays a blob that no plan names. The artifact sweep deletes it after its
-grace period.
+commit with the same parts changes nothing and answers 204, so a launcher can
+send its commit again when it lost the answer. A commit with other parts, and
+an upload after the commit, get `conflict` and change nothing.
+
+A part that no plan names is not kept. The artifact sweep deletes the parts of
+a plan that never committed when the claim that uploaded them is no longer live,
+and it deletes each part that the committed plan does not name. It deletes only
+blobs that are older than one hour, and it keeps the parts of a claim that is
+live.
 
 `GET /session/plan/parts/{part}` is for an apply phase. It streams one part of
 the plan that the job stored in its plan phase. The plan comes from the job of
