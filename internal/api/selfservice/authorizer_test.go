@@ -209,11 +209,15 @@ func TestUnmappedObjectKindIsRefused(t *testing.T) {
 	adapter := selfserviceapi.NewNamespaceAuthorizer(env.authz)
 	err := adapter.Authorize(t.Context(), env.caller, identity.ActionNamespaceRead, obj)
 
+	if err == nil {
+		t.Fatal("authorize allowed an object kind that the adapter does not map")
+	}
+
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("authorize error = %v, want a denial", err)
 	}
 
-	if !strings.Contains(err.Error(), "has no authorization here") {
-		t.Errorf("error = %q, want the adapter's own refusal of the kind", err.Error())
+	if msg := err.Error(); !strings.Contains(msg, "has no authorization here") {
+		t.Errorf("error = %q, want the adapter's own refusal of the kind", msg)
 	}
 }
