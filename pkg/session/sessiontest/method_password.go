@@ -30,6 +30,9 @@ type PasswordFixture struct {
 	Disable func(t *testing.T)
 	// Now is the clock of the method.
 	Now func() time.Time
+	// Directory is the test directory of an LDAP method, which the cases of
+	// the LDAP protocol use. It is nil for a method of another kind.
+	Directory *Directory
 	// ProviderID names the provider of the method.
 	ProviderID string
 	// Groups is true for a method that reads groups.
@@ -84,29 +87,8 @@ func RunPasswordMethod(t *testing.T, factory func(t *testing.T) PasswordFixture)
 		})
 	}
 
-	if kind := probe.Method.Kind(); kind == session.MethodLDAP {
-		unwrittenCases(t, kind, passwordProtocolCases())
-	}
-}
-
-// passwordProtocolCases returns the cases of the LDAP protocol. The first
-// LDAP adapter writes their bodies.
-func passwordProtocolCases() []string {
-	return []string{
-		"AnObjectGUIDSubjectHasTheCanonicalTextForm",
-		"AnEntryUUIDSubjectIsLowercase",
-		"GroupsComeFromTheConfiguredSource",
-		"NestedGroupsAreFlat",
-		"FilterCharactersInTheUserNameAreEscaped",
-		"DNCharactersInTheUserNameAreEscaped",
-		"AReferralIsNeverFollowed",
-		"TheConnectionGoesThroughTheEgressRules",
-		"ASearchOverTheSizeLimitIsErrMethodAnswer",
-		"AGroupSearchOverTheLimitIsErrMethodAnswer",
-		"ADirectoryThatDoesNotAnswerInTimeIsErrMethodUnavailable",
-		"APlainConnectionIsRefusedUnlessTheSettingAllowsIt",
-		"TwoUsersWithOneUserNameAreErrMethodAnswer",
-		"GroupsOnAndNoGroupsIsErrGroupsMissing",
+	if probe.Method.Kind() == session.MethodLDAP {
+		runLDAPCases(t, factory)
 	}
 }
 
