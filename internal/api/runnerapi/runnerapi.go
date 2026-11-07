@@ -118,6 +118,8 @@ type Handler struct {
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	guard      *refusal.Recorder
+	audit      audit.Store
+	onAuditErr func()
 	sessions   *sessionauth.Checker
 	logger     *slog.Logger
 	release    runner.Release
@@ -201,6 +203,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:   cfg.Sessions,
 		logger:     cfg.Logger,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
+		audit:      cfg.Audit,
+		onAuditErr: cfg.OnAuditFailure,
 		release:    cfg.Release,
 		serverURL:  cfg.ServerURL,
 		now:        now,
