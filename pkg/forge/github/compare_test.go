@@ -248,7 +248,7 @@ func TestCompareCutsThePatchAtARuneBoundary(t *testing.T) {
 		comparePath(1): compareWith("ahead", baseSHA, map[string]any{
 			"filename": "a.txt",
 			"status":   "modified",
-			"patch":    "@@ -1 +1 @@\n-héllo\n+wörld 日本\n",
+			"patch":    "@@ -1 +1 @@\n-héllo\n+wörld 日本😀\n",
 		}),
 	})
 
