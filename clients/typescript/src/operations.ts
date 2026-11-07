@@ -7,6 +7,7 @@ import {
   decodeApiDescription,
   decodeApprovalDefault,
   decodeApprovalRule,
+  decodeApproveJobRequest,
   decodeApprovers,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
@@ -85,6 +86,7 @@ import {
   decodeJobLogEntry,
   decodeJobPhase,
   decodeJobPlan,
+  decodeJobPlanBinding,
   decodeJobPlanPart,
   decodeJobStep,
   decodeJobStepRecord,
@@ -283,6 +285,7 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
@@ -361,6 +364,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -561,6 +565,16 @@ export interface AddRegistryKeyInput {
   readonly body: AddRegistryKeyRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation approveJob. */
+export interface ApproveJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: ApproveJobRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2268,6 +2282,23 @@ export const operations = {
       statuses: [201],
     },
     ref(() => decodeRegistryKey),
+  ),
+  approveJob: operation<Job>(
+    {
+      id: "approveJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeJob),
   ),
   beginPasskeyRegistration: operation<PasskeyCreationOptions>(
     {

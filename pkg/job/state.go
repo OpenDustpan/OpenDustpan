@@ -97,6 +97,10 @@ const (
 	EventNeedApproval Event = "need-approval"
 	// EventApproved: the gate got the approvals that it needs.
 	EventApproved Event = "approved"
+	// EventApprovalRecorded: the store recorded one approval, and the gate
+	// of the current phase needs more. The job stays in awaiting-approval.
+	// Only a job in awaiting-approval takes it.
+	EventApprovalRecorded Event = "approval-recorded"
 	// EventRejected: an approver rejected the job, or a person closed its
 	// review request without a merge.
 	EventRejected Event = "rejected"
@@ -140,9 +144,22 @@ const (
 // Events lists every event, in the order of the table above.
 func Events() []Event {
 	return []Event{
-		EventDispatch, EventNeedApproval, EventApproved, EventRejected, EventClaim, EventRelease, EventReplan,
-		EventPhaseDone, EventLastPhaseDone, EventDelivered, EventPhaseFailed, EventCancel, EventMerged,
-		EventStateObserved, EventExpire,
+		EventDispatch,
+		EventNeedApproval,
+		EventApproved,
+		EventApprovalRecorded,
+		EventRejected,
+		EventClaim,
+		EventRelease,
+		EventReplan,
+		EventPhaseDone,
+		EventLastPhaseDone,
+		EventDelivered,
+		EventPhaseFailed,
+		EventCancel,
+		EventMerged,
+		EventStateObserved,
+		EventExpire,
 	}
 }
 
@@ -168,9 +185,11 @@ var transitions = map[State]map[Event]State{
 		// An approval goes back to queued, so that the freeze and the
 		// one-change rule apply again before the dispatch.
 		EventApproved: StateQueued,
-		EventRejected: StateRejected,
-		EventCancel:   StateCanceled,
-		EventExpire:   StateExpired,
+		// One approval of several: the gate still needs more.
+		EventApprovalRecorded: StateAwaitingApproval,
+		EventRejected:         StateRejected,
+		EventCancel:           StateCanceled,
+		EventExpire:           StateExpired,
 	},
 	StateDispatched: {
 		EventClaim:  StateRunning,

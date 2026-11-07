@@ -148,6 +148,13 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil, Filters: nil,
 			Writes:         []identity.Action{identity.ActionUnitRunPlan},
 			IdempotencyKey: true, ETag: true, Resolve: h.resolveNamespace, Serve: h.startJob,
+		}, Route{
+			// The service checks job:read and job:approve on the unit again, and
+			// the state, the approver, the plan and the MFA step of a destroy.
+			Method: http.MethodPost, Path: approvalsPath, Scope: ScopeAuthorized,
+			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobApprove},
+			Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.approveJob,
 		})
 	}
 
@@ -162,6 +169,8 @@ const (
 	jobsPath = "/api/dustpan/v1/namespaces/{namespace}/jobs"
 	jobPath  = jobsPath + "/{job_id}"
 	logPath  = jobPath + "/logs/{phase}"
+	// approvalsPath is the path of the verdicts of the approvers of a job.
+	approvalsPath = jobPath + "/approvals"
 )
 
 // Routes returns a copy of the route table. The action lists are copied too,

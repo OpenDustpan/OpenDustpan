@@ -27,6 +27,7 @@ var allowed = []edge{
 	{job.StateQueued, job.EventPhaseFailed, job.StateFailed},
 
 	{job.StateAwaitingApproval, job.EventApproved, job.StateQueued},
+	{job.StateAwaitingApproval, job.EventApprovalRecorded, job.StateAwaitingApproval},
 	{job.StateAwaitingApproval, job.EventRejected, job.StateRejected},
 	{job.StateAwaitingApproval, job.EventCancel, job.StateCanceled},
 	{job.StateAwaitingApproval, job.EventExpire, job.StateExpired},
@@ -82,6 +83,22 @@ func TestNextAllowsExactlyTheTable(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestApprovalRecordedOnlyFromAwaitingApproval is the hostile case of the
+// event that records one approval: every other state refuses it.
+func TestApprovalRecordedOnlyFromAwaitingApproval(t *testing.T) {
+	t.Parallel()
+
+	for _, from := range job.States() {
+		if from == job.StateAwaitingApproval {
+			checkAllowed(t, from, job.EventApprovalRecorded, job.StateAwaitingApproval)
+
+			continue
+		}
+
+		checkRefused(t, from, job.EventApprovalRecorded)
 	}
 }
 

@@ -1164,6 +1164,29 @@ func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensPa
 	return count, err
 }
 
+const countActiveMembershipsInGroups = `-- name: CountActiveMembershipsInGroups :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id = ANY($2::text[])
+`
+
+type CountActiveMembershipsInGroupsParams struct {
+	PrincipalID string
+	GroupIds    []string
+}
+
+// The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+// Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+// membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountActiveMembershipsInGroupsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveMembershipsInGroups, arg.PrincipalID, arg.GroupIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditEntries = `-- name: CountAuditEntries :one
 SELECT COUNT(*)
 FROM audit_entries

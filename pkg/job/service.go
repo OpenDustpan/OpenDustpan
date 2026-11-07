@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -99,6 +100,17 @@ type GateGuard interface {
 	Enforced(ctx context.Context, unit identity.Object) ([]EnforcedGate, error)
 }
 
+// GroupReader tells whether a person belongs to the groups of an approval
+// gate. The gate names its groups by their immutable IDs, never by their
+// names: a group that someone made again with the same name has another ID.
+type GroupReader interface {
+	// MemberOfAny reports whether a principal with the subject exists, is
+	// enabled, and is a member of at least one of the groups with these IDs. A
+	// subject that no principal has is not a member: it returns false and no
+	// error. Any error denies the approval (fail closed).
+	MemberOfAny(ctx context.Context, subject string, groupIDs []string) (bool, error)
+}
+
 // ServiceConfig holds the ports of a service. Every port but Freezes,
 // Switches, Now and NewID is required.
 type ServiceConfig struct {
@@ -125,6 +137,23 @@ type ServiceConfig struct {
 	// NewID makes the ID of a job, and ident.NewID(IDPrefix) when nil.
 	NewID func() ID
 	Log   *slog.Logger
+	// Approvers decides which subjects fill a slot of an approval gate: it
+	// keeps a dev subject out of a production installation. Nil takes the
+	// closed policy, which counts no signature, so an approval can never open
+	// a gate. A policy that is not nil but has the zero value has Production
+	// false: it counts every subject, as a dev installation does. The server
+	// always sets it.
+	Approvers *gate.ApproverPolicy
+	// Groups tells whether an approver belongs to the groups of a gate. Nil
+	// means that no one belongs to any group, so a gate with groups never
+	// takes an approval (fail closed). A gate with no groups needs no reader.
+	Groups GroupReader
+	// MaxPlanAge is the oldest plan that Approve accepts. Zero takes
+	// DefaultMaxPlanAge. The state version of the plan is checked against the
+	// plan itself at approval: a state change after the plan is caught by the
+	// store at the dispatch of the apply phase, which reads the current
+	// state version of the unit.
+	MaxPlanAge time.Duration
 }
 
 // service is the Service of this package. This version starts a job and
@@ -144,6 +173,9 @@ type service struct {
 	now        func() time.Time
 	newID      func() ID
 	log        *slog.Logger
+	approvers  gate.ApproverPolicy
+	groups     GroupReader
+	maxPlanAge time.Duration
 }
 
 // Starter is a Service that tells a retry from a first start. The REST API
@@ -184,6 +216,18 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 		now:        cfg.Now,
 		newID:      cfg.NewID,
 		log:        cfg.Log,
+		// A nil policy is the closed one: it counts no signature (fail closed).
+		approvers:  gate.ApproverPolicy{Production: true, IsDev: nil},
+		groups:     cfg.Groups,
+		maxPlanAge: DefaultMaxPlanAge,
+	}
+
+	if cfg.Approvers != nil {
+		s.approvers = *cfg.Approvers
+	}
+
+	if cfg.MaxPlanAge > 0 {
+		s.maxPlanAge = cfg.MaxPlanAge
 	}
 
 	if s.now == nil {
@@ -324,11 +368,6 @@ var errNotYet = errors.New("the job service of this version does not do this yet
 // Cancel implements Service. This version refuses it.
 func (*service) Cancel(context.Context, Actor, ID, string) (Job, error) {
 	return Job{}, fmt.Errorf("%w: cancel: %w", ErrUnsupported, errNotYet)
-}
-
-// Approve implements Service. This version refuses it.
-func (*service) Approve(context.Context, Actor, ID, Verdict, PlanBinding, string) (Job, error) {
-	return Job{}, fmt.Errorf("%w: approve: %w", ErrUnsupported, errNotYet)
 }
 
 // Confirm implements Service. This version refuses it.

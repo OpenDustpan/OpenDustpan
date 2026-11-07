@@ -780,6 +780,40 @@ func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensPa
 	return count, err
 }
 
+const countActiveMembershipsInGroups = `-- name: CountActiveMembershipsInGroups :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = ?1 AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id IN (/*SLICE:group_ids*/?)
+`
+
+type CountActiveMembershipsInGroupsParams struct {
+	PrincipalID string
+	GroupIds    []string
+}
+
+// The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+// Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+// membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountActiveMembershipsInGroupsParams) (int64, error) {
+	query := countActiveMembershipsInGroups
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.PrincipalID)
+	if len(arg.GroupIds) > 0 {
+		for _, v := range arg.GroupIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:group_ids*/?", strings.Repeat(",?", len(arg.GroupIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:group_ids*/?", "NULL", 1)
+	}
+	row := q.db.QueryRowContext(ctx, query, queryParams...)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditEntries = `-- name: CountAuditEntries :one
 SELECT COUNT(*)
 FROM audit_entries

@@ -227,9 +227,8 @@ const (
 //
 // A gate of type GateApproval: each subject counts once, and an approval
 // by startedBy counts only when g allows it. A user who started the job
-// through an agent is the starter too. Status does not check groups. This
-// version does not record approvals, so no code checks the groups of an
-// approver.
+// through an agent is the starter too. Status does not check groups, and
+// Service.Approve does not check them in this version.
 //
 // A gate of type GateConfirmation opens with one confirmation by startedBy
 // with a fresh authentication at most ConfirmFreshness before it.
