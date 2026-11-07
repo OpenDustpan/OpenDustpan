@@ -223,7 +223,7 @@ cover: ## Fast coverage pass for the packages of test-ci-other, without -race: w
 	python3 -I scripts/cover-summary.py --selftest
 	status=0; \
 	go test $(COVER_FLAGS) -coverprofile=coverage.out -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS))) || status=$$?; \
-	python3 -I scripts/cover-summary.py coverage.out; \
+	python3 -I scripts/cover-summary.py coverage.out || test $$status -ne 0 || status=1; \
 	exit $$status
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
