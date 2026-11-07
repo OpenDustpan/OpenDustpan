@@ -133,7 +133,7 @@ func caseFindCommitIgnoresPushedTrailer(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			"main",
-			forge.Delivery{Trailer: jobTrailer(job), Base: base.ID},
+			forge.DeliveryOf(genuineRequest(base.ID, job)),
 			head.Time,
 		)
 		if problem := judgeFind(got, findErr, pushed.ID, tt.want); problem != "" {
@@ -147,7 +147,7 @@ func caseFindCommitIgnoresPushedTrailer(t *testing.T, h Harness) {
 func genuine(t *testing.T, h Harness, base forge.Commit, job string) (forge.Commit, string) {
 	t.Helper()
 
-	c, err := h.Forge.Commit(t.Context(), h.Repo, commitOn("main", base.ID, job, writeFile("g-"+job+".txt", "x\n")))
+	c, err := h.Forge.Commit(t.Context(), h.Repo, genuineRequest(base.ID, job))
 	if err != nil {
 		t.Fatalf("Commit of %s = %v", job, err)
 	}
@@ -158,6 +158,11 @@ func genuine(t *testing.T, h Harness, base forge.Commit, job string) (forge.Comm
 	}
 
 	return c, message
+}
+
+// genuineRequest returns the request that genuine makes for the job on base.
+func genuineRequest(base, job string) forge.CommitRequest {
+	return commitOn("main", base, job, writeFile("g-"+job+".txt", "x\n"))
 }
 
 // judgeFind compares the answer of FindCommit with the answer that a case
@@ -206,15 +211,15 @@ func caseFindCommitPushedTrailerBeforeOwn(t *testing.T, h Harness) {
 
 	ctx := t.Context()
 	head := mainHead(t, h)
-	trailer := jobTrailer("j-50")
-
 	_, message := genuine(t, h, head, "j-50")
 	pushAs(
 		t, h, map[string][]byte{"b.txt": []byte("2\n")}, message,
 		Origin{Author: PartyOther, Committer: PartyOther, Verified: false},
 	)
 
-	got, err := h.Forge.FindCommit(ctx, h.Repo, "main", forge.Delivery{Trailer: trailer, Base: head.ID}, head.Time)
+	got, err := h.Forge.FindCommit(
+		ctx, h.Repo, "main", forge.DeliveryOf(genuineRequest(head.ID, "j-50")), head.Time,
+	)
 	if !errors.Is(err, forge.ErrUntrustedCommit) || got.ID != "" {
 		t.Fatalf("FindCommit = %+v, %v; want ErrUntrustedCommit", got, err)
 	}
@@ -258,7 +263,7 @@ func caseFindCommitTrailerIsExact(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			"main",
-			forge.Delivery{Trailer: tt.trailer, Base: head.ID},
+			withTrailer(forge.DeliveryOf(req), tt.trailer),
 			head.Time,
 		)
 		if problem := judgeFind(found, findErr, got.ID, tt.want); problem != "" {

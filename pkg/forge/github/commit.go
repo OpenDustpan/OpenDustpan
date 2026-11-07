@@ -106,9 +106,9 @@ func (f *gitHub) Commit(ctx context.Context, repo string, req forge.CommitReques
 }
 
 // withProof adds the proof of the commit to the trailer block of msg. The
-// proof binds the trailer, the base commit and the repository. A commit that
-// follows a branch that moved keeps the base of the request, so that one proof
-// serves every try.
+// proof binds the trailer, the base commit, the branch, the digest of the
+// changes and the repository. A commit that follows a branch that moved keeps
+// the base of the request, so that one proof serves every try.
 func (f *gitHub) withProof(
 	ctx context.Context, r repoName, bearer string, req forge.CommitRequest, msg message,
 ) (message, error) {
@@ -123,7 +123,7 @@ func (f *gitHub) withProof(
 		return message{}, err
 	}
 
-	proof, err := f.o.prover.Seal(ctx, proofBinding(repoID, req.Trailer, req.Base))
+	proof, err := f.o.prover.Seal(ctx, proofBinding(repoID, forge.DeliveryOf(req)))
 	if err != nil || len(proof) == 0 {
 		return message{}, forge.Unavailable(0, "the proof of the commit cannot be sealed")
 	}
@@ -862,7 +862,7 @@ func (f *gitHub) FindCommit(
 		return forge.Commit{}, f.forget(r, err)
 	}
 
-	want := delivery{repo: r, bearer: bearer, trailer: d.Trailer, base: d.Base}
+	want := delivery{repo: r, bearer: bearer, Delivery: d}
 
 	for page := 1; page <= maxCommitPages; page++ {
 		list, full, listErr := f.listCommits(ctx, search{repo: r, bearer: bearer, ref: ref, since: since}, page)
@@ -910,8 +910,10 @@ func checkFind(repo, ref string, d forge.Delivery) (repoName, error) {
 		return repoName{}, fmt.Errorf("%w: the %s line is for the adapter only", forge.ErrInvalid, proofKey)
 	}
 
-	if baseErr := forge.ValidateCommitID(d.Base); baseErr != nil {
-		return repoName{}, fmt.Errorf("the base commit: %w", baseErr)
+	// Defense in depth: proofBinding puts a length before each part. This
+	// check stays so that a delivery that is not valid makes no call.
+	if deliveryErr := forge.ValidateDelivery(d); deliveryErr != nil {
+		return repoName{}, deliveryErr
 	}
 
 	return r, nil
@@ -925,7 +927,7 @@ func checkFind(repo, ref string, d forge.Delivery) (repoName, error) {
 // list has the trailer.
 func (f *gitHub) deliveryIn(ctx context.Context, list []listedCommit, d delivery) (forge.Commit, bool, error) {
 	for _, c := range list {
-		if !hasTrailer(c.Commit.Message, d.trailer) {
+		if !hasTrailer(c.Commit.Message, d.Trailer) {
 			continue
 		}
 
