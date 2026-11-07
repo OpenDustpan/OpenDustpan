@@ -42,6 +42,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -678,7 +679,7 @@ func defaultSettings() *settings {
 		eventStore:              nil,
 		secretKeys:              nil,
 		secretWrapper:           nil,
-		streamStop:              nil,
+		streamStop:              &streamStop{stopped: atomic.Bool{}},
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
