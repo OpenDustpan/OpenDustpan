@@ -15,6 +15,12 @@ sender. The kind `email` and the other chat platforms have none yet, so you can
 make and read their destinations, but the test route answers `sink.no-sender`
 for them. See `docs/guides/slack-notifications.md` for Slack.
 
+A Mattermost message holds at most 15000 characters. The server keeps each
+message to 15000 characters and marks a cut text with an ellipsis. The
+Mattermost server setting `MaxPostSize` sets the largest post that a
+Mattermost server takes. The server takes 16383 characters by default. The
+15000-character limit keeps each message below it.
+
 The paths in this guide are under `/api/dustpan/v1/`. See
 `docs/reference/notification-destinations-api.md` for every field and error.
 

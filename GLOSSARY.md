@@ -28,6 +28,12 @@ _Avoid_: Namespace status, account status
 The stable, opaque identifier of a namespace, with the prefix `ns-`. The server makes it when it creates the namespace, and it never changes. A new namespace with the name of a purged namespace gets a new Namespace ID. So rows that hold the old ID never reach it.
 _Avoid_: Namespace key, org ID, UUID
 
+**Namespace switcher**:
+The control in the top bar of the hosted console that changes the namespace that the console shows. The URL carries the namespace.
+
+**Account switcher**:
+The control of the hosted console that changes the account. It appears only for a person who is a member of several accounts.
+
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
 _Avoid_: Environment, deployment, target
