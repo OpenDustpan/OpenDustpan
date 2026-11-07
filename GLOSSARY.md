@@ -926,6 +926,10 @@ _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
 
+**Auto-dedrift**:
+The automatic remediation of a drift. The server starts a job that brings a drifted unit back to its code. A **drift result** starts this job. It is not the **drift check**. It is available and opt-in, and it is off by default. A namespace can turn it off. The opt-out of a namespace always wins over an opt-in at another object. The job meets the same gates, approvals, freezes and access limits as a job that a person starts. The audit log records it as automatic (ADR 358).
+_Avoid_: Auto-remediation, self-healing, auto-fix
+
 **Trigger**:
 A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
 _Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
