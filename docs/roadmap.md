@@ -431,7 +431,7 @@ Out of scope: replication between installations, promotion and forwarding
 (ADR 248); active-active across sites; SQLite with more than one instance; the
 shared cache (ADR 72 decision 9); a flag for the lease period.
 
-**Minimum supported topology.** Two or more instances; PostgreSQL 16 or
+**Minimum supported topology.** Two or more instances; PostgreSQL 18 or
 later; an S3-compatible object store, with no requirement for conditional
 writes; a backup target on an S3-compatible store. The Helm chart refuses the
 `fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
