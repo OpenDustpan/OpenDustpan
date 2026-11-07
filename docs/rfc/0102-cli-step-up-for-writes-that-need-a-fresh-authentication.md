@@ -537,7 +537,9 @@ level (D1).**
   any registered key of the person, also the key that it revokes, or the
   console path with WebAuthn. TOTP revokes no key, so a thief with a TOTP
   seed cannot remove the keys of the person. A person who lost each key and
-  has no WebAuthn asks an administrator for the MFA reset. The revoke takes
+  has no WebAuthn asks an administrator for the MFA reset. When that person
+  holds the only keys of the installation, the last-holder recovery of the
+  section "First key enrollment from the no-factor state" applies. The revoke takes
   effect at once: each step-up credential that the key made stops working.
 - **Admin reset.** The MFA reset of ADR 46 decision 9 needs a fresh
   authentication of the administrator. It deletes the keys and the TOTP
@@ -1142,22 +1144,96 @@ at the level `key` of the caller:
 
 - the admin MFA reset of a person who holds a step-up key, in any state.
   A reset of a person who holds TOTP only stays at the level of Q2.
-- the delete of a principal who holds a step-up key.
+- the delete of a principal who holds a step-up key, by an administrator.
 
 The store also refuses, under the step-up installation lock, each write
 that takes the count of step-up keys of the installation to zero, unless
-the write carries a fresh authentication at the level `key`. The holder's
-own revoke of their last key carries one (D5), so it passes. A
-deprovision by the identity provider or by SCIM disables the principal and
-revokes its credentials, and it does not delete the keys, so the keys still
-count. Test: the store refuses a reset that removes the last key with a
-fresh step at the level `any`, with the service check skipped.
+the write carries a fresh authentication at the level `key` or the
+last-holder recovery below.
 
-With the guard, only a caller at the level `key` can bring the installation
-back to the no-factor state. Such a caller can already enroll a key for each
-person through D6, so the way back gives that caller nothing new. This is
-the reason for the recommendation "no marker" in the questions below.
-Without the guard, the recommendation changes to a permanent marker.
+**A deprovision.** A deprovision by the identity provider or by SCIM has no
+fresh step. It disables the principal and revokes its credentials and
+sessions. It does not delete the keys, so the keys still count and the
+guard is not involved. A SCIM delete of a principal who holds a step-up key
+becomes a disable, and the server writes the audit entry
+`step-up.delete-held-by-guard` with the SCIM connection and the principal.
+An administrator at the level `key` deletes the principal later, or the
+last-holder recovery does.
+
+**The own revoke of the last key.** A revoke needs a factor at the level
+`key` of the person (D5), also when it revokes the last key of the
+installation. So the own revoke passes the guard. It reopens the no-factor
+state on purpose: the holder, with their own key, chose to leave the
+installation with no key. After it, option A or D works again.
+
+**What the way back gives a caller.** A caller at the level `key` who holds
+`server:enroll-step-up-key` can already enroll a key for each person
+through D6. For that caller, the way back gives nothing new. A holder who
+does not hold `server:enroll-step-up-key` gives something new when they
+revoke the last key: after the revoke, an administrator at the level `any`
+with the bootstrap admin token can enroll a key through option A. This
+rests on a trust assumption: the holder revokes on purpose. The audit
+entry of the revoke and the email to each administrator show it. A thief
+must hold the key of that holder to do the revoke, and such a thief can
+already do each write at the level `key` as that holder.
+
+**The last-holder recovery.** The guard alone locks out a sole holder. Q2
+tells a person who lost each key to ask an administrator for the MFA reset.
+When that person holds the only keys of the installation, no other caller
+reaches the level `key`, so the guard refuses the reset. The same holds for
+the delete of a sole holder after a deprovision. The key still counts, so
+the installation never reaches the no-factor state either.
+
+The way out is the host recovery:
+
+1. The operator makes a temporary administrator with a host recovery mode:
+   mode 1 with `opendustpan host create-temp-admin` (ADR 245), or mode 2
+   with the signed request over the network (ADR 295). The controls of
+   ADR 245 apply: the reason, the audit entries, the expiry of 24 hours or
+   less, and the review of decision 3.
+2. The temporary administrator calls the admin MFA reset, or the delete, of
+   the sole holder. The request names the principal and holds a reason.
+3. The guard accepts the record of the live temporary administrator in place
+   of the level `key` for this write only, and only when the person holds
+   every step-up key of the installation. With another holder, the guard
+   refuses, because that holder can do the reset at the level `key`.
+4. The store writes the reset or the delete, and the audit entry
+   `step-up.last-holder-recovery`, of the kind `security`, with the
+   temporary administrator, the recovery mode, the reason, the person and
+   the fingerprints of the deleted keys. The server records the write as a
+   break-glass use, so it is part of the review of the temporary
+   administrator.
+5. The installation is now in the no-factor state. Option A, or option D in
+   mode 2, applies again.
+
+A temporary administrator has only an access token, and an access token
+never gives a fresh authentication (ADR 227 decision 6, owner decision 4).
+So step 3 is an exception for one write: the recovery record takes the
+place of the fresh step of Q2 and of the level `key`. The host shell or the
+offline operator key is the proof, as for each other recovery. Question 10
+asks the owner to accept it.
+
+**The dead end of mode 3.** In the recovery mode `none`, no temporary
+administrator exists, and mode 3 closes options A and D. When the sole holder
+loses each key, or the identity provider removes the sole holder, the guard
+refuses each reset and each delete of that holder, and the installation
+cannot reach the level `key` again until a restore from a backup. A
+break-glass account, when break-glass is on, reaches the level `key` with
+its passkey and can do the reset, as a break-glass use. Option B would also
+be a way out, but it reopens D7. This dead end is the cost of mode 3. The
+user guide states it, and tells an operator of mode 3 with break-glass off
+to register keys for at least two administrators.
+
+**Tests of the guard.** Each test sends the hostile request to one layer
+with the other layers off:
+
+| Layer | The check | Tests |
+| --- | --- | --- |
+| 1. Check at the boundary | The reset and the delete name the principal with its prefix, and the recovery reason has no Cc or Cf character. | A principal ID with no prefix gets `422`. A recovery reason with U+202E gets `422`. |
+| 2. Encode or contain | The service reads the level from the credential record of the server, never from the request. | A reset with a body field `"level": "key"` and a step at `fresh=1` gets `403`. |
+| 3. Limit the effect | The recovery exception covers one write, for a sole holder, while the record of the temporary administrator is live. | A recovery reset when a second person holds a key gets `403`. A recovery reset after the expiry of the record gets `403`. A recovery reset in the recovery mode `none` gets `403`. |
+| 4. Authorization at the point of use | The service checks the level `key` of the caller, or the recovery record. The store checks the count of keys under the lock, separately for each path. | Service, with the store check off: a reset of a key holder at `fresh=1` gets `403`, and a delete of a key holder at `fresh=1` gets `403`. Store, with the service check off: the store refuses a reset that removes the last key at the level `any`. The store refuses a delete of the last holder at the level `any`. A SCIM delete of the last holder becomes a disable, with one `step-up.delete-held-by-guard` entry and the key still counted. The own revoke of the last key passes with a `key` step, and the store refuses it with a TOTP step or a step at `fresh=1`. |
+| 5. Fail closed | A store error, an unknown level, an unknown recovery mode or a failed audit write refuses the write and deletes no key. | A store that returns an unknown error during the count refuses the reset. A failed append of `step-up.last-holder-recovery` deletes no key. |
 
 ### Benchmarks
 
@@ -1574,7 +1650,12 @@ an administrator.
 5. **The level of the admin MFA reset.** Recommendation: the level `key` for
    the reset of a person who holds a step-up key, and for the delete of
    such a principal, with the store guard of "The way back to the no-factor
-   state". The level of Q2 stays for a person with TOTP only.
+   state". The level of Q2 stays for a person with TOTP only. A sole holder
+   who loses each key, or whom the identity provider removes, gets out
+   through the last-holder recovery of host recovery modes 1 and 2. In
+   the recovery mode `none`, this is a dead end until a restore (question
+   10). The own revoke of the last key passes with the level `key` and
+   reopens the no-factor state on purpose.
 6. **The delivery channel of the code.** The RFC leaves the channel to the
    operator, and the new authentication after the offer makes an
    intercepted code alone useless. Should the RFC also name a channel, for
@@ -1597,6 +1678,18 @@ an administrator.
    with the banner and the report entry. The email detects only and stops
    nothing, and the audit entry is the record. The answer of the issue
    route says that no email goes out.
+10. **The last-holder recovery and the dead end of mode 3.** Two parts:
+    - The last-holder recovery lets a temporary administrator of mode 1 or
+      mode 2 reset or delete the sole key holder, with no fresh step. That
+      is an exception to ADR 227 decision 6 and owner decision 4 for this
+      one write. The write is a break-glass use with the controls of ADR
+      245.
+    - In the recovery mode `none`, with break-glass off, the loss of the
+      sole holder leaves no way to the level `key` until a restore.
+
+    Recommendation: accept both. Accept the dead end as the cost of mode
+    `none`. The user guide says so, and tells an operator of mode `none`
+    with break-glass off to register keys for at least two administrators.
 
 ## Security layers (ADR 250)
 
@@ -1675,6 +1768,19 @@ The terms go to `GLOSSARY.md` with the ADR.
   the person, it adds one first step-up key. It is not a factor. Avoid
   "enrollment code", which names the code of an administrator for a person
   of a plain OAuth 2.0 provider or a trusted header.
+- **Bootstrap fresh request**: the record of a new authentication at the
+  identity provider that a person starts to redeem a step-up bootstrap code.
+  It binds the code, the person and the sign-in ID. Only an authentication
+  after its start counts.
+- **Step-up installation lock**: the one lock that each write takes before
+  it changes the count of step-up keys or passkeys of the installation, so
+  that the check of the no-factor state is serialized.
+- **Last-key guard**: the rule that a write that takes the count of step-up
+  keys of the installation to zero needs the level `key` of the caller, or
+  the last-holder recovery.
+- **Last-holder recovery**: the reset or the delete of the sole holder of
+  the step-up keys of an installation by a temporary administrator of host
+  recovery mode 1 or mode 2. It is a break-glass use.
 
 ## Open points for the owner
 
