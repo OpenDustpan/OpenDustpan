@@ -1347,17 +1347,19 @@ func (w restoreWriter) Actor() string {
 	return "restore " + w.id.String() + " claim token " + strconv.FormatInt(w.fence.Token, 10)
 }
 
-// logCanceled writes the log line of the work that an enter of the restore
-// canceled, with the restore ID and the claim token. The audit entry of each
-// cancel comes from the audit event that the writer stored before the
-// cancel.
+// logCanceled writes one log line for each unit of work that an enter of the
+// restore canceled, with the restore ID, the claim token and the unit name.
+// The audit entry of each cancel comes from the audit event that the writer
+// stored before the cancel.
 func (s *RestoreService) logCanceled(ctx context.Context, in restoreInput, fence durable.StepFence, units []string) {
 	if len(units) == 0 {
 		return
 	}
 
-	s.logger.WarnContext(ctx, "restore canceled the active work", slog.String("restore_id", in.ID.String()),
-		slog.Int64("token", fence.Token), slog.Int("units", len(units)))
+	for _, unit := range units {
+		s.logger.WarnContext(ctx, "restore canceled the active work", slog.String("restore_id", in.ID.String()),
+			slog.Int64("token", fence.Token), slog.String("unit", unit))
+	}
 }
 
 // differingBlobAuditObject names the refusal to overwrite the live key by
@@ -1414,11 +1416,13 @@ func writtenDiffersAuditObject(in restoreInput, key string) string {
 		" and its bytes failed the check after the write, backup " + in.BackupID.String()
 }
 
-// canceledAuditObject names the cancel of one unit of active work by the
-// enter of restore id with the claim token, for its audit entry.
+// canceledAuditObject names the attempt to cancel one unit of active work by
+// the enter of restore id with the claim token, for its audit entry. The
+// writer stores the entry before the cancel runs, so the text names an
+// attempt, not a result.
 func canceledAuditObject(id RestoreID, token int64, unit string) string {
 	return "restore " + id.String() + " claim token " + strconv.FormatInt(token, 10) +
-		" canceled the active work: " + unit
+		" attempted to cancel the active work: " + unit
 }
 
 // endBeforeSwapAuditObject names the end of restore in before its swap, for
