@@ -30,11 +30,16 @@ guaranteed and what is a heuristic.
    an import directive: an OpenTofu `resource` block and an `import` block, or
    a Pulumi resource with the `import` option in TypeScript, Python, Go, C#,
    Java or YAML. The job drops computed attributes and attributes that a
-   no-change plan shows are not necessary, writes a reference for each
-   secret and never a value, gives a stable name, and refuses to deliver the
-   code unless a plan shows "import 1, change 0" for the new resource and no
-   change to any other resource of the unit. The plan check is the
-   acceptance test and the only guarantee.
+   no-change plan shows are not necessary, and gives a stable name. A value
+   goes into Git only when the job can show that it is not a secret
+   (default-deny); every other value becomes a reference. The job refuses to
+   deliver the code unless a plan shows "import 1, change 0" for the new
+   resource and no change, no destroy and no protection change to any other
+   resource of the unit. The plan check is the acceptance test of the
+   result. It is not a security layer.
+   The runner sends **typed edits**, not text. The server checks their
+   content and renders the code with one escaping encoder for each
+   language.
 2. **The ceiling.** A placement engine proposes where the code goes in the
    team's project: an entry in an existing `for_each` map, a new module call,
    an entry in the list that a Pulumi loop reads, an argument that comes from
@@ -173,10 +178,12 @@ not "does not exist".
   for each finding the tool type and the import ID or identity. These come
   from the `iac` entry of sweep report version 2 (RFC 123), from a mapping
   table in the runner when the report has none, or from the person.
-- Output, the **codification result**: a patch of the code location, the
-  evidence for each resource, and the result of the check. The server stores
-  it as a job artifact. Without write-back of code (question 1), the console
-  shows the patch to copy.
+- Output, the **codification result**: a set of **typed edits** (section
+  B9), the evidence for each resource, the SHA-256 of each file that the
+  check planned, and the result of the check. The runner sends no text of
+  code. The server checks the edits, renders them with its own encoders and
+  stores the result as a job artifact. Without write-back of code
+  (question 1), the console shows the rendered diff to copy.
 
 ### A2. The pipeline for OpenTofu
 
@@ -192,8 +199,11 @@ not "does not exist".
 5. **References.** Section A5.
 6. **Minimize.** Section A3.
 7. **Name.** Section A6.
-8. **Format.** `tofu fmt` on the changed files.
-9. **Check.** Section A7.
+8. **Typed edits.** Turn the result into typed edits (B9) and render them
+   with the shared encoders. `tofu fmt` must leave the rendered files
+   unchanged; a difference fails the job, because the server renders the
+   same text.
+9. **Check.** Section A7, on the rendered files.
 
 ### A3. Drop computed and default attributes
 
@@ -225,43 +235,95 @@ no-op. It does not guarantee the smallest such set, and it does not
 guarantee that a dropped attribute keeps its value after a later provider
 upgrade changes a default. The review request says so.
 
-### A4. Secrets as references, never values
+### A4. No secret reaches Git: default-deny for values
 
-A secret value never enters the generated code, the patch, the evidence, the
-server, a log or Dusty's context. Not even as ciphertext.
+A secret value never enters the generated code, the typed edits, the
+evidence, a log or Dusty's context. Not even as ciphertext. This includes a
+secret in an attribute that the provider does not mark sensitive, for
+example a Lambda environment variable, an ECS container definition or user
+data.
 
-1. **Which values are secrets.**
-   - Exact: an attribute that the schema marks sensitive or write-only, or a
-     value with a sensitive mark in the plan; a Pulumi value with the secret
-     signature.
-   - Heuristic: an attribute whose name matches the credential-name rule of
-     ADR 101 decision 7 (`job.IsCredentialEnv`, asked for the attribute
-     name), and a value that a secret detector matches. The evidence marks
-     these as heuristic.
-2. **The reference.**
-   - OpenTofu: `var.<name>` and a `variable` block with `sensitive = true`,
-     and `ephemeral = true` for a write-only attribute where the tool version
-     has it.
-   - Pulumi: a stack config key read with `config.requireSecret` (or
-     `${config.<key>}` with `secret: true` in YAML).
-3. **The value of the reference.** On the runner, the job compares the read
-   value with each secret of the profiles attached to the unit, by a keyed
-   hash with a key made for this job. A match writes the reference to that
-   profile key. No match: the review request lists the key under "values
-   that the team must set", with the profile command that sets it. The plan
-   of the review request (ADR 299) fails until a person sets it.
-4. **The check needs the value.** For the plan check only, the runner passes
-   the read value as an input of the plan inside the sandbox (an environment
-   variable of the plan step, masked in the log as a job secret is). It
-   writes no file with it.
-5. **The upload guard.** Before upload, the runner searches the patch and
-   the evidence for each secret value that the job read, plain and in its
-   JSON, HCL, URL and Base64 forms. One hit fails the job, and the job writes
-   no artifact. It also fails on `secret("` with a literal argument in a
-   Pulumi file.
-6. **Write-only attributes** (for example a password that the provider never
+The rule is **default-deny**: a value becomes a literal in Git only when the
+job can show that it is not a secret. Every other value becomes a reference.
+An unclear value is never written.
+
+1. **Values that may be literals.** A value is written as a literal only
+   when one of these holds, and the checks of step 3 pass:
+   - its schema type is a boolean or a number;
+   - it became a reference to another resource, a variable that the team
+     already has, a local or a module output (A5, B6), so no new value is
+     written;
+   - its attribute is on the **non-secret list** of its resource type, and
+     the value has the shape that the list gives for it. The list is data in
+     the runner repository, reviewed as code. An entry names one attribute
+     of one type and a shape: an identifier of the provider (an ARN, a
+     resource ID), a region, a CIDR, a name of at most 255 characters from
+     a fixed character set, or a value from a closed set (for example
+     `STANDARD`, `GLACIER`). A map, a list, a JSON document, a free-form
+     string and an attribute that is not on the list are never on it by
+     default. Tag keys may be on it; tag values only with a shape.
+2. **Values that are references.** Every other value, and every value of an
+   attribute that is one of these, is a reference:
+   - the schema marks it sensitive or write-only, or the plan marks it
+     sensitive, or Pulumi gives it the secret signature (exact);
+   - its name or any key on its path matches the credential words: the rule
+     of ADR 101 decision 7 (`job.IsCredentialEnv`), and also `password`,
+     `passwd`, `pwd`, `passphrase`, `secret`, `token`, `key` as a word part
+     (`api_key`, `access_key`, `private_key`, `signing_key`), `credential`,
+     `cert` with `private`, `auth`, `bearer`, `session`, `cookie`,
+     `signature`, `salt`, `seed`, `dsn`, `connection_string`, `conn_str`
+     and `webhook` (heuristic, a widening only; default-deny already covers
+     these values);
+   - a free-form string, a map or a JSON document: environment variables,
+     container definitions, user data, scripts, policy documents.
+3. **The checks of a literal, on the runner and again in the server.** A
+   literal fails, and becomes a reference, when:
+   - its keyed digest equals the keyed digest of a known secret (step 6);
+   - a secret pattern matches it (the pattern set of the project's secret
+     scan in CI);
+   - its Shannon entropy is above the limit for its length (a number that
+     slice 1 sets from the benchmark corpus).
+4. **The forms of a reference.**
+   - OpenTofu: `var.<name>` and a `variable` block, with `sensitive = true`
+     for a value from step 2 or step 3, and `ephemeral = true` for a
+     write-only attribute where the tool version has it.
+   - Pulumi: a stack config key read with `config.requireSecret` or
+     `config.require` (or `${config.<key>}` with `secret: true` in YAML).
+5. **Where the value goes.** Never to Git.
+   - When a profile secret of the unit equals the value (compared by keyed
+     digest on the runner), the reference names that profile key.
+   - Else the runner sends the value, sealed, to a new **profile draft** of
+     the unit (the profile drafts of ADRs 200 to 209), and the change order
+     names the draft. A person publishes the draft; it is not live before.
+     Dusty never reads the draft's values (ADR 124).
+   - When the draft cannot be written (no profile attached, no right to
+     write one), the resource is **not codified**, with the reason. The job
+     writes nothing for it.
+6. **The digests.** The server gives each job a random digest key. The
+   runner sends the keyed digests (HMAC-SHA-256) of every value that step 2
+   or step 3 turned into a reference, and of every sensitive value that the
+   plan read. The server computes the same digest of every literal of the
+   typed edits, and of every secret of the profiles of the namespace, which
+   it can decrypt. One equal digest refuses the whole edit set. The key
+   lives as long as the job, so the digests are useless after it.
+7. **The check needs the values.** For the plan check only, the runner
+   passes each referenced value as an input of the plan inside the sandbox
+   (an environment variable of the plan step, masked in the log as a job
+   secret is). It writes no file with it.
+8. **The upload guard.** Before upload, the runner searches the typed edits
+   and the evidence for each value from step 2, step 3 and the plan's
+   sensitive values, plain and in its JSON, HCL, URL and Base64 forms. One
+   hit fails the job, and the job uploads no edit. It also fails on
+   `secret(` with a literal argument.
+9. **Write-only attributes** (for example a password that the provider never
    returns): the job writes the reference, and the evidence says that the
    plan cannot compare it.
+
+What this guarantees and what it does not: a value that is not on the
+non-secret list never becomes a literal. A secret can still reach Git only
+through an entry of the non-secret list whose shape a secret fits, and that
+passes the pattern, entropy and digest checks. The list is the residual
+risk, so it is short, reviewed, and grows by review only.
 
 ### A5. References to resources that exist
 
@@ -297,22 +359,51 @@ second run does not make a duplicate.
 ### A7. The check: "no changes"
 
 The check is the acceptance test of every codification, the floor and the
-ceiling.
+ceiling. It checks the result. It is not a security layer (section B9).
 
-- **OpenTofu.** On the patched copy, `tofu plan -out` and `tofu show -json`.
-  Pass when:
-  - each new address has the action `no-op` with an `importing` block, and
-    its `before` and `after` are equal;
-  - every other `resource_changes` entry has the action `no-op`;
-  - there are no output changes and no error diagnostics.
-- **Pulumi.** `pulumi preview --json` with the `import` options. Pass when
-  each new resource has the step `import` with no detailed diff, and every
-  other step is `same`.
-- **Every unit that the patch touches.** A patch of a path that another unit
+- **OpenTofu.** On the edited copy, `tofu plan -out` and `tofu show -json`.
+  Pass when every item holds:
+  - **The new resource.** Each new address has the action `no-op` with an
+    `importing` block, its `before` and `after` are equal, and it has no
+    `previous_address`.
+  - **The frame.** Every other `resource_changes` entry has the action
+    `no-op`. No `delete`, no `create`, no `update`, no replace in either
+    order (`delete` with `create`), and no `forget`. No `previous_address`
+    on any entry: the edits add no `moved` or `removed` block, and an
+    existing `moved` block does not start to apply.
+  - **Not a destroy.** The plan mode is normal, not destroy, and the unit
+    keeps every resource that it had.
+  - **Protection unchanged.** For each existing resource, `prevent_destroy`,
+    `create_before_destroy`, `ignore_changes` and `replace_triggered_by` in
+    the configuration JSON are equal before and after the edits. The new
+    resource gets the protection of question 5.
+  - No output changes, no new `check` failure, and no error diagnostics.
+- **Pulumi.** `pulumi preview --json` with the `import` options. Pass when:
+  - each new resource has the step `import` with no detailed diff;
+  - every other step is `same`: no `create`, `update`, `delete`, `replace`,
+    `create-replacement`, `delete-replaced` or `discard`;
+  - `protect`, `retainOnDelete`, `deleteBeforeReplace`, `replaceOnChanges`
+    and `ignoreChanges` of each existing resource are equal in state and in
+    the preview, and no alias is added;
+  - no stack output changes.
+- **The check plans what it shows.** The runner renders the typed edits with
+  the same encoders as the server (section B9) and reports the SHA-256 of
+  each rendered file. The server renders the same edits and compares. A
+  difference refuses the edits.
+- **The plan is a secret.** The plan file and the plan JSON hold every value
+  that the provider read, sensitive values included. They are job plans of
+  ADR 102: the `secret` flag is set, an item key seals them at rest, and a
+  person sees only the masked readable plan. An unmasked read needs
+  `unit:read-secrets`. Dusty and the evidence get only masked summaries. The
+  sandbox and its copies end with the job.
+- **Every unit that the edits touch.** An edit of a path that another unit
   declares (ADR 299 decision 24) plans that unit too, with the same rule.
-  The first slices edit only the unit's own code location (question 4).
+  The first slices edit only the unit's own code location (question 6).
 - **After the merge.** The plan of the review request (ADR 299) runs the
-  same check again on the merge result. An apply that imports is followed by
+  same check again on the merge result. The edits came from a runner and a
+  cloud read, so that plan runs as the plan of an untrusted source, in the
+  sandbox of the plan of RFC 122 (its step 4), with the credentials that
+  RFC 122 gives such a plan. An apply that imports is followed by
   a plan that must show no changes (`-detailed-exitcode` 0, or
   `pulumi preview --expect-no-changes`). The finding resolves when the index
   shows the key in the unit (ADR 165).
@@ -321,7 +412,7 @@ What the check proves, and what it does not:
 
 | Proved, at the time of the plan | Not proved |
 | --- | --- |
-| Applying the patch imports the resource and changes no attribute of it. | That the code is what the team would write. |
+| Applying the edits imports the resource and changes no attribute of it. | That the code is what the team would write. |
 | No other resource of the planned units changes. | Units that use the same files and that OpenDustpan does not know. |
 | The provider and the code agree on the resource, under the provider's own diff rules. | Attributes that the provider does not compare: write-only attributes, `ignore_changes`, attributes that a provider normalizes. |
 | | That the cloud does not change before the merge. The plan of the review request runs the check again. |
@@ -343,12 +434,16 @@ What the check proves, and what it does not:
 4. Apply A3 to A6 on the YAML. A3 uses the preview with the `import` option
    as its oracle: a dropped input that the preview shows in the diff goes
    back.
-5. Convert with `pulumi convert --from yaml --language <language>` to
-   TypeScript, Python, Go, C# or Java. YAML projects keep the YAML.
-6. Insert the declaration in the entry file, or in a new file that the entry
-   file imports when the language allows it (Python, TypeScript). Go, C# and
-   Java get a new function in a new file, and one call in the entry point.
-7. Check with A7.
+5. Turn the YAML into a typed edit `add-pulumi-resource`: the type token,
+   the logical name, the inputs as a typed value tree with the schema type
+   of each property, and the options. `pulumi convert --from yaml
+   --language <language>` is a reference only: the runner compares its
+   output with the shared encoder's output in tests, and never ships it.
+6. The encoder of the language renders the declaration: a new file that the
+   entry file imports (TypeScript, Python), or a new function in a new file
+   and one call in the entry point (Go, C#, Java). YAML projects get a new
+   entry under `resources`.
+7. Check with A7, on the rendered files.
 
 A loop or a component in Pulumi cannot take an `import` option for one new
 item without a change to the loop's code. Section B5 handles that case.
@@ -358,22 +453,25 @@ item without a change to the loop's code. Section B5 handles that case.
 **Reuse (run as a process on the runner, never linked into the server):**
 
 - The team's own `tofu` and `pulumi` binaries, which the runner already runs.
-  OpenTofu's generator writes the first draft, and `pulumi import` and
-  `pulumi convert` write the Pulumi languages. We use their licenses as a
-  user does: we run the programs; we copy no code.
+  OpenTofu's generator and `pulumi import` write the first draft, which the
+  job turns into typed edits. `pulumi convert` is a test reference for the
+  Pulumi encoders. We use their licenses as a user does: we run the
+  programs; we copy no code.
 - The ideas of `tfadd` (partial mode) and aztfexport (the plan as the goal),
   with no code.
 
-**Reuse (a library on the runner):** an HCL parser and writer that keeps
-comments and layout, `github.com/hashicorp/hcl/v2` with `hclwrite`,
-MPL-2.0. It is the only practical choice for HCL in Go. It needs the owner's
-approval for the runner repository (question 2). The server does not link
-it.
+**Reuse (a library):** an HCL parser that keeps comments and layout,
+`github.com/hashicorp/hcl/v2` with `hclwrite`, MPL-2.0. It is the only
+practical choice for HCL in Go. The runner needs it to read the project.
+The server needs it to apply an edit into an existing HCL file (a new map
+entry). It needs the owner's approval (question 3).
 
 **Build:**
 
 - The `codify` job operation, its result format, the evidence, the API and
   the console view (server).
+- The typed edit schema, its checks, and one escaping encoder for each
+  target language (B9), shared by the server and the runner.
 - The minimizer, the secret referencer and the upload guard, the namer, the
   reference index, the plan-JSON checker (runner).
 - The placement engine of part B (runner).
@@ -560,6 +658,98 @@ Each candidate carries the evidence that a reviewer needs, masked:
 - the plan summary of A7 for each unit planned;
 - the values that the team must set (A4).
 
+### B9. Typed edits, the encoders, and the change to ADR 101 decision 4
+
+The runner is not trusted to write code, so it does not. It sends typed
+edits. The server checks their content, renders them with its own encoders,
+and writes the result.
+
+**The edit schema** (`codify-edit/1`, a JSON document with a strict schema;
+unknown fields refused). Each edit is one of:
+
+| Edit | Fields | OpenTofu | Pulumi |
+| --- | --- | --- | --- |
+| `add-block` | file, kind (`resource`, `module`, `variable`), labels, body | a new block, in a new file or at the end of an existing `.tf` file | - |
+| `add-import` | file, target address, `id` or `identity` | an `import` block | - |
+| `add-map-entry` | file, the address of the collection (a `locals` entry, a variable default, a tfvars variable), key, value | a new entry in that map | a new entry in a YAML map or a stack config value |
+| `add-list-entry` | file, the address of the collection, value | a new element | a new element |
+| `add-tfvars-value` | file, variable name, value | a new line in the tfvars file that siblings use | - |
+| `add-pulumi-resource` | file, type token, logical name, inputs, options (`import`, `parent`, `provider`, `protect`, `dependsOn`) | - | a declaration in the language of the project |
+| `add-pulumi-config` | stack, key, `secret` flag, no value | - | a config key in `Pulumi.yaml` with its type; the value comes from the profile draft (A4) |
+
+A value is a typed tree: `string`, `number`, `bool`, `null`, `list`, `map`,
+`object` with schema type names, and `expr`. An `expr` is not text. It is a
+closed grammar: a traversal (`var.x`, `local.x`, `module.m.x`,
+`<type>.<name>.<attr>`, `each.key`, `each.value.<field>`, `data.<type>.<name>.<attr>`,
+`config.<key>` in Pulumi, a resource output in Pulumi) or a call of `merge`
+or `lookup` on such terms. No other function, no template, no operator.
+
+**What the server checks, at each edit, without trust in the runner:**
+
+- the schema and the bounds: 1 to 64 edits, 1 to 32 files, 256 KiB of
+  values, a depth of 16, at most 1,000 nodes in one value tree;
+- the paths: the rules of ADR 101 decision 4 (relative, clean, inside the
+  code location, no CI configuration), and only the file kinds of the tool:
+  `.tf`, `.tfvars`, `.tfvars.json` for OpenTofu; `Pulumi.yaml`, the stack
+  settings file and the source files of the project's language for Pulumi;
+- the names: labels, keys and identifiers from the namer's character set
+  (A6), never from a raw cloud value;
+- each `expr` against the grammar, and each traversal against the symbols
+  that the configuration JSON of the job lists (no reference to a symbol
+  that does not exist);
+- each literal against the secret checks of A4 step 3 and step 6 (the
+  digests, the patterns, the entropy);
+- each `add-map-entry` and `add-list-entry` against the file: the server
+  parses the file at the commit of the job, finds the collection, and
+  refuses when it is not a literal map or list in that file;
+- no edit removes or changes existing text. Every edit adds.
+
+A failure refuses the whole edit set, with an audit entry, before any review
+request exists.
+
+**The encoders.** One escaping encoder for each target: HCL, the tfvars
+JSON, Pulumi YAML, TypeScript, Python, Go, C# and Java. Each turns a typed
+value into a literal of its language, and nothing else:
+
+- HCL: a quoted string with `\`, `"` and control characters escaped, `${` as
+  `$${` and `%{` as `%%{`. Never a heredoc.
+- Pulumi YAML: always a double-quoted scalar, `${` as `$${`.
+- TypeScript: a double-quoted string literal with escapes, never a template
+  literal. Python: a string literal with escapes, never an f-string. Go:
+  `strconv.Quote`. C#: a regular string literal, never `$"..."` or `@"..."`.
+  Java: an escaped string literal, never a text block.
+- All: ` `, ` `, NUL and the bidirectional control characters are
+  escaped; non-printable characters are written as escapes.
+
+Each encoder has a test with a hostile corpus: quotes and backslashes,
+`${...}`, `%{...}`, `#{...}`, backticks, `"; os.system("...")`,
+`"); System.exit(1); ("`, `*/`, newlines, the bidirectional controls, a
+string of 1 MiB. The test encodes each string, parses the result with the
+parser of the language, and checks that the value is equal and that the
+parsed tree is one literal. At run time, the runner and the server parse
+each rendered file again before any plan or preview runs, and refuse a file
+whose literal count differs from the edits.
+
+**The change to ADR 101 decision 4.** A draft for the ADR that accepts this
+RFC:
+
+- Decision 4 keeps its rules for the edits of config and variable files.
+- It adds a second kind: **codification edits**, only for the write-back job
+  of a `codify` change order. They are typed edits of `codify-edit/1`. The
+  server checks and renders them as above. The write-back executor writes
+  only the text that the server rendered, never text from a client or a
+  runner.
+- Every edit adds text. A codification edit never deletes or changes a line.
+- The deliver phase waits for the person's confirmation in every mode, as for
+  an agent (ADR 125, ADR 128).
+
+**The re-plan is not a security layer.** The no-change check and the plan of
+the review request check the result. A hostile runner can report a check
+that it did not run. The layers that stop harm are: the typed edits and
+their checks in the server, the server's own render, the secret checks in
+the server, the person's confirmation, and the plan of the review request
+in the sandbox of RFC 122.
+
 ## Part C. Dusty
 
 - **No new tool.** `propose_change` (ADR 122) gets the operation `codify`,
@@ -588,25 +778,32 @@ Each candidate carries the evidence that a reviewer needs, masked:
 
 The inputs from outside the process: the finding (from an untrusted sweep
 report), the values that the provider read from the cloud, the team's
-repository, the plan JSON, the patch and evidence that a runner uploads, and
-Dusty's choice. The five steps of ADR 250 for each:
+repository, the placement inputs (state provenance, the configuration JSON,
+the siblings in other units), the plan file and plan JSON, the typed edits
+and evidence that a runner uploads, and Dusty's choice. The five steps of
+ADR 250 for each:
 
 | Input | 1. Check at the boundary | 2. Encode or contain | 3. Limit | 4. Authorize at use | 5. Fail closed |
 | --- | --- | --- | --- | --- | --- |
-| The finding's type and import ID | The type must be a type of the provider schema; the import ID must match the ID form of the type (allowlist). | Written into HCL and YAML only through the writer's value encoding. | 1 to 50 findings for each job; an ID of at most 1 KiB. | `namespace:triage-unmanaged` and `unit:write` at the start, checked again by the job model. | Unknown type or bad ID: the finding is refused, with an audit entry. |
-| The read values | Types from the schema; unknown attributes refused. | **Template escape.** A cloud value `${file("/etc/passwd")}` in a tag must not become an expression. HCL strings escape `${` and `%{` (the HCL writer's value tokens). Pulumi YAML escapes `${` as `$${`. A test sends such values to the writer directly. | Size limit for each value and for the patch (256 KiB, as write-back). | - | A value that the writer cannot encode fails the job. |
-| Secret values | A4 step 1. | Only in sandbox memory and the plan step's environment, masked in the log. | The keyed hash for profile matching uses a key that lives one job. | The profile attachment of the unit decides which profile secrets the job may compare. | The upload guard (A4 step 5): one hit and the job writes nothing. |
+| The finding's type and import ID | The type must be a type of the provider schema; the import ID must match the ID form of the type (allowlist). | Written only through the encoders (B9). | 1 to 50 findings for each job; an ID of at most 1 KiB. | `namespace:triage-unmanaged` and `unit:write` at the start, checked again by the job model. | Unknown type or bad ID: the finding is refused, with an audit entry. |
+| The read values | Types from the schema; unknown attributes refused; default-deny (A4 step 1). | **Template and code escape.** A cloud value such as `${file("/etc/passwd")}` or `"); exec("...` must stay one literal. The encoder of each language (B9) escapes it; a parse after the render checks it before any plan or preview. | Size limit for each value and for the edit set (256 KiB). | - | A value that an encoder cannot encode, or that fails the round-trip parse, fails the job. |
+| Secret values and unclear values | A4 steps 1 to 3. | Only in sandbox memory, the plan step's environment (masked in the log), and the sealed profile draft. | The digest key lives one job. | The profile attachment of the unit decides which profile secrets the job compares, and who may publish the draft. | The upload guard (A4 step 8) on the runner, and the digest, pattern and entropy checks in the server (A4 step 6, B9). One hit: nothing is written. |
+| The plan file and the plan JSON | Parsed strictly; unknown action values are a failure. | Sealed at rest as a job plan of ADR 102, with the `secret` flag; shown only masked. | Size limit. | An unmasked read needs `unit:read-secrets`. | Anything but the pass rule of A7 is a fail. |
 | The team's repository | Read only at the job's commit. | Read in the sandbox; the engine runs no code of the repository other than the plan that the job already runs. | Parse limits: file count, file size, nesting depth. | The job's checkout scope. | A parse error drops the site, never the check. |
-| The patch, at the server | Paths relative, clean, in the code location; no CI configuration (ADR 101 decision 4); only files of the tool (`.tf`, `.tfvars`, `.tfvars.json` for OpenTofu; the language's source files and `Pulumi.<stack>.yaml` for Pulumi). | Applied as a text patch by the write-back executor, never through a shell. | 1 to 64 files, 256 KiB. | The deliver phase waits for the person; `unit:write-back`. | A path outside the rules refuses the whole patch, with an audit entry. |
-| The patch content, at the server | A second secret scan with the server's rules, without trust in the runner's guard. | - | - | - | A hit refuses the delivery. |
-| The plan JSON | Parsed strictly; unknown action values are a failure. | - | Size limit. | - | Anything but the pass rule of A7 is a fail. |
+| Placement: provenance (`sourcePosition`, `stackTrace`, instance addresses) | A source position must name a file inside the code location; a stack frame outside it is ignored. | A position selects a file to read; it is never a path that the engine writes. | At most 10,000 resources and 64 frames for each resource. | The unit's own state, read with the job token. | A position outside the code location drops the site. |
+| Placement: the configuration JSON and the collection definition | Strict JSON parse; a collection is a site only when it is a literal map or list in a file of the code location. | The server parses the file again at the commit before it applies an `add-map-entry` (B9). | Parse limits. | - | A collection that is not a literal drops the site. |
+| Placement: siblings in other units (B6) | Only units of the same namespace. | Only the expression kinds and the non-sensitive attribute values; never a sensitive value. | At most 200 sibling units. | The person of the job must hold `unit:read` on each sibling unit, checked at the read. | A unit that the person cannot read is skipped, and counted in the evidence. |
+| Placement: a shared module or shared path | A path that another unit declares, or a module directory that another unit calls, is a shared path. | - | - | An edit of a shared path needs the owner of that module or path: a separate review request to that owner, or no placement there (question 6). | No owner, or no right: the site is dropped, and the evidence says why. |
+| The typed edits, at the server | The schema of B9, unknown fields refused; each `expr` against the grammar and the symbols. | The server renders the text itself with the encoders; the runner's text is never used. | The bounds of B9. | The deliver phase waits for the person; `unit:write-back`. | One failing edit refuses the whole set, with an audit entry, before a review request exists. |
 | Dusty's choice | Must name one of the verified candidates of the job. | - | - | The person's grants at the time of the call. | Another value is refused. |
 
-A hostile runner can upload a patch that passed no check. The server cannot
-re-run the plan. The layers that stop the harm: the deliver phase waits for
-a person; the plan of the review request (ADR 299) runs again on a runner
-before any apply; the server's own path and secret checks. The change order
-shows that the check result came from the runner of a named pool.
+A hostile runner can send typed edits that passed no check, and report a
+check that it did not run. The server cannot re-run the plan. The layers that
+stop the harm, each on its own: the typed edits and their content checks in
+the server, the server's own render, the server's secret checks, the person's
+confirmation of the deliver phase, and the plan of the review request in the
+sandbox of RFC 122 before any apply. The change order shows that the check
+result came from the runner of a named pool.
 
 ## Is this a paper?
 
@@ -680,8 +877,8 @@ Option 2:
 
 1. Part A for OpenTofu and the six Pulumi languages, with the check as the
    only acceptance test.
-2. Write-back of code files for a `codify` change order, with the server's
-   own checks (question 1).
+2. Write-back of code for a `codify` change order as typed edits that the
+   server checks and renders (B9, question 1).
 3. Part B, OpenTofu first, Pulumi YAML next, then the other Pulumi
    languages.
 4. Part C: Dusty picks and explains verified candidates. A model as a
@@ -702,8 +899,13 @@ Option 2:
 
 - **ADR 100 and ADR 165.** The job operation `codify`, plan-like, on one
   target unit, with finding IDs. ADR 165 already asks for it.
-- **ADR 101 decision 4.** Write-back of code files for a `codify` change
-  order (question 1).
+- **ADR 101 decision 4.** A second kind of edit, codification edits: typed
+  edits of `codify-edit/1` that the server checks and renders, only for a
+  `codify` change order (B9, question 1).
+- **ADR 102.** The plan file and the plan JSON of a `codify` job are job
+  plans with the `secret` flag.
+- **RFC 122.** The plan of a codification review request runs as the plan of
+  an untrusted source.
 - **ADR 122.** The operation `codify` of `propose_change`. The catalog stays
   at 12 tools.
 - **RFC 123.** The `iac` entry of sweep report version 2 is the input of the
@@ -724,12 +926,17 @@ the team's repositories or in a trust boundary, so they stay.
   the generated code that names OpenDustpan or a finding. The link lives in
   the change order. Adding markers later is possible; removing them from
   merged code is not.
-- **Write-back of code.** Once the server writes source files to a forge, the
-  path rules of the patch are a security boundary that teams depend on.
+- **Write-back of code, and the edit schema.** Once the server writes source
+  files to a forge, the typed edit schema and its checks are a security
+  boundary that teams depend on. A free-text patch later would remove the
+  content checks.
+- **The non-secret list (A4).** Each entry lets a value of one attribute
+  into Git. An entry that let a secret through cannot be taken back from
+  merged code; the secret must be rotated.
 - **The check as the gate.** If a not-verified codification is ever offered
   for write-back, the guarantee is gone for every team that trusted it.
-- **The MPL-2.0 HCL library in the runner.** Once the runner's HCL edits
-  depend on it, a replacement is a rewrite.
+- **The MPL-2.0 HCL library in the runner and the server.** Once the
+  edits depend on it, a replacement is a rewrite.
 
 Two-way doors: the ranking weights, the fragment of B4, the number of
 candidates, the mapping table, the languages order.
@@ -741,9 +948,9 @@ Each slice ends with a test that names its pass fact.
 | Slice | Content | Pass |
 | --- | --- | --- |
 | 0. Benchmark | The leave-one-out harness and corpus (public projects with loops and modules, their state). The floor of the tools measured: the share of generated resources that plan clean. No product code. | A report with the numbers, in `docs/research/`. |
-| 1. Floor, OpenTofu | `codify` job, A2 to A7, the result as an artifact, the console shows the patch. No write-back. | e2e: a bucket in no unit; the job's patch plans "import 1, change 0", other resources no-op; a tag value with `${...}` stays a string; a sensitive attribute is a variable and the upload guard finds no value. |
+| 1. Floor, OpenTofu | `codify` job, A2 to A7, the typed edits and the encoders with their hostile corpus, the server checks of B9, the result as an artifact, the console shows the rendered diff. No write-back. | e2e: a bucket in no unit; its edits plan "import 1, change 0", other resources no-op; a tag value with `${...}` stays a string; a Lambda environment variable becomes a variable whose value is in a profile draft; the server refuses an edit set with a literal equal to a profile secret. |
 | 2. Floor, Pulumi | A8 for YAML, TypeScript and Python, then Go, C# and Java. | e2e for each language: the same pass rule with `pulumi preview`; no `secret("` literal in any file. |
-| 3. Write-back of code | ADR 101 decision 4 changed; change order with the patch; the plan of the review request runs the check again. | e2e: the review request opens; its plan passes; after the merge and the apply, the finding resolves. |
+| 3. Write-back of code | ADR 101 decision 4 changed; change order with the typed edits; the plan of the review request runs the check again in the sandbox of RFC 122. | e2e: the review request opens; its plan passes; after the merge and the apply, the finding resolves. |
 | 4. Ceiling, OpenTofu G2 and G3 | B3, B4, B5, B7, B8. | Benchmark: a stated share of resources gets a verified G2 or G3 candidate. e2e: a new bucket becomes a new key of the existing `for_each` map. |
 | 5. Ceiling, references and inputs | B6, G4 and G5. | e2e: `vpc_id` becomes the module output that siblings use. |
 | 6. Ceiling, Pulumi | B3 by source position, G2 for YAML and literal collections, the import step of B5. | e2e: a new item in a YAML loop list, with the import step. |
@@ -763,46 +970,93 @@ rules ask.
 - **Slices 7 and 8** belong in the agents milestone (milestone 10 in the
   roadmap today): they need Dusty runs and the change orders of agents.
 
+The placement in milestones and Dusty's role (part C: choose and explain
+first, model-written candidates last) are proposals that follow the roadmap
+rules and ADRs 125 and 128. They are not among the questions below. The
+owner can change them in the review of this RFC.
+
 ## Open questions for the owner
 
-1. **Write-back of code.** Should the write-back executor write source files
-   (new `.tf` files, new entries in `locals` and tfvars, Pulumi source files)
-   for a codification change order, when the patch passed the no-change
-   check and the server's own path and secret checks? Today it writes only
-   config and variable files (ADR 101 decision 4).
-   _ELI5: today the helper may only fill in forms. To bring a lost toy back
-   into the toy box, it must also write a new label on the box. A grown-up
-   reads the label before it goes on._
-2. **Reuse the tools, and one library.** Should the runner run the team's own
-   `tofu` and `pulumi` to write the first draft, and should the runner
-   repository link `github.com/hashicorp/hcl/v2` (MPL-2.0) to edit HCL and
-   keep comments? The server links neither.
-   _ELI5: the toy makers already have a machine that draws the toy. We use
-   their machine, and we borrow one pair of scissors to cut the drawing to
-   fit. The scissors have a license that we must accept._
-3. **Secrets.** Should a secret always become a reference (an OpenTofu
-   sensitive variable, a Pulumi secret config key), fed from a matching
-   profile secret or listed as a value the team must set, and never a value
-   in the repository, not even as ciphertext?
-   _ELI5: we never write the secret password on the box. We write "ask the
-   locked drawer", and if the drawer is empty we tell you to fill it._
-4. **Shared files.** In the first slices, should a codification edit only the
-   unit's own code location? Later, it could edit a shared module or a
-   shared tfvars file when the plan of every unit that declares that path
-   shows no change.
-   _ELI5: first we only tidy your own room. Later we may tidy the shared
-   hall, but only after we check that nobody else's things move._
-5. **Dusty's part.** Should Dusty only choose and explain among candidates
-   that passed the check in the first version, and propose code of its own
-   only in a later slice, under the same check?
-   _ELI5: first the robot picks the best of the drawings that already fit
-   the box. Later it may draw its own, but the box test is the same._
-6. **The milestone.** Should slices 0 to 6 go into the sweep plugin milestone
-   of RFC 123 (or the one right after it), and slices 7 and 8 into the
-   agents milestone? The alternative is "Later" for the ceiling (slices 4 to
-   6 and 8).
-   _ELI5: we put the "bring the toy back" work next to the "find lost toys"
-   work, and the robot's part next to the other robot work._
+1. **The form of code write-back.** How does the server write code for a
+   codification change order?
+   - A. Typed edits of `codify-edit/1`. The server checks their content and
+     renders the text with its own encoders (B9). **Recommended.**
+   - B. A text patch from the runner, with path checks only.
+   - C. No write-back. The console shows the diff, and a person copies it.
+
+   Recommendation: A. B lets a runner put any text in the team's repository.
+   C leaves the work to the person.
+   _ELI5: A: the helper sends a list of "add this toy to shelf 3", and we
+   put it there ourselves. B: the helper rearranges the shelf, and we only
+   check that it stayed in the right room. C: we show you a photo, and you
+   do it._
+2. **Who writes the first draft.** How does the runner get the first draft of
+   a resource?
+   - A. Run the team's own `tofu` and `pulumi` as processes
+     (`-generate-config-out`, `pulumi import --preview-only`), then the
+     minimizer and the typed edits. **Recommended.**
+   - B. Our own generator from the provider schema and the read values.
+   - C. A and B: our generator only where the tool's draft fails.
+
+   Recommendation: A. The tools already read through the provider with the
+   team's versions. B is more code and must follow every provider change.
+   _ELI5: A: the toy makers have a drawing machine, and we use it. B: we
+   build our own machine. C: we use theirs, and ours when theirs jams._
+3. **The HCL library.** May OpenDustpan link `github.com/hashicorp/hcl/v2`
+   (MPL-2.0)?
+   - A. In the runner and in the server. The server needs it to check and
+     apply an `add-map-entry` into an existing HCL file. **Recommended.**
+   - B. In the runner only. The server applies only edits that need no HCL
+     parse: new `.tf` files and `.tfvars.json` entries. A new entry of a
+     `for_each` map in `locals` is then not possible.
+   - C. Neither. We write a parser of the subset of HCL that we edit.
+
+   Recommendation: A. B removes the main case of the ceiling. C is a parser
+   that must match HCL exactly, which is a security risk of its own.
+   _ELI5: we need one pair of scissors to cut paper of this shape. A: the
+   helper and we both get scissors. B: only the helper, so we can only add
+   whole new pages. C: we make our own scissors._
+4. **Values that may be secrets.** Which values may go into Git as literals?
+   - A. Default-deny: only numbers, booleans, references and the entries of
+     a reviewed non-secret list with a shape; every other value goes to a
+     sealed profile draft that a person publishes (A4). **Recommended.**
+   - B. Only the values that the provider marks sensitive, and the names
+     that the credential words match, become references.
+   - C. Only the values that the provider marks sensitive.
+
+   Recommendation: A. B and C let a password in a Lambda environment
+   variable or in user data into Git.
+   _ELI5: A: nothing goes on the label unless we know it is safe; everything
+   else goes into the locked drawer. B: we lock away what looks like a key.
+   C: we lock away only what the toy maker called a key._
+5. **Protection of an imported resource.** Does a codified resource get
+   protection from a delete?
+   - A. Follow the siblings (B6): `prevent_destroy` or `protect` when the
+     team's resources of that type have it; else protection on.
+     **Recommended.**
+   - B. Always on: Pulumi `protect: true` (the default of `pulumi import`)
+     and OpenTofu `prevent_destroy = true`.
+   - C. Never.
+
+   Recommendation: A. Nobody planned the life of a resource that was
+   unmanaged, so a delete by mistake must not be easy; but a team whose
+   resources have no protection would remove it from every codification.
+   _ELI5: a toy we found goes back in the box with a "do not throw away"
+   sticker, unless the other toys in that box never have one._
+6. **Shared modules and shared paths.** May a codification edit a module
+   directory or a path that another unit uses?
+   - A. No, in the first slices. Only the unit's own code location.
+     **Recommended for now.**
+   - B. Yes, with the owner of that module or path: a separate review request
+     to that owner, and the no-change check on every unit that declares the
+     path.
+   - C. Never. A resource that fits only a shared module gets a new block in
+     the unit.
+
+   Recommendation: A now, then B in a later slice. C loses the cases where
+   the module is the right place.
+   _ELI5: first we only tidy your own room. Later we may put a toy on the
+   shared shelf, but only when the person who owns that shelf says yes._
 
 ## Checklist
 
