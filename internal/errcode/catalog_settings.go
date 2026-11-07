@@ -10,6 +10,9 @@ const (
 	// SettingsPatchInvalid means that the change is not one JSON object of settings with a string, a boolean, a
 	// whole number or null for each value.
 	SettingsPatchInvalid = "settings.patch-invalid"
+	// SettingsRetentionInvalid means that a retention setting is not a duration from one day to ten years, so the
+	// server does not start.
+	SettingsRetentionInvalid = "settings.retention-invalid"
 	// SettingsStaticOnly means that only the static layer can set the setting.
 	SettingsStaticOnly = "settings.static-only"
 	// SettingsUnavailable means that the store of the server keeps no settings.
@@ -35,6 +38,12 @@ func settingsSpecs() []Spec {
 			Meaning: "the change is not one JSON object of settings with a string, a boolean, a whole number " +
 				"or null for each value",
 			Args: nil,
+		},
+		{
+			Code: SettingsRetentionInvalid,
+			Meaning: "a retention setting is not a duration from one day to ten years, " +
+				"so the server does not start",
+			Args: []Arg{{Name: "setting", Kind: KindIdentifier}},
 		},
 		{
 			Code:    SettingsStaticOnly,

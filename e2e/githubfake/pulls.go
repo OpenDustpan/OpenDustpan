@@ -91,6 +91,7 @@ func (f *Fake) AddFork(parent, fork string) error {
 	}
 
 	f.repos[fork] = &repo{
+		statuses:      map[string][]CommitStatus{},
 		name:          fork,
 		id:            f.nextRepoID(),
 		defaultBranch: src.defaultBranch,
@@ -492,10 +493,14 @@ type pullRequest struct {
 	Base  string `json:"base"`
 }
 
+// validationFailed is the message of GitHub for a request that it does not
+// accept.
+const validationFailed = "Validation Failed"
+
 // invalidField answers 422 for a field of a pull request.
 func (f *Fake) invalidField(w http.ResponseWriter, field string) {
 	f.writeJSON(w, http.StatusUnprocessableEntity, wireValidation{
-		Message: "Validation Failed",
+		Message: validationFailed,
 		Errors:  []wireValidationError{{Resource: "PullRequest", Field: field, Code: "invalid", Message: ""}},
 	})
 }
@@ -504,7 +509,7 @@ func (f *Fake) invalidField(w http.ResponseWriter, field string) {
 // requests.
 func (f *Fake) customProblem(w http.ResponseWriter, text string) {
 	f.writeJSON(w, http.StatusUnprocessableEntity, wireValidation{
-		Message: "Validation Failed",
+		Message: validationFailed,
 		Errors:  []wireValidationError{{Resource: "PullRequest", Field: "", Code: "custom", Message: text}},
 	})
 }

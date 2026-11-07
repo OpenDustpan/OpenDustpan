@@ -189,6 +189,10 @@ func (f *fake) ForkReview(context.Context, string, string) (string, error) {
 
 func (f *fake) SetMergeState(context.Context, string, string) error { return errNotImplemented }
 
+func (f *fake) Statuses(context.Context, string) ([]forge.Status, error) {
+	return nil, errNotImplemented
+}
+
 func (f *fake) Oversize(context.Context) (func(), error) { return nil, errNotImplemented }
 
 func (f *fake) Event(context.Context, forge.EventKind, []byte) (forge.EventRequest, error) {

@@ -57,6 +57,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -328,8 +329,12 @@ type serveFlags struct {
 	auditChain              string
 	softDeleteRetention     string
 	// retention is softDeleteRetention after the check.
-	retention  time.Duration
-	auditSinks []string
+	retention time.Duration
+	// planRetention and jobLogRetention are the retention flags. jobRetention is
+	// their value after the check.
+	planRetention, jobLogRetention string
+	jobRetention                   history.RetentionSettings
+	auditSinks                     []string
 	// destinationPorts holds the ports, besides 443, that a notification
 	// destination may use.
 	destinationPorts string
@@ -395,6 +400,10 @@ func (f *serveFlags) check() error {
 	}
 
 	f.retention = retention
+
+	if err := f.checkJobRetention(); err != nil {
+		return err
+	}
 
 	if err := f.checkCheckpointFlags(); err != nil {
 		return err
@@ -542,6 +551,7 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
 	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
+	f.registerJobRetention(fs)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -1110,6 +1120,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),
 		dustpan.WithSoftDeleteRetention(f.retention),
+		dustpan.WithRetention(f.jobRetention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),

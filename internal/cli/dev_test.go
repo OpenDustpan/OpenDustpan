@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
@@ -49,7 +50,7 @@ func TestDevFlagSet(t *testing.T) {
 	}
 
 	want := []string{
-		"data-dir", "ephemeral", "listen", "tls", "hostname", "admin-token-file", "console-dir", "log-level",
+		"data-dir", "demo", "ephemeral", "listen", "tls", "hostname", "admin-token-file", "console-dir", "log-level",
 		"log-format", "disable-pulumi-journaling", "max-checkpoint-bytes", "max-secret-batch-bytes",
 		"max-state-bytes", "max-body-bytes-in-flight", "blob-cache-bytes",
 	}
@@ -142,4 +143,28 @@ func TestDevByFlagPanicsOnUnknown(t *testing.T) {
 	}()
 
 	cli.DevByFlag("database")
+}
+
+// TestDemoIsOnlyAFlagOfDev proves that --demo is a flag of dev and of no other
+// command: serve has no flag, variable or file key for the demo person.
+func TestDemoIsOnlyAFlagOfDev(t *testing.T) {
+	t.Parallel()
+
+	if got := cli.DevByFlag("demo"); got.Env != "" || got.File != "" {
+		t.Fatalf("dev --demo has the variable %q and the file key %q, want none", got.Env, got.File)
+	}
+
+	for _, s := range cli.Settings {
+		for _, name := range []string{s.Flag, s.Env, s.File} {
+			if strings.Contains(strings.ToLower(name), "demo") {
+				t.Errorf("serve setting %q names the demo person: %q", s.Flag, name)
+			}
+		}
+	}
+
+	for _, s := range cli.ServeFlags() {
+		if s.Flag == "demo" {
+			t.Error("serve takes the flag --demo")
+		}
+	}
 }

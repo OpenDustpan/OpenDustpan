@@ -33,6 +33,7 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/compare/{spec...}", f.compare)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/statuses/{sha}", f.createStatus)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/{ref...}", f.getRef)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
@@ -464,8 +465,20 @@ func (f *Fake) compare(w http.ResponseWriter, r *http.Request) {
 
 	f.writeJSON(w, http.StatusOK, map[string]any{
 		"status": status, "ahead_by": aheadBy, "behind_by": behindBy,
-		"merge_base_commit": map[string]string{"sha": mergeBase},
+		"merge_base_commit": map[string]string{"sha": mergeBase}, "files": rp.changedBetween(mergeBase, head, r),
 	})
+}
+
+// changedBetween returns the page of the files that changed from the commit
+// with the ID mergeBase to head. A merge base that the repository does not
+// have, for two lines of history that never meet, gives no file.
+func (r *repo) changedBetween(mergeBase string, head *commit, req *http.Request) []map[string]string {
+	mb := r.commits[mergeBase]
+	if mb == nil {
+		return []map[string]string{}
+	}
+
+	return pagedFiles(diffFiles(r, mb, head), req)
 }
 
 // refPrefix starts the full name of a branch.

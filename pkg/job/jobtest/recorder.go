@@ -83,6 +83,20 @@ func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopea
 func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	t.Helper()
 
+	return NewRecorderHarnessWithRetention(
+		t,
+		parts,
+		history.RetentionSettings{Plan: planRetention, JobLog: logRetention},
+	)
+}
+
+// NewRecorderHarnessWithRetention is NewRecorderHarness with the retention
+// periods that the recorder applies to new plans and log versions.
+func NewRecorderHarnessWithRetention(
+	t *testing.T, parts RecorderParts, retention history.RetentionSettings,
+) RecorderHarness {
+	t.Helper()
+
 	wrapper := parts.Wrapper
 	if wrapper == nil {
 		key := make([]byte, keyBytes)
@@ -115,8 +129,6 @@ func NewRecorderHarness(t *testing.T, parts RecorderParts) RecorderHarness {
 	if err != nil {
 		t.Fatalf("artifact blobs: %v", err)
 	}
-
-	retention := history.RetentionSettings{Plan: planRetention, JobLog: logRetention}
 
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: parts.Records, Jobs: parts.Harness.Jobs, Blobs: artifacts, Sealer: sealer,

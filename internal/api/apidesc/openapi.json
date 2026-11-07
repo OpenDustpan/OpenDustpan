@@ -1127,6 +1127,7 @@
             "restore.swapped": "#/components/schemas/RestoreSwappedError",
             "schema.binary-below-minimum": "#/components/schemas/SchemaBinaryBelowMinimumError",
             "settings.locked": "#/components/schemas/SettingsLockedError",
+            "settings.retention-invalid": "#/components/schemas/SettingsRetentionInvalidError",
             "settings.static-only": "#/components/schemas/SettingsStaticOnlyError",
             "settings.value-invalid": "#/components/schemas/SettingsValueInvalidError",
             "sink.test-rate-limited": "#/components/schemas/SinkTestRateLimitedError",
@@ -1184,6 +1185,9 @@
           },
           {
             "$ref": "#/components/schemas/SettingsLockedError"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsRetentionInvalidError"
           },
           {
             "$ref": "#/components/schemas/SettingsStaticOnlyError"
@@ -1428,6 +1432,7 @@
           "settings.key-unknown",
           "settings.locked",
           "settings.patch-invalid",
+          "settings.retention-invalid",
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
@@ -4750,6 +4755,47 @@
         "required": [
           "key",
           "source"
+        ],
+        "type": "object"
+      },
+      "SettingsRetentionInvalidError": {
+        "description": "The error answer with the code settings.retention-invalid.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/SettingsRetentionInvalidErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "settings.retention-invalid"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "SettingsRetentionInvalidErrorArgs": {
+        "description": "The arguments of the text of the error with the code settings.retention-invalid.",
+        "properties": {
+          "setting": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting"
         ],
         "type": "object"
       },

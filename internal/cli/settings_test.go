@@ -205,6 +205,7 @@ func TestStepInputsMatchTheLauncher(t *testing.T) {
 	want := []string{
 		launcher.EnvJob, launcher.EnvPhase, launcher.EnvStep, launcher.EnvUnit,
 		launcher.EnvNamespace, launcher.EnvCommit, launcher.EnvServer, launcher.EnvSweepReport,
+		launcher.EnvHelperSocket,
 	}
 
 	var got []string
@@ -360,6 +361,31 @@ func TestFileKeysAreUnique(t *testing.T) {
 		// has no file key and no variable on purpose: only the flag sets it.
 		if s.File == "" && s.Flag != "config" && s.Flag != cli.UnsafeAllowDevBackupsFlag {
 			t.Errorf("serve flag --%s has no file key", s.Flag)
+		}
+	}
+}
+
+// TestRetentionSettingsAreInTheSettingsAPI proves that the settings resource
+// declares both retention settings with the history default, so the API shows
+// the effective value.
+func TestRetentionSettingsAreInTheSettingsAPI(t *testing.T) {
+	t.Parallel()
+
+	declared := map[string]string{}
+	for _, d := range cli.SettingDeclarations() {
+		declared[d.Key] = d.Default
+	}
+
+	for _, key := range []string{history.PlanRetentionFlag, history.JobLogRetentionFlag} {
+		def, ok := declared[key]
+		if !ok {
+			t.Errorf("settings resource does not declare %s", key)
+
+			continue
+		}
+
+		if d, err := time.ParseDuration(def); err != nil || d != history.DefaultRetention {
+			t.Errorf("settings resource default of %s = %q, want %s", key, def, history.DefaultRetention)
 		}
 	}
 }
