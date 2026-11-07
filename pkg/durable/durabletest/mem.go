@@ -879,13 +879,15 @@ func (s memStore) LastBeat(_ context.Context) (durable.Beat, error) {
 
 	beat := durable.Beat{Owner: "", At: time.Time{}, Lease: 0, Now: s.db.clock(s.skew)}
 
-	var validUntil time.Time
+	var validUntil int64
 
 	for owner, b := range s.db.beats {
-		until := b.at.Add(2 * b.lease)
+		// The same int64 millisecond sum as the SQL stores, so a long lease
+		// cannot overflow time.Duration.
+		until := b.at.UnixMilli() + 2*b.lease.Milliseconds()
 
-		if beat.Owner == "" || until.After(validUntil) ||
-			(until.Equal(validUntil) && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {
+		if beat.Owner == "" || until > validUntil ||
+			(until == validUntil && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {
 			beat.Owner, beat.At, beat.Lease, validUntil = owner, b.at, b.lease, until
 		}
 	}
