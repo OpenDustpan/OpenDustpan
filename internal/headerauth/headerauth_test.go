@@ -279,13 +279,15 @@ func TestParseALBKeyRefusesAnyOtherKey(t *testing.T) {
 	p384PEM := encodeKey(t, p384.Public()).pem
 
 	for name, body := range map[string][]byte{
-		"an RSA key":         rsaPEM,
-		"an Ed25519 key":     edPEM,
-		"a P-384 key":        p384PEM,
-		"two blocks":         slices.Concat(ecPEM, ecPEM),
-		"a certificate type": []byte(strings.Replace(string(ecPEM), "PUBLIC KEY", "CERTIFICATE", 2)),
-		"no PEM":             []byte(`{"keys":[]}`),
-		"empty":              nil,
+		"an RSA key":                    rsaPEM,
+		"an Ed25519 key":                edPEM,
+		"a P-384 key":                   p384PEM,
+		"two blocks":                    slices.Concat(ecPEM, ecPEM),
+		"a certificate type":            []byte(strings.Replace(string(ecPEM), "PUBLIC KEY", "CERTIFICATE", 2)),
+		"no PEM":                        []byte(`{"keys":[]}`),
+		"empty":                         nil,
+		"a key after junk":              slices.Concat([]byte("junk\n"), ecPEM),
+		"a key after a malformed block": slices.Concat([]byte("-----BEGIN CERTIFICATE-----\nAAAA\n"), ecPEM),
 	} {
 		if _, err := headerauth.ParseALBKey(body); !errors.Is(err, session.ErrMethodUnavailable) {
 			t.Fatalf("%s: ParseALBKey() = %v, want %v", name, err, session.ErrMethodUnavailable)

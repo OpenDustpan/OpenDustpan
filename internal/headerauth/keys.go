@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"unicode"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -327,8 +328,19 @@ func (c *keyCache) readALBKey(ctx context.Context, u string) (*ecdsa.PublicKey, 
 func ParseALBKey(body []byte) (*ecdsa.PublicKey, error) {
 	errKey := unavailable("the key of the load balancer is not a P-256 public key")
 
+	// Reject data before the block: pem.Decode would discard it, and with it
+	// a malformed block that precedes a valid one.
+	start := len(body) - len(bytes.TrimLeftFunc(body, unicode.IsSpace))
+	if !bytes.HasPrefix(body[start:], []byte("-----BEGIN ")) {
+		return nil, errKey
+	}
+
 	block, rest := pem.Decode(body)
 	if block == nil || block.Type != "PUBLIC KEY" || len(bytes.TrimSpace(rest)) != 0 || len(block.Headers) != 0 {
+		return nil, errKey
+	}
+
+	if bytes.Count(body[start:len(body)-len(rest)], []byte("-----BEGIN ")) != 1 {
 		return nil, errKey
 	}
 
