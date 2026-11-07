@@ -274,7 +274,10 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -953,7 +956,10 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -980,7 +986,10 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1009,7 +1018,10 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1942,7 +1954,10 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

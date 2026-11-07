@@ -113,7 +113,10 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -893,7 +896,10 @@ func newPagingHandlerWith(t *testing.T, authz identity.Authorizer, ws tfe.Worksp
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

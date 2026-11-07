@@ -127,7 +127,7 @@ func newConflictHandlerOver(t *testing.T, workspaces tfe.WorkspaceService) *tfe.
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -437,7 +437,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

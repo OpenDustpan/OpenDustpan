@@ -179,6 +179,7 @@ func TestLockRoutesAnswerCodes(t *testing.T) {
 		Sessions:       nil,
 		SessionPolicy:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

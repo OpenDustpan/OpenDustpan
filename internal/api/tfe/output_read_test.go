@@ -58,7 +58,7 @@ func newOutputHandler(t *testing.T, authz identity.Authorizer, checker outputsha
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -351,7 +351,7 @@ func TestOutputRoutesKeepWholeStateChecksForAJobToken(t *testing.T) {
 				Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: workspaces,
 				OutputChecker: newTestOutputChecker(t, authz, workspaces), BaseURL: baseurl.Resolver{},
 				Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-				Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+				Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

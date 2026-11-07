@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -265,7 +266,17 @@ func (h *Handler) workspaceOf(
 ) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
-		return ws, err
+		if err != nil {
+			return ws, err
+		}
+
+		// A workspace that no collection holds takes no LOCK and no state.
+		obj, objErr := unitObject(c.ref)
+		if objErr != nil {
+			return workspace.Workspace{}, objErr
+		}
+
+		return ws, h.placer.Require(ctx, obj)
 	}
 
 	ws, err = h.createWorkspace(ctx, c, admit)
@@ -298,11 +309,15 @@ func (h *Handler) createWorkspace(
 	// The job of the token, if any, decides whether a manual lock of the
 	// namespace applies to the create: the phase of a job that started before
 	// the lock passes it, as it does for the LOCK that follows.
-	// The handler chooses no collection yet, so the workspace service refuses
-	// the create with collection.ErrNoCollection and makes no workspace.
-	var noPlacement workspace.Placement
+	placement, err := h.placer.Place(ctx, tofuunit.PlaceRequest{
+		Request: c.request, Principal: c.principal, Ref: c.ref, Guard: h.guard,
+		Namespaces: h.namespaces, Workspaces: h.ws,
+	})
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
 
-	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref, noPlacement)
+	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref, placement)
 }
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current

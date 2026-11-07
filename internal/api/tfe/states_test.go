@@ -186,7 +186,7 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -821,7 +821,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1124,7 +1124,7 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1246,7 +1246,7 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
