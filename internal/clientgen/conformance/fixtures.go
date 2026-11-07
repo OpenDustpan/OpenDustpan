@@ -325,6 +325,9 @@ func writeSeed(ctx context.Context, env Env) error {
 			return readErr
 		}
 
+		// Defense in depth: ensureProfile reads the profile again and checks the
+		// same condition. This check stays so that a conflict is never counted as
+		// success without a readable profile, even if a caller skips that read.
 		if existing.status != http.StatusOK || existing.header.Get("ETag") == "" {
 			return failf("the harness could not read the seed profile: %d %s", existing.status, existing.body)
 		}

@@ -89,6 +89,9 @@ func (d *data) addTypes(api *model.API, seen map[string]string) error {
 			return err
 		}
 
+		// Defense in depth: the schema name check already refuses some names that
+		// would clash with a decoder. This claim stays so that a future name rule
+		// cannot allow a name that the decoder of another schema would take.
 		if err := claim(seen, "decode"+s.Name, "the decoder of schema "+s.Name, clientgen.ErrInvalidName); err != nil {
 			return err
 		}
