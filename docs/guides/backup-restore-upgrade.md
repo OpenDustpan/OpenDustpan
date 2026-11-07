@@ -506,7 +506,7 @@ operator's own store, not from a source that others can change.
 
 ## What this guide does not cover
 
-These items are not in milestone 3.
+These items are not in this release.
 
 - Backup schedules and retention.
 - Backups of one namespace.
