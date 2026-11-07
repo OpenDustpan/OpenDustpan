@@ -69,18 +69,22 @@ func (h *Handler) logFenced(ctx context.Context, err error) {
 	}
 }
 
-// logRefused logs the wrap text of a protocol error that the answer does not
-// hold. A fence has its own line, and an unknown error holds no text for the
-// log: its answer is "internal error" and logFailure records the status. A
-// refusal that any anonymous caller can cause logs at Debug, so that a flood
-// of forged requests does not fill the log.
+// logRefused logs a refusal whose answer does not hold its error text. A fence
+// has its own line, and an unknown error holds no text for the log: its answer
+// is "internal error" and logFailure records the status. A refusal that any
+// anonymous caller can cause logs at Debug without the text of its error, so
+// that a flood of forged requests does not fill the log and no wrapped secret
+// reaches it. Other refusals log the text at Warn.
 func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
 	if sent == err.Error() || sent == internalMessage || errors.Is(err, namespace.ErrFenced) {
 		return
 	}
 
 	if refusedLevel(err) == slog.LevelDebug {
-		h.logger.DebugContext(ctx, "runner request refused", slog.String("error", err.Error()))
+		// Defense in depth: a caller without credentials causes this line, and the
+		// wrap of its error can hold a session or proof detail. The line names no
+		// text of err, and this check stays so that a new caller cannot add it.
+		h.logger.DebugContext(ctx, "runner request refused")
 
 		return
 	}
