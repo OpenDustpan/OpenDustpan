@@ -10,26 +10,32 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// quickstartNamespace is the namespace of the quickstart guide. The harness
-// holds a catch-all placement rule in its own namespace only, so a stack here
-// meets a server as `serve` leaves it: with no rule.
-const quickstartNamespace = "acme"
+// quickstartNamespace is the namespace that the test makes in place of the
+// namespace "acme" of the guide. The harness makes the namespace "acme" and
+// puts a catch-all placement rule in it, so a stack there would not meet a
+// server as `serve` leaves it. This namespace has no rule.
+const quickstartNamespace = "firststack"
+
+// quickstartGuideNamespace is the namespace in the curl commands of the guide.
+const quickstartGuideNamespace = "acme"
+
+// quickstartGuide is the path of the guide, from the e2e directory.
+const quickstartGuide = "docs/guides/quickstart.md"
 
 // quickstartWorkspace is the OpenTofu workspace of the quickstart guide.
 const quickstartWorkspace = "web"
 
 // quickstartFileMode is the mode of the files that the steps write.
 const quickstartFileMode = 0o600
-
-// quickstartCollection is the collection that the quickstart guide makes.
-const quickstartCollection = "everything"
 
 // TestQuickstartFirstStack runs the commands of docs/guides/quickstart.md in
 // their order on a server that holds no placement rule except the one of the
@@ -93,8 +99,9 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 
 	checkReady(ctx, t, env)
 
-	// "opendustpan namespace create ... acme" makes the namespace through this
-	// route of the installation API.
+	// The harness made "acme" with a rule, so this namespace stands in for it.
+	// "opendustpan namespace create" makes a namespace through this route of the
+	// installation API.
 	quickstartCall(ctx, t, env, quickstartRequest{"/api/server/namespaces", `{"name":"` + quickstartNamespace + `"}`})
 
 	stackRef := quickstartNamespace + "/" + e2e.Project + "/dev"
@@ -113,13 +120,11 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 		return nil
 	}, "stack", "init", stackRef, "--no-select"))
 
-	// The two curl commands of the quickstart guide.
-	base := "/api/dustpan/v1/namespaces/" + quickstartNamespace
-	quickstartCall(ctx, t, env, quickstartRequest{base + "/collections", `{"name":"` + quickstartCollection + `"}`})
-	quickstartCall(ctx, t, env, quickstartRequest{
-		base + "/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collection":"` + quickstartCollection + `"}`,
-	})
+	// The two curl commands of the guide. The test reads them from the guide, so
+	// it fails when the guide loses a step or changes a route or a body.
+	for _, req := range quickstartGuideRequests(t, quickstartNamespace) {
+		quickstartCall(ctx, t, env, req)
+	}
 
 	env.Step(ctx, t, step("stack init after the rule", nil, "stack", "init", stackRef, "--no-select"))
 
@@ -145,6 +150,75 @@ func quickstartCall(ctx context.Context, t *testing.T, env *e2e.Env, c quickstar
 type quickstartRequest struct {
 	path string
 	body string
+}
+
+var (
+	// quickstartCurlURL finds the route in a curl command of the guide.
+	quickstartCurlURL = regexp.MustCompile(`https://localhost:8080(/api/dustpan/v1/namespaces/\S+)`)
+	// quickstartCurlBody finds the JSON body in a curl command of the guide.
+	quickstartCurlBody = regexp.MustCompile(`-d '([^']*)'`)
+)
+
+// quickstartGuideRequests reads the curl commands of the guide that call the
+// namespace routes and returns their requests in the order of the guide, with
+// the namespace of the guide replaced by namespace. The guide repeats the
+// commands for the compose stack, so a request that appears again is kept once.
+// It fails unless the guide has exactly the collection request and then the
+// placement rule request.
+func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest {
+	t.Helper()
+
+	root, err := os.OpenRoot("..")
+	if err != nil {
+		t.Fatalf("open the repository root: %v", err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close the repository root: %v", closeErr)
+		}
+	}()
+
+	guide, err := root.ReadFile(quickstartGuide)
+	if err != nil {
+		t.Fatalf("read the guide %s: %v", quickstartGuide, err)
+	}
+
+	// A curl command spans several lines. A backslash ends each line but the last.
+	text := strings.ReplaceAll(string(guide), "\\\n", " ")
+
+	var requests []quickstartRequest
+
+	for line := range strings.Lines(text) {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "curl ") {
+			continue
+		}
+
+		route := quickstartCurlURL.FindStringSubmatch(line)
+		body := quickstartCurlBody.FindStringSubmatch(line)
+
+		if route == nil || body == nil {
+			continue
+		}
+
+		from := "/namespaces/" + quickstartGuideNamespace + "/"
+		to := "/namespaces/" + namespace + "/"
+		req := quickstartRequest{path: strings.Replace(route[1], from, to, 1), body: body[1]}
+
+		if !slices.Contains(requests, req) {
+			requests = append(requests, req)
+		}
+	}
+
+	if len(requests) != 2 ||
+		!strings.HasSuffix(requests[0].path, "/collections") ||
+		!strings.HasSuffix(requests[1].path, "/placement-rules") {
+		t.Fatalf("the guide %s must hold a curl command for the collection and then one for the placement rule, got %v",
+			quickstartGuide, requests)
+	}
+
+	return requests
 }
 
 // quickstartTofu runs the OpenTofu part of the guide: a main.tf with a cloud
@@ -231,13 +305,10 @@ func quickstartPlacement(ctx context.Context, t *testing.T, host, token, cert st
 	}}
 	t.Cleanup(client.CloseIdleConnections)
 
-	base := "https://" + host + "/api/dustpan/v1/namespaces/" + composeNamespace
+	for _, call := range quickstartGuideRequests(t, composeNamespace) {
+		target := "https://" + host + call.path
 
-	for _, call := range []struct{ path, body string }{
-		{"/collections", `{"name":"` + quickstartCollection + `"}`},
-		{"/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"` + quickstartCollection + `"}`},
-	} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+call.path, strings.NewReader(call.body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(call.body))
 		if err != nil {
 			t.Fatalf("build the request for %s: %v", call.path, err)
 		}

@@ -67,7 +67,7 @@ curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
-For the compose stack, run the same two calls with `--cacert deploy/compose/tls/cert.pem` and the token from `deploy/compose/.env`.
+The collection must exist before the rule. For the compose stack, use the two calls of the compose section.
 
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
@@ -109,7 +109,19 @@ docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
 ```
 
-Then make a collection and a placement rule in the namespace, as the end of the previous section shows. From the host, the server is at `https://localhost:8080` and the certificate is `deploy/compose/tls/cert.pem`.
+Then make a collection and one placement rule in the namespace. The server refuses a new Pulumi stack that no rule matches. Run this from `deploy/compose`, where `.env` and `tls/` are:
+
+```sh
+curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
+curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+```
+
+Set `DUSTPAN_ADMIN_TOKEN` first, as [Connect the Pulumi CLI](#connect-the-pulumi-cli) shows. If you changed `OPENDUSTPAN_PORT`, use that port in place of 8080.
 
 The server is at `https://localhost:8080`. The certificate file is `deploy/compose/tls/cert.pem`. To use another host port, set `OPENDUSTPAN_PORT` in `.env`.
 
