@@ -5,6 +5,7 @@ Status: accepted · 2026-10-18 · supersedes ADR 101 decision 10 in part · answ
 Changed by:
 
 - ADR 204 extends: the open question on a token issuer, in part.
+- ADR 350 extends decision 2: the join token is the only way to add a runner, also for users who come from TFE agents.
 
 ## Context
 
