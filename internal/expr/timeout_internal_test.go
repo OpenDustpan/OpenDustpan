@@ -49,7 +49,10 @@ func TestNewTimeLimit(t *testing.T) {
 }
 
 // TestWorkLayer checks the work budget alone: the time limit is a minute, the
-// environment is under its limit, and the run still ends at the budget.
+// environment is under its limit, and the run still ends at the budget. The
+// error proves which layer ended the run: errWork comes only from the meter,
+// and the time limit of a minute cannot end it first. The test reads no wall
+// clock, so the load of the machine cannot change its result.
 func TestWorkLayer(t *testing.T) {
 	t.Parallel()
 
@@ -65,16 +68,14 @@ func TestWorkLayer(t *testing.T) {
 	}
 	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
-	start := time.Now()
-
 	_, err := e.run(t.Context(), "none(request.requester.groups, {inputs.big matches '^(a|b|ab|ba)*c$'})",
 		selfservice.ResultBool, env)
 	if !errors.Is(err, errWork) || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("run() = %v, want the work budget error", err)
 	}
 
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("run() took %v, want less than 1s", elapsed)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errAlive) {
+		t.Fatalf("run() = %v, want the work budget and not the time limit to end the run", err)
 	}
 }
 
