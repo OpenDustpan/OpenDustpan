@@ -115,6 +115,9 @@ var (
 	// an epoch that differs from its directory, a hash that differs from
 	// the entry at its sequence, or a bad epoch object.
 	ErrCheckpointMismatch = errors.New("audit checkpoint does not match")
+	// ErrInvalidEpoch reports a negative epoch that a caller passed to
+	// VerifyAt or WriteAt. An epoch read from the store is never negative.
+	ErrInvalidEpoch = errors.New("invalid audit checkpoint epoch: want 0 or more")
 	// ErrInvalidVerifyKey reports a verify key that is not a 32-byte
 	// Ed25519 public key.
 	ErrInvalidVerifyKey = errors.New("invalid audit verify key: want a base64 32-byte Ed25519 public key")
@@ -760,6 +763,12 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 // immediately before the store of a new checkpoint. When that read differs
 // from epoch, it stores nothing and answers false and no error.
 func (c *Checkpoints) WriteAt(ctx context.Context, scope namespace.Name, now time.Time, epoch int64) (bool, error) {
+	// Defense in depth: the epoch comes from the caller, and no other layer
+	// of the write checks its range before the key of the scope uses it.
+	if epoch < 0 {
+		return false, fmt.Errorf("audit checkpoint of %s at epoch %d: %w", scope, epoch, ErrInvalidEpoch)
+	}
+
 	return c.writeWith(ctx, scope, now, &epoch)
 }
 
@@ -790,6 +799,13 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 // scope for a bad epoch object. The Epoch read of the caller must have checked
 // them, and the caller must not call VerifyAt with an epoch from a failed read.
 func (c *Checkpoints) VerifyAt(ctx context.Context, scope namespace.Name, epoch int64) (CheckpointResult, error) {
+	// Defense in depth: the epoch comes from the caller, and no other layer
+	// of the check looks at its range before the directory of the scope uses it.
+	if epoch < 0 {
+		return CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: false},
+			fmt.Errorf("audit checkpoints of %s at epoch %d: %w", scope, epoch, ErrInvalidEpoch)
+	}
+
 	return c.verifyWith(ctx, scope, &epoch)
 }
 

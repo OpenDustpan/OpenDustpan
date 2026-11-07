@@ -152,7 +152,7 @@ func TestCheckFailsClosedWhenTheEpochReadFails(t *testing.T) {
 	t.Parallel()
 
 	chain, counted, _ := newEpochCycleChain(t)
-	chain.observed = metrics.NewServerMetrics("test", time.Now())
+	chain.observed = metrics.NewServerMetrics("test", time.Unix(1_700_000_000, 0))
 
 	rec, err := chain.store.ChainRecord(t.Context())
 	if err != nil {

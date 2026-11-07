@@ -2,7 +2,10 @@ package audit_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -120,5 +123,39 @@ func TestCheckpointsWriteAtStopsAfterAnEpochChange(t *testing.T) {
 		if !strings.Contains(string(o.Key), "/epochs/") {
 			t.Fatalf("checkpoint %s stored after an epoch change", o.Key)
 		}
+	}
+}
+
+// TestCheckpointsAtRefuseANegativeEpoch proves that VerifyAt and WriteAt fail
+// closed on an epoch below zero: they answer ErrInvalidEpoch and store
+// nothing.
+func TestCheckpointsAtRefuseANegativeEpoch(t *testing.T) {
+	t.Parallel()
+
+	for _, epoch := range []int64{-1, -2, math.MinInt64} {
+		t.Run(strconv.FormatInt(epoch, 10), func(t *testing.T) {
+			t.Parallel()
+
+			f := newCheckpointFixture(t, 2)
+
+			wrote, err := f.cps.WriteAt(t.Context(), "acme", time.Unix(1_700_000_000, 0), epoch)
+			if !errors.Is(err, audit.ErrInvalidEpoch) || wrote {
+				t.Fatalf("write at %d: wrote %v, err %v, want false and ErrInvalidEpoch", epoch, wrote, err)
+			}
+
+			res, err := f.cps.VerifyAt(t.Context(), "acme", epoch)
+			if !errors.Is(err, audit.ErrInvalidEpoch) || res.Valid {
+				t.Fatalf("verify at %d: %+v, err %v, want invalid and ErrInvalidEpoch", epoch, res, err)
+			}
+
+			objects, err := blobtest.ListAll(t.Context(), f.blobs, audit.CheckpointPrefix+"/")
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+
+			if len(objects) != 0 {
+				t.Fatalf("objects after a refused epoch %d: got %d, want none", epoch, len(objects))
+			}
+		})
 	}
 }
