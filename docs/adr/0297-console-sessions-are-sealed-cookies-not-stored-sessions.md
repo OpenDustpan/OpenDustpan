@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 301 extends decision 1: the kinds of fresh authentication in the access
   cookie gain `totp` and `ssh-signature`.
+- ADR 333 extends decision 4: the WebAuthn challenge of a passkey sign-in is a sealed cookie, not a stored row.
 
 Changes:
 
