@@ -4,7 +4,7 @@ Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
 Changes:
 
-- Changes ADR 145 decisions 13 and 20: a chat sink or a webhook sink has no legacy host path. The strict host list applies at save time. It applies at send time too.
+- Changes ADR 145 decisions 13 and 20: a chat sink has no legacy host path. The strict host list applies at save time. It applies at send time too.
 - Extends ADR 60 decision 12: the OTLP sink and the webhook sink write a float that is not finite as text. The OTLP sink takes a `ca-file` option.
 
 ## Context
@@ -21,13 +21,14 @@ On 7 November 2026 the project owner decided these points.
 
 Decided by the project owner on 7 November 2026.
 
-1. **Delete the legacy chat host path (owner, 2026-11-07).** A chat sink has one host rule. Code does not keep a second, weaker path for a sink with a host that the strict list refuses. This applies to the webhook sink too, because both use the same list.
+1. **Delete the legacy chat host path (owner, 2026-11-07).** A chat sink has one host rule. Code does not keep a second, weaker path for a sink with a host that the strict list refuses.
 2. **The strict host list applies twice (owner, 2026-11-07).** The server checks the host against the strict list when a person saves the sink. The sender checks it again at send time. The two checks are separate layers. Neither check relies on the other.
 3. **Write a float that is not finite as text (owner, 2026-11-07).** The OTLP sink and the webhook sink write NaN as `"NaN"`. They write positive infinity as `"Infinity"` and negative infinity as `"-Infinity"`. This is the proto3 JSON mapping. A record with such a float is no longer a failed record.
-4. **The OTLP sink takes `?ca-file=` (owner, 2026-11-07).** The URL of an OTLP sink can have the query option `ca-file`. Its value is the path of a PEM file. The file holds the certificate authorities that the sink trusts for its endpoint. The option adds to the system roots. It does not turn off the check of the certificate.
+4. **The OTLP sink takes `?ca-file=` (owner, 2026-11-07).** The URL of an OTLP sink can have the query option `ca-file`. Its value is the path of a PEM file. The file holds the certificate authorities that the sink trusts for its endpoint. The meaning that the option adds to the system roots, and does not turn off the check of the certificate, is the proposed meaning. The owner did not decide it.
 
 ## Consequences
 
+- This ADR does not decide the host rule of the webhook sink. The decision about the legacy host path is for the chat sender only.
 - A sink with a host that the strict list refuses stops sending. The delivery fails with the error class `refused`. The operator replaces the sink with a host that passes the list.
 - The method `HostNeedsUpdate` and the test fixtures for a legacy sink go away with the legacy path.
 - The tests of the host list stay. Each layer keeps its own test with hostile input.

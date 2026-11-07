@@ -29,7 +29,7 @@ Decided by the project owner on 7 November 2026.
 3. **Sweeps run on a runner (owner, 2026-11-07).** ADR 164 decision 1 stays.
 4. **A pool may have more than one purpose (owner, 2026-11-07).**
 5. **Converters (owner, 2026-11-07).** A converter from a cloud inventory service to the sweep report format runs on a runner pool that has the sweep purpose.
-6. **The runner repository is an exception for the runner only (owner, 2026-11-07).** The runner lives in its own repository, as ADR 282 decision 4 says. No other component gets a repository of its own from this exception.
+6. **The runner repository is an exception for the runner only (owner, 2026-11-07).** The runner lives in its own repository, as ADR 282 decision 4 says.
 
 ## Consequences
 

@@ -25,7 +25,7 @@ Decided by the project owner on 7 November 2026.
 2. **A replay record follows a successful sign-in (owner, 2026-11-07).** The server writes a replay record only after a successful sign-in. A start and a failed response write no record.
 3. **This replaces the per-source caps (owner, 2026-11-07).** The caps on open passkey challenges do not apply any more. They were for each source address, for each site group and for the installation. No row holds an open challenge.
 4. **A lock that ends has an audit kind (owner, 2026-11-07).** ADR 285 decision 23 gets the audit kind `sign-in.name-lock-ended`. The server writes it when a lock by name ends.
-5. **Lock alerts have a ceiling (owner, 2026-11-07).** The alerts of ADR 285 decision 16 have a ceiling for each installation and hour. After the ceiling, the server writes one summary alert for the rest of the hour. The ceiling is 10 alerts for each installation and hour. The summary alert gives the count of alerts left out and the top sources. The ceiling is a setting. The API shows its effective value.
+5. **Lock alerts have a ceiling (owner, 2026-11-07).** The alerts of ADR 285 decision 16 have a ceiling for each installation and hour. After the ceiling, the server writes one summary alert for the rest of the hour. The ceiling is 10 alerts for each installation and hour. The summary alert gives the count of alerts left out and the top sources.
 
 ## Consequences
 
@@ -33,5 +33,6 @@ Decided by the project owner on 7 November 2026.
 - The cookie seal and its short life are the limit on a challenge. The replay record stops a second use of a response after a good sign-in.
 - The audit log shows when a lock ends, and the summary alert shows that alerts were left out.
 - This ADR does not decide the life of the challenge cookie.
+- This ADR does not decide if the ceiling is a setting.
 - This ADR does not decide the limits on starts and on failed responses for each source address. ADR 285 decision 15 and the passkeys guide give them. They stay until a later decision changes them.
 - The passkeys guide describes the caps now. It changes in the pull request that changes the code.

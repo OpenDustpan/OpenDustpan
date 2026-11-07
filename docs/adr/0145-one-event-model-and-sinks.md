@@ -22,7 +22,7 @@ Changed by:
 - ADR 248 changes decision 9: each namespace has its own primary installation.
 - ADR 262 extends: the open question on the first chat tools.
 - ADR 315 extends: the event lock.held-too-long.
-- ADR 334 changes decisions 13 and 20: no legacy host path. The strict host list applies at save time and at send time.
+- ADR 334 changes decisions 13 and 20: the chat sender has no legacy host path. The strict host list applies at save time and at send time.
 
 ## Context
 
