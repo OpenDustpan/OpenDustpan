@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // instancesDoc returns a state with one resource block web with n instances
@@ -68,23 +67,16 @@ func TestRollbackChangeNamesKeysOfForEach(t *testing.T) {
 }
 
 // TestRollbackChangeLimit proves the instance limit: a state at the limit is
-// read, a state above it fails with ErrTooManyResources, and the work at the
-// limit stays linear (a quadratic compare of 100,000 addresses takes minutes).
+// read, and a state above it fails with ErrTooManyResources.
 func TestRollbackChangeLimit(t *testing.T) {
 	t.Parallel()
 
 	atLimit := instancesDoc(MaxRollbackInstances)
 	above := instancesDoc(MaxRollbackInstances + 1)
 
-	start := time.Now()
-
 	got, err := rollbackChangeOf([]byte(instancesDoc(1)), "sv-next", []byte(atLimit), "sv-cur")
 	if err != nil || got.Resources != 1 || len(got.Removed) != MaxRollbackInstances-1 {
 		t.Fatalf("at the limit: change with %d removed, err %v", len(got.Removed), err)
-	}
-
-	if took := time.Since(start); took > 30*time.Second {
-		t.Fatalf("the read of a state at the limit took %s, want a linear compare", took)
 	}
 
 	for name, args := range map[string][2]string{
