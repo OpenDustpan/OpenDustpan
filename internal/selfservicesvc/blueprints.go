@@ -201,7 +201,7 @@ func (s *Blueprints) Publish(
 		return selfservice.Version{}, call.fail(ctx, err)
 	}
 
-	stored.ExprVersion = s.cfg.Evaluator.Version()
+	stored.ExprVersion = selfservice.ExprVersionName(s.cfg.Evaluator.Version())
 	publication := selfservice.Publication{
 		At: s.cfg.Clock.Now(), Ref: ref, By: p.Subject, Blueprint: stored, DraftVersion: draftVersion,
 	}

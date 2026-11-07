@@ -308,7 +308,7 @@ func authorizedObject(object selfservice.Object) (identity.Object, error) {
 		return identity.NamespaceObject(object.Namespace), nil
 	}
 
-	if object.Kind == selfservice.ObjectPrincipal {
+	if object.Unit.IsPrincipal() {
 		return object.Unit, nil
 	}
 

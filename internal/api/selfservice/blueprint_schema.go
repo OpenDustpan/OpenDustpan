@@ -43,6 +43,10 @@ func blueprintTypes() []apidesc.Declaration {
 		// The shared declaration of any JSON value, as the inventory API
 		// states it. A declaration of the same type must be equal everywhere.
 		apidesc.Declare[json.RawMessage](map[string]any{"description": "Any JSON value."}),
+		apidesc.Declare[selfservice.ExprVersionName](map[string]any{
+			"type":        "string",
+			"description": "The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused.",
+		}),
 		apidesc.Declare[selfservice.ScalarValue](map[string]any{
 			"description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
 		}),

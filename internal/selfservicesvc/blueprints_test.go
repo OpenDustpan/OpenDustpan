@@ -561,7 +561,7 @@ func TestPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := original
-	want.ExprVersion = f.evaluator.Version()
+	want.ExprVersion = selfservice.ExprVersionName(f.evaluator.Version())
 	checkPublication(t, f, &want)
 	if !reflect.DeepEqual(f.store.draft, original) || !reflect.DeepEqual(got, f.store.published) ||
 		!reflect.DeepEqual(f.evaluator.calls, expectedCompilations()) {

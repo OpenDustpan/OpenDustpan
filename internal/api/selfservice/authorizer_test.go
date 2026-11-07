@@ -3,6 +3,7 @@ package selfservice_test
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,14 +18,12 @@ import (
 )
 
 // authorizerEnv is the real access authorizer over a store with one namespace
-// and three people: the caller, the principal that a blueprint names as its
-// source, and a principal that is not named.
+// and three people: the caller, the source principal of a blueprint, and a
+// principal that the blueprint does not name.
 type authorizerEnv struct {
 	store  *sqlite.Store
 	authz  *access.Authorizer
 	caller identity.Principal
-	source string
-	other  string
 }
 
 // newAuthorizerEnv opens a store, and seeds the people and the namespace.
@@ -62,19 +61,11 @@ func newAuthorizerEnv(t *testing.T) *authorizerEnv {
 
 	caller.Subject = "ann"
 
-	env := &authorizerEnv{
-		store:  st,
-		authz:  authz,
-		caller: caller,
-		source: "prn-source",
-		other:  "prn-other",
-	}
-
 	seedPerson(t, st, "prn-ann", "ann")
 	seedPerson(t, st, "prn-source", "source")
 	seedPerson(t, st, "prn-other", "other")
 
-	return env
+	return &authorizerEnv{store: st, authz: authz, caller: caller}
 }
 
 // seedPerson stores a person with the ID id and the subject subject.
@@ -119,28 +110,31 @@ func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object, role string
 	}
 }
 
-// sourcePrincipal is the object of the requirement on a source principal of a
-// blueprint.
-func sourcePrincipal(principalID string) selfservice.Object {
-	return selfservice.Object{
-		Unit:      identity.PrincipalObject(principalID),
-		Kind:      selfservice.ObjectPrincipal,
-		Namespace: "acme",
-		Blueprint: "",
+// sourceRequirement is the requirement on the source principal of a blueprint
+// that names source as its source principal. The requirement comes from
+// PublishRequirements, so the test follows the code.
+func sourceRequirement(t *testing.T, source string) selfservice.Requirement {
+	t.Helper()
+
+	bp := selfservice.Blueprint{Name: "blueprint-a", SourcePrincipal: source}
+
+	reqs := selfservice.PublishRequirements(parseNamespace(t, "acme"), &bp)
+	if len(reqs) != 2 {
+		t.Fatalf("PublishRequirements gave %d requirements, want the blueprint and the source principal", len(reqs))
 	}
+
+	return reqs[1]
 }
 
-// TestSourcePrincipalIsCheckedOnItself runs the principal requirement of a
-// blueprint through the real authorizer. A grant on the principal allows the
-// requirement, a grant on another principal or on the namespace alone does
-// not, and an object kind that the adapter does not map is refused.
+// TestSourcePrincipalIsCheckedOnItself runs the source-principal requirement of
+// a blueprint through the real authorizer. A grant on the principal allows the
+// requirement; a grant on another principal or on the namespace alone does not.
 func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name    string
 		grant   func(*testing.T, *authorizerEnv)
-		object  func(*authorizerEnv) selfservice.Object
 		allowed bool
 	}{
 		{
@@ -148,11 +142,6 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			grant: func(t *testing.T, env *authorizerEnv) {
 				t.Helper()
 				env.grantTo(t, identity.PrincipalObject("prn-source"), access.RoleAccountAdministrator)
-			},
-			object: func(env *authorizerEnv) selfservice.Object {
-				obj := sourcePrincipal(env.source)
-
-				return obj
 			},
 			allowed: true,
 		},
@@ -162,11 +151,6 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 				t.Helper()
 				env.grantTo(t, identity.PrincipalObject("prn-other"), access.RoleAccountAdministrator)
 			},
-			object: func(env *authorizerEnv) selfservice.Object {
-				obj := sourcePrincipal(env.source)
-
-				return obj
-			},
 			allowed: false,
 		},
 		{
@@ -174,24 +158,6 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			grant: func(t *testing.T, env *authorizerEnv) {
 				t.Helper()
 				env.grantTo(t, identity.NamespaceObject("acme"), access.RoleAccountAdministrator)
-			},
-			object: func(env *authorizerEnv) selfservice.Object {
-				obj := sourcePrincipal(env.source)
-
-				return obj
-			},
-			allowed: false,
-		},
-		{
-			name:  "an unknown object kind denies",
-			grant: func(*testing.T, *authorizerEnv) {},
-			object: func(*authorizerEnv) selfservice.Object {
-				return selfservice.Object{
-					Unit:      identity.Object{},
-					Kind:      selfservice.ObjectKind("unmapped"),
-					Namespace: "acme",
-					Blueprint: "",
-				}
 			},
 			allowed: false,
 		},
@@ -206,8 +172,9 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 			env := newAuthorizerEnv(t)
 			tc.grant(t, env)
 
+			req := sourceRequirement(t, "prn-source")
 			adapter := selfserviceapi.NewNamespaceAuthorizer(env.authz)
-			err := adapter.Authorize(t.Context(), env.caller, identity.ActionPrincipalManageTokens, tc.object(env))
+			err := adapter.Authorize(t.Context(), env.caller, req.Action, req.Object)
 
 			if tc.allowed && err != nil {
 				t.Fatalf("authorize: %v", err)
@@ -217,5 +184,33 @@ func TestSourcePrincipalIsCheckedOnItself(t *testing.T) {
 				t.Fatalf("authorize error = %v, want a denial", err)
 			}
 		})
+	}
+}
+
+// TestUnmappedObjectKindIsRefused gives the caller a namespace grant that
+// allows the action on the namespace. The adapter must still refuse an object
+// kind that it does not map: the refusal is its own denial, not the authorizer's.
+func TestUnmappedObjectKindIsRefused(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthorizerEnv(t)
+	env.grantTo(t, identity.NamespaceObject("acme"), access.RoleAccountAdministrator)
+
+	obj := selfservice.Object{
+		Unit:      identity.Object{},
+		Kind:      selfservice.ObjectKind("unmapped"),
+		Namespace: "acme",
+		Blueprint: "",
+	}
+
+	adapter := selfserviceapi.NewNamespaceAuthorizer(env.authz)
+	err := adapter.Authorize(t.Context(), env.caller, identity.ActionNamespaceRead, obj)
+
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("authorize error = %v, want a denial", err)
+	}
+
+	if !strings.Contains(err.Error(), "has no authorization here") {
+		t.Errorf("error = %q, want the adapter's own refusal of the kind", err.Error())
 	}
 }

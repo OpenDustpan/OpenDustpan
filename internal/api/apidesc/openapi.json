@@ -4957,6 +4957,7 @@
             "type": "string"
           },
           "exprVersion": {
+            "description": "The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused.",
             "type": "string"
           },
           "inputs": {

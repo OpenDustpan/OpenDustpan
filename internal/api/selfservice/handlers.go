@@ -47,7 +47,7 @@ func metadata(v selfservice.Version) versionMetadata {
 		DraftVersion: v.DraftVersion,
 		PublishedAt:  v.PublishedAt.UTC().Format(time.RFC3339),
 		PublishedBy:  v.PublishedBy,
-		ExprVersion:  v.Blueprint.ExprVersion,
+		ExprVersion:  string(v.Blueprint.ExprVersion),
 		Retired:      v.Retired,
 	}
 }

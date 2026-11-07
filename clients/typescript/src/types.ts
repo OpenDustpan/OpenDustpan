@@ -1343,6 +1343,7 @@ export interface SchemaBinaryBelowMinimumErrorArgs {
 export interface SelfServiceBlueprint {
   readonly delivery: SelfServiceDelivery;
   readonly description?: string;
+  /** The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused. */
   readonly exprVersion?: string;
   readonly inputs: ReadonlyArray<SelfServiceInput>;
   readonly name: string;
