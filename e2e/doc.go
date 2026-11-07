@@ -75,16 +75,20 @@
 //   - a request to a path that no route holds, and a 5xx answer;
 //   - the order or the timing of the requests.
 //
-// The version matrix follows this policy. For each CLI, Pulumi and OpenTofu,
-// the matrix pins the three newest minor releases, each at its newest patch
-// release, and it also runs "latest". e2e/tool.go lists the current pins.
-// "latest" becomes a pin after three green nightly runs of this suite in a row.
-// At the same time the oldest pin is dropped, so the matrix keeps three pins.
-// Adding a pin adds its sha256 sum to e2e/tool.go, from the checksum file that
-// the vendor publishes. A sum computed from a download alone is not accepted.
-// A red "latest" run opens a ci-red issue, and a maintainer triages that issue
-// within 24 hours.
-// A red run of a pinned version blocks merges, as any required check does.
+// The version matrix follows this policy. For each CLI, the matrix runs
+// "latest" and three pinned versions. The pins are spread by age, so that each
+// pin tests a different group of users, because the release cadence differs
+// per tool. For OpenTofu, which releases a minor version every few months, the
+// pins are the newest patch of each of the three minor versions before the
+// current one. For Pulumi, which releases a minor version about every week, the
+// pins are about two, four and twelve months old, each the newest patch of its
+// minor version at that age. A pin moves to a new version only after that
+// version passes three nightly runs of this suite in a row. Adding a pin adds
+// its sha256 sum to e2e/tool.go, from the checksum file that the vendor
+// publishes. A sum computed from a download alone is not accepted. A red
+// "latest" run opens a ci-red issue, and a maintainer triages that issue within
+// 24 hours. A red run of a pinned version blocks merges, as any required check
+// does. e2e/tool.go lists the current pins.
 //
 // Environment variables:
 //
