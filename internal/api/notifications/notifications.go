@@ -152,6 +152,14 @@ func sinkErrors(err error) (problem.Problem, bool) {
 
 	switch {
 	case errors.Is(err, sinks.ErrLimitUnavailable):
+		// Defense in depth: a limit failure can wrap a shared class (the
+		// maintenance mode or a schema minimum), and the shared class must keep
+		// its own answer. The shared classifier does not rely on the order of
+		// this switch: this check stays so that no reorder of the sink cases
+		// can hide a shared answer.
+		if shared, ok := problem.Shared(err); ok {
+			return shared, true
+		}
 		// The text names no cause: the cause is a database error.
 		return problem.New(
 			http.StatusServiceUnavailable,
