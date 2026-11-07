@@ -482,6 +482,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= $1::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -538,6 +542,9 @@ type CallerGrantsRow struct {
 	MemberRemovedAtMs pgtype.Int8
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -582,6 +589,9 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {
@@ -1810,7 +1820,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND (($1::text <> '' AND m.principal_id = $1::text)
     OR ($1::text = '' AND $2::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT $3::boolean AND m.state = 'suspended'))
   AND CASE WHEN $3::boolean THEN
     m.added_at_ms < $4::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > $5::bigint
@@ -19562,6 +19572,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= $1::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -19574,7 +19588,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND (($2::text <> '' AND m.principal_id = $2::text)
     OR ($2::text = '' AND $3::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT $4::boolean AND m.state = 'suspended'))
   AND CASE WHEN $4::boolean THEN
     m.added_at_ms < $5::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > $6::bigint
@@ -19648,6 +19662,9 @@ type ReviewGrantsRow struct {
 	MemberRemovedAtMs pgtype.Int8
 	MemberID          string
 	MemberSubject     string
+	MemberSource      string
+	MemberSourceID    string
+	MemberSuspended   int64
 	SubjectName       string
 	MemberCount       int64
 }
@@ -19706,6 +19723,9 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 			&i.MemberRemovedAtMs,
 			&i.MemberID,
 			&i.MemberSubject,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberSuspended,
 			&i.SubjectName,
 			&i.MemberCount,
 		); err != nil {

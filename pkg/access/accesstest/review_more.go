@@ -1,6 +1,8 @@
 package accesstest
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +12,231 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
+
+// reviewMemberships returns one active membership from each source.
+func reviewMemberships() []principal.Membership {
+	out := make([]principal.Membership, 0, 3)
+
+	for i, c := range []struct {
+		source   principal.MembershipSource
+		sourceID string
+	}{
+		{principal.MembershipSourceLocal, ""},
+		{principal.MembershipSourceSCIM, "scim-token-1"},
+		{principal.MembershipSourceClaim, "idp-1"},
+	} {
+		out = append(out, principal.Membership{
+			AddedAt: at(i + 2), SuspendedAt: time.Time{}, GroupID: "grp-ops",
+			PrincipalID: "prn-" + string(c.source), Source: c.source, SourceID: c.sourceID,
+			State: principal.MembershipStateActive, Pinned: false,
+		})
+	}
+
+	return out
+}
+
+// seedReviewMembers stores the members of ops and one grant of that group.
+func seedReviewMembers(t *testing.T, s access.Store, members []principal.Membership) {
+	t.Helper()
+
+	ps, ok := s.(principal.Store)
+	if !ok {
+		t.Skip("the store keeps no principals")
+	}
+
+	ctx := t.Context()
+	group := principal.Group{
+		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+	if err := ps.CreateGroup(ctx, group, entry()); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	for i := range members {
+		m := members[i]
+		p := principal.Principal{
+			CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: m.PrincipalID,
+			Subject: m.PrincipalID, DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal,
+			Namespace: "", GroupCount: 0, BreakGlass: false,
+		}
+		if err := ps.CreatePrincipal(ctx, p, entry()); err != nil {
+			t.Fatalf("create principal: %v", err)
+		}
+
+		if err := ps.AddMember(ctx, m, entryAt(m.AddedAt), nil); err != nil {
+			t.Fatalf("add member: %v", err)
+		}
+	}
+
+	mustCreateGrant(t, s, grantAt(1, "grt-ops", opsGroup(), access.RoleWriter, identity.NamespaceObject("acme")))
+}
+
+func testReviewMembershipSources(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+	members := reviewMemberships()
+	seedReviewMembers(t, s, members)
+
+	for _, history := range []bool{false, true} {
+		q := everyRow(allScope())
+		q.Expand, q.History = true, history
+		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
+
+		rows := review(t, rs, "membership sources", q, "grt-ops", "grt-ops", "grt-ops")
+		for i := range members {
+			checkReviewMembership(t, rows[i].Via, wantVia{member: members[i], suspended: false})
+		}
+	}
+
+	for i := range members {
+		m := members[i]
+		q := everyRow(allScope())
+		q.Subject, q.Principal = principalSubject(m.PrincipalID).String(), m.PrincipalID
+		rows := review(t, rs, "filtered membership source", q, "grt-ops")
+		checkReviewMembership(t, rows[0].Via, wantVia{member: m, suspended: false})
+
+		cq := callerQuery(snapshotMinute)
+		cq.Principal = m.PrincipalID
+		rows = callerGrants(t, rs, "caller membership source", cq, "grt-ops")
+		checkReviewMembership(t, rows[0].Via, wantVia{member: m, suspended: false})
+	}
+}
+
+// wantVia is the membership that a row must show: the stored membership and
+// whether the row reports it as suspended.
+type wantVia struct {
+	member    principal.Membership
+	suspended bool
+}
+
+// checkReviewMembership checks the source, the source ID and the suspension of one membership.
+func checkReviewMembership(t *testing.T, got *access.Membership, want wantVia) {
+	t.Helper()
+
+	if got == nil {
+		t.Fatal("membership is nil")
+	}
+
+	if got.PrincipalID != want.member.PrincipalID || got.Source != string(want.member.Source) ||
+		got.SourceID != want.member.SourceID || got.Suspended != want.suspended {
+		t.Fatalf("membership = %+v, want %s from %s/%s with suspended %t",
+			got, want.member.PrincipalID, want.member.Source, want.member.SourceID, want.suspended)
+	}
+}
+
+func testReviewMembershipSuspension(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+	members := reviewMemberships()
+	members[1].State, members[1].SuspendedAt = principal.MembershipStateSuspended, at(20)
+	members[2].State, members[2].SuspendedAt = principal.MembershipStateSuspended, at(40)
+	seedReviewMembers(t, s, members)
+
+	for _, c := range []struct {
+		minute int
+		want   [3]bool
+	}{
+		{19, [3]bool{false, false, false}},
+		{20, [3]bool{false, true, false}},
+		{snapshotMinute, [3]bool{false, true, false}},
+		{40, [3]bool{false, true, true}},
+	} {
+		q := everyRow(allScope())
+		q.Expand, q.AsOfMs = true, at(c.minute).UnixMilli()
+		rows := review(t, rs, "snapshot membership suspension", q, "grt-ops", "grt-ops", "grt-ops")
+
+		for i := range members {
+			checkReviewMembership(t, rows[i].Via, wantVia{member: members[i], suspended: c.want[i]})
+		}
+	}
+
+	checkReviewSuspensionFilters(t, rs, members)
+
+	for i := range members {
+		q := callerQuery(snapshotMinute)
+		q.Principal = members[i].PrincipalID
+		want := []string{"grt-ops"}
+		if i != 0 {
+			want = nil
+		}
+
+		callerGrants(t, rs, "caller excludes suspended memberships", q, want...)
+	}
+}
+
+// checkReviewSuspensionFilters checks expanded and filtered snapshots and histories.
+func checkReviewSuspensionFilters(t *testing.T, rs access.ReviewStore, members []principal.Membership) {
+	t.Helper()
+
+	for _, history := range []bool{false, true} {
+		q := everyRow(allScope())
+		q.Expand, q.History = true, history
+		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
+
+		want := []string{"grt-ops", "grt-ops", "grt-ops"}
+		if history {
+			want = want[:1]
+		}
+
+		review(t, rs, "expanded membership suspension", q, want...)
+
+		for i := range members {
+			m := members[i]
+			q.Subject, q.Principal = principalSubject(m.PrincipalID).String(), m.PrincipalID
+			want := []string{"grt-ops"}
+			if history && i != 0 {
+				want = nil
+			}
+
+			rows := review(t, rs, "filtered membership suspension", q, want...)
+			if len(rows) != 0 {
+				checkReviewMembership(t, rows[0].Via, wantVia{member: m, suspended: !history && i == 1})
+			}
+		}
+	}
+}
+
+func testReviewUnknownMembershipSource(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+	sql, ok := s.(interface {
+		ExecForTest(ctx context.Context, query string, args ...any) error
+	})
+	if !ok {
+		t.Skip("the store has no SQL test helper")
+	}
+
+	members := reviewMemberships()
+	seedReviewMembers(t, s, members)
+
+	const query = "UPDATE group_members SET source = $1 WHERE group_id = $2 AND principal_id = $3"
+	if err := sql.ExecForTest(t.Context(), query, "ldap-forged", "grp-ops", members[1].PrincipalID); err != nil {
+		t.Fatalf("write unknown membership source: %v", err)
+	}
+
+	for _, history := range []bool{false, true} {
+		q := everyRow(allScope())
+		q.Expand, q.History = true, history
+		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
+
+		rows, total, err := rs.ReviewGrants(t.Context(), q)
+		if !errors.Is(err, principal.ErrInvalid) || rows != nil || total != 0 {
+			t.Fatalf("unknown source with history %t = %+v, total %d, %v; want no rows and ErrInvalid",
+				history, rows, total, err)
+		}
+	}
+
+	q := callerQuery(snapshotMinute)
+	q.Principal = members[1].PrincipalID
+	rows, total, err := rs.CallerGrants(t.Context(), q)
+	if !errors.Is(err, principal.ErrInvalid) || rows != nil || total != 0 {
+		t.Fatalf("caller with unknown source = %+v, total %d, %v; want no rows and ErrInvalid", rows, total, err)
+	}
+}
 
 // testReviewAsOf reads snapshots at several times: a grant and a
 // membership count only while they were current then.

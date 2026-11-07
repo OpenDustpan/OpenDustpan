@@ -1831,6 +1831,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1843,7 +1847,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1882,7 +1886,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1921,6 +1925,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id

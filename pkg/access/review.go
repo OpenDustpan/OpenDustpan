@@ -136,6 +136,15 @@ type Membership struct {
 	// PrincipalID and PrincipalSubject name the member.
 	PrincipalID      string
 	PrincipalSubject string
+	// Source is the membership source: "local", "scim" or "claim".
+	// These are the values of principal.MembershipSource.
+	Source string
+	// SourceID is the identity that the source names. It is empty for a
+	// local membership.
+	SourceID string
+	// Suspended is true when the membership is suspended at the snapshot
+	// time. A suspended membership grants nothing.
+	Suspended bool
 }
 
 // Key returns the position of r in the order of an export.

@@ -137,12 +137,19 @@ type reviewRowResponse struct {
 
 // reviewViaResponse is the membership of a principal in the group of a
 // row. MemberUntilMs is null while the membership lasts.
+// MemberSource is "local", "scim" or "claim".
+// MemberSourceID is the identity that the source names, or empty for a local membership.
+// MemberSuspended is true when the membership is suspended at the snapshot time and grants nothing.
+// It is always false in a history, which lists only active memberships.
 type reviewViaResponse struct {
-	MemberUntilMs *int64 `json:"memberUntilMs"`
-	Group         string `json:"group"`
-	Member        string `json:"member"`
-	MemberSubject string `json:"memberSubject"`
-	MemberFromMs  int64  `json:"memberFromMs"`
+	MemberUntilMs   *int64 `json:"memberUntilMs"`
+	Group           string `json:"group"`
+	Member          string `json:"member"`
+	MemberSubject   string `json:"memberSubject"`
+	MemberSource    string `json:"memberSource"`
+	MemberSourceID  string `json:"memberSourceId"` //nolint:tagliatelle // The API description names this field memberSourceId, in lower camel case.
+	MemberFromMs    int64  `json:"memberFromMs"`
+	MemberSuspended bool   `json:"memberSuspended"`
 }
 
 // reviewResponse is one page of an export. Total is the count of every row
@@ -452,6 +459,7 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 			MemberUntilMs: millisOf(v.RemovedAt), Group: row.Grant.Subject.String(),
 			Member:        access.Subject{Kind: access.SubjectPrincipal, ID: v.PrincipalID}.String(),
 			MemberSubject: v.PrincipalSubject, MemberFromMs: v.AddedAt.UnixMilli(),
+			MemberSource: v.Source, MemberSourceID: v.SourceID, MemberSuspended: v.Suspended,
 		}
 	}
 
