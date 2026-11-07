@@ -98,6 +98,7 @@ func runPlacementRuleAPIOnStore(t *testing.T, cli e2e.Install, store e2e.Store) 
 	placementRulesRefusals(ctx, t, env)
 	placementRulesMoveAndDelete(ctx, t, env)
 	placementRulesDenied(ctx, t, env)
+	placementRulesCustomRole(ctx, t, env)
 }
 
 // placementCall sends s and fails unless it answers s.want. It checks that the
@@ -340,6 +341,60 @@ func placementRulesDenied(ctx context.Context, t *testing.T, env *e2e.Env) {
 	placementCall(ctx, t, env, principalStep{
 		http.MethodDelete, placementRules + "/" + seedID, "", http.StatusNoContent,
 	})
+}
+
+// placementRulesCustomRole proves that a custom role with
+// namespace:read-placement-rules and namespace:manage-placement-rules, and no
+// collection:create-unit, writes the rules and cannot make a stack in the
+// collection that a rule names. The role holds unit:manage, so that the stack
+// request passes the unit check and reaches the check of the collection.
+func placementRulesCustomRole(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var role e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"placements-rules-only","actions":[` +
+			`"namespace:read-placement-rules","namespace:manage-placement-rules","unit:manage"]}`,
+		http.StatusCreated,
+	}, &role)
+
+	var custom e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("placements-rules-only") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &custom)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + placementNamespace + "/grants",
+		`{"subject":"principal:` + custom.ID + `","role":"` + role.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	token := env.PersonalToken(ctx, t, custom.ID, "placement-rules-only-check")
+
+	project := e2e.Project
+	rule := `{"tool":"pulumi","project":"` + project + `","stack":"*","collection":"payments"}`
+
+	status, body, err := env.ServerAPIStatusAs(ctx, token.Secret, http.MethodPost, placementRules, rule)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("custom role writes a rule = %d, %v (%s); want %d", status, err, body, http.StatusCreated)
+	}
+
+	status, body, err = env.APIStatusAs(ctx, token.Secret, http.MethodPost,
+		"/api/stacks/"+placementNamespace+"/"+project, `{"tags":{},"stackName":"dev"}`)
+	// The refusal comes from the collection check: the same request by a role
+	// that also holds collection:create-unit makes the stack (checked when the
+	// control was run). The body does not name the action.
+	if err != nil || status != http.StatusForbidden {
+		t.Fatalf("custom role makes a stack without collection:create-unit = %d, %v (%s); want %d",
+			status, err, body, http.StatusForbidden)
+	}
+
+	if got, found := placementCollectionOf(ctx, t, env, "dev"); found {
+		t.Fatalf("the refused stack exists in collection %q, want no unit", got)
+	}
 }
 
 // placementRuleOf decodes one rule from the body of an answer.
