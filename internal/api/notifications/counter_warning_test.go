@@ -47,6 +47,28 @@ func TestCounterFailureWarnsBounded(t *testing.T) {
 	}
 }
 
+// TestCounterClockStepBackWarns proves that a clock that goes back before the
+// last warning does not silence the warning: the next failure logs again.
+func TestCounterClockStepBackWarns(t *testing.T) {
+	t.Parallel()
+
+	f, counter := counterFixture(t)
+	s := f.makeWebhook(t)
+	counter.Break()
+
+	path := base + "/" + s.ID + "/test"
+
+	wantCounterUnavailable(t, f, path, 0)
+
+	f.clock.advance(-2 * time.Minute)
+
+	wantCounterUnavailable(t, f, path, 1)
+
+	if n := strings.Count(f.logs.String(), counterWarningText); n != 2 {
+		t.Fatalf("warnings after the clock stepped back = %d, want 2: %s", n, f.logs.String())
+	}
+}
+
 // counterFixture returns a fixture with a breakable counter of the shared
 // test limits, and that counter.
 func counterFixture(t *testing.T) (fixture, *storetest.BreakableCounter) {

@@ -183,7 +183,12 @@ func (w *counterWarning) record(ctx context.Context, logger *slog.Logger) {
 	}
 
 	at := now()
-	if !w.last.IsZero() && at.Sub(w.last) < counterWarningWindow {
+	// Defense in depth: a clock that goes back gives a negative elapsed time.
+	// Such an event logs again and starts a new window, so that a step back of
+	// the clock cannot silence the warning. This check does not rely on the
+	// monotonic reading of time.Now.
+	elapsed := at.Sub(w.last)
+	if !w.last.IsZero() && elapsed >= 0 && elapsed < counterWarningWindow {
 		w.suppressed++
 
 		return
