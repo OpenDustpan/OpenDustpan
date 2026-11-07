@@ -1668,6 +1668,38 @@ SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
 
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = $1 AND source_id = $2 AND claim_value = $3 AND group_id = $4;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = $1 AND source_id = $2
+ORDER BY claim_value COLLATE "C", group_id COLLATE "C";
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = $1 AND m.source_id = $2 AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value COLLATE "C", m.group_id COLLATE "C";
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = $1 AND removed_at_ms IS NULL
+ORDER BY group_id COLLATE "C";
+
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

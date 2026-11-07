@@ -334,6 +334,15 @@ CREATE TABLE grants (
     revoked_by text DEFAULT ''::text NOT NULL
 );
 
+CREATE TABLE group_mappings (
+    source text NOT NULL,
+    source_id text NOT NULL,
+    claim_value text NOT NULL,
+    group_id text NOT NULL,
+    created_by text NOT NULL,
+    created_at_ms bigint NOT NULL
+);
+
 CREATE TABLE group_members (
     group_id text NOT NULL,
     principal_id text NOT NULL,
@@ -1518,6 +1527,9 @@ ALTER TABLE ONLY git_host_installations
 ALTER TABLE ONLY grants
     ADD CONSTRAINT grants_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY group_mappings
+    ADD CONSTRAINT group_mappings_pkey PRIMARY KEY (source, source_id, claim_value, group_id);
+
 ALTER TABLE ONLY group_members
     ADD CONSTRAINT group_members_pkey PRIMARY KEY (group_id, principal_id, added_at_ms);
 
@@ -2050,6 +2062,9 @@ ALTER TABLE ONLY git_host_connections
 
 ALTER TABLE ONLY git_host_installations
     ADD CONSTRAINT git_host_installations_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY group_mappings
+    ADD CONSTRAINT group_mappings_group_id_fkey FOREIGN KEY (group_id) REFERENCES principal_groups(id);
 
 ALTER TABLE ONLY group_members
     ADD CONSTRAINT group_members_group_id_fkey FOREIGN KEY (group_id) REFERENCES principal_groups(id);
