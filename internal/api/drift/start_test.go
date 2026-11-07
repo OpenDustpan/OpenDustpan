@@ -104,20 +104,32 @@ func TestStartCheckBody(t *testing.T) {
 }
 
 // TestStartCheckRefusesALineSeparator proves that a reason with a line
-// separator never reaches the checker, and that the route answers the coded
-// 400 of an invalid drift value.
+// separator, a paragraph separator or a format character never reaches the
+// checker, and that the route answers the coded 400 of an invalid drift value.
 func TestStartCheckRefusesALineSeparator(t *testing.T) {
 	t.Parallel()
 
-	r := newRig(t, newAuthorizer(holdsAll()...))
-
-	rec := r.serve(t, startRequest(`{"reason":"a\u2028b"}`))
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "job.invalid") {
-		t.Fatalf("POST = %d %s, want 400 job.invalid", rec.Code, rec.Body.String())
+	tests := []struct{ name, body string }{
+		{"line separator", `{"reason":"a\u2028b"}`},
+		{"paragraph separator", `{"reason":"a\u2029b"}`},
+		{"format character", `{"reason":"a\u200bb"}`},
 	}
 
-	if r.checker.calls() != 0 {
-		t.Errorf("checker calls = %d, want none for a reason with a line separator", r.checker.calls())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, newAuthorizer(holdsAll()...))
+
+			rec := r.serve(t, startRequest(tt.body))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "job.invalid") {
+				t.Fatalf("POST = %d %s, want 400 job.invalid", rec.Code, rec.Body.String())
+			}
+
+			if r.checker.calls() != 0 {
+				t.Errorf("checker calls = %d, want none", r.checker.calls())
+			}
+		})
 	}
 }
 
