@@ -639,8 +639,10 @@ const (
 
 // Object limits for the tool and unit parts of a unit reference.
 const (
-	maxToolLength = 100
-	maxUnitLength = 300
+	// MaxToolLength is the longest tool code, in bytes.
+	MaxToolLength = 100
+	// MaxUnitLength is the longest unit name, in bytes.
+	MaxUnitLength = 300
 )
 
 // Object is the thing an action applies to: a namespace, a unit reference,
@@ -797,7 +799,7 @@ func CollectionObject(ns namespace.Name, name string) Object {
 // for the tool tool. The name is opaque to the core. Tool names match exactly:
 // "pulumi" and "Pulumi" name different tools.
 func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
-	if !ident.Valid(tool, maxToolLength) {
+	if !ident.Valid(tool, MaxToolLength) {
 		return Object{}, fmt.Errorf("%w: tool %q", ErrInvalidObject, tool)
 	}
 
@@ -893,7 +895,7 @@ func parseUnitObject(s string) (Object, error) {
 		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 	}
 
-	if !ident.Valid(tool, maxToolLength) {
+	if !ident.Valid(tool, MaxToolLength) {
 		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 	}
 
@@ -928,7 +930,7 @@ func parseUnitObject(s string) (Object, error) {
 
 // validUnitName reports whether name is a usable opaque unit name.
 func validUnitName(name string) bool {
-	if name == "" || len(name) > maxUnitLength {
+	if name == "" || len(name) > MaxUnitLength {
 		return false
 	}
 

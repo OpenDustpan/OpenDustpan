@@ -156,26 +156,6 @@ func useOf(block *yaml.Node) *yaml.Node {
 	return mapGet(block, "use")
 }
 
-func checkExports(n *yaml.Node) error {
-	if n == nil {
-		return nil
-	}
-
-	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("%w: exports must be a map", ErrInvalid)
-	}
-
-	for i := 0; i < len(n.Content); i += pairSize {
-		switch n.Content[i].Value {
-		case "variables", "files", "pulumi", "opentofu":
-		default:
-			return fmt.Errorf("%w: unknown key %q in exports", ErrInvalid, n.Content[i].Value)
-		}
-	}
-
-	return nil
-}
-
 func checkChecks(n *yaml.Node) error {
 	if n == nil {
 		return nil

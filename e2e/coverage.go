@@ -240,7 +240,6 @@ func CoverageAllowlist() []AllowEntry {
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
 		registryAllowEntries(),
-		savedViewAllowEntries(),
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
 		trustRuleAllowEntries(),

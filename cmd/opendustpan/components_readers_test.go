@@ -85,7 +85,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"newAuthPorts": "api", "newTFEHandler": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
-	"gitHost": {"newGitHostService": "api", "newUnitSettingsHandler": "api"},
+	"gitHost": {"newGitHostService": "api", "newJobPlanner": "api", "newUnitSettingsHandler": "api"},
 	"oidcProviders": {
 		"bindingOf":             "api",
 		"hasStaticSignIn":       "api",

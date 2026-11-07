@@ -288,3 +288,37 @@ func TestNamespaceCreateDenied(t *testing.T) {
 		t.Fatalf("denied POST answers %d, want %d (%s)", status, http.StatusForbidden, body)
 	}
 }
+
+// TestNamespaceBodyTooLarge proves that a create body over the limit of the
+// namespace route answers 413 request.body-too-large with the limit, and that
+// a body of exactly the limit is read.
+func TestNamespaceBodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	const limit = 8192
+
+	// The padding is spaces after the name, so the body is valid JSON and only
+	// its size decides the answer.
+	exact := `{"name":"acme"}` + strings.Repeat(" ", limit-len(`{"name":"acme"}`))
+	if status, body := serveNamespace(t, handler, exact); status == http.StatusRequestEntityTooLarge {
+		t.Fatalf("body of %d bytes = %d %s, want it read", limit, status, body)
+	}
+
+	over := `{"name":"acme"}` + strings.Repeat(" ", limit-len(`{"name":"acme"}`)+1)
+
+	status, body := serveNamespace(t, handler, over)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("body of %d bytes = %d %s, want 413", limit+1, status, body)
+	}
+
+	var got apiError
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("answer %q is not an error: %v", body, err)
+	}
+
+	if got.ErrorCode != "request.body-too-large" || got.ErrorArgs["maxBytes"] != float64(limit) {
+		t.Fatalf("answer = %+v, want request.body-too-large with maxBytes %d", got, limit)
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"slices"
 	"strings"
@@ -236,9 +237,13 @@ type Files interface {
 	// file, and ErrTooLarge for a file above limit bytes.
 	ReadFile(ctx context.Context, repo, commit, filePath string, limit int64) (File, error)
 	// Compare returns the files that changed from base to head, the patch
-	// up to limit bytes, and whether base is an ancestor of head. A patch
-	// above limit answers its first part with Truncated set. It returns
-	// ErrNotFound for a missing repository or commit.
+	// up to limit bytes, and whether base is an ancestor of head. Base and
+	// head are full commit IDs. A patch above limit answers its first part
+	// with Truncated set, and Files still lists every changed file. It
+	// returns ErrInvalid for a commit ID that fails ValidateCommitID or a
+	// limit that is not above zero, before any call, ErrNotFound for a
+	// missing repository or commit, and ErrTooLarge when the changes have
+	// more files than the adapter lists.
 	Compare(ctx context.Context, repo, base, head string, limit int64) (Comparison, error)
 }
 
@@ -281,8 +286,12 @@ type Commits interface {
 }
 
 // Reviews manages review requests: a pull request of GitHub or a merge
-// request of GitLab. Write-back uses it.
+// request of GitLab. Write-back uses it. It holds Statuses, because the status
+// of the head commit is how a rule of the Git host sees the result of the
+// server for a review request.
 type Reviews interface {
+	Statuses
+
 	// OpenReview opens a review request from req.Branch into req.Target.
 	// When an open review request for the same req.Branch and the same
 	// req.Target exists, it returns that one and opens no second one. When
@@ -326,6 +335,22 @@ type Reviews interface {
 	// permission. It returns ErrNotFound for a missing repository or branch,
 	// so a caller that wants an idempotent delete ignores ErrNotFound.
 	DeleteBranch(ctx context.Context, repo, branch string) error
+}
+
+// Statuses sets the commit status of a review request. The review request
+// feature uses it, so that a rule of the Git host can require the result of
+// the server.
+type Statuses interface {
+	// SetStatus sets the status s on the commit sha, which is a full commit
+	// ID. A commit has one current status for each s.Context: a second call
+	// with the same context replaces the first, and a call with another
+	// context leaves it. It returns ErrInvalid for a status that fails
+	// ValidateStatus or a commit ID that fails ValidateCommitID, before any
+	// call, ErrNotFound for a missing repository or commit, ErrRefused when
+	// the credential cannot write statuses or the Git host refuses the
+	// status, and ErrUnsupported for a connection that Capabilities does not
+	// list CapStatus for.
+	SetStatus(ctx context.Context, repo, sha string, s Status) error
 }
 
 // Tokens gives a token for the git protocol. The source fetch of the server
@@ -675,6 +700,105 @@ type Comparison struct {
 	BaseIsAncestor bool
 }
 
+// StatusState is the state of a commit status.
+type StatusState string
+
+// The status states.
+const (
+	// StatusPending is a result that is not ready.
+	StatusPending StatusState = "pending"
+	// StatusSuccess is a result that passed.
+	StatusSuccess StatusState = "success"
+	// StatusFailure is a result that did not pass.
+	StatusFailure StatusState = "failure"
+	// StatusError is a result that the server could not make.
+	StatusError StatusState = "error"
+)
+
+// Status is the status of one commit for one context. Context names the
+// check, for example "opendustpan/plan", and a rule of the Git host can
+// require it. Description is one short line and can be empty. TargetURL is the
+// https address of the page that shows the result and can be empty.
+type Status struct {
+	State       StatusState
+	Context     string
+	Description string
+	TargetURL   string
+}
+
+// Limits of a Status.
+const (
+	// MaxStatusContextBytes is the most bytes of the context of a status.
+	MaxStatusContextBytes = 255
+	// MaxStatusDescriptionBytes is the most bytes of the description of a
+	// status.
+	MaxStatusDescriptionBytes = 140
+	// MaxStatusURLBytes is the most bytes of the address of a status.
+	MaxStatusURLBytes = 2048
+)
+
+// ValidateStatus checks s before an adapter calls the forge. It returns an
+// error that wraps ErrInvalid or ErrTooLarge. The context and the description
+// have valid UTF-8 and no control character, and the context is not empty. The
+// address is empty or an https address with a host and no user information.
+func ValidateStatus(s Status) error {
+	switch s.State {
+	case StatusPending, StatusSuccess, StatusFailure, StatusError:
+	default:
+		return fmt.Errorf("%w: the status state %q is not known", ErrInvalid, s.State)
+	}
+
+	if err := validateStatusText(s.Context, MaxStatusContextBytes); err != nil {
+		return fmt.Errorf("the status context: %w", err)
+	}
+
+	if strings.TrimSpace(s.Context) == "" {
+		return fmt.Errorf("the status context: %w: the text is empty", ErrInvalid)
+	}
+
+	if err := validateStatusText(s.Description, MaxStatusDescriptionBytes); err != nil {
+		return fmt.Errorf("the status description: %w", err)
+	}
+
+	return validateStatusURL(s.TargetURL)
+}
+
+// validateStatusText checks one line of text: at most limit bytes, valid
+// UTF-8 and no control character.
+func validateStatusText(text string, limit int) error {
+	switch {
+	case len(text) > limit:
+		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, limit)
+	case !utf8.ValidString(text):
+		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
+	case strings.ContainsFunc(text, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }):
+		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	}
+
+	return nil
+}
+
+// validateStatusURL checks the address of a status. An empty address is valid.
+func validateStatusURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	if len(raw) > MaxStatusURLBytes {
+		return fmt.Errorf("the status address: %w: the text has more than %d bytes", ErrTooLarge, MaxStatusURLBytes)
+	}
+
+	u, err := url.Parse(raw)
+
+	switch {
+	case err != nil, u.Scheme != "https", u.Host == "", u.User != nil, u.Fragment != "",
+		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }):
+		return fmt.Errorf("%w: the status address must be an https address with a host", ErrInvalid)
+	}
+
+	return nil
+}
+
 // ReviewRequest asks for a review request from Branch into Target.
 type ReviewRequest struct {
 	Branch string
@@ -901,6 +1025,8 @@ const (
 	CapCommit Capability = "commit"
 	// CapReview covers OpenReview, ReadReview, CloseReview and DeleteBranch.
 	CapReview Capability = "review"
+	// CapStatus covers SetStatus.
+	CapStatus Capability = "status"
 	// CapGitAccess covers RepoToken: a token for the git protocol,
 	// with Scoped set or not.
 	CapGitAccess Capability = "git-access"
@@ -915,7 +1041,7 @@ const (
 )
 
 // Capabilities is the set of capabilities of a forge connection. With Push
-// not set, the list has no commit and no review.
+// not set, the list has no commit, no review and no status.
 type Capabilities []Capability
 
 // Has reports whether c holds capability.

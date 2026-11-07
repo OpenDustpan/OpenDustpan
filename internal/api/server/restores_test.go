@@ -1362,3 +1362,40 @@ func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
 		t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
 	}
 }
+
+// TestStartRestoreBodyTooLarge proves that a start body over the limit of the
+// restore route answers 413 request.body-too-large with the limit, and that a
+// body of exactly the limit is read.
+func TestStartRestoreBodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	const limit = 4096
+
+	// The padding is spaces after the backup ID, so the body is valid JSON and
+	// only its size decides the answer.
+	const head = `{"backupID":"bkp-missing000000000001"}`
+
+	exact := head + strings.Repeat(" ", limit-len(head))
+	status, body := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", exact)
+	if status == http.StatusRequestEntityTooLarge {
+		t.Fatalf("body of %d bytes = %d %s, want it read", limit, status, body)
+	}
+
+	over := head + strings.Repeat(" ", limit-len(head)+1)
+
+	status, body = serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", over)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("body of %d bytes = %d %s, want 413", limit+1, status, body)
+	}
+
+	var got apiError
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("answer %q is not an error: %v", body, err)
+	}
+
+	if got.ErrorCode != "request.body-too-large" || got.ErrorArgs["maxBytes"] != float64(limit) {
+		t.Fatalf("answer = %+v, want request.body-too-large with maxBytes %d", got, limit)
+	}
+}
