@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -837,6 +838,12 @@ func (r *devRun) serveFlags(serverURL string, cert devCert, instanceID string) (
 	f.auditChain = cli.ByFlag("audit-chain").Default
 	f.softDeleteRetention = cli.ByFlag("soft-delete-retention").Default
 	f.retention = retention
+	f.planRetention = cli.ByFlag(history.PlanRetentionFlag).Default
+	f.jobLogRetention = cli.ByFlag(history.JobLogRetentionFlag).Default
+
+	if err := f.checkJobRetention(); err != nil {
+		return serveFlags{}, err
+	}
 
 	return f, nil
 }

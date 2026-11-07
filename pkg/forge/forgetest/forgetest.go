@@ -10,7 +10,7 @@
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
 // methods that it covers. The cases of the groups "The connection", "Files",
-// "Commits" and "Review requests" have bodies.
+// "Commits", "Review requests" and "Statuses" have bodies.
 // CaseNamesWithBody lists the cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
@@ -114,6 +114,10 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// the forge, for the review request id. The text "unknown" is the state
 	// before the forge computes the merge.
 	SetMergeState(ctx context.Context, id, state string) error
+	// Statuses returns the current status of each context of the commit
+	// commitID, as the forge shows it, in the order of the contexts. The newest
+	// status of a context replaces the older ones.
+	Statuses(ctx context.Context, commitID string) ([]forge.Status, error)
 	// Oversize makes the forge answer each review request with a body above
 	// the size limit of the adapter, until the returned function restores it.
 	Oversize(ctx context.Context) (restore func(), err error)
@@ -158,8 +162,8 @@ type testCase struct {
 
 // cases lists every case of the suite. A case with a nil run skips with
 // "not implemented" until its body lands. The methods that the design
-// proposes for feedback and comment commands (merge, status, comment) have
-// no case until they are in the port.
+// proposes for feedback and comment commands (merge, comment) have no case
+// until they are in the port.
 func cases() []testCase {
 	return []testCase{
 		// The connection.
@@ -187,11 +191,12 @@ func cases() []testCase {
 			forge.CapFiles,
 			caseReadBadPath,
 		},
-		{"compare lists each changed file and the ancestry", forge.CapCompare, nil},
-		{"compare of a rename has the old path", forge.CapCompare, nil},
-		{"compare of a base that is not an ancestor says so", forge.CapCompare, nil},
-		{"compare above the limit truncates the patch only", forge.CapCompare, nil},
-		{"compare of an unknown commit is not found", forge.CapCompare, nil},
+		{"compare lists each changed file and the ancestry", forge.CapCompare, caseCompareFiles},
+		{"compare of a rename has the old path", forge.CapCompare, caseCompareRename},
+		{"compare of a base that is not an ancestor says so", forge.CapCompare, caseCompareNotAncestor},
+		{"compare above the limit truncates the patch only", forge.CapCompare, caseCompareTruncates},
+		{"compare of an unknown commit is not found", forge.CapCompare, caseCompareUnknown},
+		{"compare with a bad commit ID or limit is invalid and makes no call", forge.CapCompare, caseCompareInvalid},
 
 		// Commits.
 		{"commit lands with its files and its trailer", forge.CapCommit, caseCommitLands},
@@ -316,6 +321,13 @@ func cases() []testCase {
 		{"review methods on a forge that fails are ErrUnavailable", forge.CapReview, caseReviewServerError},
 		{"review methods on an answer that does not parse are ErrUnavailable", forge.CapReview, caseReviewGarbled},
 		{"review methods on an answer above the size limit are ErrUnavailable", forge.CapReview, caseReviewOversize},
+
+		// Statuses.
+		{"set status lands on the commit", forge.CapStatus, caseStatusLands},
+		{"set status again for a context replaces it and keeps the others", forge.CapStatus, caseStatusReplaces},
+		{"set status on a missing commit is not found", forge.CapStatus, caseStatusMissingCommit},
+		{"set status that fails validation is invalid and makes no call", forge.CapStatus, caseStatusInvalid},
+		{"set status at the limits of each field passes", forge.CapStatus, caseStatusBoundaries},
 
 		// Tokens.
 		{"repo token of an app reads its repository only", forge.CapRepoToken, nil},

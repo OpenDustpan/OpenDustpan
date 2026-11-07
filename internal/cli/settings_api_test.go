@@ -158,3 +158,33 @@ func TestEmptyStaticLayerSetsNothing(t *testing.T) {
 		t.Fatal("a layer that was never filled sets a key")
 	}
 }
+
+// TestRetentionSettingsShowTheirSource proves that a configured retention is
+// the effective value of the settings resource, with the layer that set it: a
+// flag, a variable and a file key each give the value and the source.
+func TestRetentionSettingsShowTheirSource(t *testing.T) {
+	t.Parallel()
+
+	fs := serveFlagSet(t, "--plan-retention=72h")
+	file := cli.ConfigFile{"job-log-retention": "96h"}
+
+	resolved, err := cli.Resolve(fs, cli.ServeSettings(), mapLookup(map[string]string{}), file)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	layer := cli.NewStaticLayer(resolved)
+
+	checkStatic(t, layer, "plan-retention", staticWant{setting.SourceFlag, "72h", "--plan-retention"})
+	checkStatic(t, layer, "job-log-retention", staticWant{setting.SourceFile, "96h", "job-log-retention"})
+
+	envResolved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(map[string]string{
+		"DUSTPAN_JOB_LOG_RETENTION": "48h",
+	}), cli.ConfigFile{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	checkStatic(t, cli.NewStaticLayer(envResolved), "job-log-retention",
+		staticWant{setting.SourceEnv, "48h", "DUSTPAN_JOB_LOG_RETENTION"})
+}

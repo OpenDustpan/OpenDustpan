@@ -34,6 +34,24 @@ func TestCoverageAllowlistEntriesAreServed(t *testing.T) {
 	}
 }
 
+// TestCoverageAllowlistHasNoDuplicates proves no route appears twice in the
+// allowlist. A repeated group of entries hides a missing route behind a copy
+// of another one, so the list must name each route once.
+func TestCoverageAllowlistHasNoDuplicates(t *testing.T) {
+	t.Parallel()
+
+	seen := map[e2e.RouteRef]int{}
+	for _, allow := range e2e.CoverageAllowlist() {
+		seen[e2e.RouteRef{Method: allow.Method, Path: allow.Path}]++
+	}
+
+	for ref, count := range seen {
+		if count > 1 {
+			t.Errorf("allowlist names route %q %d times, want once", ref, count)
+		}
+	}
+}
+
 // cliEntry builds a recorded request from a real CLI binary. Only the
 // routing fields vary; the rest stay empty because matching never reads
 // them.

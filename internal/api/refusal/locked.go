@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // errUnknownUnit is the failure of an answer for a refused unit with no
@@ -37,9 +39,9 @@ func Locked(e *manuallock.LockedError) (errcode.Answer, error) {
 		errcode.Identifier("holder", e.Lock.Holder),
 		errcode.Time("since", e.Lock.Since),
 		errcode.Identifier("lockedKind", locked.kind),
-		errcode.Identifier("locked", locked.name),
+		errcode.IdentifierUpTo("locked", locked.name, maxQualifiedName),
 		errcode.Identifier("refusedKind", refused.kind),
-		errcode.Identifier("refused", refused.name),
+		errcode.IdentifierUpTo("refused", refused.name, maxQualifiedName),
 	)
 	if err != nil {
 		return errcode.Internal(), fmt.Errorf("answer for a manual lock: %w", err)
@@ -47,6 +49,11 @@ func Locked(e *manuallock.LockedError) (errcode.Answer, error) {
 
 	return a, nil
 }
+
+// maxQualifiedName is the longest value of the locked and refused arguments:
+// the longest namespace name, "/", and the longest unit name. The count is in
+// bytes, so it is above the count of characters that a legal value has.
+const maxQualifiedName = namespace.MaxNameLength + 1 + identity.MaxUnitLength
 
 // objectName is the kind and the name of an object in the answer of a manual
 // lock.

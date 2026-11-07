@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -51,7 +52,6 @@ var (
 	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
 	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
 	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
-	errBodyTooLarge        = errors.New("request body too large: the limit is 16384 bytes")
 	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
@@ -566,11 +566,39 @@ func readBody(w http.ResponseWriter, r *http.Request, bad error) ([]byte, error)
 	return readBodyUpTo(w, r, maxPrincipalBodyBytes, bad)
 }
 
+// bodyTooLargeError reports a request body longer than limit bytes. The limit
+// is the one of the route that read the body, so the answer names it.
+type bodyTooLargeError struct {
+	limit int64
+}
+
+// Error returns the sentence of the error, with the limit of the route.
+func (e *bodyTooLargeError) Error() string {
+	return fmt.Sprintf("request body too large: the limit is %d bytes", e.limit)
+}
+
+// errBodyTooLarge returns the error of a body longer than limit bytes.
+func errBodyTooLarge(limit int64) error {
+	return &bodyTooLargeError{limit: limit}
+}
+
+// classifyBodyTooLarge maps the error of a body over the limit of its route to
+// 413 with the limit. Every route that reads a bounded body answers through it.
+func classifyBodyTooLarge(err error) (failure, bool) {
+	tooLarge, ok := errors.AsType[*bodyTooLargeError](err)
+	if !ok {
+		return fail(0, ""), false
+	}
+
+	return failCoded(http.StatusRequestEntityTooLarge, tooLarge.Error(), errcode.RequestBodyTooLarge,
+		errcode.Quantity("maxBytes", tooLarge.limit)), true
+}
+
 // readBodyUpTo is readBody with the limit of the route.
 func readBodyUpTo(w http.ResponseWriter, r *http.Request, limit int64, bad error) ([]byte, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
-		return nil, errBodyTooLarge
+		return nil, errBodyTooLarge(limit)
 	}
 
 	if err != nil {
@@ -1006,9 +1034,6 @@ func classifyPrincipalRequest(err error) (failure, bool) {
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.PrincipalReservedSubject), true
 	case errors.Is(err, errPageQuery):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
-	case errors.Is(err, errBodyTooLarge):
-		return failCoded(http.StatusRequestEntityTooLarge, err.Error(), errcode.RequestBodyTooLarge,
-			errcode.Quantity("maxBytes", maxPrincipalBodyBytes)), true
 	}
 
 	return fail(0, ""), false

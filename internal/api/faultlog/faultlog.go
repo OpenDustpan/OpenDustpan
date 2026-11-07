@@ -144,10 +144,6 @@ func Cause(err error) string {
 		return CauseUnexpectedEOF
 	case errors.Is(err, io.EOF):
 		return CauseEOF
-	case errors.Is(err, fs.ErrNotExist):
-		return CauseFileMissing
-	case errors.Is(err, fs.ErrPermission):
-		return CauseFilePermission
 	}
 
 	// Local storage errors come before the network test. Every syscall.Errno
@@ -157,8 +153,18 @@ func Cause(err error) string {
 		return CauseStorage
 	}
 
+	// The network test comes before the fs sentinels. A *net.OpError can wrap
+	// ENOENT or EPERM, and such an error is a network failure, not a file
+	// failure.
 	if isNetworkError(err) {
 		return CauseNetwork
+	}
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return CauseFileMissing
+	case errors.Is(err, fs.ErrPermission):
+		return CauseFilePermission
 	}
 
 	return CauseUnclassified

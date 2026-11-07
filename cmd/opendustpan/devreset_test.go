@@ -218,6 +218,65 @@ func TestDevResetRefusesAPathThatIsNotADevDatabase(t *testing.T) {
 	}
 }
 
+// TestDevResetRefusesADirectoryThatCannotBeStatted checks that a data
+// directory whose parent denies search is refused with the error of Lstat,
+// not accepted. Root can search any directory, so the test is skipped for it.
+func TestDevResetRefusesADirectoryThatCannotBeStatted(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root can search a directory with mode 000")
+	}
+
+	parent := filepath.Join(t.TempDir(), "parent")
+	dir := filepath.Join(parent, "data")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+
+	before, err := os.Stat(parent)
+	if err != nil {
+		t.Fatalf("stat the parent: %v", err)
+	}
+
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Fatalf("deny search: %v", err)
+	}
+
+	// Restore the mode before the temporary directory is removed.
+	t.Cleanup(func() {
+		if err := os.Chmod(parent, before.Mode().Perm()); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+
+	if _, err := runReset(t, dir); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("dev reset of a directory that cannot be statted = %v, want %v", err, fs.ErrPermission)
+	}
+}
+
+// TestDevResetLinkCheckFailsClosedOnLstatError makes Lstat fail on a valid
+// dev directory. The later checks would accept that directory, so the link
+// check must refuse it on its own.
+func TestDevResetLinkCheckFailsClosedOnLstatError(t *testing.T) {
+	t.Parallel()
+
+	dir := resetTestDir(t, installation.KindDev)
+	proc := newDevTestProcess(false).process(t.TempDir(), make(chan string, 1))
+
+	if err := checkDevResetDirWithLstat(dir, proc, os.Lstat); err != nil {
+		t.Fatalf("check of a valid dev directory = %v, want nil", err)
+	}
+
+	failing := func(name string) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrPermission}
+	}
+
+	if err := checkDevResetDirWithLstat(dir, proc, failing); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("check with a failing Lstat = %v, want %v", err, fs.ErrPermission)
+	}
+}
+
 // TestDevResetKeepsTheOldData resets a dev database twice. Each reset keeps
 // the data that it replaces as dev.db.reset.bak, its log files and
 // blobs.reset.bak, names

@@ -325,7 +325,7 @@ func (f *gitHub) mintStatus(level string) func(response) error {
 		var e errorBody
 		if decode(r.body, &e) == nil && strings.Contains(e.Message, "permissions requested") {
 			missing := "the installation does not have the permission to " + missingPermission(level)
-			if level == levelWrite || level == levelReview {
+			if level == levelWrite || level == levelReview || level == levelStatus {
 				return fmt.Errorf("%w: %s", forge.ErrRefused, missing)
 			}
 
@@ -341,6 +341,8 @@ func (f *gitHub) mintStatus(level string) func(response) error {
 // too, so that the text tells which permission of the app is missing.
 func missingPermission(level string) string {
 	switch level {
+	case levelStatus:
+		return "write the commit statuses"
 	case levelReview:
 		return "write the contents and the pull requests"
 	case levelReviewRead:
@@ -390,7 +392,7 @@ func (f *gitHub) reviewReadBearer(ctx context.Context, r repoName) (string, erro
 // meet.
 func tokenKey(r repoName, level string) string {
 	key := r.owner + "/" + r.name
-	if level == levelWrite || level == levelReview || level == levelReviewRead {
+	if level == levelWrite || level == levelReview || level == levelReviewRead || level == levelStatus {
 		key += "#" + level
 	}
 
@@ -556,6 +558,8 @@ func tokenPermissions(level string) map[string]string {
 		return map[string]string{permContents: levelWrite, permPulls: levelWrite}
 	case levelReviewRead:
 		return map[string]string{permContents: levelRead, permPulls: levelRead}
+	case levelStatus:
+		return map[string]string{permStatuses: levelWrite}
 	}
 
 	return map[string]string{permContents: level}
@@ -618,6 +622,7 @@ func (f *gitHub) forget(r repoName, err error) error {
 		delete(f.readTokens, tokenKey(r, levelWrite))
 		delete(f.readTokens, tokenKey(r, levelReview))
 		delete(f.readTokens, tokenKey(r, levelReviewRead))
+		delete(f.readTokens, tokenKey(r, levelStatus))
 		f.mu.Unlock()
 	}
 

@@ -25,7 +25,11 @@
 //	GET    /user                                       the user of a token
 //	GET    /repos/{owner}/{repo}/commits?sha=&since=   the commits of a ref, newest first, with page and per_page
 //	GET    /repos/{owner}/{repo}/commits/{ref}         one commit by branch, tag or ID
-//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base
+//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base and the changed
+//
+// files (page, per_page)
+//
+//	POST   /repos/{owner}/{repo}/statuses/{sha}        a status on a commit (permission statuses)
 //	GET    /repos/{owner}/{repo}/git/ref/heads/{name}  one branch
 //	POST   /repos/{owner}/{repo}/git/refs              a new branch at a commit
 //	GET    /repos/{owner}/{repo}/contents/{path}?ref=  a file, or a directory listing
