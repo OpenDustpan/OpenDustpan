@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Merge main into the current branch. When the merge stops on a generated
 # file, take the side of main for that file, then run make regen and commit.
-# The script never rebases, resets, stashes or pushes.
+# The script never rebases, resets, stashes or pushes. It refuses to start
+# when the work tree is not clean.
 #
 # Usage: scripts/merge-main.sh   (no arguments)
-set -eu
+set -euo pipefail
 
-# The generated files. Keep this list in step with the generators in the
-# regen target of the Makefile. A directory entry ends with a slash.
-GENERATED=(
-	internal/api/apidesc/openapi.json
-	clients/typescript/
-	internal/clientgen/golang/testdata/golden/
-	internal/clientgen/typescript/testdata/golden/
-	internal/db/
-	docs/adr/INDEX.md
-	.repowise/decisions.yaml
-)
+cd "$(git rev-parse --show-toplevel)"
+
+# The generated files. The list is in scripts/generated-paths.txt and
+# scripts/generated-list-check.sh checks it against make regen.
+mapfile -t GENERATED < <(grep -v -e '^#' -e '^$' scripts/generated-paths.txt)
 
 MAIN_URL="https://github.com/OpenDustpan/OpenDustpan.git"
+
+if [ -n "$(git status --porcelain)" ]; then
+	echo "merge-main: the work tree is not clean; commit or remove your changes first" >&2
+	exit 2
+fi
 
 git fetch "$MAIN_URL" main
 
@@ -41,10 +41,13 @@ is_generated() {
 others=()
 while IFS= read -r path; do
 	[ -n "$path" ] || continue
-	if is_generated "$path"; then
+	if ! is_generated "$path"; then
+		others+=("$path")
+	elif git cat-file -e "FETCH_HEAD:$path" 2>/dev/null; then
 		git checkout FETCH_HEAD -- "$path"
 	else
-		others+=("$path")
+		echo "merge-main: main deleted $path; taking the deletion"
+		git rm -q -f -- "$path"
 	fi
 done < <(git diff --name-only --diff-filter=U)
 
@@ -55,5 +58,13 @@ if [ "${#others[@]}" -gt 0 ]; then
 fi
 
 make regen
-git add -u
+
+# Stage the generated paths by name, and any new file under them.
+# Never use git add -u: it stages unrelated tracked changes.
+# A path that main deleted does not exist now, so skip it: git rm staged it.
+for entry in "${GENERATED[@]}"; do
+	if [ -e "$entry" ]; then
+		git add -A -- "$entry"
+	fi
+done
 git commit -m "Merge main; regenerate generated files"

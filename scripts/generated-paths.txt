@@ -1,0 +1,12 @@
+# The files and directories that the generators write. One path for each line.
+# A directory ends with a slash. make regen-check, scripts/merge-main.sh and
+# scripts/generated-list-check.sh read this list.
+internal/api/apidesc/openapi.json
+clients/typescript/
+internal/clientgen/golang/testdata/golden/
+internal/clientgen/typescript/testdata/golden/
+internal/db/
+docs/adr/INDEX.md
+.repowise/decisions.yaml
+docs/reference/configuration.md
+internal/pulumijournal/internal/gen/testdata/journal.go
