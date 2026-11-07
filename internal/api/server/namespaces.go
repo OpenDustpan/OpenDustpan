@@ -88,9 +88,9 @@ func decodeNamespaceName(body []byte) (namespace.Name, error) {
 // r.Body before returning, so the handler can read it again. A missing or
 // bad name fails before authorization runs.
 func resolveCreateNamespace(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNamespaceBodyBytes))
+	body, err := readBodyUpTo(w, r, maxNamespaceBodyBytes, errInvalidNamespaceBody)
 	if err != nil {
-		return identity.Object{}, errInvalidNamespaceBody
+		return identity.Object{}, err
 	}
 
 	r.Body = io.NopCloser(bytes.NewReader(body))
@@ -108,9 +108,9 @@ func resolveCreateNamespace(w http.ResponseWriter, r *http.Request) (identity.Ob
 func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNamespaceBodyBytes))
+	body, err := readBodyUpTo(w, r, maxNamespaceBodyBytes, errInvalidNamespaceBody)
 	if err != nil {
-		h.writeError(ctx, w, errInvalidNamespaceBody)
+		h.writeError(ctx, w, err)
 
 		return
 	}

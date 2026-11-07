@@ -11,7 +11,6 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
-	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -141,6 +140,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		built, ok, buildErr := newDurableRecorder(&jobRecorderInputs{
 			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
 			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces,
+			retention: cfg.jobRetention,
 		})
 		if buildErr != nil {
 			return nil, buildErr
@@ -175,6 +175,8 @@ type jobRecorderInputs struct {
 	wrapper        secret.Wrapper
 	now            func() time.Time
 	namespaces     *namespace.Service
+	// retention is the period of each new plan and each new job log version.
+	retention jobRetention
 }
 
 // newDurableRecorder returns the recorder that the steps and the log chunks of
@@ -209,7 +211,7 @@ func newDurableRecorder(in *jobRecorderInputs) (*job.DurableRecorder, bool, erro
 
 	recorder, err := job.NewRecorder(job.RecorderConfig{
 		Store: records, Jobs: in.jobs, Blobs: blobs, Sealer: sealer,
-		Namespaces: jobNamespaces{namespaces: in.namespaces}, Retention: history.DefaultRetentionSettings(),
+		Namespaces: jobNamespaces{namespaces: in.namespaces}, Retention: in.retention,
 		Now: in.now,
 	})
 	if err != nil {

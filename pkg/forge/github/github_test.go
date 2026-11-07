@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -478,19 +479,21 @@ func TestStatusMapping(t *testing.T) {
 
 // TestUnusedMethodsAreUnsupported checks that the methods that are not in
 // this version name GitHub in their error, and that the adapter lists the
-// capabilities of the files, of the commits and of the review requests only.
+// capabilities of the files, of the comparison, of the commits, of the review
+// requests and of the statuses only.
 func TestUnusedMethodsAreUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
 	caps := h.Forge.Capabilities()
-	if len(caps) != 3 || !caps.Has(forge.CapFiles) || !caps.Has(forge.CapCommit) || !caps.Has(forge.CapReview) {
-		t.Fatalf("Capabilities = %v, want files, commit and review only", caps)
+	want := forge.Capabilities{forge.CapFiles, forge.CapCompare, forge.CapCommit, forge.CapReview, forge.CapStatus}
+	if !slices.Equal(caps, want) {
+		t.Fatalf("Capabilities = %v, want %v", caps, want)
 	}
 
-	_, err := h.Forge.Compare(t.Context(), "acme/infra", "a", "b", 1)
+	_, err := h.Forge.RepoToken(t.Context(), "acme/infra")
 	if !errors.Is(err, forge.ErrUnsupported) || !strings.Contains(err.Error(), "GitHub") {
-		t.Fatalf("Compare = %v", err)
+		t.Fatalf("RepoToken = %v", err)
 	}
 }

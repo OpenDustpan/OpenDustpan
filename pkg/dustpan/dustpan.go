@@ -209,6 +209,7 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	softDeleteRetention  time.Duration
+	jobRetention         jobRetention
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -718,6 +719,7 @@ func defaultSettings() *settings {
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
 		softDeleteRetention:     0,
+		jobRetention:            defaultJobRetention(),
 		maxBodyBytesInFlight:    0,
 		backup:                  defaultBackupSettings(),
 		beforeServe:             nil,
@@ -1632,7 +1634,11 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, errors.Join(checkIssuerBaseURL(cfg.issuerBaseURL), checkRetention(cfg.softDeleteRetention))
+	return base, errors.Join(
+		checkIssuerBaseURL(cfg.issuerBaseURL),
+		checkRetention(cfg.softDeleteRetention),
+		checkJobRetention(cfg.jobRetention),
+	)
 }
 
 // checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
