@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -712,15 +713,14 @@ func TestASlowRebindIsBoundedByTheGroupTimeout(t *testing.T) {
 
 	t.Cleanup(releaseBinds)
 
-	serviceBinds := 0
+	var serviceBinds atomic.Int32
 
 	s.dir.SetBindHook(func(dn string) {
 		if !strings.EqualFold(dn, ldaptest.ServiceDN) {
 			return
 		}
 
-		serviceBinds++
-		if serviceBinds == 2 {
+		if serviceBinds.Add(1) == 2 {
 			close(rebind)
 			<-release
 		}
