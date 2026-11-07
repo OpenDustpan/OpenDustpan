@@ -37,10 +37,10 @@ proposes:
    gives no other component a repository.
 3. **On the runner**, the launcher fetches a sweep plugin from the server by
    digest, checks its signature against keys pinned in the runner
-   configuration, and runs it in a sandbox that reaches only the job proxy,
-   with no metadata endpoint, no service account of the pool and its own
-   uid. The job proxy holds a short-lived read-only credential whose token
-   binds the target and the plugin. The server treats the report as
+   configuration, and runs it in the sandbox of the pool. The job proxy
+   holds a short-lived read-only credential whose token binds the target
+   and the plugin. What else the host can reach, for example a write
+   identity, is the operator's responsibility (owner, 2026-11-07). The server treats the report as
    unverified facts, as ADR 164 decision 17 says, and shows coverage for each
    resource type: swept, not swept or not supported.
 4. **A generic bridge to OpenTofu and Terraform providers**, which starts a
@@ -482,62 +482,55 @@ ADR 347 decision 4 applies, not "warn, do not block".
     the plugin on a loopback endpoint of the AWS container credentials
     provider, with a session of 15 minutes, and renews it. **This is a
     gap:** a hostile plugin can copy a read-only credential, and the
-    credential works from any network for up to 15 minutes. So on a pool
-    whose purposes include `jobs`, an AWS sweep runs only when the trust
-    policy of the role has an `aws:SourceIp` or an `aws:SourceVpce`
-    condition. The server cannot read the trust policy, so the target
-    records the operator's statement and the guide gives the policy. Without
-    such a condition, an AWS sweep needs a pool with the sweep purpose only.
-    The guide also names `aws:ResourceAccount` as a data perimeter
-    condition.
+    credential works from any network for up to 15 minutes. The guide
+    documents the mitigation: an `aws:SourceIp` or `aws:SourceVpce`
+    condition in the trust policy of the role, so a copy does not work from
+    another network, and `aws:ResourceAccount` as a data perimeter
+    condition. The server cannot read the trust policy, so it does not
+    enforce this.
 - **D4. D1 on a pool with only the sweep purpose, D3 everywhere else
   (recommended).** D2 is not offered. A team that has no OIDC federation
   uses a pool with the sweep purpose only.
 
-### The sandbox of a sweep plugin
+### The host identity: an operator responsibility (owner, 2026-11-07)
 
-D3 is not enough alone. A plugin must not reach any other credential: not the
-identity of the host, not the token of D3, not the session key of the claim.
-ADR 137 decision 6 makes the network of the host the default egress of a
-sandbox, and ADR 137 decision 4 runs the launcher in the same sandbox as the
-command. So this RFC proposes a rule in the coordinator, for each isolation
-kind, that fails closed. A test sends hostile input to each part (ADR 250).
+The review of this RFC found that a plugin could reach the write identity of
+the host: ADR 137 decision 6 makes the network of the host the default egress
+of a sandbox, so the instance metadata endpoint can answer; on the
+`kubernetes` isolation kind the Pod has the service account of the pool; and
+ADR 137 decision 4 runs the launcher in the same sandbox as the command. On a
+pool with more than one purpose, that identity can write.
 
-1. **Egress through the job proxy only.** The coordinator refuses to start a
-   sweep plugin in a sandbox whose egress is the network of the host. The
-   only route out of the network namespace of the plugin is the job proxy,
-   with the egress rules of this sweep. The claim fails with a reason, and
-   an audit entry records it.
-2. **Every metadata and workload-identity endpoint is blocked.** The network
-   namespace has no route to link-local addresses (`169.254.0.0/16`,
-   `fe80::/10`). This covers the instance metadata of EC2, Google Cloud and
-   Azure (`169.254.169.254`, `fd00:ec2::254` is also blocked by name), the
-   ECS task endpoint (`169.254.170.2`), EKS Pod Identity (`169.254.170.23`,
-   `fd00:ec2::23`) and the Azure host address `168.63.129.16`. The job proxy
-   also refuses these addresses and the names `metadata.google.internal`
-   and `metadata.azure.internal`, as a second layer that does not rely on
-   the routes.
-3. **Kubernetes: no service account of the pool.** For the `kubernetes`
-   isolation kind, the identity of the host is the service account of the
-   Pod, not an address. A sweep plugin Pod uses a service account of its own
-   with `automountServiceAccountToken: false`, and with no cloud identity
-   binding (IRSA, EKS Pod Identity, GKE or Azure workload identity). The
-   coordinator refuses to start a sweep Pod that mounts a token or names
-   another service account.
-4. **A process boundary between the launcher and the plugin.** The plugin
-   runs as a uid of its own, with `no_new_privs`, and a seccomp filter that
-   denies `ptrace`, `process_vm_readv` and `process_vm_writev`. The launcher
-   and the job proxy set `PR_SET_DUMPABLE` to 0. The secrets directory is
-   mode 0700 and belongs to the launcher uid. The plugin gets only the
-   request file, the report file, and for AWS the loopback endpoint and a
-   path to its authorization file. It never gets the token of D3 or the
-   session key of the claim.
-5. **Which pools.** On a pool whose purposes include `jobs`, a sweep plugin
-   runs only with the isolation kinds `firecracker`, `gvisor` or
-   `kubernetes`, and only when items 1 to 4 hold. The `process` kind has no
-   kernel boundary (ADR 137 decision 2), so a sweep plugin on it needs a
-   pool with the sweep purpose only. A coordinator that cannot prove items
-   1 to 4 for a claim refuses the claim.
+The owner decided on 7 November 2026: "A plugin could reach the host's write
+identity. This is once again a documentation thing, it's the user's
+problem." So this RFC adds no mechanism for it. The rule is:
+
+- **A sweep plugin runs with whatever the runner host can reach.** A pool
+  that has more than one purpose, or a host with a write-capable workload
+  identity, exposes that identity to the plugin. The operator owns this
+  choice.
+- **The documentation recommends, and shows how to set up:**
+  - a pool with the sweep purpose only, whose hosts have a read-only
+    identity or none;
+  - no write-capable workload identity on the hosts of a pool that runs
+    sweeps: no instance role that can write, and on Kubernetes a sweep
+    service account with no token mount and no cloud identity binding;
+  - blocked metadata and workload-identity endpoints: EC2, Google Cloud and
+    Azure instance metadata (`169.254.169.254`, `fd00:ec2::254`), the ECS
+    task endpoint (`169.254.170.2`), EKS Pod Identity (`169.254.170.23`,
+    `fd00:ec2::23`) and `168.63.129.16`, for example with the IMDS hop limit
+    of 1 and a network policy;
+  - pool egress through the job proxy (ADR 137 decision 6, ADR 330).
+- **What stays, because the design already has it:** the token of D3 and the
+  bearer tokens stay in the job proxy, as ADR 327 decision 5 does for every
+  credential of the proxy; a pool with egress through the job proxy applies
+  the egress rules of the sweep. No new boundary, block list or pool rule
+  comes from this RFC.
+- The console shows a warning on a sweep target whose pool has more than one
+  purpose, in the form of ADR 347 decision 1: it names the risk and the
+  setting to change. It does not block.
+
+The residual-risk list of section "Security" records this.
 
 ### Option E. The sweep report, version 2
 
@@ -697,12 +690,11 @@ marks each kind that it may not list as `not-swept`.
 4. **D4**: a short-lived token for each sweep on a pool with more than one
    purpose, whose subject binds the target and the plugin; the host identity
    only on a pool with the sweep purpose only; never a long-lived key.
-5. **The sandbox rule**: egress only through the job proxy, every metadata
-   and workload-identity endpoint blocked, no service account of the pool,
-   and a process boundary between the launcher and the plugin. Where a pool
-   with more than one purpose cannot hold this (the `process` kind, or AWS
-   with no network condition on the role), a sweep needs a pool with the
-   sweep purpose only.
+5. **The host identity is the operator's responsibility** (owner,
+   2026-11-07). A plugin runs with whatever the runner host can reach. The
+   documentation recommends a pool with the sweep purpose only, hosts with no
+   write identity and blocked metadata endpoints, and shows how to set each
+   up. The console warns on a target whose pool has more than one purpose.
 6. **E**: report version 2, with coverage lines, no downgrade, the resolve
    rule for each type, and an `iac` key that holds the account and the
    region.
@@ -737,8 +729,8 @@ the cloud APIs to the plugin. For each, the five steps of ADR 250:
 | The archive | The server checks the hashes, the signature, the names that the key may sign, the revocation list, the size and the paths at admission. | Stored by digest; opened only in the sandbox. | 256 MiB compressed, 1 GiB unpacked, 64 regular files, no links, no `..`. | `server:admit-sweep-plugin` (new) at admission; `namespace:manage-sweeps` to name it in a target. | No valid signature, a key outside its names, or a revoked release: no admission and no run, and an audit entry. |
 | The archive at the runner | The launcher checks the SHA-256, the signature against the keys pinned in the runner configuration, the names and both revocation lists, with no trust in the server's check. | Started from the file descriptor of the check (`execveat`); for `firecracker`, checked inside the microVM. | The same bounds. | The claim names the digest; the launcher refuses another. | A mismatch ends the sweep as `failed`, with the reason. |
 | The manifest and `describe` | A strict JSON Schema; unknown fields refused; a manifest version that the launcher lists; the output of `describe` must equal the signed manifest. | `describe` runs with no network and no credential. | 1 MiB; a timeout of 30 seconds. | - | Any difference, or no shared contract version, fails the sweep. |
-| The sandbox | The coordinator checks items 1 to 5 of "The sandbox of a sweep plugin" before it accepts the claim. | Its own uid, `no_new_privs`, seccomp without `ptrace`; no service account token; no route to link-local addresses. | The CPU, memory and time limits of ADR 137 decision 7. | The pool purpose and isolation kind, checked at the claim. | A coordinator that cannot prove the rule refuses the claim, with an audit entry. |
-| The egress of the plugin | Rules made by the server from the cloud, the services of the listed types and the regions of the target; the manifest cannot widen them. | A network namespace that reaches only the job proxy; the proxy refuses metadata addresses and names as a second layer. | The rate and the count of requests of the proxy. | The proxy checks each request against the rules of this sweep. | A request outside the rules is denied and logged. |
+| The host | The operator's choice (owner, 2026-11-07): the pool, its purposes and the identity of its hosts. | The sandbox of ADR 137; the documentation shows how to block metadata endpoints and to drop the service account token. | The CPU, memory and time limits of ADR 137 decision 7. | The pool purpose, checked at the claim. | The console warns on a target whose pool has more than one purpose. |
+| The egress of the plugin | Rules made by the server from the cloud, the services of the listed types and the regions of the target; the manifest cannot widen them. | On a pool with egress through the job proxy: only the proxy. On a pool with the network of the host: the operator's choice (see "The host identity"). | The rate and the count of requests of the proxy. | The proxy checks each request against the rules of this sweep. | A request outside the rules is denied and logged. |
 | The credential | A profile login block of the kind OIDC; a static key is refused. | The token of D3 and bearer tokens only in the job proxy; the AWS credential only on a loopback endpoint, for 15 minutes. | The expiry of the token is at most the timeout of the target. | The cloud role trusts only the subject `sweep:<namespace>/<target>/<kind>:<name>`, and may test `plugin_digest`. | No credential: the sweep fails before the plugin starts. |
 | The report | Version 2 or later for a plugin target, and only a version of the manifest; the parser refuses unknown fields and unknown line kinds. | Written to a file that the launcher reads; the launcher replaces the header line; uploaded as a stream; encrypted at rest (ADR 164 decision 12). | The bounds of ADR 164 decision 11, plus the coverage and `iac` bounds; the launcher stops the upload at the bound. | The upload needs the session key of the claim (ADR 131). | A report over a bound, with an error or of a lower version fails the sweep; no finding resolves. |
 | A key in a record | The `iac` form; a scope and a region inside the header. | The containment of ADR 164 decision 13 for every key. | The bounds of an `iac` entry. | The match reads only the namespace and its linked namespaces (ADR 163). | A key outside the header is refused and counted, never matched; a type with no `iac` key in the index opens no finding. |
@@ -756,10 +748,15 @@ What a hostile plugin can still do, inside these layers:
   allowed by a rule on the host. This is the residual risk of any read-only
   plugin. The signature, the review of community plugins and the data
   perimeter conditions on the cloud role reduce it. They do not remove it.
-- On AWS, copy a read-only credential of at most 15 minutes. On a pool with
-  more than one purpose, the role must also have an `aws:SourceIp` or
-  `aws:SourceVpce` condition, so the copy does not work from another
-  network (Option D).
+- On AWS, copy a read-only credential of at most 15 minutes. The documented
+  `aws:SourceIp` or `aws:SourceVpce` condition on the role stops its use
+  from another network, where the operator sets it (Option D).
+- **Reach the identity of the host.** A plugin runs with whatever the runner
+  host can reach. On a pool with more than one purpose, or on a host with a
+  write-capable workload identity, the plugin can use that identity, and so
+  can write to the cloud. The owner decided on 7 November 2026 that this is
+  the operator's responsibility, to document and not to prevent in the
+  design (section "The host identity").
 
 ## The ADR 164 amendment
 
@@ -771,14 +768,13 @@ ADR 343:
   token for each sweep with the subject
   `sweep:<namespace>/<target>/<kind>:<name>` and the claims
   `plugin_digest`, `installation` and `jti`. The job proxy holds the token,
-  never the plugin. The sandbox rule holds: egress only through the job
-  proxy, every metadata and workload-identity endpoint blocked, no service
-  account of the pool, and a process boundary between the launcher and the
-  plugin. On such a pool a sweep runs only with the isolation kinds
-  `firecracker`, `gvisor` or `kubernetes`, and an AWS sweep only with a
-  network condition on the role. Otherwise a sweep needs a pool with the
-  sweep purpose only, which may still use the identity of its hosts. No
-  sweep uses a long-lived key. Open question 2 of ADR 164 is answered.
+  never the plugin. A pool with the sweep purpose only may still use the
+  identity of its hosts. No sweep uses a long-lived key. A plugin runs with
+  whatever the runner host can reach: the identity of the host on a pool
+  with more than one purpose is the operator's responsibility (owner,
+  2026-11-07), and the documentation recommends a pool with the sweep
+  purpose only, hosts with no write identity and blocked metadata
+  endpoints. Open question 2 of ADR 164 is answered.
 - **Decision 7 changes.** A sweep target names either an admitted sweep
   plugin (name, version, digest, and a configuration of at most 64 KiB
   with no secret) or a command.
@@ -978,21 +974,20 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
 3. **Credentials on a pool with two purposes.** On a pool that also applies
    changes, should a sweep get only a short-lived token for that one sweep
    (OIDC, through a profile), whose subject names the target and the plugin,
-   in a sandbox that cannot reach the identity of the host, and never a
-   stored key? Where the sandbox cannot promise this (the `process`
-   isolation kind), a sweep needs a pool with the sweep purpose only.
-   _ELI5: the robot that builds things has a master key. When it only
-   counts things, we lock the master key in another room and give it a
-   visitor badge that works only for this one count and this one helper._
+   and never a stored key? (The identity of the host stays the operator's
+   responsibility, by the owner's decision of 7 November 2026.)
+   _ELI5: when the robot only counts things, we give it a visitor badge that
+   works only for this one count and this one helper. If the robot also
+   carries a master key, that is the owner of the robot's choice, and our
+   guide says to leave it at home._
 4. **The AWS gap.** AWS signs each request in the client, so the plugin sees
-   a read-only credential of 15 minutes. The proposal: on a pool with more
-   than one purpose, an AWS sweep runs only when the role has an
-   `aws:SourceIp` or `aws:SourceVpce` condition; otherwise it needs a pool
-   with the sweep purpose only. Do you accept this, or should every AWS
-   sweep need a pool with the sweep purpose only?
+   a read-only credential of 15 minutes. The proposal: document an
+   `aws:SourceIp` or `aws:SourceVpce` condition on the role as the
+   mitigation, and enforce nothing, in line with the owner's decision on the
+   host identity. Do you accept this?
    _ELI5: for one shop, the visitor must hold the badge in their own hand.
-   We make the badge work for 15 minutes and only inside our building. Is
-   that enough, or should only a robot that never builds things go there?_
+   The guide says how to make the badge work only inside your building. Is
+   a guide enough?_
 5. **Who may sign.** Should a plugin run only with the signature of the
    project key, or also with a key that the operator adds for its own or a
    third party's plugins? Each key may sign only the plugin names given to
