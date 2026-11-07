@@ -95,8 +95,8 @@ func checkErrorCode(t *testing.T, body []byte, want string) {
 		t.Fatalf("errorCode = %q (%v), want %q", doc.ErrorCode, err, want)
 	}
 
-	if want == errcode.PlacementNoMatch && !strings.Contains(doc.Message, "placement-rules") {
-		t.Fatalf("message %q does not name the placement rules", doc.Message)
+	if want == errcode.PlacementNoMatch && !strings.Contains(doc.Message, "opendustpan placement add") {
+		t.Fatalf("message %q does not name the placement add command", doc.Message)
 	}
 }
 

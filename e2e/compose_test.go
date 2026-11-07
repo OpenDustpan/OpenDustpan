@@ -127,7 +127,7 @@ func TestComposeQuickstart(t *testing.T) {
 	}
 
 	// The guide makes a collection and a placement rule before the first stack.
-	quickstartPlacement(ctx, t, host, token, cert)
+	quickstartComposePlacement(ctx, t, compose, composeNamespace)
 
 	stack := composeStack{host: host, token: token, cert: cert}
 
