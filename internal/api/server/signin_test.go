@@ -232,9 +232,10 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -1158,9 +1159,10 @@ func TestSignInProviderDown(t *testing.T) {
 		t.Fatalf("principals: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,

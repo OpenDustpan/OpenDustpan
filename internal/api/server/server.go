@@ -30,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -141,6 +142,10 @@ type Config struct {
 	// keeps none: the preferences routes answer 501. Both SQL adapters keep
 	// them.
 	Preferences *preferences.Service
+	// GitHostLinks keeps the links from Git host accounts to principals. Nil
+	// means the store keeps none: the link routes answer 501. Both SQL adapters
+	// keep them.
+	GitHostLinks *forgelink.Service
 	// LocalUsers is the service of the local users and of the password
 	// sign-in. Nil means the server keeps no local users: their routes are
 	// not mounted.
@@ -233,6 +238,7 @@ type Handler struct {
 	kind           installation.Kind
 	stateWrite     stategate.Effective
 	preferences    *preferences.Service
+	gitHostLinks   *forgelink.Service
 	localUsers     *localusersvc.Service
 	// passkeys is the passkey service of the console sign-in. With no
 	// sign-in there is no service.
@@ -249,8 +255,15 @@ type Handler struct {
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
-// means no backup target is configured.
-func NewHandler(cfg Config) (*Handler, error) {
+// means no backup target is configured. A nil cfg is the zero Config, so it
+// fails with the first missing required dependency.
+func NewHandler(cfg *Config) (*Handler, error) {
+	if cfg == nil {
+		var zero Config
+
+		cfg = &zero
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -265,6 +278,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	h := newHandlerFields(cfg, signIn, guard)
+	h.routes = h.buildRoutes()
+	for _, route := range h.routes {
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	}
+
+	return h, nil
+}
+
+// newHandlerFields returns a Handler with the dependencies of cfg. The caller
+// has validated cfg.
+func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder) *Handler {
 	h := &Handler{
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
@@ -295,6 +320,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
+		gitHostLinks:   cfg.GitHostLinks,
 		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
 		localUsers:     cfg.LocalUsers,
@@ -315,19 +341,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		h.passkeys = signIn.passkeys
 	}
 
-	h.routes = h.buildRoutes()
-	for _, route := range h.routes {
-		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
-	}
-
-	return h, nil
+	return h
 }
 
 // newGuard returns the recorder of the refused requests of the installation
 // API. The audit store must keep the entries of refused requests too, so it
 // must also keep the entries of each namespace. A store that does not gives
 // no handler: a refusal must never go without an entry.
-func newGuard(cfg Config) (*denials.Recorder, error) {
+func newGuard(cfg *Config) (*denials.Recorder, error) {
 	denialStore, ok := cfg.Audit.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -346,7 +367,7 @@ func newGuard(cfg Config) (*denials.Recorder, error) {
 
 // validate returns ErrMissingDependency when cfg lacks a required
 // dependency.
-func (cfg Config) validate() error {
+func (cfg *Config) validate() error {
 	switch {
 	case cfg.Audit == nil:
 		return fmt.Errorf("%w: audit store", ErrMissingDependency)
