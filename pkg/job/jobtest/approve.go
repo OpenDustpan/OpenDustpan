@@ -29,13 +29,6 @@ func approveCases() []suiteCase {
 // needApprovals is the number of approvals of the gate of the cases.
 const needApprovals = 2
 
-// The numbers of recorded verdicts after the second and the third write of the
-// two-approver case.
-const (
-	recordedTwice  = 2
-	recordedThrice = 3
-)
-
 // approverPolicy counts every subject, as a dev installation does.
 func approverPolicy() gate.ApproverPolicy {
 	return gate.ApproverPolicy{Production: false, IsDev: nil}
@@ -111,20 +104,14 @@ func testApprovalTwoApprovers(t *testing.T, h Harness) {
 		t.Fatalf("version after the first approval = %d, want %d", first.Version, j.Version+1)
 	}
 
-	// The same approver again is recorded and counts once.
-	again := apply(t, h, f, verdict(&first, "cy", job.VerdictApprove, job.EventApprovalRecorded))
-	checkApprovals(t, "repeat approval", &again, approvalsWant{
-		state: job.StateAwaitingApproval, count: recordedTwice, status: job.GateWaiting,
-	})
-
-	second := apply(t, h, f, verdict(&again, "di", job.VerdictApprove, job.EventApproved))
+	second := apply(t, h, f, verdict(&first, "di", job.VerdictApprove, job.EventApproved))
 	checkApprovals(t, "second approver", &second, approvalsWant{
-		state: job.StateQueued, count: recordedThrice, status: job.GateOpen,
+		state: job.StateQueued, count: needApprovals, status: job.GateOpen,
 	})
 
 	want := j.Phases[0].Plan.Binding()
 
-	got := second.Phases[1].Approvals[2]
+	got := second.Phases[1].Approvals[1]
 	if got.Subject != "di" || got.Comment != "ok" || got.Plan == nil || *got.Plan != want {
 		t.Fatalf("stored approval = %+v, want the verdict of di with the plan binding", got)
 	}

@@ -73,7 +73,7 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		Authorizer: unitLimits{grants: cfg.authorizer, limited: gate.LimitedAuthorizer(cfg.authorizer, svc.gates)},
 		Gates:      jobGates{snapshots: gates, members: facts},
 		Fences:     jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
-		Log: log, Approvers: &approvers, MaxPlanAge: 0,
+		Log: log, Approvers: &approvers, MaxPlanAge: 0, Groups: jobGroups{principals: principalStoreOf(cfg)},
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)

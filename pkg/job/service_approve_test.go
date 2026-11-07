@@ -40,8 +40,16 @@ func openPolicy() *gate.ApproverPolicy {
 func approveRig(t *testing.T, policy *gate.ApproverPolicy) *rig {
 	t.Helper()
 
+	return approveRigWithGroups(t, policy, nil)
+}
+
+// approveRigWithGroups is approveRig with a reader of group membership.
+func approveRigWithGroups(t *testing.T, policy *gate.ApproverPolicy, groups job.GroupReader) *rig {
+	t.Helper()
+
 	return newRig(t, func(cfg *job.ServiceConfig, r *rig) {
 		cfg.Approvers = policy
+		cfg.Groups = groups
 
 		for _, action := range []identity.Action{job.ActionJobRead, job.ActionJobApprove} {
 			r.authz.allow[string(action)+" "+r.unit.String()] = true
@@ -128,6 +136,14 @@ func approvedBy(subject string) job.Approval {
 	}
 }
 
+// actorWithToken is actorOf with the ID of the access token of the request.
+func actorWithToken(subject, tokenID string) job.Actor {
+	a := actorOf(subject)
+	a.Principal.TokenID = tokenID
+
+	return a
+}
+
 func agentActor(subject, agent string) job.Actor {
 	a := actorOf(subject)
 	a.Agent = agent
@@ -155,9 +171,9 @@ func TestApproveRecordsTheVerdict(t *testing.T) {
 			}, actorOf("carol"), job.VerdictApprove, job.EventApproved,
 		},
 		{
-			"the same approver twice counts once", func(j *job.Job) {
+			"an approver may still reject", func(j *job.Job) {
 				j.Phases[1].Approvals = []job.Approval{approvedBy("carol")}
-			}, actorOf("carol"), job.VerdictApprove, job.EventApprovalRecorded,
+			}, actorOf("carol"), job.VerdictReject, job.EventRejected,
 		},
 		{"a rejection ends the job", nil, actorOf("carol"), job.VerdictReject, job.EventRejected},
 		{"the starter may reject", nil, actorOf("alice"), job.VerdictReject, job.EventRejected},
@@ -320,6 +336,15 @@ func refusalCases() []refusalCase {
 			})),
 			refuse("approval by an agent", job.ErrAgentDenied, withActor(agentActor("carol", "dusty"))),
 			refuse("approval by the starter", job.ErrSelfApproval, withActor(actorOf("alice"))),
+			refuse("approval by the starter with another token", job.ErrSelfApproval,
+				withActor(actorWithToken("alice", "tok-second"))),
+			refuse("a repeat approval by the same subject", job.ErrAlreadyApproved, withMod(func(j *job.Job) {
+				j.Phases[1].Approvals = []job.Approval{approvedBy("carol")}
+			})),
+			refuse("a repeat approval with another token", job.ErrAlreadyApproved,
+				withActor(actorWithToken("carol", "tok-second")), withMod(func(j *job.Job) {
+					j.Phases[1].Approvals = []job.Approval{approvedBy("carol")}
+				})),
 			refuse("approval by the starter of a job that an agent started", job.ErrSelfApproval,
 				withActor(actorOf("alice")), withMod(agentStarted)),
 			refuse("subject that the policy does not count", identity.ErrDenied, withActor(actorOf("dev-user")),

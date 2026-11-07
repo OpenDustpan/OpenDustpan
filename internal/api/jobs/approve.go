@@ -58,10 +58,11 @@ type bindingBody struct {
 // Reasons of the audit entries of the refusals of an approval. The entry never
 // holds the text of the error.
 const (
-	reasonSelfApproval = "the person who started the job cannot approve it"
-	reasonAuthStale    = "the approval of a destroy needs a fresh MFA step"
-	reasonPlanChanged  = "the plan of the approval is not the stored plan"
-	reasonPlanStale    = "the stored plan is too old or was redacted"
+	reasonSelfApproval    = "the person who started the job cannot approve it"
+	reasonAuthStale       = "the approval of a destroy needs a fresh MFA step"
+	reasonAlreadyApproved = "the approver approved this phase already"
+	reasonPlanChanged     = "the plan of the approval is not the stored plan"
+	reasonPlanStale       = "the stored plan is too old or was redacted"
 )
 
 // classifyApproval maps the errors of the body and of the approval of a job.
@@ -83,6 +84,8 @@ func classifyApproval(err error) (problem.Problem, bool) {
 		return problem.Refused(err, http.StatusForbidden, errcode.JobSelfApproval), true
 	case errors.Is(err, job.ErrAuthStale):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobAuthStale), true
+	case errors.Is(err, job.ErrAlreadyApproved):
+		return problem.Refused(err, http.StatusConflict, errcode.JobAlreadyApproved), true
 	case errors.Is(err, job.ErrFinished):
 		return problem.Refused(err, http.StatusConflict, errcode.JobFinished), true
 	case errors.Is(err, job.ErrTransition):
@@ -226,6 +229,8 @@ func approvalRefusalReason(err error) (string, bool) {
 		return reasonSelfApproval, true
 	case errors.Is(err, job.ErrAuthStale):
 		return reasonAuthStale, true
+	case errors.Is(err, job.ErrAlreadyApproved):
+		return reasonAlreadyApproved, true
 	case errors.Is(err, job.ErrPlanChanged):
 		return reasonPlanChanged, true
 	case errors.Is(err, job.ErrPlanStale):

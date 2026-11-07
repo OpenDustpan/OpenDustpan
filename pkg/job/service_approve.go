@@ -66,7 +66,11 @@ func (s *service) Approve(
 	}
 
 	if v == VerdictApprove {
-		err = s.checkApproval(&j, a, plan, gates, &ap)
+		// The binding of the caller. checkPlan checks it, and drops it when no
+		// plan phase comes before.
+		ap.Plan = &plan
+
+		err = s.checkApproval(ctx, &j, a, gates, &ap)
 		if err != nil {
 			return Job{}, err
 		}
@@ -75,15 +79,15 @@ func (s *service) Approve(
 	return s.record(ctx, &j, a, &ap, mfaOf(&j, v))
 }
 
-// checkApproval runs the checks that only an approval needs, and sets the
-// binding to record as ap.Plan.
-func (s *service) checkApproval(j *Job, a Actor, bound PlanBinding, gates []Gate, ap *Approval) error {
-	err := s.checkApprover(j, a, gates)
+// checkApproval runs the checks that only an approval needs. ap.Plan holds the
+// binding of the caller, and stays as the binding to record.
+func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
+	err := s.checkApprover(ctx, j, a, gates)
 	if err != nil {
 		return err
 	}
 
-	err = s.checkPlan(j, bound, ap.At, ap)
+	err = s.checkPlan(j, ap)
 	if err != nil {
 		return err
 	}
@@ -221,8 +225,10 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 }
 
 // checkApprover refuses an approval by an agent, by a subject that the policy
-// does not count, and by the starter when no approval gate allows it.
-func (s *service) checkApprover(j *Job, a Actor, gates []Gate) error {
+// does not count, by the starter when no approval gate allows it, by a subject
+// that approved the phase already, and by a subject outside the groups of a
+// gate.
+func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Gate) error {
 	if a.Agent != "" {
 		return fmt.Errorf("%w: agent %q cannot approve; only a person can", ErrAgentDenied, clip(a.Agent))
 	}
@@ -243,17 +249,76 @@ func (s *service) checkApprover(j *Job, a Actor, gates []Gate) error {
 		return fmt.Errorf("%w: ask another approver", ErrSelfApproval)
 	}
 
+	// An approval counts once, so a repeat only grows the record of the phase.
+	if approvedAlready(&j.Phases[j.Current], a.Principal.Subject) {
+		return fmt.Errorf("%w: wait for the other approvers", ErrAlreadyApproved)
+	}
+
+	return s.checkGroups(ctx, j, a.Principal.Subject, gates)
+}
+
+// approvedAlready reports whether subject has an approval on the phase.
+func approvedAlready(p *Phase, subject string) bool {
+	return slices.ContainsFunc(p.Approvals, func(ap Approval) bool {
+		return ap.Subject == subject && ap.Verdict == VerdictApprove && typeOf(ap.Gate) == GateApproval
+	})
+}
+
+// checkGroups refuses an approval by a subject that is not an enabled member of
+// the groups of each gate that names groups. The gate names its groups by ID,
+// so a group that someone renamed still matches, and a group that someone made
+// again with the old name does not. It is a *DeniedError on job:approve for a
+// non-member, for a failure of the reader, for no reader, and for a gate whose
+// names have no IDs (fail closed). A gate with no groups needs no reader.
+//
+// A rejection does not come here: any holder of job:approve can reject, because
+// a rejection only stops the change.
+func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates []Gate) error {
+	for i := range gates {
+		g := &gates[i]
+		if len(g.Groups) == 0 && len(g.GroupIDs) == 0 {
+			continue
+		}
+
+		denied := func(reason string, cause error) error {
+			err := fmt.Errorf("%w: %s", identity.ErrDenied, reason)
+			if cause != nil {
+				err = fmt.Errorf("%w: %s: %w", identity.ErrDenied, reason, cause)
+			}
+
+			return &DeniedError{Action: ActionJobApprove, Object: j.Spec.Unit, Err: err}
+		}
+
+		switch {
+		case len(g.GroupIDs) != len(g.Groups) || len(g.GroupIDs) == 0:
+			return denied("the gate names groups with no group IDs", nil)
+		case s.groups == nil:
+			return denied("this server cannot read group membership", nil)
+		}
+
+		member, err := s.groups.MemberOfAny(ctx, subject, g.GroupIDs)
+
+		switch {
+		case err != nil:
+			return denied("the group membership cannot be read", err)
+		case !member:
+			return denied("the subject is not a member of a group of the gate", nil)
+		}
+	}
+
 	return nil
 }
 
 // checkPlan checks the binding of the approver to the stored plan of the plan
-// phase before the current phase, and sets it as ap.Plan. With no plan phase
-// before, the phase has no plan to bind, and ap.Plan stays nil. The state
-// version of the plan is the one the plan read: a state change after the plan
-// is caught by the store at the dispatch of the apply phase, which reads the
-// current state version.
-func (s *service) checkPlan(j *Job, bound PlanBinding, now time.Time, ap *Approval) error {
+// phase before the current phase. ap.Plan holds the binding of the caller. With
+// no plan phase before, the phase has no plan to bind, and the binding is
+// dropped (ap.Plan becomes nil). The state version of the plan is the one the
+// plan read: a state change after the plan is caught by the store at the
+// dispatch of the apply phase, which reads the current state version.
+func (s *service) checkPlan(j *Job, ap *Approval) error {
 	if j.Current == 0 || j.Phases[j.Current-1].Kind != PhasePlan {
+		ap.Plan = nil
+
 		return nil
 	}
 
@@ -264,12 +329,10 @@ func (s *service) checkPlan(j *Job, bound PlanBinding, now time.Time, ap *Approv
 		current = stored.StateVersion
 	}
 
-	err := CheckPlan(stored, &bound, current, now.Add(-s.maxPlanAge))
+	err := CheckPlan(stored, ap.Plan, current, ap.At.Add(-s.maxPlanAge))
 	if err != nil {
 		return fmt.Errorf("approve job %s: %w", j.ID, err)
 	}
-
-	ap.Plan = &bound
 
 	return nil
 }

@@ -153,6 +153,7 @@ const (
 	ErrorCodeIssuerKeyMissing                      ErrorCode = "issuer.key-missing"
 	ErrorCodeIssuerNotConfigured                   ErrorCode = "issuer.not-configured"
 	ErrorCodeJobAgentDenied                        ErrorCode = "job.agent-denied"
+	ErrorCodeJobAlreadyApproved                    ErrorCode = "job.already-approved"
 	ErrorCodeJobAuthStale                          ErrorCode = "job.auth-stale"
 	ErrorCodeJobConflict                           ErrorCode = "job.conflict"
 	ErrorCodeJobFinished                           ErrorCode = "job.finished"

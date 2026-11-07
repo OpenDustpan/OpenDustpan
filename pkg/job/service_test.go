@@ -389,7 +389,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
-		Approvers: nil, MaxPlanAge: 0,
+		Approvers: nil, MaxPlanAge: 0, Groups: nil,
 	}
 
 	for _, o := range opts {
@@ -1199,6 +1199,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			Log:        slog.New(slog.DiscardHandler),
 			Approvers:  nil,
 			MaxPlanAge: 0,
+			Groups:     nil,
 		}
 	}
 

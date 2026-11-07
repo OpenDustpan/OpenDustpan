@@ -100,6 +100,17 @@ type GateGuard interface {
 	Enforced(ctx context.Context, unit identity.Object) ([]EnforcedGate, error)
 }
 
+// GroupReader tells whether a person belongs to the groups of an approval
+// gate. The gate names its groups by their immutable IDs, never by their
+// names: a group that someone made again with the same name has another ID.
+type GroupReader interface {
+	// MemberOfAny reports whether a principal with the subject exists, is
+	// enabled, and is a member of at least one of the groups with these IDs. A
+	// subject that no principal has is not a member: it returns false and no
+	// error. Any error denies the approval (fail closed).
+	MemberOfAny(ctx context.Context, subject string, groupIDs []string) (bool, error)
+}
+
 // ServiceConfig holds the ports of a service. Every port but Freezes,
 // Switches, Now and NewID is required.
 type ServiceConfig struct {
@@ -129,8 +140,14 @@ type ServiceConfig struct {
 	// Approvers decides which subjects fill a slot of an approval gate: it
 	// keeps a dev subject out of a production installation. Nil takes the
 	// closed policy, which counts no signature, so an approval can never open
-	// a gate. The server always sets it.
+	// a gate. A policy that is not nil but has the zero value has Production
+	// false: it counts every subject, as a dev installation does. The server
+	// always sets it.
 	Approvers *gate.ApproverPolicy
+	// Groups tells whether an approver belongs to the groups of a gate. Nil
+	// means that no one belongs to any group, so a gate with groups never
+	// takes an approval (fail closed). A gate with no groups needs no reader.
+	Groups GroupReader
 	// MaxPlanAge is the oldest plan that Approve accepts. Zero takes
 	// DefaultMaxPlanAge. The state version of the plan is checked against the
 	// plan itself at approval: a state change after the plan is caught by the
@@ -157,6 +174,7 @@ type service struct {
 	newID      func() ID
 	log        *slog.Logger
 	approvers  gate.ApproverPolicy
+	groups     GroupReader
 	maxPlanAge time.Duration
 }
 
@@ -200,6 +218,7 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 		log:        cfg.Log,
 		// A nil policy is the closed one: it counts no signature (fail closed).
 		approvers:  gate.ApproverPolicy{Production: true, IsDev: nil},
+		groups:     cfg.Groups,
 		maxPlanAge: DefaultMaxPlanAge,
 	}
 

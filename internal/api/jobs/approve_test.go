@@ -388,6 +388,7 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 		{fmt.Errorf("%w: no", job.ErrAgentDenied), http.StatusForbidden, "job.agent-denied"},
 		{fmt.Errorf("%w: ask another approver", job.ErrSelfApproval), http.StatusForbidden, "job.self-approval"},
 		{fmt.Errorf("%w: MFA", job.ErrAuthStale), http.StatusForbidden, "job.auth-stale"},
+		{fmt.Errorf("%w: wait", job.ErrAlreadyApproved), http.StatusConflict, "job.already-approved"},
 		{fmt.Errorf("%w: unit", identity.ErrDenied), http.StatusForbidden, ""},
 		{fmt.Errorf("%w: queued", job.ErrTransition), http.StatusConflict, "job.not-awaiting-approval"},
 		{fmt.Errorf("%w: succeeded", job.ErrFinished), http.StatusConflict, "job.finished"},
@@ -446,6 +447,7 @@ func TestApproveRefusalWritesOneAuditEntry(t *testing.T) {
 		},
 		{"other plan", fmt.Errorf("%w: plan", job.ErrPlanChanged), "the plan of the approval is not the stored plan"},
 		{"stale plan", fmt.Errorf("%w: old", job.ErrPlanStale), "the stored plan is too old or was redacted"},
+		{"repeat approval", fmt.Errorf("%w: wait", job.ErrAlreadyApproved), "the approver approved this phase already"},
 	}
 
 	for _, tc := range tests {
@@ -481,6 +483,61 @@ func TestApproveRefusalWritesOneAuditEntry(t *testing.T) {
 		if len(r.entries.entries) != 0 {
 			t.Errorf("error %v wrote %d audit entries, want none", err, len(r.entries.entries))
 		}
+	}
+}
+
+// TestApproveAuditsTheDenialsOfTheGroupCheck proves that the denials of the
+// group check of the service, in the form that the service gives them, answer
+// 403 and write one entry of job:approve on the unit of the route. The route
+// names the object, whatever object the error names.
+func TestApproveAuditsTheDenialsOfTheGroupCheck(t *testing.T) {
+	t.Parallel()
+
+	unit := unitOf(t, "acme", testUnit)
+	other := unitOf(t, "other", testUnit)
+
+	denial := func(object identity.Object, reason string, cause error) error {
+		err := fmt.Errorf("%w: %s", identity.ErrDenied, reason)
+		if cause != nil {
+			err = fmt.Errorf("%w: %s: %w", identity.ErrDenied, reason, cause)
+		}
+
+		return &job.DeniedError{Action: identity.ActionJobApprove, Object: object, Err: err}
+	}
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"a non-member with job:approve", denial(unit, "the subject is not a member of a group of the gate", nil)},
+		{"a member of another group", denial(unit, "the subject is not a member of a group of the gate", nil)},
+		{"a failure of the membership read", denial(unit, "the group membership cannot be read", errDriver)},
+		{"no membership reader", denial(unit, "this server cannot read group membership", nil)},
+		{"a denial that names an object of another namespace", denial(other, "not a member", nil)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newApproveRig(t, holdsApprove()...)
+			r.svc.err = tc.err
+
+			rec := r.send(t, testJob, goodApprove)
+			if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "hunter2") {
+				t.Fatalf("status = %d %s, want 403 with no text of the failure", rec.Code, rec.Body.String())
+			}
+
+			if len(r.entries.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(r.entries.entries))
+			}
+
+			e := r.entries.entries[0]
+			if e.Subject != "ada" || e.Action != string(identity.ActionJobApprove) || e.Object != "opentofu:acme/net" ||
+				e.Outcome != audit.OutcomeDenied {
+				t.Fatalf("entry = %+v, want a refusal for ada of job:approve on the unit of the route", e)
+			}
+		})
 	}
 }
 

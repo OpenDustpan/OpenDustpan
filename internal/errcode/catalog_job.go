@@ -5,6 +5,8 @@ package errcode
 const (
 	// JobAgentDenied means that the rules of the agent refuse the job.
 	JobAgentDenied = "job.agent-denied"
+	// JobAlreadyApproved means that the caller approved this phase already.
+	JobAlreadyApproved = "job.already-approved"
 	// JobAuthStale means that the approval of a destroy has no fresh MFA step.
 	JobAuthStale = "job.auth-stale"
 	// JobConflict means that the job changed since the caller read it.
@@ -41,6 +43,7 @@ const (
 func jobSpecs() []Spec {
 	return []Spec{
 		{Code: JobAgentDenied, Meaning: "the rules of the agent refuse the job", Args: nil},
+		{Code: JobAlreadyApproved, Meaning: "the caller approved this phase already", Args: nil},
 		{Code: JobAuthStale, Meaning: "the approval of a destroy has no fresh MFA step", Args: nil},
 		{Code: JobConflict, Meaning: "the job changed since the caller read it", Args: nil},
 		{Code: JobFinished, Meaning: "the job ended already", Args: nil},

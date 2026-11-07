@@ -1323,6 +1323,7 @@
           "issuer.key-missing",
           "issuer.not-configured",
           "job.agent-denied",
+          "job.already-approved",
           "job.auth-stale",
           "job.conflict",
           "job.finished",
