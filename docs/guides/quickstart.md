@@ -55,6 +55,20 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 
 Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
 
+The server refuses a new Pulumi stack that no placement rule matches, and `serve` makes no rule. Make a collection and one rule that puts each new Pulumi stack in it. The `opendustpan` binary has no command for these two steps yet, so use the API:
+
+```sh
+curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
+curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+```
+
+For the compose stack, run the same two calls with `--cacert deploy/compose/tls/cert.pem` and the token from `deploy/compose/.env`.
+
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
 ## Compose stack with PostgreSQL and S3-compatible storage
@@ -94,6 +108,8 @@ Make a namespace. The container already has the admin token:
 docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
 ```
+
+Then make a collection and a placement rule in the namespace, as the end of the previous section shows. From the host, the server is at `https://localhost:8080` and the certificate is `deploy/compose/tls/cert.pem`.
 
 The server is at `https://localhost:8080`. The certificate file is `deploy/compose/tls/cert.pem`. To use another host port, set `OPENDUSTPAN_PORT` in `.env`.
 
@@ -151,7 +167,7 @@ tofu apply
 
 `SSL_CERT_FILE` works on Linux. On other systems, use a certificate that the system trusts.
 
-OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu init`.
+OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu init`. Placement rules apply to Pulumi stacks only, so OpenTofu needs no rule.
 
 ## Test the compose stack
 
