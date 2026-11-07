@@ -18,13 +18,12 @@ On 7 November 2026 the project owner decided this point.
 
 Decided by the project owner on 7 November 2026.
 
-1. **The permission is a stored grant (owner, 2026-11-07).** The server makes a stored grant in the same transaction that makes the namespace. The grant is for the namespace service principal. The grant gives the principal the action `unit:run-plan` on its own namespace. The grant has the time of the namespace creation.
+1. **The permission is a stored grant (owner, 2026-11-07).** The server makes a stored grant in the same transaction that makes the namespace. The grant is for the namespace service principal. The grant gives the principal the action `unit:run-plan` on its own namespace. The creator of the grant is the creator of the namespace. The grant has the time of the namespace creation.
 2. **A person can list and revoke the grant (owner, 2026-11-07).** The grant shows in the list of grants like each other grant. A holder of the right to manage access can revoke it. The decision that a trigger starts a plan then names the grant that allowed it.
 3. **The principal still holds nothing else (owner, 2026-11-07).** The grant covers the start of a plan only. The principal still has no token and no session. The rule of ADR 267 decision 14 about the read check of the last saver does not change.
 
 ## Consequences
 
-- This ADR does not decide who is the creator of the grant.
 - A revoked grant makes a trigger start fail closed. The server writes the denial to the audit log, as for each other denial.
 - Code no longer defines who holds `unit:run-plan` for this principal. The code defines only the action and the role.
 - The definition of "Namespace service principal" in `GLOSSARY.md` says that no grant changes what the principal holds. That sentence is no longer true. The code change updates the glossary.

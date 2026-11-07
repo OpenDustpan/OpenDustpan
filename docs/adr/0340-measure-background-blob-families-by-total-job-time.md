@@ -24,15 +24,15 @@ On 7 November 2026 the owner chose option 2 of RFC 116. The text of this option 
 Decided by the project owner on 7 November 2026.
 
 1. **Background families are measured by total job time (owner, 2026-11-07).** Accept the background cost. A background blob family is measured by the total time of its job. This changes ADR 281 decision 2 for these families.
-2. **Hot paths keep the per-operation measure (from the RFC 116 proposal).** A path where a person or a CLI waits keeps the per-operation measure. ADR 281 decision 2 stays for these paths.
+2. **Hot paths keep the per-operation measure (owner, 2026-11-07).** A path where a person or a CLI waits keeps the per-operation measure. ADR 281 decision 2 stays for these paths.
    - The hot paths are the Pulumi checkpoint, the journal batch, the job log chunk and the backup target copy.
    - The unit import and the audit checkpoint check keep it too, because they meet it now.
-3. **The record states the job (from the RFC 116 proposal).** For each background family, the benchmark record states these items:
+3. **The record states the job (owner, 2026-11-07).** For each background family, the benchmark record states these items:
    - the job and its size
    - the profile
    - how many jobs run at the same time
    - the limit
-4. **A miss goes to the owner (from the RFC 116 proposal).** A family that misses its limit goes back to the owner with the numbers.
+4. **A miss goes to the owner (owner, 2026-11-07).** A family that misses its limit goes back to the owner with the numbers.
 
 ## Consequences
 

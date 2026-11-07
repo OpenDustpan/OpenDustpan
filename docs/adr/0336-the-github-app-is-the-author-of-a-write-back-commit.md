@@ -19,13 +19,13 @@ On 7 November 2026 the project owner decided these points.
 Decided by the project owner on 7 November 2026.
 
 1. **The App is the author, and the person is a co-author (owner, 2026-11-07).** A write-back commit on GitHub has the GitHub App as its author. The message has a `Co-authored-by` trailer that names the person who asked. The job record and the audit entry stay the record of who asked and why.
-2. **GitHub signs the commit (owner, 2026-11-07).** GitHub signs the commit. The server holds no signing key for a write-back commit. The adapter makes the commit with `createCommitOnBranch`. This is a detail of the design of the adapter, not an owner decision.
+2. **GitHub signs the commit (owner, 2026-11-07).** The adapter makes the commit with `createCommitOnBranch`. GitHub signs it. The server holds no signing key for a write-back commit.
 3. **The write-back follows a moved head at most 3 times (owner, 2026-11-07).** The head of the branch can move after the base. Then the write-back may read the files again at the new head. It may try again. It makes at most 3 retries.
 4. **A retry has two conditions (owner, 2026-11-07).** The write-back retries only when both are true:
    - The move does not touch the files that the write-back changes.
    - The new head descends from the base.
 
-   If one condition is false, or the 3 retries are gone, the write-back fails. The adapter uses `job.ErrConflict` for this. That error is a detail of the design, not an owner decision.
+   If one condition is false, or the 3 retries are gone, the write-back fails with `job.ErrConflict`.
 
 ## Consequences
 
