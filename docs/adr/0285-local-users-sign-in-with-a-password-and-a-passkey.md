@@ -11,6 +11,9 @@ Changed by:
   is `caller:manage-sign-in`.
 - ADR 320 extends decision 21: the rule of the fresh step of a password
   applies to LDAP too.
+- ADR 333 changes decision 16: a ceiling of lock alerts for each installation and hour.
+- ADR 333 extends decision 23: the audit kind sign-in.name-lock-ended.
+- ADR 333 extends decision 20: the passkey challenge is a sealed cookie.
 
 ## Context
 

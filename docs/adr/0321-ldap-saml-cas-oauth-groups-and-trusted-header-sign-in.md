@@ -1,6 +1,11 @@
 # 321. LDAP, SAML, CAS, OAuth 2.0 groups and trusted-header sign-in
 
 Status: accepted · 2026-11-02. The design is the proposals P2 to P6 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md), with decisions of the PM under the owner's delegation, marked "(PM)". The owner accepts them with the merge. A decision marked "(owner, ADR N)" repeats an owner decision of that ADR. The start of a SAML sign-in (RFC 21 question O4) and the form of the group mapping (ADR 320 decision 12) wait for the owner
+Changed by:
+
+- ADR 332 extends decisions 13, 14, 15 and 22: SP-started SAML is the normal path. An optional IdP-started mode is never a fresh sign-in.
+- ADR 332 changes decisions 19, 30, 33 and 38: group claims map to groups by the rule of ADR 332.
+
 
 Changes:
 

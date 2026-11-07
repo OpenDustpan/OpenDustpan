@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 335 extends decision 7: Cedar is the default engine, and another engine can be an adapter.
 
 ## Context
 

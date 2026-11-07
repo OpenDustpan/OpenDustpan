@@ -9,6 +9,7 @@ Changed by:
 - ADR 299 changes decisions 14 and 19: one credential rule for every start of
   a plan.
 - ADR 310 changes decision 22: the run order.
+- ADR 338 changes decision 14: the permission of the namespace service principal is a stored grant.
 
 ## Context
 

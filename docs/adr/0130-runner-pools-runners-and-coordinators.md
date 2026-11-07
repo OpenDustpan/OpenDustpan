@@ -7,6 +7,7 @@ Changed by:
 - ADR 164 changes decision 5: a sweep pool uses only the workload identity of
   its hosts.
 - ADR 300 changes: the labels inside a pool. A job's required labels match a runner when they are a subset of the runner's labels.
+- ADR 343 changes decision 3: a runner pool may have more than one purpose.
 
 ## Context
 
