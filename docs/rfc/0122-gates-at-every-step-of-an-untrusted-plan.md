@@ -1,16 +1,13 @@
 ---
 rfc: 122
 title: Gates at every step of a plan that runs untrusted code with a privileged credential
-status: discussing
+status: accepted
 created: 2026-11-07
 ---
 
 # RFC 122. Gates at every step of a plan that runs untrusted code with a privileged credential
 
-Status: discussing. Design only. An open question for the project owner.
-Until the owner decides, `main` keeps the rules of the ADRs that this RFC
-names. This RFC depends on ADR 341 and ADR 347, which are in pull request
-#2562. Merge this RFC after that pull request.
+Status: accepted. The project owner decided on 7 November 2026. See [ADR 353](../adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md).
 
 This RFC supersedes the open question about scanners as a step of the plan
 job. That question was a conflict between the owner's "yes" to scanners at
@@ -1567,4 +1564,4 @@ For `GLOSSARY.md`, after acceptance. This PR does not edit the glossary.
 
 ## Outcome
 
-Empty until the RFC is accepted or dropped.
+Accepted on 7 November 2026 (owner). [ADR 353](../adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md) records the decision.
