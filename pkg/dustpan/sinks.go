@@ -148,6 +148,7 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 		Sessions:       cfg.sessionCookies,
 		Idempotency:    idem,
 		Logger:         cfg.logger,
+		Now:            cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sink api: %w", err)
