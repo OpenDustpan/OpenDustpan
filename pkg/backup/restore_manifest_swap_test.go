@@ -9,11 +9,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 )
 
-// TestRestoreSwappedManifestIsRefusedAtEachStep proves that a restore refuses
-// a manifest that changes after the pin, at the stage step and at the check
-// step. The first manifest read is the pin. The second read is the stage
-// check and the third read is the check step. Each row swaps the manifest from
-// one read on and fails the restore with no apply.
+// TestRestoreSwappedManifestIsRefusedAtEachStep proves that a restore fails
+// with ErrCorrupt and applies nothing when the manifest changes after the
+// pin. Each row swaps the manifest from one manifest read on. Read 1 is the
+// pin, read 2 is the stage check and read 3 is the check step. The test
+// checks the end state only, so it does not show which step refused.
 func TestRestoreSwappedManifestIsRefusedAtEachStep(t *testing.T) {
 	t.Parallel()
 

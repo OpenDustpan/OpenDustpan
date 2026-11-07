@@ -8,9 +8,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// TestPlacementErrorNamesTheRoutes proves that the no-match error names the
-// route that makes a collection and the route that puts a unit into it. Both
-// routes are registered in internal/api/inventory.
+// TestPlacementErrorNamesTheRoutes: the collection route is listed in the API
+// description, and the unit route is registered in the inventory API. The test
+// checks that the no-match error names both.
 func TestPlacementErrorNamesTheRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -23,7 +23,7 @@ func TestPlacementErrorNamesTheRoutes(t *testing.T) {
 			name:      "names the collection route and the unit route",
 			namespace: "acme",
 			want: []string{
-				"POST /api/inventory/namespaces/acme/collections",
+				"POST /api/dustpan/v1/namespaces/acme/collections",
 				"PUT /api/inventory/unit-collection",
 				"POST /api/dustpan/v1/namespaces/acme/placement-rules",
 			},

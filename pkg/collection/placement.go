@@ -262,7 +262,7 @@ func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
 		"no placement rule matches %s stack %s/%s in namespace %s: add a rule with "+
 			"POST /api/dustpan/v1/namespaces/%s/placement-rules, "+
-			"or create a collection with POST /api/inventory/namespaces/%s/collections "+
+			"or create a collection with POST /api/dustpan/v1/namespaces/%s/collections "+
 			"and put the unit into it with PUT /api/inventory/unit-collection",
 		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace, e.Namespace,
 	)

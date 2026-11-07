@@ -41,8 +41,9 @@ func TestLinkedDependencies(t *testing.T) {
 	}
 }
 
-// linkedInternalPackages returns the sorted set of internal packages that the
-// runner module links through pkg/launcher.
+// linkedInternalPackages returns the sorted set of internal packages that
+// pkg/launcher links. The binary cmd/dustpan-launcher imports pkg/launcher
+// and links more packages, which this list does not hold.
 func linkedInternalPackages() []string {
 	return []string{
 		"opendustpan.org/opendustpan/internal/ident",
@@ -74,9 +75,9 @@ func linkedInternalPackages() []string {
 }
 
 // TestLinkedInternalPackages checks the internal packages that pkg/launcher
-// links against linkedInternalPackages. The list is the set of internal
-// packages that the runner module links through this package; a new import
-// must add its path here in the same change.
+// links against linkedInternalPackages. The check does not cover
+// cmd/dustpan-launcher. A new import of pkg/launcher must add its path to the
+// list in the same change.
 func TestLinkedInternalPackages(t *testing.T) {
 	t.Parallel()
 
