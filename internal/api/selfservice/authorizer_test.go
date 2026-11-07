@@ -221,3 +221,71 @@ func TestUnmappedObjectKindIsRefused(t *testing.T) {
 		t.Errorf("error = %q, want the adapter's own refusal of the kind", msg)
 	}
 }
+
+// TestHostileObjectsAreRefused gives the caller a grant that would allow the
+// blueprint action on the object's real target. Each case pairs an object with
+// a half-valid shape: the adapter must refuse it, because it needs both the
+// principal kind and a principal unit.
+func TestHostileObjectsAreRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		grant  func(*testing.T, *authorizerEnv)
+		object func() selfservice.Object
+	}{
+		{
+			name: "an unmapped kind with a principal unit is refused",
+			grant: func(t *testing.T, env *authorizerEnv) {
+				t.Helper()
+				env.grantTo(t, identity.PrincipalObject("prn-source"))
+			},
+			object: func() selfservice.Object {
+				return selfservice.Object{
+					Unit:      identity.PrincipalObject("prn-source"),
+					Kind:      selfservice.ObjectKind("unmapped"),
+					Namespace: "acme",
+					Blueprint: "",
+				}
+			},
+		},
+		{
+			name: "the principal kind with a namespace unit is refused",
+			grant: func(t *testing.T, env *authorizerEnv) {
+				t.Helper()
+				env.grantTo(t, identity.ServerObject())
+			},
+			object: func() selfservice.Object {
+				return selfservice.Object{
+					Unit:      identity.NamespaceObject("acme"),
+					Kind:      selfservice.ObjectPrincipal,
+					Namespace: "acme",
+					Blueprint: "",
+				}
+			},
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newAuthorizerEnv(t)
+			tc.grant(t, env)
+
+			action := sourceRequirement(t, "prn-source").Action
+			adapter := selfserviceapi.NewNamespaceAuthorizer(env.authz)
+			err := adapter.Authorize(t.Context(), env.caller, action, tc.object())
+
+			if err == nil {
+				t.Fatal("authorize allowed a hostile object")
+			}
+
+			if !errors.Is(err, identity.ErrDenied) {
+				t.Fatalf("authorize error = %v, want a denial", err)
+			}
+		})
+	}
+}

@@ -308,7 +308,10 @@ func authorizedObject(object selfservice.Object) (identity.Object, error) {
 		return identity.NamespaceObject(object.Namespace), nil
 	}
 
-	if object.Unit.IsPrincipal() {
+	// Defense in depth: both conditions must hold. A principal unit under an
+	// unmapped kind, or the principal kind under a unit that is not a principal,
+	// is refused below. Neither check relies on the other.
+	if object.Kind == selfservice.ObjectPrincipal && object.Unit.IsPrincipal() {
 		return object.Unit, nil
 	}
 
