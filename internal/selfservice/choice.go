@@ -67,12 +67,21 @@ type ScalarValue json.RawMessage
 
 // MarshalJSON writes the JSON of s, as json.RawMessage does.
 func (s ScalarValue) MarshalJSON() ([]byte, error) {
-	return json.RawMessage(s).MarshalJSON()
+	data, err := json.RawMessage(s).MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshal a scalar value: %w", err)
+	}
+
+	return data, nil
 }
 
 // UnmarshalJSON reads the JSON into s, as json.RawMessage does.
 func (s *ScalarValue) UnmarshalJSON(data []byte) error {
-	return (*json.RawMessage)(s).UnmarshalJSON(data)
+	if err := (*json.RawMessage)(s).UnmarshalJSON(data); err != nil {
+		return fmt.Errorf("unmarshal a scalar value: %w", err)
+	}
+
+	return nil
 }
 
 // Outputs returns the output names that s reads.

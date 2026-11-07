@@ -5052,22 +5052,28 @@
       "SelfServiceDelivery": {
         "properties": {
           "default": {
-            "enum": [
-              "git",
-              "opendustpan"
-            ],
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfServiceHomeKind"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "git": {
             "$ref": "#/components/schemas/SelfServiceGitDelivery"
           },
           "homes": {
             "items": {
-              "enum": [
-                "git",
-                "opendustpan"
-              ],
-              "type": "string"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SelfServiceHomeKind"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           }
@@ -5128,11 +5134,14 @@
         "properties": {
           "deliveries": {
             "items": {
-              "enum": [
-                "review-request",
-                "direct-push"
-              ],
-              "type": "string"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SelfServiceJobDelivery"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -5144,6 +5153,13 @@
           }
         },
         "type": "object"
+      },
+      "SelfServiceHomeKind": {
+        "enum": [
+          "git",
+          "opendustpan"
+        ],
+        "type": "string"
       },
       "SelfServiceInput": {
         "properties": {
@@ -5169,14 +5185,14 @@
             "type": "string"
           },
           "type": {
-            "enum": [
-              "string",
-              "integer",
-              "number",
-              "boolean",
-              "string-list"
-            ],
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfServiceInputType"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "validate": {
             "items": {
@@ -5191,6 +5207,23 @@
           "type"
         ],
         "type": "object"
+      },
+      "SelfServiceInputType": {
+        "enum": [
+          "string",
+          "integer",
+          "number",
+          "boolean",
+          "string-list"
+        ],
+        "type": "string"
+      },
+      "SelfServiceJobDelivery": {
+        "enum": [
+          "review-request",
+          "direct-push"
+        ],
+        "type": "string"
       },
       "SelfServiceModule": {
         "properties": {
@@ -5257,6 +5290,14 @@
         },
         "type": "object"
       },
+      "SelfServicePolicyEffect": {
+        "enum": [
+          "allow",
+          "approve",
+          "deny"
+        ],
+        "type": "string"
+      },
       "SelfServicePolicyRule": {
         "properties": {
           "approvals": {
@@ -5264,12 +5305,14 @@
             "type": "integer"
           },
           "effect": {
-            "enum": [
-              "allow",
-              "approve",
-              "deny"
-            ],
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfServicePolicyEffect"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "groups": {
             "items": {
@@ -5313,15 +5356,25 @@
         ],
         "type": "object"
       },
+      "SelfServiceQuotaKind": {
+        "enum": [
+          "units",
+          "requests",
+          "expr"
+        ],
+        "type": "string"
+      },
       "SelfServiceQuotaRule": {
         "properties": {
           "kind": {
-            "enum": [
-              "units",
-              "requests",
-              "expr"
-            ],
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfServiceQuotaKind"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "max": {
             "format": "int64",
@@ -5334,11 +5387,14 @@
             "type": "string"
           },
           "scope": {
-            "enum": [
-              "namespace",
-              "requester"
-            ],
-            "type": "string"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfServiceQuotaScope"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "window": {
             "type": "string"
@@ -5348,6 +5404,13 @@
           "kind"
         ],
         "type": "object"
+      },
+      "SelfServiceQuotaScope": {
+        "enum": [
+          "namespace",
+          "requester"
+        ],
+        "type": "string"
       },
       "SelfServiceRule": {
         "properties": {

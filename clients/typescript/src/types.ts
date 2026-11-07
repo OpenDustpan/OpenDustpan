@@ -1340,6 +1340,183 @@ export interface SchemaBinaryBelowMinimumErrorArgs {
   readonly minimumVersion: string;
 }
 
+export interface SelfServiceBlueprint {
+  readonly delivery: SelfServiceDelivery;
+  readonly description?: string;
+  readonly exprVersion?: string;
+  readonly inputs: ReadonlyArray<SelfServiceInput>;
+  readonly name: string;
+  readonly platform: SelfServicePlatform;
+  readonly policy?: ReadonlyArray<SelfServicePolicyRule>;
+  readonly program: SelfServiceProgram;
+  readonly quotas?: ReadonlyArray<SelfServiceQuotaRule>;
+  readonly schemaVersion: number;
+  readonly sourcePrincipal?: string;
+  readonly title: string;
+  readonly tool: string;
+  readonly unitName: string;
+}
+
+export interface SelfServiceChoice {
+  readonly source?: SelfServiceSource;
+  readonly values?: ReadonlyArray<string>;
+}
+
+export interface SelfServiceComponent {
+  readonly package: string;
+  readonly type: string;
+  readonly version: string;
+}
+
+export interface SelfServiceDelivery {
+  readonly default: SelfServiceHomeKind;
+  readonly git?: SelfServiceGitDelivery;
+  readonly homes: ReadonlyArray<SelfServiceHomeKind>;
+}
+
+export interface SelfServiceDraft {
+  readonly blueprint: SelfServiceBlueprint;
+  readonly version: number;
+}
+
+export interface SelfServiceDraftWrite {
+  readonly version: number;
+}
+
+export interface SelfServiceFilter {
+  readonly equals: SelfServiceOperand;
+  readonly output: string;
+  readonly path?: string;
+}
+
+export interface SelfServiceGitDelivery {
+  readonly deliveries?: ReadonlyArray<SelfServiceJobDelivery>;
+  readonly repositories?: ReadonlyArray<string>;
+}
+
+/** The known values of SelfServiceHomeKind. */
+export const SelfServiceHomeKindValues = ["git", "opendustpan"] as const;
+
+export type SelfServiceHomeKind = (typeof SelfServiceHomeKindValues)[number] | (string & {});
+
+export interface SelfServiceInput {
+  readonly choice?: SelfServiceChoice;
+  /** Any JSON value. */
+  readonly default?: unknown;
+  readonly description?: string;
+  readonly maps: string;
+  readonly name: string;
+  readonly required?: boolean;
+  readonly title?: string;
+  readonly type: SelfServiceInputType;
+  readonly validate?: ReadonlyArray<SelfServiceRule>;
+}
+
+/** The known values of SelfServiceInputType. */
+export const SelfServiceInputTypeValues = ["string", "integer", "number", "boolean", "string-list"] as const;
+
+export type SelfServiceInputType = (typeof SelfServiceInputTypeValues)[number] | (string & {});
+
+/** The known values of SelfServiceJobDelivery. */
+export const SelfServiceJobDeliveryValues = ["review-request", "direct-push"] as const;
+
+export type SelfServiceJobDelivery = (typeof SelfServiceJobDeliveryValues)[number] | (string & {});
+
+export interface SelfServiceModule {
+  readonly connection?: string;
+  readonly directory?: string;
+  readonly repository?: string;
+  readonly revision?: string;
+  readonly source?: string;
+  readonly version?: string;
+}
+
+export interface SelfServiceOperand {
+  readonly input?: string;
+  /** A JSON scalar: a string, a number or a boolean. The server refuses an object or an array. */
+  readonly value?: unknown;
+}
+
+export interface SelfServiceOutputRef {
+  readonly output: string;
+  readonly path?: string;
+}
+
+export interface SelfServicePlatform {
+  readonly pool?: string;
+  readonly profile?: string;
+  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+/** The known values of SelfServicePolicyEffect. */
+export const SelfServicePolicyEffectValues = ["allow", "approve", "deny"] as const;
+
+export type SelfServicePolicyEffect = (typeof SelfServicePolicyEffectValues)[number] | (string & {});
+
+export interface SelfServicePolicyRule {
+  readonly approvals?: number;
+  readonly effect: SelfServicePolicyEffect;
+  readonly groups?: ReadonlyArray<string>;
+  readonly message?: string;
+  readonly when: string;
+}
+
+export interface SelfServiceProgram {
+  readonly component?: SelfServiceComponent;
+  readonly module?: SelfServiceModule;
+}
+
+export interface SelfServicePublishRequest {
+  readonly draftVersion: number;
+}
+
+/** The known values of SelfServiceQuotaKind. */
+export const SelfServiceQuotaKindValues = ["units", "requests", "expr"] as const;
+
+export type SelfServiceQuotaKind = (typeof SelfServiceQuotaKindValues)[number] | (string & {});
+
+export interface SelfServiceQuotaRule {
+  readonly kind: SelfServiceQuotaKind;
+  readonly max?: number;
+  readonly message?: string;
+  readonly rule?: string;
+  readonly scope?: SelfServiceQuotaScope;
+  readonly window?: string;
+}
+
+/** The known values of SelfServiceQuotaScope. */
+export const SelfServiceQuotaScopeValues = ["namespace", "requester"] as const;
+
+export type SelfServiceQuotaScope = (typeof SelfServiceQuotaScopeValues)[number] | (string & {});
+
+export interface SelfServiceRule {
+  readonly message: string;
+  readonly rule: string;
+}
+
+export interface SelfServiceSource {
+  readonly blueprint?: string;
+  readonly collection?: string;
+  readonly label?: SelfServiceOutputRef;
+  readonly value: SelfServiceOutputRef;
+  readonly where?: ReadonlyArray<SelfServiceFilter>;
+}
+
+export interface SelfServiceVersion {
+  readonly blueprint: string;
+  readonly draftVersion: number;
+  readonly exprVersion: string;
+  readonly namespace: string;
+  readonly number: number;
+  readonly publishedAt: string;
+  readonly publishedBy: string;
+  readonly retired: boolean;
+}
+
+export interface SelfServiceVersionList {
+  readonly versions: ReadonlyArray<SelfServiceVersion>;
+}
+
 export interface Setting {
   readonly apply: string;
   readonly databaseLayer: boolean;
@@ -1770,7 +1947,7 @@ export interface UnitNoStateErrorArgs {
 export interface UnitOutputEntry {
   readonly name: string;
   readonly secret: boolean;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly value?: unknown;
 }
 
@@ -1899,13 +2076,13 @@ export interface UpdateContextRequest {
 }
 
 export interface UpdateNamespaceIssuerRequest {
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly allowBlockSubjects: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly includeActorName: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly issuerURL: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly subjectTemplate: unknown;
 }
 

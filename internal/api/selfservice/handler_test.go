@@ -262,8 +262,22 @@ func checkETag(t *testing.T, tc *httpCase, w *httptest.ResponseRecorder) {
 func checkAudit(t *testing.T, tc *httpCase, env *testEnv) {
 	t.Helper()
 
-	if tc.audited && env.audit.count() == 0 {
-		t.Error("denial has no audit entry")
+	if !tc.audited {
+		return
+	}
+
+	entries := env.audit.snapshot()
+	if len(entries) == 0 {
+		t.Fatal("denial has no audit entry")
+	}
+
+	// The explanation of a refusal names its effective scope: the namespace of
+	// the path, because grants apply at namespace level today.
+	const namespaceSegment = 6
+
+	want := strings.Split(tc.path, "/")[namespaceSegment]
+	if got := entries[0].Object; got != want {
+		t.Errorf("audit object = %q, want the namespace %q", got, want)
 	}
 }
 
@@ -693,10 +707,10 @@ func (*auditStore) Check(context.Context, namespace.Name) (audit.CheckResult, er
 	return out, nil
 }
 
-// count returns how many entries were appended.
-func (s *auditStore) count() int {
+// snapshot returns a copy of the appended entries.
+func (s *auditStore) snapshot() []audit.Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return len(s.entries)
+	return slices.Clone(s.entries)
 }

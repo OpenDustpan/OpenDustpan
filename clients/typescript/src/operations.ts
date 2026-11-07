@@ -188,6 +188,33 @@ import {
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
+  decodeSelfServiceBlueprint,
+  decodeSelfServiceChoice,
+  decodeSelfServiceComponent,
+  decodeSelfServiceDelivery,
+  decodeSelfServiceDraft,
+  decodeSelfServiceDraftWrite,
+  decodeSelfServiceFilter,
+  decodeSelfServiceGitDelivery,
+  decodeSelfServiceHomeKind,
+  decodeSelfServiceInput,
+  decodeSelfServiceInputType,
+  decodeSelfServiceJobDelivery,
+  decodeSelfServiceModule,
+  decodeSelfServiceOperand,
+  decodeSelfServiceOutputRef,
+  decodeSelfServicePlatform,
+  decodeSelfServicePolicyEffect,
+  decodeSelfServicePolicyRule,
+  decodeSelfServiceProgram,
+  decodeSelfServicePublishRequest,
+  decodeSelfServiceQuotaKind,
+  decodeSelfServiceQuotaRule,
+  decodeSelfServiceQuotaScope,
+  decodeSelfServiceRule,
+  decodeSelfServiceSource,
+  decodeSelfServiceVersion,
+  decodeSelfServiceVersionList,
   decodeSetting,
   decodeSettings,
   decodeSettingsLockedError,
@@ -464,6 +491,33 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  SelfServiceBlueprint,
+  SelfServiceChoice,
+  SelfServiceComponent,
+  SelfServiceDelivery,
+  SelfServiceDraft,
+  SelfServiceDraftWrite,
+  SelfServiceFilter,
+  SelfServiceGitDelivery,
+  SelfServiceHomeKind,
+  SelfServiceInput,
+  SelfServiceInputType,
+  SelfServiceJobDelivery,
+  SelfServiceModule,
+  SelfServiceOperand,
+  SelfServiceOutputRef,
+  SelfServicePlatform,
+  SelfServicePolicyEffect,
+  SelfServicePolicyRule,
+  SelfServiceProgram,
+  SelfServicePublishRequest,
+  SelfServiceQuotaKind,
+  SelfServiceQuotaRule,
+  SelfServiceQuotaScope,
+  SelfServiceRule,
+  SelfServiceSource,
+  SelfServiceVersion,
+  SelfServiceVersionList,
   Setting,
   Settings,
   SettingsLockedError,
@@ -1085,6 +1139,25 @@ export interface GetApprovalRuleInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getBlueprintDraft. */
+export interface GetBlueprintDraftInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getBlueprintVersion. */
+export interface GetBlueprintVersionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+    readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getCapabilities. */
 export interface GetCapabilitiesInput {
   readonly signal?: AbortSignal;
@@ -1467,6 +1540,14 @@ export interface ListApprovalRulesInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listBlueprints. */
+export interface ListBlueprintsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listCollectionAccessLimits. */
 export interface ListCollectionAccessLimitsInput {
   readonly path: {
@@ -1810,6 +1891,16 @@ export interface MakeGitHostConnectionDefaultInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation publishBlueprint. */
+export interface PublishBlueprintInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly body: SelfServicePublishRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation publishModuleRelease. */
 export interface PublishModuleReleaseInput {
   readonly path: {
@@ -1977,6 +2068,16 @@ export interface ResetUnitSettingsInput {
   readonly ifMatch: string;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation retireBlueprintVersion. */
+export interface RetireBlueprintVersionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+    readonly version: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -2247,6 +2348,16 @@ export interface UpdateUnitContextInput {
     readonly unit_id: string;
   };
   readonly body: UpdateContextRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation writeBlueprintDraft. */
+export interface WriteBlueprintDraftInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly body: SelfServiceBlueprint;
   readonly signal?: AbortSignal;
 }
 
@@ -3153,6 +3264,40 @@ export const operations = {
     },
     ref(() => decodeApprovalRule),
   ),
+  getBlueprintDraft: operation<SelfServiceDraft>(
+    {
+      id: "getBlueprintDraft",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceDraft),
+  ),
+  getBlueprintVersion: operation<SelfServiceVersion>(
+    {
+      id: "getBlueprintVersion",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}",
+      pathParameters: ["namespace", "blueprint", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersion),
+  ),
   getCapabilities: operation<Capabilities>(
     {
       id: "getCapabilities",
@@ -3867,6 +4012,23 @@ export const operations = {
     },
     ref(() => decodeListApprovalRulesResponse),
   ),
+  listBlueprints: operation<SelfServiceVersionList>(
+    {
+      id: "listBlueprints",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersionList),
+  ),
   listCollectionAccessLimits: operation<ListAccessLimitsResponse>(
     {
       id: "listCollectionAccessLimits",
@@ -4411,6 +4573,23 @@ export const operations = {
     },
     ref(() => decodeGitHostConnection),
   ),
+  publishBlueprint: operation<SelfServiceVersion>(
+    {
+      id: "publishBlueprint",
+      method: "POST",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersion),
+  ),
   publishModuleRelease: operation<ModuleRelease>(
     {
       id: "publishModuleRelease",
@@ -4659,6 +4838,23 @@ export const operations = {
       security: "caller",
       idempotencyKey: "optional",
       ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  retireBlueprintVersion: operation<void>(
+    {
+      id: "retireBlueprintVersion",
+      method: "POST",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}/retire",
+      pathParameters: ["namespace", "blueprint", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
       requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
@@ -5124,6 +5320,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeContextEntry),
+  ),
+  writeBlueprintDraft: operation<SelfServiceDraftWrite>(
+    {
+      id: "writeBlueprintDraft",
+      method: "PUT",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceDraftWrite),
   ),
 };
 

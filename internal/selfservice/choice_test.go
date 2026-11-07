@@ -65,7 +65,10 @@ func subnetInput() selfservice.Input {
 			Blueprint: "subnet-group", Collection: "",
 			Where: []selfservice.Filter{
 				{Equals: selfservice.Operand{Input: "network", Value: nil}, Output: "network_id", Path: ""},
-				{Equals: selfservice.Operand{Input: "", Value: selfservice.ScalarValue(`"private"`)}, Output: "tier", Path: ""},
+				{
+					Equals: selfservice.Operand{Input: "", Value: selfservice.ScalarValue(`"private"`)},
+					Output: "tier", Path: "",
+				},
 			},
 		}, Values: nil},
 		Name: "subnetGroup", Title: "", Description: "", Type: selfservice.TypeString, Maps: "subnet_group",

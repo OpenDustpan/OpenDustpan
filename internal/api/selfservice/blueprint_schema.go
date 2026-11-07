@@ -10,17 +10,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
-// enum returns the schema of a closed set of string values. The values come
-// from the Go constants of the domain; a test checks that each value parses.
-func enum(values ...string) map[string]any {
-	list := make([]any, 0, len(values))
-	for _, v := range values {
-		list = append(list, v)
-	}
-
-	return map[string]any{"type": "string", "enum": list}
-}
-
 // blueprintTypes declares the types of the blueprint document: a name for
 // each nested object, the closed value sets of the string types, and the
 // untyped values. The schema of each type comes from its Go struct and its
@@ -42,12 +31,15 @@ func blueprintTypes() []apidesc.Declaration {
 		apidesc.Named[selfservice.Rule]("SelfServiceRule"),
 		apidesc.Named[selfservice.PolicyRule]("SelfServicePolicyRule"),
 		apidesc.Named[selfservice.QuotaRule]("SelfServiceQuotaRule"),
-		apidesc.Declare[selfservice.InputType](enum("string", "integer", "number", "boolean", "string-list")),
-		apidesc.Declare[policy.Effect](enum("allow", "approve", "deny")),
-		apidesc.Declare[quota.Kind](enum("units", "requests", "expr")),
-		apidesc.Declare[quota.Scope](enum("namespace", "requester")),
-		apidesc.Declare[selfservice.HomeKind](enum("git", "opendustpan")),
-		apidesc.Declare[job.Delivery](enum("review-request", "direct-push")),
+		// The enums are open, as every enum of the API is: a client keeps a value
+		// that it does not know yet. The server accepts only the listed values.
+		apidesc.DeclareOpenEnum[selfservice.InputType]("SelfServiceInputType",
+			"string", "integer", "number", "boolean", "string-list"),
+		apidesc.DeclareOpenEnum[policy.Effect]("SelfServicePolicyEffect", "allow", "approve", "deny"),
+		apidesc.DeclareOpenEnum[quota.Kind]("SelfServiceQuotaKind", "units", "requests", "expr"),
+		apidesc.DeclareOpenEnum[quota.Scope]("SelfServiceQuotaScope", "namespace", "requester"),
+		apidesc.DeclareOpenEnum[selfservice.HomeKind]("SelfServiceHomeKind", "git", "opendustpan"),
+		apidesc.DeclareOpenEnum[job.Delivery]("SelfServiceJobDelivery", "review-request", "direct-push"),
 		// The shared declaration of any JSON value, as the inventory API
 		// states it. A declaration of the same type must be equal everywhere.
 		apidesc.Declare[json.RawMessage](map[string]any{"description": "Any JSON value."}),
