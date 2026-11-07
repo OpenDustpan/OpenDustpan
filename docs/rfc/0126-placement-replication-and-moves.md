@@ -30,6 +30,11 @@ checks the primary installation; and new sections cover a peer that can widen
 access, work in flight at a failover, schema skew and the revocation of a
 replica's keys.
 
+Revision 2 of 2026-11-07, after the second review: the checks of each row
+that `ApplyReplicated` applies (B1a), runner jobs at a failover, the fenced
+peers list, an end state of a shred for a copy that never applies, a source
+that is no longer the primary, and signed proof of each failover version.
+
 ## Owner direction
 
 - ADR 248: installations own namespaces. One primary installation for each
@@ -114,7 +119,8 @@ Facts from `main` at commit `fa62d37`:
 - **Peers**: a static list in the static layer of RFC 68. Each entry has an
   installation name, a small installation index (1 to 99, unique in the
   list, B3), a public URL, an internal URL, the identity of its TLS client
-  certificate and its public transport key (B7). The static layer only,
+  certificate, its public transport key (B7) and its public signing key for
+  the failover history (B3). The static layer only,
   because an entry decides where client tokens and namespace keys go
   (RFC 37 design point 1, "Security").
 - **Placement entries for namespaces that this installation does not hold**:
@@ -327,14 +333,57 @@ The protocol:
   over mutual TLS, with a long poll. Pull, not push, because the replica
   owns its cursor, and a primary never waits for a replica (ADR 248 decision
   9).
-- **The handshake** carries the protocol version of the stream and the
-  SHA-256 of the schema baseline of each side (B8). A mismatch stops the
-  stream and fails closed.
+- **The handshake** carries the protocol version of the stream, the
+  SHA-256 of the schema baseline of each side (B8), and the installation
+  name and index of each side. A mismatch of the protocol or the baseline
+  stops the stream and fails closed. So does an index that differs from the
+  index of that peer in the local peer list, or that equals the local index,
+  because two peer lists can disagree.
 - The replica applies one batch in one transaction, in order, with its
-  cursor `(failover version, seq)` in the same transaction. The apply is
-  the one write path that skips the primary check of door 3, through its
-  own named store method, `ApplyReplicated`. That method checks the cursor
-  against the failover history (B3) instead.
+  cursor `(failover version, seq)` in the same transaction. After each
+  batch, the `seq` head row of the namespace on the replica equals its
+  cursor, so a replica that becomes primary continues at `fork_seq + 1`.
+- The apply is the one write path that skips the primary check of door 3,
+  through its own named store method, `ApplyReplicated`. Its input comes
+  from outside the process, so it has its own layers (B1a).
+
+### B1a. The checks of `ApplyReplicated`
+
+A peer stream is untrusted input. A source that an attacker controls, or a
+source with a wrong configuration, can send a row of an `installation`
+table, a row of another namespace, or an `access_tokens` row of an
+installation principal of the replica, which would give an installation
+administrator token on the replica. Each layer below stops these alone. Each
+has its own test that sends a hostile entry straight to that layer.
+
+1. **The source.** In the apply transaction: the local namespace row does
+   not name this installation as primary. The client certificate of the
+   source is the peer that the local row or the verified history names as
+   primary. The version of the batch is not lower than the highest version
+   that this installation knows from any source, including the placement
+   read (A1). So a replica that learns of a newer primary stops applying the
+   old source, and waits for the `source` route (B5 step 3).
+2. **The table.** The table of each entry is in the class list with class
+   `namespace`, `child` or `mixed`. Never `installation`, and never a table
+   that is not in the list.
+3. **The row.** The `namespace_id` of the row, its foreign key path (class
+   `child`) or its predicate (class `mixed`) selects the namespace of the
+   stream. The replica evaluates the predicate again on its own data. Each
+   class can add a rule. Examples: an `access_tokens` row or a `grants` row
+   arrives only for a principal whose home is the namespace of the stream,
+   and the replica checks the principal row that it already holds for that
+   namespace; an entry never writes the `primary_installation` or the
+   failover version of the namespace row, except a failover entry that B3
+   verifies.
+4. **The blob.** Each blob key is under `namespaces/<namespace ID>/` of the
+   stream, through `blob.Scoped`, and the SHA-256 of the fetched bytes
+   matches the entry.
+5. **Fail closed.** A refused entry rolls back its batch, stops the stream,
+   marks the namespace `replication-refused` with the layer and the entry,
+   and writes an audit entry. The replica never skips an entry and goes on.
+
+Defense in depth: layers 2 and 3 stay even when the source passed layer 1,
+so that a trusted source with a fault cannot write outside the namespace.
 - **Copy, then stream.** A new replica first restores a namespace backup
   (ADR 218) taken at a known `(failover version, seq)`, then pulls from that
   position. That is the pattern of Ghostferry, Vitess and PostgreSQL logical
@@ -371,14 +420,39 @@ a list (`pkg/backup/portable_tables.go`). This design reuses it.
   last two digits are its index. Two installations can never make the same
   version. A server with no peer list has index 0, so a restore or a
   failover raises the version by steps of 100 from the same base. The rule
-  "the highest version wins" is then total. The pair rule of the first
-  draft (`(version, primary)` for equal versions) is withdrawn.
+  "the highest version wins" is then total, for versions that pass the
+  proof below. The pair rule of the first draft (`(version, primary)` for
+  equal versions) is withdrawn.
+- **Which index a version carries.** The index of the new primary, as in
+  Temporal. At a planned failover the old primary makes the version with the
+  index of the target from its peer list. At a forced failover and at a
+  restore, the installation that becomes primary makes it with its own
+  index.
 - **The failover history.** Each namespace has a table
   `namespace_failovers (namespace_id, failover_version, primary_installation,
-  fork_seq, kind, at_ms, actor, reason)`. `fork_seq` is the last `seq` of
-  the earlier version that the new version contains. Each failover, each
-  restore and each forced failover appends a row, and the row replicates in
-  the log like any other row.
+  fork_seq, kind, at_ms, actor, reason, signer, signature)`. `fork_seq` is
+  the last `seq` of the earlier version that the new version contains. Each
+  failover, each restore and each forced failover appends a row, and the row
+  replicates in the log like any other row.
+- **Proof of a version.** A bare number from a peer proves nothing. One peer
+  that an attacker controls could otherwise draw forwards and their tokens
+  to itself, make a returning primary refuse writes, and block each restore.
+  So each history row is signed with the signing key of the installation
+  that wrote it (Ed25519; the public key is in its peer entry, next to the
+  transport key of B7). An installation accepts a history row, from its
+  stream or from the placement read, only when:
+  - the last two digits of the version are the index of the installation
+    that the row names as primary, in the local peer list;
+  - the signer is that new primary (forced failover, restore), or the
+    primary of the previous history row (planned failover); and
+  - the signature over the namespace ID, the version, the primary, the
+    `fork_seq` and the kind is valid.
+
+  Each refused claim writes an audit entry with the peer. The placement
+  read answers the signed history rows, never only a number.
+- **No divergence on a claim alone.** An installation marks a namespace
+  `diverged` only on a history row that passes the proof. A row signed by the
+  new primary is the confirmation of the new primary.
 - **The cursor** of a replica is `(failover version, seq)` of the last
   entry that it applied.
 - **Divergence.** A replica that changes its source, or that reads a
@@ -401,8 +475,8 @@ a list (`pkg/backup/portable_tables.go`). This design reuses it.
     copy. The replica never applies its restored rows of a replicated
     namespace.
   - Before a restore on a primary raises a version, it reads the placement
-    from each peer (A1). It refuses a namespace for which a peer holds a
-    higher version. A peer that does not answer makes the restore of that
+    from each peer (A1). It refuses a namespace for which a peer shows a
+    higher version that passes the proof. A peer that does not answer makes the restore of that
     namespace need an explicit operator flag, as a forced failover does.
   - A restore on a primary appends a history row with `fork_seq` set to the
     `seq` in the backup manifest. Replicas past that `seq` find that they
@@ -413,13 +487,18 @@ a list (`pkg/backup/portable_tables.go`). This design reuses it.
 The Temporal handover, with the wait before the switch:
 
 1. The operator calls `POST /api/server/namespaces/{id}/failover` with the
-   target replica, on the primary.
+   target replica, on the primary. The failover is a durable operation
+   (ADR 72) with a deadline, so it survives the stop of the instance that
+   took the request.
 2. **Drain.** The primary sets the namespace to `handover` in the namespace
    row, in a transaction. The store checks the state in the write
    transaction, not only in the HTTP layer. Each write answers 503 with
    `Retry-After`, and each CLI retries. The primary waits until the cursor
    of the target is at the head of the log. A timeout in this phase clears
-   `handover` and aborts. Nothing has switched, so the abort is safe.
+   `handover` and aborts. Nothing has switched, so the abort is safe. When
+   the deadline passes and the switch did not commit, any instance that
+   claims the durable operation clears `handover`. So a stop during the
+   drain never leaves writes paused.
 3. **Switch.** In one transaction, with the namespace row held
    `FOR UPDATE`, the primary appends the failover entry and the history row
    `(new version, target, fork_seq = head)`, and writes its own namespace row
@@ -438,14 +517,23 @@ typically seconds.
 
 ### B5. Forced failover and the divergent tail
 
-0. **Fence the old primary first.** The operator stops the old primary, or
-   removes it from the peer list of each other installation, so that no
-   peer accepts its forwards or reads its log (its client certificate is no
-   longer in a peer list). ADR 248 asks for this in its consequences. The
-   failover route needs the field `oldPrimaryFenced` with the value
-   `stopped` or `removed-from-peers`, and the audit entry records it. The
-   server cannot check that the old primary stopped, so this is the
-   statement of the operator. Question B-3.
+0. **Fence the old primary first.** A removal from the peer lists alone is
+   not a fence: CLIs that reach the old primary through DNS still write to
+   it, and those writes are lost. So the operator either stops the old
+   primary, or cuts it off from clients (DNS or the load balancer). ADR 248
+   asks for this in its consequences. The failover route needs the field
+   `oldPrimaryFenced` with the value `stopped` or `isolated-from-clients`,
+   and the audit entry records it. The server cannot check it, so this is
+   the statement of the operator. Question B-3.
+
+   The operator also moves the old primary from the peer list of each other
+   installation to its list of **fenced peers**. A fenced peer:
+   - gets no forwards, and its forwards are refused;
+   - gets no log entries and no wraps of a namespace key (B7);
+   - has its tokens refused, also tokens of namespace principals that it
+     issued after the version of the failover;
+   - can still call one route, the placement read (A1), with its client
+     certificate, so that it learns of the new primary when it returns.
 1. The operator calls the failover route on the replica with `force: true`
    and a reason. The audit entry names the operator and the reason.
 2. The replica writes the history row `(new version, itself, fork_seq = its
@@ -456,9 +544,11 @@ typically seconds.
    read from peers (A1) tells each installation that does not pull from the
    new primary, and the old primary when it returns, that a higher version
    exists.
-4. When the old primary returns, it reads the higher version from its peers
-   at start, before it accepts writes to replicated namespaces, and then on
-   the timer. The entries after `fork_seq` are its divergent tail. It marks
+4. When the old primary returns, it reads the placement from its peers at
+   start, before it accepts writes to replicated namespaces, and then on the
+   timer. As a fenced peer it can still read it. A history row with a higher
+   version that passes the proof of B3 makes it stop. The entries after
+   `fork_seq` are its divergent tail. It marks
    the namespace `diverged`, refuses writes, and keeps the tail readable for
    an export (ADR 248 decision 11). An operator then makes it a replica again
    from a fresh copy.
@@ -475,17 +565,18 @@ says, until the operator fences it (step 0).
 | Durable operations of the namespace | Replicate. The lease of ADR 72 is local, so the new primary claims each open operation after the lease period. Each step checks the fence, so a step of the old primary fails. | The same, from `fork_seq`. |
 | Schedules, drift checks, retention | Rows replicate. They run only on the primary (ADR 248 decision 14). The new primary runs the next due time. A run that was due during the handover runs once, late. | The same. A run in the divergent tail may run again. |
 | Pulumi updates and OpenTofu locks | The update, its lease token and the lock replicate. A CLI in the middle of `pulumi up` gets 503 during the handover, retries, and continues on the new primary with the same lease token. | An update in the divergent tail is lost. Its lease ends on the new primary, and the CLI reports the update as failed. |
-| Runner claims and sessions | Local. Each runner gets 421 with the new primary, and registers there. A job step in flight retries its claim. | The same. |
+| Runner jobs | The job rows of the namespace replicate, with the phase `running`, the claim ID and the failover version of the claim. Runner sessions stay local. The new primary never sends a job in `running` to a runner again. It waits for the runner of that claim: the runner gets 421 with the new primary, registers there, and reports on its claim ID, and the new primary accepts the report. A claim of an older failover version that no runner reports on within the claim timeout moves the job to `unknown`, which needs an operator decision. The server never sends it again on its own, because the first runner may still change real infrastructure. A report to the old primary gets `ErrFenced`. | The same, for claims up to `fork_seq`. A claim in the divergent tail is not on the new primary. Its runner reports there, the claim ID is unknown, and the job gets the state `unknown` on the new primary when the job row exists, or an audit entry when it does not. |
 | Notifications | The notification rows replicate. Each notification has a stable ID. A notification sent near the switch can be sent again by the new primary. Delivery stays at least once, and a receiver deduplicates by the ID. | The same. |
-| Audit chain | The chain of the namespace continues on the new primary from the replicated head. Each entry holds its failover version (ADR 64 decision 10), so a verifier sees the switch. | The chain forks at `fork_seq`. The verifier shows the fork. |
+| Audit chain | The entries of the namespace chain replicate (class `namespace`). `audit_chain_state` is the local state of the chain process of an installation, not the head. The new primary takes the head of the namespace chain from the last replicated entry of the namespace, its sequence and its hash, and continues from there. Each entry holds its failover version (ADR 64 decision 10), so a verifier sees the switch. | The chain forks at `fork_seq`. The verifier shows the fork. |
 
 A replica records the reads and the denials that it serves in its own
 `@server` audit scope, with the namespace ID in the entry, because it cannot
 append to the chain of the namespace.
 
 An e2e step (slice 5) runs `pulumi up` and `tofu apply` through a planned
-failover, with a retried `Idempotency-Key` request and an open durable
-operation, and checks that each completes once.
+failover, with a retried `Idempotency-Key` request, an open durable
+operation and a runner job claimed on the old primary, and checks that each
+completes once and that no second runner gets the job.
 
 ### B7. Keys (issue #1055)
 
@@ -512,8 +603,9 @@ namespace. Each installation has its own key-encryption key.
   leaves the entry after each namespace key version is sent again.
 - **Revocation of a replica.** When an operator removes a replica, or a
   replica is compromised:
-  1. The primary removes it from the peer list, so it gets no more log
-     entries and no more wraps.
+  1. The operator moves it from the peer list to the fenced peers (B5), so
+     it gets no more log entries and no more wraps, and its forwards and
+     tokens are refused.
   2. The primary rotates the namespace key and wraps each data key and item
      key again under the new version. The removed replica never gets the new
      version.
@@ -526,6 +618,21 @@ namespace. Each installation has its own key-encryption key.
   replica, a source that a move keeps for its retention period, and a
   divergent tail. Until then, the shred status names each copy that is
   pending.
+- **The end state for a copy that never applies.** A removed or fenced
+  replica, a compromised one, and a `diverged` copy that stopped never apply
+  the shred entry. For such a copy, an operator records its destruction in
+  two steps, in this order:
+  1. the destruction of its keys: its key-encryption key, and with it each
+     namespace key version that it held;
+  2. the destruction of its data: the database and the blobs of the copy.
+
+  Each step is one call with the copy, the method and a reason, and writes
+  an audit entry with the actor. The server cannot check a statement about
+  an installation it cannot reach, so the status shows it as a statement:
+  "complete, except copies stated destroyed by <actor> on <date>". A key
+  destruction that a KMS reports (for example a scheduled key deletion) can
+  be attached as evidence. The same record closes the namespace key
+  versions that a removed replica held (the revocation above).
 - A customer key (ADR 217) must be reachable from each installation that
   holds the namespace. The docs name multi-Region KMS keys as the way.
 
@@ -534,8 +641,9 @@ namespace. Each installation has its own key-encryption key.
 The log carries row images of the schema of the primary. Before 1.0 there
 is no conversion code (CLAUDE.md).
 
-- The pull handshake carries the protocol version of the stream and the
-  SHA-256 of the schema baseline of each side.
+- The pull handshake carries the protocol version of the stream, the
+  SHA-256 of the schema baseline of each side and the installation index of
+  each side (B1).
 - A mismatch stops the stream, fails closed and reports the lag and the two
   versions. Replication waits until both sides run the same version.
 - So until the first tag, every installation of a federation runs the same
@@ -656,11 +764,13 @@ each item below needs a migration with a data conversion, or cannot change.
 | 4 | IDs | Random, 20 characters, no placement. | Keep. Never add an installation or a region to an ID. A test checks that `ident.NewID` holds no setting. |
 | 5 | The class of each table | Implicit. | The four classes of B2, with the tests of B2. A namespace row may name a row of the installation scope only by its stable ID, and must work when that ID is missing on a replica. |
 | 6 | Blob keys | Under `namespaces/<namespace ID>/`, with `blob.Scoped`. | Keep. A conformance test checks that each namespace blob uses the scoped view. |
-| 7 | The failover version | `int64`, raised by one at each restore. | The index form of B3: monotonic, never reset, and the last two digits name the installation that made it. With no peer list the step is 100. |
+| 7 | The failover version | `int64`, raised by one at each restore. | The index form of B3: monotonic, never reset, and the last two digits name the new primary installation of that version. With no peer list the step is 100. Each history row is signed by the installation that wrote it. |
 | 8 | Order between installations | No code depends on it today. | Order across installations is `(failover version, seq)`, never a wall clock. Timestamps stay data. |
 | 9 | The issuer base URL | Per installation. | Docs: a namespace that may move needs a movable host name before it issues its first token (B9). |
+| 10 | Rows of `mixed` tables | `access_tokens` holds `principal_id`; `idempotency_records` holds the principal and the path; `durable_operations` holds no namespace column. | Each row of a `mixed` table names its namespace ID, or an empty value for the installation scope, in a column of its own, so that the predicate of B1a layer 3 needs no parse of a path or an input. |
 
-Items 1, 2, 3 and 7 are the real doors. They are cheap now: an edit of the
+Items 1, 2, 3, 7 and 10 are the real doors. Item 7 also adds the signer
+and the signature to the failover history (B3), which no tag shipped yet. They are cheap now: an edit of the
 baseline in each dialect, a change of the fence check, a `make generate`, and
 a `dev reset`.
 
@@ -672,13 +782,13 @@ are "Later" (ADR 280).
 
 | Slice | Scope | e2e step |
 | --- | --- | --- |
-| 0 | One-way doors 1 to 7: the ID in the secret scope, the fence and the rows; the primary check in the fence transaction and `WritableHere` in each fence source; the table classes and their tests; the index form of the failover version. | The suites of today pass. A write through each fence source with a namespace row whose primary is another installation gives `ErrNotHome`. A restore of a backup made before the change is refused with `ErrSchemaDiverged` (ADR 322). |
+| 0 | One-way doors 1 to 7 and 10: the ID in the secret scope, the fence and the rows; the primary check in the fence transaction and `WritableHere` in each fence source; the table classes and their tests; the index form of the failover version; a namespace column in each `mixed` table. | The suites of today pass. A write through each fence source with a namespace row whose primary is another installation gives `ErrNotHome`. A restore of a backup made before the change is refused with `ErrSchemaDiverged` (ADR 322). |
 | 1 | One answer for `ErrNotHome`: 421 in each adapter, with the primary and its public URL. | Two installations on one database copy: a write to the replica gives 421 from `pulumi up`, `tofu apply` (`cloud` block) and the http backend, with the primary in the text. |
 | 2 | The namespace backup (ADR 218), with `(failover version, seq)` of the log in the manifest. | Back up one namespace, restore it into a fresh installation, and `pulumi stack export` and `tofu state pull` give the same bytes. |
-| 3 | The replication log, the failover history, the pull protocol with the handshake, and blob deletes that wait for replicas; replicas read only. | Primary and replica: `pulumi up` on the primary, then `pulumi stack export` against the replica gives the same deployment after the lag. The same for `tofu apply` and `tofu state pull`. A write at the replica gives 421. A replica on another schema version stops and reports it. |
+| 3 | The replication log, the failover history, the pull protocol with the handshake, and blob deletes that wait for replicas; the checks of `ApplyReplicated` (B1a); replicas read only. | Primary and replica: `pulumi up` on the primary, then `pulumi stack export` against the replica gives the same deployment after the lag. The same for `tofu apply` and `tofu state pull`. A write at the replica gives 421. A replica on another schema version stops and reports it. A test source sends, one at a time, a row of an `installation` table, a row of another namespace, an `access_tokens` row of an installation principal of the replica, a blob key outside the namespace, and an entry from a peer that is not the primary; the replica refuses each one, stops the stream and writes an audit entry. |
 | 4 | Keys over the stream, transport key rotation, and the revocation of a replica (B7). | A secret config value set on the primary decrypts on the replica with `pulumi config get --show-secrets` after a planned failover. A removed replica gets no new namespace key version. |
-| 5 | Planned failover (B4) and work in flight (B6). | `pulumi up` runs in a loop during the failover. Each update succeeds after retries, and no checkpoint is lost. The same with `tofu apply`. A request retried with the same `Idempotency-Key` across the switch runs once. A forward during the switch gives 503, never 421. |
-| 6 | Forced failover, the fence step, the placement read from peers, and divergence on each copy (B3, B5). | Three installations. Cut the link, write on A, let C apply more of A's tail than B, force B, restore the links. A and C each mark the namespace `diverged`, and A refuses writes. The tails export. |
+| 5 | Planned failover (B4) and work in flight (B6). | `pulumi up` runs in a loop during the failover. Each update succeeds after retries, and no checkpoint is lost. The same with `tofu apply`. A request retried with the same `Idempotency-Key` across the switch runs once. A forward during the switch gives 503, never 421. A runner job claimed on the old primary completes once, and no second runner gets it. A stop of the primary during the drain clears `handover` at the deadline. |
+| 6 | Forced failover, the fence step, the placement read from peers, and divergence on each copy (B3, B5). | Three installations. Cut the link, write on A, let C apply more of A's tail than B, force B, restore the links. A and C each mark the namespace `diverged`, and A refuses writes. The tails export. A, moved to the fenced peers, can read the placement but its forwards and tokens are refused. C, still connected to A during the cut, stops applying A's entries once it learns of B's version. A peer that sends a history row with a forged version or signature is refused and audited, and no namespace becomes `diverged` from it. |
 | 7 | Request forwarding (Part A), with the rules for tokens, client addresses and the installation scope on a replica. | Each CLI points at the replica. `pulumi up`, `tofu apply` and the http backend succeed through the forward, with uploads, with a token of a namespace principal. A token of an installation principal of the replica gives 421. A stop of the primary gives 503 with `Retry-After`, and the CLI retries. An installation administrator of the replica is denied a unit of the replicated namespace. |
 | 8 | The move of a namespace: online (C3 way 1) and offline (C3 way 2), the moved marker, and the new carry-over findings. | Move a namespace with both CLIs in a loop: no failed run after retries, and the move check shows each `carry.*` finding. The old URL answers 421 with the target after the source deletes the data. |
 | 9 | The list of effects for a move between collections, and the confirm digest (C2). | API e2e: a move with a stale digest is refused; a move with a fresh digest succeeds; the grant effects match. |
@@ -709,15 +819,23 @@ where.
 
 ### A-3. Do the administrators of a replica installation get access to the namespaces it copies?
 
+A replica installation holds a copy of a namespace whose primary is another
+installation. The replica has its own installation administrators,
+temporary administrators, break-glass accounts and installation roles. The
+owners of the namespace never granted these people anything.
+
 ELI5: your neighbor keeps a spare copy of your diary in case your house burns
 down. Can the neighbor's landlord read it?
 
-- Option 1: no. On a replica, the installation scope gives no access to a
-  replicated namespace, except the replication actions (A4).
-- Option 2: yes, and the docs say that adding a replica gives its
-  administrators that reach.
+- Option 1: no. On a replica, the grants of the installation scope give no
+  access to a copied namespace. The one exception is a short list of
+  replication actions that an administrator of the replica needs to run it
+  (read the lag, stop the copy, copy again, forced failover). Each one writes
+  an audit entry.
+- Option 2: yes, and the docs say that adding a replica gives the
+  administrators of that installation access to the copied namespaces.
 - **Recommendation: option 1.** The owners of the namespace never granted
-  it.
+  that access, and a replica should not widen it.
 
 ### B-1. Is replication a log in the application?
 
@@ -729,34 +847,59 @@ each write wait for a vote.
 - Option 2: PostgreSQL logical replication, PostgreSQL only, blobs apart.
 - **Recommendation: option 1.**
 
-### B-2. Do the namespace ID changes and the primary check in the fence (doors 1, 2, 3 and 7) land before the first tag?
+### B-2. Do four storage changes that are cheap now and expensive after the first tag land before it?
+
+The changes are:
+- encrypted secrets are bound to the namespace name, and should be bound to
+  the namespace ID;
+- 16 database columns name a namespace by its name, and should name it by
+  its ID;
+- the write guard (the fence) checks only the version number of the
+  namespace, and should also check that this installation owns the
+  namespace;
+- the version number should end in two digits that name the installation
+  that owns that version, with a signature, so that two installations never
+  make the same number and no one can claim a number without proof.
 
 ELI5: today the lock on each secret box has the namespace's name on it. If
 the name ever changes, no key opens the box. Use the namespace's number,
-which never changes. And the guard at the door checks the date on your pass,
-but not which house it is for: make it check both.
+which never changes. The guard at the door checks the date on your pass,
+but not which house it is for: make it check both. And each pass gets the
+stamp of the house that issued it.
 
-- Option 1: yes, as slice 0, before the first tag.
-- Option 2: no. Accept that a namespace never changes its name, never meets a
-  name conflict on a replica, and that the fence checks only the version.
-- **Recommendation: option 1.** It costs one edit of each baseline and one
-  change of the fence check now.
+- Option 1: yes, as one slice of work before the first tag.
+- Option 2: no. Accept that a namespace never changes its name, never meets
+  a name conflict on another installation, and that the guard checks only
+  the version number. Each later change then needs a data conversion.
+- **Recommendation: option 1.** Before the first tag each change is an edit
+  of the schema and of the guard. After the tag, each one rewrites stored
+  data.
 
 ### B-3. How is the old primary stopped at a forced failover?
+
+A forced failover makes a copy the new owner of a namespace while the old
+owner (the old primary installation) does not answer. If the old primary is
+still running and clients still reach it, it keeps accepting their changes,
+and those changes are lost. The server cannot check this itself.
 
 ELI5: before you give the spare key to the new house sitter, make sure the
 old one cannot get in any more.
 
-- Option 1: the operator must state that the old primary is stopped or
-  removed from the peer lists, and the failover route records it (B5 step 0).
-- Option 2: no step. The old primary learns of the failover from its peers
-  when it returns, and its writes until then form the divergent tail.
-- Option 3: the server stops the old primary through an API call to it.
-  This works only when the old primary answers, so it is the planned
-  failover, not the forced one.
-- **Recommendation: option 1, with the placement read of option 2 as the
-  second layer.** ADR 248 already tells the operator to stop the old
-  primary first.
+- Option 1: before a forced failover, the operator states that the old
+  primary is stopped, or cut off from clients in DNS or the load balancer,
+  and the server records the statement. The operator also moves the old
+  primary to a "fenced peers" list: the other installations refuse its
+  forwards and its tokens, and let it read only who the new owner is, so
+  that it stops its own writes when it comes back.
+- Option 2: no step. The old primary learns of the new owner from the other
+  installations when it comes back, and its changes until then are lost.
+- Option 3: the server stops the old primary with an API call to it. This
+  works only when the old primary answers, and then a planned failover is
+  the better tool.
+- **Recommendation: option 1, with the check of option 2 as a second
+  layer.** The architecture decision of the federation (ADR 248) already
+  tells the operator to stop the old primary first. A removal from the peer
+  lists alone is not enough, because clients can still reach the old primary.
 
 ### B-4. Must the installations of a federation run the same version?
 
