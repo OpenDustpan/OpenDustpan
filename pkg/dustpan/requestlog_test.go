@@ -220,6 +220,8 @@ func seedNamespace(t *testing.T, st *sqlite.Store, name string) {
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+
+	seedCatchAllPlacement(t, st, namespace.Name(name))
 }
 
 func TestRequestIDNewEachResponse(t *testing.T) {

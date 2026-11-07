@@ -471,7 +471,8 @@ func startPlainDev(t *testing.T, bin string, extra ...string) *devServer {
 }
 
 // devPulumi drives the Pulumi CLI against dev with only dev.env: login, whoami,
-// stack init in the namespace dev, up, and export.
+// stack init in the namespace dev, up, and export. The stack init needs the
+// placement rule that dev makes on its first start.
 func devPulumi(t *testing.T, server *devServer, cli e2e.Install) {
 	t.Helper()
 

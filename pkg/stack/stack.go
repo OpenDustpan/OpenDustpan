@@ -35,6 +35,9 @@ var (
 	// ErrHasResources reports that a stack still manages resources, so a
 	// delete without force is refused.
 	ErrHasResources = errors.New("stack still contains resources")
+	// ErrPlacementUnsupported reports that the store cannot make a stack and
+	// put it in a collection in one transaction, so the service makes no stack.
+	ErrPlacementUnsupported = errors.New("the store cannot put a new stack in a collection")
 )
 
 const (
@@ -159,6 +162,34 @@ type DeleteGuard struct {
 func EmptyGuard() DeleteGuard {
 	//nolint:exhaustruct_v5 // An empty guard means the stack had no checkpoint to count.
 	return DeleteGuard{}
+}
+
+// Placement puts a new stack in a collection in the transaction that makes the
+// stack. The caller has already chosen the collection and checked the right to
+// make a unit in it.
+type Placement struct {
+	// Collection is the collection of the new stack. It must be in the
+	// namespace of the stack.
+	Collection collection.Ref
+	// CollectionID is the stable ID of Collection that the caller checked. The
+	// store refuses the create when the collection has another ID now.
+	CollectionID string
+	// Entry is the audit entry of the placement. The store appends it in the
+	// same transaction. The service sets its time.
+	Entry audit.Entry
+}
+
+// PlacedStore is the port of a store that makes a stack, its inventory entry,
+// its membership of a collection and the audit entry of the placement in one
+// fenced transaction. A failure of any part makes none of them, so no stack
+// exists without its collection.
+type PlacedStore interface {
+	// CreateStackPlaced persists st as CreateStack does and puts it in the
+	// collection of p, in the same transaction. It also returns
+	// collection.ErrNotFound when the collection does not exist,
+	// collection.ErrCollectionChanged when it has another ID than
+	// p.CollectionID, and the errors of a refused join (for example a gate).
+	CreateStackPlaced(ctx context.Context, st Stack, p Placement, fence namespace.Fence) error
 }
 
 // Store is the persistence port for stacks. Tags live in their own table
@@ -338,7 +369,37 @@ func NewService(cfg Config) (*Service, error) {
 
 // Create creates the stack identified by ref with the given tags. The write is
 // fenced on the namespace's failover version and only allowed in its primary installation.
+// The stack has no collection. A server that keeps placement rules uses
+// CreatePlaced.
 func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (Stack, error) {
+	return createStack(ctx, s, ref, tags, nil)
+}
+
+// CreatePlaced creates the stack identified by ref and puts it in the
+// collection of p in one fenced transaction. It returns ErrPlacementUnsupported,
+// and makes no stack, when the store is not a PlacedStore.
+func (s *Service) CreatePlaced(ctx context.Context, ref Ref, tags map[string]string, p Placement) (Stack, error) {
+	return createStack(ctx, s, ref, tags, &p)
+}
+
+// createRows makes st in store, with the membership of p when there is one. A
+// store that is not a PlacedStore makes nothing for a placed create.
+func createRows(ctx context.Context, store Store, st Stack, p *Placement, fence namespace.Fence) error {
+	if p == nil {
+		return store.CreateStack(ctx, st, fence)
+	}
+
+	placed, ok := store.(PlacedStore)
+	if !ok {
+		return ErrPlacementUnsupported
+	}
+
+	p.Entry.At = st.CreatedAt
+
+	return placed.CreateStackPlaced(ctx, st, *p, fence)
+}
+
+func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p *Placement) (Stack, error) {
 	if len(tags) > maxTags {
 		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
 	}
@@ -363,7 +424,8 @@ func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (
 		st.Tags = map[string]string{}
 	}
 
-	if err := s.store.CreateStack(ctx, st, ns.Fence()); err != nil {
+	err = createRows(ctx, s.store, st, p, ns.Fence())
+	if err != nil {
 		return Stack{}, fmt.Errorf("create stack %s: %w", ref, err)
 	}
 

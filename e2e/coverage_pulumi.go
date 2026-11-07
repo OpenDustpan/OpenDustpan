@@ -69,6 +69,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	handler, err := pulumiapi.NewHandler(pulumiapi.Config{
+		Placer:                  nil,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,

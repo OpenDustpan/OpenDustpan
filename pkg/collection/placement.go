@@ -261,7 +261,8 @@ type PlacementError struct {
 func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
 		"no placement rule matches %s stack %s/%s in namespace %s: add a rule with "+
-			"POST /api/dustpan/v1/namespaces/%s/placement-rules",
+			"POST /api/dustpan/v1/namespaces/%s/placement-rules, "+
+			"or make the collection first and make the unit through the API with that collection",
 		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace,
 	)
 }

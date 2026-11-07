@@ -474,6 +474,11 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
+	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated)
+	h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
+		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+	)
 
 	return h
 }
@@ -527,7 +532,8 @@ func (h *rtHarness) call(method, path, body string, want int) string {
 	h.t.Helper()
 
 	scheme := "token "
-	if strings.HasPrefix(path, "/api/server/") || strings.HasPrefix(path, "/api/v2/") {
+	if strings.HasPrefix(path, "/api/server/") || strings.HasPrefix(path, "/api/dustpan/") ||
+		strings.HasPrefix(path, "/api/v2/") {
 		scheme = "Bearer "
 	}
 
@@ -825,29 +831,31 @@ func requestFlows() []requestFlow {
 		// of state.write before the write: one read of the unit facts, one read
 		// of the gate configuration for the access limits and the gates
 		// together, and the write of the decision record with one statement in
-		// its own fenced transaction are part of each budget.
-		{"pulumi stack rm", 37, func(h *rtHarness) {
+		// its own fenced transaction are part of each budget. A stack is in a
+		// collection, so each of these flows also reads or deletes the
+		// membership of the unit: one more round trip in each budget.
+		{"pulumi stack rm", 38, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 64, func(h *rtHarness) {
+		{"pulumi stack import", 65, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 65, func(h *rtHarness) {
+		{"pulumi stack restore", 66, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 34, func(h *rtHarness) {
+		{"pulumi stack rename", 35, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 30, func(h *rtHarness) {
+		{"pulumi cancel", 31, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
@@ -1267,7 +1275,7 @@ func backupModel() costModel {
 // passkey ceremonies, which a restore leaves empty.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        331,
+		fixed:        346,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,

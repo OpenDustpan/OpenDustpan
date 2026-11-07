@@ -1221,6 +1221,9 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	if status != http.StatusConflict {
 		t.Fatalf("POST duplicate namespace %q answers %d, want %d (%s)", name, status, http.StatusConflict, body)
 	}
+
+	// The server refuses a stack that no rule places.
+	env.SeedCatchAllPlacement(ctx, t, name)
 }
 
 // pulumiScenario exercises login and stack management. A namespace is a

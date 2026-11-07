@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -43,6 +44,7 @@ var (
 	errDevListen    = errors.New(
 		"the listen address of dev needs a host and a port: set --listen, for example 127.0.0.1:8080",
 	)
+	errDevPlacementStore = errors.New("the store keeps no collections or placement rules")
 )
 
 // devFlags holds the settings of the dev command. The values come from the
@@ -564,6 +566,7 @@ func (r *devRun) writeCredentials(serverURL string, cert devCert) error {
 // banner prints the banner of dev to stderr.
 func (r *devRun) banner(listener net.Listener, serverURL string, cert devCert, codeText string) error {
 	b := devBanner{
+		placement: r.placementLine(serverURL),
 		tlsExpiry: cert.notAfter, dir: r.dir, serverURL: serverURL, signIn: r.signInLine(listener, serverURL, codeText),
 		envFile: filepath.Join(r.dir, devEnvName), network: r.networkLine(listener), tokenNote: r.tokenNote(),
 		ephemeral: r.flags.ephemeral, trustStep: r.flags.tls && cert.bundleFile == "",
@@ -741,11 +744,20 @@ func (r *devRun) stopped() {
 // namespace dev, writes the start entry and dev.addr.
 func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Context) error {
 	return func(ctx context.Context) error {
-		if err := r.ensureNamespace(ctx, in.st); err != nil {
+		created, err := r.ensureNamespace(ctx, in.st)
+		if err != nil {
 			return err
 		}
 
-		if err := r.seedDemo(ctx, in.st); err != nil {
+		// Dev makes the rule on the first start only, so a later start never
+		// makes a rule that the developer deleted.
+		if created {
+			if seedErr := r.seedPlacement(ctx, in, devNamespace); seedErr != nil {
+				return seedErr
+			}
+		}
+
+		if err := r.seedDemo(ctx, in); err != nil {
 			return err
 		}
 
@@ -769,28 +781,118 @@ func (r *devRun) beforeServe(in runInputs, instanceID string) func(context.Conte
 	}
 }
 
-// ensureNamespace makes the namespace dev when it does not exist.
-func (r *devRun) ensureNamespace(ctx context.Context, st store) error {
+// ensureNamespace makes the namespace dev when it does not exist. It answers
+// true when it made the namespace.
+func (r *devRun) ensureNamespace(ctx context.Context, st store) (bool, error) {
 	return r.ensureNamed(ctx, st, devNamespace)
 }
 
-// ensureNamed makes the namespace name when it does not exist.
-func (r *devRun) ensureNamed(ctx context.Context, st store, name namespace.Name) error {
+// ensureNamed makes the namespace name when it does not exist. It answers true
+// when it made the namespace.
+func (r *devRun) ensureNamed(ctx context.Context, st store, name namespace.Name) (bool, error) {
 	installationName := cli.ByFlag("installation").Default
 
 	svc, err := namespace.NewService(
 		namespace.Config{Store: st, Now: nil, Installation: namespace.InstallationName(installationName)},
 	)
 	if err != nil {
-		return fmt.Errorf("namespace service: %w", err)
+		return false, fmt.Errorf("namespace service: %w", err)
 	}
 
 	_, err = svc.Create(ctx, name)
-	if err != nil && !errors.Is(err, namespace.ErrAlreadyExists) {
-		return fmt.Errorf("make the namespace %s: %w", name, err)
+
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, namespace.ErrAlreadyExists):
+		return false, nil
+	default:
+		return false, fmt.Errorf("make the namespace %s: %w", name, err)
+	}
+}
+
+// devCollection is the collection that the placement rule of dev names.
+const devCollection = "everything"
+
+// placementPorts is what dev needs to make a collection and a placement rule.
+// The SQLite store of dev keeps both.
+type placementPorts interface {
+	collection.Store
+	collection.PlacementStore
+}
+
+// seedPlacement makes the collection devCollection in the namespace ns and one
+// placement rule that puts each new Pulumi stack in it. The server refuses a
+// new stack that no rule places, so the first "pulumi stack init" of a trial
+// needs the rule. The server itself makes no rule: this is a step of the dev
+// command, as the administrator of dev, and the audit log holds both entries.
+func (r *devRun) seedPlacement(ctx context.Context, in runInputs, ns namespace.Name) error {
+	ports, ok := in.st.(placementPorts)
+	if !ok {
+		return fmt.Errorf("make the placement rule of %s: %w", ns, errDevPlacementStore)
+	}
+
+	admin, err := in.authn.AuthenticateToken(ctx, r.token.value)
+	if err != nil {
+		return fmt.Errorf("administrator of dev: %w", err)
+	}
+
+	collections, err := collection.NewService(collection.Config{Store: ports, Namespaces: in.st, Now: r.proc.now})
+	if err != nil {
+		return fmt.Errorf("collection service: %w", err)
+	}
+
+	rules, err := collection.NewPlacementService(
+		collection.PlacementConfig{Store: ports, Namespaces: in.st, Now: r.proc.now},
+	)
+	if err != nil {
+		return fmt.Errorf("placement service: %w", err)
+	}
+
+	entry := func(action identity.Action, object string) audit.Entry {
+		e := cli.SettingsEntry(audit.ChannelStartup, admin.Subject, r.proc.now(), nil)
+		e.Namespace = ns
+		e.Action = string(action)
+		e.Object = object
+
+		return e
+	}
+
+	ref := collection.Ref{Namespace: ns, Name: devCollection}
+	created := entry(identity.ActionCollectionCreate, "collection:"+ref.String())
+
+	if _, err = collections.Create(ctx, ref, created); err != nil {
+		return fmt.Errorf("make the collection %s: %w", ref, err)
+	}
+
+	in2 := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: devCollection, Position: 0}
+	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+
+	if _, err = rules.Create(ctx, ns, in2, ruled); err != nil {
+		return fmt.Errorf("make the placement rule of %s: %w", ns, err)
 	}
 
 	return nil
+}
+
+// placementLine answers the text of the Placement line of the banner on the
+// first start: the rule that dev made and the command that removes it. It
+// answers the empty string on a later start, when dev makes no rule.
+func (r *devRun) placementLine(serverURL string) string {
+	if !r.fresh {
+		return ""
+	}
+
+	where := "in the namespace " + devNamespace
+	if r.flags.demo {
+		where = "in each of the namespaces " + strings.Join(demoNamespaceNames(), ", ")
+	}
+
+	path := serverURL + "/api/dustpan/v1/namespaces/<namespace>/placement-rules"
+
+	return where + `, a rule puts each new Pulumi stack in the collection ` +
+		devCollection + `. List it with: curl -H "Authorization: Bearer $TOKEN" ` + path +
+		`; delete it with: curl -X DELETE -H "Authorization: Bearer $TOKEN" ` + path + `/<id>`
 }
 
 // startChanges answers the changes of the start audit entry: the command,
