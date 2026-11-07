@@ -49,6 +49,11 @@ sink that exists today.
 
 The recommendation is all four, in that order of delivery, with Slack first.
 
+Slack and Mattermost are the reference platforms of this design. Each
+proposal must work for both. Matrix follows the same model. Microsoft Teams
+is covered from its documentation only, as facts with sources, and no need
+that only Teams has shapes the design.
+
 ## Problem
 
 ### What the server does today
@@ -190,6 +195,9 @@ With an incoming webhook, the credential is the channel.
   Source: <https://docs.mattermost.com/api/reference/create-post>
 
 ### Microsoft Teams
+
+These facts come from the Microsoft documentation only. No test against a
+Teams tenant supports them.
 
 - Office 365 Connectors, with the connector-based incoming webhooks, "were
   retired in May 2026. To receive webhook requests and post messages in
@@ -509,8 +517,10 @@ check and at the renderer.
 | Matrix | `token` | The access token posts to each room that its account can send to. |
 | Microsoft Teams | none in this RFC | A Workflows webhook is bound to its channel. A Graph application permission posts only for migration. A bot needs a person to install it in each team. Teams keeps the chat sink of today, one Workflows webhook for each channel. |
 
-The order follows ADR 262: Slack first, then Mattermost, then Matrix. Teams
-gets a connection only when a later RFC designs the bot path.
+The order follows ADR 262: Slack first, then Mattermost, then Matrix. Slack
+and Mattermost are the reference platforms: the end-to-end steps of each
+proposal run against both. Teams gets a connection only when a later RFC
+designs the bot path.
 
 ### P9. What stays the same
 
@@ -753,9 +763,10 @@ then accept that one host and no other.
 
 ### Q9. Teams in this RFC or later?
 
-Context: a Teams Workflows webhook is bound to its channel, a Graph
-application permission posts only for migration, and a bot needs a person to
-install it in each team.
+Context: Slack and Mattermost are the reference platforms of this RFC. The
+Teams facts come from the Microsoft documentation only. A Teams Workflows
+webhook is bound to its channel, a Graph application permission posts only
+for migration, and a bot needs a person to install it in each team.
 
 Options: (a) Teams keeps the webhook sink of today, and a later RFC designs
 a bot connection; (b) design the bot connection here.
