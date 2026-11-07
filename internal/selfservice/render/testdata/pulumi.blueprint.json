@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "webapp",
+  "title": "Web application",
+  "tool": "pulumi",
+  "program": {
+    "component": { "package": "webapp", "version": "1.2.0", "type": "webapp:index:Site" }
+  },
+  "unitName": "request.name",
+  "inputs": [
+    { "name": "size", "type": "string", "default": "small", "maps": "size" },
+    { "name": "replicas", "type": "integer", "default": 2, "maps": "replicas" },
+    { "name": "tags", "type": "string-list", "maps": "webapp:tags" }
+  ],
+  "platform": { "values": { "aws:region": "eu-west-1" } },
+  "delivery": { "homes": ["opendustpan"], "default": "opendustpan" }
+}
