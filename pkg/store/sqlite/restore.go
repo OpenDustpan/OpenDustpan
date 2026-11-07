@@ -565,12 +565,102 @@ const auditChainCheckColumns = `id, checked_at_ms, invalid`
 const auditChainMarkColumns = `scope, epoch, sequence, marked_at_ms`
 
 // copyControlTables runs keepControlStatements in tx, which holds the live
-// database attached as live.
+// database attached as live, and records the runner credentials that the
+// copy does not keep. It reads them before the copy: the copy drops them, so
+// this read is the only record of them.
 func copyControlTables(ctx context.Context, tx *sql.Tx) error {
+	dropped, err := droppedRunnerCredentials(ctx, tx)
+	if err != nil {
+		return err
+	}
+
 	for _, stmt := range keepControlStatements {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("keep control tables: %w", err)
 		}
+	}
+
+	return appendDroppedRunnerCredentials(ctx, tx, dropped)
+}
+
+// droppedRunnerCredentials returns the live handoff tokens and job sessions
+// whose runner the staged file does not hold. It reads them in tx, which
+// holds the live database attached as live, before the copy replaces the
+// tables. The runner IDs come back sorted and with no repetition.
+func droppedRunnerCredentials(ctx context.Context, tx *sql.Tx) (backup.DroppedRunnerCredentials, error) {
+	const tokens = `SELECT t.runner_id FROM live.runner_handoff_tokens t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	const sessions = `SELECT t.runner_id FROM live.runner_sessions t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	tokenRunners, err := runnerIDsOf(ctx, tx, tokens)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	sessionRunners, err := runnerIDsOf(ctx, tx, sessions)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	return backup.NewDroppedRunnerCredentials(
+		int64(len(tokenRunners)), int64(len(sessionRunners)), append(tokenRunners, sessionRunners...),
+	), nil
+}
+
+// runnerIDsOf runs query in tx and returns the runner_id of every row.
+func runnerIDsOf(ctx context.Context, tx *sql.Tx, query string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	var out []string
+
+	for rows.Next() {
+		var id string
+
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+		}
+
+		out = append(out, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	}
+
+	return out, nil
+}
+
+// appendDroppedRunnerCredentials appends the audit entry of the dropped
+// runner credentials in tx, which holds the staged file, after the copy
+// replaced the rows of the staged file. It writes no entry when the copy
+// dropped nothing. The entry follows the chain state that the swap kept.
+func appendDroppedRunnerCredentials(
+	ctx context.Context, tx *sql.Tx, dropped backup.DroppedRunnerCredentials,
+) error {
+	if dropped.Empty() {
+		return nil
+	}
+
+	q := db.New(tx)
+
+	nowMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
+		return fmt.Errorf("append dropped runner credentials entry: %w", err)
 	}
 
 	return nil
