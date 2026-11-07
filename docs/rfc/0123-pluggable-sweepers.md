@@ -433,8 +433,16 @@ and 176, not part of this RFC.
       `opendustpan/aws-resource-explorer`); "a person approves each new
       key"; and, for a regulated organization, a record of each approved
       release.
+    - **Plugin names and patterns.** A plugin name has two segments,
+      `<publisher>/<name>`, each of lower-case letters, digits and `-`, at
+      most 64 bytes each. A pattern is a full name, or `<publisher>/*`,
+      where `*` matches one segment and never crosses `/`. A person with the
+      new action `server:manage-sweep-plugin-keys` adds a trusted key and its
+      patterns to the installation; an audit entry records the key
+      fingerprint and the patterns. The admission gate reads the key and
+      whether the name matches its patterns as facts.
     - **The runner may hold its own policy.** The coordinator configuration
-      may pin keys, each bound to plugin names. When it does, the launcher
+      may pin keys, each bound to plugin name patterns of the same form. When it does, the launcher
       also checks the signature against those keys before the start. This
       check is a choice of the operator of the runner, and it is the only
       signature check that holds when the server is compromised. The guide
@@ -487,8 +495,13 @@ or a publisher is enough is the administrator's policy, by ADR 351.
   - **The token binds the code, not only the target.** The subject is
     `sweep:<namespace>/<target>/<kind>:<name>`, where `<kind>` is `plugin`
     with the plugin name, or `command` with the SHA-256 of the argument
-    list. The token also has the claims `plugin_digest`, `installation` (the
-    issuer), and `jti` set to the sweep ID. So a holder of
+    list. `<namespace>` and `<target>` keep the character rules of their
+    names (lower-case letters, digits and `-`), and the plugin name keeps the
+    rule of Option C, so no part can hold a `/` or a `:` that would shift
+    the parts. The token also has the claims `plugin_digest` (or, for a
+    command, `image_digest`, the digest of the OCI image of the sandbox),
+    `installation` (the issuer), and `jti` set to the sweep ID. A trust
+    policy that must pin the image of a command tests `image_digest`. So a holder of
     `namespace:manage-sweeps` who changes a target to a custom command, or
     to another plugin, gets another subject, and the role in the cloud does
     not match until a person in the cloud changes its trust policy. A trust
@@ -580,6 +593,12 @@ Version 2 keeps every rule and bound of version 1 (ADR 164 decisions 10 to
     `AWS::S3::Bucket` to `aws_s3_bucket` and `aws:s3/bucket:Bucket`.
   - `error` is at most 512 bytes. A report has at most 100,000 coverage
     lines, and a type comes at most one time for each scope.
+  - The server refuses a coverage line whose scope is not in the header, or
+    whose provider and type are not in the manifest of the admitted
+    release, and the sweep fails.
+  - A coverage line has no region. A type that failed in one region of a
+    scope is `not-swept` for the whole scope, so no finding of that type
+    resolves in any region of it.
 - **A resource line** adds:
   - `iac`: at most 2 entries, one for each tool. An entry has the tool, the
     normalized provider address (section "Keys"), the IaC type, an identity
@@ -623,14 +642,14 @@ For any other provider, version 2 adds an `iac` key.
     A Pulumi type with no OpenTofu type keeps its Pulumi token under the
     provider `pulumi/<package>`.
   - `<scope>` is the account scope, and `<region>` the region or the word
-    `global` for a type that the manifest declares global.
+    `global`, both in the canonical form of the scope rule below.
   - `<id>` is the import ID, or the canonical JSON of the identity when the
     type has an identity schema.
 - **Containment.** ADR 164 decision 13 applies to every key. The provider of
   an `iac` key, for the header, is the provider of the header scope that the
   manifest names for the provider address. A key whose scope or region is
   not in the header is refused, never matched, and counted in `outOfScope`.
-  A key of a type that the manifest declares global needs a complete scope
+  A key of a type that the scope rule makes global needs a complete scope
   of every region, as `unmanaged.Covers` says for a global resource today.
   `unmanaged.Scope` and `unmanaged.Region` get a case for the `iac` form, so
   that "the region of the key wins" holds for it too.
@@ -641,9 +660,24 @@ For any other provider, version 2 adds an `iac` key.
   no "not in any unit" finding from an `iac` key of that type, and marks the
   type `not-matchable` in the result of the sweep. So a missing key never
   becomes a false finding.
+- **One scope rule, owned by the server.** For each provider and type, the
+  server holds, as data in the server repository, the rule that gives the
+  canonical scope string (for example the 12 digits of an AWS account, an
+  Azure subscription ID in lower case, a Google Cloud project ID, a
+  Kubernetes cluster name of the target) and whether the type is regional
+  or `global`. The report side and the state index both use this rule. A
+  manifest may narrow it (list fewer types), never change it. When the two
+  sides disagree, for example a record says `global` and the state of the
+  same type gives `us-east-1`, or a scope string has another form, the
+  server refuses the key and marks the type `not-matchable` for the sweep.
+  A disagreement is never a "not in any unit" finding. A provider and type
+  with no rule are `not-matchable` too.
 - **Precedence.** A record with a cloud key (from `KeysOf` rules) is matched
   by the cloud key only. The `iac` key is used only when no cloud key rule
-  exists for the provider.
+  exists for the provider. A record of a provider that has a cloud key rule
+  (for example `aws`) whose type gives no cloud key (no ARN) is not matched
+  by an `iac` key either: the match drops it, counts it, and marks its type
+  `not-matchable`. So the two key forms never compete for one provider.
 
 This is the one-way door of question 7.
 
@@ -767,7 +801,8 @@ What a hostile plugin can still do, inside these layers:
   resolve. The coverage is a claim of the plugin. The console shows the
   plugin that made each resolve.
 - Read every resource that its read-only role can read, and send the data to
-  a host of its manifest. On a cloud API that many tenants share (for
+  a host that the egress rules of its sweep allow. The server makes those
+  rules, and a manifest cannot widen them. On a cloud API that many tenants share (for
   example the S3 endpoint), a request to a bucket of the attacker is
   allowed by a rule on the host. This is the residual risk of any read-only
   plugin. The signature, the review of community plugins and the data
@@ -775,6 +810,11 @@ What a hostile plugin can still do, inside these layers:
 - On AWS, copy a read-only credential of at most 15 minutes. The documented
   `aws:SourceIp` or `aws:SourceVpce` condition on the role stops its use
   from another network, where the operator sets it (Option D).
+- **Move a budget gate.** A spend plugin can raise or lower the spend of its
+  scopes, and a gate on the `budget` fact (ADR 226 decision 8) then blocks
+  or lets pass changes. The fact names the plugin and the report, and the
+  gate policy decides what that origin is worth (section "Spend and cost on
+  the same plugins").
 - **Reach the identity of the host.** A plugin runs with whatever the runner
   host can reach. On a pool with more than one purpose, or on a host with a
   write-capable workload identity, the plugin can use that identity, and so
@@ -920,8 +960,20 @@ shape, for the follow-up RFC to decide:
   `forecast`), and the amount as a decimal string in an ISO 4217 currency,
   with the bounds of `cost.Money` (ADR 144 decision 1).
 - The server treats it as unverified facts, as ADR 164 decision 17 says for
-  a sweep report. A hostile plugin can make a cost too high or too low in its
-  own scopes. It cannot block: a budget never blocks (ADR 144 decision 13).
+  a sweep report. A hostile or buggy plugin can make a cost too high or too
+  low in its own scopes.
+- **A spend report can block a change, through a gate.** A budget alone
+  never blocks (ADR 144 decision 13). But ADR 226 decision 8 makes a cost
+  gate an ordinary gate at `change.planned` on the `cost` and `budget`
+  facts, and the `budget` fact comes from spend. So a spend plugin can push
+  the level of a budget to `exceeded` and a gate then refuses changes in its
+  namespace, or it can hold the level at `ok` and a gate lets changes pass.
+  The rule of this RFC: the `budget` fact names the spend report and the
+  plugin (name, version, digest) that it came from, with the time of the
+  report, and marks its origin as a plugin on a runner, an unverified fact
+  (ADR 351 decision 4). The gate and the person who reads its decision see
+  that origin. Whether a gate may block on a fact of that origin is the
+  administrator's policy. The residual-risk list records this.
 
 ### Open points for a follow-up RFC
 
@@ -943,6 +995,12 @@ shape, for the follow-up RFC to decide:
   place of a cloud billing API.
 - **The estimate kind**, and whether an `estimate` plugin replaces the first
   pull adapter that ADR 259 decision 3 leaves open.
+- **The origin of the `budget` fact.** The fact schema field that names the
+  spend report and the plugin, and how a gate reads it.
+- **A subject kind for spend runs.** A spend run needs its own subject
+  form, for example `spend:<namespace>/<target>/plugin:<name>`, so that a
+  billing role never trusts a sweep run and a read-only role of a sweep
+  never trusts a spend run.
 
 ## Where it fits in the roadmap
 
@@ -958,8 +1016,8 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
 - **Scope:**
   - Sweeps: the contract and report version 2; the repository with the SDK
     and `sweepplugintest`; admission and the launcher checks; D4; the four
-    first-party sweep plugins. The two bridges are a second part of the
-    same milestone, or "Later".
+    first-party sweep plugins. The two bridges are the second part of the
+    same milestone, after the first-party plugins (question 8).
   - Spend: the kind `spend` in the contract and the spend report version 1;
     the spend run on a runner; the match of spend lines against the resource
     index; the cost of a finding; at least one first-party spend plugin,
@@ -975,7 +1033,12 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
      Secrets with the `view` role.
   2. A plugin with a changed byte fails before it starts, with an audit
      entry.
-  3. The plugin cannot reach the instance metadata address.
+  3. The console warns on the sweep target, because its pool has more than
+     one purpose. A second run on a pool set up as the guide recommends
+     (the sweep purpose only, the metadata endpoints blocked with the
+     documented network policy) shows that a request of the test plugin to
+     `169.254.169.254` fails. This step tests the documented setup, not a
+     rule of the design.
   4. A report that marks a type `unsupported` resolves no finding of that
      type.
   5. A signed test spend plugin uploads a spend report with 3 lines: one for
@@ -987,60 +1050,75 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
 
 1. **A new repository?** Should sweep plugins live in a new repository,
    `OpenDustpan/sweep-plugins`, as a second exception to ADR 343 decision 6?
-   The alternative is the provider kit repository.
+   Alternative: the provider kit repository. Recommended: the new
+   repository.
    _ELI5: we want a separate toy box where anyone can add a new toy without
    opening the main box. The rule says only one toy has its own box today.
    May this one have a box too?_
 2. **A process contract or gRPC?** Should a sweep plugin be a program that
-   reads a file and writes a file (`describe`, `sweep`), not a gRPC service?
+   reads a file and writes a file (`describe`, `sweep`)? Alternative: a gRPC
+   service with the `go-plugin` handshake. Recommended: the process
+   contract.
    _ELI5: we can talk to the helper on the phone the whole time, or give it
    a note and get a list back. It only ever makes one list, so the note is
    simpler and anyone can write one._
 3. **Credentials on a pool with two purposes.** On a pool that also applies
    changes, should a sweep get only a short-lived token for that one sweep
-   (OIDC, through a profile), whose subject names the target and the plugin,
-   and never a stored key? (The identity of the host stays the operator's
-   responsibility, by the owner's decision of 7 November 2026.)
+   (OIDC, through a profile), whose subject names the target and the plugin?
+   Alternatives: the identity of the host, or a stored read-only key in a
+   profile. Recommended: the short-lived token, and never a stored key. (The
+   identity of the host stays the operator's responsibility, by the owner's
+   decision of 7 November 2026.)
    _ELI5: when the robot only counts things, we give it a visitor badge that
    works only for this one count and this one helper. If the robot also
    carries a master key, that is the owner of the robot's choice, and our
    guide says to leave it at home._
 4. **The AWS gap.** AWS signs each request in the client, so the plugin sees
-   a read-only credential of 15 minutes. The proposal: document an
-   `aws:SourceIp` or `aws:SourceVpce` condition on the role as the
-   mitigation, and enforce nothing, in line with the owner's decision on the
-   host identity. Do you accept this?
+   a read-only credential of 15 minutes. Options: (a) document an
+   `aws:SourceIp` or `aws:SourceVpce` condition on the role and enforce
+   nothing; (b) enforce the condition through a statement of the operator
+   on the target; (c) AWS sweeps only on a pool with the sweep purpose only.
+   Recommended: (a), in line with the owner's decision on the host identity.
    _ELI5: for one shop, the visitor must hold the badge in their own hand.
-   The guide says how to make the badge work only inside your building. Is
-   a guide enough?_
-5. **The policy of the runner.** ADR 351 makes the signature a fact that
-   the administrator's policy reads, and keeps only the check of the
-   admitted bytes in code. Should the runner also offer keys pinned in its
-   own configuration, bound to plugin names, as the one signature check that
-   holds when the server is compromised? It needs an OpenPGP library in the
-   launcher.
-   _ELI5: the shop decides which stickers it trusts, and always checks that
-   the toy is the same toy it let in. Should the robot also carry its own
-   list of trusted stickers, in case someone breaks into the shop?_
+   We can write in the guide how to make the badge work only inside your
+   building, or make you promise it, or send only a robot that never builds
+   things. We suggest the guide._
+5. **Dependencies.** May these dependencies come in, each in the repository
+   named? (a) An OpenPGP library (`github.com/ProtonMail/go-crypto`, already
+   approved for the server registry by ADR 349) in the launcher of the
+   runner repository, only for keys pinned in the runner configuration;
+   (b) the cloud SDKs of AWS, Azure and Google Cloud and the Kubernetes
+   client in `sweep-plugins`; (c) gRPC, protobuf and the MPL-2.0 `.proto`
+   files of OpenTofu and of `go-plugin`, and the Pulumi `provider.proto`
+   (Apache-2.0), in `sweep-plugins` for the two bridges. Alternative for (a):
+   no pinned keys on the runner, so only the server checks a signature.
+   Recommended: approve all three.
+   _ELI5: to build the helpers we need some tools from other people. Each
+   tool goes only into the box that needs it. May we use them?_
 6. **Resolve only what was swept.** Should a finding resolve only when the
-   plugin says it swept that type? This changes how version 1 reports
-   behave only if they move to version 2.
+   plugin says it swept that type? Alternative: keep the rule of version 1,
+   where a complete scope resolves every finding that the sweep did not see.
+   Recommended: resolve only what was swept.
    _ELI5: if you looked only under the bed, you may not say that the closet
    is clean._
 7. **A key for every provider.** Should the resource index get a key of the
-   form provider, account, region, type and ID (section "Keys for providers
-   with no cloud ID"), so that sweeps can match resources of any provider in
-   the registries, not only AWS, Azure and Google Cloud? It cannot change
-   easily later.
+   form provider, account, region, type and ID, with one scope rule that the
+   server owns (section "Keys for providers with no cloud ID"), so that
+   sweeps can match resources of any provider in the registries?
+   Alternative: keys only for AWS, Azure and Google Cloud, as today, and
+   every other provider stays `not-matchable`. Recommended: the new key. It
+   cannot change easily later.
    _ELI5: today we can only recognize three kinds of name tags. A general
    name tag lets us recognize every kind, but once we print them, we keep
    them._
 8. **The bridges in the first slice?** Should the generic bridges to
    OpenTofu providers and Pulumi providers come in the same milestone as the
-   four first-party plugins, or later?
-   _ELI5: first we build four helpers that know the big clouds. Later a
-   translator lets every provider help. Do we build the translator now or
-   next?_
+   four first-party plugins? Alternative: "Later". Recommended: the same
+   milestone, as its second part after the four first-party plugins, because
+   the bridges are the reach to the registries that the owner asked for.
+   _ELI5: first we build four helpers that know the big clouds, then a
+   translator that lets every provider help. We suggest both in the same
+   season, the helpers first._
 
 ## Checklist
 
