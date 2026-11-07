@@ -2,6 +2,10 @@
 
 <!-- One concern per pull request. Link the issue. Say how you tested the change. -->
 
+## Owner-approved text (optional)
+
+<!-- List the files and headings whose wording the owner approved. Reviewers check only structure, lint and facts about the code there. -->
+
 ## Use of AI tools
 
 <!-- CONTRIBUTING.md: name the tool and say which parts it wrote. Write "None" if you used no AI tool. -->
