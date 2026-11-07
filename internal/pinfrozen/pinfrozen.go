@@ -1,7 +1,7 @@
 // Package pinfrozen holds the rule for a branch before the first tag: the pin
 // file of the API description does not change, and info.version of the
 // description does not change. The rule does not apply after the first tag.
-// The command in scripts/pinfrozen decides when the rule applies.
+// The command in cmd/pinfrozen decides when the rule applies.
 package pinfrozen
 
 import (

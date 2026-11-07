@@ -44,6 +44,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	base := args[0]
 
+	// A base ref that is missing fails the check before the release check, so
+	// that a CI job with no fetched ref cannot pass by skipping the rule.
+	if _, err := git(ctx, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+		return report(stderr, exitFail, "pin-frozen: base ref %s does not exist; fetch it first", base)
+	}
+
 	rec, err := releaserecord.Current()
 	if err != nil {
 		return report(stderr, exitFail, "pin-frozen: read the release record: %v", err)
