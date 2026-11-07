@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -126,18 +126,24 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 # Words that claim quality instead of showing it, and emoji. The list and its
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
+ADR_DECISIONS := python3 -I scripts/adr-decisions.py
 
 # The change links between ADRs and the generated docs/adr/INDEX.md. ADR 296
 # is the first ADR with a "Changes:" list. The older ADRs have only the
 # "Changed by:" items of their links.
 ADR_INDEX := python3 -I scripts/adr-index.py --changes-from 296
 
-docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
+docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisions file of the ADRs, for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
+	$(ADR_DECISIONS) --selftest
+	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+
+adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
+	$(ADR_DECISIONS)
 
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another
