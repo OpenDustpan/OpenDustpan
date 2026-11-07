@@ -148,9 +148,8 @@ The restore does not rely on the conditional writes of the blob store. It reads 
 A blob store that ignores conditional writes can still take a write of another writer between the last read and the write of the restore. Maintenance mode stops every other writer while the restore copies blobs. This is the protection against that gap.
 
 During a rolling deploy, a worker that runs a binary below the minimum binary
-version of the schema fails the check step of a restore, and the step is
-retried. A worker on a new binary can take the retry and continue the
-restore. When the step fails 5 times, the restore fails and changes nothing.
+version of the schema cannot claim a restore operation and never runs its
+steps. The operation stays pending until a worker on a new binary takes it.
 
 Before the server applies anything, it checks the manifest, the
 key-encryption key, every named blob, and the SQL part, then loads the SQL
