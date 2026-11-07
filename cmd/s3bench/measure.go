@@ -29,6 +29,12 @@ const (
 	modeRawPlain = "raw-plain-unique-key"
 )
 
+// Names of the conditional sequences, in the tables of both runs.
+const (
+	seqConditional   = "PUT If-None-Match"
+	seqConditionalTx = seqConditional + " + fenced tx"
+)
+
 // putModes lists the modes in the order the run measures them.
 func putModes() []string {
 	return []string{modeAdapter, modeRawConditional, modeRawPlain}
@@ -298,7 +304,7 @@ func (m *modelRun) unit(flow string) string {
 func (m *modelRun) hotPath() sequence {
 	return sequence{
 		flow:           "hot path (checkpoint, journal batch, job log chunk)",
-		conditionalSeq: "PUT If-None-Match + fenced tx",
+		conditionalSeq: seqConditionalTx,
 		arbitratedSeq:  "PUT unique key + fenced tx + 1 row read",
 		conditional: func(ctx context.Context, n int) error {
 			key, err := m.put(ctx, modeRawConditional, n)
@@ -328,7 +334,7 @@ func (m *modelRun) hotPath() sequence {
 func (m *modelRun) unitImport() sequence {
 	return sequence{
 		flow:           "unit import upload",
-		conditionalSeq: "PUT If-None-Match + fenced tx",
+		conditionalSeq: seqConditionalTx,
 		arbitratedSeq:  "fenced tx (claim) + PUT unique key + fenced tx",
 		conditional: func(ctx context.Context, n int) error {
 			key, err := m.put(ctx, modeRawConditional, n)
@@ -363,7 +369,7 @@ func (m *modelRun) unitImport() sequence {
 func (m *modelRun) listThenPut() sequence {
 	return sequence{
 		flow:           "backup target, restore, audit checkpoint",
-		conditionalSeq: "PUT If-None-Match",
+		conditionalSeq: seqConditional,
 		arbitratedSeq:  "LIST prefix + PUT unique key",
 		conditional: func(ctx context.Context, n int) error {
 			_, err := m.put(ctx, modeRawConditional, n)
