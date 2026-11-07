@@ -9,12 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
 
 var errJobStoreDown = errors.New("store: password=hunter2 refused")
@@ -293,9 +295,8 @@ func TestJobPlannerPools(t *testing.T) {
 
 // TestJobPlannerNoPoolNamesTheNextStep proves that the refusal of a namespace
 // with no runner pool for jobs names the route that makes a pool and the
-// setting that the route needs, and that the drift check answer, which the
-// API cuts at 300 bytes, holds the whole text also for the longest namespace
-// name.
+// setting that the route needs, and that the drift check answer holds the whole
+// text also for the longest namespace name.
 func TestJobPlannerNoPoolNamesTheNextStep(t *testing.T) {
 	t.Parallel()
 
@@ -1066,5 +1067,317 @@ func TestPlanStepsPulumiErrorEchoIsBounded(t *testing.T) {
 	_, err = planSteps(unit)
 	if !errors.Is(err, job.ErrInvalid) || len(err.Error()) > 400 || !strings.Contains(err.Error(), "cut") {
 		t.Errorf("planSteps with a long name = %v; want ErrInvalid with a bounded text that says it is cut", err)
+	}
+}
+
+// fakeSettings is the unit settings store of the planner tests. It keeps one
+// record for the unit web and the defaults of the namespace acme.
+type fakeSettings struct {
+	unitsettings.Store
+
+	record      *unitsettings.Settings
+	defaults    unitsettings.NamespaceDefaults
+	getErr      error
+	defaultsErr error
+}
+
+func newFakeSettings(record *unitsettings.Settings, pool string) fakeSettings {
+	return fakeSettings{
+		Store: nil, record: record,
+		defaults: unitsettings.NamespaceDefaults{Namespace: "acme", Pool: pool, Version: 0, UpdatedAt: time.Time{}},
+		getErr:   nil, defaultsErr: nil,
+	}
+}
+
+func (f fakeSettings) Get(context.Context, identity.Object) (unitsettings.Settings, error) {
+	if f.getErr != nil {
+		return unitsettings.Settings{}, f.getErr
+	}
+
+	if f.record == nil {
+		return unitsettings.Settings{}, unitsettings.ErrNotFound
+	}
+
+	return *f.record, nil
+}
+
+func (f fakeSettings) Defaults(context.Context, namespace.Name) (unitsettings.NamespaceDefaults, error) {
+	if f.defaultsErr != nil {
+		return unitsettings.NamespaceDefaults{}, f.defaultsErr
+	}
+
+	return f.defaults, nil
+}
+
+// fakeForge keeps the connection records of the planner tests.
+type fakeForge struct {
+	records []forge.ConnectionRecord
+	getErr  error
+	listErr error
+}
+
+func (f fakeForge) GetConnection(_ context.Context, ns namespace.Name, id string) (forge.ConnectionRecord, error) {
+	if f.getErr != nil {
+		return forge.ConnectionRecord{}, f.getErr
+	}
+
+	for i := range f.records {
+		if f.records[i].Namespace == ns && f.records[i].ID == id {
+			return f.records[i], nil
+		}
+	}
+
+	return forge.ConnectionRecord{}, forge.ErrConnectionNotFound
+}
+
+func (f fakeForge) ListConnections(_ context.Context, ns namespace.Name) ([]forge.ConnectionRecord, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+
+	var out []forge.ConnectionRecord
+
+	for i := range f.records {
+		if f.records[i].Namespace == ns {
+			out = append(out, f.records[i])
+		}
+	}
+
+	return out, nil
+}
+
+func forgeFailing(getErr, listErr error) fakeForge {
+	return fakeForge{records: nil, getErr: getErr, listErr: listErr}
+}
+
+func settingsFailing(record *unitsettings.Settings, getErr, defaultsErr error) fakeSettings {
+	fs := newFakeSettings(record, "")
+	fs.getErr = getErr
+	fs.defaultsErr = defaultsErr
+
+	return fs
+}
+
+func forgeRecord(ns, id string, isDefault bool) forge.ConnectionRecord {
+	return forge.ConnectionRecord{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, Namespace: namespace.Name(ns), ID: id, Kind: "", Auth: "",
+		Scope: "", InstallationID: "", Version: 1, Push: false, Default: isDefault,
+	}
+}
+
+func plannerLocation(conn, repo, ref, dir string) job.Location {
+	return job.Location{Connection: conn, Repository: repo, Ref: ref, Directory: dir, Revision: ""}
+}
+
+func unitRecord(pool string, loc job.Location) *unitsettings.Settings {
+	return &unitsettings.Settings{
+		Unit: identity.Object{}, Executor: "", Pool: pool,
+		CodeLocation: unitsettings.CodeLocation{
+			Connection: loc.Connection, Repository: loc.Repository, Ref: loc.Ref, Directory: loc.Directory,
+		},
+		WriteBack:      unitsettings.WriteBack{Delivery: "", Files: nil},
+		ReviewRequests: unitsettings.ReviewRequests{Enabled: false},
+		Steps:          nil, Version: 1, UpdatedAt: time.Time{},
+	}
+}
+
+func newSettingsPlanner(pools fakePools, conns fakeForge, record *unitsettings.Settings, pool string) settingsPlanner {
+	return settingsPlanner{
+		base:        jobPlanner{pools: pools, connections: storeConnections{connections: conns}},
+		settings:    newFakeSettings(record, pool),
+		connections: conns,
+	}
+}
+
+func TestSettingsPlannerLocation(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(
+		testPool("pool-1", "acme", "ci", runner.PurposeJobs), testPool("pool-2", "acme", "deploy", runner.PurposeJobs),
+	)
+	conns := fakeForge{records: []forge.ConnectionRecord{
+		forgeRecord("acme", "conn-1", true), forgeRecord("other", "conn-2", true), forgeRecord("acme", "conn-3", false),
+	}, getErr: nil, listErr: nil}
+	zero := plannerLocation("", "", "", "")
+	cleared := func(q *job.StartRequest) { q.Location = zero }
+
+	tests := []struct {
+		name     string
+		record   *unitsettings.Settings
+		change   func(*job.StartRequest)
+		wantLoc  job.Location
+		wantPool string
+		wantErr  error
+	}{
+		{
+			"the unit location and pool",
+			unitRecord("pool-2", plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")), cleared,
+			plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir"), "pool-2", nil,
+		},
+		{
+			"the namespace default connection and pool",
+			unitRecord("", plannerLocation("", "acme/unit-repo", "dev", "")), cleared,
+			plannerLocation("conn-1", "acme/unit-repo", "dev", ""), "pool-1", nil,
+		},
+		{
+			"a request location and pool win",
+			unitRecord("pool-2", plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")),
+			func(q *job.StartRequest) { q.Pool = "ci" },
+			plannerLocation("", "acme/infra", "main", "net"), "pool-1", nil,
+		},
+		{"no setting and no request location", nil, cleared, zero, "", job.ErrUnsupported},
+		{
+			"a request connection of another namespace", nil,
+			func(q *job.StartRequest) { q.Location.Connection = "conn-2" }, zero, "", identity.ErrDenied,
+		},
+		{
+			"an unknown request connection", nil, func(q *job.StartRequest) { q.Location.Connection = "nope" },
+			zero, "", identity.ErrDenied,
+		},
+		{
+			"a unit connection of another namespace",
+			unitRecord("", plannerLocation("conn-2", "acme/unit-repo", "dev", "")), cleared, zero, "",
+			identity.ErrDenied,
+		},
+		{
+			"a unit pool that is no job pool",
+			unitRecord("pool-9", plannerLocation("", "acme/unit-repo", "dev", "")), cleared, zero, "", job.ErrInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newSettingsPlanner(pools, conns, tt.record, "pool-1")
+			unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+			req := plannerRequest(unit)
+			tt.change(&req)
+
+			spec, err := p.Plan(t.Context(), unit, &req)
+			if tt.wantErr != nil {
+				checkPlanRefusal(t, err, tt.wantErr)
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Plan = %v", err)
+			}
+
+			if spec.Location != tt.wantLoc || spec.Pool != tt.wantPool {
+				t.Fatalf("spec location %+v pool %q, want %+v pool %q",
+					spec.Location, spec.Pool, tt.wantLoc, tt.wantPool)
+			}
+		})
+	}
+}
+
+// TestSettingsPlannerRefusalsMatch proves that a connection of another
+// namespace and a connection that does not exist give the same answer.
+func TestSettingsPlannerRefusalsMatch(t *testing.T) {
+	t.Parallel()
+
+	conns := fakeForge{
+		records: []forge.ConnectionRecord{forgeRecord("other", "conn-2", true)}, getErr: nil, listErr: nil,
+	}
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+	p := newSettingsPlanner(pools, conns, nil, "")
+	unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+
+	answer := func(id string) string {
+		req := plannerRequest(unit)
+		req.Location.Connection = id
+
+		_, err := p.Plan(t.Context(), unit, &req)
+		if !errors.Is(err, identity.ErrDenied) {
+			t.Fatalf("Plan(%q) = %v, want ErrDenied", id, err)
+		}
+
+		return err.Error()
+	}
+
+	if foreign, unknown := answer("conn-2"), answer("nope"); foreign != unknown {
+		t.Fatalf("answers differ: %q and %q", foreign, unknown)
+	}
+}
+
+// TestSettingsPlannerFailsClosed proves that a store that fails gives that
+// error and no spec, and that a request which names a full location reads no
+// connection list.
+func TestSettingsPlannerFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+	record := unitRecord("", plannerLocation("", "acme/unit-repo", "dev", ""))
+	cleared := func(q *job.StartRequest) { q.Location = plannerLocation("", "", "", "") }
+	named := func(q *job.StartRequest) { q.Location.Connection = "conn-1" }
+
+	tests := []struct {
+		name     string
+		conns    fakeForge
+		settings fakeSettings
+		change   func(*job.StartRequest)
+		wantErr  error
+	}{
+		{
+			"the unit settings read fails", forgeFailing(nil, nil), settingsFailing(nil, errJobStoreDown, nil), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the defaults read fails", forgeFailing(nil, nil), settingsFailing(record, nil, errJobStoreDown), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the connection list fails", forgeFailing(nil, errJobStoreDown), settingsFailing(record, nil, nil), cleared,
+			errJobStoreDown,
+		},
+		{
+			"the connection lookup fails", forgeFailing(errJobStoreDown, nil), settingsFailing(record, nil, nil), named,
+			errJobStoreDown,
+		},
+		{
+			"a location and no pool, settings store down", forgeFailing(nil, nil),
+			settingsFailing(nil, errJobStoreDown, nil),
+			func(*job.StartRequest) {}, errJobStoreDown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := settingsPlanner{
+				base:        jobPlanner{pools: pools, connections: storeConnections{connections: tt.conns}},
+				settings:    tt.settings,
+				connections: tt.conns,
+			}
+			unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+			req := plannerRequest(unit)
+			tt.change(&req)
+
+			spec, err := p.Plan(t.Context(), unit, &req)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Plan = %v, want %v", err, tt.wantErr)
+			}
+
+			if spec.Pool != "" || len(spec.Steps) != 0 {
+				t.Fatalf("spec = %+v, want no spec", spec)
+			}
+		})
+	}
+
+	// A full location and a pool: the connection list is not read.
+	p := settingsPlanner{
+		base:        jobPlanner{pools: pools, connections: nil},
+		settings:    newFakeSettings(nil, ""),
+		connections: fakeForge{records: nil, getErr: nil, listErr: errJobStoreDown},
+	}
+	unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+	req := plannerRequest(unit)
+
+	_, err := p.Plan(t.Context(), unit, &req)
+	if err != nil {
+		t.Fatalf("Plan with a location and the default pool = %v, want no read of the connections", err)
 	}
 }

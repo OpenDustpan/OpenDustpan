@@ -60,7 +60,8 @@ var (
 // it is a sentence with a capital letter and a full stop.
 const fencedCopy = "The namespace changed while this write ran. Run the command again."
 
-const maxNameLength = 100
+// MaxNameLength is the longest namespace name, in bytes.
+const MaxNameLength = 100
 
 // maxIDLength is the longest namespace ID, prefix included.
 const maxIDLength = 100
@@ -76,7 +77,7 @@ type Name string
 // ParseName validates s as a namespace name: 1 to 100 characters of ASCII
 // letters, digits, '-', '_' and '.', not starting with '.' or '-'.
 func ParseName(s string) (Name, error) {
-	if err := ident.Check(s, maxNameLength); err != nil {
+	if err := ident.Check(s, MaxNameLength); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidName, err)
 	}
 
@@ -125,7 +126,7 @@ type InstallationName string
 
 // ParseInstallationName validates s as an installation name.
 func ParseInstallationName(s string) (InstallationName, error) {
-	if !ident.Valid(s, maxNameLength) {
+	if !ident.Valid(s, MaxNameLength) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidInstallationName, s)
 	}
 

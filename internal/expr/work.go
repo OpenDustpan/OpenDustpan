@@ -57,9 +57,9 @@ const (
 )
 
 // Limiter is the cap on the runs that have not ended, shared by the
-// Evaluators that use it. One process must make one Limiter and pass it to each
-// Evaluator that it makes: the server wiring creates it at start. A run counts
-// until its goroutine ends, also after the caller got its error, so hostile
+// Evaluators that use it. The process owner makes one Limiter and passes it to
+// each Evaluator that it makes. No server code does so yet. A run counts until
+// its goroutine ends, also after the caller got its error, so hostile
 // expressions cannot pile up goroutines. A Limiter is safe for use by many
 // goroutines.
 type Limiter struct {

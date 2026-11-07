@@ -205,6 +205,8 @@ import type {
   Settings,
   SettingsLockedError,
   SettingsLockedErrorArgs,
+  SettingsRetentionInvalidError,
+  SettingsRetentionInvalidErrorArgs,
   SettingsStaticOnlyError,
   SettingsStaticOnlyErrorArgs,
   SettingsValueInvalidError,
@@ -656,6 +658,7 @@ export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("Error
   "restore.swapped": ref(() => decodeRestoreSwappedError),
   "schema.binary-below-minimum": ref(() => decodeSchemaBinaryBelowMinimumError),
   "settings.locked": ref(() => decodeSettingsLockedError),
+  "settings.retention-invalid": ref(() => decodeSettingsRetentionInvalidError),
   "settings.static-only": ref(() => decodeSettingsStaticOnlyError),
   "settings.value-invalid": ref(() => decodeSettingsValueInvalidError),
   "sink.test-rate-limited": ref(() => decodeSinkTestRateLimitedError),
@@ -1745,6 +1748,19 @@ export const decodeSettingsLockedError: Decoder<SettingsLockedError> = object<Se
 export const decodeSettingsLockedErrorArgs: Decoder<SettingsLockedErrorArgs> = object<SettingsLockedErrorArgs>("SettingsLockedErrorArgs", {
   key: string,
   source: string,
+});
+
+/** The validator of SettingsRetentionInvalidError. */
+export const decodeSettingsRetentionInvalidError: Decoder<SettingsRetentionInvalidError> = object<SettingsRetentionInvalidError>("SettingsRetentionInvalidError", {
+  code: int64,
+  errorArgs: ref(() => decodeSettingsRetentionInvalidErrorArgs),
+  errorCode: literal("settings.retention-invalid"),
+  message: string,
+});
+
+/** The validator of SettingsRetentionInvalidErrorArgs. */
+export const decodeSettingsRetentionInvalidErrorArgs: Decoder<SettingsRetentionInvalidErrorArgs> = object<SettingsRetentionInvalidErrorArgs>("SettingsRetentionInvalidErrorArgs", {
+  setting: string,
 });
 
 /** The validator of SettingsStaticOnlyError. */

@@ -77,8 +77,8 @@ A check:
 {
   "account": {"id": "99", "login": "acme-org", "expiresAt": null, "noExpiry": false,
               "scopes": ["contents:read", "metadata:read"]},
-  "capabilities": ["files"],
-  "missing": {"write-back": ["compare", "commit"], "catalog": []}
+  "capabilities": ["files", "compare"],
+  "missing": {"write-back": ["commit"], "catalog": []}
 }
 ```
 
@@ -87,10 +87,13 @@ A check:
 of a feature that the connection can serve is empty.
 
 For an app, `scopes` lists the permissions of the installation, for example
-`contents:write`, `metadata:read` and `pull_requests:write`. The capability
+`contents:write`, `metadata:read`, `pull_requests:write` and `statuses:write`.
+The capabilities `files` and `compare` need `contents:read`. The capability
 `commit` needs `contents:write`. The capability `review` needs `contents:write`
-and `pull_requests:write`. See the guide "Connect GitHub" for the permissions of
-the app.
+and `pull_requests:write`. The capability `status` needs `statuses:write`: the
+app permission "Commit statuses" with the access "Read and write". A connection
+with no push access has no `commit`, no `review` and no `status`. See the guide
+"Connect GitHub" for the permissions of the app.
 
 ## Errors
 

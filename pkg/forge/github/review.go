@@ -991,7 +991,7 @@ func reviewURL(s string) bool {
 		return false
 	}
 
-	return u.Scheme == "https" && u.Host != "" && u.User == nil
+	return u.Scheme == schemeHTTPS && u.Host != "" && u.User == nil
 }
 
 // hostMergeStates maps the mergeable state of GitHub to the merge state of the

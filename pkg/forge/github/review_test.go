@@ -94,6 +94,10 @@ func (c *canned) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for name, value := range a.header {
+		w.Header().Set(name, value)
+	}
+
 	w.WriteHeader(a.status)
 
 	if _, err := w.Write([]byte(a.body)); err != nil {

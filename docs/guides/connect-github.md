@@ -97,7 +97,7 @@ curl -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
         '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
 ```
 
-The request needs all four fields. The server answers 201 and the first time,
+The request needs all four fields. The server answers 201 the first time,
 and 200 for a replacement. The answer shows that the key and the event secret
 are set, with a set ID and a creation time. It never shows their values. It also
 shows the `hookID`.
@@ -136,7 +136,9 @@ curl -X PUT "$SERVER/api/dustpan/v1/git-host-installations/67890" \
   -d '{"namespace":"acme"}'
 ```
 
-Only the operator can do this. A namespace administrator cannot. One
+Only the operator can do this. A namespace administrator cannot. A console
+session needs a recent sign-in for this change. A request with an access token
+gets 403 with the error code `mfa.fresh-step-required`. One
 installation belongs to one namespace. To move it, send the request again with
 another namespace. The connections of the old namespace stop at their next use.
 To end the assignment, send `DELETE` to the same path. The map of

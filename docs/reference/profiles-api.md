@@ -72,6 +72,76 @@ A document has at most 256 KiB, 4,096 leaves in `values`, a depth of 32
 levels, 64 provider blocks, 16 rotator blocks and 32 imports. A namespace
 has at most 1,000 profiles. An answer with status 422 names the limit.
 
+## Exports
+
+`exports` says what each consumer of the profile gets. It holds the keys
+`variables`, `files`, `pulumi`, `opentofu` and `proxy`. Any other key
+answers 400.
+
+| Key | Consumer |
+| --- | --- |
+| `variables`, `files`, `pulumi`, `opentofu` | The launcher of a run command or a step |
+| `proxy` | The job proxy only |
+
+The launcher never gets `proxy`, and the job proxy gets only `proxy`. So a
+credential in `proxy` never reaches the job.
+
+`proxy` is a map from a credential name to a credential. A credential name
+has 1 to 63 characters of `a-z`, `0-9`, `_` and `-`, and starts with a
+letter or a digit. `proxy` holds at most 64 credentials. Each credential has
+a `type` and exactly the fields of its type:
+
+| `type` | Fields |
+| --- | --- |
+| `header` | `name`, `value` |
+| `basic` | `user`, `password` |
+| `query` | `name`, `value` |
+| `client-certificate` | `certificate`, `key` |
+| `ca` | `certificates` |
+
+```yaml
+values:
+  grafana:
+    token: { $secret: glsa_example }
+exports:
+  proxy:
+    grafana-admin:
+      type: header
+      name: Authorization
+      value: ${ values.grafana.token }
+```
+
+- `name` is literal text. A header name has only the token characters of
+  HTTP, and cannot be a header that frames or routes a request, for example
+  `Host`, `Content-Length` or `Proxy-Authorization`. A query parameter name
+  has only `A-Z`, `a-z`, `0-9`, `.`, `_`, `~` and `-`.
+- Each other field is exactly one reference into `values`, for example
+  `${ values.grafana.token }`. Literal text answers 400.
+- `value`, `password` and `key` must read a secret source: a `$secret`
+  value, the output of a provider or a rotator
+  (`${ providers.<name>.<output> }`) that the document declares, a value of
+  a profile that `imports` lists (`${ imports["<profile>"].values.<path> }`
+  or `${ profiles["<profile>"].values.<path> }`), or a path that the
+  document does not hold. A provider or rotator block must be in the
+  document itself. A path that the document does not hold passes only when
+  the document has imports, because only an import can give it. A field can read such a
+  source through other values, but each value on the way must be exactly
+  one reference, for example `${ values.token }`. A plain value, a literal,
+  text around a reference, an operator, a function and a read of `$env`
+  answer 400. So to send `Bearer <token>`, store the whole text as the
+  `$secret`.
+- A field cannot read a map or a list.
+- The text of a `header` field or of a `basic` field cannot hold a control
+  character, for example CR or LF. A `basic` user cannot hold `:`.
+- A path that the document does not hold answers 400 when the document has
+  no imports.
+- The save cannot see a value that another profile gives, so it does not
+  check that such a value is a secret. A check when the profile opens does
+  not exist yet.
+
+A change of a value that `proxy` reads, directly or through other
+expressions, is a routing change (see "Routing changes").
+
 ## Secrets
 
 The server seals each secret with a data key of the profile before it

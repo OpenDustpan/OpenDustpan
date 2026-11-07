@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/jobgate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
 
 // newJobService builds the job service, or returns nil when the server lacks
@@ -61,7 +63,7 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	}
 
 	starter, svcErr := job.NewService(job.ServiceConfig{
-		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: jobPlanner{pools: cfg.runners, connections: nil},
+		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: newJobPlanner(cfg),
 		Executors: []job.Executor{executor}, Decider: decider,
 		// The access limits of the starter hold for the start action, as for a
 		// call of any route. The limits of the lock of the plan are evaluated
@@ -291,15 +293,192 @@ type connectionOwner interface {
 	Owns(ctx context.Context, ns namespace.Name, id string) (bool, error)
 }
 
+// forgeConnections reads the Git host connections of a namespace. forge.Store
+// implements it.
+type forgeConnections interface {
+	GetConnection(ctx context.Context, ns namespace.Name, id string) (forge.ConnectionRecord, error)
+	ListConnections(ctx context.Context, ns namespace.Name) ([]forge.ConnectionRecord, error)
+}
+
+// storeConnections is the connectionOwner over the Git host connections.
+type storeConnections struct {
+	connections forgeConnections
+}
+
+// Owns implements connectionOwner.
+func (c storeConnections) Owns(ctx context.Context, ns namespace.Name, id string) (bool, error) {
+	rec, err := c.connections.GetConnection(ctx, ns, id)
+
+	switch {
+	case errors.Is(err, forge.ErrConnectionNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("connection of %s: %w", ns, err)
+	}
+
+	// Defense in depth: the store reads the connections of ns only. This check
+	// stays so that a store that gives a connection of another namespace never
+	// gives access to it.
+	return rec.Namespace == ns && rec.ID == id, nil
+}
+
+// newJobPlanner returns the planner of the job service. With the store of unit
+// settings, it reads the effective settings of a unit when a request names no
+// location or no pool. Without the store, a request must name both.
+//
+//nolint:ireturn // The port is the contract of the result.
+func newJobPlanner(cfg *settings) job.Planner {
+	var owner connectionOwner
+
+	var conns forgeConnections
+
+	if cfg.gitHost.store != nil {
+		conns = cfg.gitHost.store
+		owner = storeConnections{connections: conns}
+	}
+
+	base := jobPlanner{pools: cfg.runners, connections: owner}
+	if cfg.unitSettingsStore == nil {
+		return base
+	}
+
+	return settingsPlanner{base: base, settings: cfg.unitSettingsStore, connections: conns}
+}
+
+// settingsPlanner is the job.Planner that fills the code location and the pool
+// of a request from the effective settings of the unit, and then plans as
+// jobPlanner does. A value in the request wins over a setting.
+type settingsPlanner struct {
+	base     jobPlanner
+	settings unitsettings.Store
+	// connections gives the default connection of the namespace. Nil means the
+	// server keeps no connections, so the namespace has no default.
+	connections forgeConnections
+}
+
+// Plan implements job.Planner.
+func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *job.StartRequest) (job.Spec, error) {
+	if !req.Location.IsZero() && req.Pool != "" {
+		return p.base.Plan(ctx, unit, req)
+	}
+
+	// Only a request with no location uses the default connection of the
+	// namespace, so only then does the planner read the connections.
+	var defaultConn string
+
+	if req.Location.IsZero() {
+		var connErr error
+
+		defaultConn, connErr = p.defaultConnection(ctx, unit.Namespace())
+		if connErr != nil {
+			return job.Spec{}, connErr
+		}
+	}
+
+	eff, err := p.effective(ctx, unit, defaultConn)
+	if err != nil {
+		return job.Spec{}, err
+	}
+
+	filled := *req
+
+	if filled.Location.IsZero() && eff.Repository.Value != "" {
+		filled.Location = job.Location{
+			Connection: eff.Connection.Value, Repository: eff.Repository.Value, Ref: eff.Ref.Value,
+			Directory: "", Revision: "",
+		}
+		if eff.Directory.Origin == unitsettings.OriginUnit {
+			filled.Location.Directory = eff.Directory.Value
+		}
+	}
+
+	if filled.Pool == "" && eff.Pool.Value != "" {
+		name, nameErr := p.poolName(ctx, unit.Namespace(), eff.Pool.Value)
+		if nameErr != nil {
+			return job.Spec{}, nameErr
+		}
+
+		filled.Pool = name
+	}
+
+	return p.base.Plan(ctx, unit, &filled)
+}
+
+// effective returns the effective settings of unit. It fails closed: a store
+// that fails, or a record that the store refuses, gives an error and no job.
+func (p settingsPlanner) effective(ctx context.Context, unit identity.Object, defaultConn string,
+) (unitsettings.Effective, error) {
+	var none unitsettings.Effective
+
+	rec, err := p.settings.Get(ctx, unit)
+
+	var current *unitsettings.Settings
+
+	switch {
+	case errors.Is(err, unitsettings.ErrNotFound):
+	case err != nil:
+		return none, fmt.Errorf("settings of %s: %w", unit, err)
+	default:
+		current = &rec
+	}
+
+	defaults, err := p.settings.Defaults(ctx, unit.Namespace())
+	if err != nil {
+		return none, fmt.Errorf("unit defaults of %s: %w", unit.Namespace(), err)
+	}
+
+	return unitsettings.Resolve(current, defaults, unitsettings.Context{
+		DefaultConnection: defaultConn, HasJobPool: true, DefaultFiles: nil,
+	}), nil
+}
+
+// defaultConnection returns the ID of the default connection of ns, or empty.
+func (p settingsPlanner) defaultConnection(ctx context.Context, ns namespace.Name) (string, error) {
+	if p.connections == nil {
+		return "", nil
+	}
+
+	recs, err := p.connections.ListConnections(ctx, ns)
+	if err != nil {
+		return "", fmt.Errorf("connections of %s: %w", ns, err)
+	}
+
+	for i := range recs {
+		if recs[i].Default && recs[i].Namespace == ns {
+			return recs[i].ID, nil
+		}
+	}
+
+	return "", nil
+}
+
+// poolName returns the name of the job pool of ns with the ID id. A setting
+// that names a pool which does not exist gives job.ErrInvalid.
+func (p settingsPlanner) poolName(ctx context.Context, ns namespace.Name, id string) (string, error) {
+	pools, err := p.base.pools.Pools(ctx, ns)
+	if err != nil {
+		return "", fmt.Errorf("pools of %s: %w", ns, err)
+	}
+
+	i := slices.IndexFunc(pools, func(pl runner.Pool) bool {
+		return pl.ID == id && pl.Namespace == ns && pl.Purpose == runner.PurposeJobs
+	})
+	if i < 0 {
+		return "", fmt.Errorf("%w: the pool in the settings of the unit is not a runner pool for jobs in namespace %s",
+			job.ErrInvalid, ns)
+	}
+
+	return pools[i].Name, nil
+}
+
 // jobPlanner is the job.Planner of this version. It starts a plan on a
 // runner, with the default steps of the tool of the unit.
 //
 // The pool comes from the request, and then the service has checked
 // namespace:manage-runners, or it is the only job pool of the namespace. The
 // code location comes from the request, and then the service has checked
-// unit:define-steps. The server keeps no settings of a unit for jobs yet, so
-// a request with no location fails. The settings of a unit take the place of
-// both defaults.
+// unit:define-steps. A request with no location fails. settingsPlanner fills
+// both values from the settings of the unit before this planner runs.
 type jobPlanner struct {
 	pools runner.PoolStore
 	// connections checks the connection that a location names. Nil means the

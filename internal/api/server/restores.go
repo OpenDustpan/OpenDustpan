@@ -259,9 +259,9 @@ func restoreAuditObject(restoreID, backupID, accessMode string) string {
 // request field (ADR 30 decision 9): an unknown field such as target answers
 // 400 instead of being silently ignored.
 func parseStartRestoreRequest(w http.ResponseWriter, r *http.Request) (startRestoreRequest, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRestoreBodyBytes))
+	body, err := readBodyUpTo(w, r, maxRestoreBodyBytes, errInvalidBody)
 	if err != nil {
-		return startRestoreRequest{}, errInvalidBody
+		return startRestoreRequest{}, err
 	}
 
 	var req startRestoreRequest

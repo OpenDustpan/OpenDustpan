@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -296,6 +297,16 @@ type recorderStores struct {
 func newRecorderHarness(t *testing.T) recorderStores {
 	t.Helper()
 
+	return newRecorderHarnessOf(t, jobtest.NewRecorderHarness)
+}
+
+// newRecorderHarnessOf is newRecorderHarness with the function that builds
+// the harness over the stores, so a test can set the retention periods.
+func newRecorderHarnessOf(
+	t *testing.T, build func(*testing.T, jobtest.RecorderParts) jobtest.RecorderHarness,
+) recorderStores {
+	t.Helper()
+
 	s := open(t)
 	j := s.Jobs()
 	ops := s.DurableOperationsPort()
@@ -311,7 +322,7 @@ func newRecorderHarness(t *testing.T) recorderStores {
 		}
 	})
 
-	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
+	h := build(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: &jobDomain{s: s},
@@ -349,4 +360,26 @@ func TestJobRestoreIsReconciled(t *testing.T) {
 		return storetest.JobBackup{Store: src, Jobs: src.Jobs(), Domain: &jobDomain{s: src}, Namespaces: src},
 			storetest.JobBackup{Store: dst, Jobs: dst.Jobs(), Domain: &jobDomain{s: dst}, Namespaces: dst}
 	})
+}
+
+// TestRecorderAppliesTheConfiguredLogRetention proves that the expiry of a
+// log version is its creation time plus the job log period that the recorder
+// got: two days here, not the default.
+func TestRecorderAppliesTheConfiguredLogRetention(t *testing.T) {
+	t.Parallel()
+
+	const period = 48 * time.Hour
+
+	rs := newRecorderHarnessOf(t, func(t *testing.T, parts jobtest.RecorderParts) jobtest.RecorderHarness {
+		t.Helper()
+
+		return jobtest.NewRecorderHarnessWithRetention(
+			t, parts, history.RetentionSettings{Plan: history.DefaultRetention, JobLog: period},
+		)
+	})
+
+	times := jobtest.LogExpiry(t, rs.h)
+	if got := times.ExpiresAt.Sub(times.CreatedAt); got != period {
+		t.Fatalf("log expiry - creation = %s, want %s", got, period)
+	}
 }

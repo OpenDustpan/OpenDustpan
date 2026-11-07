@@ -176,6 +176,7 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 	profileReads(t, env, one, tool)
 	profileWrites(t, env, one, &tag)
 	profileKeyedCreate(t, env, tool)
+	profileProxyExport(t, env, tool)
 
 	profileStep(t, env, profileRequest("a write with a stale tag is refused",
 		http.MethodDelete, one, http.StatusPreconditionFailed).withTag(`"`+tag.id+`.1"`))
@@ -310,4 +311,43 @@ func profileKeyedCreate(t *testing.T, env *e2e.Env, tool string) {
 	}))
 	profileStep(t, env, profileRequest("delete the profile of the key ("+tool+")",
 		http.MethodDelete, profilesBase+"/"+tag.id, http.StatusNoContent))
+}
+
+// profileProxyExport saves a profile with a header credential in
+// exports.proxy (proxy_export_saved), reads it back, and checks that no read
+// holds the plain text of the secret that the credential reads.
+func profileProxyExport(t *testing.T, env *e2e.Env, tool string) {
+	t.Helper()
+
+	doc := "schemaVersion: 1\nvalues:\n  grafana:\n    token: { $secret: " + profileSecret + " }\n" +
+		"exports:\n  proxy:\n    grafana-admin:\n      type: header\n      name: Authorization\n" +
+		"      value: ${ values.grafana.token }\n"
+
+	body, err := json.Marshal(map[string]string{"name": "e2e-" + tool + "-proxy", "document": doc})
+	if err != nil {
+		t.Fatalf("encode profile body: %v", err)
+	}
+
+	var tag profileTag
+
+	profileStep(t, env, profileRequest("proxy_export_saved: create a profile with an exports.proxy header ("+tool+")",
+		http.MethodPost, profilesBase, http.StatusCreated).withBody(string(body)).checking(tag.remember))
+
+	if tag.id == "" {
+		t.Fatal("the create answer holds no profile ID")
+	}
+
+	one := profilesBase + "/" + tag.id
+
+	profileStep(t, env, profileRequest("proxy_export_saved: read the profile ("+tool+")",
+		http.MethodGet, one, http.StatusOK).checking(profileMasked(`"name":"e2e-`+tool+`-proxy"`)))
+	profileStep(t, env, profileRequest("proxy_export_saved: the revision holds the credential and the secret sealed ("+
+		tool+")", http.MethodGet, one+"/revisions/1", http.StatusOK).
+		checking(profileMasked(`grafana-admin`, `$sealed`, `"path":"grafana.token","secret":true`)))
+	profileStep(t, env, profileRequest("proxy_export_saved: a literal secret in exports.proxy is refused ("+tool+")",
+		http.MethodPost, one+"/revisions", http.StatusBadRequest).withTag(tag.etag).
+		withBody(`{"document":"schemaVersion: 1\nexports:\n  proxy:\n    g: { type: header, name: A, value: abc }\n"}`).
+		checking(profileMasked(`profile.invalid`)))
+	profileStep(t, env, profileRequest("proxy_export_saved: delete the profile ("+tool+")",
+		http.MethodDelete, one, http.StatusNoContent).withTag(tag.etag))
 }

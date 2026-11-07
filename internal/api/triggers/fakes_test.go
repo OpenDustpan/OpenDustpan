@@ -79,7 +79,11 @@ func (fakeNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, er
 func (fakeNamespaces) Ping(context.Context) error { return nil }
 
 // fakeInventory holds the units net and app in acme, and one unit in other.
-type fakeInventory struct{ gone map[string]bool }
+type fakeInventory struct {
+	gone map[string]bool
+	// extra holds units that a test adds after the rig exists, by unit ID.
+	extra map[string]coreinventory.Entry
+}
 
 func entries() []coreinventory.Entry {
 	mk := func(ns namespace.Name, tool, name, id string) coreinventory.Entry {
@@ -98,7 +102,7 @@ func entries() []coreinventory.Entry {
 func (f fakeInventory) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventory.Entry, error) {
 	var out []coreinventory.Entry
 
-	all := entries()
+	all := f.allEntries()
 	for i := range all {
 		if all[i].Namespace == ns && !f.gone[all[i].UnitID] {
 			out = append(out, all[i])
@@ -119,7 +123,7 @@ func (f fakeInventory) QueryUnits(ctx context.Context, q coreinventory.UnitQuery
 }
 
 func (f fakeInventory) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
-	all := entries()
+	all := f.allEntries()
 	for i := range all {
 		if all[i].UnitID == unitID && !f.gone[unitID] {
 			return all[i], nil
@@ -127,6 +131,16 @@ func (f fakeInventory) GetUnit(_ context.Context, unitID string) (coreinventory.
 	}
 
 	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
+}
+
+// allEntries returns the fixed units and the units that a test added.
+func (f fakeInventory) allEntries() []coreinventory.Entry {
+	all := entries()
+	for id := range f.extra {
+		all = append(all, f.extra[id])
+	}
+
+	return all
 }
 
 // unitsPort is the trigger.Units over fakeInventory.
@@ -428,7 +442,7 @@ func newRigWorkers(t *testing.T, authz identity.Authorizer, logger *slog.Logger,
 			subjs: nil,
 			err:   nil,
 		},
-		inv: fakeInventory{gone: map[string]bool{}},
+		inv: fakeInventory{gone: map[string]bool{}, extra: map[string]coreinventory.Entry{}},
 	}
 
 	namespaces, err := namespace.NewService(
