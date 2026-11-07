@@ -323,23 +323,57 @@ it and adds six details that ADR 220 does not say.
   forgets its filter, but not SQL injection or a hostile dynamic query:
   the injected SQL sets the value to namespace B first. `CLAUDE.md` asks
   that each layer stops the attack alone. So:
-  - At the start of each transaction, the server sets two values with
-    placeholders: `dustpan.namespace_ids` and `dustpan.namespace_mac`.
-    The MAC is the HMAC-SHA-256 of the length-prefixed encoding of the
-    sorted namespace IDs, `pg_backend_pid()` and `transaction_timestamp()`,
-    under the **request guard key**.
+  - The first statement of each transaction is
+    `SELECT pg_backend_pid(), transaction_timestamp()`. Behind PgBouncer in
+    transaction mode, the server backend of the transaction is not known
+    before this statement, so the server must read both values inside the
+    transaction. This is one more round trip for each transaction. The
+    server then sets three values with placeholders:
+    `dustpan.namespace_ids`, `dustpan.guard_key_version` and
+    `dustpan.namespace_mac`. The MAC is the HMAC-SHA-256 of the
+    length-prefixed encoding of the guard key version, the sorted namespace
+    IDs, the backend PID and the transaction start time, under that version
+    of the **request guard key**.
+  - The guard function computes the HMAC in SQL with the built-in
+    `sha256()` function (PostgreSQL 11 and later), in the HMAC
+    construction of RFC 2104, so the baseline needs no `pgcrypto`
+    extension. The e2e suite and the load harness (`make load`) run
+    behind PgBouncer in transaction mode, and the load harness reports the
+    cost of the extra round trip and of the HMAC.
   - The policy never reads the setting directly. It reads
     `dustpan_guard.request_namespaces()`, a `SECURITY DEFINER` function
     owned by the role `dustpan_guard`. The function reads the guard key
     from a table that only `dustpan_guard` can read, checks the MAC, and
     answers the IDs. A missing value, an empty value or a MAC that does not
     match answers NULL, so the policy matches no row.
-  - The guard key is an installation secret, as the key file of ADR 41 is.
-    The server reads it at the start. The request role has no grant on the
-    key table, so SQL that runs as the request role cannot read the key or
-    compute a MAC for namespace B. The MAC holds the backend and the start
-    time of the transaction, so a value of another transaction does not
-    match.
+  - **One source of the guard key: the table `dustpan_guard.keys`.** The
+    migration command makes the first version, a random 256-bit key, and
+    writes it to the table. No file and no setting holds it.
+    - `dustpan_guard` is `NOLOGIN`. It owns the table and the guard
+      function, and nothing else.
+    - The server reads the key with a separate login role,
+      `dustpan_guard_reader`: `SELECT` on `dustpan_guard.keys` only,
+      `NOSUPERUSER`, `NOBYPASSRLS`, member of no role. The server opens one
+      connection as this role at the start and each 5 minutes, reads the
+      current and the previous version, and closes it. The request pool
+      never uses this role. Its password is an installation secret, as the
+      key file of ADR 41 is.
+    - The request role has no grant on the key table, so SQL that runs as
+      the request role cannot read the key or compute a MAC for namespace
+      B. The MAC holds the backend and the start time of the transaction,
+      so a value of another transaction does not match.
+    - **Versions and rotation.** Each key has a version, `gk-<number>`,
+      and the MAC input holds it. The command
+      `opendustpan keys rotate-request-guard`, run with the migration role,
+      writes a new version. Instances use it after their next read, at most
+      5 minutes later. The guard function accepts the current and the
+      previous version. The command deletes the previous version 15
+      minutes after the rotation. A rotation each 90 days by default is an
+      installation schedule.
+    - **Backups.** The table `dustpan_guard.keys` is a control table, not
+      tenant data. The installation backup of D6 does not copy it, and a
+      restore makes a new version. So a backup never holds a guard key.
+      A test checks that the backup manifest has no row of that table.
   - **Why not a role switch from the pool.** The pool could connect as a
     role with no rights and run `SET LOCAL ROLE` to a role of the request.
     Injected SQL can run `RESET ROLE` or `SET ROLE` again, so a role switch
@@ -502,10 +536,26 @@ ADR 220 decisions 16 to 22 give a test for each layer. The research adds:
   build fails when a binary builds with that tag.
 - **A second layer on SQLite.** SQLite has no row-level security, so the
   query filter of ADR 220 decision 5 is the only check there. A scoped
-  view of the store adds a second check: it compares the `namespace_id` of
-  each row that a query answers with the namespace set of the request, and
-  refuses the whole answer on a mismatch, as the blob view of ADR 220
-  decision 8 does for blob keys. It applies on PostgreSQL too.
+  view of the store adds a second check, as the blob view of ADR 220
+  decision 8 does for blob keys. It applies on PostgreSQL too. It covers
+  each kind of statement:
+  - **Reads.** Each query of a namespace table projects `namespace_id`.
+    The view compares it, for each row, with the namespace set of the
+    request, and refuses the whole answer on a mismatch.
+  - **Counts and existence checks.** A `COUNT`, a `SUM` or an `EXISTS` of a
+    namespace table is written as `SELECT namespace_id, COUNT(*) ... GROUP
+    BY namespace_id`, and the view checks each group key the same way. A
+    query that answers an aggregate with no `namespace_id` is not allowed.
+  - **Writes.** Each `INSERT`, `UPDATE` and `DELETE` of a namespace table
+    has `RETURNING namespace_id` (SQLite 3.35 and later, PostgreSQL). The
+    view checks each returned row. On a mismatch it rolls back the
+    transaction, refuses the request and writes an audit entry. So a write
+    that forgets its filter changes nothing outside the namespace.
+  - **The test.** A test reads each query of `queries.sql` of both
+    dialects and fails for each query of a namespace table that has no
+    `namespace_id` in its output or in its `RETURNING` clause. The R5 run
+    with the query filter deleted then shows that the view alone refuses
+    each read, count and write of namespace B.
 - **One pooled connection, two transactions.** A test runs a transaction
   of namespace A that fails at its end, then a transaction with no value on
   the same connection, and checks that the second sees no row.
@@ -515,8 +565,15 @@ ADR 220 decisions 16 to 22 give a test for each layer. The research adds:
   tables. A new table can then not skip row-level security by accident.
 - **A unique constraint test** for D4, and a catalog test for D7 and D8:
   the owner, `search_path`, `PUBLIC` execute and the grants of each
-  `SECURITY DEFINER` function, no `CREATE` for the request role, and
-  `security_invoker` on each view.
+  `SECURITY DEFINER` function, no `CREATE` for the request role,
+  `security_invoker` on each view, and the roles of D7:
+  - the pool logs in as `dustpan_request`, which is `NOSUPERUSER`,
+    `NOBYPASSRLS`, `NOCREATEROLE` and `NOCREATEDB`,
+  - `dustpan_request` and `dustpan_guard_reader` have no row as a member in
+    `pg_auth_members`: no membership of `dustpan_guard`, `dustpan_lookup`,
+    the migration role or any predefined role such as `pg_read_all_data`.
+    With a membership, injected SQL could run `SET ROLE` and read the key,
+  - `dustpan_guard` and `dustpan_lookup` are `NOLOGIN`.
 - **Canary namespaces.** OpenDustpan Cloud runs two namespaces of its own
   that try to read each other each minute through the public API, with the
   Pulumi CLI and OpenTofu. A success is an incident. AWS says that tests
@@ -651,8 +708,9 @@ export, deprovision and read the notices.
 5. **Unique and exclusion constraints with the namespace ID** (D4). A
    constraint that a tag ships without the namespace ID needs a migration
    later. ADR 322 lets the baseline change in place until the first tag.
-6. **The request guard of D7.** The policies, the guard function and the
-   MAC encoding are in the baseline. A change after the first tag is a
+6. **The request guard of D7.** The policies, the guard function, the
+   roles, the key table and the MAC encoding with its key version are in
+   the baseline. A change after the first tag is a
    migration of each policy.
 
 Not a door before the first tag: the name claim across installations (R6),

@@ -900,7 +900,7 @@ the closed set of value tests in the table.
 | `unknown` | a changed path of class `identity`, `network` or `exposure` is `unknownAfter` | a policy document that is known only after the apply |
 | `lifecycle` | the kind is `forget`, `import` or `move`, or the change has `movedFrom` | a resource that leaves state |
 | `drift` | the plan writes a path that `resource_drift` (OpenTofu) or a refresh step (Pulumi) shows as changed outside the tool | a manual hotfix that the apply reverts |
-| `unclassified` | the resource type is in no list of the **shipped** catalog, with any change kind: `create`, `update`, `delete`, `replace`, `read`, `import`, `forget` or `move` | a third-party access-policy resource that the catalog does not know yet |
+| `unclassified` | the resource type is in no list of the `x.0` release of the current major version of the **shipped** catalog. Each change kind counts. | a third-party access-policy resource that the catalog does not know yet |
 
 - `destroy` and `replace` come from the kind alone. They never depend on
   the catalog, so a type that the catalog does not know is still caught.
@@ -929,8 +929,8 @@ the closed set of value tests in the table.
 - The shipped catalog has a list `known`: the types that the catalog
   knows and that have no class of their own, for example a tag resource or
   `terraform_data`. Only the shipped catalog holds `known`. A type is
-  `unclassified` when it is in no list of the shipped catalog, `known`
-  included.
+  `unclassified` when it is in no list of the first release of the current
+  major version (`x.0`), `known` included.
 - **A scope addition only adds a class.** A namespace, a collection or a
   unit can add entries to the lists `stateful`, `identity`, `network`,
   `exposure` and `protection`, as a path set is added (ADR 226 decision
@@ -939,11 +939,16 @@ the closed set of value tests in the table.
   adds to `identity` stays `unclassified` until the shipped catalog knows
   it. So a scope addition can raise what a change needs, never lower it
   (ADR 222 decision 5).
-- An upgrade of the server can add entries to the shipped catalog in a
-  minor version. An entry in `known` in a minor version would lower a
-  class, so a minor version never adds to `known` a type that an earlier
-  version of the same major had in no list. It deletes or narrows an entry,
-  or adds such a type to `known`, only in a new major version. A scope
+- **A catalog upgrade never lowers a class.** An upgrade of the server can
+  add entries to the shipped catalog in a minor version. A type that the
+  `x.0` release of the major version had in no list stays `unclassified`
+  for the whole major version, also when a minor version adds it to a list
+  such as `stateful` or `network`. The minor version then adds that class,
+  and `unclassified` stays. So the warn of `risk-unclassified` stays, and
+  a change of the type never starts to auto-apply after an upgrade. A
+  minor version never adds a type to `known`. The shipped catalog deletes
+  or narrows an entry, adds a type to `known`, or takes `unclassified` away
+  from a type only in a new major version. A scope
   moves to a new major version only by a person's act, with the action
   `namespace:manage-risk-catalog`, a fresh authentication (ADR 227) and an
   audit entry. So an upgrade never lowers a class on its own.
@@ -1190,8 +1195,11 @@ can never change what a person must review.
 | Write | Action | Fresh authentication | Agent class (as RFC 121 proposes the classes) |
 | --- | --- | --- | --- |
 | A scope addition to the risk catalog | `namespace:manage-risk-catalog` | yes | `never` |
+| A deletion of an entry that the scope added itself | `namespace:manage-risk-catalog` | yes | `never` |
 | A move of a scope to a new major version of the catalog | `namespace:manage-risk-catalog` | yes | `never` |
 | An addition to the acknowledge list of a scope | `namespace:manage-gates` (ADR 230) | yes | `never` |
+| A deletion of a class that the scope added itself to its acknowledge list | `namespace:manage-gates` (ADR 230) | yes | `never` |
+| A change of the installation floor of the acknowledge list | `installation:manage-gates` (ADR 230) | yes | `never` |
 | A switch of a gate of the starter pack to `enforce` or back | `namespace:manage-gates` (ADR 230) | yes | `never` |
 | A noise rule (section E) | `namespace:manage-noise-rules` | yes | `never` |
 | An acknowledgment and a signature | the approve action of ADR 225 decision 7 | as the approval rule asks | `never` |
@@ -1252,9 +1260,10 @@ changed since the revision that the reviewer signed.
    must pass the type check again. A new class is a minor version. So fix
    the 12 names before the first tag. Adding classes later is safe.
 3. **Catalog changes only add** (section J). This covers the list `known`
-   by name: only the shipped catalog holds it, a scope never adds to it,
-   and a minor version never adds a type to it that the same major version
-   had in no list. If the first release can lower a class in a minor
+   and `unclassified` by name: only the shipped catalog holds `known`, a
+   scope never adds to it, a minor version never adds to it, and a type
+   that the `x.0` release had in no list stays `unclassified` for the whole
+   major version, also when a minor version adds it to another list. If the first release can lower a class in a minor
    version or through a scope, each stored gate can relax on an upgrade or
    by the act of a narrower scope. The rule must hold from the first
    catalog.
@@ -1351,9 +1360,12 @@ or "heavy", so you know how to carry it.
   list `known` of the types that it knows. A type that the shipped catalog
   does not know is `unclassified`, with any change kind, and never
   auto-applies. A namespace, a collection or a unit can add a type or a
-  path to a risk class, never to `known`, and never delete an entry. An
-  upgrade only adds in a minor version. A person moves a scope to a new
-  major version.
+  path to a risk class, never to `known`, and never delete an entry of a
+  wider scope. A minor version of the catalog only adds classes: a type
+  that the major version did not know at its first release stays
+  `unclassified` until a new major version, also when a minor version adds
+  it to a risk class. A person moves a scope to a new major version, with
+  a fresh authentication.
 - **B.** Each namespace can also add types to `known`. This lowers a
   class: a namespace could make an unknown type auto-apply.
 - **C.** No catalog. Only the change kinds (destroy, replace) count.
@@ -1435,7 +1447,8 @@ _Avoid_: Risk score, severity
 **Risk catalog**:
 Versioned data that maps resource types and value paths to risk classes.
 The server ships it, with the list `known`. A scope can add entries to a
-risk class, never to `known`, and never delete one.
+risk class, never to `known`, and never delete an entry of a wider scope.
+A minor version only adds classes, and never takes `unclassified` away.
 _Avoid_: Risk rules, risk policy
 
 **Change key**:
