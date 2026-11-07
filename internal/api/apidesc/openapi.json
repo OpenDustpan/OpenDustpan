@@ -4375,6 +4375,9 @@
           "publishedBy": {
             "type": "string"
           },
+          "served": {
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           }
@@ -4387,6 +4390,7 @@
           "protocols",
           "publishedAt",
           "publishedBy",
+          "served",
           "version"
         ],
         "type": "object"

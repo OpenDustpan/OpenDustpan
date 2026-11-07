@@ -1568,6 +1568,7 @@ export const decodeProviderRelease: Decoder<ProviderRelease> = object<ProviderRe
   protocols: array(string),
   publishedAt: string,
   publishedBy: string,
+  served: boolean,
   version: string,
 });
 

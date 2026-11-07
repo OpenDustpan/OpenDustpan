@@ -86,6 +86,7 @@ The answer is the release:
   "publishedAt": "2026-10-21T09:00:00Z",
   "publishedBy": "ada",
   "keyFingerprint": "276D23ED2E9E5E63...",
+  "served": true,
   "files": [
     {"role": "sums", "name": "...", "sha256": "..."},
     {"role": "signature", "name": "...", "sha256": "..."},
@@ -93,6 +94,11 @@ The answer is the release:
   ]
 }
 ```
+
+`served` reports whether the provider registry protocol serves the release
+now. A release whose signing key the namespace removed stays in the list of
+`GET /providers/{name}/versions` with `"served": false`. The version list of
+the protocol leaves it out, so `tofu init` selects an older release.
 
 ### Modules
 

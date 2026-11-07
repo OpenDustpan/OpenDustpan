@@ -1166,6 +1166,7 @@ export interface ProviderRelease {
   readonly protocols: ReadonlyArray<string>;
   readonly publishedAt: string;
   readonly publishedBy: string;
+  readonly served: boolean;
   readonly version: string;
 }
 
