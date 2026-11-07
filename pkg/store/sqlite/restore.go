@@ -611,34 +611,44 @@ WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
 
 // runnerIDsOf runs query in tx and returns the runner_id of every row.
 func runnerIDsOf(ctx context.Context, tx *sql.Tx, query string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	var out []string
+
+	if err := readRunnerIDs(ctx, tx, query, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// readRunnerIDs runs query in tx and appends the runner_id of every row to
+// out. It returns the close error of the rows too.
+func readRunnerIDs(ctx context.Context, tx *sql.Tx, query string, out *[]string) (err error) {
+	rows, queryErr := tx.QueryContext(ctx, query)
+	if queryErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", queryErr)
 	}
 
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			_ = closeErr
+			err = errors.Join(err, fmt.Errorf("close dropped runner credentials: %w", closeErr))
 		}
 	}()
-
-	var out []string
 
 	for rows.Next() {
 		var id string
 
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("read dropped runner credentials: %w", scanErr)
 		}
 
-		out = append(out, id)
+		*out = append(*out, id)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", rowsErr)
 	}
 
-	return out, nil
+	return nil
 }
 
 // appendDroppedRunnerCredentials appends the audit entry of the dropped
