@@ -5,9 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -62,6 +66,12 @@ func testRestoreKeepsRunnerControlRows(t *testing.T, newStore RestoreFactory) {
 			t.Errorf("rows of control table %q after the restore = %d, want the 1 live row", table, counts[table])
 		}
 	}
+
+	// The restore kept every row, so it records no drop.
+	if entries := runnerDropEntries(t, ps.dst); len(entries) != 0 {
+		t.Errorf("audit entries of the dropped runner credentials = %d, want none: the restore kept every row",
+			len(entries))
+	}
 }
 
 // testRestoreDropsRunnerCredentials proves that a restore drops a live
@@ -110,6 +120,63 @@ func testRestoreDropsRunnerCredentials(t *testing.T, newStore RestoreFactory) {
 
 	if _, err := ports.Sessions.Session(ctx, credentials.session.ID); !errors.Is(err, runner.ErrNotFound) {
 		t.Errorf("Session of a runner that the restored data does not hold = %v, want runner.ErrNotFound", err)
+	}
+
+	// The swap drops the two credentials and records the drop, in the
+	// transaction of the copy.
+	entries := runnerDropEntries(t, ps.dst)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries of the dropped runner credentials = %d, want 1", len(entries))
+	}
+
+	entry := entries[0]
+
+	for _, want := range []string{"1 handoff token", "1 job session", seeded.runner.ID} {
+		if !strings.Contains(entry.Object, want) {
+			t.Errorf("audit object = %q, want it to hold %q", entry.Object, want)
+		}
+	}
+
+	// The entry names the counts and the runner, never the credential.
+	text := fmt.Sprintf("%+v", entry)
+
+	if strings.Contains(text, credentials.token.SHA256) {
+		t.Errorf("audit entry = %s, want it to hold no token hash", text)
+	}
+
+	if strings.Contains(text, runnerHandoffSecret) {
+		t.Errorf("audit entry = %s, want it to hold no token value", text)
+	}
+}
+
+// runnerDropEntries returns the audit entries in the scope @server whose
+// action is the drop of the runner credentials, newest first. A store
+// without the audit port fails the test.
+func runnerDropEntries(t *testing.T, s RestoreStore) []audit.Entry {
+	t.Helper()
+
+	store, ok := any(s).(audit.Store)
+	if !ok {
+		t.Fatal("the store keeps no audit log")
+	}
+
+	var out []audit.Entry
+
+	for page := 1; ; page++ {
+		listing, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			t.Fatalf("list the audit log: %v", err)
+		}
+
+		for i := range listing.Entries {
+			if listing.Entries[i].Action == backup.ActionDroppedRunnerCredentials {
+				out = append(out, listing.Entries[i])
+			}
+		}
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			return out
+		}
 	}
 }
 
