@@ -52,6 +52,10 @@ When the bottom PR is merged, run `scripts/stack.sh advance <stack>`. The comman
 
 If the merge has conflicts, the command stops and aborts the merge. Resolve the conflicts by hand, push, and run the command again.
 
+## Unstack
+
+Run `scripts/stack.sh unstack <stack>` to remove the stack link. The command calls `POST stacks/<n>/unstack` and does nothing more: each PR keeps its base and its branch. After an unstack, the agent repairs the PRs (base, merge of `main`, push).
+
 ## What the test showed
 
 A test used throwaway branches `stacktest/base`, `a`, `b`, `c` and `d`, and four draft PRs.

@@ -5,6 +5,7 @@
 #   stack.sh create --bodies DIR <bottom> <next>...
 #   stack.sh status
 #   stack.sh advance <stack>
+#   stack.sh unstack <stack>
 set -euo pipefail
 
 REPO="${STACK_REPO:-OpenDustpan/OpenDustpan}"
@@ -22,6 +23,7 @@ Usage:
   stack.sh create --bodies DIR <bottom> <next>...
   stack.sh status
   stack.sh advance <stack>
+  stack.sh unstack <stack>
 EOF
   exit 2
 }
@@ -151,6 +153,14 @@ cmd_advance() {
   link_stack "${rest[@]}"
 }
 
+# Remove the stack link of stack $1. It changes no PR, base or branch.
+cmd_unstack() {
+  local n="${1:-}"
+  [[ "$n" =~ ^[0-9]+$ ]] || usage
+  gh api -X POST "repos/$REPO/stacks/$n/unstack" >/dev/null || die "Unstack of stack $n failed. Run: stack.sh status"
+  echo "Stack $n is unstacked. The PRs keep their bases and branches."
+}
+
 need gh
 need jq
 need git
@@ -162,5 +172,6 @@ case "$sub" in
   create) cmd_create "$@" ;;
   status) cmd_status ;;
   advance) cmd_advance "$@" ;;
+  unstack) cmd_unstack "$@" ;;
   *) usage ;;
 esac
