@@ -30,53 +30,23 @@ func TestNewHandoffRefusal(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		err     error
-		claimed string
-		want    runner.HandoffRefusal
-		ok      bool
+		name string
+		err  error
+		want runner.HandoffRefusal
+		ok   bool
 	}{
-		{
-			"unknown",
-			fmt.Errorf("select: %w", runner.ErrNotFound),
-			"",
-			refusalOf(runner.HandoffUnknown, "", false),
-			true,
-		},
-		{
-			"expired",
-			fmt.Errorf("check: %w", runner.ErrTokenExpired),
-			"",
-			refusalOf(runner.HandoffExpired, "", false),
-			true,
-		},
-		{"used", fmt.Errorf("check: %w", runner.ErrTokenUsed), "", refusalOf(runner.HandoffUsed, "", false), true},
-		{"claim lost", runner.ErrClaimLost, "", refusalOf(runner.HandoffClaimLost, "", false), true},
-		{"wrong runner", runner.ErrWrongRunner, "", refusalOf(runner.HandoffWrongRunner, "", false), true},
-		{
-			"claim of the form of an ID",
-			runner.ErrNotFound,
-			"rn-abc123",
-			refusalOf(runner.HandoffUnknown, "rn-abc123", false),
-			true,
-		},
-		{"token as claim", runner.ErrTokenUsed, hostileSecret, refusalOf(runner.HandoffUsed, "", false), true},
-		{"line break in claim", runner.ErrTokenUsed, "rn-abc\nforged", refusalOf(runner.HandoffUsed, "", false), true},
-		{
-			"claim too long",
-			runner.ErrTokenUsed,
-			"rn-" + strings.Repeat("a", 100),
-			refusalOf(runner.HandoffUsed, "", false),
-			true,
-		},
-		{"prefix only", runner.ErrTokenUsed, runner.RunnerIDPrefix, refusalOf(runner.HandoffUsed, "", false), true},
-		{"database error", errDriver, "rn-abc123", none(), false},
-		{"bad proof", runner.ErrBadProof, "", none(), false},
-		{"no error", nil, "", none(), false},
+		{"unknown", fmt.Errorf("select: %w", runner.ErrNotFound), refusalOf(runner.HandoffUnknown, "", false), true},
+		{"expired", fmt.Errorf("check: %w", runner.ErrTokenExpired), refusalOf(runner.HandoffExpired, "", false), true},
+		{"used", fmt.Errorf("check: %w", runner.ErrTokenUsed), refusalOf(runner.HandoffUsed, "", false), true},
+		{"claim lost", runner.ErrClaimLost, refusalOf(runner.HandoffClaimLost, "", false), true},
+		{"wrong runner", runner.ErrWrongRunner, refusalOf(runner.HandoffWrongRunner, "", false), true},
+		{"database error", errDriver, none(), false},
+		{"bad proof", runner.ErrBadProof, none(), false},
+		{"no error", nil, none(), false},
 	}
 
 	for _, tc := range cases {
-		got, ok := runner.NewHandoffRefusal(tc.err, tc.claimed)
+		got, ok := runner.NewHandoffRefusal(tc.err)
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("%s: NewHandoffRefusal = %+v, %v, want %+v, %v", tc.name, got, ok, tc.want, tc.ok)
 		}
@@ -93,6 +63,27 @@ func TestNewVerifiedHandoffRefusal(t *testing.T) {
 
 	if got, ok = runner.NewVerifiedHandoffRefusal(errDriver, "rn-abc123"); ok || got != none() {
 		t.Errorf("NewVerifiedHandoffRefusal of a database error = %+v, %v, want none", got, ok)
+	}
+
+	// Hostile runner ID: the form check drops it, even for a verified refusal.
+	for _, id := range []string{hostileSecret, "rn-abc\nforged", "rn-" + strings.Repeat("a", 100), runner.RunnerIDPrefix} {
+		got, ok = runner.NewVerifiedHandoffRefusal(runner.ErrClaimLost, id)
+		if !ok || got.Runner != "" || !got.Verified {
+			t.Errorf("NewVerifiedHandoffRefusal with ID %q = %+v, %v, want an empty runner", id, got, ok)
+		}
+	}
+}
+
+func TestValidRunnerID(t *testing.T) {
+	t.Parallel()
+
+	for id, want := range map[string]bool{
+		"rn-abc123": true, "rn-A_b-9": true, "": false, "rn-": false, hostileSecret: false,
+		"rn-abc\r\nforged": false, "rn-" + strings.Repeat("a", 100): false, "rn-a b": false,
+	} {
+		if got := runner.ValidRunnerID(id); got != want {
+			t.Errorf("ValidRunnerID(%q) = %v, want %v", id, got, want)
+		}
 	}
 }
 
@@ -116,7 +107,7 @@ type producer struct {
 }
 
 func producers() []producer {
-	refusal, _ := runner.NewHandoffRefusal(runner.ErrNotFound, "")
+	refusal, _ := runner.NewHandoffRefusal(runner.ErrNotFound)
 	rejoined := new(runner.Joined)
 	rejoined.Rejoined = true
 

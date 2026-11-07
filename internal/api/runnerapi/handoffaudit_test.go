@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -195,21 +196,24 @@ func TestHandoffRefusalIgnoresOtherErrors(t *testing.T) {
 	}
 }
 
-// TestHandoffRefusalHostileRunnerID sends a claimed runner ID that is a token,
-// a control sequence or too long. The entry must not echo it.
+// TestHandoffRefusalHostileRunnerID sends a refusal with a runner ID that is a
+// token, a control sequence or too long, as if every layer before the adapter
+// had failed, and even with Verified set. The entry must not echo the ID.
 func TestHandoffRefusalHostileRunnerID(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		claimed string
-		want    string
+		name     string
+		id       string
+		verified bool
+		want     string
 	}{
-		{"token as runner ID", hostileToken, ""},
-		{"token behind the prefix", "rn-" + hostileToken + "\n", ""},
-		{"line break in the ID", "rn-abc\r\nforged: yes", ""},
-		{"too long", "rn-" + strings.Repeat("a", 200), ""},
-		{"valid claimed ID", "rn-abc123", "rn-abc123"},
+		{"token as runner ID", hostileToken, true, ""},
+		{"token as runner ID, unverified", hostileToken, false, ""},
+		{"token behind the prefix", "rn-" + hostileToken + "\n", true, ""},
+		{"line break in the ID", "rn-abc\r\nforged: yes", true, ""},
+		{"too long", "rn-" + strings.Repeat("a", 200), true, ""},
+		{"valid ID", "rn-abc123", true, "rn-abc123"},
 	}
 
 	for _, tc := range cases {
@@ -217,42 +221,90 @@ func TestHandoffRefusalHostileRunnerID(t *testing.T) {
 			t.Parallel()
 
 			f := newHandoffFixture(t)
-
-			// A refusal that an earlier layer built from the claim; this layer
-			// cleans the ID again.
-			ref, ok := runner.NewHandoffRefusal(runner.ErrNotFound, tc.claimed)
-			if !ok {
-				t.Fatal("NewHandoffRefusal refused an unknown token")
-			}
+			ref := runner.HandoffRefusal{Reason: runner.HandoffUsed, Runner: tc.id, Verified: tc.verified}
 
 			runnerapi.RecordHandoffRefusal(t.Context(), f.handler, f.request, &ref)
 
 			e := f.onlyEntry(t)
-			if got := changeOf(&e, "runner"); got != tc.want || changeOf(&e, "runnerVerified") != "false" {
-				t.Errorf("runner = %q verified %q, want %q false", got, changeOf(&e, "runnerVerified"), tc.want)
+			if got := changeOf(&e, "runner"); got != tc.want {
+				t.Errorf("runner = %q, want %q", got, tc.want)
 			}
 
-			if holdsToken(&e) || e.Subject != "unverified-launcher" {
-				t.Errorf("entry echoes the claim or has subject %q", e.Subject)
+			wantSubject := "unverified-launcher"
+			if tc.want != "" {
+				wantSubject = tc.want
+			}
+
+			if e.Subject != wantSubject || holdsToken(&e) || strings.ContainsAny(e.Subject, "\r\n") {
+				t.Errorf("subject = %q, token in entry %v, want %q and no token",
+					e.Subject, holdsToken(&e), wantSubject)
 			}
 		})
 	}
 }
 
-// TestHandoffRefusalCleansRunnerAtTheAdapter sends a refusal that skips the
-// allowlist of the domain layer, as if that layer had failed. The adapter still
-// writes the runner ID without control characters.
-func TestHandoffRefusalCleansRunnerAtTheAdapter(t *testing.T) {
+// TestHandoffRefusalFloodIsBounded sends many forged refusals from one client.
+// The refusal count stays whole, the entries stay bounded by the limiter, and
+// the counter rises for each dropped entry.
+func TestHandoffRefusalFloodIsBounded(t *testing.T) {
 	t.Parallel()
 
+	const flood = 200
+
 	f := newHandoffFixture(t)
-	ref := runner.HandoffRefusal{Reason: runner.HandoffUsed, Runner: "rn-abc\r\nforged: yes", Verified: true}
+	dropped := new(atomic.Int32)
 
-	runnerapi.RecordHandoffRefusal(t.Context(), f.handler, f.request, &ref)
+	small := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 8, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
 
-	e := f.onlyEntry(t)
-	if got := changeOf(&e, "runner"); strings.ContainsAny(got, "\r\n") || strings.ContainsAny(e.Subject, "\r\n") {
-		t.Errorf("runner %q or subject %q holds a control character", got, e.Subject)
+	runnerapi.LimitHandoffRefusals(f.handler, small, func() { dropped.Add(1) })
+
+	for range flood {
+		runnerapi.RecordUnverifiedHandoffRefusal(t.Context(), f.handler, f.request, runner.ErrNotFound)
+	}
+
+	if got := f.entryCount(t); got != 1 {
+		t.Errorf("entries after %d identical refusals = %d, want 1", flood, got)
+	}
+
+	if got := int(dropped.Load()); got != flood-1 {
+		t.Errorf("dropped = %d, want %d", got, flood-1)
+	}
+
+	// Many client addresses stay inside the key bound: more entries than
+	// MaxKeys never appear, and the rest count as dropped.
+	for i := range flood {
+		r := f.request.Clone(t.Context())
+		r.RemoteAddr = fmt.Sprintf("10.1.%d.%d:4000", i/250, i%250+1)
+
+		runnerapi.RecordUnverifiedHandoffRefusal(t.Context(), f.handler, r, runner.ErrTokenUsed)
+	}
+
+	if got := f.entryCount(t); got > 1+8+1 {
+		t.Errorf("entries after a flood from many addresses = %d, want at most %d", got, 1+8+1)
+	}
+}
+
+// TestHandoffRefusalFailedAppendKeepsTheWrite proves that an append failure
+// gives the write back, so the next refusal still writes an entry.
+func TestHandoffRefusalFailedAppendKeepsTheWrite(t *testing.T) {
+	t.Parallel()
+
+	failing := new(failingAudit)
+	h := runnerapi.NewHandoffAuditHandler(
+		failing, slog.New(slog.DiscardHandler), func() time.Time { return time.Time{} }, func() {},
+	)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/runner/v1/session", http.NoBody)
+	dropped := new(atomic.Int32)
+
+	defaults := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+
+	runnerapi.LimitHandoffRefusals(h, defaults, func() { dropped.Add(1) })
+
+	runnerapi.RecordUnverifiedHandoffRefusal(t.Context(), h, r, runner.ErrTokenUsed)
+	runnerapi.RecordUnverifiedHandoffRefusal(t.Context(), h, r, runner.ErrTokenUsed)
+
+	if dropped.Load() != 0 {
+		t.Errorf("dropped = %d after two failed appends, want 0: a failed write hid the next one", dropped.Load())
 	}
 }
 

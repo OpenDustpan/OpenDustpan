@@ -20,17 +20,16 @@ const (
 	HandoffClaimLost HandoffReason = "claim-lost"
 )
 
-// maxClaimedRunnerLen bounds the runner ID that an unverified request claims.
-const maxClaimedRunnerLen = 64
+// maxRunnerIDLen bounds the length of a runner ID in an audit entry.
+const maxRunnerIDLen = 64
 
 // HandoffRefusal is what the audit entry of a refused handoff token holds:
 // the reason code and the runner ID. It holds no token, no hash of a token,
 // and no text of the error.
 type HandoffRefusal struct {
 	Reason HandoffReason
-	// Runner is the ID of the runner. For an unverified refusal it is only
-	// what the request claimed, and it is empty when the claim does not have
-	// the form of a runner ID.
+	// Runner is the ID of the runner. It is empty for an unverified refusal,
+	// and empty when the ID does not have the form of a runner ID.
 	Runner string
 	// Verified is true when the server authenticated the runner with the
 	// proof of its key.
@@ -48,21 +47,26 @@ func NewVerifiedHandoffRefusal(err error, runnerID string) (HandoffRefusal, bool
 		return HandoffRefusal{Reason: "", Runner: "", Verified: false}, false
 	}
 
+	// Defense in depth: the store makes runner IDs with this form, and the
+	// audit adapter checks the form again before it sets the subject. This
+	// check does not rely on either of them.
+	if !ValidRunnerID(runnerID) {
+		runnerID = ""
+	}
+
 	return HandoffRefusal{Reason: reason, Runner: runnerID, Verified: true}, true
 }
 
 // NewHandoffRefusal is NewVerifiedHandoffRefusal for a request that no proof
-// authenticated, for example one with an unknown token. claimedRunner is only
-// what the request says. Fail closed: a claim that does not have the form of
-// a runner ID is dropped, so a token-like string in the field never reaches an
-// audit entry.
-func NewHandoffRefusal(err error, claimedRunner string) (HandoffRefusal, bool) {
+// authenticated, for example one with an unknown token. The request names no
+// runner before its session opens, so the refusal holds no runner ID.
+func NewHandoffRefusal(err error) (HandoffRefusal, bool) {
 	reason, ok := handoffReasonOf(err)
 	if !ok {
 		return HandoffRefusal{Reason: "", Runner: "", Verified: false}, false
 	}
 
-	return HandoffRefusal{Reason: reason, Runner: claimedRunnerID(claimedRunner), Verified: false}, true
+	return HandoffRefusal{Reason: reason, Runner: "", Verified: false}, true
 }
 
 // Event returns the audit event of r.
@@ -83,25 +87,31 @@ func handoffReasonOf(err error) (HandoffReason, bool) {
 	case errors.Is(err, ErrClaimLost):
 		return HandoffClaimLost, true
 	case errors.Is(err, ErrNotFound):
+		// The store gives ErrNotFound for an unknown token. Today OpenSession
+		// has no other not-found case, and the error carries no way to tell
+		// another one apart, so every ErrNotFound is "unknown". A new
+		// not-found case in OpenSession needs its own sentinel and reason.
 		return HandoffUnknown, true
 	default:
 		return "", false
 	}
 }
 
-// claimedRunnerID returns id when it has the form of a runner ID, else "".
-func claimedRunnerID(id string) string {
-	if len(id) <= len(RunnerIDPrefix) || len(id) > maxClaimedRunnerLen || id[:len(RunnerIDPrefix)] != RunnerIDPrefix {
-		return ""
+// ValidRunnerID reports whether id has the form of a runner ID: the prefix
+// RunnerIDPrefix and then 1 to 61 letters, digits, "-" or "_". It is an
+// allowlist. A token, a line break or a long text does not pass.
+func ValidRunnerID(id string) bool {
+	if len(id) <= len(RunnerIDPrefix) || len(id) > maxRunnerIDLen || id[:len(RunnerIDPrefix)] != RunnerIDPrefix {
+		return false
 	}
 
 	for _, c := range id[len(RunnerIDPrefix):] {
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
 		default:
-			return ""
+			return false
 		}
 	}
 
-	return id
+	return true
 }
