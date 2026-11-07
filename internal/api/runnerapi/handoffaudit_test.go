@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,22 +36,70 @@ type handoffFixture struct {
 	store    *testAudit
 	request  *http.Request
 	failures *atomic.Int32
+	clock    *fakeClock
+}
+
+// fakeClock is the injected clock of the tests. It moves only when a test
+// advances it.
+type fakeClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.at
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.at = c.at.Add(d)
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{mu: sync.Mutex{}, at: time.Date(2026, time.November, 7, 12, 0, 0, 0, time.UTC)}
 }
 
 func newHandoffFixture(t *testing.T) *handoffFixture {
 	t.Helper()
 
-	store, failures := newTestAudit(), new(atomic.Int32)
-	at := time.Date(2026, time.November, 7, 12, 0, 0, 0, time.UTC)
+	store, failures, clock := newTestAudit(), new(atomic.Int32), newFakeClock()
 
 	return &handoffFixture{
 		handler: runnerapi.NewHandoffAuditHandler(
-			store, slog.New(slog.DiscardHandler), func() time.Time { return at }, func() { failures.Add(1) },
+			store, slog.New(slog.DiscardHandler), clock.Now, func() { failures.Add(1) },
 		),
 		store:    store,
 		request:  httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/runner/v1/session", http.NoBody),
 		failures: failures,
+		clock:    clock,
 	}
+}
+
+// entries returns all entries of the installation scope, oldest first.
+func (f *handoffFixture) entries(t *testing.T) []audit.Entry {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	return listing.Entries
+}
+
+// refuseFrom records a refused exchange from a client address.
+func (f *handoffFixture) refuseFrom(t *testing.T, addr string, err error) {
+	t.Helper()
+
+	r := f.request.Clone(t.Context())
+	r.RemoteAddr = addr + ":4000"
+
+	runnerapi.RecordUnverifiedHandoffRefusal(t.Context(), f.handler, r, err)
 }
 
 // onlyEntry returns the one entry of the store, and fails when there is not
@@ -254,7 +303,9 @@ func TestHandoffRefusalFloodIsBounded(t *testing.T) {
 	f := newHandoffFixture(t)
 	dropped := new(atomic.Int32)
 
-	small := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 8, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	small := denylimit.New(
+		denylimit.Config{Window: 0, MaxKeys: 8, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: f.clock.Now},
+	)
 
 	runnerapi.LimitHandoffRefusals(f.handler, small, func() { dropped.Add(1) })
 
@@ -289,14 +340,16 @@ func TestHandoffRefusalFloodIsBounded(t *testing.T) {
 func TestHandoffRefusalFailedAppendKeepsTheWrite(t *testing.T) {
 	t.Parallel()
 
-	failing := new(failingAudit)
+	failing, clock := new(failingAudit), newFakeClock()
 	h := runnerapi.NewHandoffAuditHandler(
-		failing, slog.New(slog.DiscardHandler), func() time.Time { return time.Time{} }, func() {},
+		failing, slog.New(slog.DiscardHandler), clock.Now, func() {},
 	)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/runner/v1/session", http.NoBody)
 	dropped := new(atomic.Int32)
 
-	defaults := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	defaults := denylimit.New(denylimit.Config{
+		Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: clock.Now,
+	})
 
 	runnerapi.LimitHandoffRefusals(h, defaults, func() { dropped.Add(1) })
 
@@ -340,5 +393,115 @@ func TestHandoffRefusalAppendFailureFailsClosed(t *testing.T) {
 
 	if strings.Contains(logged.String(), hostileToken) {
 		t.Error("the log holds the text of the store error")
+	}
+}
+
+// TestHandoffRefusalNextWindowCarriesSuppressedCount proves that the first
+// refusal of the next window writes an entry with the count of the refusals
+// that the earlier window held back.
+func TestHandoffRefusalNextWindowCarriesSuppressedCount(t *testing.T) {
+	t.Parallel()
+
+	f := newHandoffFixture(t)
+
+	for range 3 {
+		f.refuseFrom(t, "10.0.0.1", runner.ErrTokenUsed)
+	}
+
+	if got := f.entryCount(t); got != 1 {
+		t.Fatalf("entries in the first window = %d, want 1", got)
+	}
+
+	f.clock.Advance(denylimit.DefaultWindow + time.Second)
+	f.refuseFrom(t, "10.0.0.1", runner.ErrTokenUsed)
+
+	entries := f.entries(t)
+	if len(entries) != 2 {
+		t.Fatalf("entries after the next window = %d, want 2", len(entries))
+	}
+
+	if got := changeOf(&entries[1], "suppressed"); got != "2" {
+		t.Errorf("suppressed = %q, want 2", got)
+	}
+}
+
+// TestHandoffRefusalFlushesCountOfQuietKey proves that the count of a key that
+// stays quiet goes out as an entry of its own, when a refusal of another key
+// finds the window ended. A forged exchange from another address must not erase
+// the count.
+func TestHandoffRefusalFlushesCountOfQuietKey(t *testing.T) {
+	t.Parallel()
+
+	f := newHandoffFixture(t)
+
+	for range 4 {
+		f.refuseFrom(t, "10.0.0.1", runner.ErrTokenUsed)
+	}
+
+	f.clock.Advance(denylimit.DefaultWindow + time.Second)
+	f.refuseFrom(t, "10.0.0.2", runner.ErrTokenUsed)
+
+	entries := f.entries(t)
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3: first entry, entry of the other key, flush entry", len(entries))
+	}
+
+	flushed := 0
+
+	for i := range entries {
+		if strings.HasPrefix(entries[i].Reason, "3 further refusals") && entries[i].Subject == "10.0.0.1" {
+			flushed++
+		}
+	}
+
+	if flushed != 1 {
+		t.Errorf("flush entries for the quiet key = %d, want 1", flushed)
+	}
+}
+
+// TestHandoffRefusalOverflowWritesAggregateEntry proves that a full key table
+// does not silence the refusals: the aggregate entry is written with its count,
+// and the count of the next window goes out too.
+func TestHandoffRefusalOverflowWritesAggregateEntry(t *testing.T) {
+	t.Parallel()
+
+	f := newHandoffFixture(t)
+	dropped := new(atomic.Int32)
+
+	full := denylimit.New(denylimit.Config{
+		Window: 0, MaxKeys: 2, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: f.clock.Now,
+	})
+
+	runnerapi.LimitHandoffRefusals(f.handler, full, func() { dropped.Add(1) })
+
+	for _, addr := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"} {
+		f.refuseFrom(t, addr, runner.ErrTokenUsed)
+	}
+
+	if got := f.entryCount(t); got != 3 {
+		t.Fatalf("entries = %d, want 3: two keys and the aggregate", got)
+	}
+
+	if dropped.Load() != 1 {
+		t.Errorf("dropped = %d, want 1", dropped.Load())
+	}
+
+	f.clock.Advance(denylimit.DefaultWindow + time.Second)
+	f.refuseFrom(t, "10.0.0.5", runner.ErrTokenUsed)
+
+	aggregates := 0
+
+	for _, e := range f.entries(t) {
+		if e.Subject == "denial-limiter" {
+			aggregates++
+
+			if strings.Contains(e.Reason, "1 refusals") && f.failures.Load() == 0 {
+				aggregates += 10
+			}
+		}
+	}
+
+	if aggregates != 12 {
+		t.Errorf("aggregate check = %d, want 12: two aggregate entries, one with the count 1", aggregates)
 	}
 }

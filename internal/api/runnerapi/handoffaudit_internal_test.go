@@ -21,7 +21,7 @@ func NewHandoffAuditHandler(
 	var h Handler
 
 	h.audit, h.logger, h.now, h.onAuditErr = store, logger, now, onFailure
-	h.limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	h.limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: now})
 
 	return &h
 }

@@ -69,7 +69,13 @@ func (h *Handler) recordHandoffRefusal(
 	}
 
 	decision := h.limiter.Allow(key)
-	if !decision.Write || decision.Overflow {
+
+	// The counts of earlier windows go out after the entry of this refusal, so a
+	// slow store cannot use up the time of that entry. Each flush write has its
+	// own timeout.
+	defer h.flushHandoffPending(ctx, r, decision.Flush)
+
+	if !decision.Write {
 		// The refusal stays and no entry is written. The counter says how many
 		// entries the limit dropped.
 		if h.onHandoffSuppressed != nil {
@@ -79,16 +85,100 @@ func (h *Handler) recordHandoffRefusal(
 		return
 	}
 
+	if decision.Overflow {
+		// The table is full: this entry stands for the refusals of all keys
+		// beyond the bound, with their count.
+		if appendErr := h.appendServerEntry(ctx, handoffOverflowEntry(h.now(), decision.Suppressed)); appendErr != nil {
+			h.limiter.Release(key, decision)
+			h.handoffAppendFailed(ctx, appendErr)
+		}
+
+		return
+	}
+
 	if appendErr := h.appendHandoffRefusal(ctx, r, ref, ns, decision.Suppressed); appendErr != nil {
 		// Give the write back, so the next refusal of this key writes an entry.
 		h.limiter.Release(key, decision)
+		h.handoffAppendFailed(ctx, appendErr)
+	}
+}
 
-		faultlog.LogFault(ctx, h.logger, "audit append failed for a refused handoff token", faultlog.Cause(appendErr),
-			"runnerapi.handoff-refused")
+// handoffAppendFailed logs and counts an append that failed. The log holds the
+// cause by its type, never the text of the error.
+func (h *Handler) handoffAppendFailed(ctx context.Context, appendErr error) {
+	faultlog.LogFault(ctx, h.logger, "audit append failed for a refused handoff token", faultlog.Cause(appendErr),
+		"runnerapi.handoff-refused")
 
-		if h.onAuditErr != nil {
-			h.onAuditErr()
+	if h.onAuditErr != nil {
+		h.onAuditErr()
+	}
+}
+
+// flushHandoffPending writes one entry for each count that the limiter held back
+// in a window that ended. The keys can come from other adapters that share the
+// limiter, so each entry lands in the installation scope. A failed append logs
+// and counts the failure.
+func (h *Handler) flushHandoffPending(ctx context.Context, r *http.Request, pending []denylimit.Pending) {
+	if len(pending) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handoffAuditTimeout)
+	defer cancel()
+
+	for i := range pending {
+		if ctx.Err() != nil {
+			return
 		}
+
+		if err := h.appendServerEntry(ctx, h.handoffPendingEntry(r, &pending[i])); err != nil {
+			h.handoffAppendFailed(ctx, err)
+		}
+	}
+}
+
+// appendServerEntry appends e in the installation scope.
+func (h *Handler) appendServerEntry(ctx context.Context, e audit.Entry) error {
+	ss, ok := h.audit.(audit.ServerStore)
+	if !ok {
+		return errNoServerAudit
+	}
+
+	if _, err := ss.AppendServer(ctx, e); err != nil {
+		return fmt.Errorf("append installation entry: %w", err)
+	}
+
+	return nil
+}
+
+// handoffPendingEntry returns the entry for the count of one key of the
+// limiter. It names no request: the count stands for earlier requests.
+func (h *Handler) handoffPendingEntry(r *http.Request, p *denylimit.Pending) audit.Entry {
+	if p.Overflow {
+		return handoffOverflowEntry(h.now(), p.Suppressed)
+	}
+
+	e := h.entry(r, audit.ServerScope, refusal.Clean(p.Key.Principal, maxSessionID),
+		runner.AuditRules()[runner.EventHandoffRefused], h.now())
+	e.SourceIP, e.UserAgent = "", ""
+	e.Action = refusal.Clean(p.Key.Action, audit.MaxReasonLen)
+	e.Object = refusal.Clean(p.Key.Kind, audit.MaxReasonLen)
+	e.Outcome = audit.OutcomeDenied
+	e.Reason = fmt.Sprintf("%d further refusals in the last window were not recorded one by one", p.Suppressed)
+
+	return e
+}
+
+// handoffOverflowEntry returns the entry that stands for the refusals of keys
+// that the limiter had no room to track.
+func handoffOverflowEntry(at time.Time, suppressed int) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "denial-limiter", IDPSubject: "", TokenID: "",
+		Action: "denials:suppressed", Object: "denials of untracked principals", Version: "", ValuePath: "",
+		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.NormalizeChannel(""),
+		Kind: audit.KindChange, Outcome: audit.OutcomeDenied, RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+		Reason: fmt.Sprintf("%d refusals were not recorded one by one: too many principals in one window", suppressed),
 	}
 }
 
