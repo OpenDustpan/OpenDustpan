@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-27. Decided by the project owner on 2026-10-27. Decision 2 is conditional: no pull request of work item 15 merges before the benchmark record of decision 2 exists. If the benchmark does not meet its measure, a new ADR supersedes decision 2. Supersedes ADR 31 decisions 3 and 4. Changes the ADR 30 invariant "keys are never reused" to "keys are never reused, by construction". Extends ADR 280 decision 5
 
+Changed by:
+
+- ADR 340 changes decision 2: total job time is the measure for a background blob family.
+
 ## Context
 
 ADR 31 decision 3 makes the blob port write-once. The S3 adapter sends

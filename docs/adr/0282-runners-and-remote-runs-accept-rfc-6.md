@@ -5,6 +5,7 @@ Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026.
 Changed by:
 
 - ADR 304 changes decision 5: the answer to the `terragrunt run-all` question.
+- ADR 343 extends decision 4: the runner repository is an exception for the runner only.
 
 ## Context
 

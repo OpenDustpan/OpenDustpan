@@ -361,6 +361,13 @@ const (
 	// holds it with no grant. A request that acts as a person acts on its
 	// subject. No agent tool holds it.
 	ActionCallerManagePreferences Action = "caller:manage-preferences"
+	// ActionCallerManageGitHostLinks allows a person to start, accept and
+	// delete the links from accounts of a Git host to its own principal. Its
+	// object is CallerObject. Every authenticated person holds it with no grant.
+	// The routes that change a link accept a console session only, never an
+	// access token, so that an agent that holds the token of its person cannot
+	// give an account the actions of that person. No agent tool holds it.
+	ActionCallerManageGitHostLinks Action = "caller:manage-git-host-links"
 	// ActionCallerManageSignIn allows a person to change its own sign-in
 	// credentials, for example the password of its local user. Its object is
 	// CallerObject. Every authenticated person holds it with no grant. A

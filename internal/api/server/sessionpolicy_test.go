@@ -47,9 +47,10 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		t.Fatalf("session policy service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,

@@ -868,7 +868,7 @@ A 2xx answer means the receiver holds the batch.
 A 2xx answer with a `partialSuccess` that rejects records counts the rejected records as skipped (`dustpan_audit_sink_skipped_total`), because a new try cannot deliver them.
 Any other answer is a failed batch, and the server sends the batch again with a longer wait each time.
 The server does not follow a redirect, so a header never goes to another host.
-The error text holds the status only, never the answer of the receiver.
+The logged error text is a fixed class of the failure, for example `write: refused by the target`. It does not hold the status of the receiver or the answer of the receiver.
 
 ### Object storage
 

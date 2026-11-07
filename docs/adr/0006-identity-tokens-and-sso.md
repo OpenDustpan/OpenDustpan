@@ -10,6 +10,7 @@ Changed by:
 - ADR 53 extends: token kinds, lifetimes, inactivity and retiring the
   bootstrap token.
 - ADR 237 changes: the bootstrap admin token of dev comes from other sources.
+- ADR 339 extends: the bootstrap admin token asks for the one-time code of the first administrator.
 
 ## Context
 

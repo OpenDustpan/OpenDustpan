@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -120,7 +121,7 @@ func TestPatchRefusesABadValueAndChangesNothing(t *testing.T) {
 		"query":             patchURL("https://files.example.com/acme?x=1"),
 		"fragment":          patchURL("https://files.example.com/acme#x"),
 		"trailing slash":    patchURL("https://files.example.com/acme/"),
-		"user information":  patchURL("https://user:pw@files.example.com/acme"),
+		"user information":  patchURL(fakecred.URL("https", "user", "pw", "files.example.com", "/acme")),
 		"space":             patchURL("https://files.example.com/a b"),
 		"newline":           patchURL("https://files.example.com/a\nb"),
 		"no host":           patchURL("https:///acme"),

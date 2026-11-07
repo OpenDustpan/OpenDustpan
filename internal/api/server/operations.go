@@ -13,6 +13,7 @@ import (
 const (
 	tagApprovals   = "approvals"
 	tagPreferences = "preferences"
+	tagGitHostLink = "git-host-links"
 	tagSettings    = "settings"
 )
 
@@ -63,6 +64,44 @@ var operationLabels = map[string]apidesc.Label{
 			apidesc.DeclareOpenEnum[stategate.WritePath]("StateWritePath", writePaths()...))),
 	apidesc.Pattern(http.MethodGet, openAPIPath): apidesc.Name("getApiDescription", "description").
 		WithBodies(apidesc.NoBody, apidesc.Free("ApiDescription")),
+	apidesc.Pattern(http.MethodPost, gitHostLinkRequestsPath): apidesc.Name("startGitHostLinkRequest", tagGitHostLink).
+		WithStatus(http.StatusCreated).
+		On(apidesc.KindCaller).
+		WithBodies(apidesc.NoBody, apidesc.Typed[startGitHostLinkResponse]("StartGitHostLinkResponse")),
+	apidesc.Pattern(http.MethodPost, gitHostLinkShowPath): apidesc.Name("showGitHostLinkRequest", tagGitHostLink).
+		On(apidesc.KindCaller).
+		WithBodies(
+			apidesc.Typed[gitHostLinkTokenRequest]("GitHostLinkTokenRequest"),
+			apidesc.Typed[gitHostLinkRequestResponse](
+				"GitHostLinkRequest", apidesc.Named[gitHostAccountBody]("GitHostLinkAccount"),
+				apidesc.Named[currentGitHostLinkBody]("CurrentGitHostLink"),
+			),
+		),
+	apidesc.Pattern(http.MethodPost, gitHostLinksPath): apidesc.Name("acceptGitHostLink", tagGitHostLink).
+		WithStatus(http.StatusCreated).
+		On(apidesc.KindCaller).
+		WithBodies(
+			apidesc.Typed[acceptGitHostLinkRequest]("AcceptGitHostLinkRequest"),
+			apidesc.Typed[acceptGitHostLinkResponse](
+				"AcceptGitHostLinkResponse",
+				apidesc.Named[gitHostLinkBody]("GitHostLink"), apidesc.Named[gitHostAccountBody]("GitHostLinkAccount"),
+			),
+		),
+	apidesc.Pattern(http.MethodGet, gitHostLinksPath): apidesc.Name("listGitHostLinks", tagGitHostLink).
+		On(apidesc.KindCaller).
+		WithBodies(
+			apidesc.NoBody,
+			apidesc.Typed[gitHostLinkListResponse](
+				"ListGitHostLinksResponse",
+				apidesc.Named[gitHostLinkBody]("GitHostLink"), apidesc.Named[gitHostAccountBody]("GitHostLinkAccount"),
+			),
+		),
+	apidesc.Pattern(http.MethodDelete, gitHostLinkPath): apidesc.Name("deleteGitHostLink", tagGitHostLink).
+		On(apidesc.KindCaller).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodDelete, principalGitHostLinks): apidesc.Name("deletePrincipalGitHostLink", tagGitHostLink).
+		On(apidesc.KindServer).
+		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, preferencesPath): apidesc.Name("getPreferences", tagPreferences).
 		WithETag().
 		On(apidesc.KindCaller).

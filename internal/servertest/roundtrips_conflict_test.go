@@ -20,8 +20,10 @@ import (
 // transaction that ends the claim of the step so that the runner runs it
 // again (begin, minimum version, lock, clock, end, commit). The attempt
 // counts the rows of each class of the dev strip once, so a new class adds
-// one statement.
-const swapRetryTrips = 47
+// one statement. The 47 statements of the first form count the eleven classes
+// that were there before the Git host links; the two Git host classes add
+// forgeStripClassTrips more.
+const swapRetryTrips = 47 + forgeStripClassTrips
 
 // sqlstateDeadlock is the SQLSTATE of a transaction that PostgreSQL ended to
 // break a deadlock.

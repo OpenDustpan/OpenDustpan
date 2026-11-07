@@ -1276,5 +1276,9 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	return checkStagedTrustRules(ctx, conn)
+	if err := checkStagedTrustRules(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedForgeLinks(ctx, conn)
 }

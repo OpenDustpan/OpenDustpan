@@ -1277,6 +1277,18 @@
           "gate.version-conflict",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
+          "git-host.link-account-invalid",
+          "git-host.link-body-invalid",
+          "git-host.link-body-too-large",
+          "git-host.link-conflict",
+          "git-host.link-limit",
+          "git-host.link-not-found",
+          "git-host.link-not-proved",
+          "git-host.link-person-required",
+          "git-host.link-request-expired",
+          "git-host.link-request-not-found",
+          "git-host.link-request-used",
+          "git-host.link-unavailable",
           "instance.invalid-id",
           "instance.not-found",
           "issuer.conflict",
@@ -1999,6 +2011,49 @@
           "namespace",
           "updatedAt",
           "version"
+        ],
+        "type": "object"
+      },
+      "GitHostLink": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/GitHostLinkAccount"
+          },
+          "linkedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "linkedAt",
+          "principal"
+        ],
+        "type": "object"
+      },
+      "GitHostLinkAccount": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "id",
+          "kind",
+          "login"
         ],
         "type": "object"
       },
@@ -2792,6 +2847,20 @@
         },
         "required": [
           "installations"
+        ],
+        "type": "object"
+      },
+      "ListGitHostLinksResponse": {
+        "properties": {
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/GitHostLink"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "links"
         ],
         "type": "object"
       },
@@ -7676,6 +7745,97 @@
           {
             "action": "server:manage-sign-in",
             "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/linked-accounts": {
+      "get": {
+        "operationId": "listGitHostLinks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListGitHostLinksResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "git-host-links"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/linked-accounts/{kind}/{host}/{account}": {
+      "delete": {
+        "operationId": "deleteGitHostLink",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "git-host-links"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:manage-git-host-links",
+            "object": "caller"
           }
         ]
       }
@@ -16168,6 +16328,69 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/principals/{principal}/linked-accounts/{kind}/{host}/{account}": {
+      "delete": {
+        "operationId": "deletePrincipalGitHostLink",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "git-host-links"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-principals",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/settings": {
       "get": {
         "operationId": "getSettings",
@@ -16533,6 +16756,9 @@
     },
     {
       "name": "git-host"
+    },
+    {
+      "name": "git-host-links"
     },
     {
       "name": "issuer"

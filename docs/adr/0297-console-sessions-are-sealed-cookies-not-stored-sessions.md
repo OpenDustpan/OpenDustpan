@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 301 extends decision 1: the kinds of fresh authentication in the access
   cookie gain `totp` and `ssh-signature`.
+- ADR 333 extends decision 4: the WebAuthn challenge of a passkey sign-in is a sealed cookie, not a stored row.
 
 Changes:
 
@@ -33,7 +34,7 @@ On 31 October 2026 the project owner wrote:
 OpenDustpan has no users, no installations and no data. This design replaces
 the stored sessions with no migration and no compatibility path (ADR 73).
 
-Facts on `main` at e804779:
+Facts on `main` at c2da835:
 
 - `pkg/session` stores each console session as a row: the SHA-256 digest of
   a 256-bit secret, the principal, the provider, the times, the source IP and

@@ -42,9 +42,10 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) testHan
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, apiserver.Config{
+	handler, err := newCheckedHandler(t, &apiserver.Config{
 		LocalUsers:       nil,
 		Preferences:      nil,
+		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,

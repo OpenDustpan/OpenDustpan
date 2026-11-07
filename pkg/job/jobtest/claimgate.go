@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -63,7 +64,7 @@ func (g *switchGates) set(enforced []job.EnforcedGate, err error) {
 
 // errGateStore is the error of a guard that cannot read the gates. Its text
 // holds a detail that the refusal must not show.
-var errGateStore = errors.New("gate store down: dsn=postgres://ada:hunter2@db")
+var errGateStore = errors.New("gate store down: dsn=" + fakecred.URL("postgres", "ada", "hunter2", "db", ""))
 
 // gateAt returns an enforced gate id at the decision point point.
 func gateAt(id, point string) job.EnforcedGate {
