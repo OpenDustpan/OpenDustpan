@@ -326,7 +326,7 @@ func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry
 	}
 }
 
-func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	if ref.Namespace.String() != "acme" {
 		return workspace.Workspace{}, namespace.ErrNotFound
 	}
@@ -1769,7 +1769,7 @@ func TestErrorDocuments(t *testing.T) {
 // the 500 path stays covered now that the workspace service is required.
 type errorWorkspaces struct{}
 
-func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
 

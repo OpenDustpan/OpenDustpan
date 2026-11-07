@@ -379,7 +379,7 @@ func (s *Service) CreatePlaced(ctx context.Context, ref Ref, tags map[string]str
 	// Defense in depth: the handler chooses the collection by a placement rule
 	// and the store checks the collection in the transaction. This check stays
 	// so that a new caller cannot make a stack that no collection holds.
-	if p.Collection.Name == "" || p.CollectionID == "" || p.Collection.Namespace != ref.Namespace {
+	if !p.Complete(ref.Namespace) {
 		return Stack{}, fmt.Errorf("create stack %s: %w", ref, collection.ErrNoCollection)
 	}
 

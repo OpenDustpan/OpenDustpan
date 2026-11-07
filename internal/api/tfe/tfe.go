@@ -80,7 +80,7 @@ type OverrideWriter interface {
 // WorkspaceReader is what the workspace routes need: create, read and list.
 type WorkspaceReader interface {
 	// Create creates an unlocked workspace without state.
-	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	Create(ctx context.Context, ref workspace.Ref, p workspace.Placement) (workspace.Workspace, error)
 	// Get returns the workspace called ref, or workspace.ErrNotFound.
 	Get(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
 	// GetByID returns the workspace with id, or workspace.ErrNotFound.

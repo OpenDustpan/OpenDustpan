@@ -722,7 +722,11 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 	return pagingWorkspaces{items: items}
 }
 
-func (p pagingWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (p pagingWorkspaces) Create(
+	_ context.Context,
+	_ workspace.Ref,
+	_ workspace.Placement,
+) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrAlreadyExists
 }
 

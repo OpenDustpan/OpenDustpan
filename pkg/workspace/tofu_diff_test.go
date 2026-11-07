@@ -557,7 +557,7 @@ func TestDiffThroughServiceOtherWorkspace(t *testing.T) {
 		t.Fatalf("name: %v", err)
 	}
 
-	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create other workspace: %v", err)
 	}

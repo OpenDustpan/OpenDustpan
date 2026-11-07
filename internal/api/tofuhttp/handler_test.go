@@ -111,7 +111,7 @@ func (f *fakeUnits) GetByID(ctx context.Context, _ workspace.ID) (workspace.Work
 }
 
 // Create makes the unit. A create on a unit that exists answers ErrAlreadyExists.
-func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
