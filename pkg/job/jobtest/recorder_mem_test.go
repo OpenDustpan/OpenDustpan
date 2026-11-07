@@ -582,6 +582,16 @@ func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 	next := g.next
 
+	// A repeat of a reserve returns the plan of the first one, with no second
+	// item key.
+	if e, ok := m.records.plans[np.Plan.ID]; ok {
+		if e.job != next.ID || len(e.plan.Parts) > 0 {
+			return job.PlanRef{}, fmt.Errorf("%w: plan %s is not reservable again", job.ErrConflict, np.Plan.ID)
+		}
+
+		return e.plan, nil
+	}
+
 	key, err := m.newKey(
 		ctx,
 		pc.Fence,

@@ -395,6 +395,19 @@ func (s *Store) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 		j := g.j
 
+		// A repeat of a reserve returns the plan that the first one recorded,
+		// with no second item key. The check of the claim above ran again.
+		repeat, found, err := reservedRepeat(ctx, tx, &j, &pc, np.Plan.ID)
+		if err != nil {
+			return err
+		}
+
+		if found {
+			out = *repeat
+
+			return nil
+		}
+
 		p := np.Plan
 
 		key, err := newItemKey(ctx, tx, pc.Fence, &newItem{
@@ -489,6 +502,44 @@ func (s *Store) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	}
 
 	return out, nil
+}
+
+// reservedRepeat returns the reserved plan id when a reserve recorded it for
+// the job j, and found true. It returns found false when no row has the ID. A
+// row of another job, or a row that has parts, is job.ErrConflict: a reserve
+// never takes over the plan of another job, and never reopens a plan that has
+// its parts.
+//
+// Defense in depth: the recorder derives the ID from the claim, so a reserve
+// of the plan of another job does not come from it. This check stays so that a
+// caller of the store cannot reserve a plan row of another job.
+func reservedRepeat(
+	ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, id string,
+) (*job.PlanRef, bool, error) {
+	row, ok, err := tx.Plan(ctx, pc.Fence.Namespace, id)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+
+	if row.Job != j.ID {
+		return nil, false, fmt.Errorf("%w: plan %s belongs to another job", job.ErrConflict, id)
+	}
+
+	var body planBody
+	if err = json.Unmarshal([]byte(row.Body), &body); err != nil {
+		return nil, false, fmt.Errorf("%w: plan %s: %w", ErrDamaged, id, err)
+	}
+
+	reserved := decodePlan(&body)
+
+	switch {
+	case reserved == nil:
+		return nil, false, fmt.Errorf("%w: plan %s: no plan in the row", ErrDamaged, id)
+	case len(reserved.Parts) > 0:
+		return nil, false, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, id)
+	}
+
+	return reserved, true, nil
 }
 
 // checkReserved checks that p is the plan that a reserve recorded for the job

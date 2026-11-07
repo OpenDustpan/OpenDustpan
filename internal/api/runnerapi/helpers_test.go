@@ -395,6 +395,8 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Now:            opts.now,
 		PollInterval:   20 * time.Millisecond,
 		DenialLimiter:  nil,
+		Plans:          nil,
+		Artifacts:      nil,
 	}
 
 	if opts.mutate != nil {
