@@ -222,10 +222,10 @@ func TestUnmappedObjectKindIsRefused(t *testing.T) {
 	}
 }
 
-// TestHostileObjectsAreRefused gives the caller a grant that would allow the
-// blueprint action on the object's real target. Each case pairs an object with
-// a half-valid shape: the adapter must refuse it, because it needs both the
-// principal kind and a principal unit.
+// TestHostileObjectsAreRefused gives the caller a grant that would allow
+// principal:manage-tokens on the object's real target. Each case pairs an
+// object with a half-valid shape: the adapter must refuse it, because it needs
+// both the principal kind and a principal unit.
 func TestHostileObjectsAreRefused(t *testing.T) {
 	t.Parallel()
 
