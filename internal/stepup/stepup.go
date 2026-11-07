@@ -225,7 +225,9 @@ type Challenge struct {
 	// CreatedBy is the principal ID of the person who made the request that
 	// made the challenge: the person for their own add, and the administrator
 	// for a first-key enrollment. It is never empty. The store of a key add
-	// refuses a challenge that another principal made.
+	// refuses a challenge that another principal made. The service sets it
+	// from the authenticated principal of the request, never from a request
+	// field, because the store cannot tie it to Holder.
 	CreatedBy string
 	// Requester is what the console accept page shows.
 	Requester Requester
