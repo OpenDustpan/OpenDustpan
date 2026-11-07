@@ -3913,3 +3913,15 @@ decisions:
   accepted_artifact: "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
   evidence:
   - "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
+- id: "adr-0360"
+  title: "ADR 360: Catalog: three paths to a new blueprint version, and time to live of units"
+  decision: "1. **Three paths to a new blueprint version (owner, 2026-10-18).** A Catalog request moves to a new blueprint version by one of three paths: 1. **Requester upgrade.** The server maps the answers by name. The requester fills the new required inputs. 2. **Migrations and batch upgrades.** The blueprint declares migrations, written in Expr. The platform team can run batch upgrades. 3. **Publisher edits of answers.** The publisher edits the answers.\n2. **Time to live is a unit setting (owner, 2026-10-18).** The time to live is a setting of a unit. A blueprint gives a default for it. A namespace gives a maximum for it."
+  reason: "The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 7 November 2026 found no ADR that states them. ADR 112 lists two open questions. The first: who migrates the answers of existing requests when a new version renames or deletes an input, or adds a required one? The second: does a blueprint get a time to live for its units? Version 1 of ADR 112 asks the requester to submit an upgrade with valid answers. ADR 308 records other decisions of the same day for the Catalog."
+  scope:
+  - "GLOSSARY.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"
+  evidence:
+  - "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"
