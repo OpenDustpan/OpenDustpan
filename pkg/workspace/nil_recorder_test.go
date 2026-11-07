@@ -136,7 +136,7 @@ func TestForceUnlockNeedsARecorder(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	lockAndPush(t, f, `{"encrypted_data":"c2VjcmV0"}`)
+	lockAndPush(t, f, envelope)
 	enableForced(t, f)
 
 	_, _, err := f.svc.ForceUnlock(t.Context(), f.ws.ID, "admin", forcedOnly(), nil, forceEntry())
