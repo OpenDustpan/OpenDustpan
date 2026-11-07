@@ -147,6 +147,30 @@ linters:
               desc: The launcher contract never links a SQL driver.
             - pkg: github.com/mattn/go-sqlite3
               desc: The launcher contract never links a SQL driver.
+        jobproxy:
+          # The launcher links the job proxy core, so it imports no part of
+          # this server. It never imports internal code, a SQL driver or the
+          # forge. Of this module the core links only the outbound guard
+          # (pkg/egress), and the store port is in pkg/jobproxy/rulestore, so a
+          # move to another module is a move of files. Defense in depth: the
+          # domain rule also applies to it, and deps_test.go checks every
+          # package that the core links.
+          files:
+            - "**/pkg/jobproxy/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal
+              desc: The job proxy core never imports internal code.
+            - pkg: opendustpan.org/opendustpan/pkg/forge
+              desc: The job proxy core never imports the forge.
+            - pkg: database/sql
+              desc: The job proxy core never links a SQL driver.
+            - pkg: github.com/jackc/pgx
+              desc: The job proxy core never links a SQL driver.
+            - pkg: modernc.org/sqlite
+              desc: The job proxy core never links a SQL driver.
+            - pkg: github.com/mattn/go-sqlite3
+              desc: The job proxy core never links a SQL driver.
         githubfake:
           # The fake GitHub host is test infrastructure. No file of the binary
           # (cmd/, pkg/ and internal/) imports it, except a test file, so the
@@ -205,6 +229,7 @@ linters:
             - "**/internal/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
+            - "**/pkg/jobproxy/**"
             - "**/internal/source/**"
             - "**/pkg/source/**"
             - "**/pkg/forge/*.go"
