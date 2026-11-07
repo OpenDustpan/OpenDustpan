@@ -1654,6 +1654,15 @@ SELECT pg_try_advisory_lock(sqlc.arg(class)::int, hashtext(current_schema()))::b
 -- session does not hold the lock.
 SELECT pg_advisory_unlock(sqlc.arg(class)::int, hashtext(current_schema()))::boolean AS unlocked;
 
+-- name: LockPasskeySignInChallenges :exec
+-- Orders the starts of passkey sign-ins. A start counts the open challenges of
+-- its source and of the installation, and then inserts its row. Without this
+-- lock, starts at the same time in READ COMMITTED all count the same rows and
+-- go over the caps. The lock holds until the end of the transaction. The key
+-- holds the schema, so databases that hold several schemas do not wait for
+-- each other.
+SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign-in challenges', 0));
+
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
@@ -5427,6 +5436,16 @@ SELECT COUNT(*) FROM passkeys WHERE principal_id = $1 AND suspended_at_ms = 0;
 -- The challenges of one kind that have not expired at the given time.
 SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND expires_at_ms > $2;
 
+-- name: CountOpenPasskeyChallengesBySource :one
+-- The challenges of one kind from one source that have not expired at the
+-- given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source = $2 AND expires_at_ms > $3;
+
+-- name: CountOpenPasskeyChallengesBySourceGroup :one
+-- The challenges of one kind from one site group that have not expired at the
+-- given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source_group = $2 AND expires_at_ms > $3;
+
 -- name: CountPasskeys :one
 -- The passkeys of a person, read under the lock of the principal.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1;
@@ -5440,8 +5459,9 @@ VALUES (sqlc.arg('id'), sqlc.arg('principal_id'), sqlc.arg('name'), sqlc.arg('cr
 ON CONFLICT DO NOTHING;
 
 -- name: CreatePasskeyChallenge :execrows
-INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, source_group,
+                                created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING;
 
 -- name: DeleteExpiredPasskeyChallenges :execrows

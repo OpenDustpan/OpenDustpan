@@ -64,6 +64,10 @@ const (
 	// ipv6PrefixBits is the part of an IPv6 address that names one source:
 	// a /64 is the smallest network that one site usually gets.
 	ipv6PrefixBits = 64
+	// ipv6GroupBits is the part of an IPv6 address that names one site group:
+	// a /48 is the allocation that RFC 6177 advises for an end site, and it
+	// holds 65,536 ranges of /64.
+	ipv6GroupBits = 48
 )
 
 // ErrLimited reports a request over the waiting cap of its source. It wraps
@@ -329,13 +333,14 @@ type key struct{}
 // WithRequest returns ctx with the state of one request from the address
 // source. Call it once for each request, before any authentication.
 func WithRequest(ctx context.Context, source string) context.Context {
-	return context.WithValue(ctx, key{}, &request{source: sourceKey(source), memo: nil, mu: sync.Mutex{}})
+	return context.WithValue(ctx, key{}, &request{source: SourceKey(source), memo: nil, mu: sync.Mutex{}})
 }
 
-// sourceKey returns the budget key of the address source: an IPv4 address
-// as it is, an IPv6 address as its /64, a text with the scope separator as
-// the one unknown source, and any other text as it is.
-func sourceKey(source string) string {
+// SourceKey returns the budget key that the gate uses for the address source.
+// Other budgets by source address use it too, so that one address is one
+// source in every budget: an IPv4 address as it is, an IPv6 address as its
+// /64, and a text with the scope separator as one unknown source.
+func SourceKey(source string) string {
 	// Defense in depth: the counter key adds the scope in front of the source
 	// with a separator, and this check keeps a source from forging another
 	// scope. It does not rely on the scope check of New.
@@ -354,6 +359,36 @@ func sourceKey(source string) string {
 	}
 
 	prefix, err := addr.Prefix(ipv6PrefixBits)
+	if err != nil {
+		return source
+	}
+
+	return prefix.String()
+}
+
+// SourceGroupKey returns the key of the site group of the address source: the
+// /48 of an IPv6 address, because one site can use every /64 range of its /48.
+// An IPv4 address, a text that is not an address and a text with the scope
+// separator give the same key as SourceKey.
+func SourceGroupKey(source string) string {
+	// Defense in depth: the counter key adds the scope in front of the source
+	// with a separator, and this check keeps a source from forging another
+	// scope. It does not rely on the scope check of New.
+	if strings.Contains(source, scopeSeparator) {
+		return unknownSource
+	}
+
+	addr, err := netip.ParseAddr(source)
+	if err != nil {
+		return source
+	}
+
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+
+	prefix, err := addr.Prefix(ipv6GroupBits)
 	if err != nil {
 		return source
 	}

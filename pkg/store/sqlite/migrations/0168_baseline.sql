@@ -1306,9 +1306,13 @@ CREATE TABLE passkey_challenges (
     principal_id  TEXT    NOT NULL DEFAULT '' CHECK (length(principal_id) <= 128),
     pending_id    TEXT    NOT NULL DEFAULT '' CHECK (length(pending_id) <= 128),
     session_id    TEXT    NOT NULL DEFAULT '' CHECK (length(session_id) <= 128),
+    source        TEXT    NOT NULL DEFAULT '' CHECK (length(source) <= 64 AND source NOT GLOB '*[^ -~]*'),
+    source_group  TEXT    NOT NULL DEFAULT '' CHECK (length(source_group) <= 64 AND source_group NOT GLOB '*[^ -~]*'),
     created_at_ms INTEGER NOT NULL,
     expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms AND expires_at_ms - created_at_ms <= 300000),
-    CHECK ((kind = 'sign-in') = (principal_id = ''))
+    CHECK ((kind = 'sign-in') = (principal_id = '')),
+    CHECK ((kind = 'sign-in') = (source <> '')),
+    CHECK ((kind = 'sign-in') = (source_group <> ''))
 ) STRICT;
 
 CREATE TABLE passkeys (
@@ -1570,6 +1574,8 @@ CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+CREATE INDEX passkey_challenges_source ON passkey_challenges (source, expires_at_ms);
+CREATE INDEX passkey_challenges_source_group ON passkey_challenges (source_group, expires_at_ms);
 
 CREATE INDEX passkeys_principal ON passkeys (principal_id, created_at_ms, id);
 

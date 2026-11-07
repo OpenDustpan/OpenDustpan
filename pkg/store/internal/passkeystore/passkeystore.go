@@ -68,6 +68,8 @@ type ChallengeRow struct {
 	PrincipalID string
 	PendingID   string
 	SessionID   string
+	Source      string
+	SourceGroup string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
@@ -111,9 +113,20 @@ type Writes interface {
 type ChallengeWrites interface {
 	CreateChallenge(ctx context.Context, r ChallengeRow) (int64, error)
 	DeleteExpiredChallenges(ctx context.Context, atMs int64) (int64, error)
+	// LockSignInChallenges orders the sign-in starts that write a challenge:
+	// it returns when no other transaction holds the lock, and the lock
+	// holds until the end of this transaction. An adapter whose write
+	// transactions already run one at a time may do nothing.
+	LockSignInChallenges(ctx context.Context) error
 	// CountOpenChallenges counts the challenges of the kind that have not
 	// expired at atMs.
 	CountOpenChallenges(ctx context.Context, kind string, atMs int64) (int64, error)
+	// CountOpenChallengesBySource counts the challenges of the kind from the
+	// source that have not expired at atMs.
+	CountOpenChallengesBySource(ctx context.Context, kind, source string, atMs int64) (int64, error)
+	// CountOpenChallengesBySourceGroup counts the challenges of the kind from
+	// the site group that have not expired at atMs.
+	CountOpenChallengesBySourceGroup(ctx context.Context, kind, group string, atMs int64) (int64, error)
 	// TakeChallenge deletes the challenge digest and returns it.
 	TakeChallenge(ctx context.Context, digest string) (ChallengeRow, error)
 }
@@ -473,6 +486,8 @@ func ChallengeRowOf(c mfa.Challenge, d mfa.Digest) ChallengeRow {
 		PrincipalID: c.PersonID,
 		PendingID:   c.PendingID,
 		SessionID:   c.SessionID,
+		Source:      c.Source,
+		SourceGroup: c.SourceGroup,
 		CreatedAtMs: codec.Millis(c.CreatedAt),
 		ExpiresAtMs: codec.Millis(c.ExpiresAt),
 	}
@@ -482,12 +497,14 @@ func ChallengeRowOf(c mfa.Challenge, d mfa.Digest) ChallengeRow {
 // for a row that fails the checks of a challenge.
 func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 	c := mfa.Challenge{
-		CreatedAt: codec.FromMillis(r.CreatedAtMs),
-		ExpiresAt: codec.FromMillis(r.ExpiresAtMs),
-		Kind:      mfa.Ceremony(r.Kind),
-		PersonID:  r.PrincipalID,
-		PendingID: r.PendingID,
-		SessionID: r.SessionID,
+		CreatedAt:   codec.FromMillis(r.CreatedAtMs),
+		ExpiresAt:   codec.FromMillis(r.ExpiresAtMs),
+		Kind:        mfa.Ceremony(r.Kind),
+		PersonID:    r.PrincipalID,
+		PendingID:   r.PendingID,
+		SessionID:   r.SessionID,
+		Source:      r.Source,
+		SourceGroup: r.SourceGroup,
 	}
 
 	// Defense in depth: each write checks the challenge, and the CHECK
@@ -502,22 +519,28 @@ func ChallengeOf(r ChallengeRow) (mfa.Challenge, error) {
 
 // CreateChallenge deletes the challenges that expired at the time of c, and
 // stores c with the digest d. The caller checked c with Validate. A sign-in
-// challenge over mfa.MaxOpenSignInChallenges open ones stores no row and
-// returns mfa.ErrChallengeLimit: the start of a sign-in is public, and no limit
-// by source address bounds the table when many sources send.
+// challenge over mfa.MaxOpenSignInChallengesPerSource open ones from its
+// source stores no row and returns mfa.ErrSourceChallengeLimit, so one source
+// cannot fill the table. A sign-in challenge over mfa.MaxOpenSignInChallenges
+// open ones stores no row and returns mfa.ErrChallengeLimit: the start of a
+// sign-in is public, and many sources can send together. The source count is
+// checked first, so a source that is over its count never learns the state of
+// the installation total.
 func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) error {
 	if _, err := tx.DeleteExpiredChallenges(ctx, codec.Millis(c.CreatedAt)); err != nil {
 		return fmt.Errorf("delete expired challenges: %w", err)
 	}
 
 	if c.Kind == mfa.CeremonySignIn {
-		open, err := tx.CountOpenChallenges(ctx, string(c.Kind), codec.Millis(c.CreatedAt))
-		if err != nil {
-			return fmt.Errorf("count open challenges: %w", err)
+		// The caps count rows and then the insert adds one. The lock makes
+		// that read and write one step for all starts at the same time, so a
+		// flood cannot go over a cap.
+		if err := tx.LockSignInChallenges(ctx); err != nil {
+			return fmt.Errorf("lock sign-in challenges: %w", err)
 		}
 
-		if open >= mfa.MaxOpenSignInChallenges {
-			return mfa.ErrChallengeLimit
+		if err := checkSignInCaps(ctx, tx, c); err != nil {
+			return err
 		}
 	}
 
@@ -528,6 +551,40 @@ func CreateChallenge(ctx context.Context, tx Tx, c mfa.Challenge, d mfa.Digest) 
 
 	if n != 1 {
 		return mfa.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// checkSignInCaps returns mfa.ErrSourceChallengeLimit when the source or the
+// site group of the sign-in challenge c holds the most open ones, and mfa.ErrChallengeLimit when
+// the installation holds the most open ones.
+func checkSignInCaps(ctx context.Context, tx Tx, c mfa.Challenge) error {
+	bySource, err := tx.CountOpenChallengesBySource(ctx, string(c.Kind), c.Source, codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges of a source: %w", err)
+	}
+
+	if bySource >= mfa.MaxOpenSignInChallengesPerSource {
+		return mfa.ErrSourceChallengeLimit
+	}
+
+	byGroup, err := tx.CountOpenChallengesBySourceGroup(ctx, string(c.Kind), c.SourceGroup, codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges of a source group: %w", err)
+	}
+
+	if byGroup >= mfa.MaxOpenSignInChallengesPerSourceGroup {
+		return mfa.ErrSourceChallengeLimit
+	}
+
+	open, err := tx.CountOpenChallenges(ctx, string(c.Kind), codec.Millis(c.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("count open challenges: %w", err)
+	}
+
+	if open >= mfa.MaxOpenSignInChallenges {
+		return mfa.ErrChallengeLimit
 	}
 
 	return nil
