@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-20. Records decisions 25.4 and 25.5 of the owner of 18 October 2026. Decisions 8 to 20 are decided by the product manager under the owner's delegation of 20 October 2026. Answers RFC 25 questions 1 to 13 and open question 2 of ADR 161. Extends ADR 258 decision 1 and the phase table of ADR 100 decision 4. Narrows the scope of the built-in gate in ADR 258 decision 3 (decision 9)
 
+Changed by:
+
+- ADR 354 extends: triggers and drift schedules carry the delegation.
+.
 ## Context
 
 [RFC 25](../rfc/0025-drift-detection.md) proposes drift detection: a

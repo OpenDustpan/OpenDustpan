@@ -13,7 +13,8 @@ Changed by:
 - ADR 297 changes decisions 13 and 14: a run resolves the sign-in that it records.
 - ADR 311 extends: the mark and the avatar of Dusty.
 - ADR 314 extends: the stream of an answer of Dusty.
-
+- ADR 354 changes decisions 13, 14, 15 and 16: Dusty becomes an agent principal.
+.
 ## Context
 
 [RFC 73](../rfc/0073-ai-agent-for-infrastructure.md) asks whether

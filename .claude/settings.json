@@ -1,6 +1,6 @@
 {
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": false
   },
   "permissions": {
     "allow": [
@@ -47,7 +47,9 @@
       "Bash(initdb *)",
       "Bash(pg_ctl *)",
       "Bash(createdb *)",
-      "Bash(psql *)"
+      "Bash(psql *)",
+      "Bash(opencode *)",
+      "Bash(droid *)"
     ],
     "deny": [
       "Bash(git push *:main)",

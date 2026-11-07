@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
@@ -57,10 +58,16 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The rule packs come from the Semgrep registry on each run. No metrics are sent.
 # use-of-md5 is excluded: gosec reports the same lines, and each one has a
 # nolint with its reason.
+#
+# The second scan runs the local rules in .semgrep. It ignores .semgrepignore
+# files and the Semgrep default ignores, which skip test files, because the
+# rules in .semgrep are about test files.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
+	semgrep scan --error --metrics=off --disable-version-check --quiet \
+		--x-ignore-semgrepignore-files --config .semgrep .
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -211,6 +218,19 @@ STORE_TEST_TIMEOUT := 30m
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
 	go list ./... >/dev/null
 	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
+
+# COVER_FLAGS: a fast coverage pass has no -race and no -count. Set mode
+# counts a block once, and that is enough for a percentage. Atomic mode is
+# needed only with -race.
+COVER_FLAGS ?= -covermode=set
+
+cover: ## Fast coverage pass for the packages of test-ci-other, without -race: writes coverage.out and prints a table, also when a test fails. The exit status is the one of go test. In CI, GITHUB_STEP_SUMMARY gets the same table.
+	go list ./... >/dev/null
+	python3 -I scripts/cover-summary.py --selftest
+	status=0; \
+	go test $(COVER_FLAGS) -coverprofile=coverage.out -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS))) || status=$$?; \
+	python3 -I scripts/cover-summary.py coverage.out || test $$status -ne 0 || status=1; \
+	exit $$status
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
