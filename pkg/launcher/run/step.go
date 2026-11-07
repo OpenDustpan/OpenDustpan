@@ -92,7 +92,7 @@ func (r *phaseRun) callFailed(what string, err error) stepResult {
 	if errors.Is(err, session.ErrClaimLost) {
 		r.markLost()
 
-		return stepResult{exitCode: -1, reason: "the claim is lost"}
+		return stepResult{exitCode: -1, reason: claimLostReason}
 	}
 
 	r.log.Warn("a call of the step failed", slog.String("call", what), slog.Any("error", err))
@@ -109,17 +109,71 @@ func (r *phaseRun) flushEvery() time.Duration {
 	return DefaultFlushEvery
 }
 
+// claimLostReason is the reason of a step whose claim is lost: the renewal
+// loop recorded the loss, and the launcher reports nothing more.
+const claimLostReason = "the claim is lost"
+
+// refuseStep returns the fail-closed result of a step that this release must
+// not start, and whether the step is refused. It starts no process.
+func (r *phaseRun) refuseStep(step *protocol.Step, log launcher.Masker) (stepResult, bool) {
+	// This release cannot ask for the credentials of a tool step, so a tool
+	// step fails closed before its program starts.
+	if step.Role == string(job.RoleTool) {
+		r.note(log, "this launcher release does not run a tool step")
+
+		return stepResult{exitCode: -1, reason: "this launcher release does not run a tool step"}, true
+	}
+
+	// This release cannot upload declared outputs, so a step with an output
+	// fails closed before its program starts.
+	if len(step.Outputs) > 0 {
+		r.note(log, "this launcher release does not upload declared outputs")
+
+		return stepResult{exitCode: -1, reason: "this launcher release does not upload declared outputs"}, true
+	}
+
+	// Defense in depth: the renewal loop records a lost claim, and the wait
+	// loop kills the process group of a step that runs; this check stays so
+	// that a step whose claim is lost before its start never starts a
+	// process.
+	if r.isLost() {
+		return stepResult{exitCode: -1, reason: claimLostReason}, true
+	}
+
+	// Defense in depth: the renewal loop records a cancel, and the wait loop
+	// interrupts a step that runs; this check stays so that a canceled step
+	// never starts a process.
+	if r.isCanceled() {
+		return stepResult{exitCode: -1, reason: "the job was canceled"}, true
+	}
+
+	// Defense in depth: the wait loop interrupts a step that runs at a stop
+	// signal; this check stays so that a step after a stop never starts a
+	// process.
+	if stop := r.cfg.Stop; stop != nil {
+		select {
+		case <-stop:
+			return stepResult{exitCode: -1, reason: "the launcher got a stop signal"}, true
+		default:
+		}
+	}
+
+	return stepResult{exitCode: 0, reason: ""}, false
+}
+
 // execStep starts the process of the step and waits for its end, its
 // timeout, a cancel, a lost claim or a stop. The output goes to log.
 func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launcher.Masker) stepResult {
+	if res, refused := r.refuseStep(step, log); refused {
+		return res
+	}
+
 	cmd, err := r.command(step)
 	if err != nil {
 		r.note(log, err.Error())
 
 		return stepResult{exitCode: -1, reason: err.Error()}
 	}
-
-	r.notes(step, log)
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -186,17 +240,6 @@ func (r *phaseRun) closeFile(f *os.File) {
 func (r *phaseRun) note(log launcher.Masker, text string) {
 	if err := log.Mask([]byte(notePrefix + text + "\n")); err != nil {
 		r.log.Warn("write to the log of a step", slog.Any("error", err))
-	}
-}
-
-// notes writes to the log what this release does not do for the step.
-func (r *phaseRun) notes(step *protocol.Step, log launcher.Masker) {
-	if step.Role == string(job.RoleTool) {
-		r.note(log, "this launcher release gives no credentials to a tool step")
-	}
-
-	for _, o := range step.Outputs {
-		r.note(log, fmt.Sprintf("this launcher release does not upload the output %s %s", o.Kind, o.Path))
 	}
 }
 
