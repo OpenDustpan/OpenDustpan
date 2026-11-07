@@ -1027,7 +1027,7 @@ case names only, and each case skips until an adapter exists.
 
 | Port | Methods | Errors |
 | --- | --- | --- |
-| `KeyStore` | `AddKey`, `EnrollFirstKey`, `Keys`, `Key`, `RevokeKey` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict` |
+| `KeyStore` | `AddKey`, `EnrollFirstKey`, `Keys`, `Key`, `RevokeKey` | `ErrNotFound`, `ErrInvalid`, `ErrLimit`, `ErrConflict`, `ErrUsed`, `ErrExpired` |
 | `ChallengeStore` | `CreateChallenge`, `Challenge`, `AcceptChallenge`, `CompleteChallenge`, `RecordFailure` | `ErrNotFound`, `ErrInvalid`, `ErrExpired`, `ErrUsed`, `ErrChallengeLimit`, `ErrFactorRefused`, `ErrCounterRegressed` |
 | `CredentialStore` | `UseCredential`, `RevokeCredentialsOfKey`, `RevokeCredentialsOfTOTP`, `RevokeCredentialsOfPerson` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrMismatch`, `ErrFactorRefused` |
 | `TOTPStore` | `EnrollTOTP`, `ConfirmTOTP`, `TOTP`, `BeginTOTPAttempt`, `AcceptStep`, `ResetTOTP` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrLocked`, `ErrDisabled` |
@@ -1053,7 +1053,9 @@ credentials and append their entry in the same transaction.
 adds one key, once, also after the revoke of that key. `EnrollFirstKey` checks
 that the person holds no key in the same transaction as the add. `ResetFactors`
 deletes the keys and both TOTP factors, revokes each credential, voids each
-open challenge and appends one entry in one transaction. `UseCredential` uses the credential up in its own transaction
+open or accepted challenge and appends one entry in one transaction. `BeginTOTPAttempt` records a reservation, and `AcceptStep` validates it against
+the record and consumes it in the same transaction as the step, so a reservation
+that the store did not make, or that it consumed, changes nothing. `UseCredential` uses the credential up in its own transaction
 before the write (Q4).
 
 ## Proposed terms

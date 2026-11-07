@@ -36,6 +36,7 @@ func TestServiceRules(t *testing.T) {
 
 	rules := []string{
 		"a TOTP step-up cannot add a step-up key",
+		"a refusal of AddKey or EnrollFirstKey is recorded once by the service as a failure entry, and the store appends nothing",
 		"a TOTP step-up cannot revoke a step-up key",
 		"a console sign-in with a password only or a recovery code cannot add a step-up key",
 		"the console path counts at the level key only after a WebAuthn assertion",
