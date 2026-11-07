@@ -40,7 +40,7 @@ func pgCopyRunnerTables() []pgCopyTable {
 				pgColCreatedBy,
 				pgColCreatedAtMs,
 				pgColExpiresAtMs,
-				"used_at_ms",
+				pgColUsedAtMs,
 				"used_by",
 				pgColRevokedAtMs,
 			},
@@ -85,7 +85,7 @@ func pgRunnerControlTables() []pgCopyTable {
 		{
 			table: "runner_handoff_tokens",
 			columns: []string{
-				pgColSHA256, pgColOperationID, pgColToken, "runner_id", "issued_at_ms", pgColExpiresAtMs, "used_at_ms",
+				pgColSHA256, pgColOperationID, pgColToken, "runner_id", "issued_at_ms", pgColExpiresAtMs, pgColUsedAtMs,
 			},
 			orderBy: []string{pgColSHA256},
 		},

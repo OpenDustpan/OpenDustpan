@@ -59,9 +59,10 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		tb.Fatalf("make dev sign-in code: %v", err)
 	}
 
-	handler, err := serverapi.NewHandler(serverapi.Config{
+	handler, err := serverapi.NewHandler(&serverapi.Config{
 		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
+		GitHostLinks:   nil,
 		Settings:       nil,
 		GitHost:        nil,
 		Idempotency:    nil,
