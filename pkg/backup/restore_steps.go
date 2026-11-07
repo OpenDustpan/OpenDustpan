@@ -918,6 +918,17 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 		return nil, err
 	}
 
+	// The bound stops a new backup. A manifest above it stays restorable: an
+	// earlier version of the server wrote it, and the restore records the
+	// count and the bound in the audit log before it copies the first blob.
+	limit := s.unverifiedLimit()
+
+	if count := len(manifest.Unverified); count > limit {
+		if recErr := s.recordUnverifiedOverLimit(ctx, sc.Fence, in, count, limit); recErr != nil {
+			return nil, recErr
+		}
+	}
+
 	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)
 }
 
