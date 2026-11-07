@@ -264,6 +264,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           true,
 		binPath:       binPath,
 		backupDir:     "",
