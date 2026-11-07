@@ -9,6 +9,23 @@
 // access token alone never gives a fresh authentication.
 //
 // Rows belong to a person, not to a namespace, so no write carries a fence.
+//
+// # Audit of refusals
+//
+// Exactly one layer appends the audit entry of each refusal, so that no
+// refusal is recorded twice and none is recorded zero times:
+//
+//   - ErrMismatch and ErrFactorRefused of CredentialStore.UseCredential: the
+//     store appends the failure entry of the Use, in the transaction that
+//     makes the credential void. The service appends no entry for them.
+//   - ErrNotFound, ErrExpired and ErrUsed of CredentialStore.UseCredential
+//     and of ChallengeStore.RecordFailure: the store changes nothing and
+//     appends nothing. The service appends one failure entry for each. When
+//     the service cannot append it, the request still fails, and the
+//     service never lets the write go on (fail closed).
+//
+// The implementation of the service and of the stores waits for the decision
+// on the CLI step-up.
 package stepup
 
 import (
@@ -431,9 +448,22 @@ type ChallengeStore interface {
 	// from c. Of two calls at the same time, one wins, and the other changes
 	// nothing.
 	CompleteChallenge(ctx context.Context, c Completion) error
-	// RecordFailure counts one wrong answer and appends e, in one
-	// transaction. When the count reaches the limit, the challenge is void
-	// and it returns ErrUsed.
+	// RecordFailure counts one wrong answer of the challenge id of the
+	// person personID and appends e, in one transaction. Its result for each
+	// state of the challenge:
+	//
+	//   - Open, below the failure limit: it counts the answer, appends e and
+	//     returns nil. The challenge stays open.
+	//   - Open, and this answer reaches the failure limit: it counts the
+	//     answer, makes the challenge void, appends e and returns nil. The
+	//     next call returns ErrUsed.
+	//   - Missing, or a challenge of another person: it returns ErrNotFound.
+	//   - After the expiry: it returns ErrExpired.
+	//   - Accepted, answered or void: it returns ErrUsed.
+	//
+	// On ErrNotFound, ErrExpired and ErrUsed it counts nothing, changes no
+	// state and appends nothing. The service appends the entry of these
+	// refusals (see the package documentation).
 	RecordFailure(ctx context.Context, personID, id string, e audit.Entry) error
 }
 
@@ -448,8 +478,10 @@ type CredentialStore interface {
 	// digest differ, or when u is excluded for a window credential, and
 	// ErrFactorRefused when the level of the credential is below u.Level. A
 	// mismatch or a refused level makes the credential void and appends the
-	// failure entry of u. Of two calls at the same time on the last use, one
-	// wins.
+	// failure entry of u. On ErrNotFound, ErrExpired and ErrUsed it changes
+	// nothing and appends nothing: the service appends the entry of these
+	// refusals (see the package documentation). Of two calls at the same
+	// time on the last use, one wins.
 	UseCredential(ctx context.Context, u Use) (Credential, error)
 	// RevokeCredentialsOfKey revokes each credential that the key keyID of
 	// the person personID made.
