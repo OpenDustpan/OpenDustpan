@@ -36,9 +36,11 @@ proposes:
    plugin code. The repository needs its own ADR, because ADR 343 decision 6
    gives no other component a repository.
 3. **On the runner**, the launcher fetches a sweep plugin from the server by
-   digest, checks its signature as the registry checks a provider, and runs
-   it in the sandbox with read-only, short-lived credentials and egress
-   only to the hosts of its signed manifest. The server treats the report as
+   digest, checks its signature against keys pinned in the runner
+   configuration, and runs it in a sandbox that reaches only the job proxy,
+   with no metadata endpoint, no service account of the pool and its own
+   uid. The job proxy holds a short-lived read-only credential whose token
+   binds the target and the plugin. The server treats the report as
    unverified facts, as ADR 164 decision 17 says, and shows coverage for each
    resource type: swept, not swept or not supported.
 4. **A generic bridge to OpenTofu and Terraform providers**, which starts a
@@ -121,12 +123,13 @@ search found nothing. It does not mean that the thing does not exist.
 
 ### The provider plugin protocol of OpenTofu and Terraform
 
-- **`ListResource` exists in protocol versions 5.10 and 6.10.** It is a
-  server stream:
+- **`ListResource` was added in protocol versions 5.10 and 6.10.** The
+  current version in hashicorp/terraform is 6.11; its changes are not about
+  lists. It is a server stream:
   `rpc ListResource(ListResource.Request) returns (stream ListResource.Event)`.
   The request has `type_name`, `config`, `include_resource_object` and
   `limit`. Each event has `identity`, `display_name`, an optional
-  `resource_object` and diagnostics. `GetProviderSchema` returns
+  `resource_object` and the repeated field `diagnostic`. `GetProviderSchema` returns
   `list_resource_schemas`. `ValidateListResourceConfig` checks the
   configuration of a list.
   Source: `docs/plugin-protocol/tfplugin6.proto` in hashicorp/terraform;
@@ -202,8 +205,10 @@ part of it, not all of it.
   `query` (a filter that the provider defines), `limit`, `page_size` and
   `continuation_token`. The stream gives `Result{id, name}` items and an
   optional continuation. The file says that `id` "should be an importable ID
-  that can be passed to Read". The Pulumi change log puts it in 3.233.0
-  (30 April 2026). A resource that supports it has `listInputs` in the
+  that can be passed to Read". The Pulumi change log puts the protocol call
+  in 3.233.0 (30 April 2026), and `List` on the Go `plugin.Provider`
+  interface in 3.243.0 (22 May 2026). A bridge in Go and the provider kit
+  need 3.243.0 or later. A resource that supports it has `listInputs` in the
   package schema.
 - **The protocol has no identity.** A result is an ID and a name. It has no
   identity attributes, no tags and no region.
@@ -241,7 +246,7 @@ native list call. A convention of our own would copy it.
 | Steampipe CLI, Powerpipe, Flowpipe, Tailpipe | AGPL-3.0 | - | May not use. We do not link it and do not ship it. |
 | steampipe-plugin-sdk and the plugins of Turbot | Apache-2.0 | go-plugin, gRPC | May link. Its protocol serves the database host of Steampipe, and is not a public contract. Distribution is OCI with no signature check in the documentation. |
 | CloudQuery CLI, plugin-sdk, plugin-pb-go | MPL-2.0 | gRPC over a socket, Apache Arrow records | May link the SDK. The CLI downloads need a sign-in, and the CLI sends telemetry. |
-| CloudQuery AWS, Google Cloud and Azure plugins | paid since April 2024; no license stated on the hub | - | May not use. A paid plugin with no stated license is impossible for us. |
+| CloudQuery AWS, Google Cloud and Azure plugins | paid, by a post of the vendor dated 22 April 2024; the source left the repository in commit 19b6912 of 24 April 2024; no license stated on the hub. Not verified by a second source: the review found no date in the repository. | - | May not use. A paid plugin with no stated license is impossible for us. |
 | Terraformer | Apache-2.0 | cloud SDK lists, then the Terraform provider for each read | May not use as a dependency: the repository is archived since 16 March 2026 and pins Terraform 0.12. Its method is prior art. |
 | former2 | MIT | browser JavaScript with the AWS SDK | Prior art only. No releases. |
 | Terraform core 1.6 and later | BUSL-1.1 | - | May not use. |
@@ -316,6 +321,14 @@ Facts that change the design:
   - The launcher already starts a command with an argument list and reads a
     JSON Lines report (ADR 134, ADR 164). This adds a fixed shape to that
     command.
+  - **Versions and negotiation.** The manifest has `manifestVersion`, the
+    list `contractVersions` and the list `reportVersions`. The launcher calls
+    `describe --contract <versions>` with the contract versions that it
+    runs. The plugin answers with a manifest of one version that it shares
+    with the launcher, or exits with the code "no shared version". The
+    parser refuses an unknown field, so a new field comes only with a new
+    manifest version, and the launcher reads every manifest version that it
+    lists.
   - Gives: no new transport, no socket, no dependency in the runner; any
     language; a test is a file in and a file out.
   - Costs: no typed messages; the shape lives in a JSON Schema and in the
@@ -366,22 +379,56 @@ and 176, not part of this RFC.
 
 ### Option C. Distribution and trust
 
-- **C1. The archive set, admitted into the server (recommended).** A sweep
-  plugin release is the archive set of ADR 269: one zip for each operating
-  system and architecture, `SHA256SUMS`, and its OpenPGP signature
-  `SHA256SUMS.sig`. The zip holds the binary and the manifest. The project
-  CI of `sweep-plugins` builds and signs the first-party and accepted
-  community plugins with the project key.
-  - An operator admits a release into the installation, from a file upload
-    or from the release page of the project. The server checks the hashes
-    and the signature against the trusted keys of the installation, with
-    the code of `pkg/registry/pgpverify` (ADR 349), and stores the archives
-    by digest.
-  - A sweep target names an admitted plugin by name, version and digest.
-  - The launcher fetches the archive from the server by digest, checks the
-    SHA-256 itself, checks the signature itself, opens it in the sandbox
-    and starts the binary by a file descriptor, not by a path, so that no
-    other process can change the file between the check and the start.
+- **C1. The archive set, admitted into the server and pinned on the runner
+  (recommended).** A sweep plugin release is the archive set of ADR 269: one
+  zip for each operating system and architecture, `SHA256SUMS`, and its
+  OpenPGP signature `SHA256SUMS.sig`. The zip holds the binary and the
+  manifest.
+  - **The archive.** At most 256 MiB compressed and 1 GiB unpacked, at most
+    64 files, regular files only: no symbolic link, no hard link, no device,
+    no absolute path, no `..` element, no name twice. The server and the
+    launcher each refuse an archive that breaks a rule, and do not repair
+    it.
+  - **Admission.** An operator admits a release into the installation, from
+    a file upload or from the release page of the project. The server checks
+    the hashes and the signature with the code of `pkg/registry/pgpverify`
+    (ADR 349), against the keys that the installation trusts for that
+    plugin name, and stores the archives by digest. A namespace administrator
+    then names an admitted release in a sweep target.
+  - **The runner has its own trust.** The coordinator configuration of a
+    pool pins its own keys, each bound to the plugin names that it may sign,
+    and its own list of revoked digests and keys. The server does not serve
+    this configuration. The launcher gets the archive from the server by
+    digest, checks the SHA-256, the signature against the pinned keys and
+    the names, and the two revocation lists (its own and the one that the
+    claim carries). So a compromised server cannot make the runner start a
+    binary that no pinned key signed for that name. A compromised server can
+    hold back its own revocation list; the runner list still holds.
+  - **A key signs names, not everything.** Each trusted key, on the server
+    and on the runner, has a list of name patterns, for example
+    `opendustpan/*` for the project key and `acme/*` for a key of a team. A
+    key cannot sign `opendustpan/aws-resource-explorer` unless its patterns
+    allow it.
+  - **Revocation.** A revoke of a release, as ADR 269 decision 11, or of a
+    key. The server refuses a revoked release at admission, at a change of a
+    target and when it makes a claim. The launcher refuses it at the start.
+    An audit entry records each revoke.
+  - **Where the keys belong.** ADR 269 decision 9 keeps keys for each
+    namespace, because a namespace uploads its own providers. A sweep plugin
+    gets a cloud credential, and an operator decides which code may get one,
+    so this RFC keeps the server keys for each installation and the runner
+    keys for each pool. A namespace chooses only among admitted releases.
+  - **The start.** The launcher starts the checked binary from a file
+    descriptor that it opened for the check (`execveat` with
+    `AT_EMPTY_PATH`), not by a path. For `firecracker`, the launcher runs
+    inside the microVM, so it fetches and checks the archive inside the
+    microVM. The launcher runs only on Linux (ADR 130), so no other system
+    is in scope.
+  - **The project key.** The release workflow of `sweep-plugins` signs only
+    on a protected tag, through a GitHub environment with required
+    reviewers. The key stays in a hardware or cloud key service that only
+    that environment can call. No workflow of a pull request can reach it.
+    The new-repository ADR decides the details.
   - Costs: the launcher needs an OpenPGP library, a dependency that needs the
     owner's approval for the runner repository (ADR 316 approves it only for
     the provider kit, ADR 349 for the server registry).
@@ -394,10 +441,8 @@ and 176, not part of this RFC.
   OpenDustpan. This stays for a custom command (see "Proposal"), not for an
   admitted plugin.
 
-A third-party plugin from outside the project repository needs a key that the
-operator trusts. The operator adds such a key to the installation. A plugin
-with no valid signature never runs. This is a security control, so ADR 347
-decision 4 applies, not "warn, do not block".
+A plugin with no valid signature never runs. This is a security control, so
+ADR 347 decision 4 applies, not "warn, do not block".
 
 ### Option D. Credentials, now that a pool may have more than one purpose
 
@@ -410,72 +455,182 @@ decision 4 applies, not "warn, do not block".
   target. This is weaker than ADR 164 decision 4.
 - **D3. A short-lived token for each sweep (recommended).** A sweep target
   names a profile whose login block is OIDC (ADR 204). For each sweep, the
-  server issues a token with the subject `sweep:<namespace>/<target>` and an
-  expiry of at most the timeout of the target. The launcher, not the plugin,
-  exchanges it for a read-only cloud credential through the federation of
-  each cloud (AWS `AssumeRoleWithWebIdentity`, Azure federated credentials,
-  Google Cloud workload identity federation, Kubernetes structured
-  authentication). The role in the cloud trusts only that subject, so the
-  cloud enforces "read-only" and "this sweep only". The server stores no
-  cloud credential. It stores a signing key, which ADR 164 open question 2
-  says needs a change of decision 4 and a security review.
-  - For Azure, Google Cloud and Kubernetes the credential is a bearer
-    token. The job proxy injects it (ADR 327 decision 5, way A), and the plugin
-    never sees it.
-  - For AWS the client signs each request (Signature Version 4), so the
-    proxy cannot inject it (RFC 16). The launcher serves the short-lived
-    credential to the plugin on a loopback endpoint of the AWS container
-    credentials provider, and renews it. The plugin sees a read-only
-    credential of at most one hour. **This is a gap:** a hostile plugin
-    can copy it within the egress rules. The guide names the limits:
-    egress only to the hosts of the manifest, AWS data perimeter conditions
-    on the role (`aws:ResourceAccount`), and the role session duration.
-- **D4. D1 on a pool with only the sweep purpose, D3 everywhere.** The
-  recommendation: a sweep on a pool whose purposes include `jobs` must use
-  D3. The launcher refuses the host identity there: the sandbox blocks the
-  instance metadata addresses (`169.254.169.254`, `fd00:ec2::254`) and
-  mounts no service account token. A pool with the sweep purpose only may
-  still use D1, as ADR 164 decision 4 says. D2 is not offered. A team that
-  has no OIDC federation uses a pool with the sweep purpose only.
+  server issues a token, and the job proxy, not the plugin, exchanges it
+  for a read-only cloud credential through the federation of each cloud
+  (AWS `AssumeRoleWithWebIdentity`, Azure federated credentials, Google
+  Cloud workload identity federation, Kubernetes structured authentication).
+  The server stores no cloud credential. It stores a signing key, which ADR
+  164 open question 2 says needs a change of decision 4 and a security
+  review.
+  - **The token binds the code, not only the target.** The subject is
+    `sweep:<namespace>/<target>/<kind>:<name>`, where `<kind>` is `plugin`
+    with the plugin name, or `command` with the SHA-256 of the argument
+    list. The token also has the claims `plugin_digest`, `installation` (the
+    issuer), and `jti` set to the sweep ID. So a holder of
+    `namespace:manage-sweeps` who changes a target to a custom command, or
+    to another plugin, gets another subject, and the role in the cloud does
+    not match until a person in the cloud changes its trust policy. A trust
+    policy can also test `plugin_digest` to pin one release. ADR 205
+    decision 6 gives the subject template of a namespace; the sweep subject
+    is a fixed form that a template cannot change.
+  - **Bearer clouds.** For Azure, Google Cloud and Kubernetes the credential
+    is a bearer token. The job proxy injects it (ADR 327 decision 5, way A)
+    only on the token and API hosts that OpenDustpan lists for each cloud,
+    never on a host that only the manifest names. The plugin never sees it.
+  - **AWS.** The client signs each request (Signature Version 4), so the
+    proxy cannot inject it (RFC 16). The job proxy serves the credential to
+    the plugin on a loopback endpoint of the AWS container credentials
+    provider, with a session of 15 minutes, and renews it. **This is a
+    gap:** a hostile plugin can copy a read-only credential, and the
+    credential works from any network for up to 15 minutes. So on a pool
+    whose purposes include `jobs`, an AWS sweep runs only when the trust
+    policy of the role has an `aws:SourceIp` or an `aws:SourceVpce`
+    condition. The server cannot read the trust policy, so the target
+    records the operator's statement and the guide gives the policy. Without
+    such a condition, an AWS sweep needs a pool with the sweep purpose only.
+    The guide also names `aws:ResourceAccount` as a data perimeter
+    condition.
+- **D4. D1 on a pool with only the sweep purpose, D3 everywhere else
+  (recommended).** D2 is not offered. A team that has no OIDC federation
+  uses a pool with the sweep purpose only.
+
+### The sandbox of a sweep plugin
+
+D3 is not enough alone. A plugin must not reach any other credential: not the
+identity of the host, not the token of D3, not the session key of the claim.
+ADR 137 decision 6 makes the network of the host the default egress of a
+sandbox, and ADR 137 decision 4 runs the launcher in the same sandbox as the
+command. So this RFC proposes a rule in the coordinator, for each isolation
+kind, that fails closed. A test sends hostile input to each part (ADR 250).
+
+1. **Egress through the job proxy only.** The coordinator refuses to start a
+   sweep plugin in a sandbox whose egress is the network of the host. The
+   only route out of the network namespace of the plugin is the job proxy,
+   with the egress rules of this sweep. The claim fails with a reason, and
+   an audit entry records it.
+2. **Every metadata and workload-identity endpoint is blocked.** The network
+   namespace has no route to link-local addresses (`169.254.0.0/16`,
+   `fe80::/10`). This covers the instance metadata of EC2, Google Cloud and
+   Azure (`169.254.169.254`, `fd00:ec2::254` is also blocked by name), the
+   ECS task endpoint (`169.254.170.2`), EKS Pod Identity (`169.254.170.23`,
+   `fd00:ec2::23`) and the Azure host address `168.63.129.16`. The job proxy
+   also refuses these addresses and the names `metadata.google.internal`
+   and `metadata.azure.internal`, as a second layer that does not rely on
+   the routes.
+3. **Kubernetes: no service account of the pool.** For the `kubernetes`
+   isolation kind, the identity of the host is the service account of the
+   Pod, not an address. A sweep plugin Pod uses a service account of its own
+   with `automountServiceAccountToken: false`, and with no cloud identity
+   binding (IRSA, EKS Pod Identity, GKE or Azure workload identity). The
+   coordinator refuses to start a sweep Pod that mounts a token or names
+   another service account.
+4. **A process boundary between the launcher and the plugin.** The plugin
+   runs as a uid of its own, with `no_new_privs`, and a seccomp filter that
+   denies `ptrace`, `process_vm_readv` and `process_vm_writev`. The launcher
+   and the job proxy set `PR_SET_DUMPABLE` to 0. The secrets directory is
+   mode 0700 and belongs to the launcher uid. The plugin gets only the
+   request file, the report file, and for AWS the loopback endpoint and a
+   path to its authorization file. It never gets the token of D3 or the
+   session key of the claim.
+5. **Which pools.** On a pool whose purposes include `jobs`, a sweep plugin
+   runs only with the isolation kinds `firecracker`, `gvisor` or
+   `kubernetes`, and only when items 1 to 4 hold. The `process` kind has no
+   kernel boundary (ADR 137 decision 2), so a sweep plugin on it needs a
+   pool with the sweep purpose only. A coordinator that cannot prove items
+   1 to 4 for a claim refuses the claim.
 
 ### Option E. The sweep report, version 2
 
 Version 2 keeps every rule and bound of version 1 (ADR 164 decisions 10 to
-13). It adds:
+13). It changes these parts:
 
-- **In the header:**
-  - `plugin`: the name, the version and the digest that the launcher ran.
-    The launcher writes this field, not the plugin. The server compares it
-    with the target and refuses a report where they differ.
-  - `coverage`: for each scope, a list of `{type, status, error}`, where
-    `status` is `swept`, `not-swept` (the plugin covers the type but did not
+- **Lines of three kinds.** The first line is the header. Each other line has
+  `"kind"`: `resource` (a record, as in version 1) or `coverage`. So the
+  coverage does not have to fit in the header line of 64 KiB.
+- **The header.**
+  - `plugin`: the name, the version and the digest. The launcher replaces the
+    first line of the file before the upload, and sets this field from the
+    claim. The server compares it with the target. The comparison is a
+    check of consistency, not a security control, because a runner that
+    lies writes this field too.
+- **A coverage line** is `{"kind": "coverage", "scope", "provider", "type",
+  "status", "error"}`.
+  - `status` is `swept`, `not-swept` (the plugin covers the type but did not
     read it, with the reason) or `unsupported` (the plugin does not cover
-    the type). At most 10,000 entries in a report.
-- **In a record:**
-  - `iac`: at most 4 entries, one for each tool, for example
-    `{"tool": "opentofu", "provider": "registry.opentofu.org/hashicorp/aws",
-    "type": "aws_s3_bucket", "identity": {...}, "importId": "..."}` and
-    `{"tool": "pulumi", "package": "aws", "type": "aws:s3/bucket:Bucket",
-    "importId": "..."}`. An identity has at most 32 attributes of at most
-    1 KiB each.
+    the type).
+  - The type namespace is the pair of `provider` and `type`, where
+    `provider` is the provider of a header scope and `type` is a type that
+    the manifest of the plugin lists for that provider. The manifest maps
+    each such type to the IaC types of each tool, for example
+    `AWS::S3::Bucket` to `aws_s3_bucket` and `aws:s3/bucket:Bucket`.
+  - `error` is at most 512 bytes. A report has at most 100,000 coverage
+    lines, and a type comes at most one time for each scope.
+- **A resource line** adds:
+  - `iac`: at most 2 entries, one for each tool. An entry has the tool, the
+    normalized provider address (section "Keys"), the IaC type, an identity
+    of at most 16 attributes and 8 KiB, and an import ID of at most 1 KiB.
+    So a record stays inside a line of 64 KiB.
   - `attributeHash`: optional, SHA-256 of the canonical JSON of the
     attributes that the plugin read. The server stores it and does not read
     it until a feature needs it.
+- **No downgrade.** The manifest names the report versions that the plugin
+  writes. For a target that names a plugin, the server accepts only a
+  report of version 2 or later, and only a version that the manifest of the
+  admitted release names. A version 1 report from a plugin target fails the
+  sweep. A version 1 report stays valid only for a custom command.
 - **The resolve rule changes.** Version 1 resolves every finding of a complete
   scope that the sweep did not see (ADR 164 decision 13). A plugin that
   covers 276 of more than 1,500 types would then resolve findings of types
-  that it never read. Version 2 resolves a finding only when its type has
-  the status `swept` in a complete scope. A type that is `not-swept` or
-  `unsupported` never resolves a finding and never shows as "nothing
-  unmanaged". A version 1 report has no coverage, so for it the rule of
-  version 1 stays.
-- **A key for providers with no cloud ID.** `unmanaged.KeysOf` knows `aws`,
-  `azure` and `gcp`. For any other provider, version 2 lets the match use
-  the `iac` entry: the key `iac/<tool>/<provider>/<type>/<import ID>`, which
-  the index can also read from state (the `id` of an OpenTofu resource, the
-  `id` of a Pulumi resource). The identity of OpenTofu 1.12 state can give
-  a second key later. This is a change of the resource index of ADR 163,
-  and a one-way door (section "One-way doors").
+  that it never read. Version 2 resolves a finding only when the type of the
+  finding maps to a `swept` coverage line of a complete scope. A finding of
+  the kind "not in any unit" has the provider and type of the record that
+  opened it. A finding of the kind "left behind" comes from state, and has
+  an IaC type; it maps through the manifest to a coverage type, and a
+  finding with no map never resolves by a sweep. A type that is `not-swept`
+  or `unsupported` never resolves a finding and never shows as "nothing
+  unmanaged". `FindingStore.ResolveUnseen` changes: it takes the swept types
+  of each complete scope, and its suite gets a case for each status.
+
+### Keys for providers with no cloud ID
+
+`unmanaged.KeysOf` knows `aws`, `azure` and `gcp`, whose IDs (an ARN, an Azure
+resource ID, a full resource name) name the account and often the region.
+For any other provider, version 2 adds an `iac` key.
+
+- **The form.** `iac:<provider>/<scope>/<region>/<type>/<id>`.
+  - `<provider>` is the normalized provider address: the namespace and the
+    name, with no registry host and in lower case, for example
+    `hashicorp/aws`. So `registry.opentofu.org/hashicorp/aws` and
+    `registry.terraform.io/hashicorp/aws` give one key.
+  - `<type>` is the OpenTofu type. A Pulumi type of a bridged provider maps
+    to its OpenTofu type with the map of the bridge (`GetMapping`), kept as
+    data, so a resource in OpenTofu state and in Pulumi state gives one key.
+    A Pulumi type with no OpenTofu type keeps its Pulumi token under the
+    provider `pulumi/<package>`.
+  - `<scope>` is the account scope, and `<region>` the region or the word
+    `global` for a type that the manifest declares global.
+  - `<id>` is the import ID, or the canonical JSON of the identity when the
+    type has an identity schema.
+- **Containment.** ADR 164 decision 13 applies to every key. The provider of
+  an `iac` key, for the header, is the provider of the header scope that the
+  manifest names for the provider address. A key whose scope or region is
+  not in the header is refused, never matched, and counted in `outOfScope`.
+  A key of a type that the manifest declares global needs a complete scope
+  of every region, as `unmanaged.Covers` says for a global resource today.
+  `unmanaged.Scope` and `unmanaged.Region` get a case for the `iac` form, so
+  that "the region of the key wins" holds for it too.
+- **The state side.** The index makes an `iac` key for a state resource only
+  when the state gives the account and the region: the identity of the
+  resource (OpenTofu 1.12 stores it), or the configuration of its provider.
+  When a type has no `iac` key in the index of a namespace, the server opens
+  no "not in any unit" finding from an `iac` key of that type, and marks the
+  type `not-matchable` in the result of the sweep. So a missing key never
+  becomes a false finding.
+- **Precedence.** A record with a cloud key (from `KeysOf` rules) is matched
+  by the cloud key only. The `iac` key is used only when no cloud key rule
+  exists for the provider.
+
+This is the one-way door of question 7.
 
 ### Option F. The two bridges
 
@@ -487,12 +642,34 @@ Version 2 keeps every rule and bound of version 1 (ADR 164 decisions 10 to
   credential of Option D), then `ListResource` for each type, with
   `include_resource_object` set only when the key rule needs an attribute,
   for example `arn`. It writes one record for each event. The Go code comes
-  from `docs/plugin-protocol/tfplugin6.10.proto` of OpenTofu (MPL-2.0).
+  from `docs/plugin-protocol/tfplugin6.10.proto` of OpenTofu (MPL-2.0), never
+  from the copy in hashicorp/terraform.
+  - **Egress.** The bridge runs a second binary, the provider, which signs
+    its own requests and calls many regional endpoints. For AWS that is in
+    practice every `<service>.<region>.amazonaws.com` host. The egress rules
+    of a `tofu-list` sweep come from the server, not from the manifest: only
+    the endpoints of the services of the listed types, in the regions of the
+    target, plus the token hosts of the cloud. The rule list is still wide,
+    so the AWS conditions of Option D apply in full.
 - **F2. The Pulumi provider bridge** (`pulumi-list`). The same, with the
   Pulumi protocol: `GetSchema` for the resources with `listInputs`,
   `Configure`, then `List`. A Pulumi provider plugin may also need an engine
   address for its logs; the bridge serves a small log service, or the
   provider refuses to start. A test against a real provider must show which.
+  The egress rules are made as for F1.
+  - **The ID of a bridged provider is best-effort.** For a provider that
+    bridges a Terraform provider, the bridge's own design notes call the ID
+    of a list result "a best-effort string handle", and say that it is not
+    proof that an import takes the same string
+    (`docs/specs/terraform-list-runtime-semantics.md` and
+    `terraform-list-runtime-rollout.md` in pulumi-terraform-bridge). An ID
+    that differs from the `id` in Pulumi state would give a false finding of
+    the kind "not in any unit". So `pulumi-list` never uses such an ID alone
+    to open or resolve a finding. For a type of a bridged provider it marks
+    the coverage `not-swept`, with the reason, unless it also reads the
+    resource (`Read`) and gets a cloud key (for example an ARN). The guide
+    says: for a bridged provider, run `tofu-list` on the provider that it
+    bridges.
 - **F3. No bridges, first-party plugins only.** Less code, but the reach of
   the owner's aim stops at four clouds.
 
@@ -513,19 +690,30 @@ marks each kind that it may not list as `not-swept`.
    report of version 2. The contract has its own version, apart from the
    report version.
 2. **B1**: the repository `OpenDustpan/sweep-plugins`, with its own ADR.
-3. **C1**: the archive set, admitted into the installation, checked by the
-   server and again by the launcher, started by a file descriptor.
+3. **C1**: the archive set, admitted into the installation with keys bound to
+   plugin names, checked again by the launcher against keys pinned in the
+   runner configuration, with revocation on both sides, and started from a
+   file descriptor.
 4. **D4**: a short-lived token for each sweep on a pool with more than one
-   purpose; the host identity only on a pool with the sweep purpose only;
-   never a long-lived key.
-5. **E**: report version 2, with coverage and the resolve rule for each type.
-6. **F1 and F2** after **G**: the four first-party plugins first, then the two
+   purpose, whose subject binds the target and the plugin; the host identity
+   only on a pool with the sweep purpose only; never a long-lived key.
+5. **The sandbox rule**: egress only through the job proxy, every metadata
+   and workload-identity endpoint blocked, no service account of the pool,
+   and a process boundary between the launcher and the plugin. Where a pool
+   with more than one purpose cannot hold this (the `process` kind, or AWS
+   with no network condition on the role), a sweep needs a pool with the
+   sweep purpose only.
+6. **E**: report version 2, with coverage lines, no downgrade, the resolve
+   rule for each type, and an `iac` key that holds the account and the
+   region.
+7. **F1 and F2** after **G**: the four first-party plugins first, then the two
    bridges.
-7. **A custom command stays.** A target names either an admitted plugin or a
+8. **A custom command stays.** A target names either an admitted plugin or a
    command (ADR 164 decision 8). A command gets the same credential rule
    (D4) and the same sandbox, but no signature check, and the console says so
-   on the target. ADR 343 lets a pool run jobs too, and a job also runs the
-   code of the team, so a command is no new risk on such a pool.
+   on the target. Its token has the subject kind `command` with the hash of
+   its arguments, so a cloud role that trusts a plugin does not trust it.
+   It may write a report of version 1 or 2.
 
 ### The term
 
@@ -546,12 +734,14 @@ the cloud APIs to the plugin. For each, the five steps of ADR 250:
 
 | Input | 1. Check at the boundary | 2. Contain | 3. Limit | 4. Authorize at use | 5. Fail closed |
 | --- | --- | --- | --- | --- | --- |
-| The archive | The server checks the hashes and the signature against the trusted keys at admission. | Stored by digest; opened only in the sandbox. | A size limit on the archive (proposal: 256 MiB). | `server:admit-sweep-plugin` (new) at admission; `namespace:manage-sweeps` to name it in a target. | No valid signature: no admission and no run, and an audit entry. |
-| The archive at the runner | The launcher checks the SHA-256 and the signature again, without trust in the server's check. | Started from a file descriptor in the sandbox. | The same size limit. | The claim names the digest; the launcher refuses another. | A mismatch ends the sweep as `failed`, with the reason. |
-| The manifest and `describe` | A strict JSON Schema; unknown fields refused; the output of `describe` must equal the signed manifest. | `describe` runs with no network and no credential. | 1 MiB; a timeout of 30 seconds. | - | Any difference fails the sweep. |
-| The egress of the plugin | Only the hosts of the signed manifest, through the job proxy. | A network namespace that reaches only the proxy (ADR 137 decision 6); no instance metadata address. | The rate and the count of requests of the proxy. | The proxy checks each request against the rules of this sweep. | A request outside the rules is denied and logged. |
-| The credential | A profile login block of the kind OIDC; a static key is refused. | Bearer tokens only in the proxy; the AWS credential only on a loopback endpoint. | The expiry of the token is at most the timeout of the target. | The cloud role trusts only `sweep:<namespace>/<target>`. | No credential: the sweep fails before the plugin starts. |
-| The report | Version 1 or 2 only; the parser refuses unknown fields; the header must name the plugin of the claim. | Written to a file that the launcher reads; uploaded as a stream; encrypted at rest (ADR 164 decision 12). | The bounds of ADR 164 decision 11, plus the coverage and `iac` bounds; the launcher stops the upload at the bound. | The upload needs the session key of the claim (ADR 131). | A report over a bound or with an error fails the sweep; no finding resolves. |
+| The archive | The server checks the hashes, the signature, the names that the key may sign, the revocation list, the size and the paths at admission. | Stored by digest; opened only in the sandbox. | 256 MiB compressed, 1 GiB unpacked, 64 regular files, no links, no `..`. | `server:admit-sweep-plugin` (new) at admission; `namespace:manage-sweeps` to name it in a target. | No valid signature, a key outside its names, or a revoked release: no admission and no run, and an audit entry. |
+| The archive at the runner | The launcher checks the SHA-256, the signature against the keys pinned in the runner configuration, the names and both revocation lists, with no trust in the server's check. | Started from the file descriptor of the check (`execveat`); for `firecracker`, checked inside the microVM. | The same bounds. | The claim names the digest; the launcher refuses another. | A mismatch ends the sweep as `failed`, with the reason. |
+| The manifest and `describe` | A strict JSON Schema; unknown fields refused; a manifest version that the launcher lists; the output of `describe` must equal the signed manifest. | `describe` runs with no network and no credential. | 1 MiB; a timeout of 30 seconds. | - | Any difference, or no shared contract version, fails the sweep. |
+| The sandbox | The coordinator checks items 1 to 5 of "The sandbox of a sweep plugin" before it accepts the claim. | Its own uid, `no_new_privs`, seccomp without `ptrace`; no service account token; no route to link-local addresses. | The CPU, memory and time limits of ADR 137 decision 7. | The pool purpose and isolation kind, checked at the claim. | A coordinator that cannot prove the rule refuses the claim, with an audit entry. |
+| The egress of the plugin | Rules made by the server from the cloud, the services of the listed types and the regions of the target; the manifest cannot widen them. | A network namespace that reaches only the job proxy; the proxy refuses metadata addresses and names as a second layer. | The rate and the count of requests of the proxy. | The proxy checks each request against the rules of this sweep. | A request outside the rules is denied and logged. |
+| The credential | A profile login block of the kind OIDC; a static key is refused. | The token of D3 and bearer tokens only in the job proxy; the AWS credential only on a loopback endpoint, for 15 minutes. | The expiry of the token is at most the timeout of the target. | The cloud role trusts only the subject `sweep:<namespace>/<target>/<kind>:<name>`, and may test `plugin_digest`. | No credential: the sweep fails before the plugin starts. |
+| The report | Version 2 or later for a plugin target, and only a version of the manifest; the parser refuses unknown fields and unknown line kinds. | Written to a file that the launcher reads; the launcher replaces the header line; uploaded as a stream; encrypted at rest (ADR 164 decision 12). | The bounds of ADR 164 decision 11, plus the coverage and `iac` bounds; the launcher stops the upload at the bound. | The upload needs the session key of the claim (ADR 131). | A report over a bound, with an error or of a lower version fails the sweep; no finding resolves. |
+| A key in a record | The `iac` form; a scope and a region inside the header. | The containment of ADR 164 decision 13 for every key. | The bounds of an `iac` entry. | The match reads only the namespace and its linked namespaces (ADR 163). | A key outside the header is refused and counted, never matched; a type with no `iac` key in the index opens no finding. |
 
 What a hostile plugin can still do, inside these layers:
 
@@ -566,7 +756,10 @@ What a hostile plugin can still do, inside these layers:
   allowed by a rule on the host. This is the residual risk of any read-only
   plugin. The signature, the review of community plugins and the data
   perimeter conditions on the cloud role reduce it. They do not remove it.
-- On AWS, copy a credential of at most one hour (Option D).
+- On AWS, copy a read-only credential of at most 15 minutes. On a pool with
+  more than one purpose, the role must also have an `aws:SourceIp` or
+  `aws:SourceVpce` condition, so the copy does not work from another
+  network (Option D).
 
 ## The ADR 164 amendment
 
@@ -575,19 +768,28 @@ ADR 343:
 
 - **Decision 4 changes.** A sweep on a pool whose purposes include `jobs`
   gets its credential only from a profile login block of the kind OIDC, as a
-  token for each sweep with the subject `sweep:<namespace>/<target>`. The
-  sandbox blocks the identity of the host. A pool with the sweep purpose
-  only may still use the identity of its hosts. No sweep uses a long-lived
-  key. Open question 2 of ADR 164 is answered.
+  token for each sweep with the subject
+  `sweep:<namespace>/<target>/<kind>:<name>` and the claims
+  `plugin_digest`, `installation` and `jti`. The job proxy holds the token,
+  never the plugin. The sandbox rule holds: egress only through the job
+  proxy, every metadata and workload-identity endpoint blocked, no service
+  account of the pool, and a process boundary between the launcher and the
+  plugin. On such a pool a sweep runs only with the isolation kinds
+  `firecracker`, `gvisor` or `kubernetes`, and an AWS sweep only with a
+  network condition on the role. Otherwise a sweep needs a pool with the
+  sweep purpose only, which may still use the identity of its hosts. No
+  sweep uses a long-lived key. Open question 2 of ADR 164 is answered.
 - **Decision 7 changes.** A sweep target names either an admitted sweep
   plugin (name, version, digest, and a configuration of at most 64 KiB
   with no secret) or a command.
 - **Decision 9 changes.** OpenDustpan ships sweep plugins from the repository
   `OpenDustpan/sweep-plugins`, never in the server. Open question 1 is
   answered.
-- **Decisions 10 and 13 extend.** The report has version 2, with coverage for
-  each type and the `iac` entries. A finding resolves only when its type is
-  `swept` in a complete scope.
+- **Decisions 10 and 13 extend.** The report has version 2, with coverage
+  lines and the `iac` entries. A plugin target accepts only version 2 or
+  later. A finding resolves only when its type is `swept` in a complete
+  scope. The containment of decision 13 applies to the `iac` key, which
+  holds the account scope and the region.
 - **ADR 343 decision 5 extends.** A converter is a sweep plugin.
 
 ## The new-repository ADR
@@ -620,7 +822,8 @@ ADR 343 decision 6 gives a repository only to the runner. The ADR for
 - **The spend report version 1 and the plugin kinds** (`sweep`, `spend`,
   `estimate`). The follow-up RFC decides the spend report, but the manifest
   field `kinds` ships with the first contract version.
-- **The `iac` key in the resource index.** Once findings are stored with it,
+- **The `iac` key in the resource index**, with its provider address
+  normalization, its account and region parts and its precedence. Once findings are stored with it,
   a change of its form needs a new match of every namespace.
 - **The project signing key.** Every installation trusts it. A rotation and a
   revocation need a plan before the first release.
@@ -774,21 +977,27 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
    simpler and anyone can write one._
 3. **Credentials on a pool with two purposes.** On a pool that also applies
    changes, should a sweep get only a short-lived token for that one sweep
-   (OIDC, through a profile), and never the identity of the host and never a
-   stored key?
+   (OIDC, through a profile), whose subject names the target and the plugin,
+   in a sandbox that cannot reach the identity of the host, and never a
+   stored key? Where the sandbox cannot promise this (the `process`
+   isolation kind), a sweep needs a pool with the sweep purpose only.
    _ELI5: the robot that builds things has a master key. When it only
-   counts things, we give it a visitor badge for one hour instead, and take
-   the master key away._
+   counts things, we lock the master key in another room and give it a
+   visitor badge that works only for this one count and this one helper._
 4. **The AWS gap.** AWS signs each request in the client, so the plugin sees
-   a read-only credential of at most one hour. Is that acceptable with the
-   limits named, or should AWS sweeps run only on a pool with the sweep
-   purpose only?
+   a read-only credential of 15 minutes. The proposal: on a pool with more
+   than one purpose, an AWS sweep runs only when the role has an
+   `aws:SourceIp` or `aws:SourceVpce` condition; otherwise it needs a pool
+   with the sweep purpose only. Do you accept this, or should every AWS
+   sweep need a pool with the sweep purpose only?
    _ELI5: for one shop, the visitor must hold the badge in their own hand.
-   They could show it to a friend for an hour. Do we allow that, or send a
-   different robot that never builds things?_
+   We make the badge work for 15 minutes and only inside our building. Is
+   that enough, or should only a robot that never builds things go there?_
 5. **Who may sign.** Should a plugin run only with the signature of the
    project key, or also with a key that the operator adds for its own or a
-   third party's plugins? A plugin with no signature never runs.
+   third party's plugins? Each key may sign only the plugin names given to
+   it, and the runner pins its own keys. A plugin with no signature never
+   runs.
    _ELI5: only toys with our sticker, or also toys with a sticker that your
    parents trust? Toys with no sticker never come in._
 6. **Resolve only what was swept.** Should a finding resolve only when the
@@ -797,9 +1006,10 @@ A proposal only; this RFC does not edit `docs/roadmap.md`.
    _ELI5: if you looked only under the bed, you may not say that the closet
    is clean._
 7. **A key for every provider.** Should the resource index get a key of the
-   form tool, provider, type and import ID, so that sweeps can match
-   resources of any provider in the registries, not only AWS, Azure and
-   Google Cloud? It cannot change easily later.
+   form provider, account, region, type and ID (section "Keys for providers
+   with no cloud ID"), so that sweeps can match resources of any provider in
+   the registries, not only AWS, Azure and Google Cloud? It cannot change
+   easily later.
    _ELI5: today we can only recognize three kinds of name tags. A general
    name tag lets us recognize every kind, but once we print them, we keep
    them._
