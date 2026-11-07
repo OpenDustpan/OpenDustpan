@@ -997,7 +997,9 @@ func (e *Env) StartServerExpectingRefusal(ctx context.Context, tb testing.TB, db
 
 		return cmd.ProcessState.ExitCode(), out.String()
 	case <-timer.C:
-		if killErr := cmd.Process.Kill(); killErr != nil {
+		// The process may exit between the timer and the kill. Then the kill
+		// reports that the process is done, and the wait below returns its status.
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			tb.Errorf("kill server binary: %v", killErr)
 		}
 
