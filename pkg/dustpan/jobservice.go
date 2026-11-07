@@ -517,9 +517,9 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 }
 
 // checkPlanRequest returns the refusal of a request that this planner cannot
-// start: an operation other than a plan, an apply or a destroy, or a refresh
-// for a drift check, another executor than runners, and the fields of a
-// write-back job.
+// start: an operation other than a plan (an apply and a destroy included), or
+// a refresh for a drift check, another executor than runners, and the fields
+// of a write-back job.
 func checkPlanRequest(req *job.StartRequest) error {
 	driftCheck := req.Purpose == job.PurposeDriftCheck
 
@@ -528,8 +528,7 @@ func checkPlanRequest(req *job.StartRequest) error {
 		return fmt.Errorf("%w: a %s has the operation %s, not %s", job.ErrInvalid, req.Purpose,
 			job.OperationRefresh, req.Operation)
 	case !driftCheck && !startsOnRunner(req.Operation):
-		return fmt.Errorf("%w: this server starts plan, apply and destroy jobs only, not %s", job.ErrUnsupported,
-			req.Operation)
+		return fmt.Errorf("%w: this server starts plan jobs only, not %s", job.ErrUnsupported, req.Operation)
 	case req.Executor != "" && req.Executor != job.ExecutorRunner:
 		return fmt.Errorf("%w: this server starts jobs on runners only, not through %s", job.ErrUnsupported,
 			req.Executor)
@@ -541,9 +540,13 @@ func checkPlanRequest(req *job.StartRequest) error {
 }
 
 // startsOnRunner reports whether this server starts a job of op on a runner,
-// apart from a drift check.
+// apart from a drift check. An apply and a destroy are not started yet: the
+// runner protocol does not store the plan of the plan phase or give it to the
+// apply phase, so such a job would plan again with no end. The steps of both
+// operations (applySteps, destroySteps) stay for the change that lifts this
+// refusal.
 func startsOnRunner(op job.Operation) bool {
-	return op == job.OperationPlan || op == job.OperationApply || op == job.OperationDestroy
+	return op == job.OperationPlan
 }
 
 // stepsOf returns the fixed steps for the unit, the operation and the purpose.

@@ -5,24 +5,10 @@ apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, list jobs, read a job, its phases and the records of its phases, and read
 the log of a phase.
 
-This version starts plan, apply and destroy jobs on runners. An apply and a destroy job
-have two phases: `plan`, then `apply`. The `apply` phase applies the plan of the `plan`
-phase, and the server refuses to apply a plan that is older than the maximum plan age.
-A caller needs `unit:run-plan` for a plan, `unit:run-apply` for an apply and
-`unit:run-destroy` for a destroy.
-
-The server defines the steps of OpenTofu workspaces and Pulumi stacks:
-
-| Tool | Operation | `plan` phase | `apply` phase |
-| --- | --- | --- | --- |
-| OpenTofu | apply | `init`, `plan -out=tfplan` | `init`, `apply tfplan` |
-| OpenTofu | destroy | `init`, `plan -destroy -out=tfplan` | `init`, `apply tfplan` |
-| Pulumi | apply | `preview --save-plan` | `up --plan --yes --skip-preview` |
-| Pulumi | destroy | `destroy --preview-only` | `destroy --yes --skip-preview` |
-
-The Pulumi CLI cannot save the plan of a destroy. A Pulumi destroy job previews the
-destroy in the `plan` phase and keeps no plan file, so the `apply` phase destroys what
-the stack holds at that time. No runner runs the Pulumi steps yet. No route
+This version starts plan jobs of OpenTofu workspaces on runners. It does not accept an
+apply or a destroy yet: a start with the operation `apply` or `destroy` fails with 422 and
+the code `job.unsupported`. The server defines the plan
+step of a Pulumi stack too, but no runner runs it yet. No route
 cancels or approves jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
@@ -35,7 +21,7 @@ access token or a console session.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
-| `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan`, `unit:run-apply` or `unit:run-destroy` on the workspace that the body names, by the operation | The new job, with status 201 |
+| `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan` on the workspace that the body names | The new job, with status 201 |
 | `GET /namespaces/{namespace}/jobs` | `namespace:read` on the namespace. The server also checks `job:read` on the stack or workspace of each job | A page of jobs, newest first |
 | `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
 | `GET /namespaces/{namespace}/jobs/{job_id}/logs/{phase}` | `namespace:read` on the namespace, `job:read` on the stack or workspace of the job, and `job:read-logs` on the same object | The log of the phase, as a stream |

@@ -254,21 +254,11 @@ func checkPlanSpec(t *testing.T, spec *job.Spec, req *job.StartRequest, wantPool
 	t.Helper()
 
 	if spec.Pool != wantPool || spec.Unit.String() != req.Unit.String() || spec.Unit.UnitID() != "ws-1" ||
-		spec.Operation != req.Operation || spec.Executor != job.ExecutorRunner ||
-		spec.Location != req.Location || len(spec.Steps) != wantStepCount(req.Operation) || spec.Profile != "" ||
+		spec.Operation != job.OperationPlan || spec.Executor != job.ExecutorRunner ||
+		spec.Location != req.Location || len(spec.Steps) != 2 || spec.Profile != "" ||
 		len(spec.Edits) != 0 || spec.Delivery != "" {
-		t.Fatalf("spec = %+v, want a %s of web on pool %q at %+v", *spec, req.Operation, wantPool, req.Location)
+		t.Fatalf("spec = %+v, want a plan of web on pool %q at %+v", *spec, wantPool, req.Location)
 	}
-}
-
-// wantStepCount is the number of steps of an OpenTofu job of op: init and plan,
-// and for an apply or a destroy also init and apply.
-func wantStepCount(op job.Operation) int {
-	if op == job.OperationPlan {
-		return 2
-	}
-
-	return 4
 }
 
 func TestJobPlannerPools(t *testing.T) {
@@ -381,8 +371,15 @@ func TestJobPlannerRequest(t *testing.T) {
 	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
 
 	runPlannerCases(t, []plannerCase{
-		{"apply", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationApply }, nil, "pool-1"},
-		{"destroy", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationDestroy }, nil, "pool-1"},
+		{"apply", pools, nil, func(q *job.StartRequest) { q.Operation = job.OperationApply }, job.ErrUnsupported, ""},
+		{
+			"destroy",
+			pools,
+			nil,
+			func(q *job.StartRequest) { q.Operation = job.OperationDestroy },
+			job.ErrUnsupported,
+			"",
+		},
 		{
 			"a refresh that is no drift check",
 			pools,
@@ -399,7 +396,7 @@ func TestJobPlannerRequest(t *testing.T) {
 				q.Operation = job.OperationApply
 				q.Edits = []job.FileEdit{{Path: "main.tf", Keys: nil}}
 			},
-			job.ErrInvalid,
+			job.ErrUnsupported,
 			"",
 		},
 		{
@@ -410,7 +407,7 @@ func TestJobPlannerRequest(t *testing.T) {
 				q.Operation = job.OperationApply
 				q.Delivery = job.DeliveryDirectPush
 			},
-			job.ErrInvalid,
+			job.ErrUnsupported,
 			"",
 		},
 		{
@@ -442,6 +439,30 @@ func TestJobPlannerRequest(t *testing.T) {
 			"",
 		},
 	})
+}
+
+// TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer proves that an apply and
+// a destroy get the answer "plans only" through the planner of the job service,
+// which is the layer under the service: no step list, pool or location
+// check can change it.
+func TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer(t *testing.T) {
+	t.Parallel()
+
+	pools := poolsOf(testPool("pool-1", "acme", "ci", runner.PurposeJobs))
+
+	for _, op := range []job.Operation{job.OperationApply, job.OperationDestroy} {
+		p := jobPlanner{pools: pools, connections: nil}
+		unit := jobTestUnit(t, "acme", "web").WithUnitID("ws-1")
+		req := plannerRequest(unit)
+		req.Operation = op
+
+		spec, err := p.Plan(t.Context(), unit, &req)
+
+		want := "this server starts plan jobs only, not " + string(op)
+		if !errors.Is(err, job.ErrUnsupported) || !strings.Contains(err.Error(), want) || len(spec.Steps) != 0 {
+			t.Errorf("Plan(%s) = %+v, %v; want ErrUnsupported with %q and no step", op, spec, err, want)
+		}
+	}
 }
 
 func TestPlanSteps(t *testing.T) {
