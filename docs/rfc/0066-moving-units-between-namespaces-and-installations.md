@@ -100,8 +100,10 @@ A move between installations stays open.
   a list that is no longer true.
 - A unit between installations: export and import, as between namespaces.
 - A namespace between installations: with federation, a replica, then a
-  planned failover, then a detach; without federation, an offline move from
-  the namespace backup (ADR 218) with a "restore as a move" mode.
+  planned failover, then a detach with the revocation of the old copy's
+  keys; without federation, an offline move from the namespace backup
+  (ADR 218) with a "restore as a move" mode. The source keeps a moved
+  marker, so the old URL answers 421 with the target.
 - New carry-over findings of the move check of a whole namespace for the
   references to the installation scope that do not move.
 
