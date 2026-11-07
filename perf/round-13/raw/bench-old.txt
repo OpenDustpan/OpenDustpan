@@ -1,0 +1,268 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkWriteCheck/state_only-4       	   48207	     20982 ns/op	    1685 B/op	      42 allocs/op
+BenchmarkWriteCheck/state_only-4       	   60050	     21019 ns/op	    1683 B/op	      42 allocs/op
+BenchmarkWriteCheck/state_only-4       	   63796	     21471 ns/op	    1680 B/op	      42 allocs/op
+BenchmarkWriteCheck/state_only-4       	   59498	     20347 ns/op	    1680 B/op	      42 allocs/op
+BenchmarkWriteCheck/state_only-4       	   53272	     23014 ns/op	    1680 B/op	      42 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_none_set-4         	   30480	     40223 ns/op	    2120 B/op	      56 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_none_set-4         	   32368	     41634 ns/op	    2121 B/op	      56 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_none_set-4         	   29088	     43101 ns/op	    2121 B/op	      56 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_none_set-4         	   30999	     36624 ns/op	    2121 B/op	      56 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_none_set-4         	   30969	     37215 ns/op	    2121 B/op	      56 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_one_set-4          	   28406	     40835 ns/op	    2249 B/op	      59 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_one_set-4          	   28708	     38738 ns/op	    2248 B/op	      59 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_one_set-4          	   31532	     38754 ns/op	    2248 B/op	      59 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_one_set-4          	   34086	     36945 ns/op	    2249 B/op	      59 allocs/op
+BenchmarkWriteCheck/state_and_minimum,_one_set-4          	   27907	     43076 ns/op	    2249 B/op	      59 allocs/op
+BenchmarkCheckpointSaveFull1000-4                         	    6648	    271443 ns/op	12181.68 MB/s	   11002 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4                         	    4376	    290131 ns/op	11397.01 MB/s	   11002 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4                         	    3996	    284466 ns/op	11623.99 MB/s	   11001 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4                         	    4719	    270146 ns/op	12240.17 MB/s	   11004 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull1000-4                         	    3700	    321229 ns/op	10293.67 MB/s	   11001 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull3000-4                         	    4112	    283455 ns/op	35048.46 MB/s	   10999 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull3000-4                         	    5350	    269338 ns/op	36885.48 MB/s	   10998 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull3000-4                         	    3507	    310397 ns/op	32006.35 MB/s	   10999 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull3000-4                         	    6105	    302034 ns/op	32892.52 MB/s	   10998 B/op	     270 allocs/op
+BenchmarkCheckpointSaveFull3000-4                         	    5307	    267220 ns/op	37177.90 MB/s	   10999 B/op	     270 allocs/op
+BenchmarkCheckpointSaveDelta1000-4                        	    2862	    508984 ns/op	6496.52 MB/s	   13204 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta1000-4                        	    2330	    509608 ns/op	6488.57 MB/s	   13205 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta1000-4                        	    1896	    533477 ns/op	6198.26 MB/s	   13208 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta1000-4                        	    2773	    491043 ns/op	6733.89 MB/s	   13204 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta1000-4                        	    2430	    498834 ns/op	6628.71 MB/s	   13207 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta3000-4                        	    2790	    485789 ns/op	20450.57 MB/s	   13192 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta3000-4                        	    2577	    471654 ns/op	21063.48 MB/s	   13194 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta3000-4                        	    2578	    500279 ns/op	19858.26 MB/s	   13193 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta3000-4                        	    2910	    501369 ns/op	19815.07 MB/s	   13190 B/op	     326 allocs/op
+BenchmarkCheckpointSaveDelta3000-4                        	    2558	    503041 ns/op	19749.20 MB/s	   13194 B/op	     326 allocs/op
+BenchmarkCountManagedResources1000-4                      	     135	   8959411 ns/op	 369.07 MB/s	 3883258 B/op	   51319 allocs/op
+BenchmarkCountManagedResources1000-4                      	     124	   9335248 ns/op	 354.21 MB/s	 3883261 B/op	   51319 allocs/op
+BenchmarkCountManagedResources1000-4                      	     128	   9155435 ns/op	 361.17 MB/s	 3883259 B/op	   51319 allocs/op
+BenchmarkCountManagedResources1000-4                      	     100	  10112215 ns/op	 326.99 MB/s	 3883258 B/op	   51319 allocs/op
+BenchmarkCountManagedResources1000-4                      	     124	   9477346 ns/op	 348.90 MB/s	 3883258 B/op	   51319 allocs/op
+BenchmarkCountManagedResources3000-4                      	      43	  27132683 ns/op	 366.15 MB/s	11693180 B/op	  153879 allocs/op
+BenchmarkCountManagedResources3000-4                      	      40	  25092205 ns/op	 395.93 MB/s	11693176 B/op	  153879 allocs/op
+BenchmarkCountManagedResources3000-4                      	      51	  23632965 ns/op	 420.37 MB/s	11693177 B/op	  153879 allocs/op
+BenchmarkCountManagedResources3000-4                      	      49	  25817118 ns/op	 384.81 MB/s	11693177 B/op	  153879 allocs/op
+BenchmarkCountManagedResources3000-4                      	      49	  27765773 ns/op	 357.80 MB/s	11693185 B/op	  153879 allocs/op
+BenchmarkPrincipalLists/principals-4                      	     733	   1371018 ns/op	   97741 B/op	    1426 allocs/op
+BenchmarkPrincipalLists/principals-4                      	     841	   1344624 ns/op	   97736 B/op	    1426 allocs/op
+BenchmarkPrincipalLists/principals-4                      	     998	   1451130 ns/op	   97731 B/op	    1426 allocs/op
+BenchmarkPrincipalLists/principals-4                      	     864	   1231090 ns/op	   97733 B/op	    1426 allocs/op
+BenchmarkPrincipalLists/principals-4                      	     943	   1416877 ns/op	   97737 B/op	    1426 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4        	     823	   1438280 ns/op	   97803 B/op	    1430 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4        	    1047	   1480719 ns/op	   97808 B/op	    1430 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4        	     704	   1612827 ns/op	   97802 B/op	    1430 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4        	     686	   1612205 ns/op	   97798 B/op	    1430 allocs/op
+BenchmarkPrincipalLists/principals_with_a_prefix-4        	     704	   1489216 ns/op	   97799 B/op	    1430 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     387	   2897562 ns/op	   96826 B/op	    1414 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     363	   3243863 ns/op	   96818 B/op	    1414 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     388	   3061782 ns/op	   96824 B/op	    1414 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     441	   3004631 ns/op	   96820 B/op	    1414 allocs/op
+BenchmarkPrincipalLists/workloads,_2_percent_of_the_principals-4         	     319	   3450155 ns/op	   96830 B/op	    1414 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     508	   2464751 ns/op	   96878 B/op	    1418 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     560	   2511314 ns/op	   96877 B/op	    1418 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     504	   2277042 ns/op	   96883 B/op	    1418 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     613	   2128086 ns/op	   96878 B/op	    1418 allocs/op
+BenchmarkPrincipalLists/services_with_a_prefix-4                         	     538	   2290592 ns/op	   96879 B/op	    1418 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	    1272	   1000783 ns/op	   63672 B/op	    1210 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	    1458	    828347 ns/op	   63671 B/op	    1210 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	    1174	    888339 ns/op	   63672 B/op	    1210 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	    1426	    850546 ns/op	   63674 B/op	    1210 allocs/op
+BenchmarkPrincipalLists/groups-4                                         	    1701	   1027434 ns/op	   63671 B/op	    1210 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    3972	    301678 ns/op	   12730 B/op	     238 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    6026	    287949 ns/op	   12729 B/op	     238 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    3880	    315001 ns/op	   12729 B/op	     238 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    5630	    289698 ns/op	   12728 B/op	     238 allocs/op
+BenchmarkPrincipalLists/members_of_a_group-4                             	    5808	    314241 ns/op	   12729 B/op	     238 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	    1119	   1029074 ns/op	   57414 B/op	    1010 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	    1293	    952358 ns/op	   57406 B/op	    1010 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	    1239	    887767 ns/op	   57385 B/op	    1010 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	    1118	   1038882 ns/op	   57411 B/op	    1010 allocs/op
+BenchmarkPrincipalLists/groups_of_a_principal_in_80_groups-4             	    1274	    913466 ns/op	   57379 B/op	    1010 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     351	   3600087 ns/op	  329219 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     373	   3547176 ns/op	  329207 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     334	   3673222 ns/op	  329273 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     304	   3697448 ns/op	  329245 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=0-4                                         	     364	   3563114 ns/op	  329238 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     334	   3846745 ns/op	  329284 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     279	   4029858 ns/op	  329236 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     322	   3824557 ns/op	  329287 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     339	   3698180 ns/op	  329279 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=20000-4                                     	     325	   3857375 ns/op	  329269 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     325	   3463284 ns/op	  329176 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     380	   3604903 ns/op	  329272 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     307	   3865627 ns/op	  329244 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     309	   4020524 ns/op	  329262 B/op	    3742 allocs/op
+BenchmarkCallerGrants/others=100000-4                                    	     304	   3880280 ns/op	  329271 B/op	    3742 allocs/op
+BenchmarkAuthorizer/check-4                                              	    2346	    524541 ns/op	   60619 B/op	     886 allocs/op
+BenchmarkAuthorizer/check-4                                              	    2118	    548123 ns/op	   60627 B/op	     886 allocs/op
+BenchmarkAuthorizer/check-4                                              	    2019	    647595 ns/op	   60628 B/op	     886 allocs/op
+BenchmarkAuthorizer/check-4                                              	    2056	    586682 ns/op	   60643 B/op	     886 allocs/op
+BenchmarkAuthorizer/check-4                                              	    1886	    565655 ns/op	   60652 B/op	     886 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     405	   2506630 ns/op	  383800 B/op	    5874 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     427	   2609974 ns/op	  383808 B/op	    5874 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     453	   2452286 ns/op	  383791 B/op	    5874 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     484	   2439395 ns/op	  383790 B/op	    5874 allocs/op
+BenchmarkAuthorizer/list_objects-4                                       	     394	   2855216 ns/op	  383838 B/op	    5874 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/sqlite	250.993s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/dustpan
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIPAllowlistServeNamespaceRead-4      	   19994	     64130 ns/op	   13429 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   18158	     67085 ns/op	   13418 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   18922	     64558 ns/op	   13416 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   19243	     63679 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   18298	     65448 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   24560	     48215 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   22456	     51198 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   23049	     50623 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   23221	     54032 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   23601	     51455 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      87	  13703880 ns/op	 1152569 B/op	   33005 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      72	  15298819 ns/op	 1152768 B/op	   33007 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      92	  14292911 ns/op	 1152662 B/op	   33006 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      80	  13100587 ns/op	 1152832 B/op	   33005 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      84	  13908604 ns/op	 1152623 B/op	   33005 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2422	    600522 ns/op	   31378 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2385	    532674 ns/op	   31384 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    3618	    622649 ns/op	   31360 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    1888	    593980 ns/op	   31377 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2083	    575291 ns/op	   31364 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    2936	    383597 ns/op	   27255 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    2949	    397434 ns/op	   27272 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    4297	    434510 ns/op	   27287 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    3126	    445361 ns/op	   27316 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    2373	    433908 ns/op	   27290 B/op	     498 allocs/op
+--- FAIL: BenchmarkLeaseCheck/postgres
+    lease_bench_test.go:86: connect: failed to connect to `user=postgres database=postgres`: 127.0.0.1:5432 (localhost): dial error: dial tcp 127.0.0.1:5432: connect: connection refused
+--- FAIL: BenchmarkLeaseCheck
+FAIL
+list the schemas that stay: connect: failed to connect to `user=postgres database=postgres`: 127.0.0.1:5432 (localhost): dial error: dial tcp 127.0.0.1:5432: connect: connection refused
+exit status 1
+FAIL	opendustpan.org/opendustpan/pkg/dustpan	34.027s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/ipallow
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkGateAuthorize/inside-last-4         	 3565020	       408.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2947755	       388.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2523268	       508.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2821507	       366.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2105876	       477.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1390994	       875.3 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1256317	       941.8 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1339662	       881.1 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1505559	       816.5 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1564011	       813.3 ns/op	     144 B/op	       4 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/ipallow	12.033s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	   10230	    121940 ns/op	2153.01 MB/s	  271718 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	   10234	    117648 ns/op	2231.56 MB/s	  271695 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    9124	    118854 ns/op	2208.91 MB/s	  271698 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    9549	    117732 ns/op	2229.96 MB/s	  271695 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	   10000	    139648 ns/op	1880.00 MB/s	  271680 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	    2048	    661794 ns/op	1584.63 MB/s	 1059322 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1807	    696587 ns/op	1505.49 MB/s	 1059353 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1687	    709629 ns/op	1477.82 MB/s	 1059367 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1768	    651618 ns/op	1609.38 MB/s	 1059315 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1792	    712671 ns/op	1471.51 MB/s	 1059324 B/op	      14 allocs/op
+BenchmarkDeploymentShape1M-4            	     759	   1527766 ns/op	 686.43 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     890	   1161359 ns/op	 903.00 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	    1154	   1289383 ns/op	 813.34 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     933	   1238301 ns/op	 846.89 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     818	   1366830 ns/op	 767.25 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     950	   1477323 ns/op	 709.88 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     913	   1407036 ns/op	 745.35 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     946	   1457588 ns/op	 719.50 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     975	   1270733 ns/op	 825.29 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     751	   1367768 ns/op	 766.74 MB/s	   51967 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     217	   5397730 ns/op	 777.08 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     232	   6058806 ns/op	 692.29 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     196	   5676904 ns/op	 738.87 MB/s	  205889 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     277	   4704793 ns/op	 891.53 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     259	   4948515 ns/op	 847.62 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2076	    557694 ns/op	 470.76 MB/s	  821915 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2407	    561098 ns/op	 467.90 MB/s	  821906 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    1960	    595316 ns/op	 441.01 MB/s	  821907 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    1646	    686499 ns/op	 382.43 MB/s	  821906 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    1690	    625381 ns/op	 419.81 MB/s	  821907 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13144	     88637 ns/op	  35.45 MB/s	   41289 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13464	     88079 ns/op	  35.67 MB/s	   41296 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   12705	     94592 ns/op	  33.22 MB/s	   41298 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   12770	     93263 ns/op	  33.69 MB/s	   41299 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13531	     89179 ns/op	  35.23 MB/s	   41293 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	43.119s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/workspace
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkScanPointersManyPointersManyMembers-4   	       8	 141036187 ns/op	46054606 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       8	 137455654 ns/op	46054614 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       8	 128222522 ns/op	46054568 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       9	 130239352 ns/op	46054584 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	       8	 134803813 ns/op	46054578 B/op	  501250 allocs/op
+BenchmarkUpload32MiB-4                           	       4	 312298485 ns/op	 6738820 B/op	  226075 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 344792186 ns/op	 6738901 B/op	  226066 allocs/op
+BenchmarkUpload32MiB-4                           	       4	 338125962 ns/op	 6739416 B/op	  226082 allocs/op
+BenchmarkUpload32MiB-4                           	       4	 308947018 ns/op	 6738688 B/op	  226075 allocs/op
+BenchmarkUpload32MiB-4                           	       4	 314413274 ns/op	 6738672 B/op	  226074 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/workspace	18.427s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/internal/pulumijournal
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkJournalBuildCreate3000-4        	      14	  74397968 ns/op	  16.45 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7447520 peak-heap-bytes	22357153 B/op	  188758 allocs/op
+BenchmarkJournalBuildCreate3000-4        	      15	  75396812 ns/op	  16.23 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7905936 peak-heap-bytes	22353328 B/op	  188724 allocs/op
+BenchmarkJournalBuildCreate3000-4        	      16	  79435427 ns/op	  15.40 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7456744 peak-heap-bytes	22349479 B/op	  188695 allocs/op
+BenchmarkJournalBuildCreate3000-4        	      15	  77566632 ns/op	  15.78 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7458016 peak-heap-bytes	22355361 B/op	  188723 allocs/op
+BenchmarkJournalBuildCreate3000-4        	      15	  73422787 ns/op	  16.67 MB/s	   1223692 batch-bytes	      6000 entries	      3000 link-index	    636000 new-state-bytes	    639181 out-bytes	   7909056 peak-heap-bytes	22349656 B/op	  188704 allocs/op
+BenchmarkJournalBuildChange3000-4        	      13	  79664135 ns/op	  15.69 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	  10215904 peak-heap-bytes	24214461 B/op	  206776 allocs/op
+BenchmarkJournalBuildChange3000-4        	      16	  73837263 ns/op	  16.92 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9353304 peak-heap-bytes	24208724 B/op	  206760 allocs/op
+BenchmarkJournalBuildChange3000-4        	      15	  82346163 ns/op	  15.17 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9017512 peak-heap-bytes	24209679 B/op	  206768 allocs/op
+BenchmarkJournalBuildChange3000-4        	      16	  85440460 ns/op	  14.63 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   6536224 peak-heap-bytes	24210268 B/op	  206768 allocs/op
+BenchmarkJournalBuildChange3000-4        	      13	  82862505 ns/op	  15.08 MB/s	   1249582 batch-bytes	      6000 entries	      3000 link-index	    663000 new-state-bytes	    666181 out-bytes	   9014456 peak-heap-bytes	24209951 B/op	  206756 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       4	 262934576 ns/op	  15.58 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  19747376 peak-heap-bytes	79205244 B/op	  629884 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       5	 238199787 ns/op	  17.20 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  20804264 peak-heap-bytes	79212929 B/op	  629918 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       5	 235909049 ns/op	  17.37 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  28931272 peak-heap-bytes	79211054 B/op	  629899 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       5	 242470724 ns/op	  16.90 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  19761992 peak-heap-bytes	79212336 B/op	  629900 allocs/op
+BenchmarkJournalBuildCreate10000-4       	       5	 239610806 ns/op	  17.10 MB/s	   4096695 batch-bytes	     20000 entries	     10000 link-index	   2120000 new-state-bytes	   2130181 out-bytes	  21592568 peak-heap-bytes	79211067 B/op	  629914 allocs/op
+BenchmarkJournalBuildChange10000-4       	       4	 272833814 ns/op	  15.34 MB/s	   4185585 batch-bytes	     20000 entries	     10000 link-index	   2210000 new-state-bytes	   2220181 out-bytes	  24816816 peak-heap-bytes	85547392 B/op	  690018 allocs/op
+BenchmarkJournalBuildChange10000-4       	       5	 247053223 ns/op	  16.94 MB/s	   4185585 batch-bytes	     20000 entries	     10000 link-index	   2210000 new-state-bytes	   2220181 out-bytes	  25863064 peak-heap-bytes	85539833 B/op	  689990 allocs/op
+BenchmarkJournalBuildChange10000-4       	       4	 263633720 ns/op	  15.88 MB/s	   4185585 batch-bytes	     20000 entries	     10000 link-index	   2210000 new-state-bytes	   2220181 out-bytes	  24814424 peak-heap-bytes	85540626 B/op	  689979 allocs/op
+BenchmarkJournalBuildChange10000-4       	       5	 242534006 ns/op	  17.26 MB/s	   4185585 batch-bytes	     20000 entries	     10000 link-index	   2210000 new-state-bytes	   2220181 out-bytes	  24807704 peak-heap-bytes	85540129 B/op	  689988 allocs/op
+BenchmarkJournalBuildChange10000-4       	       4	 280134554 ns/op	  14.94 MB/s	   4185585 batch-bytes	     20000 entries	     10000 link-index	   2210000 new-state-bytes	   2220181 out-bytes	  24808600 peak-heap-bytes	85545090 B/op	  690016 allocs/op
+BenchmarkJournalBuildSmallestState-4     	       5	 218495509 ns/op	  11.79 MB/s	   2576695 batch-bytes	     20000 entries	     10000 link-index	    600000 new-state-bytes	    610307 out-bytes	  10832080 peak-heap-bytes	69882894 B/op	  599848 allocs/op
+BenchmarkJournalBuildSmallestState-4     	       5	 204891365 ns/op	  12.58 MB/s	   2576695 batch-bytes	     20000 entries	     10000 link-index	    600000 new-state-bytes	    610307 out-bytes	  17837048 peak-heap-bytes	69886584 B/op	  599835 allocs/op
+BenchmarkJournalBuildSmallestState-4     	       6	 190582472 ns/op	  13.52 MB/s	   2576695 batch-bytes	     20000 entries	     10000 link-index	    600000 new-state-bytes	    610307 out-bytes	  10835568 peak-heap-bytes	69887690 B/op	  599852 allocs/op
+BenchmarkJournalBuildSmallestState-4     	       6	 195869656 ns/op	  13.16 MB/s	   2576695 batch-bytes	     20000 entries	     10000 link-index	    600000 new-state-bytes	    610307 out-bytes	  19593872 peak-heap-bytes	69891405 B/op	  599847 allocs/op
+BenchmarkJournalBuildSmallestState-4     	       6	 193124776 ns/op	  13.34 MB/s	   2576695 batch-bytes	     20000 entries	     10000 link-index	    600000 new-state-bytes	    610307 out-bytes	  21194632 peak-heap-bytes	69883746 B/op	  599836 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       8	 126277790 ns/op	   0.03 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  14680784 peak-heap-bytes	36210600 B/op	  111113 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       9	 116689574 ns/op	   0.03 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  14709544 peak-heap-bytes	36201798 B/op	  111082 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       9	 114289501 ns/op	   0.04 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  13370872 peak-heap-bytes	36205672 B/op	  111097 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	      10	 108549866 ns/op	   0.04 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  16877432 peak-heap-bytes	36206786 B/op	  111100 allocs/op
+BenchmarkJournalBuildChange10in10000-4   	       9	 112921532 ns/op	   0.04 MB/s	      4056 batch-bytes	        20.00 entries	        10.00 link-index	      2210 new-state-bytes	   2130271 out-bytes	  14837096 peak-heap-bytes	36206246 B/op	  111097 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/internal/pulumijournal	34.957s
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/internal/blobrefs
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCollectorChunks-4   	       2	 865991673 ns/op	215006700 B/op	 3397122 allocs/op
+BenchmarkCollectorChunks-4   	       2	 859410182 ns/op	215003352 B/op	 3397111 allocs/op
+BenchmarkCollectorChunks-4   	       2	 898419316 ns/op	215011696 B/op	 3397172 allocs/op
+BenchmarkCollectorChunks-4   	       2	 844934448 ns/op	215008120 B/op	 3397143 allocs/op
+BenchmarkCollectorChunks-4   	       2	 860241653 ns/op	215004176 B/op	 3397121 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/internal/blobrefs	12.736s
+FAIL

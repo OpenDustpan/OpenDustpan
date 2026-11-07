@@ -1,0 +1,4 @@
+ backup of 3 stacks and 3 workspaces: 367 round trips, as the model gives
+ restore of 3 stacks and 3 workspaces: 1083 round trips, as the model gives
+ backup of 30 stacks and 30 workspaces: 448 round trips, as the model gives
+ restore of 30 stacks and 30 workspaces: 1218 round trips, as the model gives

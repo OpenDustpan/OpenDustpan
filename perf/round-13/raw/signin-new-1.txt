@@ -1,0 +1,32 @@
+=== RUN   TestPerf12PasskeyRegister
+    perf12_passkey_test.go:61: PERF12 passkey-begin n=288 p50=0.682 p95=0.879 p99=1.145 allocs/op=456 bytes/op=32931
+    perf12_passkey_test.go:63: PERF12 passkey-finish n=288 p50=1.181 p95=1.868 p99=2.304 allocs/op=811 bytes/op=54858
+--- PASS: TestPerf12PasskeyRegister (0.95s)
+=== RUN   TestPerf12PasswordSignIn
+    perf12_signin_test.go:62: PERF12 password n=100 p50=30.97 p95=38.05 p99=41.58 allocs/op=1050 bytes/op=19980005
+--- PASS: TestPerf12PasswordSignIn (3.47s)
+=== RUN   TestPerf12OIDCCallback
+    perf12_signin_test.go:101: PERF12 oidc-callback n=300 p50=2.996 p95=3.844 p99=4.887 allocs/op=951 bytes/op=67221
+--- PASS: TestPerf12OIDCCallback (1.37s)
+=== RUN   TestPerf12PasskeyRegister
+    perf12_passkey_test.go:61: PERF12 passkey-begin n=288 p50=0.650 p95=0.983 p99=1.321 allocs/op=454 bytes/op=32425
+    perf12_passkey_test.go:63: PERF12 passkey-finish n=288 p50=1.152 p95=1.912 p99=2.242 allocs/op=808 bytes/op=54484
+--- PASS: TestPerf12PasskeyRegister (0.87s)
+=== RUN   TestPerf12PasswordSignIn
+    perf12_signin_test.go:62: PERF12 password n=100 p50=34.63 p95=43.08 p99=45.80 allocs/op=1051 bytes/op=19980428
+--- PASS: TestPerf12PasswordSignIn (3.70s)
+=== RUN   TestPerf12OIDCCallback
+    perf12_signin_test.go:101: PERF12 oidc-callback n=300 p50=3.035 p95=4.197 p99=13.126 allocs/op=951 bytes/op=67045
+--- PASS: TestPerf12OIDCCallback (1.39s)
+=== RUN   TestPerf12PasskeyRegister
+    perf12_passkey_test.go:61: PERF12 passkey-begin n=288 p50=0.588 p95=0.967 p99=1.715 allocs/op=454 bytes/op=32564
+    perf12_passkey_test.go:63: PERF12 passkey-finish n=288 p50=1.045 p95=1.945 p99=2.459 allocs/op=809 bytes/op=54579
+--- PASS: TestPerf12PasskeyRegister (0.86s)
+=== RUN   TestPerf12PasswordSignIn
+    perf12_signin_test.go:62: PERF12 password n=100 p50=30.97 p95=40.92 p99=42.30 allocs/op=1053 bytes/op=19980878
+--- PASS: TestPerf12PasswordSignIn (3.51s)
+=== RUN   TestPerf12OIDCCallback
+    perf12_signin_test.go:101: PERF12 oidc-callback n=300 p50=3.091 p95=4.028 p99=5.546 allocs/op=950 bytes/op=66872
+--- PASS: TestPerf12OIDCCallback (1.42s)
+PASS
+ok  	opendustpan.org/opendustpan/internal/api/server	17.556s

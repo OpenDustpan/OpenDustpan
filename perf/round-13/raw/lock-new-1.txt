@@ -1,0 +1,34 @@
+=== RUN   TestPerf12ManualLockService
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.335 p95=0.578 p99=1.461
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.332 p95=0.561 p99=1.281
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40259
+--- PASS: TestPerf12ManualLockService (1.73s)
+=== RUN   TestPerf12ManualLockRequest
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.812 p95=1.298 p99=2.987
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.768 p95=1.139 p99=1.685
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66922
+--- PASS: TestPerf12ManualLockRequest (0.99s)
+=== RUN   TestPerf12ManualLockService
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.273 p95=0.570 p99=1.535
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.274 p95=0.536 p99=1.177
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40247
+--- PASS: TestPerf12ManualLockService (1.60s)
+=== RUN   TestPerf12ManualLockRequest
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.863 p95=1.318 p99=2.943
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.820 p95=1.145 p99=2.102
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66911
+--- PASS: TestPerf12ManualLockRequest (1.04s)
+=== RUN   TestPerf12ManualLockService
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.331 p95=0.609 p99=1.556
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.333 p95=0.582 p99=1.314
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40266
+--- PASS: TestPerf12ManualLockService (1.76s)
+=== RUN   TestPerf12ManualLockRequest
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.780 p95=1.167 p99=5.527
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.746 p95=1.070 p99=1.582
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66929
+--- PASS: TestPerf12ManualLockRequest (0.96s)
+PASS
+list the schemas that stay: connect: failed to connect to `user=postgres database=postgres`: 127.0.0.1:5432 (localhost): dial error: dial tcp 127.0.0.1:5432: connect: connection refused
+FAIL	opendustpan.org/opendustpan/pkg/dustpan	8.092s
+FAIL

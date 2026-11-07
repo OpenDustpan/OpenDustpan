@@ -1,0 +1,18 @@
+ opentofu upload: 41 round trips, budget 41
+ pulumi event batch of 1000 events: 1010 round trips, budget 1010
+ pulumi cancel: 31 round trips, budget 31
+ pulumi stack rename: 35 round trips, budget 35
+ pulumi stack restore: 66 round trips, budget 66
+ pulumi stack import: 65 round trips, budget 65
+ pulumi stack rm: 38 round trips, budget 38
+ backup of 3 stacks and 3 workspaces: 367 round trips, as the model gives
+ restore of 3 stacks and 3 workspaces: 1083 round trips, as the model gives
+ backup of 30 stacks and 30 workspaces: 448 round trips, as the model gives
+ restore of 30 stacks and 30 workspaces: 1218 round trips, as the model gives
+ lock, upload and unlock: 87 round trips, budget 87
+ restore of 3 stacks and 3 workspaces without the failed swap: 1083 round trips, as the model gives
+ restore of 3 stacks and 3 workspaces with one failed swap: 1132 round trips, as the model gives
+ pulumi update cycle: 62 round trips, budget 62
+ pulumi checkpoint save: 13 round trips, budget 13
+ unlock: 11 round trips, budget 11
+ lock: 31 round trips, budget 31
