@@ -32,7 +32,7 @@ clients (Pulumi CLI, OpenTofu, console, API)
 The minimum topology is:
 
 - Two or more instances of one installation.
-- PostgreSQL 18 or later. The tests run on PostgreSQL 18 only.
+- PostgreSQL 18 or later. The tests run on PostgreSQL 18 only. Other versions are not tested. The server does not start on an earlier major version, and it reports the error code `store.server-version-unsupported`.
 - An S3-compatible store for the blobs.
 - A backup target on an S3-compatible store.
 - A load balancer with a health check on `/health/ready`.
