@@ -778,7 +778,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

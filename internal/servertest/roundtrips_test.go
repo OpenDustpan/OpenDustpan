@@ -479,6 +479,10 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
 		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
 	)
+	h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
+		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+	)
 
 	return h
 }
@@ -773,14 +777,20 @@ type requestFlow struct {
 // workspace to its inventory row, with one update in the same transaction.
 // So "lock" and "unlock" each hold 1 round trip for that write, and "lock,
 // upload and unlock" holds 2.
+//
+// A lock and the declare of a state version refuse a workspace that no
+// collection holds. Each check reads the membership of the unit in one read
+// transaction: the begin, the read of the unit, the read of the membership and
+// the commit. So "lock" holds 5 round trips for it, "opentofu upload" holds 4,
+// and "lock, upload and unlock" holds both, 9.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 41, func(h *rtHarness) {
+		{"opentofu upload", 45, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 31, func(h *rtHarness) {
+		{"lock", 36, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -788,7 +798,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 87, func(h *rtHarness) {
+		{"lock, upload and unlock", 96, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
