@@ -474,7 +474,7 @@ jobs:
     services:
       postgres: *postgres-service
     steps:
-      # The upgrade test reads the v* tags, so fetch all of the history.
+      # The upgrade and mixed-version tests read the v* tags, so fetch all of the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -491,6 +491,13 @@ jobs:
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make upgrade-test
+      # Serves the binary of each of the last 2 v* tags next to the current
+      # binary on one database. Without a v* tag, a second process of the
+      # current binary is the peer.
+      - name: Mixed-version test
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: make mixed-version-test
       - *show-report
       - *go-cache-save
 
