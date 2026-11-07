@@ -222,6 +222,11 @@ Each client command takes only the flags in its row:
 | Command | Flags |
 | --- | --- |
 | `opendustpan namespace create <name>` | `--server`, `--ca-file` |
+| `opendustpan collection create <namespace>/<name>` | `--server`, `--ca-file` |
+| `opendustpan collection list <namespace>` | `--server`, `--ca-file` |
+| `opendustpan placement add --tool <tool> --project <pattern> --stack <pattern> --collection <name> <namespace>` | `--server`, `--ca-file` |
+| `opendustpan placement list <namespace>` | `--server`, `--ca-file` |
+| `opendustpan placement delete <namespace> <rule-id>` | `--server`, `--ca-file` |
 | `opendustpan backup` | `--server`, `--ca-file` |
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
@@ -231,6 +236,10 @@ Each client command takes only the flags in its row:
 | `opendustpan audit-chain approve` | (none) |
 | `opendustpan health` | `--listen`, `--tls-cert` |
 | `opendustpan key generate` | `--out` |
+
+`opendustpan placement add` also takes `--tool`, `--project`, `--stack`,
+`--collection` and `--position`. They map to the fields of the rule, and the
+command sends `--position` only when you set it.
 
 `opendustpan key generate` calls no server and opens no database. It writes a
 new key-encryption key file to the path in `--out` and refuses a file that

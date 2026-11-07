@@ -4,13 +4,10 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -25,7 +22,7 @@ import (
 // server as `serve` leaves it. This namespace has no rule.
 const quickstartNamespace = "firststack"
 
-// quickstartGuideNamespace is the namespace in the curl commands of the guide.
+// quickstartGuideNamespace is the namespace in the commands of the guide.
 const quickstartGuideNamespace = "acme"
 
 // quickstartGuide is the path of the guide, from the e2e directory.
@@ -114,7 +111,7 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 	// The bug of the quickstart: a namespace with no rule refuses the first
 	// stack, and the error names the command that makes a rule.
 	env.Step(ctx, t, failStep("stack init before the rule", func(r e2e.Result) error {
-		for _, want := range []string{"no placement rule matches", "placement-rules", "curl"} {
+		for _, want := range []string{"no placement rule matches", "opendustpan placement add"} {
 			if err := outputContains(want)(r); err != nil {
 				return err
 			}
@@ -123,10 +120,14 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 		return nil
 	}, "stack", "init", stackRef, "--no-select"))
 
-	// The two curl commands of the guide. The test reads them from the guide, so
-	// it fails when the guide loses a step or changes a route or a body.
-	for _, req := range quickstartGuideRequests(t, quickstartNamespace) {
-		quickstartCall(ctx, t, env, req)
+	// The two commands of the guide that make the collection and the rule. The
+	// test reads them from the guide and runs them with the built binary, so it
+	// fails when the guide loses a step or changes a flag.
+	for _, args := range quickstartGuideCommands(t, quickstartHostPrefix, env.URL, env.CABundle(), quickstartNamespace) {
+		res := env.RunBinaryWithEnv(ctx, t, []string{"DUSTPAN_ADMIN_TOKEN=" + env.AdminToken()}, args...)
+		if res.ExitCode != 0 {
+			t.Fatalf("opendustpan %s: exit %d: %s", strings.Join(args, " "), res.ExitCode, res.Stderr)
+		}
 	}
 
 	env.Step(ctx, t, step("stack init after the rule", nil, "stack", "init", stackRef, "--no-select"))
@@ -135,7 +136,7 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 }
 
 // quickstartCall sends one installation API request with the admin token, as
-// the curl commands of the guide do, and fails unless it answers want.
+// the namespace create command does, and fails unless it answers want.
 func quickstartCall(ctx context.Context, t *testing.T, env *e2e.Env, c quickstartRequest) {
 	t.Helper()
 
@@ -155,20 +156,24 @@ type quickstartRequest struct {
 	body string
 }
 
-var (
-	// quickstartCurlURL finds the route in a curl command of the guide.
-	quickstartCurlURL = regexp.MustCompile(`https://localhost:8080(/api/dustpan/v1/namespaces/\S+)`)
-	// quickstartCurlBody finds the JSON body in a curl command of the guide.
-	quickstartCurlBody = regexp.MustCompile(`-d '([^']*)'`)
-)
+// quickstartGuideServer is the server URL in the commands of the guide.
+const quickstartGuideServer = "https://localhost:8080"
 
-// quickstartGuideRequests reads the curl commands of the guide that call the
-// namespace routes and returns their requests in the order of the guide, with
-// the namespace of the guide replaced by namespace. The guide repeats the
-// commands for the compose stack, so a request that appears again is kept once.
-// It fails unless the guide has exactly the collection request and then the
-// placement rule request.
-func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest {
+// quickstartHostPrefix starts each command of the host section of the guide.
+const quickstartHostPrefix = "./bin/opendustpan "
+
+// quickstartComposePrefix starts each command of the compose section of the
+// guide. The container runs the binary.
+const quickstartComposePrefix = "docker compose exec opendustpan /opendustpan "
+
+// quickstartGuideCommands reads the commands of one section of the guide that
+// start with prefix and make the collection and the placement rule. It returns
+// their arguments. The server URL, the CA file and the namespace of the guide
+// are replaced by the ones of the test. It fails unless the section has exactly
+// one collection create command and then one placement add command.
+func quickstartGuideCommands(
+	t *testing.T, prefix, serverURL, caFile, namespace string,
+) [][]string {
 	t.Helper()
 
 	root, err := os.OpenRoot("..")
@@ -187,41 +192,65 @@ func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest
 		t.Fatalf("read the guide %s: %v", quickstartGuide, err)
 	}
 
-	// A curl command spans several lines. A backslash ends each line but the last.
+	// A command spans several lines. A backslash ends each line but the last.
 	text := strings.ReplaceAll(string(guide), "\\\n", " ")
 
-	var requests []quickstartRequest
+	var commands [][]string
 
 	for line := range strings.Lines(text) {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "curl ") {
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
 
-		route := quickstartCurlURL.FindStringSubmatch(line)
-		body := quickstartCurlBody.FindStringSubmatch(line)
+		fields := strings.Fields(strings.TrimPrefix(line, prefix))
+		args := make([]string, 0, len(fields))
 
-		if route == nil || body == nil {
+		for _, field := range fields {
+			args = append(args, quickstartArg(field, serverURL, caFile, namespace))
+		}
+
+		if len(args) < 2 || !quickstartIsRuleCommand(args[0], args[1]) {
 			continue
 		}
 
-		from := "/namespaces/" + quickstartGuideNamespace + "/"
-		to := "/namespaces/" + namespace + "/"
-		req := quickstartRequest{path: strings.Replace(route[1], from, to, 1), body: body[1]}
-
-		if !slices.Contains(requests, req) {
-			requests = append(requests, req)
-		}
+		commands = append(commands, args)
 	}
 
-	if len(requests) != 2 ||
-		!strings.HasSuffix(requests[0].path, "/collections") ||
-		!strings.HasSuffix(requests[1].path, "/placement-rules") {
-		t.Fatalf("the guide %s must hold a curl command for the collection and then one for the placement rule, got %v",
-			quickstartGuide, requests)
+	if len(commands) != 2 ||
+		!slices.Equal(commands[0][:2], []string{"collection", "create"}) ||
+		!slices.Equal(commands[1][:2], []string{"placement", "add"}) {
+		t.Fatalf("the guide %s must hold one collection create command and then one placement add command, got %v",
+			quickstartGuide, commands)
 	}
 
-	return requests
+	return commands
+}
+
+// quickstartIsRuleCommand reports whether the first two words of a command of
+// the guide make the collection or the placement rule. Other commands of the
+// section, such as serve, are skipped.
+func quickstartIsRuleCommand(first, second string) bool {
+	return (first == "collection" && second == "create") || (first == "placement" && second == "add")
+}
+
+// quickstartArg returns one argument of a command of the guide, with the
+// server URL, the CA file and the namespace of the test in place of the guide's.
+func quickstartArg(field, serverURL, caFile, namespace string) string {
+	arg := strings.Trim(field, "'")
+
+	switch {
+	case arg == quickstartGuideServer:
+		return serverURL
+	case arg == "data/cert.pem":
+		return caFile
+	case arg == quickstartGuideNamespace:
+		return namespace
+	case strings.HasPrefix(arg, quickstartGuideNamespace+"/"):
+		return namespace + strings.TrimPrefix(arg, quickstartGuideNamespace)
+	}
+
+	return arg
 }
 
 // quickstartTofu runs the OpenTofu part of the guide: a main.tf with a cloud
@@ -276,62 +305,18 @@ output "greeting" {
 	}
 }
 
-// quickstartPlacement makes the collection and the placement rule of the
-// guide on a server at host with the admin token and the certificate file
-// cert. The compose stack uses it, because its server runs in a container.
-func quickstartPlacement(ctx context.Context, t *testing.T, host, token, cert string) {
+// quickstartComposePlacement makes the collection and the placement rule of the
+// compose section of the guide. Each command runs in the container, which holds
+// the admin token and the certificate, as the guide says.
+func quickstartComposePlacement(
+	ctx context.Context, t *testing.T, compose func(context.Context, ...string) string, namespace string,
+) {
 	t.Helper()
 
-	root, err := os.OpenRoot(filepath.Dir(cert))
-	if err != nil {
-		t.Fatalf("open the directory of the certificate %s: %v", cert, err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := root.Close(); closeErr != nil {
-			t.Errorf("close the directory of the certificate: %v", closeErr)
-		}
-	})
-
-	pem, err := root.ReadFile(filepath.Base(cert))
-	if err != nil {
-		t.Fatalf("read the certificate %s: %v", cert, err)
-	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		t.Fatalf("the certificate %s holds no certificate", cert)
-	}
-
-	client := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
-	}}
-	t.Cleanup(client.CloseIdleConnections)
-
-	for _, call := range quickstartGuideRequests(t, composeNamespace) {
-		target := "https://" + host + call.path
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(call.body))
-		if err != nil {
-			t.Fatalf("build the request for %s: %v", call.path, err)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", call.path, err)
-		}
-
-		status := resp.StatusCode
-
-		if err := resp.Body.Close(); err != nil {
-			t.Fatalf("close the answer of %s: %v", call.path, err)
-		}
-
-		if status != http.StatusCreated {
-			t.Fatalf("POST %s answers %d, want %d", call.path, status, http.StatusCreated)
-		}
+	for _, args := range quickstartGuideCommands(
+		t, quickstartComposePrefix, quickstartGuideServer, "/tls/cert.pem", namespace,
+	) {
+		out := compose(ctx, append([]string{"exec", "-T", "opendustpan", "/opendustpan"}, args...)...)
+		t.Logf("opendustpan %s: %s", strings.Join(args, " "), out)
 	}
 }

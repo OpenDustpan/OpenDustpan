@@ -286,6 +286,10 @@ func writeClients(out *strings.Builder) {
 	}
 
 	out.WriteString("\n")
+	out.WriteString("`opendustpan placement add` also takes `--tool`, `--project`, `--stack`,\n")
+	out.WriteString("`--collection` and `--position`. They map to the fields of the rule, and the\n")
+	out.WriteString("command sends `--position` only when you set it.\n")
+	out.WriteString("\n")
 	out.WriteString("`opendustpan key generate` calls no server and opens no database. It writes a\n")
 	out.WriteString("new key-encryption key file to the path in `--out` and refuses a file that\n")
 	out.WriteString("exists.\n")
@@ -316,6 +320,12 @@ func clientRows() []clientRow {
 		cmd   Command
 	}{
 		{"opendustpan namespace create <name>", NamespaceCreateCommand(nil)},
+		{"opendustpan collection create <namespace>/<name>", CollectionCreateCommand(nil)},
+		{"opendustpan collection list <namespace>", CollectionListCommand(nil)},
+		{"opendustpan placement add --tool <tool> --project <pattern> " +
+			"--stack <pattern> --collection <name> <namespace>", PlacementAddCommand(nil)},
+		{"opendustpan placement list <namespace>", PlacementListCommand(nil)},
+		{"opendustpan placement delete <namespace> <rule-id>", PlacementDeleteCommand(nil)},
 		{"opendustpan backup", BackupCommand(nil)},
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},

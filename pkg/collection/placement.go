@@ -261,9 +261,8 @@ type PlacementError struct {
 func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
 		"no placement rule matches %s stack %s/%s in namespace %s: make the collection, then add a rule with "+
-			"curl -X POST -H \"Authorization: Bearer $TOKEN\" -d '{\"tool\":\"%s\",\"project\":\"*\",\"stack\":\"*\","+
-			"\"collection\":\"<collection>\"}' <server>/api/dustpan/v1/namespaces/%s/placement-rules "+
-			"(see docs/guides/quickstart.md)",
+			"opendustpan placement add --server <server> --tool %s --project '*' --stack '*' "+
+			"--collection <collection> %s (see docs/guides/quickstart.md)",
 		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Tool, e.Namespace,
 	)
 }
