@@ -21,8 +21,7 @@ import (
 // fixture declares the feature. A case of one protocol, for example a SAML
 // signature, runs for the methods of that kind only. Until the first adapter
 // of a kind writes the body of such a case, the case fails for that kind,
-// so the first adapter cannot pass the suite without it. No adapter of
-// RequestMethod exists yet, so RunRequestMethod skips each case.
+// so the first adapter cannot pass the suite without it.
 
 // TestPerson is a person at the test identity provider or the test
 // directory of a fixture.
@@ -121,63 +120,4 @@ func manyGroups(n int) []string {
 	}
 
 	return out
-}
-
-// RequestFixture is a request method with a test proxy.
-type RequestFixture struct {
-	// Method is the method under test.
-	Method session.RequestMethod
-	// Facts returns the facts of a request that the trusted test proxy
-	// sends for the person p, with each proof of the proxy.
-	Facts func(t *testing.T, p TestPerson) session.RequestFacts
-	// Stop makes the key endpoint of the test issuer stop answering.
-	Stop func(t *testing.T)
-}
-
-// RunRequestMethod runs the conformance suite of a session.RequestMethod.
-// The factory returns a fixture over a fresh test proxy. No adapter
-// implements the port yet, so each case is skipped.
-func RunRequestMethod(t *testing.T, _ func(t *testing.T) RequestFixture) {
-	t.Helper()
-
-	skipCases(t, []string{
-		"ARequestOfTheTrustedProxyReturnsTheAssertion",
-		"HeadersNamesEachHeaderThatTheMethodReads",
-		"TheAssertionHasAuthTimeKnownFalse",
-		"TheAssertionHoldsNoFactor",
-		"TheAssertionHasTheKindOfTheMethod",
-		"GroupsComeFromTheGroupsHeaderOrClaim",
-		"AnEmptyGroupsHeaderIsPresentAndEmpty",
-		"ARequestWithNoHeaderIsErrNoAssertion",
-		"ADisabledProviderReturnsErrProviderDisabled",
-		// Layer 1: the boundary.
-		"APeerOutsideTheProxyListOfTheProviderIsErrUntrustedSource",
-		"APeerInTheClientAddressProxiesOnlyIsErrUntrustedSource",
-		"ASubjectOutsideTheAllowlistIsErrMethodInput",
-		"AHeaderWithControlCharactersIsErrMethodInput",
-		"TwoValuesOfTheUserHeaderAreErrMethodInput",
-		"MoreGroupsThanTheLimitAreErrMethodAnswer",
-		// Layer 2: encode or contain.
-		"AHeaderThatTheMethodDoesNotNameIsNotRead",
-		"AJWTWithAnotherIssuerIsErrMethodAnswer",
-		"AJWTWithAnotherAudienceIsErrMethodAnswer",
-		"AJWTSignedWithAnotherKeyIsErrMethodAnswer",
-		"AJWTWithTheAlgorithmNoneIsErrMethodAnswer",
-		"AJWTWithAnAlgorithmOutsideTheAllowlistIsErrMethodAnswer",
-		"AKeyIDOutsideTheAllowlistIsErrMethodInputBeforeTheKeyURL",
-		"AnALBSignerThatIsNotTheConfiguredARNIsErrMethodAnswer",
-		"TheKeyURLGoesThroughTheEgressRules",
-		// Layer 3: limit the effect.
-		"AJWTOutsideTheClockSkewIsErrMethodAnswer",
-		"AnExpiredJWTIsErrMethodAnswer",
-		"AKeyEndpointThatDoesNotAnswerInTimeIsErrMethodUnavailable",
-		// Layer 4: the second proof of the proxy.
-		"APlainHeaderFromATrustedPeerWithNoSecondProofIsErrUntrustedSource",
-		"AWrongSharedSecretIsErrUntrustedSource",
-		"AClientCertificateOfAnotherBundleIsErrUntrustedSource",
-		// Layer 5: fail closed.
-		"GroupsOnAndNoGroupsHeaderIsErrGroupsMissing",
-		"AStoppedKeyEndpointIsErrMethodUnavailable",
-		"EachErrorReturnsTheZeroAssertion",
-	})
 }

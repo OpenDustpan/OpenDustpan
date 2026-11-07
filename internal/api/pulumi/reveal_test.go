@@ -86,6 +86,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -143,6 +144,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

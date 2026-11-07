@@ -191,10 +191,11 @@ func enforcedActionFields() []string {
 }
 
 // unenforcedActionFields names the fields that list actions which the wrapper
-// does not authorize: the job service or the handler checks them. They are
+// does not authorize: the job service or the handler checks them. Filters
+// are the read actions that a list handler checks on each item. They are
 // documentation, so they never count as a declared action.
 func unenforcedActionFields() []string {
-	return []string{"Writes", "Extra"}
+	return []string{"Writes", "Extra", "Filters"}
 }
 
 // declarationOf reads one row of a route table.

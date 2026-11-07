@@ -1215,18 +1215,6 @@ func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsPa
 	return count, err
 }
 
-const countCatalogBlueprints = `-- name: CountCatalogBlueprints :one
-SELECT COUNT(*) FROM catalog_blueprints
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
-`
-
-func (q *Queries) CountCatalogBlueprints(ctx context.Context, namespace string) (int64, error) {
-	row := q.db.QueryRow(ctx, countCatalogBlueprints, namespace)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countEnabledBreakGlassPrincipal = `-- name: CountEnabledBreakGlassPrincipal :one
 SELECT COUNT(*) FROM principals
 WHERE id = $1 AND namespace = '' AND break_glass AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -1646,6 +1634,44 @@ func (q *Queries) CountOpenPasskeyChallenges(ctx context.Context, arg CountOpenP
 	return count, err
 }
 
+const countOpenPasskeyChallengesBySource = `-- name: CountOpenPasskeyChallengesBySource :one
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source = $2 AND expires_at_ms > $3
+`
+
+type CountOpenPasskeyChallengesBySourceParams struct {
+	Kind        string
+	Source      string
+	ExpiresAtMs int64
+}
+
+// The challenges of one kind from one source that have not expired at the
+// given time.
+func (q *Queries) CountOpenPasskeyChallengesBySource(ctx context.Context, arg CountOpenPasskeyChallengesBySourceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenPasskeyChallengesBySource, arg.Kind, arg.Source, arg.ExpiresAtMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenPasskeyChallengesBySourceGroup = `-- name: CountOpenPasskeyChallengesBySourceGroup :one
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source_group = $2 AND expires_at_ms > $3
+`
+
+type CountOpenPasskeyChallengesBySourceGroupParams struct {
+	Kind        string
+	SourceGroup string
+	ExpiresAtMs int64
+}
+
+// The challenges of one kind from one site group that have not expired at the
+// given time.
+func (q *Queries) CountOpenPasskeyChallengesBySourceGroup(ctx context.Context, arg CountOpenPasskeyChallengesBySourceGroupParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenPasskeyChallengesBySourceGroup, arg.Kind, arg.SourceGroup, arg.ExpiresAtMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countOpenRunnerJoinTokens = `-- name: CountOpenRunnerJoinTokens :one
 SELECT COUNT(*)
 FROM runner_join_tokens
@@ -1963,6 +1989,18 @@ type CountSavedViewsOfOwnerParams struct {
 
 func (q *Queries) CountSavedViewsOfOwner(ctx context.Context, arg CountSavedViewsOfOwnerParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countSavedViewsOfOwner, arg.Namespace, arg.Owner)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSelfServiceBlueprints = `-- name: CountSelfServiceBlueprints :one
+SELECT COUNT(*) FROM self_service_blueprints
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+`
+
+func (q *Queries) CountSelfServiceBlueprints(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSelfServiceBlueprints, namespace)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2500,8 +2538,9 @@ func (q *Queries) CreatePasskey(ctx context.Context, arg CreatePasskeyParams) (i
 }
 
 const createPasskeyChallenge = `-- name: CreatePasskeyChallenge :execrows
-INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, source_group,
+                                created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING
 `
 
@@ -2511,6 +2550,8 @@ type CreatePasskeyChallengeParams struct {
 	PrincipalID string
 	PendingID   string
 	SessionID   string
+	Source      string
+	SourceGroup string
 	CreatedAtMs int64
 	ExpiresAtMs int64
 }
@@ -2522,6 +2563,8 @@ func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyC
 		arg.PrincipalID,
 		arg.PendingID,
 		arg.SessionID,
+		arg.Source,
+		arg.SourceGroup,
 		arg.CreatedAtMs,
 		arg.ExpiresAtMs,
 	)
@@ -5374,95 +5417,6 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.Error,
 	)
 	return i, err
-}
-
-const getCatalogBlueprintDraft = `-- name: GetCatalogBlueprintDraft :one
-SELECT b.draft_version, b.draft_json
-FROM catalog_blueprints AS b
-JOIN namespaces AS n ON n.id = b.namespace_id
-WHERE n.name = $1 AND b.name = $2
-`
-
-type GetCatalogBlueprintDraftParams struct {
-	Namespace string
-	Name      string
-}
-
-type GetCatalogBlueprintDraftRow struct {
-	DraftVersion int64
-	DraftJson    string
-}
-
-func (q *Queries) GetCatalogBlueprintDraft(ctx context.Context, arg GetCatalogBlueprintDraftParams) (GetCatalogBlueprintDraftRow, error) {
-	row := q.db.QueryRow(ctx, getCatalogBlueprintDraft, arg.Namespace, arg.Name)
-	var i GetCatalogBlueprintDraftRow
-	err := row.Scan(&i.DraftVersion, &i.DraftJson)
-	return i, err
-}
-
-const getCatalogBlueprintVersion = `-- name: GetCatalogBlueprintVersion :one
-SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
-       v.published_at_ms, v.retired
-FROM catalog_blueprint_versions AS v
-JOIN namespaces AS n ON n.id = v.namespace_id
-WHERE n.name = $1 AND v.name = $2 AND v.number = $3
-`
-
-type GetCatalogBlueprintVersionParams struct {
-	Namespace string
-	Name      string
-	Number    int64
-}
-
-type GetCatalogBlueprintVersionRow struct {
-	Namespace     string
-	Name          string
-	Number        int64
-	DraftVersion  int64
-	DocumentJson  string
-	ExprVersion   string
-	PublishedBy   string
-	PublishedAtMs int64
-	Retired       int64
-}
-
-func (q *Queries) GetCatalogBlueprintVersion(ctx context.Context, arg GetCatalogBlueprintVersionParams) (GetCatalogBlueprintVersionRow, error) {
-	row := q.db.QueryRow(ctx, getCatalogBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
-	var i GetCatalogBlueprintVersionRow
-	err := row.Scan(
-		&i.Namespace,
-		&i.Name,
-		&i.Number,
-		&i.DraftVersion,
-		&i.DocumentJson,
-		&i.ExprVersion,
-		&i.PublishedBy,
-		&i.PublishedAtMs,
-		&i.Retired,
-	)
-	return i, err
-}
-
-const getCatalogBlueprintVersionOfDraft = `-- name: GetCatalogBlueprintVersionOfDraft :one
-SELECT v.number
-FROM catalog_blueprint_versions AS v
-JOIN namespaces AS n ON n.id = v.namespace_id
-WHERE n.name = $1 AND v.name = $2 AND v.draft_version = $3
-`
-
-type GetCatalogBlueprintVersionOfDraftParams struct {
-	Namespace    string
-	Name         string
-	DraftVersion int64
-}
-
-// The number of the version that published a draft version. No row means the
-// draft version has no version.
-func (q *Queries) GetCatalogBlueprintVersionOfDraft(ctx context.Context, arg GetCatalogBlueprintVersionOfDraftParams) (int64, error) {
-	row := q.db.QueryRow(ctx, getCatalogBlueprintVersionOfDraft, arg.Namespace, arg.Name, arg.DraftVersion)
-	var number int64
-	err := row.Scan(&number)
-	return number, err
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
@@ -8595,6 +8549,95 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 	return i, err
 }
 
+const getSelfServiceBlueprintDraft = `-- name: GetSelfServiceBlueprintDraft :one
+SELECT b.draft_version, b.draft_json
+FROM self_service_blueprints AS b
+JOIN namespaces AS n ON n.id = b.namespace_id
+WHERE n.name = $1 AND b.name = $2
+`
+
+type GetSelfServiceBlueprintDraftParams struct {
+	Namespace string
+	Name      string
+}
+
+type GetSelfServiceBlueprintDraftRow struct {
+	DraftVersion int64
+	DraftJson    string
+}
+
+func (q *Queries) GetSelfServiceBlueprintDraft(ctx context.Context, arg GetSelfServiceBlueprintDraftParams) (GetSelfServiceBlueprintDraftRow, error) {
+	row := q.db.QueryRow(ctx, getSelfServiceBlueprintDraft, arg.Namespace, arg.Name)
+	var i GetSelfServiceBlueprintDraftRow
+	err := row.Scan(&i.DraftVersion, &i.DraftJson)
+	return i, err
+}
+
+const getSelfServiceBlueprintVersion = `-- name: GetSelfServiceBlueprintVersion :one
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM self_service_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.name = $2 AND v.number = $3
+`
+
+type GetSelfServiceBlueprintVersionParams struct {
+	Namespace string
+	Name      string
+	Number    int64
+}
+
+type GetSelfServiceBlueprintVersionRow struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
+func (q *Queries) GetSelfServiceBlueprintVersion(ctx context.Context, arg GetSelfServiceBlueprintVersionParams) (GetSelfServiceBlueprintVersionRow, error) {
+	row := q.db.QueryRow(ctx, getSelfServiceBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
+	var i GetSelfServiceBlueprintVersionRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Name,
+		&i.Number,
+		&i.DraftVersion,
+		&i.DocumentJson,
+		&i.ExprVersion,
+		&i.PublishedBy,
+		&i.PublishedAtMs,
+		&i.Retired,
+	)
+	return i, err
+}
+
+const getSelfServiceBlueprintVersionOfDraft = `-- name: GetSelfServiceBlueprintVersionOfDraft :one
+SELECT v.number
+FROM self_service_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.name = $2 AND v.draft_version = $3
+`
+
+type GetSelfServiceBlueprintVersionOfDraftParams struct {
+	Namespace    string
+	Name         string
+	DraftVersion int64
+}
+
+// The number of the version that published a draft version. No row means the
+// draft version has no version.
+func (q *Queries) GetSelfServiceBlueprintVersionOfDraft(ctx context.Context, arg GetSelfServiceBlueprintVersionOfDraftParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getSelfServiceBlueprintVersionOfDraft, arg.Namespace, arg.Name, arg.DraftVersion)
+	var number int64
+	err := row.Scan(&number)
+	return number, err
+}
+
 const getSession = `-- name: GetSession :one
 SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
   generation
@@ -9936,73 +9979,6 @@ func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams
 		arg.UnitID,
 		arg.NamespaceID,
 		arg.PurgedAtMs,
-	)
-	return err
-}
-
-const insertCatalogBlueprint = `-- name: InsertCatalogBlueprint :execrows
-INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
-VALUES (
-    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
-    $2, 1, $3, $4
-)
-ON CONFLICT (namespace_id, name) DO NOTHING
-`
-
-type InsertCatalogBlueprintParams struct {
-	Namespace        string
-	Name             string
-	DraftJson        string
-	DraftUpdatedAtMs int64
-}
-
-// The caller checks the fence in the same transaction. A blueprint of the same
-// name in the namespace is not written.
-func (q *Queries) InsertCatalogBlueprint(ctx context.Context, arg InsertCatalogBlueprintParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertCatalogBlueprint,
-		arg.Namespace,
-		arg.Name,
-		arg.DraftJson,
-		arg.DraftUpdatedAtMs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const insertCatalogBlueprintVersion = `-- name: InsertCatalogBlueprintVersion :exec
-INSERT INTO catalog_blueprint_versions (
-    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
-)
-VALUES (
-    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
-    $2, $3, $4, $5, $6,
-    $7, $8, 0
-)
-`
-
-type InsertCatalogBlueprintVersionParams struct {
-	Namespace     string
-	Name          string
-	Number        int64
-	DraftVersion  int64
-	DocumentJson  string
-	ExprVersion   string
-	PublishedBy   string
-	PublishedAtMs int64
-}
-
-func (q *Queries) InsertCatalogBlueprintVersion(ctx context.Context, arg InsertCatalogBlueprintVersionParams) error {
-	_, err := q.db.Exec(ctx, insertCatalogBlueprintVersion,
-		arg.Namespace,
-		arg.Name,
-		arg.Number,
-		arg.DraftVersion,
-		arg.DocumentJson,
-		arg.ExprVersion,
-		arg.PublishedBy,
-		arg.PublishedAtMs,
 	)
 	return err
 }
@@ -11724,6 +11700,73 @@ func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams
 	return result.RowsAffected(), nil
 }
 
+const insertSelfServiceBlueprint = `-- name: InsertSelfServiceBlueprint :execrows
+INSERT INTO self_service_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, 1, $3, $4
+)
+ON CONFLICT (namespace_id, name) DO NOTHING
+`
+
+type InsertSelfServiceBlueprintParams struct {
+	Namespace        string
+	Name             string
+	DraftJson        string
+	DraftUpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A blueprint of the same
+// name in the namespace is not written.
+func (q *Queries) InsertSelfServiceBlueprint(ctx context.Context, arg InsertSelfServiceBlueprintParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertSelfServiceBlueprint,
+		arg.Namespace,
+		arg.Name,
+		arg.DraftJson,
+		arg.DraftUpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertSelfServiceBlueprintVersion = `-- name: InsertSelfServiceBlueprintVersion :exec
+INSERT INTO self_service_blueprint_versions (
+    namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
+)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, $5, $6,
+    $7, $8, 0
+)
+`
+
+type InsertSelfServiceBlueprintVersionParams struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+}
+
+func (q *Queries) InsertSelfServiceBlueprintVersion(ctx context.Context, arg InsertSelfServiceBlueprintVersionParams) error {
+	_, err := q.db.Exec(ctx, insertSelfServiceBlueprintVersion,
+		arg.Namespace,
+		arg.Name,
+		arg.Number,
+		arg.DraftVersion,
+		arg.DocumentJson,
+		arg.ExprVersion,
+		arg.PublishedBy,
+		arg.PublishedAtMs,
+	)
+	return err
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
@@ -12118,22 +12161,22 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 	return i, err
 }
 
-const lastCatalogBlueprintVersion = `-- name: LastCatalogBlueprintVersion :one
+const lastSelfServiceBlueprintVersion = `-- name: LastSelfServiceBlueprintVersion :one
 SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
-FROM catalog_blueprint_versions AS v
+FROM self_service_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
 WHERE n.name = $1 AND v.name = $2
 `
 
-type LastCatalogBlueprintVersionParams struct {
+type LastSelfServiceBlueprintVersionParams struct {
 	Namespace string
 	Name      string
 }
 
 // The last published number of a blueprint, 0 for none. The caller holds the
 // write lock of the namespace, so the next number is exact.
-func (q *Queries) LastCatalogBlueprintVersion(ctx context.Context, arg LastCatalogBlueprintVersionParams) (int64, error) {
-	row := q.db.QueryRow(ctx, lastCatalogBlueprintVersion, arg.Namespace, arg.Name)
+func (q *Queries) LastSelfServiceBlueprintVersion(ctx context.Context, arg LastSelfServiceBlueprintVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lastSelfServiceBlueprintVersion, arg.Namespace, arg.Name)
 	var number int64
 	err := row.Scan(&number)
 	return number, err
@@ -12588,62 +12631,6 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 			&i.UnitID,
 			&i.NamespaceID,
 			&i.PurgedAtMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCatalogBlueprintLatest = `-- name: ListCatalogBlueprintLatest :many
-SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
-       v.published_at_ms, v.retired
-FROM catalog_blueprint_versions AS v
-JOIN namespaces AS n ON n.id = v.namespace_id
-WHERE n.name = $1
-  AND v.number = (
-      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
-      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
-  )
-ORDER BY v.name
-`
-
-type ListCatalogBlueprintLatestRow struct {
-	Namespace     string
-	Name          string
-	Number        int64
-	DraftVersion  int64
-	DocumentJson  string
-	ExprVersion   string
-	PublishedBy   string
-	PublishedAtMs int64
-	Retired       int64
-}
-
-// The newest published version of each blueprint of a namespace, by name.
-func (q *Queries) ListCatalogBlueprintLatest(ctx context.Context, namespace string) ([]ListCatalogBlueprintLatestRow, error) {
-	rows, err := q.db.Query(ctx, listCatalogBlueprintLatest, namespace)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListCatalogBlueprintLatestRow
-	for rows.Next() {
-		var i ListCatalogBlueprintLatestRow
-		if err := rows.Scan(
-			&i.Namespace,
-			&i.Name,
-			&i.Number,
-			&i.DraftVersion,
-			&i.DocumentJson,
-			&i.ExprVersion,
-			&i.PublishedBy,
-			&i.PublishedAtMs,
-			&i.Retired,
 		); err != nil {
 			return nil, err
 		}
@@ -16453,6 +16440,62 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const listSelfServiceBlueprintLatest = `-- name: ListSelfServiceBlueprintLatest :many
+SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
+       v.published_at_ms, v.retired
+FROM self_service_blueprint_versions AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1
+  AND v.number = (
+      SELECT MAX(w.number) FROM self_service_blueprint_versions AS w
+      WHERE w.namespace_id = v.namespace_id AND w.name = v.name
+  )
+ORDER BY v.name
+`
+
+type ListSelfServiceBlueprintLatestRow struct {
+	Namespace     string
+	Name          string
+	Number        int64
+	DraftVersion  int64
+	DocumentJson  string
+	ExprVersion   string
+	PublishedBy   string
+	PublishedAtMs int64
+	Retired       int64
+}
+
+// The newest published version of each blueprint of a namespace, by name.
+func (q *Queries) ListSelfServiceBlueprintLatest(ctx context.Context, namespace string) ([]ListSelfServiceBlueprintLatestRow, error) {
+	rows, err := q.db.Query(ctx, listSelfServiceBlueprintLatest, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSelfServiceBlueprintLatestRow
+	for rows.Next() {
+		var i ListSelfServiceBlueprintLatestRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.Number,
+			&i.DraftVersion,
+			&i.DocumentJson,
+			&i.ExprVersion,
+			&i.PublishedBy,
+			&i.PublishedAtMs,
+			&i.Retired,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSettings = `-- name: ListSettings :many
 SELECT key, value
 FROM settings
@@ -17657,6 +17700,21 @@ SELECT pg_advisory_xact_lock_shared(
 // hold several schemas do not wait for each other.
 func (q *Queries) LockNamespaceCreatesShared(ctx context.Context, namespace string) error {
 	_, err := q.db.Exec(ctx, lockNamespaceCreatesShared, namespace)
+	return err
+}
+
+const lockPasskeySignInChallenges = `-- name: LockPasskeySignInChallenges :exec
+SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign-in challenges', 0))
+`
+
+// Orders the starts of passkey sign-ins. A start counts the open challenges of
+// its source and of the installation, and then inserts its row. Without this
+// lock, starts at the same time in READ COMMITTED all count the same rows and
+// go over the caps. The lock holds until the end of the transaction. The key
+// holds the schema, so databases that hold several schemas do not wait for
+// each other.
+func (q *Queries) LockPasskeySignInChallenges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockPasskeySignInChallenges)
 	return err
 }
 
@@ -19176,28 +19234,6 @@ func (q *Queries) RestoreWorkspace(ctx context.Context, arg RestoreWorkspacePara
 	return result.RowsAffected(), nil
 }
 
-const retireCatalogBlueprintVersion = `-- name: RetireCatalogBlueprintVersion :execrows
-UPDATE catalog_blueprint_versions
-SET retired = 1
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
-  AND catalog_blueprint_versions.name = $2 AND number = $3
-`
-
-type RetireCatalogBlueprintVersionParams struct {
-	Namespace string
-	Name      string
-	Number    int64
-}
-
-// A retire of a retired version matches the row and changes nothing.
-func (q *Queries) RetireCatalogBlueprintVersion(ctx context.Context, arg RetireCatalogBlueprintVersionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, retireCatalogBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const retireRunner = `-- name: RetireRunner :exec
 UPDATE runners SET retired_at_ms = $1 WHERE id = $2
 `
@@ -19210,6 +19246,28 @@ type RetireRunnerParams struct {
 func (q *Queries) RetireRunner(ctx context.Context, arg RetireRunnerParams) error {
 	_, err := q.db.Exec(ctx, retireRunner, arg.RetiredAtMs, arg.ID)
 	return err
+}
+
+const retireSelfServiceBlueprintVersion = `-- name: RetireSelfServiceBlueprintVersion :execrows
+UPDATE self_service_blueprint_versions
+SET retired = 1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND self_service_blueprint_versions.name = $2 AND number = $3
+`
+
+type RetireSelfServiceBlueprintVersionParams struct {
+	Namespace string
+	Name      string
+	Number    int64
+}
+
+// A retire of a retired version matches the row and changes nothing.
+func (q *Queries) RetireSelfServiceBlueprintVersion(ctx context.Context, arg RetireSelfServiceBlueprintVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retireSelfServiceBlueprintVersion, arg.Namespace, arg.Name, arg.Number)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const reviewGrants = `-- name: ReviewGrants :many
@@ -19973,33 +20031,6 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 	return err
 }
 
-const setCatalogBlueprintExprVersion = `-- name: SetCatalogBlueprintExprVersion :execrows
-UPDATE catalog_blueprint_versions
-SET expr_version = $1
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
-  AND catalog_blueprint_versions.name = $3 AND number = $4
-`
-
-type SetCatalogBlueprintExprVersionParams struct {
-	ExprVersion string
-	Namespace   string
-	Name        string
-	Number      int64
-}
-
-func (q *Queries) SetCatalogBlueprintExprVersion(ctx context.Context, arg SetCatalogBlueprintExprVersionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setCatalogBlueprintExprVersion,
-		arg.ExprVersion,
-		arg.Namespace,
-		arg.Name,
-		arg.Number,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setDurableScheduleInterval = `-- name: SetDurableScheduleInterval :exec
 UPDATE durable_schedules
 SET interval_ms = $1::bigint,
@@ -20572,6 +20603,33 @@ func (q *Queries) SetRunnerDraining(ctx context.Context, arg SetRunnerDrainingPa
 	return err
 }
 
+const setSelfServiceBlueprintExprVersion = `-- name: SetSelfServiceBlueprintExprVersion :execrows
+UPDATE self_service_blueprint_versions
+SET expr_version = $1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $2)
+  AND self_service_blueprint_versions.name = $3 AND number = $4
+`
+
+type SetSelfServiceBlueprintExprVersionParams struct {
+	ExprVersion string
+	Namespace   string
+	Name        string
+	Number      int64
+}
+
+func (q *Queries) SetSelfServiceBlueprintExprVersion(ctx context.Context, arg SetSelfServiceBlueprintExprVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSelfServiceBlueprintExprVersion,
+		arg.ExprVersion,
+		arg.Namespace,
+		arg.Name,
+		arg.Number,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setSessionPolicy = `-- name: SetSessionPolicy :execrows
 UPDATE session_policy
 SET idle_ms = $1::bigint, max_length_ms = $2::bigint,
@@ -20922,7 +20980,7 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 }
 
 const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one
-DELETE FROM passkey_challenges WHERE digest = $1 RETURNING digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms
+DELETE FROM passkey_challenges WHERE digest = $1 RETURNING digest, kind, principal_id, pending_id, session_id, source, source_group, created_at_ms, expires_at_ms
 `
 
 // The delete of a challenge returns it, so that a challenge works once,
@@ -20936,6 +20994,8 @@ func (q *Queries) TakePasskeyChallenge(ctx context.Context, digest string) (Pass
 		&i.PrincipalID,
 		&i.PendingID,
 		&i.SessionID,
+		&i.Source,
+		&i.SourceGroup,
 		&i.CreatedAtMs,
 		&i.ExpiresAtMs,
 	)
@@ -21205,36 +21265,6 @@ func (q *Queries) UnlockSweep(ctx context.Context, class int32) (bool, error) {
 	var unlocked bool
 	err := row.Scan(&unlocked)
 	return unlocked, err
-}
-
-const updateCatalogBlueprintDraft = `-- name: UpdateCatalogBlueprintDraft :execrows
-UPDATE catalog_blueprints
-SET draft_version = draft_version + 1, draft_json = $1, draft_updated_at_ms = $2
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
-  AND catalog_blueprints.name = $4 AND draft_version = $5
-`
-
-type UpdateCatalogBlueprintDraftParams struct {
-	DraftJson        string
-	DraftUpdatedAtMs int64
-	Namespace        string
-	Name             string
-	DraftVersion     int64
-}
-
-// The draft changes only at the version that the caller read.
-func (q *Queries) UpdateCatalogBlueprintDraft(ctx context.Context, arg UpdateCatalogBlueprintDraftParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateCatalogBlueprintDraft,
-		arg.DraftJson,
-		arg.DraftUpdatedAtMs,
-		arg.Namespace,
-		arg.Name,
-		arg.DraftVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const updateExists = `-- name: UpdateExists :one
@@ -21793,6 +21823,36 @@ func (q *Queries) UpdateRunnerPool(ctx context.Context, arg UpdateRunnerPoolPara
 		arg.ID,
 	)
 	return err
+}
+
+const updateSelfServiceBlueprintDraft = `-- name: UpdateSelfServiceBlueprintDraft :execrows
+UPDATE self_service_blueprints
+SET draft_version = draft_version + 1, draft_json = $1, draft_updated_at_ms = $2
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+  AND self_service_blueprints.name = $4 AND draft_version = $5
+`
+
+type UpdateSelfServiceBlueprintDraftParams struct {
+	DraftJson        string
+	DraftUpdatedAtMs int64
+	Namespace        string
+	Name             string
+	DraftVersion     int64
+}
+
+// The draft changes only at the version that the caller read.
+func (q *Queries) UpdateSelfServiceBlueprintDraft(ctx context.Context, arg UpdateSelfServiceBlueprintDraftParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSelfServiceBlueprintDraft,
+		arg.DraftJson,
+		arg.DraftUpdatedAtMs,
+		arg.Namespace,
+		arg.Name,
+		arg.DraftVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSignInProvider = `-- name: UpdateSignInProvider :execrows

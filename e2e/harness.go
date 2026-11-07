@@ -1104,6 +1104,39 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	e.createNamespaceThroughAPI(ctx, tb, name)
 }
 
+// CatchAllCollection is the collection that the catch-all placement rule of a
+// namespace of the harness names.
+const CatchAllCollection = "e2e-default"
+
+// SeedCatchAllPlacement makes the collection CatchAllCollection in the
+// namespace ns and a placement rule for Pulumi stacks of any project and any
+// name that names it. The server refuses a new stack that no rule places, so
+// each scenario that makes a stack through the CLI needs the rule. The
+// administrator token holds collection:create-unit on the collection.
+func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns string) {
+	tb.Helper()
+
+	base := "/api/dustpan/v1/namespaces/" + ns
+
+	for _, step := range []struct{ path, body string }{
+		{base + "/collections", `{"name":"` + CatchAllCollection + `"}`},
+		{
+			base + "/placement-rules",
+			`{"tool":"pulumi","project":"*","stack":"*","collection":"` + CatchAllCollection + `"}`,
+		},
+	} {
+		status, body, err := e.serverStatus(ctx, e.token, http.MethodPost, step.path, step.body)
+		if err != nil {
+			tb.Fatalf("POST %s: %v", step.path, err)
+		}
+
+		// 409: an earlier call made the collection or the rule, so the call is safe to repeat.
+		if status != http.StatusCreated && status != http.StatusConflict {
+			tb.Fatalf("POST %s answers %d, want %d (%s)", step.path, status, http.StatusCreated, body)
+		}
+	}
+}
+
 // CreateForeignNamespace stores a namespace whose primary installation is installationName, so a step can
 // prove what the server answers for a namespace that another installation owns.
 // The installation API creates namespaces in the server's own installation only,
@@ -1300,6 +1333,25 @@ func (e *Env) APIStatusAs(ctx context.Context, token, method, path, body string)
 	}
 
 	return resp.StatusCode, string(respBody), nil
+}
+
+// OpenStream sends an authenticated GET and returns the response before its
+// body ends, so a test reads a stream line by line while the server still
+// writes it. The caller closes the body.
+func (e *Env) OpenStream(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.URL+path, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build GET %s: %w", path, err)
+	}
+
+	req.Header.Set("Authorization", "token "+e.token)
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", path, err)
+	}
+
+	return resp, nil
 }
 
 // APIResponse is the status, headers and body of one harness request.
@@ -2718,6 +2770,8 @@ func (e *Env) createNamespaceThroughAPI(ctx context.Context, tb testing.TB, name
 	if doc.Name != name || doc.PrimaryInstallation != installationName || doc.FailoverVersion != 1 {
 		tb.Fatalf("namespace answers %+v, want %q in %q at version 1", doc, name, installationName)
 	}
+
+	e.SeedCatchAllPlacement(ctx, tb, name)
 }
 
 // tfeStatusAs is TFEStatus for one tfeCall.

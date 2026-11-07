@@ -108,7 +108,8 @@ func Fixed(status int, code, message string) error {
 }
 
 // MaxMessageBytes is the longest refusal text that an answer repeats. Refused
-// cuts the text of an error to this length.
+// cuts the text of an error to this length. A refusal of a manual lock holds
+// its removal route, so its cut uses refusal.MaxLockedTextBytes.
 const MaxMessageBytes = 300
 
 // New returns the answer of status, code and message, with the arguments that

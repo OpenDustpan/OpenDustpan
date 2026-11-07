@@ -2,11 +2,12 @@
 
 A job is work that the server asks an executor to do on one stack or workspace: a plan, an
 apply, a destroy or a refresh. The jobs API lets a person or a client start a
-plan job, read a job, its phases and the records of its phases.
+plan job, list jobs, read a job, its phases and the records of its phases, and read
+the log of a phase.
 
 This version starts plan jobs of OpenTofu workspaces on runners. The server defines the plan
 step of a Pulumi stack too, but no runner runs it yet. No route
-cancels, approves or lists jobs yet. The [drift API](drift-api.md) starts a drift
+cancels or approves jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
 
@@ -19,15 +20,23 @@ access token or a console session.
 | Method and path | Action | Answer |
 | --- | --- | --- |
 | `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan` on the workspace that the body names | The new job, with status 201 |
+| `GET /namespaces/{namespace}/jobs` | `namespace:read` on the namespace. The server also checks `job:read` on the stack or workspace of each job | A page of jobs, newest first |
 | `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
+| `GET /namespaces/{namespace}/jobs/{job_id}/logs/{phase}` | `namespace:read` on the namespace, `job:read` on the stack or workspace of the job, and `job:read-logs` on the same object | The log of the phase, as a stream |
 
 The server serves the `POST` route only when it has the stores of runners, the
-inventory and the gates. Without them, the server serves the `GET` route only.
+inventory and the gates. Without them, the server serves the `GET` routes only. The
+server serves the log route only when it has the stores that a log read needs: the
+job store with its records, the blob store and the item keys.
 
 A caller who cannot read the job gets the same 404 as for a job that does not
 exist. The answer never tells that the job exists. This holds for a job ID that
 is not valid, a job of another namespace than the one in the path, and a
 caller who lacks `namespace:read` or `job:read`.
+
+A caller who has `job:read` but not `job:read-logs` on the unit of the job gets 403 with the code
+`access.denied` from the log route. The caller can see that the job exists, so the
+answer does not hide it.
 
 Any method other than `GET` on the path of one job gets 405.
 
@@ -133,6 +142,86 @@ The `errorCode` is a stable code for a program.
 | 422 | `job.unsupported` | The operation or the tool is not available in this version. The namespace has no default pool, or has more than one. The request names no code location. |
 | 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |
 
+## List jobs
+
+`GET /namespaces/{namespace}/jobs` answers a page of the jobs of the namespace,
+newest first. The page holds only the jobs whose stack or workspace the caller
+can read with `job:read`. A job that the caller cannot read is not in the page.
+Each job has the form of [the job document](#the-job-document).
+
+| Query value | Meaning |
+| --- | --- |
+| `unit` | Keep the jobs of the stack or workspace with this unit ID |
+| `status` | Keep the jobs in this state, for example `running` or `failed`. Give the value more than once to keep the jobs in any of the states |
+| `purpose` | Keep the jobs with this purpose. The only value is `drift-check` |
+| `trigger` | Keep the jobs that the run trigger with this ID started |
+| `pageSize` | The largest number of jobs on the page, from 1 to 200. The default is 50 |
+| `pageToken` | The `nextPageToken` of the page before, for the same query |
+
+The answer is `{"jobs": [...], "nextPageToken": "..."}`. The field `nextPageToken`
+is not in the answer of the last page. The token is opaque: the server seals its cursor, so a token never names a job. A token works for the query that made it. A
+token that was changed, or that another query made, gets 400 with the code
+`request.page-token-invalid`. A value that is not valid gets 400 with the code
+`request.invalid-query`. One request reads at most 2,000 jobs from the store. When it
+reaches that limit, the page can hold fewer jobs than `pageSize`, and it still has a
+`nextPageToken`. Continue with the token.
+
+## Read a job log
+
+`GET /namespaces/{namespace}/jobs/{job_id}/logs/{phase}` streams the log of one
+phase. The `phase` is `plan`, `apply` or `deliver`. The log is the logs of the
+steps of the phase, in the order of the step records.
+
+The answer has the content type `application/x-ndjson`: one JSON object on each
+line. Each line of the log is one entry:
+
+```json
+{"seq": 1, "step": "plan", "text": "Initializing...\n"}
+```
+
+- `seq` counts the entries of the phase from 1. A line that is longer than
+  16 KiB is in more than one entry. A byte that is not UTF-8 is in `text` as
+  U+FFFD.
+- A last line with no newline is sent when the log of its step closes.
+
+When the phase runs, the stream stays open and sends new entries when they are
+stored. When the phase ended and the stream sent all of the log, the last line is
+`{"done": true, "last": 2}`, where `last` is the `seq` of the last entry. A stream
+that ends with no `done` line is not complete.
+
+To continue after a break, send the query value `after` with the `seq` of the last
+entry that the client has. The stream starts with the next entry. The default is
+`0`. A value that is not a whole number from 0 gets 400 with the code
+`request.invalid-query`.
+
+The server checks each chunk of the log before it sends the bytes of the chunk.
+A stream has these limits:
+
+- A stream lives at most 10 minutes. At that limit, the last line is
+  `{"done": false, "last": 2, "resume": true}`. Open the stream again with
+  `?after=2`, where `2` is the `last` value.
+- When the server stops, the stream ends with the same `resume` line.
+- The server sets a time limit of 30 seconds on each write. A client that does
+  not read ends its stream at that limit.
+- The server checks `namespace:read`, `job:read` and `job:read-logs` again at each
+  poll. If the caller lost one of them, the stream ends with an error line with
+  the reason `access.denied`.
+- A principal can have 8 open streams, and the server can have 256. A stream over
+  a limit gets 429 with the code `job.limit`. Close a stream and try again.
+
+When a chunk fails its check, or the log was redacted, the stream ends with the line
+`{"error": {"reason": "...", "message": "..."}}` and no `done` line. The status is
+200 by then, so a client must read the last line. The `reason` is a code of the catalog. The server never sends the bytes
+of a chunk that failed its check.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.invalid-query` | The `after` value is not valid |
+| 403 | `access.denied` | The caller has `job:read` but lacks `job:read-logs` |
+| 429 | `job.limit` | The principal has 8 open log streams, or the server has 256 |
+| 404 | `job.not-found` | The namespace or the job does not exist in the path, the phase is not `plan`, `apply` or `deliver`, or the caller cannot read the job |
+| 404 | `job.log-not-available` | The phase did not start, so it has no log yet |
+
 ## What the server does with a job on its own
 
 The server runs the schedule `job.reconcile` once each minute. One instance
@@ -180,7 +269,7 @@ schedule.
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |
 | `startedBy`, `agent`, `agentMode` | Who started the job, and the agent that acted for them |
-| `source` | Where the start came from: `api`, `agent`, `catalog`, `forge`, `schedule` or `trigger` |
+| `source` | Where the start came from: `api`, `agent`, `self-service`, `forge`, `schedule` or `trigger` |
 | `breakGlass` | `reason` and `freeze`, when the job started through an active change freeze |
 | `trigger` | `id` of the trigger that started the job, and `saver`, the subject of its last saver at the start. The field is not there when no trigger started the job. See the [triggers guide](../guides/run-triggers.md). |
 | `delivery` | The result of the deliver phase of a write-back job |

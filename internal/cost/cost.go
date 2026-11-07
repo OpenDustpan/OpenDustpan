@@ -95,7 +95,7 @@ type ResourceCost struct {
 }
 
 // Subject names what an estimate is for: the plan of a phase of a job, or
-// a version of a blueprint in the Catalog. Exactly one of Job and
+// a version of a blueprint in Self-service. Exactly one of Job and
 // Blueprint is set.
 type Subject struct {
 	Job              string
@@ -176,7 +176,7 @@ func (e Estimate) Origin() Origin {
 }
 
 // Delta returns After minus Before: the change of the cost of a month,
-// "+EUR 31.20 a month" in the work order and the Catalog. It returns
+// "+EUR 31.20 a month" in the work order and Self-service. It returns
 // ErrCurrencyMismatch when the sums are in two currencies, and ErrInvalid
 // when the difference does not fit.
 func (e Estimate) Delta() (Money, error) {

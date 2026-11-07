@@ -425,6 +425,26 @@ type notFoundWriter struct {
 	notFound bool
 }
 
+// FlushError sends the data written so far to the client, so a stream reaches it
+// before the handler ends. It does not expose the other optional methods of
+// the writer below, such as Hijack.
+func (c *notFoundWriter) FlushError() error {
+	if err := http.NewResponseController(c.ResponseWriter).Flush(); err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+
+	return nil
+}
+
+// SetWriteDeadline limits the time of the next writes of a stream.
+func (c *notFoundWriter) SetWriteDeadline(t time.Time) error {
+	if err := http.NewResponseController(c.ResponseWriter).SetWriteDeadline(t); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
+	return nil
+}
+
 // WriteHeader swallows a 404 without the JSON media type and records it.
 // Every other status passes through.
 func (c *notFoundWriter) WriteHeader(status int) {
@@ -639,7 +659,7 @@ func classifyIdentity(err error) (failure, bool) {
 // part of the contract: the first function that maps the error decides.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyStoreCheck, classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
+		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {

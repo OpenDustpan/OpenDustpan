@@ -658,6 +658,16 @@ func (s *Service) SignInDevAdministrator(
 	return s.signIn(ctx, e, in, Principal.validateDevAdministrator)
 }
 
+// SeedDemoPerson returns the person DemoSubject for the demo seed of
+// opendustpan dev, and makes it when none exists: a local person with no
+// grant and no group. It takes no subject, so it cannot make any other
+// principal. created is true when it made the person.
+func (s *Service) SeedDemoPerson(ctx context.Context, e audit.Entry, displayName string) (Principal, bool, error) {
+	in := SignInInput{Subject: DemoSubject, Source: SourceLocal, Names: []string{displayName}, Create: true}
+
+	return s.signIn(ctx, e, in, Principal.validateDemoPerson)
+}
+
 // signIn is SignInPrincipal. validate checks the principal that it makes.
 func (s *Service) signIn(
 	ctx context.Context, e audit.Entry, in SignInInput, validate func(Principal) error,

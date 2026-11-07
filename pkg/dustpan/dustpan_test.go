@@ -118,6 +118,8 @@ func (f fixture) createNamespace(t *testing.T, name, home string) {
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+
+	seedCatchAllPlacement(t, f.store, namespace.Name(name))
 }
 
 func (f fixture) do(t *testing.T, method, path, token, body string) (int, string) {

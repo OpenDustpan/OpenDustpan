@@ -3,8 +3,8 @@
 // kinds app (a GitHub App installation) and token (a fine-grained
 // personal access token).
 //
-// The adapter does Check, Head, ReadFile, Commit, FindCommit, OpenReview,
-// ReadReview, CloseReview and DeleteBranch now. Each other
+// The adapter does Check, Head, ReadFile, Compare, Commit, FindCommit,
+// OpenReview, ReadReview, CloseReview, DeleteBranch and SetStatus now. Each other
 // method returns forge.ErrUnsupported, and Capabilities does not list it, until
 // the method lands. Every request
 // goes through the egress rules: the address of the API passes the URL
@@ -30,6 +30,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
+
+// schemeHTTPS is the one scheme that the adapter accepts for an address.
+const schemeHTTPS = "https"
 
 // Config holds the settings of an Opener.
 type Config struct {
@@ -150,9 +153,24 @@ func (o *Opener) Open( //nolint:ireturn // The port returns the Forge interface.
 	}
 
 	f := &gitHub{
-		o: o, base: base, push: c.Push, auth: c.Auth, appID: "", installationID: "", token: "", key: nil,
-		mu: sync.Mutex{}, readTokens: map[string]readToken{}, owner: "", contents: contentsUnknown,
-		writes: contentsUnknown, pulls: contentsUnknown, identity: "",
+		o:              o,
+		base:           base,
+		push:           c.Push,
+		auth:           c.Auth,
+		appID:          "",
+		installationID: "",
+		token:          "",
+		key:            nil,
+		mu:             sync.Mutex{},
+		readTokens:     map[string]readToken{},
+		owner:          "",
+		contents:       contentsUnknown,
+		writes:         contentsUnknown,
+		pulls:          contentsUnknown,
+		statuses:       contentsUnknown,
+		issues:         contentsUnknown,
+		identity:       "",
+		identityID:     "",
 	}
 
 	switch c.Auth {
@@ -180,7 +198,7 @@ func (o *Opener) baseURL(raw string) (string, error) {
 	}
 
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.ForceQuery {
+	if err != nil || u.Scheme != schemeHTTPS || u.Host == "" || u.RawQuery != "" || u.ForceQuery {
 		return "", fmt.Errorf("%w: the GitHub API address must be an https address with no query", forge.ErrInvalid)
 	}
 
@@ -217,9 +235,14 @@ type gitHub struct {
 	contents   contentsAccess
 	writes     contentsAccess
 	pulls      contentsAccess
+	statuses   contentsAccess
+	issues     contentsAccess
 	// identity is the login that the connection commits as. FindCommit reads
 	// it once, see commitIdentity.
 	identity string
+	// identityID is the numeric ID of the account of identity. UpsertComment
+	// reads it once, see commentIdentity.
+	identityID string
 }
 
 // contentsAccess says whether an installation has the permission to read
@@ -244,7 +267,9 @@ const (
 // connection with push access and a Prover in the Config, unless the last Check showed an installation
 // without the permission to write the contents. Before a Check, the
 // permissions are not known, and the capabilities are listed. A token
-// connection always lists them, because a token shows no permissions.
+// connection always lists them, because a token shows no permissions. It lists
+// forge.CapStatus for a connection with push access, unless the last Check
+// showed an installation without the permission to write the commit statuses.
 func (f *gitHub) Capabilities() forge.Capabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -253,28 +278,15 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 	caps := forge.Capabilities{}
 
 	if !app || f.contents != contentsMissing {
-		caps = append(caps, forge.CapFiles)
+		caps = append(caps, forge.CapFiles, forge.CapCompare, forge.CapTree)
 	}
 
-	if f.push && canProve(f.o.prover) && (!app || f.writes != contentsMissing) {
-		caps = append(caps, forge.CapCommit)
-	}
-
-	if f.push && (!app || (f.writes != contentsMissing && f.pulls != contentsMissing)) {
-		caps = append(caps, forge.CapReview)
-	}
-
-	return caps
+	return append(caps, f.pushCapabilities()...)
 }
 
 // unsupported returns the error of a method that the adapter does not have.
 func unsupported(method string) error {
 	return fmt.Errorf("%w: GitHub %s is not available yet", forge.ErrUnsupported, method)
-}
-
-// Compare returns forge.ErrUnsupported.
-func (*gitHub) Compare(context.Context, string, string, string, int64) (forge.Comparison, error) {
-	return forge.Comparison{}, unsupported("Compare")
 }
 
 // RepoToken returns forge.ErrUnsupported.
@@ -291,6 +303,36 @@ func (*gitHub) ParseEvent(context.Context, forge.EventRequest, [][]byte) (forge.
 // a token.
 func (*gitHub) RotateSelf(context.Context, time.Time) (forge.RotatedToken, error) {
 	return forge.RotatedToken{}, unsupported("RotateSelf")
+}
+
+// pushCapabilities lists the capabilities that need push access. The caller
+// holds the lock.
+func (f *gitHub) pushCapabilities() forge.Capabilities {
+	app := f.auth == forge.AuthApp
+
+	var caps forge.Capabilities
+
+	if !f.push {
+		return caps
+	}
+
+	if canProve(f.o.prover) && (!app || f.writes != contentsMissing) {
+		caps = append(caps, forge.CapCommit)
+	}
+
+	if !app || (f.writes != contentsMissing && f.pulls != contentsMissing) {
+		caps = append(caps, forge.CapReview)
+	}
+
+	if !app || f.statuses != contentsMissing {
+		caps = append(caps, forge.CapStatus)
+	}
+
+	if !app || f.issues != contentsMissing {
+		caps = append(caps, forge.CapComment)
+	}
+
+	return caps
 }
 
 // openApp reads the app parameters and the private key of an app connection.

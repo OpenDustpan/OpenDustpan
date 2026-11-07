@@ -237,7 +237,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, _ identity.Princi
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, http.StatusOK, resp)
+	h.writeJSON(ctx, w, resp)
 }
 
 // get serves GET /sinks/{sink_id}.
@@ -252,7 +252,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, http.StatusOK, toDocument(&s))
+	h.writeJSON(ctx, w, toDocument(&s))
 }
 
 // createBody is the body of a create. The fields are pointers so that a

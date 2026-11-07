@@ -1186,7 +1186,7 @@ func (k NotificationStore) Redeliver(ctx context.Context, id string, fence names
 			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
 		}
 
-		return nil
+		return finishCompletion(ctx, q, id)
 	})
 }
 

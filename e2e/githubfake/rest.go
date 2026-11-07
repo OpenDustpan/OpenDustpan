@@ -29,10 +29,16 @@ func (f *Fake) handler() http.Handler {
 	mux.HandleFunc("DELETE /installation/token", f.revokeInstallationToken)
 	mux.HandleFunc("GET /app", f.getApp)
 	mux.HandleFunc("GET /user", f.getUser)
+	mux.HandleFunc("GET /users/{login}", f.getAccount)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/trees/{sha}", f.getTree)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits", f.listCommits)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{ref...}", f.getCommit)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/compare/{spec...}", f.compare)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/statuses/{sha}", f.createStatus)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/issues/{first}/{second}", f.issuesGet)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues/{number}/comments", f.createComment)
+	mux.HandleFunc("PATCH /repos/{owner}/{repo}/issues/comments/{id}", f.patchComment)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues/comments/{id}/reactions", f.react)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/{ref...}", f.getRef)
 	mux.HandleFunc("POST /repos/{owner}/{repo}/git/refs", f.createRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", f.getContents)
@@ -237,6 +243,28 @@ func (f *Fake) getUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.writeJSON(w, http.StatusOK, wireAccount{ID: f.cfg.User.ID, Login: f.cfg.User.Login})
+}
+
+// getAccount answers the account with the login: the user of the token, the bot of
+// the app, and the person that AddComment uses. Any other login answers 404.
+func (f *Fake) getAccount(w http.ResponseWriter, r *http.Request) {
+	if !f.authorize(w, r, BearerInstallation, BearerUser) {
+		return
+	}
+
+	login := r.PathValue("login")
+
+	for _, a := range []Account{
+		f.cfg.User, {ID: BotAccountID, Login: f.AppLogin()}, {ID: OtherAccountID, Login: OtherAuthor},
+	} {
+		if a.Login == login {
+			f.writeJSON(w, http.StatusOK, wireAccount(a))
+
+			return
+		}
+	}
+
+	f.message(w, http.StatusNotFound, "Not Found")
 }
 
 // repoOf finds the repository of the path and checks that the credential has the
@@ -464,8 +492,20 @@ func (f *Fake) compare(w http.ResponseWriter, r *http.Request) {
 
 	f.writeJSON(w, http.StatusOK, map[string]any{
 		"status": status, "ahead_by": aheadBy, "behind_by": behindBy,
-		"merge_base_commit": map[string]string{"sha": mergeBase},
+		"merge_base_commit": map[string]string{"sha": mergeBase}, "files": rp.changedBetween(mergeBase, head, r),
 	})
+}
+
+// changedBetween returns the page of the files that changed from the commit
+// with the ID mergeBase to head. A merge base that the repository does not
+// have, for two lines of history that never meet, gives no file.
+func (r *repo) changedBetween(mergeBase string, head *commit, req *http.Request) []map[string]string {
+	mb := r.commits[mergeBase]
+	if mb == nil {
+		return []map[string]string{}
+	}
+
+	return pagedFiles(diffFiles(r, mb, head), req)
 }
 
 // refPrefix starts the full name of a branch.
@@ -656,7 +696,8 @@ func dirEntries(rp *repo, c *commit, dir string) []wireEntry {
 	for _, name := range names {
 		if kinds[name] == "" {
 			out = append(out, wireEntry{
-				Type: "dir", Name: name, Path: prefix + name, SHA: "", Size: 0, Encoding: nil, Content: nil,
+				Type: "dir", Name: name, Path: prefix + name, SHA: treeID(c, prefix+name), Size: 0, Encoding: nil,
+				Content: nil,
 			})
 
 			continue

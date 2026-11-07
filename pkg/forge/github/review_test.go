@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e/githubfake"
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forge/github"
@@ -92,6 +93,10 @@ func (c *canned) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 
 		return
+	}
+
+	for name, value := range a.header {
+		w.Header().Set(name, value)
 	}
 
 	w.WriteHeader(a.status)
@@ -247,7 +252,10 @@ func TestReadReviewRefusesAnswersThatFailACheck(t *testing.T) {
 		{"an address that is not https", func(p map[string]any) { p["html_url"] = "http://github.example/x" }},
 		{"an address with a script", func(p map[string]any) { p["html_url"] = "javascript:alert(1)" }},
 		{"an empty address", func(p map[string]any) { p["html_url"] = "" }},
-		{"an address with a password", func(p map[string]any) { p["html_url"] = "https://u:p@github.example/x" }},
+		{
+			"an address with a password",
+			func(p map[string]any) { p["html_url"] = fakecred.URL("https", "u", "p", "github.example", "/x") },
+		},
 		{"an address that is too long", func(p map[string]any) {
 			p["html_url"] = "https://github.example/" + strings.Repeat("a", 3000)
 		}},

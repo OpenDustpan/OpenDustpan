@@ -40,8 +40,8 @@ func sqliteLocalUserBackupTables() []sqliteBackupTable {
 // passkey ceremonies, which a backup leaves out.
 func sqlitePasskeyChallengeColumns() []string {
 	return []string{
-		backupColDigest, backupColKind, backupColPrincipalID, "pending_id", "session_id", backupColCreatedAtMs,
-		"expires_at_ms",
+		backupColDigest, backupColKind, backupColPrincipalID, "pending_id", "session_id", "source",
+		"source_group", backupColCreatedAtMs, "expires_at_ms",
 	}
 }
 

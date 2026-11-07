@@ -122,30 +122,6 @@ CREATE TABLE blob_purges (
     namespace_id text NOT NULL
 );
 
-CREATE TABLE catalog_blueprint_versions (
-    namespace_id text NOT NULL,
-    name text NOT NULL,
-    number bigint NOT NULL,
-    draft_version bigint NOT NULL,
-    document_json text NOT NULL,
-    expr_version text NOT NULL,
-    published_by text NOT NULL,
-    published_at_ms bigint NOT NULL,
-    retired bigint NOT NULL,
-    CONSTRAINT catalog_blueprint_versions_draft_version_check CHECK ((draft_version >= 1)),
-    CONSTRAINT catalog_blueprint_versions_number_check CHECK ((number >= 1)),
-    CONSTRAINT catalog_blueprint_versions_retired_check CHECK ((retired = ANY (ARRAY[(0)::bigint, (1)::bigint])))
-);
-
-CREATE TABLE catalog_blueprints (
-    namespace_id text NOT NULL,
-    name text NOT NULL,
-    draft_version bigint NOT NULL,
-    draft_json text NOT NULL,
-    draft_updated_at_ms bigint NOT NULL,
-    CONSTRAINT catalog_blueprints_draft_version_check CHECK ((draft_version >= 1))
-);
-
 CREATE TABLE checkpoints (
     update_id text NOT NULL,
     lease_digest bytea NOT NULL,
@@ -819,15 +795,21 @@ CREATE TABLE passkey_challenges (
     principal_id text DEFAULT ''::text NOT NULL,
     pending_id text DEFAULT ''::text NOT NULL,
     session_id text DEFAULT ''::text NOT NULL,
+    source text DEFAULT ''::text NOT NULL,
+    source_group text DEFAULT ''::text NOT NULL,
     created_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
     CONSTRAINT passkey_challenges_check CHECK (((expires_at_ms > created_at_ms) AND ((expires_at_ms - created_at_ms) <= 300000))),
     CONSTRAINT passkey_challenges_check1 CHECK (((kind = 'sign-in'::text) = (principal_id = ''::text))),
+    CONSTRAINT passkey_challenges_check2 CHECK (((kind = 'sign-in'::text) = (source <> ''::text))),
+    CONSTRAINT passkey_challenges_check3 CHECK (((kind = 'sign-in'::text) = (source_group <> ''::text))),
     CONSTRAINT passkey_challenges_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT passkey_challenges_kind_check CHECK ((kind = ANY (ARRAY['register'::text, 'sign-in'::text, 'second-factor'::text, 'fresh'::text]))),
     CONSTRAINT passkey_challenges_pending_id_check CHECK ((length(pending_id) <= 128)),
     CONSTRAINT passkey_challenges_principal_id_check CHECK ((length(principal_id) <= 128)),
-    CONSTRAINT passkey_challenges_session_id_check CHECK ((length(session_id) <= 128))
+    CONSTRAINT passkey_challenges_session_id_check CHECK ((length(session_id) <= 128)),
+    CONSTRAINT passkey_challenges_source_check CHECK (((length(source) <= 64) AND (source ~ '^[ -~]*$'::text))),
+    CONSTRAINT passkey_challenges_source_group_check CHECK (((length(source_group) <= 64) AND (source_group ~ '^[ -~]*$'::text)))
 );
 
 CREATE TABLE passkeys (
@@ -1068,6 +1050,30 @@ CREATE TABLE secret_keys (
     wrapper_id text NOT NULL,
     ciphertext bytea NOT NULL,
     created_at_ms bigint NOT NULL
+);
+
+CREATE TABLE self_service_blueprint_versions (
+    namespace_id text NOT NULL,
+    name text NOT NULL,
+    number bigint NOT NULL,
+    draft_version bigint NOT NULL,
+    document_json text NOT NULL,
+    expr_version text NOT NULL,
+    published_by text NOT NULL,
+    published_at_ms bigint NOT NULL,
+    retired bigint NOT NULL,
+    CONSTRAINT self_service_blueprint_versions_draft_version_check CHECK ((draft_version >= 1)),
+    CONSTRAINT self_service_blueprint_versions_number_check CHECK ((number >= 1)),
+    CONSTRAINT self_service_blueprint_versions_retired_check CHECK ((retired = ANY (ARRAY[(0)::bigint, (1)::bigint])))
+);
+
+CREATE TABLE self_service_blueprints (
+    namespace_id text NOT NULL,
+    name text NOT NULL,
+    draft_version bigint NOT NULL,
+    draft_json text NOT NULL,
+    draft_updated_at_ms bigint NOT NULL,
+    CONSTRAINT self_service_blueprints_draft_version_check CHECK ((draft_version >= 1))
 );
 
 CREATE TABLE session_policy (
@@ -1423,12 +1429,6 @@ ALTER TABLE ONLY audit_sink_leases
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);
 
-ALTER TABLE ONLY catalog_blueprint_versions
-    ADD CONSTRAINT catalog_blueprint_versions_pkey PRIMARY KEY (namespace_id, name, number);
-
-ALTER TABLE ONLY catalog_blueprints
-    ADD CONSTRAINT catalog_blueprints_pkey PRIMARY KEY (namespace_id, name);
-
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
 
@@ -1705,6 +1705,12 @@ ALTER TABLE ONLY saved_views
 ALTER TABLE ONLY secret_keys
     ADD CONSTRAINT secret_keys_pkey PRIMARY KEY (namespace, stack_id);
 
+ALTER TABLE ONLY self_service_blueprint_versions
+    ADD CONSTRAINT self_service_blueprint_versions_pkey PRIMARY KEY (namespace_id, name, number);
+
+ALTER TABLE ONLY self_service_blueprints
+    ADD CONSTRAINT self_service_blueprints_pkey PRIMARY KEY (namespace_id, name);
+
 ALTER TABLE ONLY session_policy
     ADD CONSTRAINT session_policy_pkey PRIMARY KEY (id);
 
@@ -1798,8 +1804,6 @@ CREATE INDEX access_tokens_principal ON access_tokens USING btree (principal_id,
 CREATE INDEX audit_entries_ns_time ON audit_entries USING btree (namespace, at_ms DESC, sequence DESC);
 
 CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLLATE "C", unit_id COLLATE "C");
-
-CREATE UNIQUE INDEX catalog_blueprint_versions_draft ON catalog_blueprint_versions USING btree (namespace_id, name, draft_version);
 
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
@@ -1913,6 +1917,10 @@ CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (n
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 
+CREATE INDEX passkey_challenges_source ON passkey_challenges USING btree (source, expires_at_ms);
+
+CREATE INDEX passkey_challenges_source_group ON passkey_challenges USING btree (source_group, expires_at_ms);
+
 CREATE INDEX passkeys_principal ON passkeys USING btree (principal_id, created_at_ms, id COLLATE "C");
 
 CREATE INDEX placement_rules_order ON placement_rules USING btree (namespace, "position");
@@ -1936,6 +1944,8 @@ CREATE UNIQUE INDEX runners_name ON runners USING btree (pool_id, name) WHERE (r
 CREATE INDEX saved_views_owner ON saved_views USING btree (owner);
 
 CREATE UNIQUE INDEX saved_views_owner_name ON saved_views USING btree (namespace_id, owner, name);
+
+CREATE UNIQUE INDEX self_service_blueprint_versions_draft ON self_service_blueprint_versions USING btree (namespace_id, name, draft_version);
 
 CREATE UNIQUE INDEX sessions_digest ON sessions USING btree (digest);
 
@@ -1971,12 +1981,6 @@ CREATE INDEX workspaces_live_name ON workspaces USING btree (namespace, name) WH
 
 ALTER TABLE ONLY access_tokens
     ADD CONSTRAINT access_tokens_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
-
-ALTER TABLE ONLY catalog_blueprint_versions
-    ADD CONSTRAINT catalog_blueprint_versions_namespace_id_name_fkey FOREIGN KEY (namespace_id, name) REFERENCES catalog_blueprints(namespace_id, name);
-
-ALTER TABLE ONLY catalog_blueprints
-    ADD CONSTRAINT catalog_blueprints_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;
@@ -2100,6 +2104,12 @@ ALTER TABLE ONLY saved_views
 
 ALTER TABLE ONLY secret_keys
     ADD CONSTRAINT secret_keys_namespace_fkey FOREIGN KEY (namespace) REFERENCES namespaces(name);
+
+ALTER TABLE ONLY self_service_blueprint_versions
+    ADD CONSTRAINT self_service_blueprint_versions_namespace_id_name_fkey FOREIGN KEY (namespace_id, name) REFERENCES self_service_blueprints(namespace_id, name);
+
+ALTER TABLE ONLY self_service_blueprints
+    ADD CONSTRAINT self_service_blueprints_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY sessions
     ADD CONSTRAINT sessions_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);

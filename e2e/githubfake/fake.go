@@ -23,9 +23,25 @@
 //	POST   /app/installations/{id}/access_tokens       an installation token (JWT)
 //	DELETE /installation/token                         revoke an installation token
 //	GET    /user                                       the user of a token
+//	GET    /users/{login}                              the user of a token, the bot of the app, or the person of
+//
+// AddComment
+//
 //	GET    /repos/{owner}/{repo}/commits?sha=&since=   the commits of a ref, newest first, with page and per_page
 //	GET    /repos/{owner}/{repo}/commits/{ref}         one commit by branch, tag or ID
-//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base
+//	GET    /repos/{owner}/{repo}/compare/{base}...{head} how head and base relate, with the merge base and the changed
+//
+// files (page, per_page)
+//
+//	POST   /repos/{owner}/{repo}/statuses/{sha}        a status on a commit (permission statuses)
+//	GET    /repos/{owner}/{repo}/issues/{n}/comments   the comments of a pull request, with page and per_page
+//
+// (permission issues)
+//
+//	POST   /repos/{owner}/{repo}/issues/{n}/comments   a comment on a pull request (permission issues)
+//	GET    /repos/{owner}/{repo}/issues/comments/{id}  one comment
+//	PATCH  /repos/{owner}/{repo}/issues/comments/{id}  the text of a comment of the same account
+//	POST   /repos/{owner}/{repo}/issues/comments/{id}/reactions a reaction: 201 when new, 200 when it exists
 //	GET    /repos/{owner}/{repo}/git/ref/heads/{name}  one branch
 //	POST   /repos/{owner}/{repo}/git/refs              a new branch at a commit
 //	GET    /repos/{owner}/{repo}/contents/{path}?ref=  a file, or a directory listing

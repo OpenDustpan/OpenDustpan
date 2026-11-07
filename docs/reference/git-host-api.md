@@ -77,20 +77,28 @@ A check:
 {
   "account": {"id": "99", "login": "acme-org", "expiresAt": null, "noExpiry": false,
               "scopes": ["contents:read", "metadata:read"]},
-  "capabilities": ["files"],
-  "missing": {"write-back": ["compare", "commit"], "catalog": []}
+  "capabilities": ["files", "compare"],
+  "missing": {"write-back": ["commit"], "self-service": []}
 }
 ```
 
 `missing` has one list for each of the features `write-back`,
-`write-back-review`, `fetch`, `runner-git`, `catalog` and `cause-diff`. The list
+`write-back-review`, `fetch`, `runner-git`, `self-service` and `cause-diff`. The list
 of a feature that the connection can serve is empty.
 
 For an app, `scopes` lists the permissions of the installation, for example
-`contents:write`, `metadata:read` and `pull_requests:write`. The capability
-`commit` needs `contents:write`. The capability `review` needs `contents:write`
-and `pull_requests:write`. See the guide "Connect GitHub" for the permissions of
-the app.
+`contents:write`, `metadata:read`, `pull_requests:write`, `statuses:write` and
+`issues:write`. The capabilities `files`, `compare` and `tree` need
+`contents:read`. The capability `commit` needs `contents:write`. The capability
+`review` needs `contents:write` and `pull_requests:write`. The capability
+`status` needs `statuses:write`: the app permission "Commit statuses" with the
+access "Read and write". The capability `comment` needs `issues:write`: the app
+permission "Issues" with the access "Read and write". GitHub keeps the comments
+of a pull request in the issues. The server reads up to 1000 comments of a pull
+request to find its own comment, so a pull request with more comments cannot get
+a comment of the server. A connection with no push access has no
+`commit`, no `review`, no `status` and no `comment`. See the guide "Connect
+GitHub" for the permissions of the app.
 
 ## Errors
 

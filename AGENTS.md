@@ -37,6 +37,10 @@ Consider a change done only when `make check` passes with zero findings:
   comment that gives a real reason. The target also fails on a dependency
   with a forbidden, restricted or unknown license (for example GPL or AGPL).
 - `make trufflehog` finds no secret in the Git history.
+  A test builds a fake credential with `internal/fakecred`, so that the text
+  `user:pass@` is not in the source. A raw fake credential that must stay gets
+  `trufflehog:ignore` and a reason on its line. Do not add a new path to
+  `.trufflehog-exclude-paths.txt`.
 - `make licenses` finds a license file for each module that the binary links.
   The release archives and the container image ship these files.
 - `go test -race ./...` passes, including the conformance suites. When you run
@@ -117,9 +121,9 @@ internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
   agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
-  calendar/, catalog/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/
+  calendar/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/, selfservice/
                        features with their own package and suite (<name>test/)
-  expr/                the built-in Expr engine (catalog.Evaluator); the only package that imports the Expr library
+  expr/                the built-in Expr engine (selfservice.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
   breakglass/, graph/, history/, store/, blob/, notify/

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"slices"
 	"strings"
@@ -226,7 +227,7 @@ type Forge interface {
 }
 
 // Files reads the code of a repository. Write-back, triggers, the change
-// order review and the request files of the Catalog use it.
+// order review and the request files of Self-service use it.
 type Files interface {
 	// Head returns the commit at the head of the branch or tag ref. It
 	// returns ErrNotFound for a repository or a ref that does not exist.
@@ -236,10 +237,23 @@ type Files interface {
 	// file, and ErrTooLarge for a file above limit bytes.
 	ReadFile(ctx context.Context, repo, commit, filePath string, limit int64) (File, error)
 	// Compare returns the files that changed from base to head, the patch
-	// up to limit bytes, and whether base is an ancestor of head. A patch
-	// above limit answers its first part with Truncated set. It returns
-	// ErrNotFound for a missing repository or commit.
+	// up to limit bytes, and whether base is an ancestor of head. Base and
+	// head are full commit IDs. A patch above limit answers its first part
+	// with Truncated set, and Files still lists every changed file. It
+	// returns ErrInvalid for a commit ID that fails ValidateCommitID or a
+	// limit that is not above zero, before any call, ErrNotFound for a
+	// missing repository or commit, and ErrTooLarge when the changes have
+	// more files than the adapter lists.
 	Compare(ctx context.Context, repo, base, head string, limit int64) (Comparison, error)
+	// Tree lists the direct children of the directory dir at commit, which
+	// is a full commit ID, sorted by name. dir is empty for the root of the
+	// repository, or a relative clean path. At most limit entries are
+	// listed: a directory with more entries is ErrTooLarge, never a part of
+	// the list. Each entry is inside dir. It returns ErrInvalid for a dir,
+	// a commit ID or a limit (below one, or above MaxTreeEntries) that fails
+	// the checks, before any call, and ErrNotFound for a missing repository,
+	// commit or directory, and for a dir that is a file.
+	Tree(ctx context.Context, repo, commit, dir string, limit int) ([]TreeEntry, error)
 }
 
 // Commits writes to a repository through the API of the forge, never with
@@ -281,8 +295,13 @@ type Commits interface {
 }
 
 // Reviews manages review requests: a pull request of GitHub or a merge
-// request of GitLab. Write-back uses it.
+// request of GitLab. Write-back uses it. It holds Statuses and Comments,
+// because the status of the head commit and the comment are how a rule of the
+// Git host and a person see the result of the server for a review request.
 type Reviews interface {
+	Statuses
+	Comments
+
 	// OpenReview opens a review request from req.Branch into req.Target.
 	// When an open review request for the same req.Branch and the same
 	// req.Target exists, it returns that one and opens no second one. When
@@ -326,6 +345,52 @@ type Reviews interface {
 	// permission. It returns ErrNotFound for a missing repository or branch,
 	// so a caller that wants an idempotent delete ignores ErrNotFound.
 	DeleteBranch(ctx context.Context, repo, branch string) error
+}
+
+// Statuses sets the commit status of a review request. The review request
+// feature uses it, so that a rule of the Git host can require the result of
+// the server.
+type Statuses interface {
+	// SetStatus sets the status s on the commit sha, which is a full commit
+	// ID. A commit has one current status for each s.Context: a second call
+	// with the same context replaces the first, and a call with another
+	// context leaves it. It returns ErrInvalid for a status that fails
+	// ValidateStatus or a commit ID that fails ValidateCommitID, before any
+	// call, ErrNotFound for a missing repository or commit, ErrRefused when
+	// the credential cannot write statuses or the Git host refuses the
+	// status, and ErrUnsupported for a connection that Capabilities does not
+	// list CapStatus for.
+	SetStatus(ctx context.Context, repo, sha string, s Status) error
+}
+
+// Comments writes the comment of the server on a review request. The comment
+// has a hidden marker, so that the server finds it again and edits it, and never
+// makes a second one.
+type Comments interface {
+	// UpsertComment finds the comment of the connection on the review request
+	// reviewID that has the marker req.Marker, and edits it. When there is
+	// none, it makes one. A comment of another account is never edited, also
+	// when its text has the marker, and a comment of the connection without
+	// the marker is never edited. A text above MaxCommentBytes is cut and has
+	// a notice, and Comment.Truncated is set. It returns ErrInvalid for a
+	// request that fails ValidateComment or an ID that is not a review number,
+	// before any call, ErrNotFound for a missing repository or review request,
+	// ErrRefused when the credential cannot write comments or the Git host
+	// refuses the comment (for example a locked conversation), ErrTooLarge
+	// when the review request has more comments than the adapter reads, and
+	// ErrUnsupported for a connection that Capabilities does not list
+	// CapComment for.
+	UpsertComment(ctx context.Context, repo, reviewID string, req CommentRequest) (Comment, error)
+	// ReadComment returns the comment commentID of the repository. It returns
+	// ErrInvalid for an ID that is not a number, before any call, and
+	// ErrNotFound for a comment that does not exist.
+	ReadComment(ctx context.Context, repo, commentID string) (Comment, error)
+	// React adds the reaction r of the connection to the comment commentID.
+	// It is idempotent: a reaction that the connection made already is nil.
+	// It returns ErrInvalid for a reaction that is not known or an ID that is
+	// not a number, before any call, and ErrNotFound for a comment that does
+	// not exist.
+	React(ctx context.Context, repo, commentID string, r Reaction) error
 }
 
 // Tokens gives a token for the git protocol. The source fetch of the server
@@ -675,6 +740,280 @@ type Comparison struct {
 	BaseIsAncestor bool
 }
 
+// Limits of the comments and of the tree reads.
+const (
+	// MaxCommentBytes is the most bytes of a comment, the marker and a notice
+	// of a cut included.
+	MaxCommentBytes = 65536
+	// MaxCommentMarkerBytes is the most bytes of the key of a marker.
+	MaxCommentMarkerBytes = 64
+	// MaxTreeEntries is the most entries that Tree lists.
+	MaxTreeEntries = 1000
+	// CommentMarkerPrefix starts the hidden marker line of each comment of the
+	// server.
+	CommentMarkerPrefix = "<!-- opendustpan:"
+	commentMarkerSuffix = " -->"
+	// CommentCutNotice ends a comment that was cut to MaxCommentBytes.
+	CommentCutNotice = "\n\n_The text is cut: it has more than 65536 bytes._"
+)
+
+// CommentRequest asks for the comment of the server with the key Marker. The
+// key names one comment, for example "plan": a second call with the same key
+// edits the comment. Body is Markdown.
+type CommentRequest struct {
+	Marker string
+	Body   string
+}
+
+// Comment is a comment on a review request. Body is the text as the Git host
+// shows it, with the marker line. Truncated is set when UpsertComment cut the
+// text of the request.
+type Comment struct {
+	ID        string
+	ReviewID  string
+	URL       string
+	AuthorID  string
+	Body      string
+	Truncated bool
+}
+
+// Reaction is a reaction to a comment.
+type Reaction string
+
+// The reactions. They are the ones that GitHub has; a forge that has fewer
+// refuses the others with ErrInvalid.
+const (
+	ReactionPlusOne  Reaction = "+1"
+	ReactionMinusOne Reaction = "-1"
+	ReactionLaugh    Reaction = "laugh"
+	ReactionConfused Reaction = "confused"
+	ReactionHeart    Reaction = "heart"
+	ReactionHooray   Reaction = "hooray"
+	ReactionRocket   Reaction = "rocket"
+	ReactionEyes     Reaction = "eyes"
+)
+
+// ValidateReaction checks r. It returns an error that wraps ErrInvalid.
+func ValidateReaction(r Reaction) error {
+	switch r {
+	case ReactionPlusOne, ReactionMinusOne, ReactionLaugh, ReactionConfused, ReactionHeart, ReactionHooray,
+		ReactionRocket, ReactionEyes:
+		return nil
+	}
+
+	return fmt.Errorf("%w: the reaction %q is not known", ErrInvalid, string(r))
+}
+
+// CommentMarker returns the hidden marker line for the key: an HTML comment
+// that the Git host does not show. It returns an error that wraps ErrInvalid
+// for a key that is not 1 to MaxCommentMarkerBytes characters of a-z, 0-9 and
+// "._-", starting with a letter or a digit.
+func CommentMarker(key string) (string, error) {
+	if !validMarkerKey(key) {
+		return "", fmt.Errorf(
+			"%w: the comment marker key has 1 to %d characters of a-z, 0-9 and \"._-\", and starts with a letter or a digit",
+			ErrInvalid,
+			MaxCommentMarkerBytes,
+		)
+	}
+
+	return CommentMarkerPrefix + key + commentMarkerSuffix, nil
+}
+
+// validMarkerKey reports whether key is a key that CommentMarker accepts.
+func validMarkerKey(key string) bool {
+	if key == "" || len(key) > MaxCommentMarkerBytes || key[0] == '.' || key[0] == '-' || key[0] == '_' {
+		return false
+	}
+
+	for i := range len(key) {
+		if !markerChar(key[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// markerChar reports whether c is a character that a marker key may have.
+func markerChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
+}
+
+// ValidateComment checks req before an adapter calls the forge. It returns an
+// error that wraps ErrInvalid. A body above MaxCommentBytes is not an error:
+// CommentText cuts it.
+func ValidateComment(req CommentRequest) error {
+	if _, err := CommentMarker(req.Marker); err != nil {
+		return err
+	}
+
+	switch {
+	case !utf8.ValidString(req.Body):
+		return fmt.Errorf("%w: the comment text is not valid UTF-8", ErrInvalid)
+	case strings.TrimSpace(req.Body) == "":
+		return fmt.Errorf("%w: the comment text is empty", ErrInvalid)
+	}
+
+	for _, r := range req.Body {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return fmt.Errorf("%w: the comment text has a control character", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
+// CommentText returns the text that an adapter sends for req: the marker line,
+// a line break and the body. A text above MaxCommentBytes is cut at the end of a
+// character and ends with CommentCutNotice, so that the whole text has at most
+// MaxCommentBytes bytes. The boolean says whether it cut. It returns an error
+// that wraps ErrInvalid for a request that fails ValidateComment.
+func CommentText(req CommentRequest) (string, bool, error) {
+	if err := ValidateComment(req); err != nil {
+		return "", false, err
+	}
+
+	marker, err := CommentMarker(req.Marker)
+	if err != nil {
+		return "", false, err
+	}
+
+	text := marker + "\n" + req.Body
+	if len(text) <= MaxCommentBytes {
+		return text, false, nil
+	}
+
+	end := MaxCommentBytes - len(CommentCutNotice)
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+
+	return text[:end] + CommentCutNotice, true, nil
+}
+
+// TreeKind is the kind of an entry of a directory.
+type TreeKind string
+
+// The kinds of entries.
+const (
+	TreeFile      TreeKind = "file"
+	TreeDir       TreeKind = "dir"
+	TreeSymlink   TreeKind = "symlink"
+	TreeSubmodule TreeKind = "submodule"
+)
+
+// TreeEntry is one direct child of a directory. Path is the path from the root
+// of the repository, and Name the last part of it. ID is the object ID of the
+// blob, the tree or the commit of a submodule. Size is the size of a file and
+// zero for the other kinds.
+type TreeEntry struct {
+	Path string
+	Name string
+	Kind TreeKind
+	ID   string
+	Size int64
+}
+
+// StatusState is the state of a commit status.
+type StatusState string
+
+// The status states.
+const (
+	// StatusPending is a result that is not ready.
+	StatusPending StatusState = "pending"
+	// StatusSuccess is a result that passed.
+	StatusSuccess StatusState = "success"
+	// StatusFailure is a result that did not pass.
+	StatusFailure StatusState = "failure"
+	// StatusError is a result that the server could not make.
+	StatusError StatusState = "error"
+)
+
+// Status is the status of one commit for one context. Context names the
+// check, for example "opendustpan/plan", and a rule of the Git host can
+// require it. Description is one short line and can be empty. TargetURL is the
+// https address of the page that shows the result and can be empty.
+type Status struct {
+	State       StatusState
+	Context     string
+	Description string
+	TargetURL   string
+}
+
+// Limits of a Status.
+const (
+	// MaxStatusContextBytes is the most bytes of the context of a status.
+	MaxStatusContextBytes = 255
+	// MaxStatusDescriptionBytes is the most bytes of the description of a
+	// status.
+	MaxStatusDescriptionBytes = 140
+	// MaxStatusURLBytes is the most bytes of the address of a status.
+	MaxStatusURLBytes = 2048
+)
+
+// ValidateStatus checks s before an adapter calls the forge. It returns an
+// error that wraps ErrInvalid or ErrTooLarge. The context and the description
+// have valid UTF-8 and no control character, and the context is not empty. The
+// address is empty or an https address with a host and no user information.
+func ValidateStatus(s Status) error {
+	switch s.State {
+	case StatusPending, StatusSuccess, StatusFailure, StatusError:
+	default:
+		return fmt.Errorf("%w: the status state %q is not known", ErrInvalid, s.State)
+	}
+
+	if err := validateStatusText(s.Context, MaxStatusContextBytes); err != nil {
+		return fmt.Errorf("the status context: %w", err)
+	}
+
+	if strings.TrimSpace(s.Context) == "" {
+		return fmt.Errorf("the status context: %w: the text is empty", ErrInvalid)
+	}
+
+	if err := validateStatusText(s.Description, MaxStatusDescriptionBytes); err != nil {
+		return fmt.Errorf("the status description: %w", err)
+	}
+
+	return validateStatusURL(s.TargetURL)
+}
+
+// validateStatusText checks one line of text: at most limit bytes, valid
+// UTF-8 and no control character.
+func validateStatusText(text string, limit int) error {
+	switch {
+	case len(text) > limit:
+		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, limit)
+	case !utf8.ValidString(text):
+		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
+	case strings.ContainsFunc(text, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }):
+		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	}
+
+	return nil
+}
+
+// validateStatusURL checks the address of a status. An empty address is valid.
+func validateStatusURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	if len(raw) > MaxStatusURLBytes {
+		return fmt.Errorf("the status address: %w: the text has more than %d bytes", ErrTooLarge, MaxStatusURLBytes)
+	}
+
+	u, err := url.Parse(raw)
+
+	switch {
+	case err != nil, u.Scheme != "https", u.Host == "", u.User != nil, u.Fragment != "",
+		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }):
+		return fmt.Errorf("%w: the status address must be an https address with a host", ErrInvalid)
+	}
+
+	return nil
+}
+
 // ReviewRequest asks for a review request from Branch into Target.
 type ReviewRequest struct {
 	Branch string
@@ -901,6 +1240,12 @@ const (
 	CapCommit Capability = "commit"
 	// CapReview covers OpenReview, ReadReview, CloseReview and DeleteBranch.
 	CapReview Capability = "review"
+	// CapStatus covers SetStatus.
+	CapStatus Capability = "status"
+	// CapComment covers UpsertComment, ReadComment and React.
+	CapComment Capability = "comment"
+	// CapTree covers Tree.
+	CapTree Capability = "tree"
 	// CapGitAccess covers RepoToken: a token for the git protocol,
 	// with Scoped set or not.
 	CapGitAccess Capability = "git-access"
@@ -915,7 +1260,7 @@ const (
 )
 
 // Capabilities is the set of capabilities of a forge connection. With Push
-// not set, the list has no commit and no review.
+// not set, the list has no commit, no review, no status and no comment.
 type Capabilities []Capability
 
 // Has reports whether c holds capability.
@@ -955,8 +1300,8 @@ const (
 	// source of the job, for example a private Git module source. It never
 	// gives a long-lived token.
 	ConsumerRunnerGit Consumer = "runner-git"
-	// ConsumerCatalog reads the request files of the Catalog.
-	ConsumerCatalog Consumer = "catalog"
+	// ConsumerSelfService reads the request files of Self-service.
+	ConsumerSelfService Consumer = "self-service"
 	// ConsumerCauseDiff reads the cause diff of a change order.
 	ConsumerCauseDiff Consumer = "cause-diff"
 )
@@ -973,7 +1318,7 @@ func Needs(consumer Consumer) Capabilities {
 		return Capabilities{CapGitAccess}
 	case ConsumerRunnerGit:
 		return Capabilities{CapRepoToken}
-	case ConsumerCatalog:
+	case ConsumerSelfService:
 		return Capabilities{CapFiles}
 	case ConsumerCauseDiff:
 		return Capabilities{CapCompare}

@@ -83,6 +83,29 @@ func methods(secret []byte) []method {
 		{"DeleteBranch", forge.CapReview, func(ctx context.Context, f forge.Forge, repo string) error {
 			return f.DeleteBranch(ctx, repo, "dustpan/j-1")
 		}},
+		{"SetStatus", forge.CapStatus, func(ctx context.Context, f forge.Forge, repo string) error {
+			return f.SetStatus(ctx, repo, validBase, forge.Status{
+				State: forge.StatusSuccess, Context: "opendustpan/plan", Description: "d", TargetURL: "",
+			})
+		}},
+		{"UpsertComment", forge.CapComment, func(ctx context.Context, f forge.Forge, repo string) error {
+			_, err := f.UpsertComment(ctx, repo, "1", forge.CommentRequest{Marker: "plan", Body: "text"})
+
+			return err
+		}},
+		{"ReadComment", forge.CapComment, func(ctx context.Context, f forge.Forge, repo string) error {
+			_, err := f.ReadComment(ctx, repo, "1")
+
+			return err
+		}},
+		{"React", forge.CapComment, func(ctx context.Context, f forge.Forge, repo string) error {
+			return f.React(ctx, repo, "1", forge.ReactionEyes)
+		}},
+		{"Tree", forge.CapTree, func(ctx context.Context, f forge.Forge, repo string) error {
+			_, err := f.Tree(ctx, repo, validBase, "", 10)
+
+			return err
+		}},
 		{"RepoToken", forge.CapGitAccess, func(ctx context.Context, f forge.Forge, repo string) error {
 			_, err := f.RepoToken(ctx, repo)
 
@@ -403,7 +426,8 @@ func caseNoPushNoWrite(t *testing.T, h Harness) {
 	}
 
 	caps := f.Capabilities()
-	if caps.Has(forge.CapCommit) || caps.Has(forge.CapReview) {
+	if caps.Has(forge.CapCommit) || caps.Has(forge.CapReview) || caps.Has(forge.CapStatus) ||
+		caps.Has(forge.CapComment) {
 		t.Fatalf("a connection with no push access lists %v", caps)
 	}
 }

@@ -578,14 +578,16 @@ var Settings = []*Setting{
 
 	stringSetting(
 		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,
-		"how long a stored plan stays ("+history.PlanRetentionEnv+")",
-		"`"+retentionDefault+"` (400 days). A Go duration",
-	),
+		"how long a stored plan stays, from 24h to 87600h ("+history.PlanRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration from `24h` to `87600h`. Each plan records its end of "+
+			"retention when it is made, so a change applies to later plans",
+	).WithFile(history.PlanRetentionFlag),
 	stringSetting(
 		history.JobLogRetentionFlag, history.JobLogRetentionEnv, retentionDefault,
-		"how long a version of a job log stays ("+history.JobLogRetentionEnv+")",
-		"`"+retentionDefault+"` (400 days). A Go duration",
-	),
+		"how long a version of a job log stays, from 24h to 87600h ("+history.JobLogRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration from `24h` to `87600h`. Each log version records its "+
+			"end of retention when it is made, so a change applies to later versions",
+	).WithFile(history.JobLogRetentionFlag),
 	stepInput("DUSTPAN_JOB_ID", "The ID of the job that the step belongs to."),
 	stepInput("DUSTPAN_PHASE", "The name of the phase of the job that the step belongs to."),
 	stepInput("DUSTPAN_STEP", "The name of the step."),
@@ -597,6 +599,11 @@ var Settings = []*Setting{
 		"DUSTPAN_SWEEP_REPORT",
 		"Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes "+
 			"its report to. The launcher uploads the file when the command ends.",
+	),
+	stepInput(
+		"DUSTPAN_HELPER_SOCKET",
+		"Set for a tool step only: the path of the Unix socket on which the launcher answers its helpers "+
+			"for OpenTofu and git. The variable holds a path.",
 	),
 }
 

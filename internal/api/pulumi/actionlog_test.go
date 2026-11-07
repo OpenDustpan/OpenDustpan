@@ -42,6 +42,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -85,6 +86,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

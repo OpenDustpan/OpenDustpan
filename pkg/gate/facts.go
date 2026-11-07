@@ -198,12 +198,12 @@ type SourceKind string
 
 // The source kinds.
 const (
-	SourceAPI      SourceKind = "api"
-	SourceCLI      SourceKind = "cli"
-	SourceForge    SourceKind = "forge"
-	SourceCatalog  SourceKind = "catalog"
-	SourceAgent    SourceKind = "agent"
-	SourceSchedule SourceKind = "schedule"
+	SourceAPI         SourceKind = "api"
+	SourceCLI         SourceKind = "cli"
+	SourceForge       SourceKind = "forge"
+	SourceSelfService SourceKind = "self-service"
+	SourceAgent       SourceKind = "agent"
+	SourceSchedule    SourceKind = "schedule"
 )
 
 // OperationKind is the operation of a change. The kinds after

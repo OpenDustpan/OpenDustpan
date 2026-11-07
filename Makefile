@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -97,19 +97,18 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 	trivy fs $(TRIVY_LICENSE_FLAGS) --format json --output bin/trivy-canary.json testdata/trivy-canary
 	python3 -I scripts/trivy-license-gate.py canary bin/trivy-canary.json
 
-# Scans the commits of every local branch, not the uncommitted files. Each
+# Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
-# Today it holds one vendored agent skill, where a Markdown link that names a
-# file looks like a credential to a detector, two API reference pages, and
-# test files whose fake URLs with a user name and a password test the refusal
-# or the masking of credentials. Four of these files no longer exist, but
-# their history still holds a fake credential.
+# Each entry stays only because an old commit holds a fake credential in that
+# path. A test builds a fake credential with internal/fakecred, and a raw one
+# carries a trufflehog:ignore tag with a reason. Do not add a path.
+# Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
+	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
@@ -230,6 +229,9 @@ load: ## Run the load harness against a self-started server and write load-repor
 bench-s3: ## S3 latency benchmark: MinIO, Garage, PostgreSQL 18 and Toxiproxy in containers pinned by digest (needs Docker; BENCH_S3_ARGS, BENCH_S3_OUT; see docs/reference/s3-latency-benchmark.md). Not part of check.
 	scripts/bench-s3.sh
 
+bench-s3-protocol: ## Protocol run of the blob families: old and new path, 10,000 operations and 5 alternating runs each (needs Docker; see docs/reference/blob-write-benchmark-record.md). Not part of check.
+	BENCH_S3_MODE=protocol scripts/bench-s3.sh
+
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
 	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/blob/s3/...
@@ -309,6 +311,9 @@ journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan
+
+build-launcher: ## Build the launcher binary, static with no cgo.
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/dustpan-launcher ./cmd/dustpan-launcher
 
 demo: build ## Run the server with the web console and demo data on 127.0.0.1:8080 (needs Go, Node and npm; not part of check).
 	CONSOLE_REPO="$(CONSOLE_REPO)" CONSOLE_REF="$(CONSOLE_REF)" DEMO_PORT="$(DEMO_PORT)" ./scripts/demo.sh

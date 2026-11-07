@@ -528,8 +528,8 @@ func TestGitHostCheckAnswersTheAccountAndTheCapabilities(t *testing.T) {
 		}
 	}
 
-	if got := doc.Missing["catalog"]; len(got) != 1 || got[0] != "files" {
-		t.Fatalf("catalog misses %v, want files", got)
+	if got := doc.Missing["self-service"]; len(got) != 1 || got[0] != "files" {
+		t.Fatalf("self-service misses %v, want files", got)
 	}
 }
 

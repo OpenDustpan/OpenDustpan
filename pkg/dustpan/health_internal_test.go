@@ -242,6 +242,7 @@ func TestReadinessDrains(t *testing.T) {
 		},
 		"with components": func(failures *metrics.Counter) *readiness {
 			return newComponentReadiness(readinessSettings{
+				streamStop:  nil,
 				components:  api,
 				store:       blocked,
 				blobs:       blocked,

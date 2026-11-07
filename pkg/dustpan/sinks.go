@@ -7,6 +7,7 @@ import (
 
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -28,7 +29,8 @@ type sinkSettings struct {
 
 // WithSinkStore sets the store of notification sinks. With it, and with a
 // namespace store that keeps audit entries, the server serves the sink routes
-// under /api/dustpan/v1/namespaces/{namespace}/sinks, and the test route of a
+// under /api/dustpan/v1/namespaces/{namespace}/sinks, the subscription and
+// delivery routes beside them, and the test route of a
 // sink sends one fixed message through the sender of its kind. The server
 // seals the secret items of a sink with the data key of the namespace. Without
 // the option, the server serves no sink route.
@@ -109,6 +111,26 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 		return nil, fmt.Errorf("sink service: %w", err)
 	}
 
+	// The store of sinks is the store of notifications, which also keeps the
+	// subscriptions and the deliveries. A store that keeps only sinks cannot
+	// serve the subscription routes, so the server refuses to build them.
+	subscriptions, ok := cfg.sinks.store.(notify.Subscriptions)
+	if !ok {
+		return nil, fmt.Errorf("sink store keeps no subscriptions: %w", ErrMissingOption)
+	}
+
+	deliveries, ok := cfg.sinks.store.(notify.Deliveries)
+	if !ok {
+		return nil, fmt.Errorf("sink store keeps no deliveries: %w", ErrMissingOption)
+	}
+
+	subscriptionService, err := subscriptionsvc.NewService(subscriptionsvc.Config{
+		Subscriptions: subscriptions, Deliveries: deliveries, Namespaces: svc.namespaces, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("subscription service: %w", err)
+	}
+
 	idem, err := idempotencyMiddleware(cfg)
 	if err != nil {
 		return nil, err
@@ -116,6 +138,7 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 
 	handler, err := notificationsapi.NewHandler(notificationsapi.Config{
 		Sinks:          service,
+		Subscriptions:  subscriptionService,
 		Authenticator:  cfg.authenticator,
 		Authorizer:     cfg.authorizer,
 		Audit:          entries,

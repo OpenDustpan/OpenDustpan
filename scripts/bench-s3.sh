@@ -17,6 +17,14 @@
 #                   "-quick" or "-profiles eu-metro -limits"
 #   BENCH_S3_NAME   name prefix of the containers and the network
 #                   (default odp-bench-s3)
+#   BENCH_S3_MODE   empty for the profile run, or "protocol" for the
+#                   protocol run of the blob families (make bench-s3-protocol)
+#   BENCH_S3_PROTOCOL_PROFILES
+#                   profiles of the protocol run, split by spaces
+#                   (default "same-az cross-az eu-metro")
+#   BENCH_S3_MINIO_TMPFS
+#                   size of a tmpfs for the MinIO data, for example 8g
+#                   (default: no tmpfs, the data is on the disk)
 #   BENCH_S3_PORT   first host port; the run uses this port (Toxiproxy API)
 #                   and the next three (MinIO, Garage, PostgreSQL)
 #                   (default 18474)
@@ -62,12 +70,26 @@ chmod 700 "$WORK"
 SECRETS="$WORK/secrets"
 mkdir -m 700 "$SECRETS"
 
+TRASH_PID=""
+
+# empty_minio_trash deletes the content of the MinIO trash directory every
+# 10 seconds until the run ends. The trash holds objects that MinIO deleted
+# already, so this frees space and changes no object.
+empty_minio_trash() {
+	while sleep 10; do
+		docker exec "$NAME-minio" sh -c 'rm -rf /tmp/data/.minio.sys/tmp/.trash/*' >/dev/null 2>&1 || true
+	done
+}
+
 remove_containers() {
 	docker rm -f "$NAME-toxiproxy" "$NAME-minio" "$NAME-garage" "$NAME-postgres" >/dev/null 2>&1 || true
 	docker network rm "$NET" >/dev/null 2>&1 || true
 }
 
 cleanup() {
+	if [ -n "$TRASH_PID" ]; then
+		kill "$TRASH_PID" 2>/dev/null || true
+	fi
 	remove_containers
 	rm -rf "$WORK"
 }
@@ -116,12 +138,22 @@ docker run -d --name "$NAME-postgres" --network "$NET" --network-alias postgres 
 	-e POSTGRES_PASSWORD_FILE=/run/secrets/pg-password \
 	"$POSTGRES_IMAGE" >/dev/null
 
+# MinIO moves a deleted object to a trash directory and empties it later.
+# A protocol run writes and deletes gigabytes faster than MinIO empties the
+# trash, and MinIO then answers 507. empty_minio_trash below deletes the
+# trash every 10 seconds. BENCH_S3_MINIO_TMPFS puts the MinIO data on a
+# tmpfs of that size instead of the disk. The tmpfs uses memory.
+MINIO_TMPFS=()
+if [ -n "${BENCH_S3_MINIO_TMPFS:-}" ]; then
+	MINIO_TMPFS=(--tmpfs "/tmp/data:rw,size=$BENCH_S3_MINIO_TMPFS")
+fi
 echo "bench-s3: start MinIO"
 docker run -d --name "$NAME-minio" --network "$NET" --network-alias minio \
 	-v "$SECRETS/minio-access:/run/secrets/minio-access:ro" \
 	-v "$SECRETS/minio-secret:/run/secrets/minio-secret:ro" \
 	-e MINIO_ROOT_USER_FILE=/run/secrets/minio-access \
 	-e MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-secret \
+	"${MINIO_TMPFS[@]+"${MINIO_TMPFS[@]}"}" \
 	"$MINIO_IMAGE" server /tmp/data >/dev/null
 
 echo "bench-s3: start Garage"
@@ -187,6 +219,14 @@ echo "bench-s3: build the benchmark and the load harness"
 go build -o "$WORK/s3bench" ./cmd/s3bench
 go build -o "$WORK/load" ./load
 
+# The record names each store and its version, so a missing MinIO version
+# stops the run.
+MINIO_VERSION="$(docker exec "$NAME-minio" minio --version 2>/dev/null | head -1 || true)"
+if [ -z "$MINIO_VERSION" ]; then
+	echo "bench-s3: cannot read the MinIO version; run docker logs $NAME-minio" >&2
+	exit 1
+fi
+
 mkdir -p "$OUT_DIR/load"
 {
 	echo "minio=$MINIO_IMAGE"
@@ -194,6 +234,9 @@ mkdir -p "$OUT_DIR/load"
 	echo "postgres=$POSTGRES_IMAGE"
 	echo "toxiproxy=$TOXIPROXY_IMAGE"
 	docker version --format 'docker={{.Server.Version}}'
+	echo "minio-version=$MINIO_VERSION"
+	echo "garage-version=$(docker exec "$NAME-garage" /garage --version 2>/dev/null | head -1)"
+	echo "postgres-version=$(docker exec "$NAME-postgres" postgres --version 2>/dev/null | head -1)"
 } >"$OUT_DIR/images.txt"
 
 COMMON=(
@@ -236,8 +279,26 @@ run_load() {
 	fi
 }
 
+empty_minio_trash &
+TRASH_PID=$!
+
 echo "bench-s3: set up the proxies and the buckets"
 bench setup
+
+# The protocol mode runs the old path and the new path of each blob family
+# with a fixed count of operations, in alternating runs, for each profile.
+# A run that stops keeps protocol.json, and the next run with the same
+# BENCH_S3_OUT skips the results that it holds.
+if [ "${BENCH_S3_MODE:-}" = protocol ]; then
+	for step in ${BENCH_S3_PROTOCOL_PROFILES:-same-az cross-az eu-metro}; do
+		echo "bench-s3: protocol $step"
+		bench protocol -profile "$step" </dev/null
+	done
+	bench reset
+	echo "bench-s3: done; read $OUT_DIR/protocol.md"
+	exit 0
+fi
+
 bench profiles >"$WORK/steps"
 
 while read -r step kind stores reps dataset duration; do

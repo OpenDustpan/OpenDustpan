@@ -10,18 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/catalog"
 	"opendustpan.org/opendustpan/internal/expr"
+	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
-func hostileEnv() *catalog.Env {
-	return &catalog.Env{
+func hostileEnv() *selfservice.Env {
+	return &selfservice.Env{
 		Value:  "x",
 		Inputs: map[string]any{"s": "abc", "tags": []any{"a", "b"}},
 		Usage:  map[string]int{"units": 1},
 		Input:  nil,
-		Request: catalog.RequestEnv{
-			Requester: catalog.Requester{Subject: "ana", Agent: "", Groups: []string{"dev"}},
+		Request: selfservice.RequestEnv{
+			Requester: selfservice.Requester{Subject: "ana", Agent: "", Groups: []string{"dev"}},
 			Namespace: "payments",
 			Name:      "orders-db",
 		},
@@ -45,26 +45,30 @@ func TestSizeLayer(t *testing.T) {
 		source string
 		want   error
 	}{
-		{"empty", "", catalog.ErrLimit},
-		{"huge string literal", "'" + strings.Repeat("a", 1<<20) + "' == ''", catalog.ErrLimit},
-		{"one byte over", strings.Repeat(" ", catalog.MaxExprBytes) + "true", catalog.ErrLimit},
-		{"deep unary", strings.Repeat("!", 2000) + "true", catalog.ErrLimit},
-		{"deep array", strings.Repeat("[", 1000) + strings.Repeat("]", 1000) + " == nil", catalog.ErrLimit},
-		{"deep call", strings.Repeat("len(", 500) + "inputs" + strings.Repeat(")", 500) + " > 0", catalog.ErrLimit},
-		{"deep ternary", strings.Repeat("true ? ", 600) + "true" + strings.Repeat(" : false", 600), catalog.ErrLimit},
-		{"many terms", strings.Repeat("1 + ", 300) + "1 > 0", catalog.ErrLimit},
+		{"empty", "", selfservice.ErrLimit},
+		{"huge string literal", "'" + strings.Repeat("a", 1<<20) + "' == ''", selfservice.ErrLimit},
+		{"one byte over", strings.Repeat(" ", selfservice.MaxExprBytes) + "true", selfservice.ErrLimit},
+		{"deep unary", strings.Repeat("!", 2000) + "true", selfservice.ErrLimit},
+		{"deep array", strings.Repeat("[", 1000) + strings.Repeat("]", 1000) + " == nil", selfservice.ErrLimit},
+		{"deep call", strings.Repeat("len(", 500) + "inputs" + strings.Repeat(")", 500) + " > 0", selfservice.ErrLimit},
+		{
+			"deep ternary",
+			strings.Repeat("true ? ", 600) + "true" + strings.Repeat(" : false", 600),
+			selfservice.ErrLimit,
+		},
+		{"many terms", strings.Repeat("1 + ", 300) + "1 > 0", selfservice.ErrLimit},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, tc.want) {
+			if err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool); !errors.Is(err, tc.want) {
 				t.Fatalf("Compile() = %v, want %v", err, tc.want)
 			}
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -79,7 +83,7 @@ func TestNameLayer(t *testing.T) {
 		{"method of a string", "request.name.String() == ''"},
 		{"method of the environment", "$env.Value.Error() == ''"},
 		{"go field name", "request.Requester.Subject == 'ana'"},
-		{"go type name", "catalog.Env != nil"},
+		{"go type name", "selfservice.Env != nil"},
 		{"reflect", "reflect.TypeOf(value) != nil"},
 		{"os getenv", "os.Getenv('OPENDUSTPAN_EXPR_TEST') != ''"},
 		{"env function", "env('OPENDUSTPAN_EXPR_TEST') != ''"},
@@ -110,12 +114,13 @@ func TestNameLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+			err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool)
+			if !errors.Is(err, selfservice.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -129,7 +134,7 @@ func TestNameLayerRunsNoMethod(t *testing.T) {
 
 	for _, source := range []string{"inputs.Len() > 0", "inputs.s.Len() > 0", "inputs.tags.Len() > 0"} {
 		got, err := newEvaluator(t).Bool(t.Context(), source, hostileEnv())
-		if got || !errors.Is(err, catalog.ErrRuleFailed) {
+		if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 			t.Fatalf("Bool(%q) = %v, %v, want false, ErrRuleFailed", source, got, err)
 		}
 	}
@@ -154,7 +159,7 @@ func TestNameLayerGivesNoEnvironment(t *testing.T) {
 			t.Fatalf("Bool(%q) = true, want false: the expression read the process environment", source)
 		}
 
-		if err != nil && !errors.Is(err, catalog.ErrRuleFailed) {
+		if err != nil && !errors.Is(err, selfservice.ErrRuleFailed) {
 			t.Fatalf("Bool(%q) = %v, want nil or ErrRuleFailed", source, err)
 		}
 	}
@@ -179,12 +184,13 @@ func TestSyntaxLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := newEvaluator(t).Compile(tc.source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+			err := newEvaluator(t).Compile(tc.source, selfservice.ResultBool)
+			if !errors.Is(err, selfservice.ErrInvalid) {
 				t.Fatalf("Compile() = %v, want ErrInvalid", err)
 			}
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, hostileEnv())
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -196,7 +202,7 @@ func TestMemoryLayer(t *testing.T) {
 	t.Parallel()
 
 	env := hostileEnv()
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
 	tests := []struct{ name, source string }{
 		{"map of a map", "len(map(map(request.requester.groups, #), #)) > 0"},
@@ -211,7 +217,7 @@ func TestMemoryLayer(t *testing.T) {
 			t.Parallel()
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, env)
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -223,7 +229,7 @@ func TestConcatLayer(t *testing.T) {
 	t.Parallel()
 
 	env := hostileEnv()
-	env.Inputs["half"] = strings.Repeat("a", catalog.MaxConcatBytes/2+1)
+	env.Inputs["half"] = strings.Repeat("a", selfservice.MaxConcatBytes/2+1)
 	env.Inputs["huge"] = strings.Repeat("a", 1<<20)
 
 	tests := []struct{ name, source string }{
@@ -238,7 +244,7 @@ func TestConcatLayer(t *testing.T) {
 			t.Parallel()
 
 			got, err := newEvaluator(t).String(t.Context(), tc.source, env)
-			if got != "" || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got != "" || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("String() = %d bytes, %v, want empty, ErrRuleFailed", len(got), err)
 			}
 		})
@@ -265,7 +271,7 @@ func TestResultLayer(t *testing.T) {
 			t.Parallel()
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, env)
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -278,10 +284,10 @@ func TestGroupsLayer(t *testing.T) {
 	t.Parallel()
 
 	env := hostileEnv()
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups+1)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups+1)
 
 	got, err := newEvaluator(t).Bool(t.Context(), "true", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 }
@@ -292,7 +298,7 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 	t.Parallel()
 
 	env := hostileEnv()
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups-1)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups-1)
 	env.Inputs["long"] = strings.Repeat("a", 1<<10)
 
 	for _, source := range []string{
@@ -309,10 +315,10 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 
 // reviewerBig is the string of the expressions that a review found: a
 // regular expression, read once for each group.
-func reviewerEnv() *catalog.Env {
+func reviewerEnv() *selfservice.Env {
 	env := hostileEnv()
 	env.Inputs["big"] = strings.Repeat("ab", 8<<10)
-	env.Request.Requester.Groups = make([]string, catalog.MaxEnvGroups)
+	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
 	return env
 }
@@ -342,7 +348,7 @@ func TestWorkLayerReviewerExpressions(t *testing.T) {
 			start := time.Now()
 
 			got, err := newEvaluator(t).Bool(t.Context(), tc.source, reviewerEnv())
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 
@@ -366,15 +372,15 @@ func TestEnvLayer(t *testing.T) {
 
 	tests := []struct {
 		name string
-		edit func(env *catalog.Env)
+		edit func(env *selfservice.Env)
 	}{
-		{"a long string", func(env *catalog.Env) { env.Inputs["big"] = strings.Repeat("a", 1<<20) }},
-		{"many items", func(env *catalog.Env) { env.Inputs["many"] = many }},
-		{"a long value", func(env *catalog.Env) { env.Value = strings.Repeat("a", 1<<20) }},
-		{"a long input", func(env *catalog.Env) { env.Input = map[string]any{"k": strings.Repeat("a", 1<<20)} }},
-		{"a long name", func(env *catalog.Env) { env.Request.Name = strings.Repeat("a", 1<<20) }},
-		{"long group names", func(env *catalog.Env) {
-			env.Request.Requester.Groups = slices.Repeat([]string{strings.Repeat("g", 1<<10)}, catalog.MaxEnvGroups)
+		{"a long string", func(env *selfservice.Env) { env.Inputs["big"] = strings.Repeat("a", 1<<20) }},
+		{"many items", func(env *selfservice.Env) { env.Inputs["many"] = many }},
+		{"a long value", func(env *selfservice.Env) { env.Value = strings.Repeat("a", 1<<20) }},
+		{"a long input", func(env *selfservice.Env) { env.Input = map[string]any{"k": strings.Repeat("a", 1<<20)} }},
+		{"a long name", func(env *selfservice.Env) { env.Request.Name = strings.Repeat("a", 1<<20) }},
+		{"long group names", func(env *selfservice.Env) {
+			env.Request.Requester.Groups = slices.Repeat([]string{strings.Repeat("g", 1<<10)}, selfservice.MaxEnvGroups)
 		}},
 	}
 
@@ -386,7 +392,7 @@ func TestEnvLayer(t *testing.T) {
 			tc.edit(env)
 
 			got, err := newEvaluator(t).Bool(t.Context(), "true", env)
-			if got || !errors.Is(err, catalog.ErrRuleFailed) {
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 			}
 		})
@@ -406,7 +412,7 @@ func TestOperatorNamesCannotBeWritten(t *testing.T) {
 		"matches(request.name, inputs.s)",
 		"request.name matches '('",
 	} {
-		if err := newEvaluator(t).Compile(source, catalog.ResultBool); !errors.Is(err, catalog.ErrInvalid) {
+		if err := newEvaluator(t).Compile(source, selfservice.ResultBool); !errors.Is(err, selfservice.ErrInvalid) {
 			t.Fatalf("Compile(%q) = %v, want ErrInvalid", source, err)
 		}
 	}
@@ -438,16 +444,16 @@ func TestEnvTypeLayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			for place, edit := range map[string]func(env *catalog.Env){
-				"inputs": func(env *catalog.Env) { env.Inputs["v"] = tc.value },
-				"value":  func(env *catalog.Env) { env.Value = tc.value },
-				"input":  func(env *catalog.Env) { env.Input = tc.value },
+			for place, edit := range map[string]func(env *selfservice.Env){
+				"inputs": func(env *selfservice.Env) { env.Inputs["v"] = tc.value },
+				"value":  func(env *selfservice.Env) { env.Value = tc.value },
+				"input":  func(env *selfservice.Env) { env.Input = tc.value },
 			} {
 				env := hostileEnv()
 				edit(env)
 
 				got, err := newEvaluator(t).Bool(t.Context(), "true", env)
-				if got || !errors.Is(err, catalog.ErrRuleFailed) {
+				if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 					t.Fatalf("%s: Bool() = %v, %v, want false, ErrRuleFailed", place, got, err)
 				}
 			}
@@ -478,7 +484,7 @@ func TestRunErrorIsShort(t *testing.T) {
 	env.Inputs["s"] = strings.Repeat("Z", 100_000)
 
 	got, err := newEvaluator(t).Bool(t.Context(), "int(inputs.s) > 0", env)
-	if got || !errors.Is(err, catalog.ErrRuleFailed) {
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
 	}
 

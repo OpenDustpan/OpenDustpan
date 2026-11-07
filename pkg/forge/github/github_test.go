@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forge/forgetest"
@@ -316,7 +318,11 @@ func TestOpenHostile(t *testing.T) {
 	}{
 		{"an empty address", withBase(""), pkcs1PEM(testKey())},
 		{"an http address", withBase("http://127.0.0.1:1"), pkcs1PEM(testKey())},
-		{"an address with user information", withBase("https://user:pw@127.0.0.1:1"), pkcs1PEM(testKey())},
+		{
+			"an address with user information",
+			withBase(fakecred.URL("https", "user", "pw", "127.0.0.1:1", "")),
+			pkcs1PEM(testKey()),
+		},
 		{"an address with a query", withBase("https://127.0.0.1:1/?x=1"), pkcs1PEM(testKey())},
 		{"an address with a fragment", withBase("https://127.0.0.1:1/#f"), pkcs1PEM(testKey())},
 		{"localhost", withBase("https://localhost:1"), pkcs1PEM(testKey())},
@@ -478,19 +484,24 @@ func TestStatusMapping(t *testing.T) {
 
 // TestUnusedMethodsAreUnsupported checks that the methods that are not in
 // this version name GitHub in their error, and that the adapter lists the
-// capabilities of the files, of the commits and of the review requests only.
+// capabilities of the files, of the comparison, of the tree, of the commits, of
+// the review requests, of the statuses and of the comments only.
 func TestUnusedMethodsAreUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
 	caps := h.Forge.Capabilities()
-	if len(caps) != 3 || !caps.Has(forge.CapFiles) || !caps.Has(forge.CapCommit) || !caps.Has(forge.CapReview) {
-		t.Fatalf("Capabilities = %v, want files, commit and review only", caps)
+	want := forge.Capabilities{
+		forge.CapFiles, forge.CapCompare, forge.CapTree, forge.CapCommit, forge.CapReview, forge.CapStatus,
+		forge.CapComment,
+	}
+	if !slices.Equal(caps, want) {
+		t.Fatalf("Capabilities = %v, want %v", caps, want)
 	}
 
-	_, err := h.Forge.Compare(t.Context(), "acme/infra", "a", "b", 1)
+	_, err := h.Forge.RepoToken(t.Context(), "acme/infra")
 	if !errors.Is(err, forge.ErrUnsupported) || !strings.Contains(err.Error(), "GitHub") {
-		t.Fatalf("Compare = %v", err)
+		t.Fatalf("RepoToken = %v", err)
 	}
 }

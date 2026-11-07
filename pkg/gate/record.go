@@ -25,12 +25,12 @@ type ChangeKind string
 // The change kinds. A write at state.write and a refused call of an access
 // limit have no change object: the record stands on its own.
 const (
-	ChangeJob             ChangeKind = "job"
-	ChangeChangeOrder     ChangeKind = "change-order"
-	ChangeCatalogRevision ChangeKind = "catalog-revision"
-	ChangeProfile         ChangeKind = "profile"
-	ChangeStateWrite      ChangeKind = "state-write"
-	ChangeAccess          ChangeKind = "access"
+	ChangeJob                 ChangeKind = "job"
+	ChangeChangeOrder         ChangeKind = "change-order"
+	ChangeSelfServiceRevision ChangeKind = "self-service-revision"
+	ChangeProfile             ChangeKind = "profile"
+	ChangeStateWrite          ChangeKind = "state-write"
+	ChangeAccess              ChangeKind = "access"
 )
 
 // ChangeRef names the object that a decision record explains.

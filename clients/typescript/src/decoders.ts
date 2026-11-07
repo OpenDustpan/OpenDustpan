@@ -55,6 +55,7 @@ import type {
   CreateLocalUserRequest,
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
+  CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -97,6 +98,7 @@ import type {
   JobLocation,
   JobLocationRequest,
   JobLog,
+  JobLogEntry,
   JobPhase,
   JobPlan,
   JobPlanPart,
@@ -112,8 +114,11 @@ import type {
   ListGatesResponse,
   ListGitHostConnectionsResponse,
   ListGitHostInstallationsResponse,
+  ListJobsResponse,
   ListModuleReleasesResponse,
+  ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
+  ListNotificationSubscriptionsResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -146,8 +151,12 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NotificationDelivery,
+  NotificationFilter,
+  NotificationFilterRequest,
   NotificationSink,
   NotificationSinkTest,
+  NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
   Passkey,
@@ -179,6 +188,7 @@ import type {
   RegistryModule,
   RegistryProvider,
   ReplaceNotificationSinkRequest,
+  ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
   RequestBodyTooLargeErrorArgs,
   RequestIdempotencyKeyReplayedSecretError,
@@ -197,6 +207,8 @@ import type {
   Settings,
   SettingsLockedError,
   SettingsLockedErrorArgs,
+  SettingsRetentionInvalidError,
+  SettingsRetentionInvalidErrorArgs,
   SettingsStaticOnlyError,
   SettingsStaticOnlyErrorArgs,
   SettingsValueInvalidError,
@@ -538,6 +550,12 @@ export const decodeCreateNotificationSinkRequest: Decoder<CreateNotificationSink
   url: optional(string),
 });
 
+/** The validator of CreateNotificationSubscriptionRequest. */
+export const decodeCreateNotificationSubscriptionRequest: Decoder<CreateNotificationSubscriptionRequest> = object<CreateNotificationSubscriptionRequest>("CreateNotificationSubscriptionRequest", {
+  filter: optional(ref(() => decodeNotificationFilterRequest)),
+  sink: string,
+});
+
 /** The validator of CreateProfileRequest. */
 export const decodeCreateProfileRequest: Decoder<CreateProfileRequest> = object<CreateProfileRequest>("CreateProfileRequest", {
   document: string,
@@ -642,6 +660,7 @@ export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("Error
   "restore.swapped": ref(() => decodeRestoreSwappedError),
   "schema.binary-below-minimum": ref(() => decodeSchemaBinaryBelowMinimumError),
   "settings.locked": ref(() => decodeSettingsLockedError),
+  "settings.retention-invalid": ref(() => decodeSettingsRetentionInvalidError),
   "settings.static-only": ref(() => decodeSettingsStaticOnlyError),
   "settings.value-invalid": ref(() => decodeSettingsValueInvalidError),
   "sink.test-rate-limited": ref(() => decodeSinkTestRateLimitedError),
@@ -933,6 +952,13 @@ export const decodeJobLog: Decoder<JobLog> = object<JobLog>("JobLog", {
   version: int64,
 });
 
+/** The validator of JobLogEntry. */
+export const decodeJobLogEntry: Decoder<JobLogEntry> = object<JobLogEntry>("JobLogEntry", {
+  seq: int64,
+  step: string,
+  text: string,
+});
+
 /** The validator of JobPhase. */
 export const decodeJobPhase: Decoder<JobPhase> = object<JobPhase>("JobPhase", {
   approvals: array(ref(() => decodeJobApproval)),
@@ -1038,14 +1064,31 @@ export const decodeListGitHostInstallationsResponse: Decoder<ListGitHostInstalla
   installations: array(ref(() => decodeGitHostInstallation)),
 });
 
+/** The validator of ListJobsResponse. */
+export const decodeListJobsResponse: Decoder<ListJobsResponse> = object<ListJobsResponse>("ListJobsResponse", {
+  jobs: array(ref(() => decodeJob)),
+  nextPageToken: optional(string),
+});
+
 /** The validator of ListModuleReleasesResponse. */
 export const decodeListModuleReleasesResponse: Decoder<ListModuleReleasesResponse> = object<ListModuleReleasesResponse>("ListModuleReleasesResponse", {
   releases: array(ref(() => decodeModuleRelease)),
 });
 
+/** The validator of ListNotificationDeliveriesResponse. */
+export const decodeListNotificationDeliveriesResponse: Decoder<ListNotificationDeliveriesResponse> = object<ListNotificationDeliveriesResponse>("ListNotificationDeliveriesResponse", {
+  deliveries: array(ref(() => decodeNotificationDelivery)),
+  nextPageToken: string,
+});
+
 /** The validator of ListNotificationSinksResponse. */
 export const decodeListNotificationSinksResponse: Decoder<ListNotificationSinksResponse> = object<ListNotificationSinksResponse>("ListNotificationSinksResponse", {
   sinks: array(ref(() => decodeNotificationSink)),
+});
+
+/** The validator of ListNotificationSubscriptionsResponse. */
+export const decodeListNotificationSubscriptionsResponse: Decoder<ListNotificationSubscriptionsResponse> = object<ListNotificationSubscriptionsResponse>("ListNotificationSubscriptionsResponse", {
+  subscriptions: array(ref(() => decodeNotificationSubscription)),
 });
 
 /** The validator of ListPasskeysResponse. */
@@ -1270,6 +1313,36 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
   promoted: boolean,
 });
 
+/** The validator of NotificationDelivery. */
+export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
+  attempts: int64,
+  contact: optional(string),
+  deliveredAt: optional(dateTime),
+  id: string,
+  lastError: optional(string),
+  nextAt: dateTime,
+  notification: string,
+  principal: string,
+  sink: string,
+  state: string,
+  subscription: string,
+  version: int64,
+});
+
+/** The validator of NotificationFilter. */
+export const decodeNotificationFilter: Decoder<NotificationFilter> = object<NotificationFilter>("NotificationFilter", {
+  minSeverity: optional(string),
+  objects: optional(array(string)),
+  types: optional(array(string)),
+});
+
+/** The validator of NotificationFilterRequest. */
+export const decodeNotificationFilterRequest: Decoder<NotificationFilterRequest> = object<NotificationFilterRequest>("NotificationFilterRequest", {
+  minSeverity: optional(string),
+  objects: optional(array(string)),
+  types: optional(array(string)),
+});
+
 /** The validator of NotificationSink. */
 export const decodeNotificationSink: Decoder<NotificationSink> = object<NotificationSink>("NotificationSink", {
   createdBy: string,
@@ -1289,6 +1362,18 @@ export const decodeNotificationSinkTest: Decoder<NotificationSinkTest> = object<
   class: optional(string),
   delivered: boolean,
   message: string,
+});
+
+/** The validator of NotificationSubscription. */
+export const decodeNotificationSubscription: Decoder<NotificationSubscription> = object<NotificationSubscription>("NotificationSubscription", {
+  createdBy: string,
+  filter: ref(() => decodeNotificationFilter),
+  id: string,
+  namespace: string,
+  reason: optional(string),
+  sink: string,
+  state: string,
+  version: int64,
 });
 
 /** The validator of OutputSharing. */
@@ -1539,6 +1624,14 @@ export const decodeReplaceNotificationSinkRequest: Decoder<ReplaceNotificationSi
   version: int64,
 });
 
+/** The validator of ReplaceNotificationSubscriptionRequest. */
+export const decodeReplaceNotificationSubscriptionRequest: Decoder<ReplaceNotificationSubscriptionRequest> = object<ReplaceNotificationSubscriptionRequest>("ReplaceNotificationSubscriptionRequest", {
+  filter: optional(ref(() => decodeNotificationFilterRequest)),
+  sink: string,
+  state: string,
+  version: int64,
+});
+
 /** The validator of RequestBodyTooLargeError. */
 export const decodeRequestBodyTooLargeError: Decoder<RequestBodyTooLargeError> = object<RequestBodyTooLargeError>("RequestBodyTooLargeError", {
   code: int64,
@@ -1670,6 +1763,19 @@ export const decodeSettingsLockedError: Decoder<SettingsLockedError> = object<Se
 export const decodeSettingsLockedErrorArgs: Decoder<SettingsLockedErrorArgs> = object<SettingsLockedErrorArgs>("SettingsLockedErrorArgs", {
   key: string,
   source: string,
+});
+
+/** The validator of SettingsRetentionInvalidError. */
+export const decodeSettingsRetentionInvalidError: Decoder<SettingsRetentionInvalidError> = object<SettingsRetentionInvalidError>("SettingsRetentionInvalidError", {
+  code: int64,
+  errorArgs: ref(() => decodeSettingsRetentionInvalidErrorArgs),
+  errorCode: literal("settings.retention-invalid"),
+  message: string,
+});
+
+/** The validator of SettingsRetentionInvalidErrorArgs. */
+export const decodeSettingsRetentionInvalidErrorArgs: Decoder<SettingsRetentionInvalidErrorArgs> = object<SettingsRetentionInvalidErrorArgs>("SettingsRetentionInvalidErrorArgs", {
+  setting: string,
 });
 
 /** The validator of SettingsStaticOnlyError. */

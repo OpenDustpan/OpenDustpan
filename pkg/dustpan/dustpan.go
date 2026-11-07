@@ -163,6 +163,7 @@ type settings struct {
 	eventStore      stack.EventStore
 	secretKeys      secret.KeyStore
 	secretWrapper   secret.Wrapper
+	streamStop      *streamStop
 	workspaceStore  workspace.Store
 	stateStore      workspace.StateStore
 	blobStore       blob.Store
@@ -208,6 +209,7 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	softDeleteRetention  time.Duration
+	jobRetention         jobRetention
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -675,6 +677,7 @@ func defaultSettings() *settings {
 		eventStore:              nil,
 		secretKeys:              nil,
 		secretWrapper:           nil,
+		streamStop:              nil,
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
@@ -716,6 +719,7 @@ func defaultSettings() *settings {
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
 		softDeleteRetention:     0,
+		jobRetention:            defaultJobRetention(),
 		maxBodyBytesInFlight:    0,
 		backup:                  defaultBackupSettings(),
 		beforeServe:             nil,
@@ -1420,6 +1424,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 
 	return newComponentReadiness(readinessSettings{
 		components:  cfg.components,
+		streamStop:  cfg.streamStop,
 		store:       cfg.namespaceStore,
 		blobs:       cfg.blobStore,
 		watch:       cfg.watch,
@@ -1629,7 +1634,11 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, errors.Join(checkIssuerBaseURL(cfg.issuerBaseURL), checkRetention(cfg.softDeleteRetention))
+	return base, errors.Join(
+		checkIssuerBaseURL(cfg.issuerBaseURL),
+		checkRetention(cfg.softDeleteRetention),
+		checkJobRetention(cfg.jobRetention),
+	)
 }
 
 // checkIssuerBaseURL refuses an issuer base URL that does not parse. An empty
@@ -2506,6 +2515,7 @@ func newPulumiHandler(
 		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 		StateGuard:              svc.stateWrite.guard,
+		Placer:                  newStackPlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)

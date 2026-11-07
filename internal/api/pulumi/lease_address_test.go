@@ -49,6 +49,7 @@ func newUpdateFixtureWithAddressGate(
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -90,6 +91,7 @@ func newUpdateFixtureWithAddressGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -236,6 +238,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	}
 
 	stores := &recordingStackStore{
+		placed: nil, placeErr: nil,
 		created:   nil,
 		renamed:   nil,
 		tags:      nil,
@@ -290,6 +293,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 	t.Helper()
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		Placer:                  nil,
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

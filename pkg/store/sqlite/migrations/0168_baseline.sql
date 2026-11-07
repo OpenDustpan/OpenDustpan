@@ -1057,7 +1057,7 @@ CREATE TABLE trust_rules (
     created_at_ms   INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE catalog_blueprints (
+CREATE TABLE self_service_blueprints (
     namespace_id     TEXT    NOT NULL REFERENCES namespaces (id),
     name             TEXT    NOT NULL,
     draft_version    INTEGER NOT NULL CHECK (draft_version >= 1),
@@ -1066,7 +1066,7 @@ CREATE TABLE catalog_blueprints (
     PRIMARY KEY (namespace_id, name)
 ) STRICT;
 
-CREATE TABLE catalog_blueprint_versions (
+CREATE TABLE self_service_blueprint_versions (
     namespace_id    TEXT    NOT NULL,
     name            TEXT    NOT NULL,
     number          INTEGER NOT NULL CHECK (number >= 1),
@@ -1077,7 +1077,7 @@ CREATE TABLE catalog_blueprint_versions (
     published_at_ms INTEGER NOT NULL,
     retired         INTEGER NOT NULL CHECK (retired IN (0, 1)),
     PRIMARY KEY (namespace_id, name, number),
-    FOREIGN KEY (namespace_id, name) REFERENCES catalog_blueprints (namespace_id, name)
+    FOREIGN KEY (namespace_id, name) REFERENCES self_service_blueprints (namespace_id, name)
 ) STRICT;
 
 CREATE TABLE store_checks (
@@ -1306,9 +1306,13 @@ CREATE TABLE passkey_challenges (
     principal_id  TEXT    NOT NULL DEFAULT '' CHECK (length(principal_id) <= 128),
     pending_id    TEXT    NOT NULL DEFAULT '' CHECK (length(pending_id) <= 128),
     session_id    TEXT    NOT NULL DEFAULT '' CHECK (length(session_id) <= 128),
+    source        TEXT    NOT NULL DEFAULT '' CHECK (length(source) <= 64 AND source NOT GLOB '*[^ -~]*'),
+    source_group  TEXT    NOT NULL DEFAULT '' CHECK (length(source_group) <= 64 AND source_group NOT GLOB '*[^ -~]*'),
     created_at_ms INTEGER NOT NULL,
     expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms AND expires_at_ms - created_at_ms <= 300000),
-    CHECK ((kind = 'sign-in') = (principal_id = ''))
+    CHECK ((kind = 'sign-in') = (principal_id = '')),
+    CHECK ((kind = 'sign-in') = (source <> '')),
+    CHECK ((kind = 'sign-in') = (source_group <> ''))
 ) STRICT;
 
 CREATE TABLE passkeys (
@@ -1539,7 +1543,7 @@ CREATE UNIQUE INDEX trust_rules_name ON trust_rules (namespace, name);
 
 CREATE INDEX trust_rules_principal ON trust_rules (principal_id);
 
-CREATE UNIQUE INDEX catalog_blueprint_versions_draft ON catalog_blueprint_versions (namespace_id, name, draft_version);
+CREATE UNIQUE INDEX self_service_blueprint_versions_draft ON self_service_blueprint_versions (namespace_id, name, draft_version);
 
 CREATE UNIQUE INDEX store_checks_one_running ON store_checks ((state = 'running')) WHERE state = 'running';
 
@@ -1570,6 +1574,8 @@ CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+CREATE INDEX passkey_challenges_source ON passkey_challenges (source, expires_at_ms);
+CREATE INDEX passkey_challenges_source_group ON passkey_challenges (source_group, expires_at_ms);
 
 CREATE INDEX passkeys_principal ON passkeys (principal_id, created_at_ms, id);
 

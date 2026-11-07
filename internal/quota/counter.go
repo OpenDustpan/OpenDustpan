@@ -9,7 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// ReservationID identifies a reservation. The Catalog uses the revision
+// ReservationID identifies a reservation. Self-service uses the revision
 // that the reservation holds a unit for: <request ID>/<revision>.
 type ReservationID string
 
@@ -119,7 +119,7 @@ type Tx interface {
 type Counter interface {
 	// InTx runs fn with a Tx in one new transaction, after a check of
 	// fence. It commits when fn returns nil, and rolls back each write of
-	// the Tx when fn returns an error, which InTx then returns. The Catalog
+	// the Tx when fn returns an error, which InTx then returns. Self-service
 	// store adapter does not call InTx: it gives the Tx of its own
 	// transaction to the same code.
 	InTx(ctx context.Context, fence namespace.Fence, fn func(tx Tx) error) error
@@ -138,7 +138,7 @@ type Counter interface {
 	// when. A key that the counter does not know uses nothing.
 	Usage(ctx context.Context, checks []Check, when time.Time) ([]Usage, error)
 	// SetSettled writes the settled count of key, as the reconcile
-	// schedule counts it from the inventory and the Catalog records. It
+	// schedule counts it from the inventory and Self-service records. It
 	// returns ErrInvalid for a key that is not of KindUnits or a count below
 	// 0.
 	SetSettled(ctx context.Context, key Key, count int, fence namespace.Fence) error

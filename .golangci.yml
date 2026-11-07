@@ -102,12 +102,12 @@ linters:
               desc: The client generator reads the published description; it never imports server code.
         expr:
           # The Expr engine of internal/expr is the only code that imports the
-          # library. Everything else uses the catalog.Evaluator port.
+          # library. Everything else uses the selfservice.Evaluator port.
           files:
             - "!**/internal/expr/**"
           deny:
             - pkg: github.com/expr-lang/expr
-              desc: Only internal/expr imports the Expr library; use the catalog.Evaluator port.
+              desc: Only internal/expr imports the Expr library; use the selfservice.Evaluator port.
         journal:
           # The journal takes bytes and gives bytes (ADR 43, decision 3.3). It
           # imports no part of the server, so a later move to a separate module
@@ -147,6 +147,30 @@ linters:
               desc: The launcher contract never links a SQL driver.
             - pkg: github.com/mattn/go-sqlite3
               desc: The launcher contract never links a SQL driver.
+        jobproxy:
+          # The launcher links the job proxy core, so it imports no part of
+          # this server. It never imports internal code, a SQL driver or the
+          # forge. Of this module the core links only the outbound guard
+          # (pkg/egress), and the store port is in pkg/jobproxy/rulestore, so a
+          # move to another module is a move of files. Defense in depth: the
+          # domain rule also applies to it, and deps_test.go checks every
+          # package that the core links.
+          files:
+            - "**/pkg/jobproxy/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal
+              desc: The job proxy core never imports internal code.
+            - pkg: opendustpan.org/opendustpan/pkg/forge
+              desc: The job proxy core never imports the forge.
+            - pkg: database/sql
+              desc: The job proxy core never links a SQL driver.
+            - pkg: github.com/jackc/pgx
+              desc: The job proxy core never links a SQL driver.
+            - pkg: modernc.org/sqlite
+              desc: The job proxy core never links a SQL driver.
+            - pkg: github.com/mattn/go-sqlite3
+              desc: The job proxy core never links a SQL driver.
         githubfake:
           # The fake GitHub host is test infrastructure. No file of the binary
           # (cmd/, pkg/ and internal/) imports it, except a test file, so the
@@ -159,6 +183,19 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/e2e/githubfake
               desc: The fake GitHub host is for tests; the binary never links it.
+        ldaptest:
+          # The in-process LDAP directory is test infrastructure. No file of
+          # the binary imports it, except a test file, so the binary never
+          # links it.
+          files:
+            - "**/cmd/**"
+            - "**/pkg/**"
+            - "**/internal/**"
+            - "!**/*_test.go"
+            - "!**/internal/ldaptest/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/ldaptest
+              desc: The test LDAP directory is for tests; the binary never links it.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
@@ -205,6 +242,7 @@ linters:
             - "**/internal/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
+            - "**/pkg/jobproxy/**"
             - "**/internal/source/**"
             - "**/pkg/source/**"
             - "**/pkg/forge/*.go"
@@ -219,7 +257,7 @@ linters:
             - "**/pkg/egress/*.go"
             - "**/internal/chatops/**"
             - "**/internal/incident/**"
-            - "**/internal/catalog/**"
+            - "**/internal/selfservice/**"
             - "**/internal/policy/**"
             - "**/pkg/gate/**"
             - "**/internal/quota/**"
@@ -566,7 +604,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/catalog/catalogtest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/|^pkg/localuser/localusertest/|^pkg/mfa/mfatest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^internal/history/historytest/|^pkg/inventory/inventorytest/|^internal/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^internal/agent/agenttest/|^internal/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^internal/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^internal/calendar/calendartest/|^internal/freeze/freezetest/|^internal/breakglass/breakglasstest/|^internal/oncall/oncalltest/|^internal/cost/costtest/|^pkg/notify/notifytest/|^internal/chatops/chatopstest/|^internal/incident/incidenttest/|^internal/selfservice/selfservicetest/|^internal/policy/policytest/|^internal/quota/quotatest/|^pkg/gate/gatetest/|^internal/unitimport/unitimporttest/|^pkg/forge/forgetest/|^pkg/preferences/preferencestest/|^pkg/localuser/localusertest/|^pkg/mfa/mfatest/)
         linters:
           - mnd
           - funlen

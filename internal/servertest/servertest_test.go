@@ -262,6 +262,29 @@ func send(t *testing.T, c *servertest.Cluster, requests ...request) {
 				body,
 			)
 		}
+
+		if r.path == "/api/server/namespaces" && r.want == http.StatusCreated {
+			seedPlacement(t, c, r.server, r.body)
+		}
+	}
+}
+
+// seedPlacement makes a collection and a placement rule for Pulumi stacks of
+// any project and any name in the namespace that body creates. The server
+// refuses a new stack that no rule places.
+func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBody string) {
+	t.Helper()
+
+	name := strings.TrimSuffix(strings.TrimPrefix(namespaceBody, `{"name":"`), `"}`)
+	base := "/api/dustpan/v1/namespaces/" + name
+
+	for _, step := range []struct{ path, body string }{
+		{base + "/collections", `{"name":"everything"}`},
+		{base + "/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`},
+	} {
+		if status, body := c.Do(t, server, http.MethodPost, step.path, step.body); status != http.StatusCreated {
+			t.Fatalf("POST %s = %d %s, want %d", step.path, status, body, http.StatusCreated)
+		}
 	}
 }
 

@@ -166,3 +166,52 @@ kind `trust`. It shows in the list of the tokens of the principal, and a
 holder of `principal:manage-tokens` on the principal can revoke it. No
 rotation renews it: the job asks for a new token. A delete of the rule does
 not end the tokens that the rule issued earlier.
+
+## Providers in a profile: login/oidc
+
+Workload identity also works in the other direction: the server signs a token
+for a job, and a remote system trusts the server. The issuer of the namespace
+signs the token (see [The OIDC issuer of a namespace](oidc-issuer.md)). A
+provider block with `use: login/oidc` asks the issuer for one token for the
+audience that the block names, and gives the token as a secret value. The
+server makes no exchange: the tool or the remote system that reads the value
+checks the token itself.
+
+```yaml
+schemaVersion: 1
+providers:
+  vault:
+    use: login/oidc
+    with:
+      audience: https://vault.example.com
+      tokenLifetime: 15m
+```
+
+| Input | Required | Description |
+| --- | --- | --- |
+| `audience` | yes | The `aud` claim of the token: the value that the relying party expects. 1 to 255 bytes, with no control character. |
+| `tokenLifetime` | no | How long the token lives, from `1m` to `60m`. The default is `15m`. |
+
+| Output | Secret | Description |
+| --- | --- | --- |
+| `token` | yes | The signed token, a compact JWT. |
+| `issuer` | no | The `iss` claim: the issuer URL of the namespace. |
+| `audience` | no | The `aud` claim of the token. |
+| `expiresAt` | no | When the token expires, in RFC 3339 form. |
+
+The rules of a block:
+
+- The server refuses an audience that names a host of this server, so that a
+  token of a profile can never be used against the API of the server.
+- A block has a deadline of 10 seconds by default, and at most 30 seconds.
+  All the provider blocks of one open have at most 60 seconds together.
+  When a deadline ends, the block fails and gives no value.
+- An error of a block never holds the token or a secret input. The server
+  replaces each such value with `[secret]`.
+- When one block fails, the open gives no value of any block.
+- Each token that the issuer signs for a block has an audit entry, also when
+  the block fails after it got the token.
+
+A `login/oidc` block is not active yet: the server does not run provider
+blocks in this version, and no job step reads their values. Delivery of the
+token to a job comes with runs.

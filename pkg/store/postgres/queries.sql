@@ -1654,6 +1654,15 @@ SELECT pg_try_advisory_lock(sqlc.arg(class)::int, hashtext(current_schema()))::b
 -- session does not hold the lock.
 SELECT pg_advisory_unlock(sqlc.arg(class)::int, hashtext(current_schema()))::boolean AS unlocked;
 
+-- name: LockPasskeySignInChallenges :exec
+-- Orders the starts of passkey sign-ins. A start counts the open challenges of
+-- its source and of the installation, and then inserts its row. Without this
+-- lock, starts at the same time in READ COMMITTED all count the same rows and
+-- go over the caps. The lock holds until the end of the transaction. The key
+-- holds the schema, so databases that hold several schemas do not wait for
+-- each other.
+SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign-in challenges', 0));
+
 -- name: LockServerAuditScope :exec
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
@@ -5091,51 +5100,51 @@ WHERE c.state = 'running'
   AND o.kind = sqlc.arg('kind')
   AND o.state IN ('failed', 'canceled');
 
--- name: InsertCatalogBlueprint :execrows
+-- name: InsertSelfServiceBlueprint :execrows
 -- The caller checks the fence in the same transaction. A blueprint of the same
 -- name in the namespace is not written.
-INSERT INTO catalog_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
+INSERT INTO self_service_blueprints (namespace_id, name, draft_version, draft_json, draft_updated_at_ms)
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
     sqlc.arg(name), 1, sqlc.arg(draft_json), sqlc.arg(draft_updated_at_ms)
 )
 ON CONFLICT (namespace_id, name) DO NOTHING;
 
--- name: UpdateCatalogBlueprintDraft :execrows
+-- name: UpdateSelfServiceBlueprintDraft :execrows
 -- The draft changes only at the version that the caller read.
-UPDATE catalog_blueprints
+UPDATE self_service_blueprints
 SET draft_version = draft_version + 1, draft_json = sqlc.arg(draft_json), draft_updated_at_ms = sqlc.arg(draft_updated_at_ms)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
-  AND catalog_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
+  AND self_service_blueprints.name = sqlc.arg(name) AND draft_version = sqlc.arg(draft_version);
 
--- name: CountCatalogBlueprints :one
-SELECT COUNT(*) FROM catalog_blueprints
+-- name: CountSelfServiceBlueprints :one
+SELECT COUNT(*) FROM self_service_blueprints
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
--- name: GetCatalogBlueprintDraft :one
+-- name: GetSelfServiceBlueprintDraft :one
 SELECT b.draft_version, b.draft_json
-FROM catalog_blueprints AS b
+FROM self_service_blueprints AS b
 JOIN namespaces AS n ON n.id = b.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND b.name = sqlc.arg(name);
 
--- name: GetCatalogBlueprintVersionOfDraft :one
+-- name: GetSelfServiceBlueprintVersionOfDraft :one
 -- The number of the version that published a draft version. No row means the
 -- draft version has no version.
 SELECT v.number
-FROM catalog_blueprint_versions AS v
+FROM self_service_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.draft_version = sqlc.arg(draft_version);
 
--- name: LastCatalogBlueprintVersion :one
+-- name: LastSelfServiceBlueprintVersion :one
 -- The last published number of a blueprint, 0 for none. The caller holds the
 -- write lock of the namespace, so the next number is exact.
 SELECT CAST(COALESCE(MAX(v.number), 0) AS BIGINT) AS number
-FROM catalog_blueprint_versions AS v
+FROM self_service_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name);
 
--- name: InsertCatalogBlueprintVersion :exec
-INSERT INTO catalog_blueprint_versions (
+-- name: InsertSelfServiceBlueprintVersion :exec
+INSERT INTO self_service_blueprint_versions (
     namespace_id, name, number, draft_version, document_json, expr_version, published_by, published_at_ms, retired
 )
 VALUES (
@@ -5144,38 +5153,38 @@ VALUES (
     sqlc.arg(published_by), sqlc.arg(published_at_ms), 0
 );
 
--- name: GetCatalogBlueprintVersion :one
+-- name: GetSelfServiceBlueprintVersion :one
 SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
-FROM catalog_blueprint_versions AS v
+FROM self_service_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND v.name = sqlc.arg(name) AND v.number = sqlc.arg(number);
 
--- name: ListCatalogBlueprintLatest :many
+-- name: ListSelfServiceBlueprintLatest :many
 -- The newest published version of each blueprint of a namespace, by name.
 SELECT n.name AS namespace, v.name, v.number, v.draft_version, v.document_json, v.expr_version, v.published_by,
        v.published_at_ms, v.retired
-FROM catalog_blueprint_versions AS v
+FROM self_service_blueprint_versions AS v
 JOIN namespaces AS n ON n.id = v.namespace_id
 WHERE n.name = sqlc.arg(namespace)
   AND v.number = (
-      SELECT MAX(w.number) FROM catalog_blueprint_versions AS w
+      SELECT MAX(w.number) FROM self_service_blueprint_versions AS w
       WHERE w.namespace_id = v.namespace_id AND w.name = v.name
   )
 ORDER BY v.name;
 
--- name: RetireCatalogBlueprintVersion :execrows
+-- name: RetireSelfServiceBlueprintVersion :execrows
 -- A retire of a retired version matches the row and changes nothing.
-UPDATE catalog_blueprint_versions
+UPDATE self_service_blueprint_versions
 SET retired = 1
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
-  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+  AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
--- name: SetCatalogBlueprintExprVersion :execrows
-UPDATE catalog_blueprint_versions
+-- name: SetSelfServiceBlueprintExprVersion :execrows
+UPDATE self_service_blueprint_versions
 SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
-  AND catalog_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+  AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.
@@ -5427,6 +5436,16 @@ SELECT COUNT(*) FROM passkeys WHERE principal_id = $1 AND suspended_at_ms = 0;
 -- The challenges of one kind that have not expired at the given time.
 SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND expires_at_ms > $2;
 
+-- name: CountOpenPasskeyChallengesBySource :one
+-- The challenges of one kind from one source that have not expired at the
+-- given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source = $2 AND expires_at_ms > $3;
+
+-- name: CountOpenPasskeyChallengesBySourceGroup :one
+-- The challenges of one kind from one site group that have not expired at the
+-- given time.
+SELECT COUNT(*) FROM passkey_challenges WHERE kind = $1 AND source_group = $2 AND expires_at_ms > $3;
+
 -- name: CountPasskeys :one
 -- The passkeys of a person, read under the lock of the principal.
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1;
@@ -5440,8 +5459,9 @@ VALUES (sqlc.arg('id'), sqlc.arg('principal_id'), sqlc.arg('name'), sqlc.arg('cr
 ON CONFLICT DO NOTHING;
 
 -- name: CreatePasskeyChallenge :execrows
-INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO passkey_challenges (digest, kind, principal_id, pending_id, session_id, source, source_group,
+                                created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING;
 
 -- name: DeleteExpiredPasskeyChallenges :execrows

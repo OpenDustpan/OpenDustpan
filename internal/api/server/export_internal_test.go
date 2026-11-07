@@ -111,7 +111,6 @@ var (
 	ErrGroupChangeBodyForTest        = errGroupChangeBody
 	ErrMemberBodyForTest             = errMemberBody
 	ErrNamespacePrincipalBodyForTest = errNamespacePrincipalBody
-	ErrBodyTooLargeForTest           = errBodyTooLarge
 	ErrPageQueryForTest              = errPageQuery
 	ErrNoPrincipalStoreForTest       = errNoPrincipalStore
 )
@@ -124,4 +123,9 @@ func (h *Handler) CompleteLocalForTest(w http.ResponseWriter, r *http.Request, i
 	_, ok := h.completeLocal(w, r, in)
 
 	return ok
+}
+
+// BodyTooLargeForTest returns the error of a body longer than limit bytes.
+func BodyTooLargeForTest(limit int64) error {
+	return errBodyTooLarge(limit)
 }

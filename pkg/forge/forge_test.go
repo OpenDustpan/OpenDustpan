@@ -272,7 +272,7 @@ func TestNeeds(t *testing.T) {
 		},
 		{forge.ConsumerFetch, forge.Capabilities{forge.CapGitAccess}},
 		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
-		{forge.ConsumerCatalog, forge.Capabilities{forge.CapFiles}},
+		{forge.ConsumerSelfService, forge.Capabilities{forge.CapFiles}},
 		{forge.ConsumerCauseDiff, forge.Capabilities{forge.CapCompare}},
 	}
 
@@ -302,7 +302,7 @@ func TestMissing(t *testing.T) {
 		{forge.ConsumerWriteBackReview, forge.Capabilities{forge.CapReview}},
 		{forge.ConsumerFetch, nil},
 		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
-		{forge.ConsumerCatalog, nil},
+		{forge.ConsumerSelfService, nil},
 		{forge.ConsumerCauseDiff, nil},
 	}
 

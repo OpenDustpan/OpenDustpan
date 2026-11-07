@@ -1239,6 +1239,10 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 
 	prepareBinaryEnvDirs(tb, env, proxy)
 
+	// The command made the first namespace, so the harness adds the catch-all
+	// placement rule that the in-process server gets from the API create.
+	env.SeedCatchAllPlacement(ctx, tb, Namespace)
+
 	if in.store == StoreSQLite {
 		dbPath := strings.TrimPrefix(dbURL, "sqlite:")
 		checkNoOwnSQLiteHandle(tb, dbPath)
@@ -1325,6 +1329,7 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
+	env.SeedCatchAllPlacement(ctx, tb, Namespace)
 
 	return env
 }

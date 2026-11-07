@@ -15,6 +15,7 @@ func baseBanner() devBanner {
 		envFile:   "/home/alex/.local/share/opendustpan/dev/dev.env",
 		network:   "",
 		tokenNote: "",
+		placement: "",
 		ephemeral: false,
 		trustStep: false,
 	}

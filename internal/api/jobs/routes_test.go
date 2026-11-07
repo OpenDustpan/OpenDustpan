@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can
@@ -77,12 +78,14 @@ func (fakeNamespaces) Ping(context.Context) error { return nil }
 type fakeJobs struct {
 	jobs   map[job.ID]job.Job
 	getErr error
+	// listed answers List. Nil makes List fail the test of a route that calls it.
+	listed func(job.Filter) []job.Job
 	calls  []string
 	mu     sync.Mutex
 }
 
 func newFakeJobs(jobs ...job.Job) *fakeJobs {
-	f := &fakeJobs{jobs: map[job.ID]job.Job{}, getErr: nil, calls: nil, mu: sync.Mutex{}}
+	f := &fakeJobs{jobs: map[job.ID]job.Job{}, getErr: nil, listed: nil, calls: nil, mu: sync.Mutex{}}
 	for i := range jobs {
 		f.jobs[jobs[i].ID] = jobs[i]
 	}
@@ -106,7 +109,10 @@ func (f *fakeJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 		return job.Job{}, f.getErr
 	}
 
+	f.mu.Lock()
 	j, ok := f.jobs[id]
+	f.mu.Unlock()
+
 	if !ok {
 		return job.Job{}, job.ErrNotFound
 	}
@@ -114,10 +120,14 @@ func (f *fakeJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	return j, nil
 }
 
-func (f *fakeJobs) List(context.Context, job.Filter) ([]job.Job, error) {
+func (f *fakeJobs) List(_ context.Context, flt job.Filter) ([]job.Job, error) {
 	f.note("List")
 
-	return nil, errUnexpected
+	if f.listed == nil {
+		return nil, errUnexpected
+	}
+
+	return f.listed(flt), nil
 }
 
 func (f *fakeJobs) Apply(context.Context, job.Change, namespace.Fence, []audit.Entry) (job.Job, error) {
@@ -143,6 +153,14 @@ func (f *fakeJobs) Orphans(context.Context, int) ([]job.Orphan, error) {
 	f.note("Orphans")
 
 	return nil, errUnexpected
+}
+
+// set stores j, so a running stream finds the new record at its next read.
+func (f *fakeJobs) set(j *job.Job) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.jobs[j.ID] = *j
 }
 
 func (f *fakeJobs) note(name string) {
@@ -214,6 +232,14 @@ func (*recordingAuthorizer) ListObjects(context.Context, identity.Principal, ide
 	return identity.Scope{}, errNoListing
 }
 
+// revoke removes a check from the ones that the authorizer allows.
+func (a *recordingAuthorizer) revoke(hold string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	delete(a.holds, hold)
+}
+
 func (a *recordingAuthorizer) seen() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -233,14 +259,22 @@ func newStartHandler(
 ) testHandler {
 	t.Helper()
 
-	return newWorkerHandler(t, authz, handlerDeps{jobs: jobs, starter: starter, entries: entries}, nil)
+	return newWorkerHandler(
+		t,
+		authz,
+		handlerDeps{jobs: jobs, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil},
+		nil,
+	)
 }
 
 // handlerDeps are the stores and services behind a test handler.
 type handlerDeps struct {
-	jobs    job.Store
-	starter job.Starter
-	entries audit.Store
+	jobs      job.Store
+	starter   job.Starter
+	entries   audit.Store
+	artifacts job.ArtifactReader
+	logs      *jobsapi.LogOptions
+	cursors   secret.Wrapper
 }
 
 // newWorkerHandler is newStartHandler with the worker check of the start.
@@ -263,6 +297,9 @@ func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps,
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
 		Jobs:           deps.jobs,
+		Artifacts:      deps.artifacts,
+		Logs:           deps.logs,
+		Cursors:        deps.cursors,
 		Starter:        deps.starter,
 		Workers:        workers,
 		Pools:          nil,
@@ -483,7 +520,7 @@ func checkRoute(t *testing.T, handler http.Handler, pattern string, route *jobsa
 	switch {
 	case route.Scope != jobsapi.ScopeAuthorized:
 		t.Errorf("route %q is not authorized: this API serves no public route", pattern)
-	case !slices.Contains(route.Reads, identity.ActionJobRead):
+	case !slices.Contains(route.Reads, identity.ActionJobRead) && !slices.Contains(route.Filters, identity.ActionJobRead):
 		t.Errorf("route %q declares no job:read action", pattern)
 	case route.Resolve == nil || route.Serve == nil:
 		t.Errorf("route %q declares no resolver or no handler", pattern)
@@ -680,12 +717,12 @@ func TestJobDocument(t *testing.T) {
 	// A step answers its name, role and phase only. The server never answers
 	// the arguments or the variables of a step, the internal operation of a
 	// phase, or the item key of a plan or a log. The profile answers by name.
-	for _, secret := range []string{
+	for _, hidden := range []string{
 		"hunter2", "TF_LOG", "dop-internal-operation", "ik-plan-secret", "ik-secret",
 		`"args"`, `"env"`, `"idempotencyKey"`, "key-1",
 	} {
-		if strings.Contains(body, secret) {
-			t.Errorf("body holds %q: %s", secret, body)
+		if strings.Contains(body, hidden) {
+			t.Errorf("body holds %q: %s", hidden, body)
 		}
 	}
 
@@ -787,6 +824,9 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	_, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     nil,
 		Jobs:           nil,
+		Artifacts:      nil,
+		Logs:           nil,
+		Cursors:        nil,
 		Starter:        nil,
 		Workers:        nil,
 		Pools:          nil,
@@ -855,12 +895,15 @@ func TestDescriptionHoldsTheChecksOfTheRoute(t *testing.T) {
 
 	got := kindsOf(t, authz.seen())
 
-	ops := handler.Operations()
-	if len(ops) != 1 {
-		t.Fatalf("Operations() = %d operations, want 1", len(ops))
+	var op apidesc.Operation
+
+	for _, o := range handler.Operations() {
+		if o.ID == "getJob" {
+			op = o
+		}
 	}
 
-	if !maps.Equal(got, ops[0].ActionObjects) {
-		t.Errorf("the route checks %v, and the description lists %v", got, ops[0].ActionObjects)
+	if !maps.Equal(got, op.ActionObjects) {
+		t.Errorf("the route checks %v, and the description lists %v", got, op.ActionObjects)
 	}
 }

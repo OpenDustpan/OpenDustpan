@@ -91,6 +91,8 @@ func (f *Fake) AddFork(parent, fork string) error {
 	}
 
 	f.repos[fork] = &repo{
+		statuses:      map[string][]CommitStatus{},
+		comments:      nil,
 		name:          fork,
 		id:            f.nextRepoID(),
 		defaultBranch: src.defaultBranch,
@@ -447,7 +449,7 @@ func (f *Fake) pullsOf(w http.ResponseWriter, r *http.Request, level string) (*r
 // installation token, and the user otherwise. The caller holds the lock.
 func (f *Fake) actor(r *http.Request) Account {
 	if f.bearerToken(r) != nil {
-		return Account{ID: BotAccountID, Login: "dustpan-test[bot]"}
+		return Account{ID: BotAccountID, Login: f.AppLogin()}
 	}
 
 	return f.cfg.User
@@ -492,10 +494,14 @@ type pullRequest struct {
 	Base  string `json:"base"`
 }
 
+// validationFailed is the message of GitHub for a request that it does not
+// accept.
+const validationFailed = "Validation Failed"
+
 // invalidField answers 422 for a field of a pull request.
 func (f *Fake) invalidField(w http.ResponseWriter, field string) {
 	f.writeJSON(w, http.StatusUnprocessableEntity, wireValidation{
-		Message: "Validation Failed",
+		Message: validationFailed,
 		Errors:  []wireValidationError{{Resource: "PullRequest", Field: field, Code: "invalid", Message: ""}},
 	})
 }
@@ -504,7 +510,7 @@ func (f *Fake) invalidField(w http.ResponseWriter, field string) {
 // requests.
 func (f *Fake) customProblem(w http.ResponseWriter, text string) {
 	f.writeJSON(w, http.StatusUnprocessableEntity, wireValidation{
-		Message: "Validation Failed",
+		Message: validationFailed,
 		Errors:  []wireValidationError{{Resource: "PullRequest", Field: "", Code: "custom", Message: text}},
 	})
 }

@@ -27,6 +27,9 @@ const (
 	MFARateLimited = "mfa.rate-limited"
 	// MFASessionRequired means that the passkey route needs the console session of a person.
 	MFASessionRequired = "mfa.session-required"
+	// MFASignInSourceLimit means that the source address holds the most open passkey sign-in challenges that one source
+	// can hold.
+	MFASignInSourceLimit = "mfa.sign-in-source-limit"
 	// MFASignInFailed means that the passkey sign-in failed and the person starts it again.
 	MFASignInFailed = "mfa.sign-in-failed"
 	// MFAUnavailable means that the passkey store cannot answer.
@@ -77,6 +80,11 @@ func mfaSpecs() []Spec {
 		{
 			Code:    MFARateLimited,
 			Meaning: "the person started too many passkey ceremonies in a short time",
+			Args:    nil,
+		},
+		{
+			Code:    MFASignInSourceLimit,
+			Meaning: "the source address holds the most open passkey sign-in challenges that one source can hold",
 			Args:    nil,
 		},
 		{
