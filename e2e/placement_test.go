@@ -384,9 +384,9 @@ func placementRulesCustomRole(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	status, body, err = env.APIStatusAs(ctx, token.Secret, http.MethodPost,
 		"/api/stacks/"+placementNamespace+"/"+project, `{"tags":{},"stackName":"dev"}`)
-	// The refusal comes from the collection check: the same request by a role
-	// that also holds collection:create-unit makes the stack (checked when the
-	// control was run). The body does not name the action.
+	// The control below shows that the refusal comes from the collection check:
+	// the same request by a role that also holds collection:create-unit makes
+	// the stack. The body does not name the action.
 	if err != nil || status != http.StatusForbidden {
 		t.Fatalf("custom role makes a stack without collection:create-unit = %d, %v (%s); want %d",
 			status, err, body, http.StatusForbidden)
@@ -394,6 +394,43 @@ func placementRulesCustomRole(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	if got, found := placementCollectionOf(ctx, t, env, "dev"); found {
 		t.Fatalf("the refused stack exists in collection %q, want no unit", got)
+	}
+
+	// The control: a role that also holds collection:create-unit makes the
+	// stack.
+	var createRole e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"placements-create-unit","actions":[` +
+			`"namespace:read-placement-rules","namespace:manage-placement-rules","unit:manage",` +
+			`"collection:create-unit"]}`,
+		http.StatusCreated,
+	}, &createRole)
+
+	var creator e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("placements-create-unit") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &creator)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + placementNamespace + "/grants",
+		`{"subject":"principal:` + creator.ID + `","role":"` + createRole.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	controlToken := env.PersonalToken(ctx, t, creator.ID, "placements-create-unit-check")
+
+	status, body, err = env.APIStatusAs(ctx, controlToken.Secret, http.MethodPost,
+		"/api/stacks/"+placementNamespace+"/"+project, `{"tags":{},"stackName":"control"}`)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("the control role makes a stack with collection:create-unit = %d, %v (%s); want %d",
+			status, err, body, http.StatusOK)
+	}
+
+	if got, found := placementCollectionOf(ctx, t, env, "control"); !found || got != "payments" {
+		t.Fatalf("the control stack is in collection %q (found %t), want %q", got, found, "payments")
 	}
 }
 
