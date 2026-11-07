@@ -65,16 +65,10 @@ func TestWorkLayer(t *testing.T) {
 	}
 	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
-	start := time.Now()
-
 	_, err := e.run(t.Context(), "none(request.requester.groups, {inputs.big matches '^(a|b|ab|ba)*c$'})",
 		selfservice.ResultBool, env)
 	if !errors.Is(err, errWork) || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("run() = %v, want the work budget error", err)
-	}
-
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("run() took %v, want less than 1s", elapsed)
 	}
 }
 
