@@ -5,7 +5,7 @@ Status: accepted · 2026-11-07. Records owner decision 73.3 of 18 October 2026
 Changes:
 
 - Changes ADR 121 decision 6: the port gets a second method that streams. `Complete` does not change.
-- Extends ADR 314 decision 2: the design of the stream that the owner decided.
+- Extends ADR 314 decision 2: what the stream of an answer needs.
 
 ## Context
 
@@ -16,14 +16,14 @@ ADR 121 decision 6 says that the model port has no stream. The console shows the
 ## Decision
 
 1. **The port gets a second method (owner, 2026-10-18).** `agent.Model` keeps `Complete` and `Info`, and gets a streaming method. `Complete` does not change.
-2. **The agent turn route streams (owner, 2026-10-18).** While a turn runs, the agent turn route sends the text deltas of the answer. It also sends the progress of the tool calls. The route uses server-sent events and `net/http`.
-3. **One final event (owner, 2026-10-18).** The stream ends with one final event. The final event matches the turn as the store records it.
-4. **A client disconnect cancels the model call (owner, 2026-10-18).** When the client closes the connection, the model call stops.
+2. **The agent turn route streams (owner, 2026-10-18).** While a turn runs, the agent turn route sends the text deltas of the answer. It also sends the progress of the tool calls.
 
 ## Consequences
 
 - ADR 121 decision 6 does not apply now. Its other decisions apply.
-- A stream shows the same text that the stored turn holds. The final event is the record, and the deltas are a preview of it.
+- The route uses `net/http`, as `CLAUDE.md` requires.
+- The stream ends with one final event. The final event matches the turn as the store records it. The deltas are a preview of it.
+- When the client closes the connection, the model call stops.
 - ADR 124 applies to the stream. A secret value, or a masked value, never appears in a delta or in a progress event. A test checks this with a canary value.
 - A canceled call leaves no goroutine that runs. The test package uses `goleak`.
 - Each adapter of the model port runs the conformance suite for the second method (ADR 121 decision 10).
@@ -32,6 +32,7 @@ ADR 121 decision 6 says that the model port has no stream. The console shows the
 
 ## Not decided here
 
+- The transport of the stream (for example server-sent events).
 - The signature of the streaming method, and the type of its events.
 - The route path, the name of each event, and the JSON of the data of an event.
 - How the route finds the turn that it streams, and the action that it needs.

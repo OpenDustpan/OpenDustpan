@@ -3915,10 +3915,10 @@ decisions:
   - "docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md"
 - id: "adr-0357"
   title: "ADR 357: The model port gets a stream, and the agent turn route streams"
-  decision: "1. **The port gets a second method (owner, 2026-10-18).** `agent.Model` keeps `Complete` and `Info`, and gets a streaming method. `Complete` does not change.\n2. **The agent turn route streams (owner, 2026-10-18).** While a turn runs, the agent turn route sends the text deltas of the answer. It also sends the progress of the tool calls. The route uses server-sent events and `net/http`.\n3. **One final event (owner, 2026-10-18).** The stream ends with one final event. The final event matches the turn as the store records it.\n4. **A client disconnect cancels the model call (owner, 2026-10-18).** When the client closes the connection, the model call stops."
+  decision: "1. **The port gets a second method (owner, 2026-10-18).** `agent.Model` keeps `Complete` and `Info`, and gets a streaming method. `Complete` does not change.\n2. **The agent turn route streams (owner, 2026-10-18).** While a turn runs, the agent turn route sends the text deltas of the answer. It also sends the progress of the tool calls."
   reason: "On 18 October 2026 the project owner decided: \"Stream Dusty's answers in the console\". ADR 314 records these words and adds no design. ADR 121 decision 6 says that the model port has no stream. The console shows the progress of a run by turn. ADR 121 also says: \"A stream can come later as a second method, with no change to `Complete`\". The decision of the owner is that \"later\". This ADR records the parts of the design that the decision settles. It adds no decision of its own."
   scope:
-  - "docs/adr/0357-the-model-port-gets-a-stream-and-the-agent-turn-route-streams.md"
+  - "CLAUDE.md"
   currency: "active"
   source: "adr"
   accepted_at: "2026-11-07"
