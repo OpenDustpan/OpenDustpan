@@ -10,6 +10,7 @@ Changed by:
   decision points.
 - ADR 225 changes decisions 6 and 7: the change rule and the open rule become
   gates.
+- ADR 341 changes decision 2: a taint that reaches a secret source in any export key is a routing change.
 
 ## Context
 

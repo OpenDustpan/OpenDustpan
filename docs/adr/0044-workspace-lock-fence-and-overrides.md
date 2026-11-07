@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 239 extends decisions 4 and 6: a client-encrypted lock release needs the
   action and the switch.
+- ADR 335 extends decision 5: a state version with no lock meets the gates before it is written.
 
 ## Context
 
