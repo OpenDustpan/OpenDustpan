@@ -992,10 +992,17 @@ func TestDevDemoSignIn(t *testing.T) {
 	// Debug level writes the most log records: none of them may hold the password.
 	server := startPlainDev(t, bin, "--demo", "--log-level", "debug")
 
-	match := devDemoPasswordPattern.FindStringSubmatch(server.out.String())
+	// dev.addr exists, but the pseudo terminal can deliver the demo line a
+	// moment later, mostly under load: wait for the end of the line.
+	ctx, cancel := context.WithTimeout(t.Context(), devReadyLimit)
+	defer cancel()
+
+	output, _ := server.out.waitFor(ctx, "(new at each start)")
+
+	match := devDemoPasswordPattern.FindStringSubmatch(output)
 	if match == nil {
 		t.Fatalf("dev --demo prints no demo sign-in:\n%s", devDemoPasswordPattern.ReplaceAllString(
-			server.out.String(), "the user name demo and the password <redacted> ",
+			output, "the user name demo and the password <redacted> ",
 		))
 	}
 
