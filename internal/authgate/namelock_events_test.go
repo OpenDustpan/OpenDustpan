@@ -219,29 +219,35 @@ func TestLockEventsValidate(t *testing.T) {
 // pruneRequest is the arguments of a prune that the check reads.
 type pruneRequest struct {
 	name       string
+	now        time.Time
 	age        time.Duration
 	limit      int
 	endedLimit int
 	valid      bool
 }
 
-// TestCheckPruneRequest sends the bounds of a prune directly to the check: an
-// ended limit above the limit, above its maximum or below 1 fails closed.
+// TestCheckPruneRequest sends the bounds of a prune directly to the check: a
+// zero now, an ended limit above the limit, above its maximum or below 1
+// fails closed.
 func TestCheckPruneRequest(t *testing.T) {
 	t.Parallel()
 
+	at := time.Date(2026, time.November, 2, 12, 30, 15, 0, time.UTC)
+
 	cases := []pruneRequest{
-		{name: "equal limits", age: time.Hour, limit: 5, endedLimit: 5, valid: true},
-		{name: "ended limit below the limit", age: time.Hour, limit: 5, endedLimit: 1, valid: true},
-		{name: "ended limit above the limit", age: time.Hour, limit: 1, endedLimit: 2, valid: false},
+		{name: "equal limits", now: at, age: time.Hour, limit: 5, endedLimit: 5, valid: true},
+		{name: "ended limit below the limit", now: at, age: time.Hour, limit: 5, endedLimit: 1, valid: true},
+		{name: "zero now", now: time.Time{}, age: time.Hour, limit: 1, endedLimit: 1, valid: false},
+		{name: "ended limit above the limit", now: at, age: time.Hour, limit: 1, endedLimit: 2, valid: false},
 		{
-			name: "ended limit above its maximum", age: time.Hour, limit: authgate.MaxNamePruneRows,
+			name: "ended limit above its maximum", now: at, age: time.Hour, limit: authgate.MaxNamePruneRows,
 			endedLimit: authgate.MaxNamePruneEnded + 1, valid: false,
 		},
-		{name: "ended limit of 0", age: time.Hour, limit: 1, endedLimit: 0, valid: false},
-		{name: "no age", age: 0, limit: 1, endedLimit: 1, valid: false},
+		{name: "ended limit of 0", now: at, age: time.Hour, limit: 1, endedLimit: 0, valid: false},
+		{name: "no age", now: at, age: 0, limit: 1, endedLimit: 1, valid: false},
 		{
 			name:       "limit above its maximum",
+			now:        at,
 			age:        time.Hour,
 			limit:      authgate.MaxNamePruneRows + 1,
 			endedLimit: 1,
@@ -250,7 +256,9 @@ func TestCheckPruneRequest(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		err := authgate.CheckPruneRequest(tc.age, tc.limit, tc.endedLimit)
+		limits := authgate.PruneLimits{Limit: tc.limit, EndedLimit: tc.endedLimit}
+
+		err := authgate.CheckPruneRequest(tc.now, tc.age, limits)
 		if tc.valid && err != nil {
 			t.Fatalf("%s: check = %v, want nil", tc.name, err)
 		}

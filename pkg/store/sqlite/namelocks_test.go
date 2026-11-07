@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
@@ -25,6 +26,16 @@ func TestNameLockConformance(t *testing.T) {
 
 		return authgatetest.NameLockHarness{
 			Open: func(*testing.T) authgate.NameLockCounter { return s },
+			Now: func(t *testing.T) time.Time {
+				t.Helper()
+
+				now, err := s.DatabaseNow(t.Context())
+				if err != nil {
+					t.Fatalf("read the clock of the store: %v", err)
+				}
+
+				return now
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
@@ -33,6 +34,16 @@ func TestNameLockConformance(t *testing.T) {
 				t.Helper()
 
 				return openURL(t, schemaURL)
+			},
+			Now: func(t *testing.T) time.Time {
+				t.Helper()
+
+				now, err := openURL(t, schemaURL).DatabaseNow(t.Context())
+				if err != nil {
+					t.Fatalf("read the clock of the store: %v", err)
+				}
+
+				return now
 			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()

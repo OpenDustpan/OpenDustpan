@@ -419,7 +419,8 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Tim
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "", Reason: ReasonNameLocksPruned,
 	}
 
-	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)
+	n, err := locks.PruneNameLocks(ctx, at, p.Age,
+		authgate.PruneLimits{Limit: p.MaxRows, EndedLimit: p.MaxEnded}, e)
 	if err != nil {
 		return res, fmt.Errorf("prune the name counts: %w", err)
 	}
