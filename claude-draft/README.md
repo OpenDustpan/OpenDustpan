@@ -36,8 +36,8 @@ install:
 - `Bash(gh api *)` is wide. The deny list stops DELETE, the merge of a pull
   request and the ref `heads/main`. Other POST, PUT and PATCH calls stay
   allowed.
-- `Bash(git push *main*)` also blocks a branch name that contains the text
-  "main".
+- The `git push` deny entries for `main` use exact patterns, so a branch name
+  that contains the text "main" (for example `drain/domain`) is not blocked.
 - `Bash(make *)`, `Bash(go run *)` and `Bash(go generate *)` run code from the
   checkout.
 - The base file already allows `Bash(git commit *)`, `Bash(git checkout *)`,
