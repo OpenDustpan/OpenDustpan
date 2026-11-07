@@ -301,6 +301,9 @@ func TestModuleListHostileQuery(t *testing.T) {
 	f := newFixture(t)
 	encode := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 
+	// The parallel rows share one fixture and one call counter. Put only rows
+	// that make no store call in this table: a valid row would break the
+	// zero-calls check of every other row.
 	for _, tc := range []struct {
 		name  string
 		token string

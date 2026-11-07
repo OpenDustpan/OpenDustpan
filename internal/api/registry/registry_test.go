@@ -998,6 +998,9 @@ func TestListProvidersHostileQuery(t *testing.T) {
 
 	enc := base64.RawURLEncoding.EncodeToString
 
+	// The parallel rows share one fixture and one call counter. Put only rows
+	// that make no store call in this table: a valid row would break the
+	// zero-calls check of every other row.
 	tests := []struct {
 		name  string
 		query string
