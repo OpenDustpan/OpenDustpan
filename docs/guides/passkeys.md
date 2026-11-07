@@ -219,9 +219,11 @@ credential ID or a key.
 `backupEligible` is `true` for a passkey that the device can sync to other
 devices. A passkey with a `suspendedAt` time is suspended because its
 signature counter went back. A suspended passkey is a sign of a copied key.
-A restore of a backup brings back the signature counter of the passkey as
-it was at the backup.
 Remove it and add a new one.
+
+A restore of a backup brings back the signature counter of each passkey as it
+was at the backup. A use with a counter that is not higher than the restored
+counter suspends the passkey.
 
 ## Remove a passkey
 
