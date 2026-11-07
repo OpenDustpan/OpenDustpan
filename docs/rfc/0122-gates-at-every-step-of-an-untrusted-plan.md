@@ -110,11 +110,33 @@ Each step of the chain is a layer. Each layer must stop its part of the
 attack alone, with no help from the other layers. "Another step checks it"
 is never a reason to leave a check out.
 
-**A trusted source.** A job has a trusted source when the server resolved
-its commit at the start from the head of a branch that the source filter
-lists in `protectedBranches`. This is the rule of ADR 213 decision 2 for
-`unit:decrypt`, and the fact `source.protected`. Each other job has an
-**untrusted source**, whatever path started it.
+**A trusted source.** ADR 213 decision 2 trusts a commit that the server
+resolved at the start from the head of a branch that the source filter
+lists in `protectedBranches`. That list holds names only, and the server
+cannot see whether the Git host protects those branches. So this RFC
+proposes a stricter rule (O15). A job has a trusted source only when each
+of these is true:
+
+1. The commit comes from the code location of the unit, by the repository
+   ID of the Git host. A fork never gives a trusted source.
+2. The branch is an exact entry of `protectedBranches`. An entry is never
+   a pattern. A temporary branch of a merge queue is never an entry.
+3. No commit between the last approved apply and the head is marked
+   `merged-unapproved` (ADR 299 decision 17), and the server saw no force
+   push to the branch in that range. A bypass makes the source untrusted
+   until a person approves and applies a change again.
+4. For each Git host that can report it, the Forge port shows that the
+   branch requires a review, refuses force pushes, and has no bypass for
+   a principal without the approval grant. The new fact
+   `source.hostProtection` is `verified`, `missing` or `unknown`. With
+   `missing`, the source is untrusted. With `unknown` (a Git host that
+   cannot report it), the setting of O15 decides, and the docs say that
+   trust then depends on Git host settings that the server cannot see.
+
+Each other job has an **untrusted source**, whatever path started it.
+This includes a job from a tag, a blueprint version or a Catalog request.
+That fails closed: the hardening items H5 and H7 then apply to those jobs
+too.
 
 Four invariants hold at each step:
 
@@ -487,20 +509,28 @@ proxy records and the approvals, in different places. See option set O14.
 "The credential is never in the job" is a promise that teams will build
 on. It holds only when each item below holds. Each item is a check of its
 own, with its own test that sends hostile input to that check alone (ADR
-250). Items H1 to H4 close a path to the credential. Items H5 and H6 make
-a plan phase read-only and keep the credential out of a response. Items
-H7 and H8 limit the channels out.
+250). Items H1 to H4 and H10 close a path to the credential. Items H5
+and H6 make a plan phase read-only and keep the credential out of a
+response. Items H7 to H9 limit the channels out.
+
+"A plan phase" here means the phase of kind `plan` of any operation:
+`plan`, `refresh` (a drift check, ADR 263 decision 1) or `destroy`. The
+checks of H5, the facts of O8-b and the budget of O9 read the proxy rules
+that render for the operation of the job, not only the rules with `plan`
+in `operations`.
 
 | Item | Rule | Test |
 | --- | --- | --- |
 | H1 | The server derives the consumer `job-proxy` from the identity of the proxy session, never from a field of the request. The launcher claim token in the sandbox can open only the consumer `launcher`. This makes ADR 203 decision 1 stricter: the consumer is not a parameter that a caller chooses. | An open with the launcher token that asks for `job-proxy` gets `identity.ErrDenied` and an audit entry. |
 | H2 | The listener of the job proxy serves only CONNECT, and the plain HTTP of a loopback opt-in. It has no health, metrics or profiling handler on an address that the sandbox can reach. | A `GET /`, `GET /metrics` and `GET /debug/pprof/` from the sandbox get a refusal. |
 | H3 | A job of an untrusted source with `proxy-only` credentials runs only on `firecracker`, on `gvisor`, or on `kubernetes` with a sandboxed runtime class that the pool names. On `kubernetes` with the default runtime, the job pod and the proxy pod can be on one node, and a container escape reaches the credential. The start fails with `runner.ErrIsolation`, which names the unit and the pool. | A job of an untrusted source on a pool with the default runtime fails at start. |
-| H4 | The secret that starts the proxy session is not readable through the Kubernetes API by the service account of the job pod, and is not mounted into the job pod. | The service account of a job pod gets 403 on a read of the proxy secret. |
+| H4 | The secret that starts the proxy session is not readable from the sandbox. On `kubernetes`: not readable through the Kubernetes API by the service account of the job pod, and not mounted into the job pod. On `firecracker` and `gvisor`: a file that only the user of the job proxy can read, outside the sandbox. | On `kubernetes`, the service account of a job pod gets 403 on a read of the proxy secret. On a machine runner, a read from the sandbox user fails. |
 | H5 | In a plan phase of an untrusted source, the job proxy refuses: `Upgrade` and `Connection: upgrade`, the extended CONNECT of HTTP/2 (`:protocol`), the method-override headers `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, a `_method` query or form parameter, and a body on `GET`, `HEAD` or `OPTIONS` (a `Content-Length` above 0, or a `Transfer-Encoding`). | One test for each kind, each with a request that a `GET` proxy rule matches. |
 | H6 | The response scan of ADR 330 decision 7 also covers the response headers, `Location` included, in each form. Under `proxy-only`, a proxy rule cannot use a `query` credential or a credential in the URL. The job start fails with `jobproxy.ErrCredential`. | A `301` whose `Location` holds the credential breaks the stream. A `query` credential under `proxy-only` fails the start. |
 | H7 | In a phase of an untrusted source, a `tunnel` proxy rule is refused by default. A `tunnel` rule has no SNI and no `Host` check, so it allows domain fronting, and a host that many tenants share (a package registry, a Git host, object storage) is an exit for data. A unit that needs packages uses a mirror through an `inspect` proxy rule with a list of paths. | A `tunnel` rule in a plan of an untrusted source fails the start, unless a fact and a gate allow it (O8). |
 | H8 | The values that the attacker chooses and that go into records, facts and messages are checked: a host in `planDeniedHosts` matches the host grammar, the set holds at most 32 hosts, and `{{fact.path}}` escapes them in a gate message. A path in a proxy record follows ADR 330 decision 10 (only a canonical path). | A CONNECT host with control characters, and 1,000 distinct hosts, give a valid fact document. |
+| H9 | The built-in tunnel rule to the server (ADR 330 decision 3) checks the TLS ClientHello without ending the TLS. It refuses a ClientHello with an SNI other than the host of the server, with no SNI, or with Encrypted Client Hello. Without this, a program can CONNECT to the server host and reach another host behind the same ingress controller or CDN. | One test for each: another SNI, no SNI, Encrypted Client Hello. |
+| H10 | A job of an untrusted source with `proxy-only` runs only on a pool, or a set of nodes, that the operator marks for untrusted sources. A job with a credential in the job (`direct`) never runs there. So a sandbox escape cannot wait on the host for the next job that holds a credential. The docs say that EKS has no gVisor runtime class by default, and that `firecracker` needs KVM, which on a cloud VM needs nested virtualization. | A `direct` job on a pool for untrusted sources, and a `proxy-only` job of an untrusted source on another pool, each fail at start. |
 
 ## Options
 
@@ -520,6 +550,23 @@ short explanation for the owner (ELI5).
   profile gives the credential to the consumer `launcher` by any path
   (O6). The unit setting cascade (installation, namespace, collection,
   unit) gives the effective value, and a level can force it.
+  - Under `proxy-only`, a job of an untrusted source never gets
+    `unit:decrypt` or an unmasked read of the state, whoever started it.
+    This changes ADR 213 decision 2, which gives them when the principal
+    that started the job holds `unit:read-secrets`. Without this change, a
+    platform team member who clicks "Plan again" on A3's review request
+    gives A3's program the secrets of the stack. A test starts such a job
+    as a principal with `unit:read-secrets`.
+  - A second setting, `trustedSourceCredentials`, with the same values,
+    covers jobs of a trusted source. Its default is `direct`. With
+    `direct`, each trusted apply gives the provider the real credential,
+    and the Pulumi CLI stores it in the provider inputs in the state, as a
+    secret. So the persona sets both settings to `proxy-only`. Then the
+    state holds only the placeholder.
+  - A stored plan that applies after a merge (ADR 300 decision 5) keeps
+    the source of the job at its start. The apply of a plan of an
+    untrusted source stays a job of an untrusted source, also when the
+    tree is now the head of `main`.
   - For: the persona gets a preview that reads the downstream system, and
     the credential never enters the job. The rule follows the source, so
     a branch that A3 pushes and plans through the REST route gets the
@@ -558,8 +605,14 @@ front door.
   `change.plan` (O4) can name an approval rule. The plan phase does not
   dispatch until the requirement is met. The signature is a **run
   signature**:
-  - It binds to the head commit (the level L0 of ADR 299 decision 9). A
-    new push voids it.
+  - It binds to the head commit (the level L0 of ADR 299 decision 9), the
+    digest of the proxy rule set that the plan will render, the revision
+    of each profile that the plan will open, and the effective credential
+    level. A change of any of these voids it. So a person cannot widen the
+    plan proxy rules, change a profile or set the credential level to
+    `direct` after the signature, and run the plan under the old "yes".
+  - The author rule of ADR 299 decision 14 applies: the opener, a pusher
+    or an author of a commit of the review request cannot give it.
   - It meets only a requirement of `change.plan`. It never meets a
     requirement of `change.planned` or `change.apply`, also when both name
     the same approval rule. So a signature that was given before any plan
@@ -637,9 +690,11 @@ work. At this checkpoint we read the results of the inspectors.
 - **O5-a. Do nothing.** The path facts come from the list of changed
   files that the Git host gives.
 - **O5-b. The server computes the paths from two trees.** The server
-  compares the tree of the base commit and the tree of the head commit
-  that it fetched for the source snapshot (ADR 135), not a list from the
-  Git host. Then:
+  compares two trees that it fetched for the source snapshot (ADR 135),
+  not a list from the Git host. For a review request, the two trees are
+  the first parent of the test merge that the plan runs and the tree of
+  that test merge, so the diff and the planned tree are one snapshot.
+  Then:
   - a rename gives both paths.
   - a new fact `paths.special`: the count of changed entries that are not
     a regular file, or that change the mode (a symlink, a submodule entry,
@@ -768,11 +823,30 @@ The rule:
   save refuses an `approval:` gate at `change.plan` whose `when` or
   `unless` names a group of the origins `runner` or `external`, with
   `gate.ErrInvalid`, which names the group.
+- **An unverified fact never removes a requirement of an untrusted
+  source.** At `change.planned` and `change.apply`, an `approval:` gate
+  can read a plan count, for example `approval:security when
+  plan.destroy > 0`. A forged count of 0 would then remove the
+  requirement. So for a job of an untrusted source, the server counts an
+  `approval:` gate as matched when its `when` or its `unless` reads a
+  group of the origin `runner` or `external`. The requirement then holds
+  whatever the value. A group that O11-b computes in the server has the
+  origin `server`, and a gate can read it as usual.
+- **No skip at `change.plan`.** ADR 224 decision 13 lets a gate set
+  `onError: skip`, so an error counts as "no match". A gate such as `deny
+  unless checkSteps.passed.contains("manifest-schema")` raises an error
+  when the check phase gave no `checkSteps` attribute, and with `skip`
+  the plan runs. The check at the save refuses `onError: skip` on each
+  gate at `change.plan`. A switch of a gate at `change.plan` to
+  `evaluate` mode needs a fresh authentication and an audit entry, as for
+  a built-in gate (ADR 226 decision 7). A test sends a fact document with
+  no `checkSteps` attribute.
 - **The credential level is not a gate.** `untrustedSourceCredentials`
-  (O1) is a fixed setting that no fact changes.
+  and `trustedSourceCredentials` (O1) are fixed settings that no fact
+  changes.
 
-The check at the save is a security control, so it refuses. It does not
-warn. ADR 347 decision 4 says that ADR 347 does not change a security
+The checks at the save are a security control, so they refuse. They do
+not warn. ADR 347 decision 4 says that ADR 347 does not change a security
 control. Open question 11 asks the owner to confirm this.
 
 **The fact schema shows the origin.** Each group in the schema of a
@@ -840,6 +914,13 @@ guard checked with their own eyes more than the note.
   - a value for `launcher`, secret or not, is equal to a value of
     `exports.proxy`, or to its base64, JSON escape or percent form. The
     server compares the SHA-256 of each form, and never logs a value.
+  - a config secret of the stack (Pulumi config with `secure:`), or a
+    secret in the provider inputs of the current state of the unit, is
+    equal to a value of `exports.proxy` in one of these forms. The server
+    holds the keys of both, so it can compare them. For a job of an
+    untrusted source under `proxy-only`, these secrets do not reach the
+    job anyway (O1-b). The check also finds a copy that a trusted job
+    with `direct` left in the state.
 
   The error names the profile and the export, never the value.
 
@@ -876,11 +957,13 @@ use.
   source.
 - **O8-b. Facts and the read-only checks.** The job proxy applies H5 to
   each plan phase of an untrusted source. New facts:
-  `proxy.planWriteMethods` (the count of proxy rules for `plan` that allow
-  a method other than `GET`, `HEAD` and `OPTIONS`), `proxy.planHostRules`
-  (the count of proxy rules for `plan` with `inspect` and no path list, or
-  with `paths: ["/**"]`) and `proxy.planTunnelRules` (the count of
-  `tunnel` rules for `plan`). A starter gate denies a plan of an untrusted
+  `proxy.planWriteMethods` (the count of proxy rules of the plan phase
+  that allow a method other than `GET`, `HEAD` and `OPTIONS`),
+  `proxy.planHostRules` (the count of proxy rules of the plan phase with
+  `inspect` and no path list, or with `paths: ["/**"]`) and
+  `proxy.planTunnelRules` (the count of `tunnel` rules of the plan phase,
+  not the built-in tunnel to the server). The proxy rules of the plan
+  phase are the rules that render for the operation of the job. A starter gate denies a plan of an untrusted
   source when any count is above 0.
   - A fixed control too, in addition to the gate: under `proxy-only`, the
     job start of an untrusted source refuses a plan proxy rule with
@@ -949,11 +1032,24 @@ which the apply enforces, say the same thing.
   operations of `plan-display` fails closed: the plan is not readable for
   approval (`builtin/plan-readable`). The set of operations that the
   server computed is a fact of the origin `server`.
+  - The set of operations is the level L1 of ADR 299 decision 9. The
+    approvers read the property diff. A hostile preview can show an
+    `update` of a tag while the plan file holds an `update` of an access
+    policy: the same address and the same kind. So the server also
+    computes the property diff from the goals in the plan file and the
+    state that it holds, and the console shows that diff, not the one of
+    `plan-display`. Until the server computes it, the property values of
+    an `update` stay unverified for Pulumi (residual risk 8).
 - **O11-c. A render step in a fresh sandbox.** A check step after the plan
   makes the display from `plan-apply`, with no program and no credential:
   `tofu show -json` on the plan file. The providers come from the lock
   file of the base branch (invariant I1), not of the head. The result is
   an unverified fact, but no code of the change ran in that sandbox.
+  - A provider of the plan file that is not in the lock file of the base
+    branch fails closed (`builtin/plan-readable`).
+  - A plan file that OpenTofu plan encryption protects needs the key in
+    the render sandbox. The render step gets that key and no other
+    credential.
 
 **Recommendation.** O11-b for Pulumi, because the server can read the
 format in Go. O11-c for OpenTofu, because its plan file format is internal
@@ -990,16 +1086,40 @@ the recipe, not only the photo of the dish.
 - **O13-a. Do nothing.** A profile can change between the plan and the
   apply, and the apply keeps the proxy rules of the job start.
 - **O13-b. Add both to the plan binding.** The plan binding holds the
-  revision of each profile that the job opened and the SHA-256 of the
-  proxy rule set that the server renders for the unit now. At the dispatch
-  of an apply phase, a changed revision or a changed digest fails with
-  `ErrPlanStale`, and the job plans again with the new values (ADR 102
-  decision 7).
+  revision of each profile that the job opened, the SHA-256 of the proxy
+  rule set that the server renders for the unit now, and the effective
+  credential level of the source of the job. At the dispatch of an apply
+  phase, a change of any of these fails with `ErrPlanStale`, and the job
+  plans again with the new values (ADR 102 decision 7).
 
-**Recommendation.** O13-b. It is two more fields in a check that exists.
+**Recommendation.** O13-b. It is three more fields in a check that exists.
 
 **ELI5.** If somebody changed the guard's list after the preview, we do
 the preview again with the new list.
+
+### O15. What makes a source trusted
+
+- **O15-a. Keep ADR 213 decision 2.** A branch name in `protectedBranches`
+  makes a trusted source. A person who can push to that branch on the Git
+  host, or a merge that bypassed the gate, gives the root token to the
+  next trusted job.
+- **O15-b. Items 1 to 3 of section "The principle".** The repository ID,
+  exact names and no bypass since the last approved apply. The server
+  checks all three itself.
+- **O15-c. O15-b and item 4.** The Forge port reads the branch protection
+  of the Git host. `missing` makes the source untrusted. A setting of the
+  installation, `unknownHostProtection`, says what `unknown` does: `trust`
+  or `untrusted`.
+
+**Recommendation.** O15-c, with `unknownHostProtection: untrusted` as the
+default. A team on a Git host that cannot report its branch rules sets
+`trust` with a fresh authentication and an audit entry, and the API shows
+the effective value. This changes ADR 213 decision 2 and needs a Forge
+port operation with a conformance suite.
+
+**ELI5.** A note that says "this came from the safe drawer" is not enough.
+We check that the drawer has a lock, that nobody picked it, and that the
+note came from our own desk.
 
 ### O14. One view of the chain (G16)
 
@@ -1020,31 +1140,35 @@ why.
 The proposal is the recommendation of each option set:
 
 1. `untrustedSourceCredentials` with `direct` and `proxy-only`, for each
-   phase of each job of an untrusted source (O1-b), and the hardening H1
-   to H8.
-2. A new decision point `change.plan` before each plan phase (O4-b). It
+   phase of each job of an untrusted source, and `trustedSourceCredentials`
+   for a trusted source (O1-b). No `unit:decrypt` and no unmasked state
+   for a job of an untrusted source under `proxy-only`. The hardening H1
+   to H10.
+2. A stricter rule for a trusted source (O15-c).
+3. A new decision point `change.plan` before each plan phase (O4-b). It
    can deny, and can hold the plan for approve and run, with a run
    signature that never counts for a plan (O2-b).
-3. Ownership facts from the stored ownership rules, `false` when a
+4. Ownership facts from the stored ownership rules, `false` when a
    changer is unknown (O3-b).
-4. Path facts from two trees that the server fetched, with renames,
+5. Path facts from two trees that the server fetched, with renames,
    special entries and no silent cut (O5-b).
-5. Scanners as check steps in a check phase of their own, or as external
+6. Scanners as check steps in a check phase of their own, or as external
    checks. Their output is an unverified fact, bound to the job and sent
-   once. Only `deny` gates and gates after the plan can read it. This
-   amends ADR 226 decision 10 (the scanner question).
-6. A fixed check at the job start for a credential that also reaches the
+   once. A `deny` gate can read it. It never removes an approval
+   requirement of an untrusted source. This amends ADR 226 decision 10
+   (the scanner question).
+7. A fixed check at the job start for a credential that also reaches the
    job, by taint and by value (O6-c).
-7. The facts `proxy.planWriteMethods`, `planHostRules`,
+8. The facts `proxy.planWriteMethods`, `planHostRules`,
    `planTunnelRules` (O8-b), `planRequests`, `planDenied` and
    `planDeniedHosts` (O10-b).
-8. A budget for the job proxy (O9-b).
-9. A check that the two plan parts agree (O11-b and O11-c).
-10. A starter pack for an owner review of the program (O12-b).
-11. The profile revisions and the proxy rule digest in the plan binding
+9. A budget for the job proxy (O9-b).
+10. A check that the two plan parts agree (O11-b and O11-c).
+11. A starter pack for an owner review of the program (O12-b).
+12. The profile revisions and the proxy rule digest in the plan binding
     (O13-b).
-12. A read route for the chain (O14-b).
-13. RFC 16 items P13 and P14 are named as needed for this persona.
+13. A read route for the chain (O14-b).
+14. RFC 16 items P13 and P14 are named as needed for this persona.
 
 ### The decisions that this proposal changes
 
@@ -1057,6 +1181,8 @@ The proposal is the recommendation of each option set:
 | ADR 226 decision 13 | The paths come from two trees that the server fetched, with `paths.special`. |
 | ADR 100 decision 4 | A fifth phase kind, `check`. |
 | ADR 102 decision 7 | The two plan parts must agree. The binding holds the profile revisions and the proxy rule digest. |
+| ADR 213 decision 2 | A trusted source needs the repository ID, an exact branch name, no bypass and the branch protection of the Git host (O15-c). Under `proxy-only`, a job of an untrusted source gets no `unit:decrypt` and no unmasked state, whoever started it (O1-b). |
+| ADR 330 decision 3 | The built-in tunnel to the server checks the SNI (H9). |
 | ADR 203 decision 1 | The server derives the consumer `job-proxy` from the proxy session (H1). |
 | ADR 330 decisions 2, 4 and 7 | H3 (isolation for an untrusted source), H5 (read-only checks), H6 (the header scan, no `query` credential), H7 (no `tunnel` rule for an untrusted source by default). |
 
@@ -1064,8 +1190,11 @@ The proposal is the recommendation of each option set:
 
 With the proposal, the persona configures:
 
-- A path set `manifests` (`manifests/**`) and a path set `program` (each
-  other path).
+- A path set `manifests` (`manifests/**/*.yaml` and `manifests/**/*.yml`)
+  and a path set `program` (each other path). The path set lists the
+  extensions, because `manifests/**` also matches code: a `.ts` file that
+  the program imports, or a `.tf` file that a `module` block loads. The
+  docs say so.
 - An ownership rule for each team on its manifests, and one for the
   platform team on `program`, in `enforce` mode.
 - A profile with the root token in `exports.proxy` only.
@@ -1073,8 +1202,12 @@ With the proposal, the persona configures:
   `api.downstream.example`, for example `/v1/items/*` and
   `/v1/items/*/settings`, not the whole host. For `apply`, the methods
   and paths of the resources that the stack manages.
-- `untrustedSourceCredentials: proxy-only`, forced at the collection, on
-  a pool with `gvisor` isolation.
+- `untrustedSourceCredentials: proxy-only` and
+  `trustedSourceCredentials: proxy-only`, forced at the collection, on a
+  pool with `gvisor` isolation that is marked for untrusted sources (H10).
+- `main` as an exact entry of `protectedBranches`, with branch rules on
+  the Git host that require a review and refuse force pushes, so that
+  `source.hostProtection` is `verified`.
 - A check step `manifest-schema` (conftest, with the policy files of the
   base branch) in the check phase.
 - Gates at `change.plan`, each with the outcome `deny` or `approval:`:
@@ -1092,7 +1225,7 @@ Then the attack goes like this:
 
 | Example | Stopped at | How |
 | --- | --- | --- |
-| 1. Steal the root token | Step 3, with H1 to H6 | The token is not in the job. Each host of the attacker gets 403. |
+| 1. Steal the root token | Step 3, with H1 to H6, H9 and H10 | The token is not in the job. Each host of the attacker gets 403. |
 | 2. Call a delete in the preview | Step 3 with H5, and step 2 when the program changes | The plan proxy rules list read paths only, and H5 refuses upgrades, overrides and bodies. A program change needs approve and run. A `GET` with a side effect on a listed path stays possible. |
 | 3. Read data and print it | Partly, steps 2 and 4 | A manifest-only change cannot change what the program reads. A program change needs approve and run. The budget limits the volume. See "Residual risk". |
 | 4. Use the runner | Step 4 | One route, to the job proxy. CPU, memory and time limits. |
@@ -1136,7 +1269,9 @@ These stay possible with the full proposal. The docs must say each one.
 7. **The apply runs code.** See G13. A code owner who approves a hostile
    program diff (A5) is out of scope.
 8. **The plan parts until O11 exists.** For a tool with no check of O11,
-   the display and the plan file can differ.
+   the display and the plan file can differ. For Pulumi, until the server
+   computes the property diff (O11-b), the property values of an `update`
+   stay unverified.
 9. **Credentials that sign each request** (for example AWS Signature
    Version 4) cannot go through the job proxy as a credential. Such a
    unit must use workload identity with a short life, or `direct`.
@@ -1145,7 +1280,17 @@ These stay possible with the full proposal. The docs must say each one.
     327).
 11. **Sandbox escape.** A kernel or hypervisor bug can break the
     isolation. The isolation probe finds a wrong network setup, not a
-    kernel bug. H3 keeps an untrusted source off the weakest isolation.
+    kernel bug. H3 keeps an untrusted source off the weakest isolation,
+    and H10 keeps it off the hosts of trusted jobs.
+15. **Each trusted apply with `direct` puts the credential in the job and
+    in the state.** With `trustedSourceCredentials: direct` (the default),
+    the program of a trusted apply holds the real credential, and the
+    provider inputs in the state hold it as a secret. The proxy-only level
+    of an untrusted source does not change that.
+16. **The trust of a source depends on the Git host.** When
+    `source.hostProtection` is `unknown`, a person who can push to a
+    protected branch on the Git host, or who can change its rules, makes a
+    trusted source. The server cannot see this.
 12. **Name constraints.** A client that does not honor the name
     constraint of the CA of a claim trusts more names than it should (RFC
     16, open).
@@ -1169,7 +1314,7 @@ proposal are one-way in the API. These parts are harder to undo:
 - **The security promise of `proxy-only`.** When the docs say "the
   credential never enters the job", teams build on it. A later exception
   breaks their threat model without a change in their configuration. So
-  H1 to H8 must hold before the docs make the promise.
+  H1 to H10 must hold before the docs make the promise.
 - **The origin of each fact.** Once gates rely on the origin, a change of
   the origin of a group can turn a refused gate into an allowed one.
 - **Ownership facts from the code owners file of the Git host (O3-c).**
@@ -1275,8 +1420,33 @@ recommendation.
     Recommendation: refuse.
 12. **The origin of each fact.** Should each fact group of each decision
     point name its origin (`server`, `job-proxy`, `runner`, `external`),
-    also for the plan and the policy pack facts that exist today?
+    also for the plan and the policy pack facts that exist today? For a job
+    of an untrusted source, an approval gate that reads a group of the
+    origin `runner` or `external` then always asks for its approval.
     Recommendation: yes.
+13. **What makes a source trusted.** Today a branch name in
+    `protectedBranches` makes a trusted source, and the server cannot see
+    whether the Git host protects that branch. Should a trusted source
+    also need the repository ID of the code location, an exact branch
+    name, no merge around the gate and no force push since the last
+    approved apply, and branch rules on the Git host that the server reads?
+    When the Git host cannot report its rules, should the default be
+    "untrusted"? This changes ADR 213 decision 2. Recommendation: yes to
+    both (O15-c).
+14. **No secrets for an untrusted source, whoever starts it.** ADR 213
+    decision 2 gives a plan the secrets of the stack and an unmasked state
+    when the person who starts it holds `unit:read-secrets`. So a platform
+    team member who clicks "Plan again" on a user's review request gives
+    that user's program the secrets. Under `proxy-only`, should a job of
+    an untrusted source never get them, whoever starts it? Recommendation:
+    yes.
+15. **Trusted applies keep the credential in the job by default.**
+    `proxy-only` for an untrusted source does not change a trusted apply.
+    With `trustedSourceCredentials: direct` (the default), each trusted
+    apply gives the program the real credential, and the state stores it
+    as a secret. Keep `direct` as the default, and let a team set
+    `proxy-only` for trusted sources too? Recommendation: yes, and the
+    docs show this as residual risk 15.
 
 ## Proposed glossary lines
 
