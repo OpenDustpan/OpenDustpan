@@ -22,7 +22,7 @@ administrator writes over them with the gates of ADR 222, and the guidelines
 and example policies for each kind of organization. The sections "Owner
 decision of 2026-11-07" to "One-way doors" are new. Section C, section D (the
 parts about signatures, age and provenance), section H, the first slice, and
-the questions changed. The earlier proposal of 2026-10-30 is kept as history
+the questions changed. The section "Prior art: artifact firewalls" is new in this revision: it records how JFrog, Sonatype, Cloudsmith, GitHub, Socket and others, and the Go module ecosystem, set signals, policies and waivers, and the example policies follow from it. The earlier proposal of 2026-10-30 is kept as history
 where it still holds.
 
 ## Owner decision of 2026-11-07: signals, not verdicts
@@ -1118,6 +1118,220 @@ step:
    file can no longer download from a signed URL that was issued before the
    revocation.
 
+## Prior art: artifact firewalls
+
+The owner asked whether this is a solved problem. Mostly it is. Artifact
+proxies and firewalls have used one shape for years: read signals about a
+package, apply a policy that an administrator writes, and give a person a way
+to make an exception. This section records what the vendor documents say,
+as of 2026-11-07. It reads vendor documents and public specifications only.
+A statement that the pages do not make is marked "not documented". Several
+pages were read through a summarizing tool, so the details are as relayed and
+a reviewer should check any value before the project quotes it.
+
+### What each system does
+
+| System | Signals | How a policy is written, and the default | Waiver | First-party and third-party |
+| --- | --- | --- | --- | --- |
+| **JFrog Xray** | Security (CVE severity), license and operational risk. A rule can ignore violations that have no fix version (`fix_version_dependant`). | A policy holds rules with criteria and actions: fail build, **block download** (also for unscanned artifacts, with a timeout of 60 seconds by default), notify. A watch binds a policy to repositories or builds. A grace period (in days) is available. Default policy: not documented. The block-download function for remote repositories is moving to Curation. | An **ignore rule**: scope is a watch, component, artifact, build or release bundle. Expiry is optional. The violation stays visible in the audit log. Who may create a rule and whether a reason is required: not documented. | Gates local repositories. Not documented otherwise. |
+| **JFrog Curation** | Malicious package, CVE by CVSS (options: use EPSS, allow when no fix exists, allow when the CVE is already in the repository), OpenSSF score, license (allow list, block list, "no license found"), **immature** (younger than N days; 2, 14 or 30 in the wizard; option: allow when the version fixes a CVE that the repositories have), aged, end of life, integrity violation, catalog labels. | A policy is a **condition + a repository scope + an action** (`block` or `dry_run`). A dry run writes audit events only, and the vendor suggests one to two weeks before enforcing. "Compliant version selection" returns the newest version that passes, in place of an error. Default policy: not documented. A "warn" action: not found. | **Waiver request** with a reason, through the CLI or the UI. Each policy sets `Not Allowed`, `Manually Approved` (a decision-owner group is required) or `Automatically Approved`. All blocking policies must agree. Scope: one package version. **Expiry: 1 to 365 days, set in the policy. If unset, the waiver is permanent.** The shortest duration wins. On expiry the block applies again, also to cached copies. The closed requests list who decided, the duration and the time, and exports to CSV. | The public catalog covers public packages. **On-Demand Curation** scans packages from internal remote repositories separately. Some conditions are not supported there, and the age of a package is the date it entered Artifactory, which gives false alarms. |
+| **Sonatype Repository Firewall** | Malicious component, release **integrity** rating, CVSS 9 or more, banned license, **age** (counted from the day Sonatype first cataloged the version, not from the publish date of the host), **namespace conflict**, unknown component. | A policy has an action for each stage. At the proxy stage the action is `Fail`, `Warn` or `No Action`. **`No Action` is the default.** Only `Fail` quarantines. Automatic release of a quarantined component happens when its violations no longer hold. The vendor recommends: block unknown components, turn on automatic release. | A **waiver** needs the "Waive policy violations" permission. A user without it submits a **waiver request**. The reviewer may change the scope, the match and the expiry, and gives a reason. Scope: the repository is recommended, the organization is "use with caution". Expiry: a duration or never, and the vendor says to use short durations. After expiry the violation returns, but **the component is not quarantined again** until a person removes it from the proxy. A waiver can stop to apply when the data under it changes (for example a changed CVE severity). Vendor advice: give the right to the project owner, the security team or the legal team, not to developers. | **Namespace confusion protection** builds a list of namespaces from hosted repositories that an administrator marks as proprietary (Maven group, npm scope). A public component in such a namespace is quarantined at the proxy. |
+| **Cloudsmith** | CVE severity, license, deny rules by name or version, malware, and for the policy-as-code add-on: CVSS, EPSS, patch availability, package and repository data. **Cooldown policy**: minimum age in days, from the upstream publish date. | Standard policies quarantine what they match. **Policy as code** is Rego (OPA) over package metadata. Actions: set state (`AVAILABLE`, `QUARANTINED`, `DELETED`, `HIDDEN`), add or remove tags. A higher precedence runs first, and a `terminal` flag stops the evaluation. A request for a quarantined package gets 403. A **simulate** endpoint shows the effect. Default policy: not documented. | An **exemption** is an exact allow list in a Rego policy (package and version) that sets the state `AVAILABLE` and the tag `exempt`. **No expiry and no approval flow are built in.** The vendor suggests a monthly review and a pull request flow in Git. Decision logs record each evaluation with the reason and the actions. | The cooldown targets packages from public upstream hosts. A manual upload has no upstream publish date, so it is not covered by that policy. |
+| **GitHub dependency review, Dependabot, Artifact Attestations** | Known vulnerabilities (Advisory DB), license, scope (runtime or development), package identity (purl), OpenSSF Scorecard score. Attestations are signed claims about the workflow, the repository, the organization, the commit and the event. | Action inputs: `fail-on-severity`, `allow-licenses` (an SPDX list; it cannot be combined with `deny-licenses`), `deny-packages` (purl; without a version, all versions), `allow-ghsas`, `fail-on-scopes`, `warn-on-openssf-scorecard-level`. Defaults: `fail-on-severity` is `low`, `fail-on-scopes` is `runtime`, and a Scorecard score below 3 gives a **warning, never a failure**. A license that is not found does not fail. Organization-wide enforcement is a required workflow in a ruleset. The Kubernetes policy-controller enforces nothing until a namespace carries the label `policy.sigstore.dev/include=true`, and then **an image that matches no policy is rejected**. | `allow-ghsas` and `allow-dependencies-licenses` live in the workflow file. They have no expiry, and the review of the pull request is the approval. A Dependabot dismissal has a reason code and a comment, and it is in the audit log. **Delegated alert dismissal** makes a user with write access *request* a dismissal. Only owners, security managers, or a custom role with the review permission approve. | No distinction. The policy-controller tells a source organization (`policy.organization`) from other sources. |
+| **Socket.dev** | Alert types: install scripts, network access, obfuscated code, typosquat, **new author**, **recently published**, unmaintained, known malware, malware found by AI, CVEs, license, git or HTTP dependencies, telemetry, protestware. | A policy is an **ordered list of rules**. Each rule maps an alert to `Block`, `Warn`, `Monitor` or `Ignore`. The first match wins. Default ("Balanced"): block known malware. Warn on AI-found malware, critical CVEs, license violations, typosquats, protestware, obfuscated code. Monitor the other CVEs. Ignore the rest, which includes install scripts, network access and package age. | An **alert resolution** (reasons: remediated, false positive, tolerable risk, other) with a comment. It is checked **before** the policy and wins over it. Scope: from one repository to the whole organization. Expiry: not documented. A comment `@SocketSecurity ignore pkg@version` in a pull request does the same, and any contributor can write it. | Not documented. |
+| **OpenSSF Scorecard and SLSA** | Scorecard: about 18 checks that score 0 to 10, each with a risk level. Critical: dangerous workflow, webhooks. High: binary artifacts, branch protection, code review, maintained, signed releases, token permissions, vulnerabilities and others. SLSA build track: L1 provenance exists, L2 a hosted build and signed provenance, L3 hardened and isolated builds. | **No policy language.** A score is data, not a decision. Tools that use it make it a warning or a threshold of their own. SLSA says that the consumer checks the provenance against its own expectations. | None. | None. |
+| **Google Assured OSS** | The guarantees of the service: built from source by Google, signed provenance (SLSA level 3), continuous vulnerability scanning, SBOM and VEX. | The administrator chooses the repository. No policy language is in the overview. | Not documented. | Only the packages that Google builds carry the guarantees. The free proxy serves other packages too, without them. |
+| **Artifact Hub** | A scan report of the container images in a package (Trivy), the **verified publisher** mark (the owner proves control of the repository with a metadata file), the **official** mark (a manual request), a signed mark (Helm provenance). | **Informational.** There is no threshold and no block. | Not applicable. | Official means that the publisher owns the software. Verified means that the publisher controls the repository. |
+| **Inedo ProGet** | Vulnerabilities, license (a global policy and a feed policy: compliant, warn, non-compliant). | Two feeds: an unapproved feed that connects to public hosts, and an approved feed. A person **promotes** a vetted package to the approved feed, and developers see only that feed. Default: the pages do not say what an unassessed package counts as (a forum post says compliant; not verified). | License exceptions use wildcard filters with an optional expiry date. Vulnerability overrides, who may assess, and the audit: the pages could not be read. | Not documented. |
+
+### The Go module ecosystem
+
+Providers are Go programs, so Go gives a natural signal set for them. Athens,
+the Go module proxy, is a gate for modules. The facts below are from
+`go.dev/ref/mod`, `go.dev/doc/security/vuln` and the Athens documents.
+
+- **Athens filter file.** One rule for each line. The prefix is `+` (store the
+  module), `D` (fetch it directly, do not store it) or `-` (exclude it: not
+  fetched from upstream). A first line with a bare `+`, `-` or `D` is the
+  default. A more specific rule wins. A path may be followed by a
+  comma-separated list of versions with the modifiers `~1.2.3`, `^1.2.3` and
+  `<1.2.3`. The allowlist form is: a bare `-` as the default, `D` for the
+  organization's own path, and `+` with a list of versions for each admitted
+  module. The documents mark the filter file as deprecated for download
+  routing, because of the **download mode file** (`sync`, `async`, `redirect`,
+  `none`, with one block for each module pattern). `ValidatorHook` is a URL
+  that Athens calls to validate a module. The request and the response format
+  are not in the documents that were read. **Lesson:** include and exclude
+  lists with version rules are the oldest form of the allowlist, and the
+  community moved from one flat file to rules with an outcome per pattern.
+- **Checksum database** (`sum.golang.org`). A transparency log (a Merkle tree)
+  of the hashes in `go.sum`. The `go` command checks an inclusion proof and a
+  consistency proof, and compares the hash with the bytes. A mismatch is a
+  security error. Inclusion proves that everyone sees the **same bytes for a
+  version**. It does not prove that the code is safe, that the author is who
+  the name says, or that the version is old. A first publish that is malicious
+  is logged faithfully. `GOPRIVATE` (and so `GONOSUMDB` and `GONOPROXY`)
+  names the modules that skip the proxy and the database. A private module
+  has **no transparency guarantee**, only `go.sum` on first use. This is the
+  Go form of the first-party and third-party split.
+- **Retraction and deprecation.** The author writes `retract` in `go.mod` or a
+  `Deprecated:` paragraph. The `go` command does not select a retracted
+  version in an upgrade, and warns. A build that already uses the version
+  still works. The **author controls both marks**. An attacker who owns the
+  module can add or omit them.
+- **Vulnerability database** (`vuln.go.dev`, OSV format) and **govulncheck**.
+  The database covers known, curated problems only. It has no severity label
+  and no malicious-package feed. govulncheck in source mode reports only the
+  symbols that the code can reach. In **binary mode** it has no call graph, so
+  it may report problems that are not reachable. It exits with 0 only when it
+  finds nothing, and with the JSON output it exits with 0 in every case, so a
+  gate must read the findings, not the exit code.
+- **Publish time.** The proxy answers `@v/<version>.info` with a `Time` field.
+  It is optional. For a direct fetch it is the commit time, which the author
+  sets. The checksum database does not cover it. A policy on age must treat it
+  as untrusted. The time of the first sight in the installation is the safer
+  clock (Sonatype counts from the first catalog date for the same reason).
+
+### The common signal set
+
+Eight signals appear in at least three of the systems above:
+
+1. **Known malicious package** (JFrog Curation, Sonatype, Cloudsmith, Socket).
+   Every system that has it treats it as a block by default.
+2. **Known vulnerability with a severity** (all except Scorecard, Artifact
+   Hub and the Go checksum database). Always with a **fix available**
+   condition or a **reachability** condition (Xray, Curation, Cloudsmith
+   with patch availability, govulncheck), because a threshold alone blocks
+   too much.
+3. **License** (all except the Go ecosystem). An allow list. Unknown license
+   is a separate value.
+4. **Age** of the version (Curation, Sonatype, Cloudsmith, Socket).
+   Always a minimum age in days, with a relaxation for a version that fixes
+   a known problem. Two systems count from their own first sight of the
+   version, and not from the date that the publisher gives.
+5. **Provenance and integrity** (Curation, Sonatype, GitHub, SLSA, Google,
+   Artifact Hub, the Go checksum database): a signature, an attestation, a
+   build level.
+6. **Maintainer and ownership change** (Socket new author, Scorecard
+   maintained, Sonatype namespace conflict, Artifact Hub verified publisher).
+7. **Project posture** (Scorecard, Curation OpenSSF, Socket unmaintained).
+   Advisory in every system that uses it. No system blocks on the score alone
+   by default.
+8. **Unscanned or unknown** (Xray, Sonatype, Curation). A package for which
+   the data is not yet there. Three systems block or hold it, and one of them
+   cannot waive that hold.
+
+### The common policy primitives
+
+- **Three outcomes, plus a rehearsal.** Block, warn (or monitor), and
+  **quarantine** (the package is known to the system and is held until a
+  person or a condition releases it). Every system with a block also has a
+  mode that records the result and enforces nothing: dry run (Curation),
+  simulate (Cloudsmith), monitor (Socket). Our outcomes are `deny`, `warn`,
+  `approval:<rule id>` (a request that waits is our quarantine) and the
+  `evaluate` mode of ADR 229 (the rehearsal). The mapping needs no new
+  concept.
+- **A threshold with a relaxation.** Severity with "fix available" or
+  "reachable", age with "fixes a known problem", Scorecard score with a level
+  that only warns.
+- **An allow list and a deny list of licenses, of packages and of
+  namespaces.** An allow list wins when both are present (GitHub refuses to
+  combine them).
+- **A scope.** Repository, label, runtime or development dependency. For us:
+  installation, namespace, kind of package.
+- **Ordered rules, the first match wins** (Socket, Cloudsmith with a terminal
+  flag) or **combine all** (Cloudsmith precedence, Curation: every blocking
+  policy must agree). Gates in ADR 224 combine all. This is the safer form
+  for a deny.
+- **A malicious-package feed blocks without a threshold.** Nobody makes it
+  a score.
+- **Fail closed for the unknown.** Two of the systems hold a package that
+  they cannot evaluate yet. The GitHub policy-controller rejects an image that
+  no policy matches. Counter-example: Sonatype's stage default is `No Action`
+  and Cloudsmith leaves a package available when its first evaluation fails,
+  so those two fail open until an administrator writes a policy.
+
+### The waiver model
+
+The pattern with the most support (Curation, Sonatype, GitHub delegated
+dismissal):
+
+1. **A request, then a decision.** The person who needs the package asks, and
+   gives a reason. A person with a named permission decides. A person without
+   the permission can ask and cannot decide.
+2. **The scope is one version of one package** (Curation), a repository
+   (Sonatype, recommended) or an advisory ID (GitHub). The wide scopes
+   (organization, all versions) exist, and the vendors tell the user to avoid
+   them.
+3. **An expiry.** Curation: 1 to 365 days, set by the policy, with the
+   shortest of several owners winning. Sonatype: a duration or never, with
+   advice to use short ones. Xray: optional. Cloudsmith: none, so the vendor
+   suggests a monthly review. **When a waiver ends, enforcement applies again
+   and the decision is re-evaluated.** Sonatype shows the failure of the
+   alternative: after expiry the component stays in the cache until a person
+   removes it.
+4. **A reason, the deciding person and the time are kept.** Curation exports
+   them. Sonatype keeps approved requests. Xray keeps the violation visible
+   in the audit log. Socket keeps the reason and the comment.
+5. **The waiver can lose its meaning.** Sonatype stops a waiver when the data
+   under it changes (for example a new CVE severity).
+6. **Some holds cannot be waived.** Xray cannot override the "unscanned"
+   block, and Curation cannot waive a block while a scan is pending.
+7. **The weak forms are the ones to avoid.** A waiver in a file with no expiry
+   and no separate approver (the GitHub `allow-ghsas`), a comment that any
+   contributor can write (Socket), and an allow list with no expiry
+   (Cloudsmith) are the forms that the vendors' own best-practice pages warn
+   about, in the cases that we read.
+
+### Guidelines for RFC 93
+
+These follow from the above. Each is a guideline for the documentation and the
+starter packs. None is a built-in verdict, because the owner decision stands.
+
+- **G1. Start in rehearsal.** Every starter pack arrives in `evaluate` mode
+  (ADR 229). The vendors suggest one to two weeks before a block.
+- **G2. Use the waiver for exceptions, and the gate for rules.** A request
+  that waits for an approval rule (ADR 225) is the waiver flow of Curation and
+  Sonatype. The approval record holds the scope (one version of one address),
+  the reason, the approvers and the time. The requester does not approve
+  (question 2).
+- **G3. An approval for a third-party package has an expiry.** Both vendors
+  with a full flow have one, and both warn about the permanent waiver. Our
+  proposal: the approval rule sets a maximum in days (the shortest wins when
+  rules differ), and at the end the package goes back to the state "waits for
+  a person" and the units that use it see a `warn` in their next job. This
+  re-evaluation is the part that Sonatype lacks. Question 5 asks the owner.
+- **G4. A reason is a required field, and a hold cannot be waived while
+  scan data is missing.** The pack for a regulated organization makes the
+  second a `deny` with no approval path.
+- **G5. Age counts from our first sight where the host date is not safe.**
+  The facts hold both: `version.ageDays` (the host date, `host-claim`) and
+  `version.firstSeenDays` (our clock, `computed`). A pack that wants a
+  cooldown should read the second one, or both.
+- **G6. A malicious-package finding is a `deny` in every pack.** An
+  administrator may still remove it. The reason is that no vendor treats this
+  signal as a score.
+- **G7. A severity gate has a fix-available or a reachable condition.** For
+  Go binaries, read the reachable findings first. A binary-mode finding may be
+  a false alarm, and the gate must say so in its reason.
+- **G8. A score from outside the installation only warns.** Stars, Scorecard
+  and similar values are `host-claim`. All systems that use them keep them
+  advisory. The packs follow this.
+- **G9. First-party packages go through the review flow of the team.**
+  Curation scans private repositories apart from the public catalog. Sonatype
+  protects proprietary namespaces against a public package of the same name.
+  Go skips the proxy and the database for private modules. This matches the
+  owner's decision, and adds one thing to the design: a **namespace conflict**
+  check. A third-party package whose address lies in a namespace that the
+  installation registered as private is held for review (G10).
+- **G10. Name confusion is a signal.** The new fact
+  `ownership.namespaceConflict` is `true` when an upstream package has the same
+  name or namespace as a first-party one. It is `computed` from our own
+  records. The packs `deny` it unless a person approves.
+- **G11. Show the policy that decided.** Every system with an audit log keeps
+  who and when. We add the matched gate and the whole fact document (ADR 229).
+  This is more than the vendors keep, and it follows from "no magic".
+
 ## The provenance signals
 
 The fact schema `package.admit/1.0` has one group for each family of signals.
@@ -1133,14 +1347,15 @@ A group has an `available` flag (ADR 226 decision 3). Each group has an
 
 | Group | Fields (examples) | Origin | What a person can fake or what the signal misses |
 | --- | --- | --- | --- |
-| `ownership` | `first-party` or `third-party`, the registry, the namespace, the publishing principal and the grant that allowed the upload | computed | Nothing, if the rule below holds: a package is `first-party` only when it is in a private registry or namespace of this installation, a principal uploaded it through the publish route, and a grant allowed it. A mirrored package is always `third-party`. A claim inside the package has no effect. |
+| `ownership` | `class` (`first-party` or `third-party`), `namespaceConflict` (an upstream package has the name or namespace of a first-party one), the registry, the namespace, the publishing principal and the grant that allowed the upload | computed | Nothing, if the rule below holds: a package is `first-party` only when it is in a private registry or namespace of this installation, a principal uploaded it through the publish route, and a grant allowed it. A mirrored package is always `third-party`. A claim inside the package has no effect. |
 | `package` | kind, upstream host, registry host, address, version as written, number of platforms, SHA-256 of each archive | computed | Nothing about the bytes. The address says nothing about who owns the name. |
 | `publisher` | namespace or organization of the address, forge host, forge organization or user, the forge's own "verified" mark | host-claim | A name that looks like a vendor (typosquat). A forge organization that changes owner. A "verified" mark is the host's view, not ours. |
 | `signature` | result (`verified`, `unsigned`, `unknown-key`, `failed`), key ID, fingerprint, `keyChanged` | computed | `verified` means "signed by this key". An attacker with the key, or with a new key at a new address, is `verified`. |
 | `attestation` | format (`slsa`, `sigstore`, `openpgp-only`, `none`), `present`, `verified`, the builder and the source repository that it names, the claimed level | computed when an adapter checks it, else host-claim | A build can be reproducible and still malicious. An attestation names the builder, not the intent. |
 | `version` | upstream release date, age in days, `firstSeenDays` in this installation, the count of admitted versions of the address, the yank or deprecation mark of the host | host-claim for the date, computed for `firstSeenDays` | The publisher chooses the release date on many hosts. A new version of an old package has an old repository. |
 | `repository` | forge host, URL, age in days, days since the last commit, stars, forks, archived mark, number of contributors | host-claim | **Stars are cheap to buy and tell nothing about safety.** A new commit costs one empty commit. An old repository can change hands. A fork starts at age 0 with the history of the original. |
-| `vulnerabilities` | scanner, database version, scan time, count for each severity, count of reachable findings where the scanner gives it | computed (scan of the stored bytes) | A scanner finds known problems only. `govulncheck` covers Go modules and the reachable symbols of a Go binary, and not other languages. A database can lag behind a disclosure. |
+| `vulnerabilities` | scanner, database version, scan time, count for each severity, count of reachable findings where the scanner gives it, count of `malicious` findings from a malicious-package feed in OSV format | computed (scan of the stored bytes) | A scanner finds known problems only. `govulncheck` covers Go modules and the reachable symbols of a Go binary, and not other languages. A database can lag behind a disclosure. |
+| `gomodule` | for a Go binary: module path and version, linked modules, `sumdbIncluded`, `retracted`, `deprecated`, `govulncheck` mode and findings, `proxyTime`. See "Go modules as a signal set for providers" | computed from the binary, host-claim for the rest | The author controls retraction and the proxy time. Inclusion in the checksum database shows the same bytes for everyone, not that the code is safe. |
 | `external` | for each check: name, reporter, time, status (`pass`, `fail`, `error`), counts for each severity | reporter-claim | As good as the reporter and its credentials. The server cannot check the work of a scanner that it did not run. |
 | `principal`, `source` | who asks and how: kind, credential, `api`, `cli` or `agent` (ADR 226) | computed | Nothing. These are our own records. |
 
@@ -1182,24 +1397,178 @@ old requests. The administrator decides:
 - what a scan result means: a count of severities, or only reachable findings;
 - which external checks must pass.
 
-### Guidelines per kind of organization
+### Example policies for three kinds of organization
 
 The documentation (a guide in `docs/guides/`) and the starter packs give
-examples. A starter pack is a set of gates and one approval rule, as data.
+examples. A starter pack is a set of gates and approval rules, as data.
 An administrator copies a pack and edits it. The server does not apply a pack
-by itself. The three below are sketches in words. The exact gates need
-`gate/gatetest` and a review.
+by itself. The packs below are sketches. The field names are proposals for
+`package.admit/1.0`, and the exact gates need `gate/gatetest` and a review.
 
-| Kind | Policy sketch | What the decision record holds |
+How to read a sketch. ADR 224 decision 14 combines the outcomes of the gates
+in this order: any `deny`, then each named approval rule, then each `warn`,
+then `allow`. So a pack never writes an `allow` rule. A package is admitted
+when no rule below matches it. Each rule is a gate with a `when` condition
+over the facts and one outcome. Every pack starts in `evaluate` mode (G1).
+Every pack applies to `ownership.class == "third-party"` (the next
+subsection). The prior art maps to ours like this: block is `deny`, warn is
+`warn`, quarantine is a request that waits (`approval:<rule id>`), and a
+rehearsal is `evaluate` mode.
+
+#### Pack 1: startup (speed first)
+
+The aim: no human delay for known vendors and for packages that look
+normal. A person looks at the rest, and that person may be the requester.
+The pack has five rules and one approval rule.
+
+```
+approval rule  package-quick-review
+  approvers    holders of the approve action (the requester may approve:
+               packageAdmission.authorMayApprove = true, set by the
+               administrator, shown in the API)
+  count        1
+  expires      90 days, then the package waits again (G3)
+
+deny   when vulnerabilities.available and vulnerabilities.malicious > 0   (G6)
+deny   when ownership.namespaceConflict                                 (G10)
+warn   when vulnerabilities.critical > 0 and vulnerabilities.fixAvailable
+         message "A critical finding has a fixed version. Update."
+approval:package-quick-review
+       when not (publisher.name in ["hashicorp", "opentofu", "pulumi",
+                                    "<cloud vendor>", "<team forge org>"])
+approval:package-quick-review
+       when version.ageDays < 7 and version.firstSeenDays < 7          (G5)
+```
+
+The signals it reads: `publisher`, `version`, `vulnerabilities`,
+`ownership`. It does not read stars, repository age or Scorecard (G8). The
+decision record holds the facts, the matched gate, the person and the expiry.
+Compare Socket's "Balanced" preset: block the known bad, warn on the loud
+risks, ignore the rest.
+
+#### Pack 2: regulated, with a SOUP process (ISO 13485, IEC 62304)
+
+The aim: evidence for each item of software of unknown provenance, for years.
+No package enters without two people and a written risk review. The pack
+blocks the cases where the evidence is not there.
+
+```
+approval rule  soup-review
+  approvers    members of the group "soup-reviewers"
+  count        2, from distinct people, and the requester is not one
+  reason       required: the intended use, the risk review, the version
+  scope        one version of one address (not a range, not all versions)
+  expires      365 days at most, then a new review (G3)
+  on change    a new vulnerability finding on the stored bytes re-opens it
+
+deny   when vulnerabilities.available == false                   (G4, no waiver)
+deny   when signature.result != "verified"
+deny   when vulnerabilities.malicious > 0   (G6)
+deny   when vulnerabilities.reachableCritical > 0 or
+            vulnerabilities.reachableHigh > 0                    (G7)
+deny   when external.checks["<named scanner>"] != "pass"
+deny   when ownership.namespaceConflict                          (G10)
+approval:soup-review   when true
+```
+
+`when true` means each third-party package waits for the review. The record
+holds the whole fact document, the rule, both approvers, the reasons, the
+hashes and the expiry. It never changes, and it stays while the package is
+in use and after it. The rules `deny` an `unavailable` scan and give no
+approval path to waive it, as Xray does for an unscanned artifact and
+Curation does for a pending scan. A review is for a person to read the
+evidence, not to override a missing fact.
+
+For a provider, the `gomodule` group (below) adds two lines that this pack
+writes in the same way: `deny when gomodule.retracted`, and
+`deny when gomodule.sumdbIncluded == false`.
+
+#### Pack 3: enterprise allowlist
+
+The aim: the security team lists what is allowed, and everything else is out.
+This is the Athens allowlist form (`-` as the default, then `+` with
+versions) and the Curation block list with a waiver flow.
+
+```
+approval rule  allowlist-entry
+  approvers    members of the group "security-team"
+  count        1
+  expires      180 days; the entry returns to review (G3)
+
+deny   when address not in allowlist.addresses
+         message "The address is not on the allowlist of the security team."
+deny   when address in allowlist.addresses and
+            version not in allowlist.versions[address]
+deny   when namespace not in allowlist.namespaces[address]
+deny   when vulnerabilities.malicious > 0   (G6)
+deny   when ownership.namespaceConflict                          (G10)
+```
+
+The allowlist is data in the installation (a list of entries with an address,
+the versions, the namespaces that may use it, the creator and the time). A
+new entry is a change that needs the approval rule `allowlist-entry`. A
+request for a package that is not on the list is a `deny` with a message
+that tells the requester how to ask for an entry. The pack reads no stars,
+no repository age and no age of the version. The decision record holds the
+list entry, the matched gate and the approver of the entry. ADR 269
+decision 10 already puts the SHA-256 sums of an admitted package on this
+list.
+
+The three packs do not need all signals. The table shows what each reads.
+
+| Signal | Startup | Regulated | Allowlist |
+| --- | --- | --- | --- |
+| `ownership` (class, namespace conflict) | yes | yes | yes |
+| `publisher` | yes | no | no (the list has the address) |
+| `signature` | no | yes | no |
+| `version` (age, first seen) | yes | no | no |
+| `vulnerabilities` | yes, warn | yes, deny | no |
+| `external` | no | yes | no |
+| `gomodule` (providers) | no | yes | no |
+| `repository` (stars, commit age) | no | no | no |
+
+No pack reads `repository`. This follows the prior art (G8): no system blocks
+on a project score alone.
+
+#### Go modules as a signal set for providers
+
+An OpenTofu provider is a Go program, and a Pulumi plugin often is. A Go
+binary holds its module path, its version and the modules that it links in its
+build information. The server reads it from the stored bytes, so those facts
+are `computed`. The new group `gomodule` holds:
+
+| Field | Origin | What a person can fake or what it misses |
 | --- | --- | --- |
-| **Startup** (speed first) | Allow a package at once when the publisher is on a short list of organizations (the cloud vendor, the registry's `hashicorp` and `opentofu` namespaces, the team's own forge organization) and `vulnerabilities` finds no critical severity. Anything else: `warn`, and the request waits for one person, who may be the requester. | The facts, the matched gate, the person. |
-| **Regulated, with a SOUP process** (software of unknown provenance, as in ISO 13485 or IEC 62304 for medical software) | Every package waits for approval by two persons of a named group, and the requester is not one of them. The gate `deny`s a package with `signature.result` other than `verified`, `unavailable` scan data, or an `external` check of the named scanner that is not `pass`. The approver must fill in a reason that names the intended use and the risk review. | The whole fact document, the rule, both approvers, the reasons, the hashes. The record never changes and stays while the package is in use, and after it. It is the record of each approved item. |
-| **Enterprise allowlist** | `deny` any package whose address is not on the allowlist of the security team (an allowlist of addresses and versions, as data). A package on the list is `allow`ed at once for a namespace that the list names. A new entry needs one approval. Stars, repository age and age of the version are not read. | The list entry, the matched gate, the approver of the entry. |
+| `modulePath`, `moduleVersion`, the list of linked modules with their versions and sums, from the build information of the binary | computed | A build can lie about its source when the builder is not trusted. The binary says what the builder wrote. |
+| `sumdbIncluded` (the module and version have a proof in `sum.golang.org`, and the hash equals the hash of the source module) | host-claim, or computed when the server checks the inclusion and consistency proofs itself | Inclusion shows the same bytes for everyone. It does not show that the code is safe. A malicious first publish is included. A private module is never in the database. |
+| `retracted`, `deprecated` (from the `go.mod` of a newer version) | host-claim | The author controls both marks. An attacker who owns the module can omit them. |
+| `govulncheck` result: mode (`source` or `binary`), database version, findings, reachable findings | computed (scan of the stored bytes) | The database has known, curated problems only, no severity label and no malware feed. In `binary` mode there is no call graph, so a finding may not be reachable. |
+| `proxyTime` (the `Time` of the `.info` answer) | host-claim | The author sets it for a direct fetch. A policy on age reads `version.firstSeenDays` as well. |
 
-The three packs apply to **third-party** packages (the next subsection). The
-packs are examples. They are not defaults. An installation that applies no
-pack and writes no gate for a third-party package has no policy, and the first
-rule of section C applies: each request waits for a person.
+Two rules follow from the Go documents. First, a gate reads the findings of
+govulncheck and not its exit code, because the exit code is 0 with the JSON
+output. Second, the group is `available: false` for a package that is not a Go
+binary, and a gate must test the flag first (ADR 226 decision 3). The module
+path rule of Go (a major version suffix, case-encoded paths) is also a
+`package` check: the server rejects an address that differs from another only
+by case. This is integrity input checking (section F), not provenance.
+
+#### Waivers for third-party packages
+
+A waiver is not a new object. It is an approval (ADR 225) for one version of
+one address, with the properties from the prior art (G2 to G4):
+
+- the requester gives a reason, and the approvers are a named group;
+- the scope is one address and one version, and a wider scope needs a
+  `namespace:approve-package` or `installation:approve-package` grant and a
+  warning in the record;
+- the approval rule sets a maximum age in days, and the effective value shows
+  in the API (no magic);
+- at the end, the package goes back to the state "waits for a person", the
+  job decision point shows a `warn`, and the audit log has an event. The
+  package does not stay in use unseen (the Sonatype failure);
+- the decision record names the rule, the approvers, the reasons and the
+  facts of the time.
 
 ### Two kinds of package: first-party and third-party (owner, 2026-11-07)
 
@@ -1353,7 +1722,7 @@ storage layout.
 The earlier 16 questions are answered in the section "History: proposal of
 2026-10-30". The owner's decision of 2026-11-07 closes the questions about
 verdicts: the minimum age (10), the scanner revoking (9), and the final gate
-(2, in part). Four questions remain.
+(2, in part). Five questions remain.
 
 1. **One decision point for every kind of package?** Does `package.admit`
    become a seventh decision point (ADR 224) with the amendments of option C.1
@@ -1381,6 +1750,14 @@ verdicts: the minimum age (10), the scanner revoking (9), and the final gate
    copy in `evaluate` mode (ADR 229) for the administrator to edit and turn
    on. The alternative: the guide only, and the administrator types the
    gates.
+5. **Does an approval expire?** The prior art says yes (Curation 1 to 365 days,
+   Sonatype a duration, with advice to use short ones), and Sonatype shows the
+   failure of an expiry that does not re-open the item. The recommendation: an
+   approval rule sets a maximum number of days (the shortest value wins), and at
+   the end the package goes back to "waits for a person", the jobs that use it
+   get a `warn`, and the audit log has an event. ADR 225 has no expiry today, so
+   this is an amendment. The alternative: no expiry, as in Cloudsmith, with a
+   report of old approvals for a periodic review.
 
 ## History: proposal of 2026-10-30
 
