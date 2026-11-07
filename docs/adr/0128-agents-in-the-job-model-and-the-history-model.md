@@ -10,7 +10,8 @@ Changed by:
 - ADR 227 changes decision 7: the age of a confirmation.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
-
+- ADR 354 changes decisions 1, 5 and 17: job.AgentRef holds the delegation.
+.
 ## Context
 
 Three designs merged on 2026-10-18 in parallel:
