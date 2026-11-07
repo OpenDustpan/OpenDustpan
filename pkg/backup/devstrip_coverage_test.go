@@ -58,6 +58,7 @@ var devColumnDecisions = map[string]devDecision{
 	},
 	"passkeys.principal_id":        {strip: true, reason: "passkey of a removed principal"},
 	"trust_rules.created_by":       {strip: false, reason: "history text of who made the trust rule"},
+	"group_mappings.created_by":    {strip: false, reason: "history text of who made the group mapping"},
 	"grants.subject_kind":          {strip: false, reason: "a kind word, not a subject"},
 	"grants.created_by":            {strip: false, reason: "history text of who made the grant"},
 	"grants.revoked_by":            {strip: false, reason: "history text of who revoked the grant"},

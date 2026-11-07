@@ -223,8 +223,13 @@ type signInServiceInputs struct {
 var errSignInStore = errors.New("the store cannot serve the sign-in service")
 
 // newSignInService builds the sign-in service of the console sign-in. It has
-// no group applier: no mapping from the group values of an identity provider
-// to groups exists, so no sign-in joins a group.
+// no group applier on purpose. The stores implement the applier over explicit
+// group mappings (GroupClaimApplier of the store), but the rules for protected
+// groups have no stored data yet: no closed or trusted flag on a group, no
+// full-sync setting and no protection check. An applier without those rules
+// could add a member to a group with wide reach from an identity provider.
+// The applier is not wired until the protection rules exist, so no sign-in
+// joins a group.
 func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 	records, ok := in.store.(principal.RecordStore)
 	if !ok {
