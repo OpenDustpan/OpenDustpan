@@ -126,6 +126,9 @@ func TestComposeQuickstart(t *testing.T) {
 		t.Fatalf("namespace create did not report the namespace:\n%s", out)
 	}
 
+	// The guide makes a collection and a placement rule before the first stack.
+	quickstartPlacement(ctx, t, host, token, cert)
+
 	stack := composeStack{host: host, token: token, cert: cert}
 
 	// The subtests end before the restart check below. Their directories
