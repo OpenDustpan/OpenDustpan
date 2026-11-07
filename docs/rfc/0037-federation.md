@@ -43,7 +43,7 @@ four:
 4. **Forwarding instead of 421.** A client that reaches the wrong place gets
    its answer, not an error.
 
-Facts from the code on `main` (commit `6e3c2d7`):
+Facts from the code on `main` (commit `1d4e302`):
 
 - A namespace row names its primary installation. `namespace.ErrNotHome` reports a
   write outside the primary installation. Only the Pulumi adapter maps it to 421
