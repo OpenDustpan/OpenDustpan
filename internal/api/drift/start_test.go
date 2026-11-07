@@ -103,6 +103,24 @@ func TestStartCheckBody(t *testing.T) {
 	}
 }
 
+// TestStartCheckRefusesALineSeparator proves that a reason with a line
+// separator never reaches the checker, and that the route answers the coded
+// 400 of an invalid drift value.
+func TestStartCheckRefusesALineSeparator(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, newAuthorizer(holdsAll()...))
+
+	rec := r.serve(t, startRequest(`{"reason":"a\u2028b"}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "job.invalid") {
+		t.Fatalf("POST = %d %s, want 400 job.invalid", rec.Code, rec.Body.String())
+	}
+
+	if r.checker.calls() != 0 {
+		t.Errorf("checker calls = %d, want none for a reason with a line separator", r.checker.calls())
+	}
+}
+
 // TestStartCheckRefusesBadBodies proves that a body that is not valid never
 // reaches the checker, and that a field that the server fixes is not accepted.
 func TestStartCheckRefusesBadBodies(t *testing.T) {
