@@ -1565,8 +1565,8 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
 // "namespaces/<namespace id>/tofu/<workspace id>/<state version id>/<attempt>".
-// A failure reports the version ID only, never a key, a scope or content. The
-// caller closes the result.
+// A failure names the operation and, when it is known, the version ID or the
+// workspace ID, never a key, a scope or content. The caller closes the result.
 //
 // The namespace of the read comes from the workspace row of the version, never
 // from the key. A key that names another namespace gives blob.ErrOutOfScope,
@@ -1574,12 +1574,12 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	parsed, err := ParseStateBlobKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob: %w", err)
 	}
 
 	sv, err := s.states.GetStateVersion(ctx, parsed.Version)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob %s: %w", parsed.Version, err)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1592,7 +1592,10 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 	// nothing, so one workspace never opens another's sealed bytes. The
 	// refusal goes to the audit log in the namespace of the row.
 	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
-		return nil, fmt.Errorf("open state blob %q: %w", key, s.blobs.refuseMismatch(ctx, w.NamespaceID))
+		return nil, fmt.Errorf(
+			"open state blob %s of workspace %s: %w",
+			parsed.Version, parsed.Workspace, s.blobs.refuseMismatch(ctx, w.NamespaceID),
+		)
 	}
 
 	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, key)
@@ -2495,7 +2498,7 @@ func (s *Service) sweepPage(ctx context.Context, w Workspace, page []blob.Object
 		}
 
 		if blobErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, obj.Key); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content %q: %w", obj.Key, blobErr))
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content of %s: %w", w.Ref, blobErr))
 		}
 	}
 
