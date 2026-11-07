@@ -238,7 +238,7 @@ func TestLogStreamChecksTheGrantsAgain(t *testing.T) {
 	lines := decodeLines(t, string(rest))
 	last := lines[len(lines)-1]
 
-	if last.Done || last.Error.ErrorCode != errcode.AccessDenied {
+	if last.Done || last.Error.Reason != errcode.AccessDenied {
 		t.Errorf("last line = %+v, want an access.denied error line", last)
 	}
 }

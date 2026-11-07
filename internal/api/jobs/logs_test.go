@@ -147,7 +147,7 @@ type logLine struct {
 }
 
 type logLineError struct {
-	ErrorCode string `json:"errorCode"`
+	Reason string `json:"reason"`
 }
 
 func decodeLines(t *testing.T, body string) []logLine {
@@ -360,7 +360,7 @@ func TestLogChunkThatFailsItsCheck(t *testing.T) {
 		lines := decodeLines(t, body)
 		last := lines[len(lines)-1]
 
-		if len(lines) != 2 || lines[0].Text != "good\n" || last.Done || last.Error.ErrorCode == "" {
+		if len(lines) != 2 || lines[0].Text != "good\n" || last.Done || last.Error.Reason == "" {
 			t.Errorf("lines = %+v, want one entry and an error line", lines)
 		}
 	}

@@ -205,13 +205,13 @@ A stream has these limits:
   not read ends its stream at that limit.
 - The server checks `namespace:read`, `job:read` and `job:read-logs` again at each
   poll. If the caller lost one of them, the stream ends with an error line with
-  the code `access.denied`.
+  the reason `access.denied`.
 - A principal can have 8 open streams, and the server can have 256. A stream over
   a limit gets 429 with the code `job.limit`. Close a stream and try again.
 
 When a chunk fails its check, or the log was redacted, the stream ends with the line
-`{"error": {"errorCode": "...", "message": "..."}}` and no `done` line. The status is
-200 by then, so a client must read the last line. The server never sends the bytes
+`{"error": {"reason": "...", "message": "..."}}` and no `done` line. The status is
+200 by then, so a client must read the last line. The `reason` is a code of the catalog. The server never sends the bytes
 of a chunk that failed its check.
 
 | Status | `errorCode` | Cause |

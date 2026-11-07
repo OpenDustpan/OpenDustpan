@@ -60,8 +60,8 @@ type logFailure struct {
 }
 
 type logFailureBody struct {
-	ErrorCode string `json:"errorCode"`
-	Message   string `json:"message"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
 }
 
 // logStep keeps what a stream has read of the log of one step record.
@@ -491,7 +491,7 @@ func (s *logStream) fail(ctx context.Context, err error) {
 
 	s.h.logger.WarnContext(ctx, "read job log failed", slog.String("error", err.Error()))
 
-	body := logFailureBody{ErrorCode: errcode.ServerInternal, Message: "the log cannot be read"}
+	body := logFailureBody{Reason: errcode.ServerInternal, Message: "the log cannot be read"}
 
 	switch {
 	case errors.Is(err, secret.ErrShredded):
@@ -499,9 +499,9 @@ func (s *logStream) fail(ctx context.Context, err error) {
 	case errors.Is(err, secret.ErrDecrypt):
 		body.Message = "a chunk of the log failed its check"
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, errNotFound):
-		body = logFailureBody{ErrorCode: errcode.AccessDenied, Message: "the caller may not read this log"}
+		body = logFailureBody{Reason: errcode.AccessDenied, Message: "the caller may not read this log"}
 	case errors.Is(err, job.ErrNotFound):
-		body = logFailureBody{ErrorCode: errcode.JobLogNotAvailable, Message: "the log is not available"}
+		body = logFailureBody{Reason: errcode.JobLogNotAvailable, Message: "the log is not available"}
 	default:
 		// Any other error keeps the fixed words of the internal error.
 	}
