@@ -2,10 +2,16 @@ package access
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// ErrStoredSource reports a stored group membership whose source is not a known
+// value. It is a fault of the store, not of the request: the server answers 500
+// and never echoes the stored value.
+var ErrStoredSource = errors.New("a stored group membership has an unknown source")
 
 // ReviewScope names the grants of an access-review export (ADR 52,
 // decision 10), as a store reads them. A grant is in the scope when:
@@ -136,6 +142,15 @@ type Membership struct {
 	// PrincipalID and PrincipalSubject name the member.
 	PrincipalID      string
 	PrincipalSubject string
+	// Source is the membership source: "local", "scim" or "claim".
+	// These are the values of principal.MembershipSource.
+	Source string
+	// SourceID is the identity that the source names. It is empty for a
+	// local membership.
+	SourceID string
+	// Suspended is true when the membership is suspended at the snapshot
+	// time. A suspended membership grants nothing.
+	Suspended bool
 }
 
 // Key returns the position of r in the order of an export.

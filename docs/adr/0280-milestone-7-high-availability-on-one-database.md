@@ -70,6 +70,7 @@ high availability. Each decision below has the label "(owner)".
 5. **The minimum supported topology (owner).**
    - Two or more instances of one installation.
    - PostgreSQL 16 or later.
+   - Amendment (2026-11-07): PostgreSQL 18 or later. CI tests only PostgreSQL 18. A version that CI does not test is not supported.
    - An S3-compatible object store. The topology has no requirement for
      conditional writes.
    - A backup target on an S3-compatible store.
