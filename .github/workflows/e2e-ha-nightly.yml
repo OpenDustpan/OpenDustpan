@@ -56,13 +56,30 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-e2e-0-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ runner.os }}-e2e-0-
-      # The pinned versions of the matrix are in e2e/tool.go, so the key changes
-      # when they change. The "latest" versions are downloaded on each run.
-      - name: Cache the CLI archives
+      # The CLI archives are kept in two cache entries. A cache key is written
+      # only once, so each entry has a key that changes when its content must
+      # change. The pinned versions are in e2e/tool.go, so that entry has the
+      # hash of the file in its key and leaves out the "latest" versions. The
+      # "latest" entry has the newest versions in its key, so each new release
+      # is downloaded once.
+      - name: Find the newest CLI versions
+        id: latest-clis
+        run: scripts/e2e-latest-clis.sh >> "$GITHUB_OUTPUT"
+      - name: Cache the pinned CLI archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/opendustpan-e2e
-          key: e2e-clis-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+          path: |
+            ~/.cache/opendustpan-e2e
+            !~/.cache/opendustpan-e2e/pulumi-v${{ steps.latest-clis.outputs.pulumi }}-*
+            !~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
+          key: e2e-clis-pinned-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+      - name: Cache the latest CLI archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/opendustpan-e2e/pulumi-v${{ steps.latest-clis.outputs.pulumi }}-*
+            ~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
+          key: e2e-clis-latest-${{ runner.os }}-${{ runner.arch }}-pulumi-${{ steps.latest-clis.outputs.pulumi }}-tofu-${{ steps.latest-clis.outputs.tofu }}
       - name: High availability end-to-end suite
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable

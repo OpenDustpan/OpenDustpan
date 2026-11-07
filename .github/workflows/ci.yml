@@ -401,14 +401,33 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
-      # The pinned versions of the matrix are in e2e/tool.go, so the key changes
-      # when they change. The "latest" versions are downloaded on each run.
+      # The CLI archives are kept in two cache entries. A cache key is written
+      # only once, so each entry has a key that changes when its content must
+      # change. The pinned versions are in e2e/tool.go, so that entry has the
+      # hash of the file in its key and leaves out the "latest" versions. The
+      # "latest" entry has the newest versions in its key, so each new release
+      # is downloaded once.
+      - &latest-clis
+        name: Find the newest CLI versions
+        id: latest-clis
+        run: scripts/e2e-latest-clis.sh >> "$GITHUB_OUTPUT"
       - &cache-clis
-        name: Cache the CLI archives
+        name: Cache the pinned CLI archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/opendustpan-e2e
-          key: e2e-clis-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+          path: |
+            ~/.cache/opendustpan-e2e
+            !~/.cache/opendustpan-e2e/pulumi-v${{ steps.latest-clis.outputs.pulumi }}-*
+            !~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
+          key: e2e-clis-pinned-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+      - &cache-latest-clis
+        name: Cache the latest CLI archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/opendustpan-e2e/pulumi-v${{ steps.latest-clis.outputs.pulumi }}-*
+            ~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
+          key: e2e-clis-latest-${{ runner.os }}-${{ runner.arch }}-pulumi-${{ steps.latest-clis.outputs.pulumi }}-tofu-${{ steps.latest-clis.outputs.tofu }}
       - name: End-to-end suite
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
@@ -438,7 +457,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      - *latest-clis
       - *cache-clis
+      - *cache-latest-clis
       - name: Journal end-to-end tests
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
@@ -462,7 +483,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      - *latest-clis
       - *cache-clis
+      - *cache-latest-clis
       # Without a v* tag, only the empty-database case runs.
       - name: Upgrade test
         env:
@@ -484,7 +507,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      - *latest-clis
       - *cache-clis
+      - *cache-latest-clis
       - name: Crash test
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
@@ -519,7 +544,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      - *latest-clis
       - *cache-clis
+      - *cache-latest-clis
       - name: Network fault tests
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
