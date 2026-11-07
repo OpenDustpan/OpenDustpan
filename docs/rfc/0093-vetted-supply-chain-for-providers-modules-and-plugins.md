@@ -1133,6 +1133,7 @@ A group has an `available` flag (ADR 226 decision 3). Each group has an
 
 | Group | Fields (examples) | Origin | What a person can fake or what the signal misses |
 | --- | --- | --- | --- |
+| `ownership` | `first-party` or `third-party`, the registry, the namespace, the publishing principal and the grant that allowed the upload | computed | Nothing, if the rule below holds: a package is `first-party` only when it is in a private registry or namespace of this installation, a principal uploaded it through the publish route, and a grant allowed it. A mirrored package is always `third-party`. A claim inside the package has no effect. |
 | `package` | kind, upstream host, registry host, address, version as written, number of platforms, SHA-256 of each archive | computed | Nothing about the bytes. The address says nothing about who owns the name. |
 | `publisher` | namespace or organization of the address, forge host, forge organization or user, the forge's own "verified" mark | host-claim | A name that looks like a vendor (typosquat). A forge organization that changes owner. A "verified" mark is the host's view, not ours. |
 | `signature` | result (`verified`, `unsigned`, `unknown-key`, `failed`), key ID, fingerprint, `keyChanged` | computed | `verified` means "signed by this key". An attacker with the key, or with a new key at a new address, is `verified`. |
@@ -1195,9 +1196,47 @@ by itself. The three below are sketches in words. The exact gates need
 | **Regulated, with a SOUP process** (software of unknown provenance, as in ISO 13485 or IEC 62304 for medical software) | Every package waits for approval by two persons of a named group, and the requester is not one of them. The gate `deny`s a package with `signature.result` other than `verified`, `unavailable` scan data, or an `external` check of the named scanner that is not `pass`. The approver must fill in a reason that names the intended use and the risk review. | The whole fact document, the rule, both approvers, the reasons, the hashes. The record never changes and stays while the package is in use, and after it. It is the record of each approved item. |
 | **Enterprise allowlist** | `deny` any package whose address is not on the allowlist of the security team (an allowlist of addresses and versions, as data). A package on the list is `allow`ed at once for a namespace that the list names. A new entry needs one approval. Stars, repository age and age of the version are not read. | The list entry, the matched gate, the approver of the entry. |
 
-The packs are examples. They are not defaults. An installation that applies
-no pack and writes no gate has no policy, and the first rule of section C
-applies: each request waits for a person.
+The three packs apply to **third-party** packages (the next subsection). The
+packs are examples. They are not defaults. An installation that applies no
+pack and writes no gate for a third-party package has no policy, and the first
+rule of section C applies: each request waits for a person.
+
+### Two kinds of package: first-party and third-party (owner, 2026-11-07)
+
+The owner's words: "I would make a distinction between public and private
+packages. Teams often don't impose the same strict rules on their own code
+because they're by definition not SOUP." ADR 351 decision 6 keeps one
+mechanism, the same facts and the same gates, and adds a fact and a default.
+
+- **The fact.** The group `ownership` has the value `first-party` or
+  `third-party`. A `first-party` package is built and published by the
+  organization in its own private registry or namespace. A `third-party`
+  package is public or other outside code. It is SOUP in the regulated sense.
+- **How the server knows.** The value is `computed` from the records of the
+  installation, not claimed. A package is `first-party` only when all three
+  are true: it is in a private registry or namespace of this installation
+  (`source.kind = private`), a principal uploaded it through the publish
+  route, and a grant of that principal allowed the upload. A package that the
+  server fetched from an upstream host is `third-party`, also when its
+  address or its publisher looks like the organization. The group shows the
+  registry, the namespace, the principal and the grant. A field in the
+  package that says "ours" has no effect. When a record is missing, the value
+  is `third-party`.
+- **The default.** A `first-party` package goes through the review flow that
+  the team already has: the review request and the gates that the team
+  already has. OpenDustpan adds no provenance policy for it. A `third-party`
+  package goes through the provenance policy of the administrator. The
+  example policies above and in the starter packs are policies for
+  `third-party` packages.
+- **The choice of the administrator.** An organization may apply strict rules
+  to its own packages too. The administrator writes a gate for
+  `package.admit` that reads `ownership` (for example, `first-party` packages
+  need two approvers, or a build attestation as an `external` check). This is
+  the choice of the administrator, as in the first owner decision. The server
+  does not do it by itself.
+- **No magic.** The effective policy shows, for each kind, which gates apply.
+  The decision record of an admission holds the `ownership` group like any
+  other group.
 
 ### Policy at a unit
 
@@ -1223,7 +1262,7 @@ in the catalog of code rules.
 
 ## What this means for the private registry and for sweep plugins
 
-One model serves the three cases. In each case the artifact is an archive set
+One mechanism serves the three cases, with the `ownership` default of the section above. In each case the artifact is an archive set
 (ADR 177), the facts have the same groups, and the administrator writes the
 policy with the same gates.
 
@@ -1238,8 +1277,11 @@ policy with the same gates.
 - Today (ADR 269) an upload by a holder of the publish action is a published
   version. This RFC keeps that. An administrator who wants a review before a
   version becomes `published` (ADR 345) writes a gate for `package.admit` that
-  reads `source.kind`. No gate means no review, because the grants of the
-  uploader are the policy then. The version states of ADR 345 stay the life
+  reads `ownership` (or `source.kind`). Without such a gate, the review flow
+  that the team already has (the review request and its gates) is the review
+  of a `first-party` package, and the grants of the uploader decide who may
+  publish. The provenance policy does not apply to it by default (owner,
+  2026-11-07). The version states of ADR 345 stay the life
   cycle of a version. A revoked package is revoked for a private and a public
   package alike.
 - ADR 269 decision 10 puts the allowlist of SHA-256 sums into the curation of
