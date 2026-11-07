@@ -210,8 +210,25 @@ Errors of a check:
 | --- | --- |
 | 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
-| 429 | The server limits the checks. It allows one check of a connection in 10 seconds, and 30 checks of an installation in a minute. It also allows 40 checks of all installations of the app together in a minute. All namespaces share the app, so a check in one namespace can use the budget of another. The header `Retry-After` gives the wait time, at most 60 seconds. |
-| 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds. |
+| 429 | The server limits the checks. It allows one check of a connection in 10 seconds, and 30 checks of an installation in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
+| 503 | GitHub did not answer, or limited the rate. Or the app used its budget of signed calls (see below). The header `Retry-After` gives the wait time when the server or GitHub gave one, at most 60 seconds. |
+
+### The budget of the app
+
+The server signs some calls with the key of the app: each check, each
+installation token for a read or a write, and each read of an installation or
+of the app. GitHub limits these calls for each app. So the server allows 80
+signed calls of the app in a minute, which is 4,800 in an hour, below the
+GitHub limit of 5,000. All installations and all namespaces of the app share
+this budget. A call over the budget makes no call to GitHub, and the request
+answers 503 with `Retry-After`.
+
+When one namespace uses the budget, the other namespaces wait too. To find
+the cause, read the audit log of the installation for the check entries of
+the Git host connections, and for the write-backs and the reads of each
+namespace. To stop it, delete the grant that lets the principal check the
+connections, or end the assignment of the installation to the namespace (see
+"Step 2: the operator gives an installation to a namespace").
 
 The check takes no `Idempotency-Key`. A retry is safe.
 

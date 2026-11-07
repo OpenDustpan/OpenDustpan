@@ -186,11 +186,24 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 
 	rules := egress.Rules{Allow: cfg.gitHost.allow, LoopbackForTests: cfg.gitHost.loopback}
 
+	limits := forge.DefaultCheckLimits()
+	if cfg.gitHost.checkLimits != nil {
+		limits = *cfg.gitHost.checkLimits
+	}
+
+	// The budget of the signed calls of the app is the one of the limits,
+	// for every connection of the app.
+	budget, err := forge.NewAppBudget(limits.PerApp, limits.Window)
+	if err != nil {
+		return nil, fmt.Errorf("git host limits: %w", err)
+	}
+
 	opener, err := github.NewOpener(github.Config{
-		Rules:   rules,
-		RootCAs: cfg.gitHost.cas,
-		Now:     cfg.now,
-		Prover:  commitProver{secrets: secrets, keyed: cfg.secretWrapper != nil},
+		Rules:     rules,
+		RootCAs:   cfg.gitHost.cas,
+		Now:       cfg.now,
+		Prover:    commitProver{secrets: secrets, keyed: cfg.secretWrapper != nil},
+		AppBudget: budget,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("make the GitHub adapter: %w", err)

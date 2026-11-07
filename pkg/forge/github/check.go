@@ -137,6 +137,10 @@ func (f *gitHub) checkApp(ctx context.Context) (forge.Account, error) {
 
 	path := "/app/installations/" + f.installationID
 
+	if spendErr := f.spendApp(); spendErr != nil {
+		return forge.Account{}, spendErr
+	}
+
 	resp, err := f.do(ctx, http.MethodGet, path, jwt, nil)
 	if err != nil {
 		return forge.Account{}, err
@@ -174,6 +178,10 @@ const revokeTimeout = 10 * time.Second
 // the smallest permission, reads no field of the answer except the token, and
 // revokes the token at once. The adapter never keeps or logs the token.
 func (f *gitHub) probeToken(ctx context.Context, path, jwt string) error {
+	if err := f.spendApp(); err != nil {
+		return err
+	}
+
 	resp, err := f.do(ctx, http.MethodPost, path+"/access_tokens", jwt, []byte(checkTokenBody))
 	if err != nil {
 		return err

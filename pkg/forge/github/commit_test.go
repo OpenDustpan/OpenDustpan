@@ -90,7 +90,9 @@ func rawForgeWith(t *testing.T, basePath string, opts rawOptions, h http.Handler
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
 
-	o, err := github.NewOpener(github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: opts.prover})
+	o, err := github.NewOpener(
+		github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: opts.prover, AppBudget: nil},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

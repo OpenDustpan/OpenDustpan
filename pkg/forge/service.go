@@ -373,16 +373,16 @@ func (s *Service) Open(ctx context.Context, e audit.Entry, ns namespace.Name, id
 // account, the capabilities and what each consumer misses. It returns the
 // errors of Open and of the adapter: ErrAuth for a credential that the Git host
 // refuses, and ErrUnavailable. It returns ErrRateLimited, with no call to the
-// Git host, when the connection, its installation or the app of its kind was
-// checked too often. The result is audited, best effort.
+// Git host, when the connection or its installation was checked too often.
+// The adapter refuses a call over the budget of the signed calls of the app
+// (see AppBudget) with ErrUnavailable. The result is audited, best effort.
 func (s *Service) Check(ctx context.Context, e audit.Entry, ns namespace.Name, id string) (CheckResult, error) {
 	rec, err := s.connectionRecord(ctx, ns, id)
 	if err != nil {
 		return CheckResult{}, err
 	}
 
-	installation := string(rec.Kind) + "/" + rec.InstallationID
-	if wait, ok := s.checks.admit(ns.String()+"/"+id, installation, string(rec.Kind), s.now()); !ok {
+	if wait, ok := s.checks.admit(ns.String()+"/"+id, string(rec.Kind)+"/"+rec.InstallationID, s.now()); !ok {
 		return CheckResult{}, &RateLimitedError{After: wait}
 	}
 

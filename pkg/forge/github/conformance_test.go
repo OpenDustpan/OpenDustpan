@@ -384,7 +384,7 @@ func newHostOpenerAt(t *testing.T, host *githubfake.Fake, now func() time.Time) 
 		},
 		RootCAs: host.CertPool(),
 		Now:     now,
-		Prover:  testProver{},
+		Prover:  testProver{}, AppBudget: nil,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -49,6 +49,11 @@ type Config struct {
 	// adapter cannot prove a commit: Capabilities then does not list
 	// forge.CapCommit, and Commit and FindCommit return forge.ErrUnsupported.
 	Prover Prover
+	// AppBudget bounds the calls that the key of an app signs. All Forges of
+	// the Opener share it. Nil means a budget of forge.DefaultCheckPerApp
+	// calls in forge.DefaultCheckWindow: the adapter never signs with no
+	// budget.
+	AppBudget *forge.AppBudget
 }
 
 // Opener makes a forge.Forge for a GitHub connection. It implements
@@ -58,6 +63,7 @@ type Opener struct {
 	client *http.Client
 	now    func() time.Time
 	prover Prover
+	budget *forge.AppBudget
 }
 
 var _ forge.Opener = (*Opener)(nil)
@@ -84,7 +90,17 @@ func NewOpener(cfg Config) (*Opener, error) {
 
 	keepRedirectStatus(client)
 
-	return &Opener{rules: cfg.Rules, client: client, now: now, prover: cfg.Prover}, nil
+	budget := cfg.AppBudget
+	if budget == nil {
+		var err error
+
+		budget, err = forge.NewAppBudget(forge.DefaultCheckPerApp, forge.DefaultCheckWindow)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Opener{rules: cfg.Rules, client: client, now: now, prover: cfg.Prover, budget: budget}, nil
 }
 
 // redirectError is the error of a redirect that the rules refuse. It keeps
