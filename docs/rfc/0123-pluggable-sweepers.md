@@ -54,6 +54,12 @@ proposes:
    provider built with it is swept with no plugin of its own.
 6. **First-party sweep plugins** for AWS Resource Explorer, Azure Resource
    Graph, Google Cloud Asset Inventory and Kubernetes discovery.
+7. **Spend on the same plugins.** By the owner decision of 7 November
+   2026, FinOps (RFCs 45 and 67) joins the same milestone, renamed "Cloud
+   inventory: sweeps and spend". A plugin can implement the kind `spend` and
+   write a spend report, which the server matches against the same resource
+   keys. Section "Spend and cost on the same plugins" maps the two RFCs; a
+   follow-up RFC designs the FinOps feature.
 
 ## Problem
 
@@ -611,6 +617,9 @@ ADR 343 decision 6 gives a repository only to the runner. The ADR for
 - **The report version 2.** A server reads every version that a released
   plugin writes (ADR 72). The coverage values and the `iac` entry are hard to
   change later.
+- **The spend report version 1 and the plugin kinds** (`sweep`, `spend`,
+  `estimate`). The follow-up RFC decides the spend report, but the manifest
+  field `kinds` ships with the first contract version.
 - **The `iac` key in the resource index.** Once findings are stored with it,
   a change of its form needs a new match of every namespace.
 - **The project signing key.** Every installation trusts it. A rotation and a
@@ -621,27 +630,134 @@ ADR 343 decision 6 gives a repository only to the runner. The ADR for
 Two-way doors: the list of first-party plugins, the bridges, Sigstore later,
 the size limits.
 
+## Spend and cost on the same plugins (RFCs 45 and 67)
+
+The owner decided on 7 November 2026 that FinOps (cost estimation, RFC 45, and
+the integration with spend and cost tools, RFC 67) goes into the same
+milestone as sweep plugins. The reason, in the product manager's words: both
+answer "what really exists in the cloud, and what does it cost". They read the
+same data for each resource from the inventory and billing APIs of a cloud,
+with the same plugins, runners and short-lived read credentials, keyed by the
+same resource identity.
+
+This section maps RFCs 45 and 67 onto the plugin model. It does not design the
+FinOps feature. Its open points are for a follow-up RFC.
+
+### What is decided already for cost
+
+- ADR 144 gives a cost port: an estimate of a plan (`cost.Estimate`), actual
+  spend (`cost.SpendSource`) and budgets. A budget never blocks; only a
+  policy can block (decisions 13 and 14).
+- ADR 144 decision 5 gives two ways in for an estimate: pull (the
+  `cost.Estimator` port in the server) and push (a step of the role `tool`
+  in a runner job). ADR 259 ships the push route first. No estimator is in
+  the binary (ADR 144 decision 6).
+- ADR 144 decisions 7 to 9: the server reads spend through the
+  `cost.SpendSource` port, once an hour for each namespace with a budget. An
+  adapter finds the resources of a unit by a tag that holds the unit ID, or
+  by its own mapping.
+
+### The map
+
+| Need (RFC) | Today | With plugins |
+| --- | --- | --- |
+| The spend of each resource and each account (RFC 67, ADR 144 decision 7) | A `SpendSource` adapter, called by the server, with credentials for a billing API that the server would hold | A **spend run**: a plugin with the kind `spend` runs on a runner, with a short-lived read credential (Option D), and uploads a **spend report**. The server reads the latest spend report of a namespace in place of a call to a tool. |
+| Which unit a cost belongs to (ADR 144 decision 8) | A tag with the unit ID on each resource, written by the team | The same resource keys as a sweep (`unmanaged.KeysOf`, and the `iac` key of Option E) match each spend line against the resource index. A tag stays a second way. A line with no match is spend of the namespace with no unit. |
+| The cost of unmanaged resources | None | A spend line whose key matches a finding of the kind "not in any unit" gives that finding a monthly cost. This is new value that neither RFC has today. |
+| The estimate of a plan (RFC 45, ADR 259) | The push route from a job step | An estimator can be a signed plugin with the kind `estimate`, run as a step of the role `tool` in a job, that pushes through the route of ADR 259. It reads the masked plan and a price list, and needs no cloud credential. It runs on a pool with the purpose `jobs`, not `sweeps`. |
+| Allocation labels and events for a cost tool (RFC 67) | Open | Not changed by this RFC. |
+
+### How the contract extends
+
+The contract of Option A gets one more command, and the manifest names the
+kinds that a plugin implements:
+
+- The manifest has `kinds`: a list of `sweep`, `spend` and `estimate`. A
+  plugin implements one or more kinds. The admission, the signature, the
+  sandbox, the egress rules and the credential rules are the same for every
+  kind.
+- `spend --request <file> --report <file>` writes a **spend report**. The
+  request names the account scopes and one month.
+- `estimate` is left to the follow-up RFC, because ADR 259 already gives its
+  way in.
+
+The spend report is its own format, not a part of the sweep report version 2.
+The reasons: a sweep report says what exists now, a spend report says what a
+month cost; they have different bounds, different schedules and a different
+read action (`namespace:read-cost`, ADR 144 decision 15). A proposal for its
+shape, for the follow-up RFC to decide:
+
+- JSON Lines, with the format name `opendustpan-spend-report` and version 1.
+- The header has the plugin (written by the launcher), the month, the scopes
+  with `complete` and `error`, as in a sweep report, and the currency of
+  each scope.
+- Each record has the provider, the resource key (or no key for an account
+  line), the scope, the region, the service, the `kind` (`actual` or
+  `forecast`), and the amount as a decimal string in an ISO 4217 currency,
+  with the bounds of `cost.Money` (ADR 144 decision 1).
+- The server treats it as unverified facts, as ADR 164 decision 17 says for
+  a sweep report. A hostile plugin can make a cost too high or too low in its
+  own scopes. It cannot block: a budget never blocks (ADR 144 decision 13).
+
+### Open points for a follow-up RFC
+
+- **The billing sources and their keys.** Which billing API of each cloud a
+  first-party spend plugin reads, and whether its lines carry a resource ID
+  that matches the keys of the resource index. This RFC did not check the
+  billing APIs. The follow-up RFC must check them against primary sources.
+- **ADR 144 decisions 7 to 9.** With spend runs, the server no longer calls
+  a spend tool. The schedule of decision 9 starts a spend run on a runner
+  instead. The follow-up RFC writes this change.
+- **The target and the purpose.** Whether a spend run uses a sweep target or
+  a target of its own, and whether the pool purpose `sweeps` also covers
+  spend runs or a new purpose comes (ADR 343 lets a pool have several).
+- **Billing credentials.** A billing role is not the read-only role of a
+  sweep (for example, the billing data of AWS is in the management account).
+  Whether one plugin run may hold both.
+- **Third-party FinOps tools** (the research task of RFC 67): whether a
+  plugin reads a cost tool, for example the export of a FinOps product, in
+  place of a cloud billing API.
+- **The estimate kind**, and whether an `estimate` plugin replaces the first
+  pull adapter that ADR 259 decision 3 leaves open.
+
 ## Where it fits in the roadmap
 
 A proposal only; this RFC does not edit `docs/roadmap.md`.
 
-- **A new milestone, "Sweep plugins", after milestone 9 and before the
-  agents milestone.** It takes the number 10, and the agents milestone moves
-  to 11. It
-  needs runners and the runner protocol (milestone 5), the implementation of
-  ADR 164 (the sweep, the upload and the match), the job proxy of RFC 16 in
-  the runner, and the OIDC issuer of ADR 204.
-- **Scope:** the contract and report version 2; the repository with the
-  SDK and `sweepplugintest`; admission and the launcher checks; D4; the four
-  first-party plugins. The two bridges are a second part of the same
-  milestone, or "Later".
+- **A new milestone, "Cloud inventory: sweeps and spend", after milestone 9
+  and before the agents milestone.** It takes the number 10, and the agents
+  milestone moves to 11. The name follows the owner decision of 7 November
+  2026 that puts FinOps in the same milestone. It needs runners and the
+  runner protocol (milestone 5), the implementation of ADR 164 (the sweep,
+  the upload and the match), the job proxy of ADR 327 and ADR 330 in the
+  runner, the OIDC issuer of ADR 204, and the cost port of ADR 144.
+- **Scope:**
+  - Sweeps: the contract and report version 2; the repository with the SDK
+    and `sweepplugintest`; admission and the launcher checks; D4; the four
+    first-party sweep plugins. The two bridges are a second part of the
+    same milestone, or "Later".
+  - Spend: the kind `spend` in the contract and the spend report version 1;
+    the spend run on a runner; the match of spend lines against the resource
+    index; the cost of a finding; at least one first-party spend plugin,
+    chosen by the follow-up RFC.
+  - Out of scope: the estimate kind, allocation labels and events for a cost
+    tool. They stay in RFCs 45 and 67.
+- **Design first:** this RFC, and the follow-up RFC for spend, come before
+  any code of the milestone.
 - **Exit test (sketch):** on Linux, on PostgreSQL, through the real binary,
-  with a pool that has both purposes: a signed Kubernetes plugin sweeps a
-  kind cluster with 3 resources in no unit; pass: 3 findings, coverage
-  `swept` for each kind, `not-swept` for Secrets with the `view` role; a
-  plugin with a changed byte fails before it starts, with an audit entry; the
-  plugin cannot reach the instance metadata address; a report that marks a
-  type `unsupported` resolves no finding of that type.
+  with a pool that has both purposes:
+  1. A signed Kubernetes plugin sweeps a kind cluster with 3 resources in no
+     unit. Pass: 3 findings, coverage `swept` for each kind, `not-swept` for
+     Secrets with the `view` role.
+  2. A plugin with a changed byte fails before it starts, with an audit
+     entry.
+  3. The plugin cannot reach the instance metadata address.
+  4. A report that marks a type `unsupported` resolves no finding of that
+     type.
+  5. A signed test spend plugin uploads a spend report with 3 lines: one for
+     a resource in a unit, one for a resource of a finding, one for the
+     account. Pass: the unit shows its spend, the finding shows its monthly
+     cost, and the namespace shows the account line as spend with no unit.
 
 ## Open questions for the owner
 
