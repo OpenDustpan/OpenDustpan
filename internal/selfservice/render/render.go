@@ -131,9 +131,18 @@ func precheck(ctx context.Context, in selfservice.RenderInput, tool string) (*se
 		return nil, fmt.Errorf("render: %w", err)
 	}
 
-	for _, name := range sortedNames(in.Document.Inputs) {
+	if err := checkAnswerNames(b, in.Document); err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
+
+// checkAnswerNames refuses an answer for a name that is not an input of b.
+func checkAnswerNames(b *selfservice.Blueprint, d *selfservice.Document) error {
+	for _, name := range sortedNames(d.Inputs) {
 		if _, ok := b.InputNamed(name); !ok {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"%w: the document answers %q, which is not an input of the blueprint",
 				selfservice.ErrInvalid,
 				name,
@@ -141,7 +150,7 @@ func precheck(ctx context.Context, in selfservice.RenderInput, tool string) (*se
 		}
 	}
 
-	return b, nil
+	return nil
 }
 
 func checkLimits(b *selfservice.Blueprint, d *selfservice.Document) error {
