@@ -3,14 +3,63 @@ rfc: 93
 title: A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins
 status: discussing
 created: 2026-10-20
+revised: 2026-11-07
 ---
 
 # RFC 93. A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins
 
-Status: discussing. Nothing in this RFC is decided. No code exists for it. The
-owner answers the questions at the end (ADR 15). The section "Proposal
-(2026-10-30): answers to the open questions" gives a recommendation for
-each.
+Status: discussing. No code exists for it. The owner answers the questions at
+the end (ADR 15).
+
+**Revision of 2026-11-07.** On 7 November 2026 the owner decided that
+OpenDustpan does not decide what provenance means (ADR 350). This revision
+follows that decision. It keeps the facts from primary sources, the mirror,
+the storage and the run-time layers. It cuts every built-in verdict about
+trust: the installation gate that could not be lowered, and the rule that a
+signature, an age or a scan result makes a package fit or unfit. In their
+place the RFC defines the provenance signals as facts, the policy that an
+administrator writes over them with the gates of ADR 222, and the guidelines
+and example policies for each kind of organization. The sections "Owner
+decision of 2026-11-07" to "One-way doors" are new. Section C, section D (the
+parts about signatures, age and provenance), section H, the first slice, and
+the questions changed. The earlier proposal of 2026-10-30 is kept as history
+where it still holds.
+
+## Owner decision of 2026-11-07: signals, not verdicts
+
+The owner's words:
+
+> We don't decide. We can provide guidelines, but at the end of the day admins
+> need to decide what provenance means to their organization (which
+> vendors/github/gitlab orgs, registries or individual provider (versions)
+> they trust, if GitHub stars and repository age and last commit time, means
+> anything to them, what govulncheck means to them, and if they want any
+> additional external scanners). These are just examples, not an exhaustive
+> list. Provenance means one thing to an advertising startup, than it does to
+> a medical company which has an ISO regulated SOUP process.
+
+The design follows from it:
+
+1. **OpenDustpan computes and shows signals.** A signal is a fact about a
+   package: who published it, from which registry, how it is signed, how old
+   the version and the repository are, what a scan found. The server shows
+   each signal with its origin and the time of its read.
+2. **The administrator writes the policy.** The policy is a gate over those
+   facts (ADR 222 to 230), at the installation, the namespace or the unit.
+   OpenDustpan has no built-in answer to "is this package trusted".
+3. **OpenDustpan ships guidelines, not a verdict.** The documentation and the
+   example policies for three kinds of organization show what a policy can
+   read. They are data that an administrator copies and edits.
+4. **No magic.** Each admission and each refusal names the policy that
+   decided and the facts that it read. A signal from outside the installation
+   is an unverified fact, and the documentation says which signals an
+   attacker can fake.
+
+What stays in code is **integrity**, not provenance. The server serves the
+bytes that it admitted and no other bytes. It checks each hash, each size
+limit and each signed URL, and it checks a signature when an administrator
+asks for it. Integrity answers "are these the bytes that a person admitted".
+Provenance answers "should a person admit them". Only the first is code.
 
 ## Problem
 
@@ -550,18 +599,11 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
 1. **A new decision point `package.admit` (recommended).** It runs before
    the server stores an admission. Gates and approval rules work as for
    every other decision point: a gate with the outcome
-   `approval:supply-chain` makes the admission wait for the approvers of
-   that rule. The fact schema `package.admit/1.0` holds the kind, the
-   upstream host, the address, the version, the number of platforms, the
-   signature result (`verified`, `unsigned`, `unknown-key`, `not-checked` or
-   `failed`), the `principal` group of ADR 226 (`kind`, `credential`) and a
-   `source` group with `kind` only (`api`, `cli` or `agent`), so a gate can
-   refuse an admission that an agent or an access token asks for, a `keyChanged` fact (the signing key of this address differs
-   from the key of an earlier admission), the SHA-256 of each archive, and
-   two groups with an `available` flag as ADR 226 decision 3 asks: `age`
-   (the age of the upstream version, see section D) and `scan` (for later,
-   section H). A built-in gate and its approval rule are the answer to
-   self-approval, see below.
+   `approval:<rule id>` makes the admission wait for the approvers of that
+   rule. The fact schema `package.admit/1.0` holds the groups of section
+   "The provenance signals", each with an `available` flag as ADR 226
+   decision 3 asks. The administrator writes the gates (section "Policy").
+   The RFC does not write a gate for the administrator.
 
    **Amendments that option C.1 makes.** The ADR that accepts C.1 changes:
    - ADR 224 decision 2: a seventh decision point, `package.admit`.
@@ -571,16 +613,16 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    - ADR 224 decision 5: the gates that apply are the gates of the
      installation and of the namespace. A gate for `package.admit` at the
      scope of a collection or a unit is refused at save (`gate.ErrInvalid`),
-     because no collection or unit is in the request.
+     because no collection or unit is in the request. A gate at the scope of
+     a unit decides the **use** of a package, see "Policy at a unit".
    - ADR 224 decisions 13 and 14 apply with the namespace or the installation
      as the one resource: the combining runs once for it, and an error of a
-     gate stops the admission (`gate.ErrRuleFailed`). A break-glass for a gate
-     in error passes a final gate of the installation only with
-     `installation:break-gate-error`.
+     gate stops the admission (`gate.ErrRuleFailed`).
    - ADR 229 decision 1: the record "for the change" is a record for the
      admission. It names the admission request in place of a job or change
      order, and it holds one resource entry (the namespace or the
-     installation) in place of one entry for each unit.
+     installation) in place of one entry for each unit. It holds the whole
+     fact document, so the record is the evidence of an approved item.
    - ADR 225 decision 1: a new `approvers` entry, `holders`: the persons who
      hold the approve action of the resource of the request. The reserved
      list of rule IDs adds `package-admission`.
@@ -591,47 +633,38 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    - ADR 230 decision 2: **no new row**. The rows
      `installation:manage-gates` and `namespace:manage-gates` already cover
      the gates and approval rules of every decision point at their scope, so
-     they cover the gates and the rule of `package.admit`. The new actions
-     of this RFC are in its own table below, and they are not actions for
-     the configuration of gates. The ADR keeps the text of those two rows
-     and adds `package.admit` to the examples.
+     they cover the gates and the rules of `package.admit`.
 
-   **The built-in gate cannot be bypassed.** The installation holds a
-   built-in starter gate for `package.admit` with `final: true`, and the
-   built-in approval rule `package-admission` (one approval,
-   `authorMayApprove: false`, approvers: `holders`). The approve action of
-   the built-in rule is `installation:approve-package`, for the admission of
-   a namespace and for the admission of the installation.
-   Both the gate and the rule live at installation scope, as a final gate does
-   (ADR 224 decision 12), so no narrower scope deletes or relaxes them. A
-   rule with the ID `package-admission` at a narrower scope gives
-   `gate.ErrFinal`. Four rules, each with its own test (proposal names):
-   - **No gate means approval.** An admission that finds no gate in its
-     chain does not admit. It waits for approval under the built-in rule.
-     The code never reads "no gate" as "allowed". This fails closed
-     (ADR 250). Test: `TestPackageAdmitNoGateNeedsApproval`.
+   **No built-in verdict.** The earlier proposal had a built-in gate with
+   `final: true` that no narrower scope could lower. The owner's decision
+   removes it, because a final gate is a built-in answer to "what is
+   acceptable". The server keeps only the four rules below. They say who
+   decides when no policy decides, and they are not a view on provenance.
+   Each rule has its own test (proposal names):
+   - **No policy does not mean allowed.** An admission that finds no gate
+     that decides it does not admit. It waits for a person who holds the
+     approve action, and the decision record says "no policy matched". The
+     code never reads "no gate" as "allowed" (ADR 250). Test:
+     `TestPackageAdmitNoGateWaitsForAPerson`.
    - **Managing gates is not approving.** A requester who holds
-     `namespace:manage-gates` can save a gate for the namespace, and that
-     gate cannot lower the final gate of the installation. The requester
-     cannot approve the own admission, because the approve action is
-     separate, the author is not eligible, and a job token, a service
-     principal, an access token or an agent never approves (ADR 225
-     decision 7). Test: `TestPackageAdmitRequesterWithManageGatesCannotApprove`,
-     which also tries to save a namespace gate that returns `allow`, and to
-     approve with the same session.
+     `namespace:manage-gates` can save a gate for the namespace. The
+     requester cannot approve the own admission by default, because the
+     approve action is separate, and a job token, a service principal, an
+     access token or an agent never approves (ADR 225 decision 7). The
+     installation setting `packageAdmission.authorMayApprove` has the
+     default `false`, and the API shows its effective value. A small team may
+     set it to `true`. That change is a sensitive setting: it needs
+     `installation:manage-gates`, a fresh authentication (ADR 227), a reason
+     and an audit entry, and the console warns (ADR 347). Test:
+     `TestPackageAdmitRequesterWithManageGatesCannotApprove`.
    - **No self-admit.** The route for an admission has no way to set the
      state to admitted. Only the engine, after the decision record, writes
      it. Test: `TestPackageAdmitRouteCannotSetAdmitted`.
-   - **A namespace grant does not make an approver.** `holders` of the
-     built-in rule resolves the approve action only at the scope of the
-     rule, which is the installation. The approvers of every admission under
-     the built-in rule, also the admission of a namespace, hold
-     `installation:approve-package`. A namespace administrator can grant
-     `namespace:approve-package`, and with a namespace principal home can
-     create a second person, but that grant makes nobody an approver of the
-     built-in rule. `namespace:approve-package` serves only the rules that a
-     namespace saves itself. Test:
-     `TestPackageAdmitNamespaceGrantDoesNotMakeApprover`.
+   - **A namespace grant does not reach the installation.** The approvers of
+     a rule resolve the approve action at the scope of the rule. A grant of
+     `namespace:approve-package` serves the rules of that namespace and no
+     rule of the installation. Test:
+     `TestPackageAdmitNamespaceGrantDoesNotApproveInstallationRule`.
 
    **Approvers: the choice.** `holders` is a new entry kind, and a rule
    with it needs the amendment of ADR 225 decision 1 above (recommended). It
@@ -646,16 +679,13 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    `evaluate` mode, no exemptions, and a second approval system, which
    ADR 222 replaced with one model.
 3. **No approval, an action only.** A holder of the admit action adds an
-   entry. This is the minimum for a small team. It is not a mode of option
-   1, because option 1 never reads "no gate" as "allowed". A small team
-   instead edits the built-in approval rule at the installation (one
-   approver, who may be the author). A change of the approval rule that a
-   final gate names counts as a change of the gate, and it makes the gate
-   weaker (ADR 224 decision 12, effect 4). So the edit needs
-   `installation:manage-gates` (ADR 230 decision 2), a `reason`, a fresh
-   authentication (ADR 227) and an audit entry of the kind `change`. It does
-   not need `installation:manage-packages`, so a person who manages
-   admissions cannot weaken the control that governs them.
+   entry. This is the mode of a small team. It is not a mode of option 1
+   with a hidden default, because option 1 never reads "no gate" as
+   "allowed". The administrator picks it with a gate that returns `allow`
+   for the requesters that the administrator names. That is a policy
+   written by a person, with a record. It needs `namespace:manage-gates` or
+   `installation:manage-gates`, and the starter pack "Startup" holds it as an
+   example (section "Policy").
 
 **Scope (proposal).** The allowlist belongs to a namespace. The installation
 can hold admissions that each namespace inherits, as gates do. A namespace
@@ -672,7 +702,7 @@ admit one that the installation revoked (question 3).
 | `installation:approve-package` | installation | approve an admission of the installation as an eligible approver (ADR 225 decision 7) |
 | `namespace:revoke-package` | namespace | revoke a vetted package, with a fresh authentication and a reason |
 | `namespace:download-packages` | namespace | the mirror routes, the lock-file route and the Pulumi checksums route. A job token of the namespace holds it. The token of a person (a laptop, a team CI) needs it as well |
-| `installation:manage-packages` | installation | request and revoke the admissions of the installation, and rotate the package signing key. It does not change gates or the built-in rule (that needs `installation:manage-gates`) |
+| `installation:manage-packages` | installation | request and revoke the admissions of the installation, and rotate the package signing key. It does not change gates or rules (that needs `installation:manage-gates`), so a person who manages admissions cannot change the policy that governs them |
 
 A revocation needs no approval: it only takes away. It is in the audit log
 with the reason.
@@ -747,32 +777,36 @@ and both are checked in the e2e suite:
 `trust_all_hashes = true` is a secondary option. The launcher does not rely
 on it, and the documentation names its limit.
 
-**Signatures.** The standard library has no OpenPGP. In slice 1 there is no
-OpenPGP dependency (question 4). The slice checks the SHA-256 of the archive
-against the upstream checksums file, keeps the hashes, and needs an
-approval. The record keeps the signature, the key ID and the fingerprint, and
+**Signatures.** The standard library has no OpenPGP. The owner approved
+`github.com/ProtonMail/go-crypto` (issue 1293), and `pkg/registry/pgpverify`
+uses it. So the server checks the upstream signature of the checksums file
+and gives the result as a fact: `verified`, `unsigned`, `unknown-key` or
+`failed`. The record keeps the signature, the key ID and the fingerprint, and
 the fact `keyChanged` tells a gate that the key of this address changed. The
-signature result is `not-checked`, so a gate can ask for a stricter
-approval. A later slice can add
-`github.com/ProtonMail/go-crypto` after the owner reviews it (question 4). An upstream
-that gives no key (the CLI allows this for `registry.opentofu.org` only,
-and a WARN shows it) gives `unsigned`. The CLI of a team that sets
+fact says what the server found. It does not say that the package is good: a
+valid signature of a key that an attacker controls is `verified`. Whether
+`unsigned` blocks, warns or passes is the policy of the administrator. An
+upstream that gives no key (the CLI allows this for `registry.opentofu.org`
+only, and a WARN shows it) gives `unsigned`. The CLI of a team that sets
 `OPENTOFU_ENFORCE_GPG_VALIDATION=true` still reads the mirror hashes
 correctly, because the mirror gives hashes and not a signature (see the e2e
 step).
 
-**Age of the upstream version.** The protocols give no date of a release. The
-network mirror protocol, the registry protocol and the module protocol have
-no such field. A GitHub release has a date, but it is a source of the
-upstream host, not of the protocol. So the first slice has no age. The fact
-`age.available` is `false`, and `age.days` is 0, as ADR 226 decision 3 asks.
-A later slice can add a source, for example the date of the release asset
-on the upstream host, or the date of the first admission request of the
-version in this installation. A gate that needs the age names `available`.
+**Age of the version and of the repository.** The protocols give no date of a
+release. The network mirror protocol, the registry protocol and the module
+protocol have no such field. A date is a claim of the upstream host (for
+example the date of a GitHub release asset), so it is a signal with the origin
+`host-claim` (section "The provenance signals"). When no source gives a date,
+`available` is `false` and the day count is 0, as ADR 226 decision 3 asks.
+The first date that the installation itself saw is a second signal, and the
+server computes it: `firstSeenDays`. A policy that wants a minimum age reads
+one of them and names `available`.
 
 **Upstream provenance.** Where an upstream gives more (for example a build
-attestation of a release), the record keeps it as an opaque blob, and a
-later fact can read it. No check depends on it in the first slice.
+attestation of a release, a SLSA provenance document or a Sigstore bundle),
+the record keeps it as an opaque blob. The server checks it only when an
+adapter for that format exists, and the `attestation` group says what was
+checked. A document that no adapter checks is `present` and not `verified`.
 
 **Pulumi resource plugins.** The Pulumi CLI checks no signature, and it
 checks a SHA-256 only when the plugin spec has an entry for the current
@@ -998,16 +1032,28 @@ points to a git URL needs a later fetcher in a runner sandbox (question 7).
    archives and the checksums file, and the server checks them as in
    option 1. It can come with either option, and it comes soon after slice 1.
 
-### H. Later: scanning hooks
+### H. Scans and external checks
 
-A scanner (for example `govulncheck -mode=binary` for Go providers, as
-RFC 10 says, or a license scanner) reads a vetted package and gives a
-report. The report uses the model of RFC 90: a scanner report blob with
-scanner findings, bound to the vetted package instead of a plan. The
-`scan` group of `package.admit` then reads its counts, so a gate can deny
-an admission with a finding at or above a severity. A new scan of an
-admitted package can flag it, and a person revokes it. No scan revokes by
-itself in this RFC (question 9).
+Two kinds of scan result enter the facts, and both are signals:
+
+- **A scan that the server runs** over the stored bytes: for example
+  `govulncheck -mode=binary` for a Go provider, as RFC 10 says, or a lookup of
+  the module list of the binary in OSV. The `vulnerabilities` group holds the
+  scanner, the version of its database, the time of the scan, and the counts
+  for each severity. A new scan of an admitted package can flag it. No scan
+  admits or revokes by itself.
+- **An external check**: a scanner that the administrator runs outside of
+  OpenDustpan (a license scanner, a software composition analysis service, an
+  internal review tool) posts its result for a vetted package through a REST
+  route (ADR 17). The `external` group holds the result of each check. The
+  report uses the model of RFC 90: a scanner report blob with findings, bound
+  to the vetted package instead of a plan. A check is a claim of its reporter.
+  The record names the reporter, the check name and the time, so the gate and
+  the reader see who said it.
+
+Whether a finding at or above a severity blocks an admission, asks for an
+approval, or only shows, is the policy of the administrator. A person always
+revokes: no scan revokes by itself (question 9 of the earlier list).
 
 ### I. The first slice
 
@@ -1032,11 +1078,14 @@ version in the normal path of the tool, and a record of who approved it.
   resource plugins.
 - `pkg/pkgmirror` with the record, the store port and its conformance suite
   in `pkg/pkgmirror/pkgmirrortest`, for SQLite and PostgreSQL.
-- The decision point `package.admit` (after its ADR), the built-in gate and
-  rule, and the action `namespace:approve-package`.
+- The decision point `package.admit` (after its ADR), the fact schema with
+  the signals that the server computes (hashes, signature, first seen), the
+  rules of section C that say who decides when no policy decides, the starter
+  packs as examples, and the action `namespace:approve-package`.
 - The server fetch from its own allowlist of upstream hosts, with the checks
   of section F, the SHA-256 against the checksums file, and the `h1:` hash
-  for each platform. No OpenPGP check.
+  for each platform, and the OpenPGP check of the upstream signature as a
+  fact. No signal from a host (stars, repository age) in slice 1.
 - The network mirror routes and the lock file route in `internal/api/tfe/`.
 - Layer 1 in the launcher: the `provider_installation` block (with the
   amendment of ADR 134 decision 7).
@@ -1069,66 +1118,234 @@ step:
    file can no longer download from a signed URL that was issued before the
    revocation.
 
+## The provenance signals
+
+The fact schema `package.admit/1.0` has one group for each family of signals.
+A group has an `available` flag (ADR 226 decision 3). Each group has an
+`origin` that says how much the server vouches for it:
+
+- `computed`: the server read the bytes that it holds, or its own record.
+- `host-claim`: a host outside the installation said it (GitHub, a registry,
+  a package host). The server stores what the host said and the time of the
+  read. The value is unverified.
+- `reporter-claim`: a scanner or a person outside the server posted it. The
+  record names the reporter. The value is unverified.
+
+| Group | Fields (examples) | Origin | What a person can fake or what the signal misses |
+| --- | --- | --- | --- |
+| `package` | kind, upstream host, registry host, address, version as written, number of platforms, SHA-256 of each archive | computed | Nothing about the bytes. The address says nothing about who owns the name. |
+| `publisher` | namespace or organization of the address, forge host, forge organization or user, the forge's own "verified" mark | host-claim | A name that looks like a vendor (typosquat). A forge organization that changes owner. A "verified" mark is the host's view, not ours. |
+| `signature` | result (`verified`, `unsigned`, `unknown-key`, `failed`), key ID, fingerprint, `keyChanged` | computed | `verified` means "signed by this key". An attacker with the key, or with a new key at a new address, is `verified`. |
+| `attestation` | format (`slsa`, `sigstore`, `openpgp-only`, `none`), `present`, `verified`, the builder and the source repository that it names, the claimed level | computed when an adapter checks it, else host-claim | A build can be reproducible and still malicious. An attestation names the builder, not the intent. |
+| `version` | upstream release date, age in days, `firstSeenDays` in this installation, the count of admitted versions of the address, the yank or deprecation mark of the host | host-claim for the date, computed for `firstSeenDays` | The publisher chooses the release date on many hosts. A new version of an old package has an old repository. |
+| `repository` | forge host, URL, age in days, days since the last commit, stars, forks, archived mark, number of contributors | host-claim | **Stars are cheap to buy and tell nothing about safety.** A new commit costs one empty commit. An old repository can change hands. A fork starts at age 0 with the history of the original. |
+| `vulnerabilities` | scanner, database version, scan time, count for each severity, count of reachable findings where the scanner gives it | computed (scan of the stored bytes) | A scanner finds known problems only. `govulncheck` covers Go modules and the reachable symbols of a Go binary, and not other languages. A database can lag behind a disclosure. |
+| `external` | for each check: name, reporter, time, status (`pass`, `fail`, `error`), counts for each severity | reporter-claim | As good as the reporter and its credentials. The server cannot check the work of a scanner that it did not run. |
+| `principal`, `source` | who asks and how: kind, credential, `api`, `cli` or `agent` (ADR 226) | computed | Nothing. These are our own records. |
+
+Rules for the groups:
+
+- **No score.** The server gives no combined number such as "trust 7 of 10"
+  and no color that hides the facts. A score is a verdict with a hidden
+  weight. A console view may sort and group by a fact. It does not rank.
+- **Each fact shows its origin and its time.** The API for a vetted package
+  and the console show the origin, the host that gave the value, the time of
+  the read and whether the read failed. A failed read is `available: false`,
+  never a default value that looks good.
+- **A read from a host is an outbound call that the operator names.** The
+  read of a forge API (stars, last commit) goes through `pkg/egress` with the
+  package-upstream allowlist of section G. With no entry, the group is
+  `available: false`. This is not phone-home (ADR 74): the operator names
+  the destination, and the call carries the name of a public package and
+  nothing about the installation.
+- **The set of groups can grow.** A new group or a new field is a new minor
+  version of the schema (ADR 226 decision 2). A fact that Cedar cannot reach
+  (it has no open map and no quantifier over a set) gets a fixed field: for
+  `external`, the counts and a list of check names that the gate can test
+  with `contains`. The ADR that accepts this RFC fixes the exact shape.
+- **Slice order.** Slice 1 gives the groups with the origin `computed`.
+  The groups with `host-claim` follow, then `external`.
+
+## Policy: the administrator decides
+
+A policy is a gate over the facts of the previous section, at the scope of an
+installation or a namespace, with the outcomes of ADR 224 (`allow`, `deny`,
+`warn`, `approval:<rule id>`). It is data that a person edits and
+audits, saves in `evaluate` mode first (ADR 229), and can simulate against
+old requests. The administrator decides:
+
+- which vendors, forge organizations, registries and individual versions are
+  trusted, and how (an allowlist of publishers, an allowlist of addresses);
+- whether stars, repository age, the time of the last commit and the age of
+  the version mean anything;
+- what a scan result means: a count of severities, or only reachable findings;
+- which external checks must pass.
+
+### Guidelines per kind of organization
+
+The documentation (a guide in `docs/guides/`) and the starter packs give
+examples. A starter pack is a set of gates and one approval rule, as data.
+An administrator copies a pack and edits it. The server does not apply a pack
+by itself. The three below are sketches in words. The exact gates need
+`gate/gatetest` and a review.
+
+| Kind | Policy sketch | What the decision record holds |
+| --- | --- | --- |
+| **Startup** (speed first) | Allow a package at once when the publisher is on a short list of organizations (the cloud vendor, the registry's `hashicorp` and `opentofu` namespaces, the team's own forge organization) and `vulnerabilities` finds no critical severity. Anything else: `warn`, and the request waits for one person, who may be the requester. | The facts, the matched gate, the person. |
+| **Regulated, with a SOUP process** (software of unknown provenance, as in ISO 13485 or IEC 62304 for medical software) | Every package waits for approval by two persons of a named group, and the requester is not one of them. The gate `deny`s a package with `signature.result` other than `verified`, `unavailable` scan data, or an `external` check of the named scanner that is not `pass`. The approver must fill in a reason that names the intended use and the risk review. | The whole fact document, the rule, both approvers, the reasons, the hashes. The record never changes and stays while the package is in use, and after it. It is the record of each approved item. |
+| **Enterprise allowlist** | `deny` any package whose address is not on the allowlist of the security team (an allowlist of addresses and versions, as data). A package on the list is `allow`ed at once for a namespace that the list names. A new entry needs one approval. Stars, repository age and age of the version are not read. | The list entry, the matched gate, the approver of the entry. |
+
+The packs are examples. They are not defaults. An installation that applies
+no pack and writes no gate has no policy, and the first rule of section C
+applies: each request waits for a person.
+
+### Policy at a unit
+
+A gate for `package.admit` at the scope of a namespace or an installation
+decides whether a package enters the allowlist. A different question is
+whether a unit may use an admitted package. For example, a regulated
+namespace admits a provider, and only the units of one collection may use it.
+The job record (layer 4) gives the packages that a job used, and a gate at the
+decision point of the job (ADR 224) can read the list. This RFC does not add
+a fact to the job decision points. Question 1 covers the amendment of the
+decision point.
+
+### "Why": the answer names the policy and the facts
+
+An admission, a refusal and a use each have a decision record (ADR 229) that
+names the gate, the rule, the version of the schema, and the whole fact
+document with the origin of each group. The API call "why was this package
+admitted" reads that record. A request for the **effective policy** of a
+namespace lists the gates that apply to `package.admit`, from the installation
+and from the namespace, and shows which gate wins. No part of the answer
+comes from code. If code rules stay (the four rules of section C), they are
+in the catalog of code rules.
+
+## What this means for the private registry and for sweep plugins
+
+One model serves the three cases. In each case the artifact is an archive set
+(ADR 177), the facts have the same groups, and the administrator writes the
+policy with the same gates.
+
+**The private registry (ADR 269, RFC 101).**
+
+- A team upload is a package with `source.kind = private`. Its signals come
+  from our own records: the `publisher` is the principal who uploaded it,
+  with the grant that allowed it (`computed`). The `signature` is checked
+  against the signing keys that the namespace registered (ADR 269
+  decision 9). There are no `repository` signals unless the team posts them
+  as an `external` check, for example a build attestation from its CI.
+- Today (ADR 269) an upload by a holder of the publish action is a published
+  version. This RFC keeps that. An administrator who wants a review before a
+  version becomes `published` (ADR 345) writes a gate for `package.admit` that
+  reads `source.kind`. No gate means no review, because the grants of the
+  uploader are the policy then. The version states of ADR 345 stay the life
+  cycle of a version. A revoked package is revoked for a private and a public
+  package alike.
+- ADR 269 decision 10 puts the allowlist of SHA-256 sums into the curation of
+  public packages. This RFC keeps that. The allowlist is the record of the
+  admission, and an enterprise policy can read it.
+- The conformance suite and the storage of RFC 101 are shared. The upload
+  route of RFC 101 and the fetch of this RFC end in the same record.
+
+**Sweep plugins (RFC 123, PR #2572).** A sweep plugin is third-party code that
+runs on a runner with a cloud credential, so it needs a trust policy of the
+same kind. RFC 123 proposes that a plugin runs only with a valid signature of
+the project key or of a key that the operator adds. With this decision:
+
+- An admitted sweep plugin is a package of the kind `sweep-plugin`. Its
+  release is the archive set of RFC 123 option C1. The `package.admit` facts
+  hold its signature, the key, the publisher, the repository signals, the scan
+  and the external checks.
+- **Integrity stays in code**, in both RFCs: the launcher runs only the bytes
+  with the admitted SHA-256, starts them from a file descriptor, and refuses
+  any difference. A plugin whose bytes differ from the admitted record never
+  runs.
+- **Which signatures count is policy.** RFC 123 reads "a plugin with no valid
+  signature never runs" as one fixed rule. Under this decision the fixed part
+  is the integrity check. The rule "only the project key" is the default
+  starter policy of an installation that applies the Enterprise pack. A
+  startup may admit a plugin that is `unsigned`. RFC 123 needs this
+  edit before it is accepted. This RFC does not edit PR #2572.
+- A sweep plugin runs with read-only, short-lived credentials and a sandbox
+  (RFC 123 options D and security table). Those are limits on the effect of a
+  plugin. They are not provenance, and they stay in every policy.
+- The trusted keys of an installation are records with a holder, a creator
+  and a time. An administrator lists, adds and removes them (no magic).
+
+## One-way doors
+
+A one-way door is hard to undo after a release. These are the ones in this
+design, in the order of the cost of a mistake:
+
+1. **The fact schema `package.admit/1.0`: names and types of the fields.**
+   Administrators store gates against it. A removed or renamed field is a new
+   major version (ADR 226 decision 2), and every stored gate needs a check
+   and a migration. Adding a field is cheap. So the first release has fewer
+   fields rather than more.
+2. **The origin vocabulary** (`computed`, `host-claim`, `reporter-claim`) and
+   the rule that there is no combined score. Policies and the console depend
+   on both.
+3. **The decision point `package.admit` itself**, and the `kind` values
+   (`opentofu-provider`, `opentofu-module`, `pulumi-plugin`, and the kinds for
+   a private upload and a sweep plugin). They are in the decision records for
+   ever. The amendments of ADRs 224, 225, 226 and 229 are accepted law.
+4. **The shape of the decision record** of an admission. A regulated
+   organization keeps it as evidence for years, and a change cannot rewrite it.
+5. **The external-check API**: the route, the body, and the names of the
+   status values. Scanners and CI jobs of others call it, and a break reaches
+   code that we cannot change (as with the tool-compatible APIs).
+6. **The key of a record**: kind, upstream host, address, version. Section A
+   already says so.
+7. **The two protocol routes that the tools store** (`/tofu/mirror/v1/...` and
+   `/pulumi/plugins/v1/cap/...`) in the CLI configurations (ADR 210
+   decision 2).
+
+Two-way doors: the list of signals in a group beyond the first release, the
+content of the starter packs, the thresholds in them, the retention and quota
+values, the package signing key format (URLs live 10 minutes), and the
+storage layout.
+
 ## Open questions
 
-1. Are the names right: vetted package, package admission, package mirror?
-   Or "approved provider" and a word for each tool?
-2. Does `package.admit` become a seventh decision point with the amendments
-   listed in option C.1, and a final installation gate that fails closed? Or
-   a fixed approval (option C.2)? The recommendation is C.1.
-3. Does the installation hold admissions that each namespace inherits, and
-   can a namespace narrow them, as gates do?
-4. Does slice 1 go without an OpenPGP dependency (the recommendation: the
-   SHA-256 against the checksums file, the stored hashes, the approval, and
-   the key ID, fingerprint and `keyChanged` fact), and a later review of
-   `github.com/ProtonMail/go-crypto`?
+The earlier 16 questions are answered in the section "History: proposal of
+2026-10-30". The owner's decision of 2026-11-07 closes the questions about
+verdicts: the minimum age (10), the scanner revoking (9), and the final gate
+(2, in part). Four questions remain.
 
-   Status (2026-10-27): not answered. Slice 1 follows the recommendation,
-   because section D says that the standard library has no OpenPGP. The
-   later review needs a human decision. ADR 7 does not state a review rule.
-   It pins dependencies and requires versions at least two weeks old.
-   CLAUDE.md asks for a question before a new dependency. The owner decides
-   the review before the owner fixes the scope of slice 2.
-5. Does the server fetch from upstream through `pkg/egress` with its own
-   allowlist, off until set (option G.1), with an upload for an air gap soon
-   after (G.3), and a fetch by a runner only for git module sources
-   (G.2)? That is the recommendation.
-6. Is the job record (layer 4) a failure before the plan, or a warning in
-   the first slice? The recommendation: a failure, in the slice after slice 1.
-7. Modules: only from an upstream module registry, or also from git at a
-   commit, fetched in a runner sandbox? Most public modules use git sources,
-   so the answer decides how many modules the feature can serve.
-8. Layer 5: an audit finding (recommended), or a fact at `state.write`
-   against the current state only? Or neither, given what state shows?
-9. Can a scanner report revoke a package by itself, or does a person always
-   revoke?
-10. A minimum age for a new upstream version before admission: what is the
-    source of the date (the protocols give none), and is it a fact for a gate
-    or a fixed rule?
-11. Does the mirror sign what it serves again with a key of the namespace
-    (RFC 10 asks the same)?
-12. Does RFC 10 keep private publishing and the version lifecycle, and drop
-    its curation part in favor of this RFC?
-13. What quota for pending blobs does a namespace receive? How long does a
-    pending request stay before it expires? (section B, pending storage)
-14. Do the lock-file route and the Pulumi checksums route sit under
-    `/api/dustpan/v1/namespaces/{namespace}/packages/`, as section D
-    proposes? Section A says that a format that only one tool reads lives
-    in that tool's adapter.
-15. Is `POST /api/dustpan/v1/package-keys/rotate` the right shape? ADR 210
-    decision 5 gives its custom methods on a resource with an `{id}`. This
-    route acts on the collection.
-16. Section B says that the server seals the package signing key in the scope
-    `@server`, and that it is not a secret item. ADR 129 decision 10 says
-    that a secret item of that scope is a secret item. Which storage is
-    intended?
+1. **One decision point for every kind of package?** Does `package.admit`
+   become a seventh decision point (ADR 224) with the amendments of option C.1
+   and the fact groups above, for OpenTofu providers and modules, Pulumi
+   resource plugins, private uploads (optional gate) and sweep plugins? The
+   recommendation: yes, one point, with no built-in final gate. The
+   alternative is a point for each kind, which repeats the amendments and
+   splits the policy of an organization into three.
+2. **When no policy decides, who decides?** The recommendation: the request
+   waits for a person who holds the approve action, and the requester cannot
+   approve the own request unless the installation setting
+   `packageAdmission.authorMayApprove` is `true` (default `false`, shown in the
+   API, a sensitive change with a warning). The alternative: a request from a
+   holder of the admit action is admitted at once when no gate matches. It is
+   faster for a small team, and it makes "no policy" mean "allowed".
+3. **Which signals come in slice 1?** The recommendation: only the signals
+   that the server computes (`package`, `signature`, `version.firstSeenDays`,
+   the `vulnerabilities` scan of the stored bytes), plus the external-check
+   API. The signals from a forge (`publisher`, `repository`, stars, last
+   commit) follow in the next slice, because each needs an outbound read and
+   an upstream allowlist entry, and each can be faked. The alternative: all
+   groups in slice 1.
+4. **Where do the example policies live?** The recommendation: in a guide in
+   `docs/guides/` and as data in the repository, and a request creates a
+   copy in `evaluate` mode (ADR 229) for the administrator to edit and turn
+   on. The alternative: the guide only, and the administrator types the
+   gates.
 
-## Proposal (2026-10-30): answers to the open questions
+## History: proposal of 2026-10-30
 
-This section answers the open questions above, so that the RFC is ready to
-accept. RFC 10 holds the work items of the whole registry theme
-(Milestone 6), with this RFC as its curation part. One answer is an owner
-decision (D1), because it amends accepted ADRs.
+This section answers the 16 earlier questions. The owner's decision of
+2026-11-07 changes rows 2, 9 and 10, and the table marks them. RFC 10 holds
+the work items of the whole registry theme (Milestone 6), with this RFC as
+its curation part.
 
 ### New facts (2026-10-30)
 
@@ -1188,15 +1405,15 @@ was read on 2026-10-30, **[not fetched]** means a search snippet only.
 | # | Question | Answer |
 | --- | --- | --- |
 | 1 | The names | Keep vetted package, package admission and package mirror. They do not clash with the glossary, and RFC 10 uses them too. |
-| 2 | `package.admit` as a seventh decision point | **Owner decision D1** (it amends ADRs 224, 225, 226 and 229). Recommended: option C.1, with the final installation gate that fails closed. |
+| 2 | `package.admit` as a seventh decision point | **Changed on 2026-11-07.** Still an owner decision (it amends ADRs 224, 225, 226 and 229), now question 1. Option C.1 with no built-in final gate: the administrator writes the gates. |
 | 3 | Installation admissions that namespaces inherit | Yes. A namespace can revoke an inherited package for itself. It cannot admit a package that the installation revoked. |
 | 4 | OpenPGP | Decided. The owner approved `github.com/ProtonMail/go-crypto` on 2026-10-20 (issue 1293, which also asks for an ADR that records it), and `pkg/registry/pgpverify` uses it. So slice 1 checks the upstream signature with that adapter, and the signature result is `verified`, `unsigned`, `unknown-key` or `failed`, never `not-checked`. An earlier version of this proposal asked the owner again (D2). That question is withdrawn. |
 | 5 | Who fetches | The server, through `pkg/egress` with its own allowlist of upstream hosts, off until set (G.1). The upload of a person for an air gap (G.3) in the same milestone. A runner job only for git module sources (G.2, answer 7). |
 | 6 | Layer 4 | A failure before the plan, in the slice after slice 1. A warning teaches teams to ignore it. |
 | 7 | Modules | Both. Modules from an upstream module registry and `https` archives in the server fetch. Modules from git at a full commit through a runner job of the kind `package-fetch`, in a sandbox, after the server fetch works. Most public modules use git sources, so without it the feature serves few modules. |
 | 8 | Layer 5 | The audit finding that does not block (option 1). |
-| 9 | Can a scanner revoke | No. A scanner report gives facts and a finding. A person revokes. |
-| 10 | Minimum age | A fact for a gate, never a fixed rule. The source of `age.days` is the release date that the upstream host gives for the archive, for example the date of a GitHub release asset. The fetch records it. Else `age.available` is `false`. The starter pack holds a gate "approval when `age.available` is false or `age.days < 14`", as the immature-version rule of JFrog Curation does. |
+| 9 | Can a scanner revoke | No. A scanner report gives facts and a finding. A person revokes. Still holds. A policy may deny an admission on a finding, and that is the policy of the administrator. |
+| 10 | Minimum age | **Changed on 2026-11-07.** A signal, not a rule. `version.ageDays` and `version.firstSeenDays` are facts with the origin `host-claim` and `computed`. The starter packs may read them. No built-in gate asks for 14 days. |
 | 11 | Re-signing | No, as ADR 269 decision 7 decides for private releases. |
 | 12 | RFC 10 and this RFC | RFC 10 keeps private publishing, the version life cycle and the order of the work. This RFC is the curation part. |
 | 13 | Pending storage | 10 GiB of pending blobs for each namespace, an installation setting. A pending request expires after 7 days. |
@@ -1208,9 +1425,15 @@ The work items are in RFC 10, "Proposal (2026-10-30)".
 
 ## Proposed glossary lines
 
+**Provenance signal**:
+A fact about a package that the server computes or stores, with its origin
+(`computed`, `host-claim` or `reporter-claim`) and the time of its read. A
+signal never decides. A gate that an administrator writes reads signals.
+_Avoid_: Trust score, rating, reputation
+
 **Vetted package**:
-One version of an OpenTofu provider, an OpenTofu module or a Pulumi resource
-plugin that a namespace admitted, with an archive and its hashes for each
+One version of an OpenTofu provider, an OpenTofu module, a Pulumi resource
+plugin or a sweep plugin that a namespace admitted, with an archive and its hashes for each
 platform, and the record of its admission.
 _Avoid_: Approved provider, artifact (that is a plan or a log of a job), dependency
 
@@ -1227,4 +1450,6 @@ _Avoid_: Registry (alone), proxy, cache
 
 ## Outcome
 
-None yet.
+Partly decided. ADR 350 records the owner's decision of 2026-11-07: OpenDustpan
+computes provenance signals and administrators write the policy. The decision
+point, the fact schema and the rest of this RFC wait for the owner's answers.
