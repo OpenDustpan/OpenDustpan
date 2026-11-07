@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: regen regen-check regenerate-baselinerelease-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -299,6 +299,19 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
+
+regen: ## Run every code and file generator in a fixed order.
+	$(MAKE) generate
+	go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description -count=1
+	$(CLIENTGEN)
+	go test ./internal/clientgen/golang -run TestRenderGolden -update -count=1
+	go test ./internal/clientgen/typescript -run TestRenderGolden -update -count=1
+	$(MAKE) adr-index
+	$(MAKE) adr-decisions
+
+regen-check: ## Run regen, then fail when a file differs from the work tree that was committed.
+	$(MAKE) regen
+	@git diff --exit-code || { echo "generated files are out of date: run make regen"; exit 1; }
 
 journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
 	go test -tags journalrecording $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./internal/api/pulumi/ ./pkg/dustpan/
