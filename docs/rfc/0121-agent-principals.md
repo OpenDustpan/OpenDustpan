@@ -53,7 +53,8 @@ the work, and no one else:
   agent in CI) is out of scope. A later RFC can propose it as a separate
   record with separate grants.
 - Some steps are never the agent's: a sign-in, an MFA step, a
-  confirmation, an approval, a change of who can do what, a break-glass.
+  confirmation, an approval, a change of who can do what, a new
+  credential or a connection to an outside system, a break-glass.
   The person does each of these in the console. The agent can ask for them
   with a held request (decision 23) and wait.
 
@@ -354,7 +355,9 @@ These terms are proposals. The ADR that accepts this RFC adds them to
   console with a fresh authentication. _Avoid_: pending approval (an
   approval fills a requirement of an approval rule), step-up.
 - **Untrusted input**: the mark on a run, a token family or delegated work
-  that says it has read text that neither its person nor the project wrote.
+  that says it has read untrusted text: text that the person did not write
+  in a request of their own with no delegation, and that the server did not
+  generate (decision 28).
   _Avoid_: taint (a taint set belongs to profiles).
 - **Token family**: the access tokens and refresh tokens of one OAuth
   authorization of a client under one delegation. It takes the place of
@@ -507,11 +510,12 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
     | --- | --- | --- |
     | `read` | Use the read actions of its ceiling. | None: no change is possible. |
     | `propose` | Read, plan, draft a change order (ADR 344), open a review request. | The change goes to review. The agent starts no apply. |
-    | `operate` | Also start an apply, a destroy or a refresh through a job, and ask for other writes of its ceiling. | Each job waits for one confirmation of the person (decision 24). Each other write is a held request (decision 23). |
+    | `operate` | Also start an apply, a destroy or a refresh through a job, and ask for other writes of its ceiling whose agent class is `held`. | Each job waits for one confirmation of the person (decision 24), except a `direct` job under the exact conditions of decision 30. Each other write is a held request (decision 23). |
 
     `read` is one button on the consent page. The installation agent
     policy (decision 19) chooses which modes a person can pick. No mode
-    skips the subject part, the ceiling, decision 20 or a confirmation.
+    skips the subject part, the ceiling or decision 20. Only `operate` can
+    reach `direct`, and only through decision 30.
 13. **The scope is stored expanded.** The scope has three parts:
     - the objects: a list of namespaces, or all namespaces, and a separate
       flag `installation`. All namespaces never covers an action whose
@@ -577,7 +581,9 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
     - the namespaces that no delegation can cover,
     - whether the REST API audience can be offered (decision 37),
     - whether DPoP is required for public clients (decision 39),
-    - whether a burst of refusals suspends a delegation (decision 5).
+    - whether a burst of refusals suspends a delegation (decision 5),
+    - the maximum count of pending held requests for each delegation
+      (decision 23).
 
     The policy only narrows. The server enforces it at each check, so a
     change narrows existing delegations at once. Each change writes an
@@ -585,27 +591,43 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
 
 ### What no agent does
 
-20. **A fixed list, with no flag.** A rule in the catalog of code rules
-    refuses these actions for each delegated request and each piece of
-    delegated work, with `ErrAgentDenied` and a denial in the audit log. No
-    mode, scope, ceiling, policy or administrator can allow them:
-    - grants, roles, groups and memberships,
-    - access tokens: create, rotate or revoke,
-    - trust rules,
-    - principals: create, change, disable, delete, including agents,
-      ceilings, sponsors and client registrations,
-    - delegations: create, renew, widen or revoke (only the person, in the
-      console),
-    - gates, approval rules, access limits and the installation agent
-      policy,
-    - sign-in settings, identity providers, SCIM and MFA settings,
-    - break-glass,
-    - each action of the operator family,
-    - a run start of Dusty, and each route that starts work under another
-      delegation, for example a Catalog request on behalf of another agent.
+20. **The never class, defined by property.** Each action of the action
+    catalog declares an **agent class**: `allowed`, `held` or `never`. The
+    catalog test fails for an action with no declaration, so a new action
+    cannot slip through. A delegated request and each piece of delegated
+    work get `ErrAgentDenied` and a denial in the audit log for each action
+    of the class `never`. No mode, scope, ceiling, policy, administrator or
+    held request can allow it: a held request can never cover a `never`
+    action, and the server refuses to create one for it. An action is
+    `never` when it has one of these properties:
+    - (a) it creates, issues, returns, rotates or changes a credential, a
+      key or a token of any kind,
+    - (b) it creates or changes an identity: a principal, an agent, a
+      sponsor, a ceiling, a client registration, a group or a membership,
+    - (c) it creates or changes a trust relation: a trust rule, an issuer,
+      an identity provider, SCIM, sign-in or MFA settings,
+    - (d) it creates or changes a grant, a role, an access limit, a gate, an
+      approval rule or the installation agent policy,
+    - (e) it creates, renews, widens or revokes a delegation,
+    - (f) it changes an agent setting, switch or opt-in,
+    - (g) it creates or changes a connection to an outside system or a
+      security control: a Git host connection, a notification or log sink,
+      a webhook, the egress rules, an IP allowlist,
+    - (h) it changes audit or history retention, or redacts audit or
+      history,
+    - (i) it uses break-glass, or it is in the operator family,
+    - (j) it starts work under another delegation: a run start of Dusty, or
+      a Catalog request on behalf of another agent.
+
+    Examples from the catalog today: `namespace:manage-runners` (runner pool
+    join tokens), `profile:issue-token`, `namespace:manage-issuer`,
+    `git-host-connection:create`, `namespace:manage-git-host-connections`,
+    `principal:manage-tokens`, `caller:manage-agent-opt-ins`,
+    `namespace:manage-agent` and `server:manage-agent`. When an action is in
+    doubt, its class is `never` until an ADR says otherwise.
 
     The `accessAdministration` flag of round 2 is removed. An agent can
-    describe an access change in text, and the person makes it. A later RFC
+    describe such a change in text, and the person makes it. A later RFC
     can propose access changes as drafts that a person confirms.
 21. **Policy never comes from what the agent reads.** No scope, gate,
     ceiling or policy comes from content that the agent reads: a stack
@@ -622,11 +644,19 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
     request ID and the console link. The agent waits, then retries. The
     person answers in the console.
 23. **The held request.** A held request stores the delegation ID, the
-    agent, the subject, the exact action and object, a digest of the
-    arguments (or of the plan), a summary that the server computes, the
-    agent's text, a creation time, an expiry (default 1 hour, at most 24,
-    a setting that the API shows) and a state (`pending`, `confirmed`,
-    `refused`, `expired`, `used`). Its rules:
+    token family or the run that made it, the agent, the subject, the exact
+    action and object, the full arguments and their digest (or the plan
+    and its digest), a summary that the server computes, the agent's text,
+    a creation time, an expiry (default 1 hour, at most 24, a setting that
+    the API shows) and a state (`pending`, `confirmed`, `refused`,
+    `expired`, `used`). Its rules:
+    - Only an action of the agent class `held` can make one.
+    - Only the token family or the run that made it can use it. Another
+      token family of the same delegation cannot.
+    - A delegation has at most 10 pending held requests (a setting of the
+      installation agent policy). The server refuses one more, and each
+      refused or expired held request counts in the refusal alert of
+      decision 5.
     - Only the subject confirms it, in a console session with no agent and
       a fresh authentication, as for the confirmation step (ADR 128
       decision 5).
@@ -653,8 +683,15 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
        destroys, the changed protection flags, each unit or namespace that
        the original request did not name, and the sources of untrusted
        input (decision 28).
-    2. the agent's text, in a separate box with the label "Written by the
-       agent. It can repeat text that the agent read."
+    2. for a held request, the exact arguments, rendered by the server from
+       the stored request as a typed diff of each argument, before and
+       after: for example the code location, the steps, the pool and the
+       executor of a unit, an output sharing rule, or object context. Names
+       that come from state or from other principals (units, tags, comments)
+       appear as quoted data with a length limit, never as page text.
+    3. the agent's text, below the facts and the arguments, in a separate
+       box with the label "Written by the agent. It can repeat text that the
+       agent read."
 
     For a destroy, or a replacement of a stateful resource, the person
     types a fact that the page shows (open question 4).
@@ -671,25 +708,45 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
 
 ### Untrusted input
 
-28. **The mark.** The server sets `untrustedInput` on a Dusty run when a
-    tool result carries text that neither the person nor the project wrote.
-    Each catalog tool declares whether its results can carry such text, and
-    the catalog test fails for a tool with no declaration. The list of ADR
-    124 decision 13 gets `read_audit_log`, `explain_access` and
-    `get_change`. The run records each source (the tool, the object and the
-    author). The mark never clears during a run.
+28. **The mark.** Text is **trusted** only when the person wrote it in a
+    request of their own with no delegation, or when the server generated
+    it (for example an ID, a count or a plan summary). All other text is
+    untrusted: text of other principals, state attributes and tags, logs,
+    repository content (a repository has other contributors), and text that
+    any delegated request wrote. The server sets `untrustedInput` on a Dusty
+    run when the run reads untrusted text, through a tool result or through
+    context that the server loads into the run (ADR 127). Each catalog tool
+    declares whether its results can carry untrusted text, and the catalog
+    test fails for a tool with no declaration. The list of ADR 124 decision
+    13 gets `read_audit_log`, `explain_access` and `get_change`. The run
+    records each source (the tool or the context, the object and the
+    writer). The mark never clears during a run.
 29. **An outside client is marked from its first call.** The server cannot
     see what an outside client read elsewhere. So each request of a token
     family carries `untrustedInput: true`.
-30. **The rule.** A request or delegated work with `untrustedInput` cannot
-    act directly:
+30. **The rule, and the one path to `direct`.** A request or delegated work
+    with `untrustedInput` cannot act directly:
     - a job that it starts cannot use `direct` (ADR 125 decision 3). The
       job falls back to `approve-first`, and the answer says why,
-    - a write of the mode `operate` outside a job is always a held request.
+    - a write outside a job is always a held request.
 
-    The mark is a fact (`delegation.untrustedInput`), so a gate can also
-    read it. Dusty in a run with no untrusted input keeps every mode that
-    the three switches of ADR 125 allow.
+    A job of a delegated request uses `direct` only when all of these hold:
+    the delegation mode is `operate`, the run has no untrusted input, and
+    the three switches of ADR 125 decision 3 are on. The agent can never
+    turn a switch on (decision 20 (f)), and a destroy is never `direct`.
+    Every other job of mode `operate` waits for one confirmation (decision
+    12). So an outside client never reaches `direct` (decision 29). The
+    mark is a fact (`delegation.untrustedInput`), so a gate can also read
+    it.
+
+    **Agent-written text keeps its writer.** Text that a delegated request
+    stores (a change order description, a job reason, a comment, object
+    context, a unit setting) records the agent and the delegation as its
+    writer, next to the person, and carries the mark of the request.
+    Content that carries the mark never clears it: a later run that reads it
+    is marked, also when the person is the author for the rules of review
+    (decision 26). Only the person, in a request of their own with no
+    delegation, can store a new version as trusted text.
 
 ### Delegated work
 
@@ -718,16 +775,36 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
 34. **Rebind or take over.** The person can rebind a disabled trigger or
     schedule to a live delegation to the same agent (a held request), or
     take it over as their own work with no actor part (in the console, with
-    a fresh authentication). Each writes an audit entry.
+    a fresh authentication). Each writes an audit entry. A rebind keeps the
+    mark of untrusted input of the old work.
+
+    **Work that an agent's write causes carries that write's delegation.**
+    A run trigger of any owner can fire on a write that a delegated request
+    made: a push of a write-back job, a review request, or a change of a unit
+    that a trigger follows. The job that it starts records the causing
+    delegation and its mark, runs both parts, and gets the `sub` key `agent`
+    (decision 52). It also keeps every check of the trigger itself, so it is
+    never wider than either. The owner of the trigger never supplies the
+    authority of the agent's write. When the causing delegation has ended,
+    the job does not start, with the stop reason `delegation-ended`. The
+    server knows the causing delegation from its own records of the write. A
+    push that an outside agent makes to the Git host with its own Git
+    credential is not visible to the server, as a personal token is not
+    (decision 47).
 
 ### Agent rules key on the delegation
 
-35. **`delegation.present`, never the channel.** Each agent rule applies
-    when `delegation.present` is true, whatever `source.kind` says: the
-    agent checks of the job model (`job.CheckAgent`), the confirmation
-    step, the `direct` switches, "a destroy is never `direct`", "no propose
-    after a reveal", the secret gate and the fixed list. An outside client
-    on the REST API gets the same rules as Dusty and the MCP endpoint.
+35. **The delegation or the channel, never narrower than today.** Each
+    agent rule applies when `delegation.present` is true **or**
+    `source.kind` is `agent`, `mcp` or `mcp-proxy`: the agent checks of the
+    job model (`job.CheckAgent`), the confirmation step, the `direct`
+    switches, "a destroy is never `direct`", "no propose after a reveal",
+    the secret gate and decision 20. The new key adds cases. It never
+    removes one. Until the slices that add delegations and OAuth ship, the
+    MCP endpoint keeps the agent rules of ADR 123 to ADR 128 for personal
+    tokens and service tokens, as today. An outside client on the REST API
+    with a delegated token gets the same rules as Dusty and the MCP
+    endpoint.
 36. **The guide of gates** says: to match agents, read `principal.kind ==
     "agent"` or `delegation.present`. `source.kind == "agent"` is a channel,
     not an identity.
@@ -762,9 +839,13 @@ Options 1D, 2C, 3B and 4A. The decisions below are the design for the ADR.
 39. **Public clients.** A public client gets:
     - refresh token rotation with reuse detection: a reused refresh token
       revokes the whole token family and writes an audit entry,
-    - DPoP-bound tokens (RFC 9449), required by default through the
-      installation agent policy, which can set it to optional for clients
-      that lack it, and shows the effective value,
+    - DPoP-bound tokens (RFC 9449) when the client supports DPoP. The
+      installation agent policy sets `publicClientDPoP` to `optional` by
+      default, because DPoP support in MCP clients is not verified, and an
+      administrator can set `required`. The API shows the effective value.
+      The default changes to `required` in a later ADR once support is
+      verified. Without DPoP, rotation and the short token lifetime are the
+      layers,
     - the default ceiling `agent-tools-read`, with no audit or access-map
       tools (`read_audit_log` and `explain_access` are in a separate role,
       `agent-tools-audit`),
@@ -1025,8 +1106,12 @@ that this design must break:
    two-part meaning. `principal.kind` never takes `agent` until slice 1.
 2. The decision record has a list of parts and an allow source, with one
    part for every decision today.
-3. The `sub` key order of ADR 205 reserves the key `agent` at the end, and
-   `act` drops the MCP session.
+3. The issued token claims of ADR 205 take their final form: the `sub` key
+   order reserves the key `agent` at the end. `act.sub` changes from
+   `agent:<agent ref>` to `agent:<agent principal ID>`. The run or the token
+   family moves to a nested member of `act`, and `act` drops the MCP
+   session. Cloud trust policies can match `act`, so this shape must not
+   change after a tag.
 4. The bootstrap token sets `person`, and an empty or unknown kind fails
    closed at gates.
 5. The `agent/1` block drops the MCP session, so that `agent/2` adds fields
@@ -1038,7 +1123,8 @@ Each slice is a separate pull request, after the ADR. Slice 0 comes before
 the first tag. Slices 1 to 8 are milestone 10.
 
 0. The shapes of "Before the first tag", with tests.
-1. The record kind, decision 2, sponsors, delete and the tests of each kind
+1. The agent class of each catalog action (decision 20) with its test,
+   the record kind, decision 2, sponsors, delete and the tests of each kind
    in decision 48.
 2. Delegations: the store, the conformance suite, the API, modes, the
    expanded scope, renewal, the ends, the installation agent policy, the
@@ -1097,6 +1183,22 @@ agents change in the slice that first sets each behavior (ADR 214).
 | m11 Details of the `sub` key | Decision 52: the 600-character count, the claim name, both policy examples and the Azure limit. |
 | m12 ADR 70 cannot be edited | "ADRs that this touches": a "Changes" item, not an edit. |
 
+### Final check of round 3 (head d637783)
+
+| Finding | Resolution |
+| --- | --- |
+| N1 The never-list missed credential and control actions (join tokens, profile tokens, the issuer, Git host connections, agent switches) | Decision 20: each catalog action declares an agent class (`allowed`, `held`, `never`), the test fails without one, the `never` class is defined by property, and a held request never covers it. |
+| N2 A held request page did not show the arguments | Decision 25: a typed diff of every argument, rendered by the server from the stored request, with names from state as quoted data. Decision 23 binds a held request to its token family or run. |
+| N3 The mark could be laundered through text stored as the person's | Decision 28 defines trusted text and covers context that the server loads. Decision 30: text that a delegated request writes keeps the agent as its writer and the mark. Decision 34: a rebind keeps the mark. |
+| N4 Event triggers ran an agent's write as the trigger owner | Decision 34: the job records the causing delegation and its mark, runs both parts, gets the `sub` key `agent`, and does not start when the delegation has ended. |
+| N5 Decision 35 could drop today's MCP agent rules | Decision 35: `delegation.present` or the agent channels, never narrower than today. The MCP endpoint keeps its rules until the new slices ship. |
+| N6 Decisions 12 and 30 disagreed on `direct` | Decisions 12 and 30: `direct` only in mode `operate`, with no untrusted input, with the three switches on, never for a destroy. The agent cannot turn a switch on. |
+| N7 The `act.sub` change was not before the first tag | "Before the first tag" item 3 and slice 0. |
+| m1 No cap on held requests | Decision 23: at most 10 pending for each delegation, and refusals and expiries count in the refusal alert. |
+| m2 DPoP required by default, but client support is not verified | Decision 39: `optional` by default, `required` by policy, and a later ADR changes the default once support is verified. |
+| m3 "The project" was undefined | Decision 28 defines trusted text without the word. |
+| m4 Open question 5 wording | "A (recommended now)". |
+
 ## Open questions
 
 Each question stands alone. Each has a recommendation, so the owner can
@@ -1142,21 +1244,24 @@ accept the proposal as it is.
    - ELI5: Alice asks Dusty about one namespace. Should Dusty then be kept
      to that namespace for this conversation, even though the note allows
      more?
-   - A (recommended for later): no derived narrowing in the first version.
+   - A (recommended now): no derived narrowing in the first version.
      The mark of untrusted input, the held requests and the page fact "a
      unit you did not ask about" (decision 25) cover the risk, and a wrong
      guess would make Dusty refuse real work.
    - B: each run narrows itself to the namespaces of the objects that the
      person named, widens only while it has no untrusted input, and records
      the narrowing on the run.
+   - A later RFC can add B when Dusty's run data shows how often a run
+     crosses namespaces.
 
 ## Notes
 
 - The GLOSSARY entry **Principal kind** says that a token from a trust rule
   gives `service`. ADR 240 decision 3 and `identity.KindWorkload` say
   `workload`. The ADR of this RFC can fix the entry.
-- Review round 1 found two blockers, and round 2 found two more. "Review
-  findings and their resolution" answers each finding of both rounds.
+- Review round 1 found two blockers, round 2 found two more, and the
+  final check of round 3 found one more. "Review
+  findings and their resolution" answers each finding of all three checks.
 - Round 3 adds research on standards, identity vendors, infrastructure
   platforms, agent harnesses and threats. "Benchmarks" cites the public
   sources.
