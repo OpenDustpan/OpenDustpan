@@ -97,7 +97,7 @@ upsets no persona, and it is not stupid on a step back. Else the question has
 the mark "owner decision". The list "Questions for the owner" holds each
 owner decision as a yes or no question.
 
-### Facts on `main` (checked 2026-10-30, at 252b87f)
+### Facts on `main` (checked 2026-10-30, at 29a2062)
 
 - `identity.Authenticator` has one method, `AuthenticateToken`
   (`pkg/identity/identity.go`). The adapters are the access token service, the
@@ -1271,7 +1271,7 @@ the item starts. This needs a check that the migration runner accepts a gap
 in the numbers while an item is open. The work item that first does it
 checks that, and also checks that it does not conflict with the hash of each
 file in TestFrozenMigrations or with the collapse rule of ADR 73. This is a
-process note, not part of the design. The check on `main` at 252b87f:
+process note, not part of the design. The check on `main` at 29a2062:
 `migrate.Load` sorts by version and refuses only a duplicate, so a gap loads.
 TestFrozenMigrations pins the hash of each file and not the numbers. The
 collapse of ADR 73 makes one file above all the files that it replaces, and
