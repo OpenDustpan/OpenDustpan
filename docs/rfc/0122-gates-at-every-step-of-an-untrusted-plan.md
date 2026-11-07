@@ -18,8 +18,10 @@ direction "jobs do not run anything except IaC code") and ADR 226
 decision 10 ("an external check is never a job step"). The owner did not
 decide that conflict directly. The owner described the problem below and
 asked for gates and policies at every step, as far as is possible and
-logical. Section "The scanner question" gives the answer that this RFC
-proposes.
+logical. On 7 November 2026 the owner added: "having steps run on the
+runners isn't an issue, as long as the gating happens on the trusted side
+(our backend)." Section "The scanner question" gives the answer that this
+RFC proposes, and how it amends ADR 226 decision 10.
 
 ## Problem
 
@@ -175,7 +177,8 @@ before the runner gets the job.
 **Facts.** `change.paths`, `paths.touches["<set>"]` and
 `paths.only["<set>"]` (ADR 226 decision 13). The principal of the change.
 The result of an external check at the stage after `change.propose` (ADR
-226 decision 10).
+226 decision 10), or of a check step on a runner (an unverified fact, see "The
+scanner question").
 
 **What exists.**
 
@@ -501,57 +504,152 @@ another shelf must ask first.
 - **O4-b. A new decision point `change.plan`.** It runs before the
   dispatch of each plan phase, after each external check of the stage
   after `change.propose` has an answer or has timed out. Its fact schema
-  holds the groups of `change.propose`, and `externalChecks`, `ownership`
-  (O3) and `proxy`. A `deny` refuses the plan. A requirement holds the
+  holds the groups of `change.propose`, and `externalChecks`,
+  `checkSteps`, `ownership` (O3) and `proxy`, each with its origin. A `deny` refuses the plan. A requirement holds the
   plan (O2-b). A new decision point needs a new ADR (ADR 224 decision 2).
 - **O4-c. Evaluate `change.propose` two times.** Once at the start, and
   again after the pre-plan checks. One decision point with two meanings.
-- **O4-d. Run the scanner as a step of the plan job.** See the next
-  section. Not recommended.
+- **O4-d. Only the facts of the server.** No scanner result before the
+  plan. Gates read paths, ownership and proxy facts only.
 
 **Recommendation.** O4-b. It gives a clear name to the moment that the
 persona needs: "may this code run with this credential". It keeps
-`change.propose` as it is.
+`change.propose` as it is. The results of a check step (next section) and
+of an external check both reach `change.plan`.
 
 **ELI5.** We add one more checkpoint just before the helper starts the
 work. At this checkpoint we read the results of the inspectors.
 
-### The scanner question (O4-d)
+### The scanner question
 
-The owner said "yes" to scanners at the plan step. This RFC proposes to
-keep the "yes" and move the scanner out of the job:
+The owner said "yes" to scanners at the plan step. On 7 November 2026 the
+owner added: "having steps run on the runners isn't an issue, as long as
+the gating happens on the trusted side (our backend)." This section
+designs for that input.
 
-- A scanner over the **source** (the diff, the manifests, the program, the
-  lock file) runs as an external check at the stage after
-  `change.propose`. The gates of `change.plan` read its result. It runs
-  before any code of the change runs. Examples: OPA conftest over the
-  manifests, a check that a manifest matches its schema, a check for an
-  OpenTofu `external` data source or a Pulumi dynamic provider.
-- A scanner over the **plan** runs as an external check after the plan,
-  on the stored plan display (RFC 90, option A3). The gates of
-  `change.planned` read its result.
+#### The rule: the runner reports, the server decides
 
-A scanner as a step of the plan job is not recommended, for these
-reasons:
+A scanner can run as a job step on a runner. Its output is an **unverified fact**: a
+value that a process in a sandbox sent to the server. An unverified fact is never a
+fact that the server trusts by itself. The gate in the server decides,
+over the facts that the server verifies and over the unverified facts, with the
+origin of each value in the fact document.
 
-1. The scanned code runs in the same sandbox, before or after the
-   scanner. It can change the files that the scanner reads, or forge the
-   report. The result of a step in the sandbox is not a fact that a gate
-   can trust.
-2. A step after the plan is too late for examples 1 to 4. A step before
-   the plan, in the same sandbox, has the same credentials and network as
-   the plan, so the scanner gets reach that it does not need.
-3. The owner direction on RFC 49: "jobs do not run anything except IaC
-   code (and their dependencies) and die."
+#### The risk, and how the order of the steps removes it
 
-The external check gets the commit, the changed paths and a token that
-can read the source snapshot of that commit only. It gets no credential
-of the unit (open question 4).
+The risk: a scanner in the same sandbox as the program can be tricked. If
+the untrusted program runs first, or at the same time, it can change the
+files that the scanner reads, replace the scanner binary, or write the
+report itself. The result is then a forgery.
 
-**ELI5.** The inspector does not work inside the room where the
-stranger's machine runs, because the machine could trick the inspector.
-The inspector looks at the drawings before the machine starts, and at the
-result after it stops.
+The design removes this with the order of the steps and with the sandbox:
+
+1. **A check phase of its own.** A job of a review request gets a phase
+   `check` before the plan phase. The check phase runs one or more check
+   steps. No step of the check phase runs the program, a provider, a
+   package install or a script of the repository.
+2. **A fresh sandbox.** The check phase runs in its own sandbox, on its
+   own claim. The coordinator destroys the sandbox at the end of the phase
+   (ADR 137 decision 1). The plan phase gets a new sandbox. So no code of
+   the change runs before the scanner or next to it.
+3. **No credential and no route.** The check phase opens no profile
+   export, also not `exports.proxy`. Its proxy rule set holds no rule for
+   the downstream host, and no rule with a credential. The only route out
+   is the built-in tunnel to the server (ADR 330 decision 3). The job
+   token of the check phase can read the source snapshot of the job and
+   send the result of the step, and nothing more.
+4. **The scanner comes from the server.** The image of the check step and
+   its digest, the scanner configuration and the policy files come from
+   the server or from the base branch, never from the head commit
+   (invariant I1). A `.checkov.yaml` or a `policy/` directory in the head
+   commit does not change the check.
+5. **The server binds the result.** The launcher sends the result with the
+   SHA-256 of the source snapshot that it scanned. The server refuses a
+   result whose snapshot hash is not the hash of the job. The server
+   stores the raw report as a history item, and its SHA-256 goes into the
+   decision record.
+
+What stays: the scanner reads the files of the change, and these files
+are hostile input. A file made to exploit a bug in the scanner can make
+the scanner lie. The sandbox, the missing credential and the missing
+route limit what that exploit can reach. The rule below limits what
+the lie can unlock.
+
+#### Facts that the server verifies, and unverified facts
+
+| Value | Origin | Why |
+| --- | --- | --- |
+| `change.paths`, `paths.touches`, `paths.only` | Server | The server reads the changed paths from the Git host, or computes them from the source snapshot that it builds itself (ADR 135). |
+| `source.commit`, `source.protected`, `source.kind` | Server | The server resolves the commit and the branch at the start (ADR 213 decision 2). |
+| The principal, the opener, each pusher and their links | Server | Stored grants and links (ADR 299 decisions 20 and 22). |
+| `ownership.*` (O3) | Server | Stored ownership rules matched against the paths that the server read. |
+| `proxy.enabled`, `rules`, `ruleSetDigest`, `credentialHosts`, `planWriteMethods` | Server | The server renders the proxy rules at the job start. |
+| `proxy.planRequests`, `planDenied`, `planDeniedHosts` (O9) | Job proxy | The job proxy runs outside the sandbox, as its own user (ADR 330 decision 1). The program cannot write its records. |
+| The plan hash and the plan binding | Server | The server stores the plan and its hashes. The apply checks the binding (ADR 102 decision 7). The hash proves which plan the approvers saw. It does not prove that the content is true. |
+| `plan.add`, `change`, `replace`, `destroy`, `resourceTypes` | Runner, unverified | The tool in the sandbox writes the plan. A hostile program can make the plan show less than it does. |
+| `resourcePolicy.*` | Runner, unverified | The policy pack runs in the same plan, next to the program. |
+| `checkSteps.*` (new, the result of a check step) | Runner, unverified | A scanner in the check phase. Order and sandbox as above. |
+| `externalChecks.*` | External service | A signed callback from a service that the team runs (ADR 226 decision 10). It is as trusted as that service. |
+
+A plan count is an unverified fact too. This is true today for each plan. This RFC
+makes it visible.
+
+#### What an unverified fact can do in a gate
+
+- **An unverified fact can block.** A failed unverified fact can `deny`, or add a requirement.
+  A forged "failed" only stops the change of the person who forged it.
+- **An unverified fact alone cannot unlock.** A gate that grants more reach (the
+  `proxy-only` credentials of O1, a plan with no approve and run of O2)
+  must also hold on facts that the server verifies. The check at the save
+  of a gate warns when an `allow` outcome at `change.plan` reads only
+  unverified facts (ADR 347). A forged "passed" then removes one layer, and the
+  layers of the server still hold.
+- **The fact schema shows the origin.** Each group in the schema of a
+  decision point names its origin: `server`, `job-proxy`, `runner` or
+  `external`. The decision record shows it for each value that a gate
+  read.
+
+#### The external check stays
+
+An external check (ADR 226 decision 10) stays an option for each scanner.
+A team can run its scanner as a service, or in its own CI, and answer
+with a signed callback. The external check gets the commit, the changed
+paths and a token that can read the source snapshot of that commit only.
+It gets no credential of the unit (open question 4).
+
+A scanner over the plan runs after the plan, either as an external check
+on the stored plan display (RFC 90, option A3), or as a check step in a
+fresh sandbox that reads the stored plan display. It never runs in the
+sandbox of the plan phase.
+
+#### How this amends ADR 226 decision 10
+
+ADR 226 decision 10 says: "This accepts RFC 49: a run task is an external
+check, never a job step." The owner direction on RFC 49 said that jobs do
+not run anything except IaC code. The owner input of 7 November 2026
+replaces that direction for checks. The proposed amendment:
+
+- A run task, a call to a service of the team, stays an external check.
+- A check can also run as a **check step** in a check phase of a job,
+  with the rules of this section: its own fresh sandbox, before any step
+  that runs the program, no credential, no route to a host of the unit,
+  the scanner and its configuration from the server or the base branch.
+- The result of a check step is an unverified fact, with its origin in the fact
+  schema. A gate in the server decides. An unverified fact alone never grants reach.
+- A check step never runs in the sandbox of a plan or an apply phase.
+- The check phase is a fifth phase kind, next to `plan`, `apply`,
+  `deliver` and `verify` (ADR 100 decision 4, ADR 148 decision 3). The
+  `verify` phase is a precedent: it holds runner steps that change nothing
+  and check the change after the apply.
+
+This needs the owner's yes (open question 9). The new ADR must name ADR
+226 decision 10 in its "Changes" list, and RFC 49 in its context.
+
+**ELI5.** A helper may check the drawings in a clean, empty room before
+the stranger's machine is brought in. The helper has no keys. The helper
+writes a note. The note can stop the work, but the note alone cannot
+open a door. The guard at the front desk decides, and trusts what the
+guard checked with their own eyes more than the note.
 
 ### O5. A credential that also reaches the job (G5)
 
@@ -706,8 +804,11 @@ The proposal is the recommendation of each option set:
    reads pre-plan external checks, ownership facts and proxy facts, can
    deny, and can hold the plan for an approval (O2-b).
 3. Ownership facts from the stored ownership rules (O3-b).
-4. Scanners as external checks before and after the plan, never in the
-   job (the scanner question).
+4. Scanners as check steps on a runner, in a check phase of their own
+   with a fresh sandbox and no credential, or as external checks. Their
+   output is an unverified fact. The gate in the server decides, and an unverified fact alone
+   never grants reach. This amends ADR 226 decision 10 (the scanner
+   question).
 5. A fixed check at the job start for a credential that also reaches the
    job (O5-b).
 6. The facts `proxy.planWriteMethods` (O7-b), `proxy.planRequests`,
@@ -731,10 +832,11 @@ With the proposal, the persona configures:
 - Proxy rules: for `plan`, `GET` on `api.downstream.example` only. For
   `apply`, the methods and paths of the resources that the stack manages.
 - `reviewPlanCredentials: proxy-only`, forced at the collection.
-- An external check `manifest-schema` (conftest) at the stage after
-  `change.propose`.
+- A check step `manifest-schema` (conftest, with the policy files of the
+  base branch) in the check phase.
 - Gates at `change.plan`:
-  - deny when `externalChecks.failed` holds `manifest-schema`.
+  - deny when `checkSteps.failed` holds `manifest-schema` (an unverified fact that
+    blocks).
   - deny when `proxy.planWriteMethods > 0`.
   - allow when `ownership.changerOwnsAll` and `paths.only["manifests"]`.
   - else ask for the approval rule `platform-team` before the plan.
@@ -862,8 +964,13 @@ The owner keeps these. Each has a recommendation in the section
 7. Does a denied request in the plan notify the owners by default (O9-b)?
 8. The spike on Pulumi update plans (O10-d): in milestone 6 with the job
    proxy, or later?
-9. The scanner question: accept "scanners as external checks before and
-   after the plan, never in the job" as the answer to the owner's "yes"?
+9. The scanner question: accept check steps on a runner, with the rules
+   of "The scanner question" (a check phase of its own, a fresh sandbox, no
+   credential, the scanner from the server, the output as an unverified fact, an unverified fact
+   alone never unlocks), as an amendment of ADR 226 decision 10?
+10. The origin of each fact group in the fact schema (`server`,
+    `job-proxy`, `runner`, `external`): accept it for all decision points,
+    also for the plan and the policy pack facts that exist today?
 
 ## Proposed glossary lines
 
@@ -873,9 +980,15 @@ For `GLOSSARY.md`, after acceptance. This PR does not edit the glossary.
   `reviewPlanCredentials`. A plan of a review request opens only the
   credentials for the job proxy, so no credential enters the job.
   _Avoid_: Read-only mode, safe mode
-- **Pre-plan check**: an external check at the stage after
-  `change.propose`, whose result the gates of `change.plan` read.
-  _Avoid_: Pre-flight check, plan step scanner
+- **Check step**: a step of a check phase of a job. It runs a scanner or a
+  linter on a runner, in a fresh sandbox, with no credential and before any
+  step that runs the program. Its result is an unverified fact.
+  _Avoid_: Scanner step, plan step scanner, pre-flight check
+- **Unverified fact**: a value that a process in a sandbox sends to the server, for
+  example the result of a check step or the counts of a plan. A gate can
+  read an unverified fact. An unverified fact alone never grants reach.
+  _Avoid_: Claim (a claim is the durable claim of a phase), assertion,
+  attestation (a signed statement, which an unverified fact is not)
 - **Approve and run**: an approval that a gate at `change.plan` asks for
   before the plan phase runs. It binds to the head commit.
   _Avoid_: Pre-approval, run approval
