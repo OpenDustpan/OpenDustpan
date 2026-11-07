@@ -471,8 +471,10 @@ func (p settingsPlanner) poolName(ctx context.Context, ns namespace.Name, id str
 	return pools[i].Name, nil
 }
 
-// jobPlanner is the job.Planner of this version. It starts a plan on a
-// runner, with the default steps of the tool of the unit.
+// jobPlanner is the job.Planner of this version. It starts a plan, or a drift
+// check, on a runner, with the default steps of the tool of the unit. It
+// refuses an apply and a destroy until the runner protocol stores the plan of
+// the plan phase and gives it to the apply phase.
 //
 // The pool comes from the request, and then the service has checked
 // namespace:manage-runners, or it is the only job pool of the namespace. The

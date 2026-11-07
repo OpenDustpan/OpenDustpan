@@ -41,6 +41,33 @@ func TestStartApplyAndDestroyHaveTwoPhases(t *testing.T) {
 	}
 }
 
+// TestStartApplyByWriteBackHolderIsRefusedAfterThePlanner proves that a
+// principal who holds unit:write-back but not unit:run-apply passes the first
+// check of a start with no executor (the write-back action), and that the
+// check of the spec, which the planner sets to a runner, still refuses the
+// start with the action it lacks. The second check does not rely on the first.
+func TestStartApplyByWriteBackHolderIsRefusedAfterThePlanner(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, func(_ *job.ServiceConfig, r *rig) {
+		r.authz.allow[string(job.ActionUnitWriteBack)+" "+r.unit.String()] = true
+	})
+
+	req := r.plan("key-write-back")
+	req.Operation = job.OperationApply
+
+	_, err := r.svc.Start(t.Context(), actorOf("pam"), req)
+
+	var denied *job.DeniedError
+	if !errors.Is(err, identity.ErrDenied) || !errors.As(err, &denied) || denied.Action != job.ActionUnitRunApply {
+		t.Fatalf("Start = %v, want a refusal for the action %s", err, job.ActionUnitRunApply)
+	}
+
+	if r.planner.calls != 1 || len(r.store.creates) != 0 {
+		t.Fatalf("planner calls = %d, stored jobs = %d; want 1 and 0", r.planner.calls, len(r.store.creates))
+	}
+}
+
 // TestStartApplyAndDestroyNeedTheirActions proves that a principal who can
 // plan only gets a refusal for an apply and for a destroy, with the action
 // that it lacks, before the planner reads the unit or a job is stored.
