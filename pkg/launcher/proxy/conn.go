@@ -71,6 +71,16 @@ type bufConn struct {
 
 func (c *bufConn) Read(b []byte) (int, error) { return same(c.r.Read(b)) }
 
+// CloseWrite closes the write side when the connection can, so a tunnel
+// half-closes the client side also when the hijack buffer had bytes.
+func (c *bufConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return sameErr(cw.CloseWrite())
+	}
+
+	return sameErr(c.Close())
+}
+
 // notifyConn tells when it is closed.
 type notifyConn struct {
 	net.Conn

@@ -203,11 +203,27 @@ func TestResponseHeaderScan(t *testing.T) {
 
 	tests := map[string]struct {
 		name   string
-		value  string
+		values []string
 		reason proxy.Reason
 	}{
-		"credential in a header": {name: "X-Echo", value: "v=" + probeValue, reason: proxy.ReasonAuthInResponse},
-		"gzip":                   {name: "Content-Encoding", value: "gzip", reason: proxy.ReasonEncodedResponse},
+		"credential in a header": {
+			name: "X-Echo", values: []string{"v=" + probeValue}, reason: proxy.ReasonAuthInResponse,
+		},
+		"gzip": {
+			name: "Content-Encoding", values: []string{"gzip"}, reason: proxy.ReasonEncodedResponse,
+		},
+		"identity then gzip on a second line": {
+			name: "Content-Encoding", values: []string{"identity", "gzip"}, reason: proxy.ReasonEncodedResponse,
+		},
+		"empty then gzip on a second line": {
+			name: "Content-Encoding", values: []string{"", "gzip"}, reason: proxy.ReasonEncodedResponse,
+		},
+		"identity then gzip in a list": {
+			name: "Content-Encoding", values: []string{"identity, gzip"}, reason: proxy.ReasonEncodedResponse,
+		},
+		"empty value": {
+			name: "Content-Encoding", values: []string{""}, reason: proxy.ReasonEncodedResponse,
+		},
 	}
 
 	for name, tt := range tests {
@@ -215,7 +231,7 @@ func TestResponseHeaderScan(t *testing.T) {
 			t.Parallel()
 
 			e := newEnv(t, withHandler(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set(tt.name, tt.value)
+				w.Header()[tt.name] = tt.values
 				write(w, "body")
 			}))
 
@@ -230,6 +246,41 @@ func TestResponseHeaderScan(t *testing.T) {
 				t.Errorf("record %+v, want %q", rec, tt.reason)
 			}
 		})
+	}
+}
+
+// TestIdentityEncodingPasses checks that the one allowed encoding still
+// passes, in each spelling.
+func TestIdentityEncodingPasses(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"identity", "IDENTITY", "identity, identity"} {
+		e := newEnv(t, withHandler(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Encoding", value)
+			write(w, "body")
+		}))
+
+		if rep := e.get(t, http1, "/v1/x"); rep.status != http.StatusOK || rep.body != "body" {
+			t.Errorf("Content-Encoding %q: status %d body %q", value, rep.status, rep.body)
+		}
+	}
+}
+
+// TestRangeIsNotForwarded checks that a rule with a credential drops the Range
+// headers, so a job cannot read a reflected credential in short slices.
+func TestRangeIsNotForwarded(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	c, br := e.rawTLS(t)
+
+	rawRequest(t, c, br, "GET /v1/x HTTP/1.1\r\n"+hostHeader(e)+"Range: bytes=0-3\r\nIf-Range: x\r\n\r\n")
+
+	r := e.up.requests()[0]
+	for _, h := range []string{"Range", "If-Range"} {
+		if v := r.Header.Values(h); len(v) != 0 {
+			t.Errorf("%s = %q reached the host", h, v)
+		}
 	}
 }
 

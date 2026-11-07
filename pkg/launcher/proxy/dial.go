@@ -118,16 +118,17 @@ func (g *guardDialer) resolve(ctx context.Context, host string) ([]netip.Addr, e
 		addrs = got
 	}
 
-	out := make([]netip.Addr, 0, len(addrs))
+	// Check every address of the answer first, then keep the first few, so an
+	// address late in the answer cannot pass unchecked.
+	out := make([]netip.Addr, 0, min(len(addrs), maxDialAddrs))
 
 	for _, a := range addrs {
 		if g.rules.CheckAddr(a) != nil {
 			return nil, ErrGuardRefused
 		}
 
-		out = append(out, a.Unmap())
-		if len(out) == maxDialAddrs {
-			break
+		if len(out) < maxDialAddrs {
+			out = append(out, a.Unmap())
 		}
 	}
 

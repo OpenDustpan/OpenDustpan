@@ -303,6 +303,10 @@ func (p *Proxy) buildRequest(r *http.Request, t target, adm admitted, out *outbo
 
 	var scan *scanner
 
+	if ref := refusePlainCredential(t, adm.rule); ref != nil {
+		return ref
+	}
+
 	if adm.rule.Credential != "" {
 		cred, cerr := p.credential(adm.rule.Credential)
 		if cerr != nil || cred.Kind == KindClientCertificate {
@@ -319,6 +323,10 @@ func (p *Proxy) buildRequest(r *http.Request, t target, adm admitted, out *outbo
 
 		// A compressed response would hide the credential from the scan.
 		h.Set("Accept-Encoding", "identity")
+		// A range request would let a job read a reflected credential in
+		// slices that are shorter than one form, which the scan cannot see.
+		h.Del("Range")
+		h.Del("If-Range")
 	}
 
 	// No User-Agent from the transport: the client's own header or none.
@@ -342,6 +350,19 @@ func (p *Proxy) buildRequest(r *http.Request, t target, adm admitted, out *outbo
 		ContentLength: r.ContentLength,
 	}
 	out.scan = scan
+
+	return nil
+}
+
+// refusePlainCredential refuses a request that would send a credential over
+// plain HTTP. Defense in depth: jobproxy.Match denies it too (the reason
+// credential-over-http); this check stays so that a change in the proxy rules
+// cannot make the proxy send a credential without TLS. It does not rely on
+// Match, and it runs before the credential is read.
+func refusePlainCredential(t target, rule jobproxy.RenderedRule) *refusal {
+	if t.plain() && (rule.Credential != "" || rule.ClientCertificate != "") {
+		return newRefusal(http.StatusForbidden, ReasonAuthOverHTTP)
+	}
 
 	return nil
 }
@@ -401,7 +422,7 @@ func checkResponse(resp *http.Response, scan *scanner) Reason {
 		return ReasonNone
 	}
 
-	if ce := resp.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
+	if encodedResponse(resp.Header) {
 		return ReasonEncodedResponse
 	}
 
@@ -418,6 +439,22 @@ func checkResponse(resp *http.Response, scan *scanner) Reason {
 	}
 
 	return ReasonNone
+}
+
+// encodedResponse reports whether any Content-Encoding line of h holds a token
+// other than "identity". It reads every line and splits each on commas, and an
+// empty token counts as an encoding, so the scan never reads bytes it cannot
+// understand.
+func encodedResponse(h http.Header) bool {
+	for _, line := range h.Values("Content-Encoding") {
+		for token := range strings.SplitSeq(line, ",") {
+			if !strings.EqualFold(strings.TrimSpace(token), "identity") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // relay sends the response to the client. A redirect passes unchanged. When

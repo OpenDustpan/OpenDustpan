@@ -159,6 +159,20 @@ func TestGuardMixedAnswer(t *testing.T) {
 	}
 }
 
+// TestGuardChecksEveryAddress checks that an address late in a long answer is
+// checked too, although the dial tries only the first few.
+func TestGuardChecksEveryAddress(t *testing.T) {
+	t.Parallel()
+
+	res := answering("93.184.216.34", "93.184.216.35", "93.184.216.36", "93.184.216.37", "93.184.216.38", "10.0.0.1")
+	dial := proxy.ProbeGuardedDial(egress.Rules{Allow: nil, LoopbackForTests: false}, res, time.Second,
+		func(proxy.Dialed) { t.Error("the dial connected although the sixth address was refused") })
+
+	if _, err := dial(t.Context(), testHost, 443); !errors.Is(err, proxy.ErrGuardRefused) {
+		t.Errorf("dial error %v, want ErrGuardRefused", err)
+	}
+}
+
 // TestResolverErrorIsFixedReason checks that the text of a resolver error
 // reaches neither the client nor the record.
 func TestResolverErrorIsFixedReason(t *testing.T) {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"syscall"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/jobproxy"
 )
 
 // ProbeForms exposes the forms of a secret to the tests.
@@ -25,6 +27,38 @@ func ProbeScanWindow(secrets []string) int { return newScanner(secrets).window }
 // ProbeControl exposes the Control check of the outbound guard.
 func ProbeControl(rules egress.Rules, expected netip.Addr) func(string, string, syscall.RawConn) error {
 	return guardControl(rules, expected)
+}
+
+// ProbeBuildPlain runs buildRequest for a plain HTTP request to a rule with
+// the named credential and client certificate. It does not go through
+// jobproxy.Match, so it tests the check of this layer alone. It returns the
+// status and the reason of the refusal, or 0 and ReasonNone.
+func ProbeBuildPlain(p *Proxy, credential, clientCertificate string) (int, Reason) {
+	return probeBuild(p, kindPlain, credential, clientCertificate)
+}
+
+// ProbeBuildInspect is ProbeBuildPlain for a request inside a TLS end.
+func ProbeBuildInspect(p *Proxy, credential, clientCertificate string) (int, Reason) {
+	return probeBuild(p, kindInspect, credential, clientCertificate)
+}
+
+// probeBuild runs buildRequest for a request of kind k.
+func probeBuild(p *Proxy, k kind, credential, clientCertificate string) (int, Reason) {
+	rule := jobproxy.RenderedRule{
+		ID: "r", Operations: nil, Host: "api.example.com", Port: defaultTLSPort, Mode: jobproxy.ModeInspect,
+		Methods: nil, Paths: nil, Credential: credential, ClientCertificate: clientCertificate,
+		ServerTrust: jobproxy.ServerTrustSystem,
+	}
+	adm := admitted{rule: rule, path: "/x", query: "", hasQuery: false}
+	req := &http.Request{Method: http.MethodGet, Header: http.Header{}}
+	out := &outbound{req: &http.Request{}, scan: nil}
+
+	ref := p.buildRequest(req, target{host: rule.Host, port: rule.Port, kind: k}, adm, out)
+	if ref == nil {
+		return 0, ReasonNone
+	}
+
+	return ref.status, ref.reason
 }
 
 // Dialed is one connect that the guarded dial tried.

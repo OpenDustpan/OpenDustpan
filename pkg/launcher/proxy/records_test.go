@@ -179,6 +179,39 @@ func TestZeroRenderedAllowsNothing(t *testing.T) {
 	}
 }
 
+// TestPlainCredentialLayer is the check against a credential over plain HTTP,
+// on its own: it runs below jobproxy.Match, as if Match had allowed the
+// request.
+func TestPlainCredentialLayer(t *testing.T) {
+	t.Parallel()
+
+	p, err := proxy.New(baseConfig(newSink()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		if cerr := p.Close(); cerr != nil {
+			t.Errorf("Close: %v", cerr)
+		}
+	})
+
+	for _, c := range [][2]string{{"tok", ""}, {"", "cert"}, {"tok", "cert"}} {
+		status, reason := proxy.ProbeBuildPlain(p, c[0], c[1])
+		if status != http.StatusForbidden || reason != proxy.ReasonAuthOverHTTP {
+			t.Errorf("plain with %q and %q: %d %q, want 403 credential-over-http", c[0], c[1], status, reason)
+		}
+	}
+
+	if status, reason := proxy.ProbeBuildPlain(p, "", ""); status != 0 || reason != proxy.ReasonNone {
+		t.Errorf("plain with no credential: %d %q, want it to pass", status, reason)
+	}
+
+	if status, reason := proxy.ProbeBuildInspect(p, "", ""); status != 0 || reason != proxy.ReasonNone {
+		t.Errorf("inspect with no credential: %d %q, want it to pass", status, reason)
+	}
+}
+
 // TestNewRefusesBadConfig checks the configuration errors.
 func TestNewRefusesBadConfig(t *testing.T) {
 	t.Parallel()
