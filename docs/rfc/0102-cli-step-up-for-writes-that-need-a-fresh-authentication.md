@@ -1031,6 +1031,7 @@ case names only, and each case skips until an adapter exists.
 | `ChallengeStore` | `CreateChallenge`, `Challenge`, `AcceptChallenge`, `CompleteChallenge`, `RecordFailure` | `ErrNotFound`, `ErrInvalid`, `ErrExpired`, `ErrUsed`, `ErrChallengeLimit`, `ErrFactorRefused`, `ErrCounterRegressed` |
 | `CredentialStore` | `UseCredential`, `RevokeCredentialsOfKey`, `RevokeCredentialsOfTOTP`, `RevokeCredentialsOfPerson` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrMismatch`, `ErrFactorRefused` |
 | `TOTPStore` | `EnrollTOTP`, `ConfirmTOTP`, `TOTP`, `BeginTOTPAttempt`, `AcceptStep`, `ResetTOTP` | `ErrNotFound`, `ErrExpired`, `ErrUsed`, `ErrLocked`, `ErrDisabled` |
+| `ResetStore` | `ResetFactors` | `ErrInvalid` |
 | `Verifier` | `Verify` | `ErrBadAnswer`, `ErrInvalid` |
 
 **Atomicity.** `CompleteChallenge` does the whole answer in one transaction,
@@ -1047,8 +1048,12 @@ challenge void and appends the `security` entry in the same transaction, and
 saves no credential, so a cloned key never gets one. No separate counter
 method exists. `RevokeKey`, `ResetTOTP` and `ConfirmTOTP` revoke the
 credentials and append their entry in the same transaction.
-`EnrollFirstKey` checks that the person holds no key in the same transaction
-as the add. `UseCredential` uses the credential up in its own transaction
+`AddKey` and `EnrollFirstKey` take the challenge of the key add, check it, mark it
+`answered`, store the key and append the entry in one transaction, so one proof
+adds one key, once, also after the revoke of that key. `EnrollFirstKey` checks
+that the person holds no key in the same transaction as the add. `ResetFactors`
+deletes the keys and both TOTP factors, revokes each credential, voids each
+open challenge and appends one entry in one transaction. `UseCredential` uses the credential up in its own transaction
 before the write (Q4).
 
 ## Proposed terms

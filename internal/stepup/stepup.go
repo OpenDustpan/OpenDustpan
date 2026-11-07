@@ -261,6 +261,20 @@ type Challenge struct {
 	AcceptedAt time.Time
 }
 
+// KeyAddition is the add of a step-up key under the challenge that proved
+// possession of it. The store binds the key to the challenge, so that one
+// proof adds one key, once.
+type KeyAddition struct {
+	// Key is the new key.
+	Key Key
+	// ChallengeID names the challenge of ScopeKeyAdd that the new key
+	// answered. The service verified the signature before the call.
+	ChallengeID string
+	// At is the time of the add. A challenge that expired at or before At is
+	// expired.
+	At time.Time
+}
+
 // Answer is the answer of a challenge.
 type Answer struct {
 	Factor Factor
@@ -366,24 +380,47 @@ type Use struct {
 
 // KeyStore is the persistence port for step-up keys.
 type KeyStore interface {
-	// AddKey stores k and appends e in the same transaction. It returns
-	// ErrConflict for a fingerprint that the person registered before,
-	// ErrLimit when the person holds the maximum count of keys, and
-	// ErrInvalid for a key with an empty field or a non-empty EnrolledBy. A
-	// failed add stores nothing and appends nothing.
-	AddKey(ctx context.Context, k Key, e audit.Entry) error
+	// AddKey stores a.Key, marks the challenge a.ChallengeID answered and
+	// appends e, in one transaction. The challenge must be a challenge of
+	// ScopeKeyAdd of the person a.Key.PersonID, in StateOpen, not expired at
+	// a.At, and its KeyAdd must hold the type and the fingerprint of a.Key.
+	// It checks in this order, and the first failure decides:
+	//
+	//  1. ErrInvalid for a key with an empty field or a non-empty EnrolledBy,
+	//     an empty ChallengeID, a zero At, or a challenge of another scope or
+	//     whose KeyAdd differs from the key.
+	//  2. ErrNotFound for a missing challenge or a challenge of another
+	//     person.
+	//  3. ErrUsed for a challenge that is not open: answered, void or
+	//     accepted. A challenge that made a key is answered, so the proof
+	//     adds no second key, also after the revoke of the first key and
+	//     before the expiry of the challenge.
+	//  4. ErrExpired for a challenge that expired at or before a.At.
+	//  5. ErrConflict for a fingerprint that the person registered before,
+	//     and ErrLimit when the person holds the maximum count of keys.
+	//
+	// A failed add stores nothing, appends nothing and leaves the challenge
+	// open. Of two calls at the same time for one challenge, one wins, and
+	// the other returns ErrUsed.
+	AddKey(ctx context.Context, a KeyAddition, e audit.Entry) error
 	// Keys returns the keys of the person personID in the order of the add.
 	Keys(ctx context.Context, personID string) ([]Key, error)
 	// Key returns the key id of the person personID, or ErrNotFound.
 	Key(ctx context.Context, personID, id string) (Key, error)
-	// EnrollFirstKey stores k, the first key of the person k.PersonID, for
-	// the administrator adminID, and appends e, in one transaction. It
-	// returns ErrConflict when the person holds a key, also a suspended one,
-	// and ErrInvalid when adminID is empty or names the person, or for a key
-	// with an empty field or an EnrolledBy that is not adminID.
-	// Of two calls at the same time for one person, one wins. A failed
-	// enrollment stores nothing and appends nothing.
-	EnrollFirstKey(ctx context.Context, adminID string, k Key, e audit.Entry) error
+	// EnrollFirstKey stores a.Key, the first key of the person
+	// a.Key.PersonID, for the administrator adminID, marks the challenge
+	// a.ChallengeID answered and appends e, in one transaction. The challenge
+	// rules and the order of the checks are those of AddKey, with these
+	// changes: step 1 also returns ErrInvalid when adminID is empty or names
+	// the person, or when the EnrolledBy of the key is not adminID, and step
+	// 5 returns ErrConflict when the person holds a key, also a suspended
+	// one. The challenge names the person who gets the key, and holds the
+	// credential of the administrator. The store does not map that credential
+	// to adminID, so the service checks it.
+	// Of two calls at the same time for one person, or for one challenge,
+	// one wins. A failed enrollment stores nothing, appends nothing and
+	// leaves the challenge open.
+	EnrollFirstKey(ctx context.Context, adminID string, a KeyAddition, e audit.Entry) error
 	// RevokeKey deletes the key, revokes each credential that it made and
 	// appends e, in one transaction. It returns ErrNotFound.
 	RevokeKey(ctx context.Context, personID, id string, e audit.Entry) error
@@ -460,6 +497,21 @@ type CredentialStore interface {
 	// RevokeCredentialsOfPerson revokes each credential of the person
 	// personID, for an admin reset and a deprovision.
 	RevokeCredentialsOfPerson(ctx context.Context, personID string) error
+}
+
+// ResetStore is the persistence port for the admin reset of the factors of a
+// person.
+type ResetStore interface {
+	// ResetFactors deletes each step-up key of the person personID and the
+	// active and the pending TOTP factor, revokes each step-up credential of
+	// the person, makes each open or accepted challenge of the person void,
+	// and appends e, which is the one entry of the reset, in one
+	// transaction. It returns ErrInvalid for an empty personID. A person who
+	// holds no key and no factor still gets the entry, so that the reset has
+	// a record. It changes nothing for another person. A failed reset
+	// changes nothing and appends nothing. Two resets at the same time each
+	// append their entry.
+	ResetFactors(ctx context.Context, personID string, e audit.Entry) error
 }
 
 // TOTP is the TOTP factor of a person. The store keeps the secret sealed.

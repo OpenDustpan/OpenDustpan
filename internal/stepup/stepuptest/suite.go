@@ -24,6 +24,7 @@ type Store interface {
 	stepup.ChallengeStore
 	stepup.CredentialStore
 	stepup.TOTPStore
+	stepup.ResetStore
 	audit.Store
 }
 
@@ -35,8 +36,8 @@ type Factory func(t *testing.T) Store
 //nolint:gochecknoglobals // A fixed list of case names.
 var caseNames = []string{
 	// KeyStore.
-	"an added key reads back with its fingerprint and its audit entry",
-	"an add with an empty field fails with ErrInvalid and stores nothing",
+	"an added key reads back with its fingerprint and its audit entry, and its challenge is answered",
+	"an add with an empty field fails with ErrInvalid, stores nothing and leaves the challenge open",
 	"a second add of the same fingerprint for one person fails with ErrConflict",
 	"the same fingerprint for two people is two keys",
 	"an add above the key limit fails with ErrLimit and stores nothing",
@@ -50,6 +51,21 @@ var caseNames = []string{
 	"an admin enrollment for a person with only a suspended key fails with ErrConflict",
 	"an admin cannot enroll a key for themselves",
 	"two first-key enrollments at the same time for one person: one wins",
+	// KeyStore: the binding of an add and of an enrollment to its key-add challenge.
+	"an add with a missing challenge or a challenge of another person fails with ErrNotFound and stores nothing",
+	"an add with a challenge of another scope, or whose key type or fingerprint differs from the key, fails with ErrInvalid and stores nothing",
+	"an add with a challenge that is answered, void or accepted fails with ErrUsed and stores nothing",
+	"an add with an expired challenge fails with ErrExpired and stores nothing",
+	"a second add under one challenge fails with ErrUsed, also after the revoke of the first key and before the expiry of the challenge",
+	"an add that fails with ErrConflict or ErrLimit leaves the challenge open, and the challenge answers a later good add",
+	"an add whose audit append fails stores no key and leaves the challenge open",
+	"two adds at the same time under one challenge: one wins and one key exists",
+	"a first-key enrollment marks its challenge answered in the same transaction as the key and its entry",
+	"an enrollment with a missing challenge, a challenge of another person, of another scope or with another key fails and stores nothing",
+	"a second enrollment under one challenge fails with ErrUsed, also after the revoke of the first key and before the expiry of the challenge",
+	"an enrollment that fails with ErrConflict or ErrInvalid leaves the challenge open",
+	"an enrollment whose audit append fails stores no key and leaves the challenge open",
+	"two enrollments at the same time under one challenge: one wins and one key exists",
 	// ChallengeStore.
 	"a created challenge reads back open with each bound value",
 	"a challenge with an empty field or an empty holder fails with ErrInvalid",
@@ -117,6 +133,13 @@ var caseNames = []string{
 	"a good code sets the failure count to 0",
 	"an accept after a reset or a new active factor fails with ErrNotFound",
 	"a reset deletes the active and the pending factor, revokes the TOTP credentials and appends one entry",
+	// ResetStore.
+	"a factor reset deletes each key and both TOTP factors, revokes each credential, voids each open challenge and appends exactly one entry",
+	"a factor reset changes nothing for another person",
+	"a factor reset of a person with no key and no factor appends one entry",
+	"a factor reset with an empty person ID fails with ErrInvalid and appends nothing",
+	"a factor reset that fails in its transaction leaves the keys, the factors, the credentials, the challenges and the audit entries unchanged",
+	"a credential of a person after a factor reset stops working",
 }
 
 // CaseNames returns a copy of the names of the cases, in the order of the
