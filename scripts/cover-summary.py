@@ -21,7 +21,9 @@ import sys
 import tempfile
 
 # The module path is the prefix of each package path in a profile. The script
-# removes it from the table, so that the table shows short paths.
+# removes it from the table, so that the table shows short paths. It reads the
+# module path from go.mod in the current directory, and uses this value when
+# go.mod is not there.
 MODULE_PREFIX = "opendustpan.org/opendustpan/"
 
 
@@ -86,8 +88,20 @@ def percent(covered, statements):
     return 100.0 * covered / statements
 
 
+def module_prefix():
+    """Return the module path of go.mod in the current directory, with a slash."""
+    try:
+        with open("go.mod", encoding="utf-8") as handle:
+            first = handle.readline().split()
+    except OSError:
+        return MODULE_PREFIX
+    if len(first) == 2 and first[0] == "module":
+        return first[1] + "/"
+    return MODULE_PREFIX
+
+
 def short(package):
-    return package.removeprefix(MODULE_PREFIX)
+    return package.removeprefix(module_prefix())
 
 
 def render_text(packages):
