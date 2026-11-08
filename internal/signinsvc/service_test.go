@@ -60,6 +60,21 @@ func checkRefusedEntry(t *testing.T, w *world, reason, providerID string, kind s
 	}
 }
 
+// checkRefusalCause fails unless the refusal err holds the cause error, or
+// the cause is nil. The cause reaches the caller in the refusal: the audit
+// entry holds the reason alone.
+func checkRefusalCause(t *testing.T, err, cause error) {
+	t.Helper()
+
+	if cause == nil {
+		return
+	}
+
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("refusal %v does not hold the cause %v", err, cause)
+	}
+}
+
 // assertionOfKind returns a valid Assertion of the provider corp for the
 // method kind.
 func assertionOfKind(kind session.MethodKind) session.Assertion {
@@ -663,9 +678,10 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 
 // lookupCase is one answer of a faulty lookup layer: a principal that the
 // lookup returns with a nil error, or a failed read of the temporary
-// administrators.
+// administrators. cause is the error that the refusal must hold, or nil.
 type lookupCase struct {
 	change func(w *world)
+	cause  error
 	name   string
 }
 
@@ -673,18 +689,23 @@ type lookupCase struct {
 // disable for the subject corp:sub-1, one for each condition of the check.
 func hostileLookups() []lookupCase {
 	return []lookupCase{
-		{func(w *world) { w.principal.Subject = "other:sub-9" }, "other subject"},
-		{func(w *world) { w.principal.Kind = principal.KindService }, "not a person"},
-		{func(w *world) { w.principal.Namespace = "team-a" }, "principal of a namespace"},
-		{func(w *world) { w.principal.BreakGlass = true }, "break-glass account"},
-		{func(w *world) { w.tempAdmin = true }, "temporary administrator"},
-		{func(w *world) { w.tempAdminErr = errStoreStopped }, "temporary administrator read failed"},
+		{func(w *world) { w.principal.Subject = "other:sub-9" }, nil, "other subject"},
+		{func(w *world) { w.principal.Kind = principal.KindService }, nil, "not a person"},
+		{func(w *world) { w.principal.Namespace = "team-a" }, nil, "principal of a namespace"},
+		{func(w *world) { w.principal.BreakGlass = true }, nil, "break-glass account"},
+		{func(w *world) { w.tempAdmin = true }, nil, "temporary administrator"},
+		{
+			func(w *world) { w.tempAdminErr = errStoreStopped }, errStoreStopped,
+			"temporary administrator read failed",
+		},
 	}
 }
 
 // TestCompleteSubjectDisabledChecksTheLookup sends the answers that the
 // lookup layer should never give, with a nil error, to the disable step. The
-// step must disable and bump nothing, as if the lookup layer had failed.
+// step must disable and bump nothing, as if the lookup layer had failed. A
+// failed read of the temporary administrators has its own reason, and the
+// refusal holds the read error.
 func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 	t.Parallel()
 
@@ -695,23 +716,39 @@ func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 			w := newWorld()
 			tc.change(w)
 
+			reason := signinsvc.ReasonDisableNotTarget
+			if tc.cause != nil {
+				reason = signinsvc.ReasonTargetLookup
+			}
+
 			_, err := w.service(t).Complete(t.Context(),
 				requestOf(oidcProvider(), disabledAssertion(), session.ErrSubjectDisabled))
-			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonDisableNotTarget {
-				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonDisableNotTarget)
+			r := refusalOf(t, err)
+
+			if r.Reason != reason {
+				t.Fatalf("reason = %q, want %q", r.Reason, reason)
 			}
+
+			if !errors.Is(err, session.ErrSubjectDisabled) {
+				t.Fatalf("the refusal holds no method error: %v", err)
+			}
+
+			checkRefusalCause(t, err, tc.cause)
+			checkCauseLogged(t, w, tc.cause)
 
 			if len(w.disabled) != 0 || len(w.bumped) != 0 {
 				t.Fatalf("disabled %v, bumped %v, want none", w.disabled, w.bumped)
 			}
 
-			checkRefusedEntry(t, w, signinsvc.ReasonDisableNotTarget, "corp", session.MethodOIDC)
+			checkRefusedEntry(t, w, reason, "corp", session.MethodOIDC)
 		})
 	}
 }
 
 // TestCompleteChecksTheLookup sends the same answers to the success path.
-// The service must refuse and start no session.
+// The service must refuse and start no session. A failed read of the
+// temporary administrators has its own reason, and the refusal holds the
+// read error.
 func TestCompleteChecksTheLookup(t *testing.T) {
 	t.Parallel()
 
@@ -722,13 +759,44 @@ func TestCompleteChecksTheLookup(t *testing.T) {
 			w := newWorld()
 			tc.change(w)
 
-			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
-			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonNotTarget {
-				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonNotTarget)
+			reason := signinsvc.ReasonNotTarget
+			if tc.cause != nil {
+				reason = signinsvc.ReasonTargetLookup
 			}
 
-			checkRefusedEntry(t, w, signinsvc.ReasonNotTarget, "corp", session.MethodOIDC)
+			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
+			r := refusalOf(t, err)
+
+			if r.Reason != reason {
+				t.Fatalf("reason = %q, want %q", r.Reason, reason)
+			}
+
+			checkRefusalCause(t, err, tc.cause)
+
+			checkRefusedEntry(t, w, reason, "corp", session.MethodOIDC)
+
+			// A failed read is a fault, not a decision about the person.
+			answer, outcome := signinsvc.AnswerRefused, audit.OutcomeDenied
+			if tc.cause != nil {
+				answer, outcome = signinsvc.AnswerFailed, audit.OutcomeFailure
+			}
+
+			if r.Answer != answer || w.entries[0].Outcome != outcome {
+				t.Fatalf("answer %v, outcome %q, want %v, %q", r.Answer, w.entries[0].Outcome, answer, outcome)
+			}
+
+			checkCauseLogged(t, w, tc.cause)
 		})
+	}
+}
+
+// checkCauseLogged fails unless the log of w holds the text of cause, or the
+// cause is nil.
+func checkCauseLogged(t *testing.T, w *world, cause error) {
+	t.Helper()
+
+	if cause != nil && !strings.Contains(w.logs.String(), cause.Error()) {
+		t.Fatalf("the log does not name the cause %q: %s", cause, w.logs.String())
 	}
 }
 

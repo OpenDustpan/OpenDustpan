@@ -1455,7 +1455,7 @@ export interface SelfServiceModule {
 export interface SelfServiceOperand {
   readonly input?: string;
   /** A JSON scalar: a string, a number or a boolean. The server refuses an object or an array. */
-  readonly value?: unknown;
+  readonly value?: string | number | boolean;
 }
 
 export interface SelfServiceOutputRef {
