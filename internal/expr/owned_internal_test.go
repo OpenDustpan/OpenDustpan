@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -117,8 +118,9 @@ func TestCloneEnvIsDeep(t *testing.T) {
 
 // TestUncountedWorkEndsWithinTheLimit runs expressions whose work no counter
 // of the meter covers: scans of the largest list that the environment allows,
-// and of nested lists. Each must return within a short time after the limit,
-// with a result or with ErrRuleFailed, and its goroutine must end.
+// and of nested lists. The time limit is 1 ns, so the run cannot finish
+// first: the caller gets the error of the deadline, and the goroutine of the
+// run ends at the end of its scan.
 func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +145,8 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 			t.Parallel()
 
 			e := mustNew(t, NewLimiter())
+			e.timeout = time.Nanosecond
+
 			env := &selfservice.Env{
 				Value:   nil,
 				Inputs:  map[string]any{"l": bigList(100_000), "rows": rows},
@@ -151,19 +155,14 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 				Request: schema().Request,
 			}
 
-			start := time.Now()
 			_, err := e.Bool(t.Context(), tc.source, env)
 
 			if errors.Is(err, errEnvTooBig) {
 				t.Fatalf("Bool() error = %v, the test environment must be under its size limit", err)
 			}
 
-			if err != nil && !errors.Is(err, selfservice.ErrRuleFailed) {
-				t.Fatalf("Bool() error = %v, want nil or ErrRuleFailed", err)
-			}
-
-			if elapsed := time.Since(start); elapsed > time.Second {
-				t.Fatalf("Bool() returned after %v, want within 1s of the limit of %v", elapsed, e.timeout)
+			if !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Bool() error = %v, want ErrRuleFailed from the time limit", err)
 			}
 
 			waitIdle(t, e)

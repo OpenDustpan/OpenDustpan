@@ -156,7 +156,8 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	leases := make([]benchLease, len(modes))
 
 	for i, m := range modes {
-		leases[i] = startBenchLease(b, stacks, updates, m.stack, m.tokenID)
+		createBenchStack(b, stacks, s.stacks, m.stack)
+		leases[i] = startBenchLease(b, updates, m.stack, m.tokenID)
 	}
 
 	handler := leaseBenchHandler(b, s, blobs)
@@ -252,9 +253,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 // startBenchLease creates and starts a mutating update on the stack named
 // stackName, started by the access token tokenID, or by no token when tokenID
 // is empty. It returns the checkpoint path and the lease token.
-func startBenchLease(
-	b *testing.B, stacks *stack.Service, updates *stack.Updates, stackName, tokenID string,
-) benchLease {
+func startBenchLease(b *testing.B, updates *stack.Updates, stackName, tokenID string) benchLease {
 	b.Helper()
 
 	ctx := b.Context()
@@ -262,10 +261,6 @@ func startBenchLease(
 	ref, err := stack.ParseRef("acme", "web", stackName)
 	if err != nil {
 		b.Fatalf("parse ref: %v", err)
-	}
-
-	if _, createErr := stacks.Create(ctx, ref, nil); createErr != nil {
-		b.Fatalf("create stack %s: %v", stackName, createErr)
 	}
 
 	u, err := updates.Create(ctx, ref, stack.Plan{
@@ -392,4 +387,18 @@ func leaseBenchSchemaURL(b *testing.B, base string) string {
 	u.RawQuery = q.Encode()
 
 	return u.String()
+}
+
+// createBenchStack makes the stack acme/web/stackName in a collection.
+func createBenchStack(b *testing.B, stacks *stack.Service, store any, stackName string) {
+	b.Helper()
+
+	ref, err := stack.ParseRef("acme", "web", stackName)
+	if err != nil {
+		b.Fatalf("parse ref: %v", err)
+	}
+
+	if _, createErr := stacks.CreatePlaced(b.Context(), ref, nil, placeStack(b, store, "acme")); createErr != nil {
+		b.Fatalf("create stack %s: %v", stackName, createErr)
+	}
 }

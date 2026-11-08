@@ -484,6 +484,157 @@ func TestPurgeBlobDeleteReleasesTheLease(t *testing.T) {
 	requireLeaseReleased(t, guard, "after the delete")
 }
 
+// TestCheckpointReplaceKeepsTheBlobWhenTheLeaseEnded proves that a save which
+// replaces a checkpoint deletes nothing when the context of the delete lease
+// ended before the delete: the previous blob stays.
+func TestCheckpointReplaceKeepsTheBlobWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	f := newUpdatesGuarded(t, clk, nil, nil, guard)
+	s := f.started(t, stack.KindUpdate)
+	f.saveSeq(t, s, 1, `{"a":1}`)
+
+	f.saveSeq(t, s, 2, `{"a":2}`)
+
+	if got := updateBlobs(t, f, s.Update.ID); len(got) != 2 {
+		t.Fatalf("blobs of the update with an ended lease = %d, want both checkpoints", len(got))
+	}
+
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
+// TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded proves that the build of
+// the checkpoint of a journaled update deletes no batch blob when the context
+// of the delete lease ended before the delete: the batch blobs stay.
+func TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	f := newBuildFixtureGuarded(t, clk, pulumijournal.NewReplayer(clk.Now, ""), nil, guard)
+	s := f.startJournaled(t)
+	before := f.journalKeys(t, s.Update.ID)
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete journaled update: %v", err)
+	}
+
+	f.requireKept(t, before, "with an ended lease")
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
+// stallingBlobs is a memory blob store whose delete waits until its context
+// ends and then answers the error of the context. It deletes nothing.
+type stallingBlobs struct {
+	*memBlob
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stallingBlobs) Delete(ctx context.Context, _ blob.Key) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	<-ctx.Done()
+
+	return fmt.Errorf("delete blob: %w", ctx.Err())
+}
+
+// deletes returns the number of delete calls that reached the store.
+func (s *stallingBlobs) deletes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
+
+// endedLeaseFixture returns the clock of the fixture and its guard of the
+// blob deletes. Each take of the guard moves the clock forward by a lease
+// time, so the context of the delete lease ends between the read of the
+// start and the read of the elapsed time.
+func endedLeaseFixture() (*clock, *blobguardtest.Leases) {
+	clk := newClock()
+
+	guard := blobguardtest.NewLeases(func() time.Time {
+		clk.Advance(blobguard.LeaseTTL)
+
+		return clk.Now()
+	})
+
+	return clk, guard
+}
+
+// TestPurgeBlobDeleteStopsWhenTheLeaseEnded proves that a purge deletes
+// nothing when the context of the delete lease ended before the delete: the
+// blob stays, and the method reports it as not deleted.
+func TestPurgeBlobDeleteStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	blobs := &stallingBlobs{memBlob: newMemBlob(clk), mu: sync.Mutex{}, calls: 0}
+	f := newUpdatesGuarded(t, clk, blobs, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+
+	// The outer context ends long before the store delete would, so a delete
+	// that ignored the lease context cannot hold the test.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	err := f.svc.DeleteStackBlobs(ctx, f.nsID, "stk-test")
+	if !errors.Is(err, stack.ErrBlobsRemain) {
+		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
+	}
+
+	if _, getErr := f.blobs.Get(t.Context(), orphan.key); getErr != nil {
+		t.Fatalf("orphan blob: %v, want it kept", getErr)
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
+// TestStackSweepStopsWhenTheLeaseEnded proves the same for the sweep of a
+// stack: the orphan stays, and the sweep deletes nothing.
+func TestStackSweepStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	blobs := &stallingBlobs{memBlob: newMemBlob(clk), mu: sync.Mutex{}, calls: 0}
+	f := newUpdatesGuarded(t, clk, blobs, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+	f.complete(t, orphan.update)
+
+	// The start of the preview runs the sweep of the stack. The start has a
+	// bounded context, so a delete that ignored the lease context cannot hold
+	// the test.
+	next, err := f.svc.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create preview: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	if _, err := f.svc.Start(ctx, f.ref, next.ID); err != nil {
+		t.Fatalf("start preview: %v", err)
+	}
+
+	if _, getErr := f.blobs.Get(t.Context(), orphan.key); getErr != nil {
+		t.Fatalf("orphan blob: %v, want it kept", getErr)
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+}
+
 // TestPurgeBlobDeleteFailsClosed proves that a failed guard read and a service
 // with no guard delete nothing and return an error that does not match
 // blobguard.ErrWait.

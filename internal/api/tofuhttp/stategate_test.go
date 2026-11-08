@@ -134,6 +134,7 @@ func TestNilGuardDoesNotStart(t *testing.T) {
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     nil,
+		Placer:         testPlacer(),
 	})
 	if h != nil || !errors.Is(err, tofuhttp.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
 		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)
@@ -158,6 +159,7 @@ func newGuardedHandler(t *testing.T, guard *fakeGuard) guardedHandler {
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     guard,
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

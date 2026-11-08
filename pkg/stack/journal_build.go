@@ -289,12 +289,12 @@ func (s *Updates) commitBuiltRow(
 	// blobs, and the next sweep deletes them.
 	if s.journal != nil {
 		for _, key := range keys {
-			release, ok := s.takeDeleteLease(ctx, "journal build", save.ref)
+			leaseCtx, release, ok := s.takeDeleteLease(ctx, "journal build", save.ref)
 			if !ok {
 				break
 			}
 
-			delErr := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, []blob.Key{key})
+			delErr := s.journal.RemoveBlobs(leaseCtx, save.blobs.ns, save.stackID, save.id, []blob.Key{key})
 
 			if releaseErr := release(ctx); releaseErr != nil {
 				s.logger.WarnContext(ctx, "blob delete lease not released",

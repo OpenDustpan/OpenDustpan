@@ -206,7 +206,10 @@ func classifyProtocolOther(
 		}
 	case errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
-		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrNotHome)
+		return mk(
+			http.StatusServiceUnavailable, protocol.ErrorUnavailable,
+			namespace.ErrNotHome, maintenance.ErrInMaintenance,
+		)
 	case errors.Is(err, schema.ErrBinaryBelowMinimum):
 		// The text names both versions and nothing else, so a runner can show it.
 		message := schema.ErrBinaryBelowMinimum.Error()

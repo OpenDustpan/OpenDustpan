@@ -613,7 +613,7 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		// the walk. The error keeps the blob purge record, and the retention
 		// sweep tries again. The holder is new for each delete, so the lease
 		// row names the delete that holds it.
-		release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+		leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 		if holdErr != nil {
 			if s.onDeleteWait != nil {
 				s.onDeleteWait(blobguard.ReasonOf(holdErr))
@@ -624,7 +624,7 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 			return holdErr
 		}
 
-		blobErr := s.deleteBlobRetried(ctx, bl, obj.Key)
+		blobErr := s.deleteBlobRetried(leaseCtx, bl, obj.Key)
 
 		if releaseErr := release(ctx); releaseErr != nil {
 			s.logger.WarnContext(ctx, "blob delete lease not released",
@@ -1049,6 +1049,20 @@ func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, er
 		return nil, fmt.Errorf("history of %s: %w", ref, err)
 	}
 
+	if len(list) == 0 {
+		// The stack can be deleted between the two reads above. The store
+		// answers an empty list for a stack that does not exist, so an empty
+		// list reads the stack again.
+		//
+		// Defense in depth: the route reads the stack before it calls History,
+		// so it answers with the error of the stack route. This check stays
+		// for the same reason as the read above: a new caller cannot read an
+		// empty history for a stack that is missing.
+		if _, stackErr := s.stacks.GetStack(ctx, ref); stackErr != nil {
+			return nil, fmt.Errorf("history of %s: %w", ref, stackErr)
+		}
+	}
+
 	return list, nil
 }
 
@@ -1196,14 +1210,14 @@ func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) 
 // comes from a row. It must name a save of this update in this stack, so the
 // access is narrowed to the directory of the update.
 func (s *Updates) deleteSupersededBlob(ctx context.Context, save checkpointSave) {
-	release, ok := s.takeDeleteLease(ctx, "checkpoint replace", save.ref)
+	leaseCtx, release, ok := s.takeDeleteLease(ctx, "checkpoint replace", save.ref)
 	if !ok {
 		return
 	}
 
 	own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
 
-	delErr := s.deleteBlobRetried(ctx, own, save.prev.BlobKey)
+	delErr := s.deleteBlobRetried(leaseCtx, own, save.prev.BlobKey)
 
 	if releaseErr := release(ctx); releaseErr != nil {
 		s.logger.WarnContext(ctx, "blob delete lease not released",
@@ -1288,8 +1302,14 @@ func (s *Updates) storedLimit() int64 {
 
 // deleteBlobRetried removes the object under key, retrying a transient
 // failure after a short backoff (blob.DeleteRetried). Deleting a missing key
-// is not an error.
+// is not an error. A context that ended deletes nothing: the check comes
+// before the first attempt, and blob.DeleteRetried watches the context before
+// each retry.
 func (s *Updates) deleteBlobRetried(ctx context.Context, bl *scopedBlobs, key blob.Key) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
+	}
+
 	if err := blob.DeleteRetried(ctx, bl, key); err != nil {
 		return fmt.Errorf("delete blob: %w", err)
 	}
@@ -1308,8 +1328,10 @@ func sweepDeleter(id UpdateID) string {
 }
 
 // takeDeleteLease takes the lease of one blob delete of deleter and returns
-// the function that releases it, or nil and false when the delete must not
-// run now. It fails closed: a backup or a restore that runs, a guard that
+// the context of the delete and the function that releases it, or nil
+// contexts and false when the delete must not run now. The delete runs only
+// under the returned context, and it deletes nothing more once that context
+// ends. It fails closed: a backup or a restore that runs, a guard that
 // fails and a guard that is not set all keep the blob. The blobs stay, and a
 // later sweep deletes them. The holder is new for each delete, so the lease
 // row names the delete that holds it. The first skip for each running backup
@@ -1317,10 +1339,10 @@ func sweepDeleter(id UpdateID) string {
 // save asks on each save. No log line names a blob key.
 func (s *Updates) takeDeleteLease(
 	ctx context.Context, deleter string, ref Ref,
-) (func(context.Context) error, bool) {
-	release, err := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+) (context.Context, func(context.Context) error, bool) {
+	leaseCtx, release, err := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 	if err == nil {
-		return release, true
+		return leaseCtx, release, true
 	}
 
 	if s.onDeleteWait != nil {
@@ -1333,7 +1355,7 @@ func (s *Updates) takeDeleteLease(
 			slog.String("deleter", deleter), slog.String("stack", ref.String()),
 			slog.String("error_kind", inventory.ErrorKind(err)))
 
-		return nil, false
+		return nil, nil, false
 	}
 
 	level := slog.LevelDebug
@@ -1351,7 +1373,7 @@ func (s *Updates) takeDeleteLease(
 		slog.String("deleter", deleter), slog.String("stack", ref.String()),
 		slog.String("running", wait.Work.String()))
 
-	return nil, false
+	return nil, nil, false
 }
 
 // sweepUpdateBlobs deletes the blobs of one update that no row names and that
@@ -1497,12 +1519,12 @@ func (s *Updates) sweepOrphans(
 		// it. A lease is taken again before each delete, so a restore that
 		// starts during the loop keeps the blobs that are left. A running
 		// backup or restore keeps them for the next sweep.
-		release, ok := s.takeDeleteLease(ctx, sweepDeleter(id), ref)
+		leaseCtx, release, ok := s.takeDeleteLease(ctx, sweepDeleter(id), ref)
 		if !ok {
 			return
 		}
 
-		blobErr := s.deleteBlobRetried(ctx, bl, obj.Key)
+		blobErr := s.deleteBlobRetried(leaseCtx, bl, obj.Key)
 
 		if releaseErr := release(ctx); releaseErr != nil {
 			s.logger.WarnContext(ctx, "blob delete lease not released",

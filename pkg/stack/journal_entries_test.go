@@ -717,6 +717,49 @@ func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
 	}
 }
 
+// TestJournalRemoveBlobsStopsWithTheContext proves that an ended context
+// deletes no batch blob: the check comes before each delete, so no blob goes
+// after the context of the delete lease ended.
+func TestJournalRemoveBlobsStopsWithTheContext(t *testing.T) {
+	t.Parallel()
+
+	blobs := newFakeBlobs()
+	entries := newEntries(
+		t,
+		blobs,
+		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
+		allowAll{},
+	)
+
+	keys := []blob.Key{
+		blob.Key(journalPrefix + "stack-1/upd-1/journal/1"),
+		blob.Key(journalPrefix + "stack-1/upd-1/journal/2"),
+	}
+
+	for _, key := range keys {
+		if err := blobs.Put(t.Context(), key, strings.NewReader("batch")); err != nil {
+			t.Fatalf("put batch: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := entries.RemoveBlobs(ctx, journalNS, "stack-1", "upd-1", keys); !errors.Is(err, context.Canceled) {
+		t.Fatalf("remove with an ended context: err = %v, want context.Canceled", err)
+	}
+
+	for _, key := range keys {
+		if _, err := blobs.Get(t.Context(), key); err != nil {
+			t.Fatalf("batch blob %s: %v, want it kept", key, err)
+		}
+	}
+
+	if strings.Join(blobs.calls, ",") != "put,put" {
+		t.Fatalf("blob calls = %v, want no delete", blobs.calls)
+	}
+}
+
 // TestJournalBatchesCompareBytesWithTheRow checks that the read of the batches
 // compares the size and the SHA-256 of each blob with its row: a blob with the
 // recorded bytes is returned, and a blob with other bytes, the same size or

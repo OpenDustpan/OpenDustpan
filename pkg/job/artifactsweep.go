@@ -476,9 +476,11 @@ func (s *ArtifactSweeper) sweepPage(
 // never had one, before that read, so a backup that the guard does not see
 // cannot name it. A lease is taken again before each delete, so a restore
 // that starts during the loop keeps the blobs that are left. The holder is new
-// for each delete, so the lease row names the delete that holds it.
+// for each delete, so the lease row names the delete that holds it. The delete
+// runs only under the context of the lease, so it deletes nothing once that
+// context ends.
 func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel string) error {
-	release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+	leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 	if holdErr != nil {
 		if s.onDeleteWait != nil {
 			s.onDeleteWait(blobguard.ReasonOf(holdErr))
@@ -487,7 +489,7 @@ func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel 
 		return fmt.Errorf("%w: %w", errHeld, holdErr)
 	}
 
-	delErr := s.blobs.DeleteJobBlob(ctx, at.nsID, at.job, rel)
+	delErr := s.blobs.DeleteJobBlob(leaseCtx, at.nsID, at.job, rel)
 
 	if releaseErr := release(ctx); releaseErr != nil {
 		s.logger.WarnContext(ctx, "blob delete lease not released",

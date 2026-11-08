@@ -443,8 +443,28 @@ func NewService(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// Create creates an unlocked workspace without state.
-func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
+// ErrPlacementUnsupported reports that the store cannot make a workspace and
+// put it in a collection in one transaction, so the service makes no workspace.
+var ErrPlacementUnsupported = errors.New("the store cannot put a new workspace in a collection")
+
+// Create creates an unlocked workspace without state and puts it in the
+// collection of p in one fenced transaction. It returns an error that matches
+// collection.ErrNoCollection, and makes no workspace, when p names no
+// collection, no checked collection ID, or a collection of another namespace.
+// It returns ErrPlacementUnsupported when the store is not a PlacedStore.
+func (s *Service) Create(ctx context.Context, ref Ref, p Placement) (Workspace, error) {
+	// Defense in depth: the handler chooses the collection by a placement rule
+	// and the store checks the collection in the transaction. This check stays
+	// so that a new caller cannot make a workspace that no collection holds.
+	if !p.Complete(ref.Namespace) {
+		return Workspace{}, errNoCollection(ref)
+	}
+
+	placed, ok := s.workspaces.(PlacedStore)
+	if !ok {
+		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, ErrPlacementUnsupported)
+	}
+
 	n, err := s.writable(ctx, ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -478,7 +498,9 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 
 	ctx = WithLockPass(ctx, pass)
 
-	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
+	p.Entry.At = now
+
+	if err := placed.CreateWorkspacePlaced(ctx, w, p, fence); err != nil {
 		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
 	}
 
@@ -638,7 +660,7 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 			// read, stops the walk. The error keeps the blob purge record,
 			// and the retention sweep tries again. The holder is new for each
 			// delete, so the lease row names the delete that holds it.
-			release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+			leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 			if holdErr != nil {
 				s.countDeleteWait(holdErr)
 
@@ -647,7 +669,7 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 				return holdErr
 			}
 
-			deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key)
+			deleteErr := s.blobs.deleteRetried(leaseCtx, ns, id, obj.Key)
 
 			if releaseErr := release(ctx); releaseErr != nil {
 				s.logger.WarnContext(ctx, "blob delete lease not released",
@@ -1554,14 +1576,14 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
 // "namespaces/<namespace id>/tofu/<workspace id>/<state version id>/<attempt>".
-// A failure reports the version ID only, never a key, a scope or content. The
-// caller closes the result.
+// A failure names the operation and, when it is known, the version ID or the
+// workspace ID, never a key, a scope or content. The caller closes the result.
 //
 // The namespace of the read comes from the workspace row of the version, never
 // from the key. A key that names another namespace gives blob.ErrOutOfScope,
@@ -1569,12 +1591,12 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	parsed, err := ParseStateBlobKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob: %w", err)
 	}
 
 	sv, err := s.states.GetStateVersion(ctx, parsed.Version)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob %s: %w", parsed.Version, err)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1587,7 +1609,10 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 	// nothing, so one workspace never opens another's sealed bytes. The
 	// refusal goes to the audit log in the namespace of the row.
 	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
-		return nil, fmt.Errorf("open state blob %q: %w", key, s.blobs.refuseMismatch(ctx, w.NamespaceID))
+		return nil, fmt.Errorf(
+			"open state blob %s of workspace %s: %w",
+			parsed.Version, parsed.Workspace, s.blobs.refuseMismatch(ctx, w.NamespaceID),
+		)
 	}
 
 	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, key)
@@ -1600,7 +1625,7 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
@@ -1895,7 +1920,8 @@ func (s *Service) followedState(ctx context.Context, w Workspace, in NewState) (
 
 // rejectEncryptedState fails with ErrClientEncrypted when state is a state
 // file the client encrypted: the resource routes cannot read it, while the
-// outputs list still works.
+// outputs list still works. A state that the check cannot classify is refused
+// with the error of the check: the state never reads as plaintext.
 func rejectEncryptedState(state []byte, id StateVersionID) error {
 	encrypted, err := IsClientEncrypted(state)
 	if err != nil {
@@ -2285,7 +2311,7 @@ func (s *Service) copyBlob(
 		)
 	}
 
-	r = &closeReader{reader: opened, closer: r, id: src.ID}
+	r = &closeReader{reader: opened, opened: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace:   w.Ref.Namespace,
@@ -2497,7 +2523,7 @@ func (s *Service) sweepPage(ctx context.Context, w Workspace, page []blob.Object
 		}
 
 		if blobErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, obj.Key); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content %q: %w", obj.Key, blobErr))
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content of %s: %w", w.Ref, blobErr))
 		}
 	}
 
@@ -2730,12 +2756,14 @@ func sanitizeOpenError(id StateVersionID, err error) error {
 	return fmt.Errorf("open state %s: %w", id, ErrSealedContent)
 }
 
-// closeReader reads sealed content and closes the underlying blob object. A
-// decryption failure while streaming maps to ErrSealedContent with the
-// version ID only, so the error holds no key, scope or content; anything
-// else passes through unchanged.
+// closeReader reads sealed content, and at Close closes the opened stream,
+// which clears its key, and the underlying blob object. A decryption failure
+// while streaming maps to ErrSealedContent with the version ID only, so the
+// error holds no key, scope or content; anything else passes through
+// unchanged.
 type closeReader struct {
 	reader io.Reader
+	opened io.Closer
 	closer io.Closer
 	id     StateVersionID
 }
@@ -2783,7 +2811,7 @@ func (v *verifiedReader) Read(p []byte) (int, error) {
 
 // Close closes the underlying blob object.
 func (r *closeReader) Close() error {
-	return r.closer.Close() //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
+	return errors.Join(r.opened.Close(), r.closer.Close())
 }
 
 // change applies a lock transition to the stored workspace and saves it.

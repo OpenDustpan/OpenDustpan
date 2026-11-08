@@ -1,9 +1,12 @@
 package workspace_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,33 @@ import (
 )
 
 var errGuardRead = errors.New("registry unavailable")
+
+// stallingBlobs is a blob store whose delete waits until its context ends and
+// then answers the error of the context. It deletes nothing.
+type stallingBlobs struct {
+	blob.Store
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stallingBlobs) Delete(ctx context.Context, _ blob.Key) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	<-ctx.Done()
+
+	return fmt.Errorf("delete blob: %w", ctx.Err())
+}
+
+// deletes returns the number of delete calls that reached the store.
+func (s *stallingBlobs) deletes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
 
 // stateBlobCount returns the number of state blobs under prefix.
 func stateBlobCount(t *testing.T, f fixture, prefix string) int {
@@ -156,6 +186,53 @@ func TestDeletePurgedBlobsReleasesTheLease(t *testing.T) {
 	}
 
 	requireLeaseReleased(t, guard, "after the delete")
+}
+
+// TestDeletePurgedBlobsStopsWhenTheLeaseEnded proves that the delete of the
+// state blobs deletes nothing when the context of the delete lease ended
+// before the delete: the blobs stay, and the method reports them as not
+// deleted.
+func TestDeletePurgedBlobsStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	blobs := &stallingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, calls: 0}
+
+	// move moves the clock of the fixture forward by a lease time. The guard
+	// calls it on each take, so the context of the delete lease ends between
+	// the read of the start and the read of the elapsed time. The fixture
+	// exists before the first take.
+	var move func() time.Time
+
+	guard := blobguardtest.NewLeases(func() time.Time { return move() })
+	f := newFixtureGuarded(t, blobs, guard)
+
+	move = func() time.Time {
+		*f.now = f.now.Add(blobguard.LeaseTTL)
+
+		return *f.now
+	}
+
+	prefix := purgedWorkspace(t, f)
+
+	// The outer context ends long before the store delete would, so a delete
+	// that ignored the lease context cannot hold the test.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	err := f.svc.DeletePurgedBlobs(ctx, f.ws.NamespaceID, f.ws.ID)
+	if !errors.Is(err, workspace.ErrBlobsRemain) {
+		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
+	}
+
+	if left := stateBlobCount(t, f, prefix); left == 0 {
+		t.Fatal("state blobs with an ended lease = 0, want them kept")
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+
+	requireLeaseReleased(t, guard, "after the failed delete")
 }
 
 // TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete proves that a restore

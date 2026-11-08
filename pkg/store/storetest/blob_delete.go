@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -750,7 +752,14 @@ func (r *blobDeleteRig) seedWorkspace(t *testing.T) (workspace.Workspace, []blob
 		t.Fatalf("workspace name: %v", err)
 	}
 
-	w, err := r.workspaces.Create(ctx, workspace.Ref{Namespace: r.ns.Name, Name: name})
+	cols, ok := r.store.(collection.Store)
+	if !ok {
+		t.Fatalf("store %T does not keep collections", r.store)
+	}
+
+	w, err := r.workspaces.Create(
+		ctx, workspace.Ref{Namespace: r.ns.Name, Name: name}, placementtest.Workspace(t, cols, r.ns.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

@@ -157,7 +157,7 @@ func newExchanger(svc services, cfg *settings, exchanges trustrule.ExchangeStore
 	x, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: cfg.trustRules.store, Exchanges: exchanges, Namespaces: svc.namespaces, Principals: principals,
 		Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit, Refusals: nil, Keys: keys,
-		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own, Now: cfg.now,
+		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own, Now: cfg.now, Log: cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)

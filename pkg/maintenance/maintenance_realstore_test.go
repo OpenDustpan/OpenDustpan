@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -113,7 +114,15 @@ func (r *realStack) startUpdate(t *testing.T, name string) {
 		t.Fatalf("parse stack reference: %v", err)
 	}
 
-	if _, createErr := r.stacks.Create(ctx, ref, nil); createErr != nil {
+	ns, err := r.namespaces.Get(ctx, testNamespace)
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	place := placementtest.Stack(t, r.st, ns.Fence())
+
+	_, createErr := r.stacks.CreatePlaced(ctx, ref, nil, place)
+	if createErr != nil {
 		t.Fatalf("create stack %s: %v", name, createErr)
 	}
 

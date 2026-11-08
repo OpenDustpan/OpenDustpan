@@ -200,7 +200,9 @@ func (b *ArtifactBlobs) WalkJob(ctx context.Context, ns namespace.ID, id ID, fn 
 // namespace ns. rel must be a key that ParseArtifactKey reads for id: any
 // other key is ErrInvalid, and the call deletes nothing. It tries a
 // transient failure again (blob.DeleteRetried). A blob that does not exist is
-// not an error.
+// not an error. A context that ended deletes nothing: the check comes before
+// the first attempt, and blob.DeleteRetried watches the context before each
+// retry.
 func (b *ArtifactBlobs) DeleteJobBlob(ctx context.Context, ns namespace.ID, id ID, rel string) error {
 	// Defense in depth: the sweep parses each key before it asks for a delete,
 	// and the scoped view refuses a key outside the namespace. This check
@@ -208,6 +210,10 @@ func (b *ArtifactBlobs) DeleteJobBlob(ctx context.Context, ns namespace.ID, id I
 	// that is not an artifact blob.
 	if _, err := ParseArtifactKey(id, rel); err != nil {
 		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete artifact blob: %w", err)
 	}
 
 	key, err := blob.ParseKey(rel)
