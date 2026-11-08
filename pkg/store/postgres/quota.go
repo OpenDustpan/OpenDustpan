@@ -272,9 +272,7 @@ func lockQuotaKeys(ctx context.Context, q *db.Queries, checks []quota.Check) err
 		keys = append(keys, c.Key)
 	}
 
-	slices.SortFunc(keys, compareQuotaKeys)
-
-	for _, k := range keys {
+	for _, k := range quotaLockOrder(keys) {
 		err := q.EnsureQuotaKey(ctx, db.EnsureQuotaKeyParams{
 			Namespace: k.Namespace.String(),
 			Blueprint: k.Blueprint,
@@ -383,8 +381,11 @@ func endQuotaReservation(
 }
 
 // addQuotaSettled adds one settled unit for each key of a settled reservation.
+// It updates the rows of the keys in the order of lockQuotaKeys, not in the
+// order of the table, so that a settle and a reserve that share two keys
+// cannot deadlock.
 func addQuotaSettled(ctx context.Context, q *db.Queries, ns namespace.Name, keys []quota.Key) error {
-	for _, k := range keys {
+	for _, k := range quotaLockOrder(keys) {
 		err := q.AddQuotaSettled(ctx, db.AddQuotaSettledParams{
 			Namespace: ns.String(),
 			Blueprint: k.Blueprint,
@@ -528,6 +529,17 @@ func sameQuotaKeys(a, b []quota.Key) bool {
 	slices.SortFunc(right, compareQuotaKeys)
 
 	return slices.Equal(left, right)
+}
+
+// quotaLockOrder returns a sorted copy of keys: the one order in which a
+// transaction locks or updates the rows of quota keys. The order is the byte
+// order of Key.String, not the collation of the database, so that it is the
+// same order for every writer.
+func quotaLockOrder(keys []quota.Key) []quota.Key {
+	sorted := slices.Clone(keys)
+	slices.SortFunc(sorted, compareQuotaKeys)
+
+	return sorted
 }
 
 // compareQuotaKeys orders two keys of one namespace by their parts.
