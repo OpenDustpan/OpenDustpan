@@ -636,6 +636,43 @@ func TestJobTokenRuleListObjects(t *testing.T) {
 	}
 }
 
+// TestJobTokenRuleListObjectsClearsElevation proves that Next lists for a
+// job token with no administrator flag and no temporary elevation.
+func TestJobTokenRuleListObjectsClearsElevation(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+
+	cases := []struct {
+		name string
+		p    identity.Principal
+	}{
+		{name: "a job token with the administrator flag", p: withAdminFlag(jobToken(unit, "job-a"))},
+		{name: "a job token with a temporary elevation", p: withTemporaryFlag(jobToken(unit, "job-a"))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			next := &recordingNext{
+				allow: true, scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+			}
+			rule := identity.JobTokenRule{Next: next}
+
+			if _, err := rule.ListObjects(t.Context(), tc.p, identity.ActionUnitRead); err != nil {
+				t.Fatalf("ListObjects = %v, want no error", err)
+			}
+
+			if next.asked != 1 {
+				t.Fatalf("Next asked %d times, want 1", next.asked)
+			}
+
+			checkClearedFlags(t, next)
+		})
+	}
+}
+
 // sameScope reports whether a and b name the same objects.
 func sameScope(a, b identity.Scope) bool {
 	return a.All == b.All && slices.Equal(a.Namespaces, b.Namespaces) &&
