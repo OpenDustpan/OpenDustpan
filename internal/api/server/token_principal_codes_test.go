@@ -108,7 +108,7 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			"too few working break-glass accounts", principal.ErrNoWorkingBreakGlass, http.StatusConflict,
 			errcode.PrincipalNoWorkingBreakGlass, nil,
 			"The change leaves too few working break-glass accounts. " +
-				"Add a break-glass account or register a passkey for one, then try again. " +
+				"Add or enable a working break-glass account, then try again. " +
 				"See the break-glass accounts guide.",
 		},
 		{"principal not found", principal.ErrNotFound, http.StatusNotFound, errcode.PrincipalNotFound, nil, ""},

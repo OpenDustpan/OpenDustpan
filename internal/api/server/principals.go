@@ -68,7 +68,7 @@ var errNoPrincipalStore = errors.New("the store of this server keeps no principa
 // noWorkingBreakGlassMessage is the answer of a change that leaves too few
 // working break-glass accounts.
 const noWorkingBreakGlassMessage = "The change leaves too few working break-glass accounts. " +
-	"Add a break-glass account or register a passkey for one, then try again. " +
+	"Add or enable a working break-glass account, then try again. " +
 	"See the break-glass accounts guide."
 
 // principalResponse is one principal on the wire. Times are UTC in RFC 3339

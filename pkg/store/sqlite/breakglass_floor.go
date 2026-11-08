@@ -19,18 +19,7 @@ func (s *Store) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return countWorkingBreakGlass(ctx, s.queries, at)
-}
-
-// countWorkingBreakGlass counts the working break-glass accounts at the
-// time at with the queries of one transaction.
-func countWorkingBreakGlass(ctx context.Context, q *db.Queries, at time.Time) (int64, error) {
-	n, err := q.CountWorkingBreakGlassPrincipals(ctx, codec.Millis(at))
-	if err != nil {
-		return 0, fmt.Errorf("count working break-glass accounts: %w: %w", principal.ErrBreakGlassUnavailable, err)
-	}
-
-	return n, nil
+	return countWorkingBreakGlass(ctx, s.conn, breakGlassSchemaMain, at)
 }
 
 // checkWorkingBreakGlassFloor refuses a change that lowers the working
@@ -55,7 +44,7 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 
 	at := codec.FromMillis(nowMs)
 
-	before, beforeErr := countWorkingBreakGlassLive(ctx, tx, at)
+	before, beforeErr := countWorkingBreakGlass(ctx, tx, breakGlassSchemaLive, at)
 	if beforeErr != nil {
 		return beforeErr
 	}
@@ -64,7 +53,7 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 
-	after, afterErr := countWorkingBreakGlass(ctx, db.New(tx), at)
+	after, afterErr := countWorkingBreakGlass(ctx, tx, breakGlassSchemaMain, at)
 	if afterErr != nil {
 		return afterErr
 	}
@@ -72,57 +61,85 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 	return checkWorkingBreakGlassFloor(before, after)
 }
 
-// workingBreakGlassLiveQuery counts the working break-glass accounts of the
-// live database that a staged file attaches as live. It holds the same
-// predicates as CountWorkingBreakGlassPrincipals.
-const workingBreakGlassLiveQuery = `SELECT COUNT(*) FROM live.principals p
+// breakGlassSchema names a schema of the connection: the database of the
+// store, or the staged file that a restore attaches as live.
+type breakGlassSchema string
+
+const (
+	breakGlassSchemaMain breakGlassSchema = "main"
+	breakGlassSchemaLive breakGlassSchema = "live"
+)
+
+// workingBreakGlassQueryTemplate holds the text of the count for one schema.
+const workingBreakGlassQueryTemplate = `SELECT COUNT(*) FROM %[1]s.principals p
 WHERE p.break_glass = 1
   AND p.kind = 'person'
   AND p.namespace = ''
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
-  AND p.created_at_ms <= ?
+  AND p.created_at_ms <= ?1
   AND EXISTS (
-    SELECT 1 FROM live.passkeys pk
+    SELECT 1 FROM %[1]s.passkeys pk
     WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
-      AND pk.created_at_ms <= ?
+      AND pk.created_at_ms <= ?1
   )
   AND EXISTS (
-    SELECT 1 FROM live.grants g
+    SELECT 1 FROM %[1]s.grants g
     WHERE g.object_kind = 'installation'
       AND g.role IN ('site-administrator', 'account-administrator')
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
-      AND g.created_at_ms <= ?
+      AND g.created_at_ms <= ?1
       AND (
         (g.subject_kind = 'principal' AND g.subject_id = p.id)
         OR (g.subject_kind = 'group' AND EXISTS (
-          SELECT 1 FROM live.group_members m
-          JOIN live.principal_groups pg ON pg.id = m.group_id
+          SELECT 1 FROM %[1]s.group_members m
+          JOIN %[1]s.principal_groups pg ON pg.id = m.group_id
           WHERE m.group_id = g.subject_id
             AND m.principal_id = p.id
             AND m.removed_at_ms IS NULL
             AND m.state = 'active'
             AND pg.deleted_at_ms IS NULL
-            AND m.added_at_ms <= ?
-            AND pg.created_at_ms <= ?
+            AND m.added_at_ms <= ?1
+            AND pg.created_at_ms <= ?1
         ))
       )
   )`
 
-// countWorkingBreakGlassLive counts the working break-glass accounts at the
-// time at of the live database attached to tx, which holds the staged file
-// as main.
-func countWorkingBreakGlassLive(ctx context.Context, tx *sql.Tx, at time.Time) (int64, error) {
+// workingBreakGlassQuery returns the count query for a schema. The schema is
+// one of the fixed constants, so no input reaches the text.
+//
+// The working break-glass accounts of the installation: an enabled local
+// person of the installation with a passkey that is not suspended, and a
+// current grant without a condition of an administration role on the
+// installation, directly or through an active membership of a group that
+// exists. An installation-level IP allowlist must join this count when one
+// exists; the current allowlists are per namespace and do not apply to
+// installation sign-in.
+func workingBreakGlassQuery(schema breakGlassSchema) (string, error) {
+	switch schema {
+	case breakGlassSchemaMain, breakGlassSchemaLive:
+		return fmt.Sprintf(workingBreakGlassQueryTemplate, schema), nil
+	default:
+		return "", fmt.Errorf("count working break-glass accounts: unknown schema %q: %w",
+			string(schema), principal.ErrBreakGlassUnavailable)
+	}
+}
+
+// countWorkingBreakGlass counts the working break-glass accounts at the
+// time at in the schema.
+func countWorkingBreakGlass(ctx context.Context, q sqlQueryer, schema breakGlassSchema, at time.Time) (int64, error) {
+	query, queryErr := workingBreakGlassQuery(schema)
+	if queryErr != nil {
+		return 0, queryErr
+	}
+
 	var n int64
 
-	ms := codec.Millis(at)
-
-	err := tx.QueryRowContext(ctx, workingBreakGlassLiveQuery, ms, ms, ms, ms, ms).Scan(&n)
+	err := q.QueryRowContext(ctx, query, codec.Millis(at)).Scan(&n)
 	if err != nil {
-		return 0, fmt.Errorf("count live working break-glass accounts: %w: %w",
-			principal.ErrBreakGlassUnavailable, err)
+		return 0, fmt.Errorf("count working break-glass accounts: %w: %w", principal.ErrBreakGlassUnavailable, err)
 	}
 
 	return n, nil

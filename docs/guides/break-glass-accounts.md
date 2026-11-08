@@ -71,7 +71,7 @@ Both answer 409 with the error code `principal.no-working-break-glass` and
 this message:
 
 ```text
-The change leaves too few working break-glass accounts. Add a break-glass account or register a passkey for one, then try again. See the break-glass accounts guide.
+The change leaves too few working break-glass accounts. Add or enable a working break-glass account, then try again. See the break-glass accounts guide.
 ```
 
 The request changes nothing. The account stays enabled. Before the answer,
