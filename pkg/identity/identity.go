@@ -76,7 +76,7 @@ type Principal struct {
 	// for every other credential.
 	JobID string
 	// JobUnit is the unit of the job whose token authenticated the request.
-	// The authorizer limits a job token to this unit. It is the zero Object
+	// The authorizer will limit a job token to this unit. It is the zero Object
 	// for every other credential.
 	JobUnit Object
 }
