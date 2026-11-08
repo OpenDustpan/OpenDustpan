@@ -18,6 +18,9 @@ var errLimitsRead = errors.New("read failed")
 // errLimitParse is the error of an access limit that does not parse.
 var errLimitParse = errors.New("policy refused")
 
+// errGrantsRead is the error of a read of the grants that fails.
+var errGrantsRead = errors.New("grants read failed")
+
 // limitKey names one answer of fakeLimits: the group, the name that a
 // rename gives it and the change.
 type limitKey struct {
@@ -45,6 +48,18 @@ func (f fakeLimits) LimitLiftedBy(
 	}
 
 	return access.LimitRef{ID: "lim-1", Scope: "namespace/acme"}, true, nil
+}
+
+// failingGrantsStore is the fixture store with a read of the grants that
+// fails. It keeps every other method of the store.
+type failingGrantsStore struct {
+	access.Store
+}
+
+func (s *failingGrantsStore) GrantsOn(
+	_ context.Context, _ []access.Subject, _ []identity.Object,
+) ([]access.Grant, error) {
+	return nil, errGrantsRead
 }
 
 // serviceWithLimits returns a service over the fixture store whose guard
@@ -323,6 +338,54 @@ func TestCheckGroupGrantsAllowsASiteAdministratorByTheDecision(t *testing.T) {
 				t.Fatalf("CheckGroupGrants(readers) = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision proves that a
+// decision of the site administrator actions that fails for another reason
+// than a denial refuses the change, and that the refusal carries the error of
+// the read.
+func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	acct := f.accountAdministrator(t, "acct")
+
+	// The group holds no grant, so the grants check of the group reads no
+	// grant through GrantsOn before the site administrator check.
+	ops := f.group(t, "ops")
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: &failingGrantsStore{Store: f.store}, Callers: f.store, Collections: nil, Units: f.store,
+		Principals: f.store,
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: f.store, Directory: f.store, Namespaces: f.store, Authorizer: authz,
+		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) }, NewID: nil,
+		BootstrapAdmins: []string{"admin"},
+		LimitGroups: fakeLimits{
+			lifted: map[limitKey]bool{
+				{group: ops.ID, newName: "", change: principal.GroupChangeAddMember}: true,
+			},
+			err: nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	err = svc.CheckGroupGrants(ctx, acct, ops.ID, "", principal.GroupChangeAddMember)
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("CheckGroupGrants(ops) = %v, want ErrEscalation", err)
+	}
+
+	if !errors.Is(err, errGrantsRead) {
+		t.Fatalf("CheckGroupGrants(ops) = %v, want the error of the read", err)
 	}
 }
 
