@@ -522,8 +522,9 @@ func TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded(t *testing.T) {
 	requireLeaseReleased(t, guard, "after the failed delete")
 }
 
-// stallingBlobs is a memory blob store whose delete waits until its context
-// ends and then answers the error of the context. It deletes nothing.
+// stallingBlobs is a memory blob store whose delete would stall the test
+// forever. It fails at once instead, so a delete that ignores the lease
+// context cannot hold the test. It deletes nothing.
 type stallingBlobs struct {
 	*memBlob
 
@@ -531,14 +532,12 @@ type stallingBlobs struct {
 	calls int
 }
 
-func (s *stallingBlobs) Delete(ctx context.Context, _ blob.Key) error {
+func (s *stallingBlobs) Delete(context.Context, blob.Key) error {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
 
-	<-ctx.Done()
-
-	return fmt.Errorf("delete blob: %w", ctx.Err())
+	return fmt.Errorf("delete blob: %w", context.Canceled)
 }
 
 // deletes returns the number of delete calls that reached the store.
@@ -576,12 +575,7 @@ func TestPurgeBlobDeleteStopsWhenTheLeaseEnded(t *testing.T) {
 	f := newUpdatesGuarded(t, clk, blobs, nil, guard)
 	orphan := f.orphanOfNewUpdate(t)
 
-	// The outer context ends long before the store delete would, so a delete
-	// that ignored the lease context cannot hold the test.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	err := f.svc.DeleteStackBlobs(ctx, f.nsID, "stk-test")
+	err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test")
 	if !errors.Is(err, stack.ErrBlobsRemain) {
 		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
 	}
@@ -608,9 +602,7 @@ func TestStackSweepStopsWhenTheLeaseEnded(t *testing.T) {
 	orphan := f.orphanOfNewUpdate(t)
 	f.complete(t, orphan.update)
 
-	// The start of the preview runs the sweep of the stack. The start has a
-	// bounded context, so a delete that ignored the lease context cannot hold
-	// the test.
+	// The start of the preview runs the sweep of the stack.
 	next, err := f.svc.Create(t.Context(), f.ref, stack.Plan{
 		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
 	})
@@ -618,10 +610,7 @@ func TestStackSweepStopsWhenTheLeaseEnded(t *testing.T) {
 		t.Fatalf("create preview: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	if _, err := f.svc.Start(ctx, f.ref, next.ID); err != nil {
+	if _, err := f.svc.Start(t.Context(), f.ref, next.ID); err != nil {
 		t.Fatalf("start preview: %v", err)
 	}
 
@@ -640,7 +629,7 @@ func TestStackSweepStopsWhenTheLeaseEnded(t *testing.T) {
 func TestPurgeBlobDeleteFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := blobguardtest.NewLeases(time.Now)
+	failing := blobguardtest.NewLeases(newClock().Now)
 	failing.Fail(errRegistry)
 
 	tests := map[string]struct {
