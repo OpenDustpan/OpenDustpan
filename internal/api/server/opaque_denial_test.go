@@ -189,6 +189,21 @@ func TestTokenRoutesHideStoredTokenState(t *testing.T) {
 			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: true,
 		},
 		{
+			name: "administrator rotate unknown ID with an undecodable body", subject: "admin", method: http.MethodPost,
+			path: rotatePath + "tok-unknown/rotate", body: `{"x":1}`, id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: true,
+		},
+		{
+			name: "administrator rotate unknown ID without a session", subject: "admin", method: http.MethodPost,
+			path: rotatePath + "tok-unknown/rotate", body: "{}", id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: false, broken: false, session: false,
+		},
+		{
+			name: "administrator rotate service token without a session", subject: "admin", method: http.MethodPost,
+			path: rotatePath + service.ID + "/rotate", body: "{}", id: service.ID,
+			wantStatus: http.StatusForbidden, wantDenial: false, broken: false, session: false,
+		},
+		{
 			name: "administrator read unknown token", subject: "admin", method: http.MethodGet,
 			path: deletePath + "tok-unknown", body: "", id: "tok-unknown",
 			wantStatus: http.StatusNotFound, wantDenial: false, broken: false, session: false,
@@ -304,13 +319,25 @@ func checkTokenStateCase(t *testing.T, f, broken accessFixture, tc tokenStateCas
 	var body denialBody
 	decodeInto(t, rec.Body.String(), &body)
 
-	wantCode := errcode.TokenNotFound
-	if tc.wantStatus == http.StatusInternalServerError {
+	// A 403 that is not the opaque denial is the refusal of a rotation
+	// without a fresh console session. It is the same for each token ID.
+	var wantCode string
+
+	switch tc.wantStatus {
+	case http.StatusInternalServerError:
 		wantCode = errcode.ServerInternal
+	case http.StatusForbidden:
+		wantCode = errcode.MFAFreshStepRequired
+	default:
+		wantCode = errcode.TokenNotFound
 	}
 
 	if body.ErrorCode != wantCode {
 		t.Errorf("errorCode = %q, want %q", body.ErrorCode, wantCode)
+	}
+
+	if tc.wantStatus == http.StatusForbidden && strings.Contains(rec.Body.String(), tc.id) {
+		t.Errorf("body holds the token ID %q: %s", tc.id, rec.Body.String())
 	}
 }
 

@@ -359,7 +359,7 @@ func (h *Handler) serviceTokenRoutes() []Route {
 			Resolve:      h.resolveTokenOwner,
 			ActionsFor:   nil,
 			OpaqueDenial: true,
-			Serve:        serve(opaqueTokenState(rotateToken(accesstoken.ScopeService))),
+			Serve:        serve(freshFirst(opaqueTokenState(rotateToken(accesstoken.ScopeService)))),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
@@ -817,6 +817,21 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 	}
 
 	return accesstoken.TokenRef(t.PrincipalID, id)
+}
+
+// freshFirst runs the freshness check of a console session before op, so
+// that a caller without a recent session gets the same answer for each token
+// ID and learns nothing about which IDs exist. op keeps its own check.
+func freshFirst(op tokenOp) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		if err := requireFresh(r); err != nil {
+			return failed(accesstoken.Ref(r.PathValue("id"))), err
+		}
+
+		return op(w, r, svc, p, e)
+	}
 }
 
 // opaqueTokenState answers the opaque denial of the two routes whose object
