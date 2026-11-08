@@ -20,6 +20,17 @@ var subsetSchemaKeys = []string{
 	"minLength", "maxLength",
 }
 
+// isSubsetType reports whether name is a type name of the subset: a name that
+// the reflector writes.
+func isSubsetType(name string) bool {
+	switch name {
+	case typeObject, typeArray, typeString, typeInteger, typeNumber, typeBoolean, typeNull:
+		return true
+	default:
+		return false
+	}
+}
+
 // checkDeclared refuses a member outside the subset in a declared schema, at
 // any depth. It refuses anyOf and oneOf too: the reflector writes the only two
 // forms of them that the subset holds, the open enum and the nullable reference,
@@ -43,7 +54,8 @@ func checkDeclared(schema any) error {
 	return nil
 }
 
-// checkDeclaredMember checks the schemas that a member of a schema holds.
+// checkDeclaredMember checks the schemas that a member of a schema holds, and
+// the values of the members with a value of their own.
 func checkDeclaredMember(key string, child any) error {
 	switch key {
 	case keyProperties:
@@ -56,9 +68,60 @@ func checkDeclaredMember(key string, child any) error {
 		}
 
 		return checkDeclared(child)
+	case keyType:
+		return checkDeclaredType(child)
+	case keyRequired:
+		return checkDeclaredRequired(child)
 	default:
 		return nil
 	}
+}
+
+// checkDeclaredType checks the value of a type member: one type name of the
+// subset, or a non-empty list of them, as the reflector writes for a value
+// that can also be null.
+func checkDeclaredType(child any) error {
+	if name, isString := child.(string); isString {
+		if isSubsetType(name) {
+			return nil
+		}
+
+		return fmt.Errorf("%w: member %q is the type name %q, which is not in the subset", errDeclared, keyType, name)
+	}
+
+	names, isList := child.([]any)
+	if !isList || len(names) == 0 {
+		return fmt.Errorf("%w: member %q is %v, which is not a type name or a non-empty list of type names",
+			errDeclared, keyType, child)
+	}
+
+	for _, name := range names {
+		text, isString := name.(string)
+		if !isString || !isSubsetType(text) {
+			return fmt.Errorf("%w: member %q holds %v, which is not a type name of the subset", errDeclared,
+				keyType, name)
+		}
+	}
+
+	return nil
+}
+
+// checkDeclaredRequired checks the value of a required member: a list of
+// strings, as the reflector writes.
+func checkDeclaredRequired(child any) error {
+	names, isList := child.([]any)
+	if !isList {
+		return fmt.Errorf("%w: member %q is %v, which is not a list of strings", errDeclared, keyRequired, child)
+	}
+
+	for _, name := range names {
+		if _, isString := name.(string); !isString {
+			return fmt.Errorf("%w: member %q holds the value %v, which is not a string", errDeclared, keyRequired,
+				name)
+		}
+	}
+
+	return nil
 }
 
 // checkDeclaredProperties checks the schemas of the members of an object.
