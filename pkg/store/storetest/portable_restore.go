@@ -421,6 +421,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	seed := seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 	checkImportRowCounts(t, ps.src, sum)
+	checkBreakGlassRowCounts(t, ps.src, sum)
 	checkBlameRowCounts(t, ps.src, sum)
 	checkProfileRowCounts(t, ps.src, sum)
 	checkIssuerRowCounts(t, ps.src, sum)

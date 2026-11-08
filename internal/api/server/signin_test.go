@@ -254,6 +254,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Schema:           st,
 		Journal:          st,
 		Principals:       principals,
+		Reach:            routeReach(st),
 		Tokens:           seedRouteTokens(t, st),
 		Access:           grants,
 		Audit:            st,
@@ -1160,6 +1161,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1630,7 +1632,7 @@ func newSignInAccess(
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -1658,7 +1660,7 @@ func TestSignInJoinsNoGroup(t *testing.T) {
 	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
 		g := principal.Group{
 			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
 			t.Fatalf("create group %s: %v", name, err)

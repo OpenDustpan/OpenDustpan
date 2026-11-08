@@ -50,9 +50,11 @@ var (
 	)
 	errPrincipalChangeBody = errors.New(`invalid principal change body: provide {"displayName":"..."}`)
 	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
-	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
-	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
-	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
+	errGroupChangeBody     = errors.New(
+		`invalid group change body: provide {"name":"..."}, {"description":"..."} or {"closedToIdentityProvider":true}`,
+	)
+	errMemberBody = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errPageQuery  = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
 // errNoPrincipalStore reports a server whose store keeps no principals.
@@ -95,7 +97,10 @@ type principalResponse struct {
 
 // groupResponse is one group on the wire. A group whose source is not local
 // refuses membership changes through the API with 409. MemberCount is the
-// count of its current members.
+// count of its current members. Protected reports whether the group holds a
+// sensitive action on the installation or on a principal of the
+// installation through its own grants, without the grants of its members. A
+// read that cannot check the group answers an error, never false.
 //
 // Contract: never remove or rename these fields.
 type groupResponse struct {
@@ -106,6 +111,10 @@ type groupResponse struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	MemberCount int64  `json:"memberCount"`
+	// ClosedToIdentityProvider is true when the identity provider may not
+	// add members to the group.
+	ClosedToIdentityProvider bool `json:"closedToIdentityProvider"`
+	Protected                bool `json:"protected"`
 }
 
 // memberResponse is one member of a group on the wire.
@@ -157,10 +166,12 @@ type createGroupRequest struct {
 }
 
 // changeGroupRequest is the body of a group change. A missing field keeps
-// its value.
+// its value. ClosedToIdentityProvider sets the switch of the group: true
+// closes the group to the identity provider.
 type changeGroupRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
+	Name                     *string `json:"name"`
+	Description              *string `json:"description"`
+	ClosedToIdentityProvider *bool   `json:"closedToIdentityProvider"`
 }
 
 // addMemberRequest is the body of a member add.
@@ -283,27 +294,74 @@ func markTempAdminMembers(
 	return v
 }
 
-func groupOf(g principal.Group) groupResponse {
+// groupOf returns one group on the wire with its protected flag.
+func groupOf(g principal.Group, protected bool) groupResponse {
 	return groupResponse{
-		ID:          g.ID,
-		Name:        g.Name,
-		Description: g.Description,
-		Source:      string(g.Source),
-		CreatedAt:   wireTime(g.CreatedAt),
-		UpdatedAt:   wireTime(g.UpdatedAt),
-		MemberCount: g.MemberCount,
+		ID:                       g.ID,
+		Name:                     g.Name,
+		Description:              g.Description,
+		Source:                   string(g.Source),
+		CreatedAt:                wireTime(g.CreatedAt),
+		UpdatedAt:                wireTime(g.UpdatedAt),
+		MemberCount:              g.MemberCount,
+		ClosedToIdentityProvider: g.ClosedToIdentityProvider,
+		Protected:                protected,
 	}
 }
 
-func groupsOf(page principal.Page[principal.Group]) groupListResponse {
+// protectedGroupOf returns one group on the wire with its protected flag. A
+// failed check answers its error, so the route answers an error, never a
+// false flag.
+func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (groupResponse, error) {
+	protected, err := access.Protected(ctx, h.reach, g.ID)
+	if err != nil {
+		return groupResponse{}, err
+	}
+
+	return groupOf(g, protected), nil
+}
+
+// protectedGroupsOf returns one page of groups on the wire with the
+// protected flag of each. It checks the whole page with one ProtectedGroups
+// call. A failed check of one group answers its error, so the route answers
+// an error, never a false flag.
+func (h *Handler) protectedGroupsOf(
+	ctx context.Context, page principal.Page[principal.Group],
+) (groupListResponse, error) {
+	ids := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		ids = append(ids, page.Items[i].ID)
+	}
+
+	flags, err := access.ProtectedGroups(ctx, h.reach, ids)
+	if err != nil {
+		return groupListResponse{}, err
+	}
+
+	return groupsWithFlags(page, flags)
+}
+
+// groupsWithFlags returns page on the wire with the flag of each group from
+// flags. A group with no flag answers an error, never a false flag.
+func groupsWithFlags(page principal.Page[principal.Group], flags map[string]bool) (groupListResponse, error) {
 	out := groupListResponse{
 		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
-	for _, g := range page.Items {
-		out.Groups = append(out.Groups, groupOf(g))
+
+	for i := range page.Items {
+		// Defense in depth: ProtectedGroups answers a flag for each ID or an
+		// error. This check stays so that a missing flag never shows as false.
+		g := &page.Items[i]
+
+		protected, ok := flags[g.ID]
+		if !ok {
+			return groupListResponse{}, fmt.Errorf("protected flag of group %q: %w", g.ID, access.ErrInvalid)
+		}
+
+		out.Groups = append(out.Groups, groupOf(*g, protected))
 	}
 
-	return out
+	return out, nil
 }
 
 // Route paths of the principals and the groups.
@@ -454,8 +512,13 @@ func (h *Handler) principalRoutes() []Route {
 			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal),
 		},
 		{
-			Method: http.MethodGet, Path: principalPath + "/groups", Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listGroupsOfPrincipal),
+			Method:     http.MethodGet,
+			Path:       principalPath + "/groups",
+			Scope:      ScopeAuthorized,
+			Actions:    read,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.servePrincipalRead(h.listGroupsOfPrincipal),
 		},
 		{
 			Method:  http.MethodPost,
@@ -488,15 +551,15 @@ func (h *Handler) groupRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: manage,
 			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, createGroup),
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, h.createGroup),
 		},
 		{
 			Method: http.MethodGet, Path: groupsPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listGroups),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(h.listGroups),
 		},
 		{
 			Method: http.MethodGet, Path: groupPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(getGroup),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(h.getGroup),
 		},
 		{
 			Method:  http.MethodPatch,
@@ -504,7 +567,7 @@ func (h *Handler) groupRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: manage,
 			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, changeGroup),
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, h.changeGroup),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -814,8 +877,8 @@ func disablePrincipal(
 }
 
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
-// page, ordered by name.
-func listGroupsOfPrincipal(
+// page, ordered by name, with the protected flag of each group.
+func (h *Handler) listGroupsOfPrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
@@ -828,12 +891,17 @@ func listGroupsOfPrincipal(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, groupsOf(page), ""), nil
+	body, err := h.protectedGroupsOf(r.Context(), page)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, body, ""), nil
 }
 
 // createGroup serves POST /api/server/groups: it answers 201 with the new
 // group. A name that another group holds without regard to case answers 409.
-func createGroup(
+func (h *Handler) createGroup(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req createGroupRequest
@@ -855,11 +923,17 @@ func createGroup(
 		return failed("groups"), err
 	}
 
-	return ok(http.StatusCreated, groupOf(g), principal.GroupRef(g.ID)), nil
+	body, err := h.protectedGroupOf(r.Context(), g)
+	if err != nil {
+		return failed(principal.GroupRef(g.ID)), err
+	}
+
+	return ok(http.StatusCreated, body, principal.GroupRef(g.ID)), nil
 }
 
-// listGroups serves GET /api/server/groups: one page, ordered by name.
-func listGroups(
+// listGroups serves GET /api/server/groups: one page, ordered by name, with
+// the protected flag of each group.
+func (h *Handler) listGroups(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
@@ -872,11 +946,17 @@ func listGroups(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, groupsOf(page), ""), nil
+	body, err := h.protectedGroupsOf(r.Context(), page)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, body, ""), nil
 }
 
 // getGroup serves GET /api/server/groups/{id}. An unknown ID answers 404.
-func getGroup(
+// The group carries its protected flag.
+func (h *Handler) getGroup(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	g, err := svc.GetGroup(r.Context(), r.PathValue("id"))
@@ -884,33 +964,48 @@ func getGroup(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, groupOf(g), ""), nil
+	body, err := h.protectedGroupOf(r.Context(), g)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, body, ""), nil
 }
 
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
-// changes its description or both, and answers 200 with the stored group.
-func changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+// changes its description, closes or opens it to the identity provider, or
+// combines those, and answers 200 with the stored group and its protected
+// flag.
+func (h *Handler) changeGroup(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
 	object := principal.GroupRef(r.PathValue("id"))
-	empty := func() bool { return req.Name == nil && req.Description == nil }
+	empty := func() bool {
+		return req.Name == nil && req.Description == nil && req.ClosedToIdentityProvider == nil
+	}
 
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
 	if err != nil {
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
-		Name:        req.Name,
-		Description: req.Description,
+	g, err := svc.UpdateGroup(r.Context(), e, caller, r.PathValue("id"), principal.GroupUpdate{
+		Name:                     req.Name,
+		Description:              req.Description,
+		ClosedToIdentityProvider: req.ClosedToIdentityProvider,
 	})
 	if err != nil {
 		return failed(object), err
 	}
 
-	return ok(http.StatusOK, groupOf(g), object), nil
+	body, err := h.protectedGroupOf(r.Context(), g)
+	if err != nil {
+		return failed(object), err
+	}
+
+	return ok(http.StatusOK, body, object), nil
 }
 
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and

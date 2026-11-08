@@ -310,8 +310,8 @@ func testList(t *testing.T, h Harness) {
 		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	})
-	if err != nil || len(all) != 2 || all[0].ID != newer.ID || all[1].ID != older.ID {
-		t.Fatalf("List = %v, %v; want %s then %s", ids(all), err, newer.ID, older.ID)
+	if err != nil || len(all.Jobs) != 2 || all.Jobs[0].ID != newer.ID || all.Jobs[1].ID != older.ID {
+		t.Fatalf("List = %v, %v; want %s then %s", ids(all.Jobs), err, newer.ID, older.ID)
 	}
 
 	queued, err := h.Jobs.List(t.Context(), job.Filter{
@@ -319,8 +319,8 @@ func testList(t *testing.T, h Harness) {
 		After:              "",
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	})
-	if err != nil || !slices.Equal(ids(queued), []job.ID{older.ID}) {
-		t.Fatalf("List(queued) = %v, %v; want %s", ids(queued), err, older.ID)
+	if err != nil || !slices.Equal(ids(queued.Jobs), []job.ID{older.ID}) {
+		t.Fatalf("List(queued) = %v, %v; want %s", ids(queued.Jobs), err, older.ID)
 	}
 }
 

@@ -189,7 +189,7 @@ func newAccessFixtureAll(
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -259,6 +259,7 @@ func newAccessFixtureAll(
 		Schema:           stubSchema{migrations: nil},
 		Journal:          nil,
 		Principals:       principals,
+		Reach:            routeReach(st),
 		Tokens:           tokens,
 		Access:           grants,
 		Audit:            entries(st),

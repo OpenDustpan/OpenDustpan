@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -128,6 +129,30 @@ func (m *memObjects[T]) List(_ context.Context, scope gate.Scope) ([]T, error) {
 	}
 
 	slices.SortFunc(out, func(a, b T) int { return compareIDs(a.Ref().ID, b.Ref().ID) })
+
+	return out, nil
+}
+
+func (m *memObjects[T]) ListEveryScope(_ context.Context) ([]T, error) {
+	m.db.mu.Lock()
+	defer m.db.mu.Unlock()
+
+	var out []T
+
+	for _, objs := range m.byKey {
+		for _, obj := range objs {
+			out = append(out, obj)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b T) int {
+		ar, br := a.Ref(), b.Ref()
+		if c := strings.Compare(ar.Scope.Key(), br.Scope.Key()); c != 0 {
+			return c
+		}
+
+		return compareIDs(ar.ID, br.ID)
+	})
 
 	return out, nil
 }

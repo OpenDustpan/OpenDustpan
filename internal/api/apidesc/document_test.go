@@ -514,7 +514,11 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 	t.Parallel()
 
 	bad := map[string]string{
-		"multi type":                         `{"type":["string","integer"]}`,
+		"type list with an object":           `{"type":["object","string"]}`,
+		"type list with an enum":             `{"type":["string","number"],"enum":["a"]}`,
+		"type list with a format":            `{"type":["string","number"],"format":"date"}`,
+		"type list with a name twice":        `{"type":["string","string"]}`,
+		"type list of one name":              `{"type":["string"]}`,
 		"null type alone":                    `{"type":["null"]}`,
 		"closed enum":                        `{"type":"string","enum":["a","b"]}`,
 		"const":                              `{"const":"a"}`,
@@ -543,6 +547,7 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 
 	good := map[string]string{
 		"nullable":             `{"type":["string","null"]}`,
+		"list of primitives":   `{"type":["string","number","boolean"]}`,
 		"nullable ref":         `{"oneOf":[{"$ref":"#/components/schemas/a"},{"type":"null"}]}`,
 		"open enum":            `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"}]}`,
 		"open enum or null":    `{"anyOf":[{"$ref":"#/components/schemas/a"},{"type":"string"},{"type":"null"}]}`,
@@ -644,8 +649,8 @@ func hasPlainString(alts []any) bool {
 func schemaProblems(where string, obj map[string]any, state walkState) []string {
 	var out []string
 
-	if types, ok := obj["type"].([]any); ok && (len(types) != 2 || !slices.Contains(types, any("null"))) {
-		out = append(out, where+` has a type list that is not [X, "null"]`)
+	if types, ok := obj["type"].([]any); ok {
+		out = append(out, typeListProblems(where, obj, types)...)
 	}
 
 	out = append(out, oneOfAndEnumProblems(where, obj, state)...)
@@ -655,6 +660,104 @@ func schemaProblems(where string, obj map[string]any, state walkState) []string 
 	}
 
 	return out
+}
+
+// typeListProblems checks a type member that is a list: the nullable form
+// [X, "null"], or a list of two or more primitive names. A list without null
+// carries no enum and no format.
+func typeListProblems(where string, obj map[string]any, types []any) []string {
+	names, seen, problem := typeListNames(types)
+	if problem != "" {
+		return []string{where + problem}
+	}
+
+	if seen["null"] {
+		if problem := nullableTypeList(names); problem != "" {
+			return []string{where + problem}
+		}
+
+		return nil
+	}
+
+	if problem := plainTypeList(obj, names); problem != "" {
+		return []string{where + problem}
+	}
+
+	return nil
+}
+
+// typeListNames reads the names of a type list and reports a repeat or a name
+// that the subset does not know.
+func typeListNames(types []any) ([]string, map[string]bool, string) {
+	names := make([]string, 0, len(types))
+	seen := make(map[string]bool, len(types))
+
+	for _, item := range types {
+		name, ok := item.(string)
+		if !ok || !subsetTypeName(name) {
+			return nil, nil, " has a type list with a name that is not a type name"
+		}
+
+		if seen[name] {
+			return nil, nil, " has a type list with a name twice"
+		}
+
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	return names, seen, ""
+}
+
+// nullableTypeList checks the nullable form [X, "null"].
+func nullableTypeList(names []string) string {
+	if len(names) != 2 || names[1] != "null" {
+		return ` has the type name "null" outside the second place of a list of two names`
+	}
+
+	return ""
+}
+
+// plainTypeList checks a type list without null: at least two primitive names,
+// with no enum and no format.
+func plainTypeList(obj map[string]any, names []string) string {
+	if len(names) < 2 {
+		return " has a type list with fewer than two names"
+	}
+
+	for _, name := range names {
+		if !primitiveTypeName(name) {
+			return " has a type list with a name that is not a primitive type name"
+		}
+	}
+
+	for _, key := range []string{"enum", "format"} {
+		if obj[key] != nil {
+			return " has " + key + " beside a type list"
+		}
+	}
+
+	return ""
+}
+
+// subsetTypeName reports whether the name is a type name of the subset.
+func subsetTypeName(name string) bool {
+	switch name {
+	case "string", "number", "integer", "boolean", "object", "array", "null":
+		return true
+	default:
+		return false
+	}
+}
+
+// primitiveTypeName reports whether the name is a primitive type name of JSON.
+func primitiveTypeName(name string) bool {
+	switch name {
+	case "string", "number", "integer", "boolean":
+		return true
+	default:
+		return false
+	}
 }
 
 // oneOfAndEnumProblems returns the problems of oneOf and enum in a schema. A

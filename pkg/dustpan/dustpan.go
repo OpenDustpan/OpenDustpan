@@ -2860,9 +2860,15 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return none, err
+	}
+
 	serverAPI, err := newServerHandler(serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
+		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
@@ -3176,9 +3182,15 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var limits access.LimitGroups
+
+	if reader := accessLimitGroups(cfg, stores); reader != nil {
+		limits = reader
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)

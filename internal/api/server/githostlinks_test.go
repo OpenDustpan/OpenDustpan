@@ -5,11 +5,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forgelink"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -114,6 +116,19 @@ func (f accessFixture) linkAlice(t *testing.T, id string) {
 	token := f.startLink(t, "alice")
 	f.proveLink(t, token, id, "login-"+id)
 	f.asPerson(t, "alice", apiCall{http.MethodPost, linksURL, `{"token":"` + token + `"}`, http.StatusCreated}, nil)
+}
+
+// staleLinkSession starts a console session of subject whose sign-in is one
+// minute older than the token freshness window. The session is active: a read
+// works. It returns the cookie and the CSRF value of the session.
+func (f accessFixture) staleLinkSession(t *testing.T, subject string) (*http.Cookie, string) {
+	t.Helper()
+
+	cookie, csrf := f.sessionOf(t, subject, f.sessions.Now().Add(-session.DefaultTokenFreshness-time.Minute))
+
+	f.asSessionCookie(t, cookie, csrf, apiCall{http.MethodGet, linksURL, "", http.StatusOK}, nil)
+
+	return cookie, csrf
 }
 
 func TestGitHostLinkFlow(t *testing.T) {
@@ -244,25 +259,46 @@ func TestGitHostLinkNeedsBothSides(t *testing.T) {
 }
 
 // TestGitHostLinkChangesNeedASession proves that an access token starts, shows,
-// accepts and deletes nothing, and that it reads the list.
+// accepts and deletes nothing, and that it reads the list. The accept needs a
+// fresh sign-in, so an access token gets the fresh-step code there.
 func TestGitHostLinkChangesNeedASession(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
 	f.linkAlice(t, "4711")
 
-	var failure linkErrorDoc
+	tests := []struct {
+		call apiCall
+		code string
+	}{
+		{apiCall{http.MethodPost, linkRequestsURL, "", http.StatusForbidden}, "git-host.link-person-required"},
+		{
+			apiCall{
+				http.MethodPost, linkShowURL,
+				`{"token":"` + strings.Repeat("a", forgelink.MinTokenLen) + `"}`, http.StatusForbidden,
+			},
+			"git-host.link-person-required",
+		},
+		{
+			apiCall{
+				http.MethodPost, linksURL,
+				`{"token":"` + strings.Repeat("a", forgelink.MinTokenLen) + `"}`, http.StatusForbidden,
+			},
+			freshErrorCode,
+		},
+		{
+			apiCall{http.MethodDelete, linksURL + ghAccountPath + "4711", "", http.StatusForbidden},
+			"git-host.link-person-required",
+		},
+	}
 
-	for _, c := range []apiCall{
-		{http.MethodPost, linkRequestsURL, "", http.StatusForbidden},
-		{http.MethodPost, linkShowURL, `{"token":"` + strings.Repeat("a", forgelink.MinTokenLen) + `"}`, http.StatusForbidden},
-		{http.MethodPost, linksURL, `{"token":"` + strings.Repeat("a", forgelink.MinTokenLen) + `"}`, http.StatusForbidden},
-		{http.MethodDelete, linksURL + ghAccountPath + "4711", "", http.StatusForbidden},
-	} {
-		f.as(t, "alice", c, &failure)
+	for _, tc := range tests {
+		var failure linkErrorDoc
 
-		if failure.ErrorCode != "git-host.link-person-required" {
-			t.Errorf("%s %s code = %q", c.method, c.path, failure.ErrorCode)
+		f.as(t, "alice", tc.call, &failure)
+
+		if failure.ErrorCode != tc.code {
+			t.Errorf("%s %s code = %q, want %q", tc.call.method, tc.call.path, failure.ErrorCode, tc.code)
 		}
 	}
 
@@ -278,6 +314,230 @@ func TestGitHostLinkChangesNeedASession(t *testing.T) {
 
 	if len(list.Links) != 1 {
 		t.Fatalf("links after the refusals = %+v", list.Links)
+	}
+}
+
+// linkAcceptCase is one row of TestGitHostLinkAcceptNeedsAFreshSignIn: the
+// state of the accept and the links that each person holds after it.
+type linkAcceptCase struct {
+	name string
+	// replace makes the accept take over the link of alice, so that the
+	// refusal must keep that link.
+	replace bool
+	// stale accepts from a session whose sign-in is older than the window.
+	stale bool
+	want  int
+	code  string
+	// alice and bob are the counts of the links of each person after.
+	alice, bob int
+}
+
+// checkLinkAcceptFreshness runs one row of TestGitHostLinkAcceptNeedsAFreshSignIn.
+func checkLinkAcceptFreshness(t *testing.T, tc linkAcceptCase) {
+	t.Helper()
+
+	f := newLinkFixture(t)
+
+	if tc.replace {
+		f.linkAlice(t, "4711")
+	}
+
+	token := f.startLink(t, "bob")
+	f.proveLink(t, token, "4711", "alice-gh")
+
+	body := `{"token":"` + token + `"}`
+	if tc.replace {
+		body = `{"token":"` + token + `","previousPrincipal":"prn-alice"}`
+	}
+
+	call := apiCall{http.MethodPost, linksURL, body, tc.want}
+
+	if tc.stale {
+		cookie, csrf := f.staleLinkSession(t, "bob")
+
+		var failure linkErrorDoc
+		f.asSessionCookie(t, cookie, csrf, call, &failure)
+
+		if failure.ErrorCode != tc.code {
+			t.Fatalf("code = %q, want %q", failure.ErrorCode, tc.code)
+		}
+	} else {
+		var accepted acceptedDoc
+		f.asPerson(t, "bob", call, &accepted)
+
+		if accepted.Link.Principal != "prn-bob" || accepted.ReplacedPrincipal != nil {
+			t.Fatalf("accepted = %+v, want the link of bob", accepted)
+		}
+	}
+
+	for _, holder := range []struct {
+		subject string
+		want    int
+	}{{"alice", tc.alice}, {"bob", tc.bob}} {
+		var list linkListDoc
+		f.asPerson(t, holder.subject, apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &list)
+
+		if len(list.Links) != holder.want {
+			t.Fatalf("links of %s = %+v, want %d", holder.subject, list.Links, holder.want)
+		}
+	}
+
+	if tc.stale {
+		if got := countLinkEntries(serverLinkEntries(t, f), "failure", "@caller"); got != 1 {
+			t.Fatalf("refusal entries = %d, want 1", got)
+		}
+	}
+}
+
+// TestGitHostLinkAcceptNeedsAFreshSignIn proves that the accept of a link
+// needs a sign-in inside the token freshness window: a session that is older
+// than the window is refused with the fresh-step code, no link is stored, and
+// the refusal is recorded. A session that signed in inside the window accepts.
+func TestGitHostLinkAcceptNeedsAFreshSignIn(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []linkAcceptCase{
+		{"stale session", false, true, http.StatusUnauthorized, freshErrorCode, 0, 0},
+		{"stale session takes over no link", true, true, http.StatusUnauthorized, freshErrorCode, 1, 0},
+		{"fresh session", false, false, http.StatusCreated, "", 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkLinkAcceptFreshness(t, tc)
+		})
+	}
+}
+
+// TestGitHostLinkAcceptRefusesANonSessionCaller proves that the accept stays
+// refused for a caller that is not a console session: an access token of a
+// person, and an access token of a service principal that the server made.
+// The fresh check refuses both before the route reaches its session check.
+func TestGitHostLinkAcceptRefusesANonSessionCaller(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		subject string
+		service bool
+	}{
+		{"access token of a person", "alice", false},
+		{"access token of a service principal", "ci-deploy", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLinkFixture(t)
+
+			if tc.service {
+				f.seedService(t, tc.subject)
+			}
+
+			token := f.startLink(t, "alice")
+			f.proveLink(t, token, "4711", "alice-gh")
+
+			var failure linkErrorDoc
+			f.as(t, tc.subject, apiCall{
+				http.MethodPost, linksURL, `{"token":"` + token + `"}`, http.StatusForbidden,
+			}, &failure)
+
+			if failure.ErrorCode != freshErrorCode {
+				t.Fatalf("code = %q, want %q", failure.ErrorCode, freshErrorCode)
+			}
+
+			if got := countLinkEntries(serverLinkEntries(t, f), "failure", "@caller"); got != 1 {
+				t.Fatalf("refusal entries = %d, want 1", got)
+			}
+
+			var list linkListDoc
+			f.asPerson(t, "alice", apiCall{http.MethodGet, linksURL, "", http.StatusOK}, &list)
+
+			if len(list.Links) != 0 {
+				t.Fatalf("links after the refusal = %+v, want none", list.Links)
+			}
+		})
+	}
+}
+
+// staleAcceptRefusal is the body of the refusal of a stale accept.
+type staleAcceptRefusal struct {
+	Message        string `json:"message"`
+	ErrorCode      string `json:"errorCode"`
+	Reauthenticate string `json:"reauthenticate"`
+}
+
+// checkStaleAcceptRefusal fails when the refusal does not name the fresh
+// sign-in step, or when it names one of the parts of the link.
+func checkStaleAcceptRefusal(t *testing.T, refusal staleAcceptRefusal, named []string) {
+	t.Helper()
+
+	if refusal.ErrorCode != freshErrorCode {
+		t.Fatalf("code = %q, want %q", refusal.ErrorCode, freshErrorCode)
+	}
+
+	if !strings.Contains(refusal.Message, "sign in again") ||
+		!strings.HasPrefix(refusal.Reauthenticate, "/api/server/sign-in/") {
+		t.Fatalf("the refusal does not name the fresh sign-in step: %s %s", refusal.Message, refusal.Reauthenticate)
+	}
+
+	for _, part := range named {
+		if strings.Contains(refusal.Message, part) || strings.Contains(refusal.Reauthenticate, part) {
+			t.Errorf("the refusal names %q: %s %s", part, refusal.Message, refusal.Reauthenticate)
+		}
+	}
+}
+
+// checkStaleAcceptEntries fails when a failure entry of the links names one of
+// the parts of the link, and returns the count of the failure entries.
+func checkStaleAcceptEntries(t *testing.T, entries, named []string) int {
+	t.Helper()
+
+	refusals := 0
+
+	for _, entry := range entries {
+		if !strings.Contains(entry, "failure") {
+			continue
+		}
+
+		refusals++
+
+		for _, part := range named {
+			if strings.Contains(entry, part) {
+				t.Errorf("the refusal entry names %q: %s", part, entry)
+			}
+		}
+	}
+
+	return refusals
+}
+
+// TestGitHostLinkStaleAcceptNamesNoAccount proves that the refusal of a stale
+// accept and its audit entry name the fresh sign-in step only: no account, no
+// host, no login and no previous principal.
+func TestGitHostLinkStaleAcceptNamesNoAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newLinkFixture(t)
+	f.linkAlice(t, "4711")
+
+	token := f.startLink(t, "bob")
+	f.proveLink(t, token, "4711", "alice-gh")
+
+	cookie, csrf := f.staleLinkSession(t, "bob")
+
+	var refusal staleAcceptRefusal
+	f.asSessionCookie(t, cookie, csrf, apiCall{
+		http.MethodPost, linksURL, `{"token":"` + token + `","previousPrincipal":"prn-alice"}`, http.StatusUnauthorized,
+	}, &refusal)
+
+	named := []string{"4711", "github.com", "alice-gh", "prn-alice", token}
+	checkStaleAcceptRefusal(t, refusal, named)
+
+	entries := serverLinkEntries(t, f)
+
+	if got := checkStaleAcceptEntries(t, entries, named); got != 1 {
+		t.Fatalf("refusal entries = %d, want 1: %q", got, entries)
 	}
 }
 
@@ -513,23 +773,32 @@ func TestGitHostLinkAuditEntries(t *testing.T) {
 // TestGitHostLinkRoutesCheckTheSessionFirst proves the check of the route, which
 // the service does not replace: a request with an access token is refused before
 // the route reads its body or its path. A bad body or a bad account gives 403 and
-// not 400, because the service never sees them.
+// not 400, because the service never sees them. The accept answers the code of
+// the fresh check, which runs before the route too.
 func TestGitHostLinkRoutesCheckTheSessionFirst(t *testing.T) {
 	t.Parallel()
 
 	f := newLinkFixture(t)
 
-	for _, c := range []apiCall{
-		{http.MethodPost, linkShowURL, `not json`, http.StatusForbidden},
-		{http.MethodPost, linksURL, `{"unknown":1}`, http.StatusForbidden},
-		{http.MethodDelete, linksURL + "/svn/GitHub.com/x", "", http.StatusForbidden},
-	} {
+	tests := []struct {
+		call apiCall
+		code string
+	}{
+		{apiCall{http.MethodPost, linkShowURL, `not json`, http.StatusForbidden}, "git-host.link-person-required"},
+		{apiCall{http.MethodPost, linksURL, `{"unknown":1}`, http.StatusForbidden}, freshErrorCode},
+		{
+			apiCall{http.MethodDelete, linksURL + "/svn/GitHub.com/x", "", http.StatusForbidden},
+			"git-host.link-person-required",
+		},
+	}
+
+	for _, tc := range tests {
 		var failure linkErrorDoc
 
-		f.as(t, "alice", c, &failure)
+		f.as(t, "alice", tc.call, &failure)
 
-		if failure.ErrorCode != "git-host.link-person-required" {
-			t.Errorf("%s %s code = %q, want person-required", c.method, c.path, failure.ErrorCode)
+		if failure.ErrorCode != tc.code {
+			t.Errorf("%s %s code = %q, want %q", tc.call.method, tc.call.path, failure.ErrorCode, tc.code)
 		}
 	}
 }

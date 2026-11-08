@@ -258,10 +258,15 @@ type memRecords struct {
 	logs   map[string]memLogEntry
 }
 
-// memPlanEntry is the lookup row of a stored plan.
+// memPlanEntry is the lookup row of a stored plan. phase, operation and token
+// name the reserve of a plan with no part yet: only the claim that made the
+// reserve fills it.
 type memPlanEntry struct {
-	job  job.ID
-	plan job.PlanRef
+	job       job.ID
+	plan      job.PlanRef
+	phase     int
+	operation durable.ID
+	token     int64
 }
 
 // memLogEntry is the lookup row of a log version.
@@ -603,7 +608,9 @@ func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 	p := np.Plan
 	p.ItemKey, p.Parts, p.StateVersion = key.ID, nil, next.Phases[pc.Phase].StateVersion
-	m.records.plans[p.ID] = memPlanEntry{job: next.ID, plan: p}
+	m.records.plans[p.ID] = memPlanEntry{
+		job: next.ID, plan: p, phase: pc.Phase, operation: pc.Claim.Operation, token: pc.Claim.Token,
+	}
 
 	return p, nil
 }
@@ -633,6 +640,8 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 		return job.PlanRef{}, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
 	case e.plan.ItemKey != p.ItemKey:
 		return job.PlanRef{}, fmt.Errorf("%w: plan %s has another item key", job.ErrInvalid, p.ID)
+	case e.phase != pc.Phase || e.operation != pc.Claim.Operation || e.token != pc.Claim.Token:
+		return job.PlanRef{}, fmt.Errorf("%w: plan %s was reserved by another phase or claim", job.ErrConflict, p.ID)
 	}
 
 	if partsErr := job.CheckPlanParts(p.Parts); partsErr != nil {
@@ -643,7 +652,9 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	plan.Parts, plan.StateVersion = p.Parts, next.Phases[pc.Phase].StateVersion
 	next.Phases[pc.Phase].Plan = &plan
 
-	m.records.plans[plan.ID] = memPlanEntry{job: next.ID, plan: plan}
+	m.records.plans[plan.ID] = memPlanEntry{
+		job: next.ID, plan: plan, phase: pc.Phase, operation: pc.Claim.Operation, token: pc.Claim.Token,
+	}
 	m.store(&next, time.Now().UTC())
 
 	return plan, nil

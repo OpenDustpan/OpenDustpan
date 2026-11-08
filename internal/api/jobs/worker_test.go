@@ -35,6 +35,7 @@ func TestStartNeedsAWorker(t *testing.T) {
 			starter := newFakeStarter(t)
 			deps := handlerDeps{
 				jobs:      newFakeJobs(),
+				units:     nil,
 				starter:   starter,
 				entries:   nil,
 				artifacts: nil,
@@ -80,6 +81,7 @@ func TestReplayNeedsAWorker(t *testing.T) {
 	workers := admittest.Worker()
 	deps := handlerDeps{
 		jobs:      newFakeJobs(),
+		units:     nil,
 		starter:   starter,
 		entries:   nil,
 		artifacts: nil,

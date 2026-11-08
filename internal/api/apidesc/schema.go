@@ -49,6 +49,9 @@ type reflector struct {
 	// owners maps a schema name to the type that owns it.
 	owners   map[string]reflect.Type
 	declared map[reflect.Type]Declaration
+	// described maps a struct type to the descriptions of its fields, by the
+	// wire name of each field.
+	described map[reflect.Type]map[string]string
 	// badNames lists every wire name that breaks the camelCase rule, so that
 	// one run names all of them.
 	badNames []string
@@ -56,11 +59,12 @@ type reflector struct {
 
 func newReflector() *reflector {
 	return &reflector{
-		schemas:  object{},
-		names:    map[reflect.Type]string{},
-		owners:   map[string]reflect.Type{},
-		declared: map[reflect.Type]Declaration{},
-		badNames: nil,
+		schemas:   object{},
+		names:     map[reflect.Type]string{},
+		owners:    map[string]reflect.Type{},
+		declared:  map[reflect.Type]Declaration{},
+		described: map[reflect.Type]map[string]string{},
+		badNames:  nil,
 	}
 }
 
@@ -68,12 +72,23 @@ func newReflector() *reflector {
 // error, so that the schema of a type never depends on the order of the
 // operations.
 func (r *reflector) declare(d Declaration) error {
+	if d.describe != nil {
+		return r.describeField(d)
+	}
+
 	if prev, ok := r.declared[d.typ]; ok {
 		if !reflect.DeepEqual(prev, d) {
 			return fmt.Errorf("%w: type %s is declared twice with different schemas", ErrInvalidBody, d.typ)
 		}
 
 		return nil
+	}
+
+	// A declaration with a name only keeps the derived schema, and a field
+	// description of the type stays valid. Every other declaration replaces
+	// the derived schema, and a field description would be lost.
+	if err := r.refuseOwnSchema(d); err != nil {
+		return err
 	}
 
 	switch {
@@ -97,6 +112,72 @@ func (r *reflector) declare(d Declaration) error {
 	}
 
 	r.declared[d.typ] = d
+
+	return nil
+}
+
+// refuseOwnSchema returns an error when the type has a field description and
+// the declaration gives the type a schema of its own: the description would
+// be lost, because the derived struct schema is never built.
+func (r *reflector) refuseOwnSchema(d Declaration) error {
+	if d.name == "" && len(r.described[d.typ]) > 0 {
+		return fmt.Errorf(
+			"%w: type %s has a field description and a declaration of its own schema",
+			ErrInvalidBody, d.typ,
+		)
+	}
+
+	return nil
+}
+
+// describeField records the description of one field of the struct type. The
+// field is named by its wire name. The text must not be empty, the field must
+// exist in the schema of the type, and two different texts for one field are
+// refused. A type with a schema of its own has no derived fields, so it
+// cannot take a field description.
+func (r *reflector) describeField(d Declaration) error {
+	fd := d.describe
+
+	if fd.text == "" {
+		return fmt.Errorf("%w: the description of the field %q of %s is empty", ErrInvalidBody, fd.name, d.typ)
+	}
+
+	if _, hasOwnSchema := r.declared[d.typ]; hasOwnSchema {
+		return fmt.Errorf(
+			"%w: type %s has a declaration of its own schema and a field description",
+			ErrInvalidBody, d.typ,
+		)
+	}
+
+	if d.typ.Kind() != reflect.Struct {
+		return fmt.Errorf("%w: %s is not a struct, so it has no field %q", ErrInvalidBody, d.typ, fd.name)
+	}
+
+	fields, err := structFields(d.typ)
+	if err != nil {
+		return err
+	}
+
+	if !slices.ContainsFunc(fields, func(f field) bool { return f.name == fd.name }) {
+		return fmt.Errorf("%w: type %s has no field %q", ErrInvalidBody, d.typ, fd.name)
+	}
+
+	if text, ok := r.described[d.typ][fd.name]; ok {
+		if text != fd.text {
+			return fmt.Errorf(
+				"%w: the field %q of %s has the descriptions %q and %q",
+				ErrInvalidBody, fd.name, d.typ, text, fd.text,
+			)
+		}
+
+		return nil
+	}
+
+	if r.described[d.typ] == nil {
+		r.described[d.typ] = map[string]string{}
+	}
+
+	r.described[d.typ][fd.name] = fd.text
 
 	return nil
 }
@@ -200,9 +281,14 @@ func (r *reflector) reflectBodies(bodies []Body) error {
 }
 
 // checkFinished checks the schemas when all of them are written: every
-// reference has a schema, and every anyOf and oneOf has an allowed form.
+// reference has a schema, and every type list and every anyOf and oneOf has
+// an allowed form.
 func (r *reflector) checkFinished() error {
 	if err := r.checkRefs(); err != nil {
+		return err
+	}
+
+	if err := r.checkTypeLists(); err != nil {
 		return err
 	}
 
@@ -443,9 +529,10 @@ func (r *reflector) mapSchema(t reflect.Type) (object, error) {
 
 // nullable returns the schema of a value that can also be null. A reference
 // becomes oneOf, an open enum gets a third branch, and any other schema takes
-// the type list [X, "null"]. It refuses a schema that none of these forms can
-// make null without leaving the subset: a declared oneOf, and a declared schema
-// with no type.
+// the type list [X, "null"]. A type list that already holds null stays as it
+// is, in the order of its declaration. It refuses a schema that none of these
+// forms can make null without leaving the subset: a declared oneOf, a declared
+// schema with no type, and a type list that holds no null and cannot take one.
 func nullable(s object) (object, error) {
 	null := object{keyType: typeNull}
 
@@ -472,12 +559,16 @@ func nullable(s object) (object, error) {
 
 	out := cloneSchema(s)
 
-	typ, ok := out[keyType].(string)
-	if !ok {
+	switch typ := out[keyType].(type) {
+	case string:
+		out[keyType] = []any{typ, typeNull}
+	case []any:
+		if !slices.Contains(typ, any(typeNull)) {
+			return nil, fmt.Errorf("%w: the type list %v cannot take null without leaving the subset", errDeclared, typ)
+		}
+	default:
 		return nil, fmt.Errorf("%w: a schema with no type cannot be made nullable", errDeclared)
 	}
-
-	out[keyType] = []any{typ, typeNull}
 
 	return out, nil
 }
@@ -512,6 +603,10 @@ func (r *reflector) structSchema(t reflect.Type) (object, error) {
 			return nil, fmt.Errorf("field %q: %w", f.name, err)
 		}
 
+		if text, ok := r.described[t][f.name]; ok {
+			schema = withDescription(schema, text)
+		}
+
 		props[f.name] = schema
 
 		if f.isRequired() {
@@ -543,6 +638,16 @@ func (r *reflector) checkFieldName(t reflect.Type, name string) {
 	if _, legacy := legacyFieldNames[name]; !legacy {
 		r.badNames = append(r.badNames, fmt.Sprintf("%q of %s", name, t))
 	}
+}
+
+// withDescription returns the schema of a field with the description of the
+// field. The text stands next to a reference, as the only member beside it,
+// and it wins over the description of the type of the field.
+func withDescription(schema object, text string) object {
+	out := cloneSchema(schema)
+	out[keyDescription] = text
+
+	return out
 }
 
 // cloneSchema returns a deep copy of a schema, so that a use of a declared
