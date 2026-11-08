@@ -95,8 +95,10 @@ type ErrorCode string
 const (
 	ErrorCodeAccessDenied                          ErrorCode = "access.denied"
 	ErrorCodeAccessIpNotAllowed                    ErrorCode = "access.ip-not-allowed"
+	ErrorCodeAccessJobTokenAction                  ErrorCode = "access.job-token-action"
 	ErrorCodeAccessLastSiteAdministrator           ErrorCode = "access.last-site-administrator"
 	ErrorCodeAccessNoAction                        ErrorCode = "access.no-action"
+	ErrorCodeAccessSecretsWithheld                 ErrorCode = "access.secrets-withheld"
 	ErrorCodeAuditEntryNotFound                    ErrorCode = "audit.entry-not-found"
 	ErrorCodeAuditEntryReadUnavailable             ErrorCode = "audit.entry-read-unavailable"
 	ErrorCodeAuditExportNotRecorded                ErrorCode = "audit.export-not-recorded"

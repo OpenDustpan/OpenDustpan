@@ -376,6 +376,7 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		// Sizes come from the checkpoint rows on read.
 		CreatedBy:       plan.CreatedBy,
 		RestoredFrom:    plan.RestoredFrom,
+		JobID:           plan.JobID,
 		CheckpointBytes: 0,
 	}
 
@@ -433,6 +434,20 @@ func (s *Updates) StartBy(
 	u, err := s.Get(ctx, ref, id)
 	if err != nil {
 		return Started{}, err
+	}
+
+	// Defense in depth: the route refuses a job token that belongs to another
+	// job before it starts the update. This check stays so that the update
+	// record alone keeps a job token to its own job.
+	if by.JobID != "" && u.JobID != by.JobID {
+		owner := "no job"
+		if u.JobID != "" {
+			owner = "job " + u.JobID
+		}
+
+		return Started{}, fmt.Errorf(
+			"%w: the update of %s cannot be started by job %s", ErrInvalidUpdate, owner, by.JobID,
+		)
 	}
 
 	tok, err := token.New()
@@ -764,7 +779,7 @@ func (s *Updates) Import(ctx context.Context, ref Ref, subject string, in Checkp
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0})
+	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0, JobID: ""})
 	if err != nil {
 		return Update{}, err
 	}
@@ -805,7 +820,11 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version, JobID: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}

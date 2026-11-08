@@ -888,12 +888,12 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	// actions and the configured authorizer, so no authorizer of an embedder
 	// can widen them. Every authenticated person lists and revokes its own
 	// personal tokens with no grant.
-	authz := allowlistGate(identity.JobTokenRule{Next: identity.NamespaceServiceRule{Next: identity.SelfAllowed{
+	authz := allowlistGate(jobTokenRule(cfg, identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 			identity.ActionCallerManageGitHostLinks,
 		},
-	}}}, cfg.ipAllowlists)
+	}}), cfg.ipAllowlists)
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
 	if err != nil {
@@ -1490,7 +1490,7 @@ func newTofuHTTPHandler(
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
 		Placer:        newWorkspacePlacer(svc),
-	})
+	}.WithJobTokenPorts(jobTokenFacts(cfg), jobTokenRefusalRecorder(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
 	}
@@ -1595,7 +1595,7 @@ func newTFEHandler(
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
 		Placer:        newWorkspacePlacer(svc),
-	})
+	}.WithJobTokenPorts(jobTokenFacts(cfg), jobTokenRefusalRecorder(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
 	}
@@ -2546,7 +2546,7 @@ func newPulumiHandler(
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 		StateGuard:              svc.stateWrite.guard,
 		Placer:                  newStackPlacer(svc),
-	})
+	}.WithJobTokenPorts(jobTokenFacts(cfg), jobTokenRefusalRecorder(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
 	}

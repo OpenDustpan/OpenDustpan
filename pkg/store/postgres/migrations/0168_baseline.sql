@@ -1393,7 +1393,8 @@ CREATE TABLE updates (
     journal_version bigint DEFAULT 0 NOT NULL,
     journal_closed boolean DEFAULT false NOT NULL,
     token_id text DEFAULT ''::text NOT NULL,
-    journal_records_changed boolean DEFAULT false NOT NULL
+    journal_records_changed boolean DEFAULT false NOT NULL,
+    job_id text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE used_tickets (

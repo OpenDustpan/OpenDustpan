@@ -907,6 +907,23 @@ func requestFlows() []requestFlow {
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
 		}},
+		// The budget counts the job token and its job (4), the subjects of
+		// the caller and the stable ID of the unit (2), two checks of the
+		// grants on the unit (6 each: one for the decrypt, and one more for
+		// the read of the secrets that a job token needs), the stack and its
+		// key (2), and the audit entry of the decrypt in its own fenced
+		// transaction (8).
+		{"pulumi decrypt under a job token", 28, func(h *rtHarness) {
+			h.newStack()
+			ciphertext := h.encrypt()
+			token := h.issueJobToken(h.stackUnit())
+			h.measure(func() {
+				h.callWithToken(
+					http.MethodPost, "/api/stacks/acme/web/"+h.stack+"/decrypt",
+					`{"ciphertext":"`+ciphertext+`"}`, "token "+token, http.StatusOK,
+				)
+			})
+		}},
 	}
 }
 

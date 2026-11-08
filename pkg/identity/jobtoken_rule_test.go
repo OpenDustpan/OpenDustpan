@@ -11,13 +11,19 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// errListFailed is the error of a Next that fails to list.
-var errListFailed = errors.New("list failed")
+// The errors of the fakes in this file.
+var (
+	errListFailed    = errors.New("list failed")
+	errJobReadFailed = errors.New("read failed")
+	errJobNotFound   = errors.New("job not found")
+	errRecordRefused = errors.New("record failed")
+)
 
 // recordingNext is an Authorizer whose answer the test sets. It records
 // every call and the principal that it saw.
 type recordingNext struct {
 	allow bool
+	deny  identity.Action
 	scope identity.Scope
 	err   error
 	asked int
@@ -30,6 +36,10 @@ func (n *recordingNext) Authorize(
 ) error {
 	n.asked++
 	n.got = p
+
+	if n.deny != "" && action == n.deny {
+		return &identity.DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	}
 
 	if n.allow {
 		return nil
@@ -50,6 +60,47 @@ func (n *recordingNext) ListObjects(
 	}
 
 	return n.scope, nil
+}
+
+// fakeJobFacts is a JobFacts whose answer the test sets. It records the job
+// ID of each read.
+type fakeJobFacts struct {
+	fact     identity.JobFact
+	err      error
+	reads    int
+	gotJobID string
+}
+
+// JobFact implements identity.JobFacts.
+func (f *fakeJobFacts) JobFact(_ context.Context, jobID string) (identity.JobFact, error) {
+	f.reads++
+	f.gotJobID = jobID
+
+	return f.fact, f.err
+}
+
+// fakeRefusals records each refusal of the rule.
+type fakeRefusals struct {
+	recorded []identity.JobTokenRefusal
+	err      error
+}
+
+// RecordJobTokenRefusal implements identity.JobTokenRefusals.
+func (f *fakeRefusals) RecordJobTokenRefusal(
+	_ context.Context, r identity.JobTokenRefusal,
+) error {
+	f.recorded = append(f.recorded, r)
+
+	return f.err
+}
+
+// matchingFacts returns job facts that fit p: the unit of the token, a job
+// that can change, and the API source.
+func matchingFacts(p identity.Principal) *fakeJobFacts {
+	return &fakeJobFacts{
+		fact: identity.JobFact{Unit: p.JobUnit, Changes: true, Source: "api"},
+		err:  nil, reads: 0, gotJobID: "",
+	}
 }
 
 // emptyTestScope returns the empty scope.
@@ -365,9 +416,11 @@ func runRuleCase(t *testing.T, tc ruleCase) {
 	t.Helper()
 
 	next := &recordingNext{
-		allow: tc.nextAllows, scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+		allow: tc.nextAllows, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
 	}
-	rule := identity.JobTokenRule{Next: next}
+	rule := identity.JobTokenRule{
+		Next: next, Jobs: matchingFacts(tc.p), Refusals: &fakeRefusals{recorded: nil, err: nil},
+	}
 
 	err := rule.Authorize(t.Context(), tc.p, tc.action, tc.obj)
 
@@ -486,8 +539,12 @@ func TestJobTokenRuleWriteCost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			next := &recordingNext{allow: true, scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal()}
-			rule := identity.JobTokenRule{Next: next}
+			next := &recordingNext{
+				allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+			}
+			rule := identity.JobTokenRule{
+				Next: next, Jobs: matchingFacts(tc.p), Refusals: &fakeRefusals{recorded: nil, err: nil},
+			}
 
 			err := rule.Authorize(t.Context(), tc.p, identity.ActionJobWriteCost, tc.obj)
 
@@ -612,8 +669,12 @@ func TestJobTokenRuleListObjects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			next := &recordingNext{allow: true, scope: tc.nextScope, err: tc.nextErr, asked: 0, got: zeroPrincipal()}
-			rule := identity.JobTokenRule{Next: next}
+			next := &recordingNext{
+				allow: true, deny: "", scope: tc.nextScope, err: tc.nextErr, asked: 0, got: zeroPrincipal(),
+			}
+			rule := identity.JobTokenRule{
+				Next: next, Jobs: matchingFacts(tc.p), Refusals: &fakeRefusals{recorded: nil, err: nil},
+			}
 
 			scope, err := rule.ListObjects(t.Context(), tc.p, tc.action)
 
@@ -656,9 +717,11 @@ func TestJobTokenRuleListObjectsClearsElevation(t *testing.T) {
 			t.Parallel()
 
 			next := &recordingNext{
-				allow: true, scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+				allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
 			}
-			rule := identity.JobTokenRule{Next: next}
+			rule := identity.JobTokenRule{
+				Next: next, Jobs: matchingFacts(tc.p), Refusals: &fakeRefusals{recorded: nil, err: nil},
+			}
 
 			if _, err := rule.ListObjects(t.Context(), tc.p, identity.ActionUnitRead); err != nil {
 				t.Fatalf("ListObjects = %v, want no error", err)
@@ -776,4 +839,563 @@ func agentPrincipal() identity.Principal {
 	p.Kind = identity.KindService
 
 	return p
+}
+
+// actionCase is one row of the action allowlist and limit tables.
+type actionCase struct {
+	name        string
+	action      identity.Action
+	changes     bool
+	source      string
+	nextAllows  bool
+	nextDeny    identity.Action
+	wantErr     error
+	wantAsked   int
+	wantRefusal string
+}
+
+// TestJobTokenRuleAllowedActions proves that a consistent job token may ask
+// for each action of the allowlist when its job fits and Next allows it.
+func TestJobTokenRuleAllowedActions(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+
+	cases := []struct {
+		name      string
+		action    identity.Action
+		wantAsked int
+	}{
+		{"unit:read", identity.ActionUnitRead, 1},
+		{"unit:write", identity.ActionUnitWrite, 1},
+		{"unit:read-outputs", identity.ActionUnitReadOutputs, 1},
+		{"unit:encrypt", identity.ActionUnitEncrypt, 1},
+		{"unit:decrypt", identity.ActionUnitDecrypt, 2},
+		{"unit:read-secrets", identity.ActionUnitReadSecrets, 2},
+		{"job:write-cost", identity.ActionJobWriteCost, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			next := &recordingNext{
+				allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+			}
+			jobs := matchingFacts(jobToken(unit, "job-a"))
+			refusals := &fakeRefusals{recorded: nil, err: nil}
+			rule := identity.JobTokenRule{Next: next, Jobs: jobs, Refusals: refusals}
+
+			err := rule.Authorize(t.Context(), jobToken(unit, "job-a"), tc.action, unit)
+			if err != nil {
+				t.Fatalf("Authorize = %v, want allowed", err)
+			}
+
+			if next.asked != tc.wantAsked {
+				t.Errorf("Next asked %d times, want %d", next.asked, tc.wantAsked)
+			}
+
+			if jobs.reads != 1 {
+				t.Errorf("the rule read the job %d times, want 1", jobs.reads)
+			}
+
+			if len(refusals.recorded) != 0 {
+				t.Errorf("the rule recorded %d refusals, want 0", len(refusals.recorded))
+			}
+		})
+	}
+}
+
+// TestJobTokenRuleRefusesOtherActions proves that every action outside the
+// allowlist is refused before Next is asked, also when Next allows it.
+func TestJobTokenRuleRefusesOtherActions(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+
+	cases := []identity.Action{
+		identity.ActionUnitManage,
+		identity.ActionUnitManageAccess,
+		identity.Action("unit:delete"),
+		identity.ActionUnitWriteForced,
+		identity.ActionNamespaceManageSettings,
+		identity.ActionPrincipalManageTokens,
+		identity.ActionNamespaceManageAccess,
+	}
+
+	for _, action := range cases {
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+			runRefusedActionCase(t, action, unit)
+		})
+	}
+}
+
+// runRefusedActionCase runs one row of the refused action table.
+func runRefusedActionCase(t *testing.T, action identity.Action, unit identity.Object) {
+	t.Helper()
+
+	next := &recordingNext{
+		allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+	}
+	jobs := matchingFacts(jobToken(unit, "job-a"))
+	refusals := &fakeRefusals{recorded: nil, err: nil}
+	rule := identity.JobTokenRule{Next: next, Jobs: jobs, Refusals: refusals}
+
+	err := rule.Authorize(t.Context(), jobToken(unit, "job-a"), action, unit)
+	if err == nil {
+		t.Fatal("Authorize = nil, want ErrJobTokenAction and ErrDenied")
+	}
+
+	if !errors.Is(err, identity.ErrJobTokenAction) || !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize = %v, want ErrJobTokenAction and ErrDenied", err)
+	}
+
+	if !strings.Contains(err.Error(), string(action)) {
+		t.Errorf("error %q does not name the action %q", err, action)
+	}
+
+	if next.asked != 0 || jobs.reads != 0 {
+		t.Errorf("Next asked %d times and the rule read the job %d times, want 0", next.asked, jobs.reads)
+	}
+
+	assertOneRefusal(t, refusals, identity.JobTokenRefusal{
+		Subject: "alice", JobID: "job-a", Unit: unit, Action: action, Reason: "access.job-token-action",
+	})
+}
+
+// assertOneRefusal checks that the rule recorded exactly the refusal want.
+func assertOneRefusal(t *testing.T, refusals *fakeRefusals, want identity.JobTokenRefusal) {
+	t.Helper()
+
+	if len(refusals.recorded) != 1 {
+		t.Fatalf("the rule recorded %d refusals, want 1", len(refusals.recorded))
+	}
+
+	if got := refusals.recorded[0]; got != want {
+		t.Errorf("refusal = %+v, want %+v", got, want)
+	}
+}
+
+// TestJobTokenRuleJobFacts proves that the rule denies a consistent job token
+// when it cannot read the live job or when the live job does not hold the unit
+// of the token.
+func TestJobTokenRuleJobFacts(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	other := jobTestUnit(t, "acme", "web/other", "unt-2")
+	otherNS := jobTestUnit(t, "beta", "web/prod", "unt-3")
+	otherID := jobTestUnit(t, "acme", "web/prod", "unt-9")
+
+	cases := []struct {
+		name string
+		jobs *fakeJobFacts
+	}{
+		{
+			name: "no job facts", jobs: nil,
+		},
+		{
+			name: "the read fails", jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: identity.Object{}, Changes: false, Source: ""},
+				err:  errJobReadFailed, reads: 0, gotJobID: "",
+			},
+		},
+		{
+			name: "the job does not exist",
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: identity.Object{}, Changes: false, Source: ""},
+				err:  errJobNotFound, reads: 0, gotJobID: "",
+			},
+		},
+		{
+			name: "the read fails after it read the unit",
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+				err:  errJobReadFailed, reads: 0, gotJobID: "",
+			},
+		},
+		{
+			name: "the job holds another unit",
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: other, Changes: true, Source: "api"}, err: nil, reads: 0, gotJobID: "",
+			},
+		},
+		{
+			name: "the job holds a unit of another namespace",
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: otherNS, Changes: true, Source: "api"}, err: nil, reads: 0, gotJobID: "",
+			},
+		},
+		{
+			name: "the job holds the unit with another stable ID",
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: otherID, Changes: true, Source: "api"}, err: nil, reads: 0, gotJobID: "",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runJobFactCase(t, tc.jobs, unit)
+		})
+	}
+}
+
+// runJobFactCase runs one hostile job facts row.
+func runJobFactCase(t *testing.T, facts *fakeJobFacts, unit identity.Object) {
+	t.Helper()
+
+	next := &recordingNext{
+		allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+	}
+	refusals := &fakeRefusals{recorded: nil, err: nil}
+
+	var jobs identity.JobFacts
+	if facts != nil {
+		jobs = facts
+	}
+
+	rule := identity.JobTokenRule{Next: next, Jobs: jobs, Refusals: refusals}
+
+	err := rule.Authorize(t.Context(), jobToken(unit, "job-a"), identity.ActionUnitRead, unit)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize = %v, want ErrDenied", err)
+	}
+
+	if next.asked != 0 {
+		t.Errorf("Next asked %d times, want 0", next.asked)
+	}
+
+	assertOneRefusal(t, refusals, identity.JobTokenRefusal{
+		Subject: "alice", JobID: "job-a", Unit: unit, Action: identity.ActionUnitRead,
+		Reason: "access.denied",
+	})
+}
+
+// TestJobTokenRuleChangeAndSecretsLimits proves the plan-only encrypt limit
+// and the secrets limits of the job token rule.
+func TestJobTokenRuleChangeAndSecretsLimits(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+
+	cases := []actionCase{
+		{
+			name: "a plan-only job may not encrypt", action: identity.ActionUnitEncrypt, changes: false,
+			source: "api", nextAllows: true, nextDeny: "", wantErr: identity.ErrDenied, wantAsked: 0,
+			wantRefusal: "access.denied",
+		},
+		{
+			name: "a changing job may encrypt", action: identity.ActionUnitEncrypt, changes: true,
+			source: "api", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 1, wantRefusal: "",
+		},
+		{
+			name: "decrypt from api", action: identity.ActionUnitDecrypt, changes: true,
+			source: "api", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 2, wantRefusal: "",
+		},
+		{
+			name: "decrypt from agent", action: identity.ActionUnitDecrypt, changes: true,
+			source: "agent", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 2, wantRefusal: "",
+		},
+		{
+			name: "decrypt from self-service", action: identity.ActionUnitDecrypt, changes: true,
+			source: "self-service", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 2, wantRefusal: "",
+		},
+		{
+			name: "decrypt from schedule", action: identity.ActionUnitDecrypt, changes: true,
+			source: "schedule", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 2, wantRefusal: "",
+		},
+		{
+			name: "decrypt from forge", action: identity.ActionUnitDecrypt, changes: true,
+			source: "forge", nextAllows: true, nextDeny: "", wantErr: identity.ErrSecretsWithheld,
+			wantAsked: 0, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "decrypt from trigger", action: identity.ActionUnitDecrypt, changes: true,
+			source: "trigger", nextAllows: true, nextDeny: "", wantErr: identity.ErrSecretsWithheld,
+			wantAsked: 0, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "decrypt from an empty source", action: identity.ActionUnitDecrypt, changes: true,
+			source: "", nextAllows: true, nextDeny: "", wantErr: identity.ErrSecretsWithheld,
+			wantAsked: 0, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "decrypt from an unknown source", action: identity.ActionUnitDecrypt, changes: true,
+			source: "other", nextAllows: true, nextDeny: "", wantErr: identity.ErrSecretsWithheld,
+			wantAsked: 0, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "decrypt when Next refuses read-secrets", action: identity.ActionUnitDecrypt, changes: true,
+			source: "api", nextAllows: true, nextDeny: identity.ActionUnitReadSecrets,
+			wantErr: identity.ErrSecretsWithheld, wantAsked: 1, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "read-secrets from forge", action: identity.ActionUnitReadSecrets, changes: true,
+			source: "forge", nextAllows: true, nextDeny: "", wantErr: identity.ErrSecretsWithheld,
+			wantAsked: 0, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "read-secrets when Next refuses read-secrets", action: identity.ActionUnitReadSecrets,
+			changes: true, source: "api", nextAllows: true, nextDeny: identity.ActionUnitReadSecrets,
+			wantErr: identity.ErrSecretsWithheld, wantAsked: 1, wantRefusal: "access.secrets-withheld",
+		},
+		{
+			name: "read-secrets from api", action: identity.ActionUnitReadSecrets, changes: true,
+			source: "api", nextAllows: true, nextDeny: "", wantErr: nil, wantAsked: 2, wantRefusal: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runSecretsLimitCase(t, tc, unit)
+		})
+	}
+}
+
+// runSecretsLimitCase runs one row of the change and secrets limit table.
+func runSecretsLimitCase(t *testing.T, tc actionCase, unit identity.Object) {
+	t.Helper()
+
+	next := &recordingNext{
+		allow: tc.nextAllows, deny: tc.nextDeny, scope: emptyTestScope(), err: nil, asked: 0,
+		got: zeroPrincipal(),
+	}
+	jobs := &fakeJobFacts{
+		fact: identity.JobFact{Unit: unit, Changes: tc.changes, Source: tc.source},
+		err:  nil, reads: 0, gotJobID: "",
+	}
+	refusals := &fakeRefusals{recorded: nil, err: nil}
+	rule := identity.JobTokenRule{Next: next, Jobs: jobs, Refusals: refusals}
+
+	err := rule.Authorize(t.Context(), jobToken(unit, "job-a"), tc.action, unit)
+
+	if tc.wantErr == nil {
+		if err != nil {
+			t.Fatalf("Authorize = %v, want allowed", err)
+		}
+	} else if !errors.Is(err, tc.wantErr) {
+		t.Fatalf("Authorize = %v, want %v", err, tc.wantErr)
+	}
+
+	if errors.Is(tc.wantErr, identity.ErrSecretsWithheld) && !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("Authorize = %v, want a denial that wraps ErrDenied", err)
+	}
+
+	if next.asked != tc.wantAsked {
+		t.Errorf("Next asked %d times, want %d", next.asked, tc.wantAsked)
+	}
+
+	if tc.wantRefusal == "" {
+		if len(refusals.recorded) != 0 {
+			t.Errorf("the rule recorded %d refusals, want 0", len(refusals.recorded))
+		}
+
+		return
+	}
+
+	if len(refusals.recorded) != 1 {
+		t.Fatalf("the rule recorded %d refusals, want 1", len(refusals.recorded))
+	}
+
+	if got := refusals.recorded[0]; got.Reason != tc.wantRefusal {
+		t.Errorf("refusal reason = %q, want %q", got.Reason, tc.wantRefusal)
+	}
+}
+
+// refusalAuditCase is one row of the refusal audit table.
+type refusalAuditCase struct {
+	name          string
+	action        identity.Action
+	refusals      *fakeRefusals
+	wantRecorded  int
+	wantErr       error
+	wantRecordErr error
+}
+
+// TestJobTokenRuleRefusalAudit proves that the rule refuses when it cannot
+// record a refusal, and that it records each refusal exactly once.
+func TestJobTokenRuleRefusalAudit(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	errRecord := errRecordRefused
+
+	cases := []refusalAuditCase{
+		{
+			name: "no recorder", action: identity.ActionUnitManage, refusals: nil,
+			wantRecorded: 0, wantErr: identity.ErrJobTokenAction, wantRecordErr: nil,
+		},
+		{
+			name: "the recorder fails", action: identity.ActionUnitManage,
+			refusals: &fakeRefusals{recorded: nil, err: errRecord}, wantRecorded: 1,
+			wantErr: identity.ErrJobTokenAction, wantRecordErr: errRecord,
+		},
+		{
+			name: "a refusal records once", action: identity.ActionUnitManage,
+			refusals: &fakeRefusals{recorded: nil, err: nil}, wantRecorded: 1,
+			wantErr: identity.ErrJobTokenAction, wantRecordErr: nil,
+		},
+		{
+			name: "an allowed action records nothing", action: identity.ActionUnitRead,
+			refusals: &fakeRefusals{recorded: nil, err: nil}, wantRecorded: 0,
+			wantErr: nil, wantRecordErr: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runRefusalAuditCase(t, tc, unit)
+		})
+	}
+}
+
+// runRefusalAuditCase runs one row of the refusal audit table.
+func runRefusalAuditCase(t *testing.T, tc refusalAuditCase, unit identity.Object) {
+	t.Helper()
+
+	var recorder identity.JobTokenRefusals
+	if tc.refusals != nil {
+		recorder = tc.refusals
+	}
+
+	next := &recordingNext{
+		allow: true, deny: "", scope: emptyTestScope(), err: nil, asked: 0, got: zeroPrincipal(),
+	}
+	rule := identity.JobTokenRule{
+		Next: next, Jobs: matchingFacts(jobToken(unit, "job-a")), Refusals: recorder,
+	}
+
+	err := rule.Authorize(t.Context(), jobToken(unit, "job-a"), tc.action, unit)
+
+	if tc.wantErr == nil {
+		if err != nil {
+			t.Fatalf("Authorize = %v, want allowed", err)
+		}
+	} else if !errors.Is(err, tc.wantErr) {
+		t.Errorf("Authorize = %v, want %v", err, tc.wantErr)
+	}
+
+	if tc.wantErr != nil && !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("Authorize = %v, want ErrDenied", err)
+	}
+
+	if tc.wantRecordErr != nil && !errors.Is(err, tc.wantRecordErr) {
+		t.Errorf("Authorize = %v, want the record error %v", err, tc.wantRecordErr)
+	}
+
+	if tc.refusals != nil && len(tc.refusals.recorded) != tc.wantRecorded {
+		t.Errorf("the rule recorded %d refusals, want %d", len(tc.refusals.recorded), tc.wantRecorded)
+	}
+}
+
+// TestJobTokenRuleListObjectsFacts proves that a list of a job token is empty
+// when the rule cannot read the live job, when the job does not hold the unit,
+// and when the token may not ask for the action.
+func TestJobTokenRuleListObjectsFacts(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	other := jobTestUnit(t, "acme", "web/other", "unt-2")
+
+	cases := []struct {
+		name   string
+		action identity.Action
+		jobs   *fakeJobFacts
+		scope  identity.Scope
+	}{
+		{
+			name: "no job facts", action: identity.ActionUnitRead, jobs: nil,
+			scope: emptyTestScope(),
+		},
+		{
+			name: "the read fails", action: identity.ActionUnitRead,
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: identity.Object{}, Changes: false, Source: ""},
+				err:  errJobReadFailed, reads: 0, gotJobID: "",
+			},
+			scope: emptyTestScope(),
+		},
+		{
+			name: "the read fails after it read the unit", action: identity.ActionUnitRead,
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+				err:  errJobReadFailed, reads: 0, gotJobID: "",
+			},
+			scope: emptyTestScope(),
+		},
+		{
+			name: "the job holds another unit", action: identity.ActionUnitRead,
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: other, Changes: true, Source: "api"}, err: nil, reads: 0, gotJobID: "",
+			},
+			scope: emptyTestScope(),
+		},
+		{
+			name: "an action outside the allowlist", action: identity.ActionUnitManage,
+			jobs:  matchingFacts(jobToken(unit, "job-a")),
+			scope: emptyTestScope(),
+		},
+		{
+			name: "a plan-only job may not list encrypt", action: identity.ActionUnitEncrypt,
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+				err:  nil, reads: 0, gotJobID: "",
+			},
+			scope: emptyTestScope(),
+		},
+		{
+			name: "decrypt from forge", action: identity.ActionUnitDecrypt,
+			jobs: &fakeJobFacts{
+				fact: identity.JobFact{Unit: unit, Changes: true, Source: "forge"},
+				err:  nil, reads: 0, gotJobID: "",
+			},
+			scope: emptyTestScope(),
+		},
+		{
+			name: "the unit of the job", action: identity.ActionUnitRead,
+			jobs:  matchingFacts(jobToken(unit, "job-a")),
+			scope: scopeOfUnit(unit),
+		},
+		{
+			name: "job:write-cost", action: identity.ActionJobWriteCost,
+			jobs:  matchingFacts(jobToken(unit, "job-a")),
+			scope: scopeOfUnit(unit),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			next := &recordingNext{
+				allow: true, deny: "", scope: identity.Scope{
+					Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true,
+				},
+				err: nil, asked: 0, got: zeroPrincipal(),
+			}
+
+			var jobs identity.JobFacts
+			if tc.jobs != nil {
+				jobs = tc.jobs
+			}
+
+			rule := identity.JobTokenRule{
+				Next: next, Jobs: jobs, Refusals: &fakeRefusals{recorded: nil, err: nil},
+			}
+
+			scope, err := rule.ListObjects(t.Context(), jobToken(unit, "job-a"), tc.action)
+			if err != nil {
+				t.Fatalf("ListObjects = %v, want no error", err)
+			}
+
+			if !sameScope(scope, tc.scope) {
+				t.Errorf("scope = %+v, want %+v", scope, tc.scope)
+			}
+		})
+	}
 }

@@ -45,6 +45,7 @@ func checkLeaseNotStarted(t *testing.T, f updatesFixture, s stack.Started) {
 		DryRun:       false,
 		CreatedBy:    "",
 		RestoredFrom: 0,
+		JobID:        "",
 	})
 	if createErr != nil {
 		t.Fatalf("create: %v", createErr)

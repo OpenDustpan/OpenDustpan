@@ -95,7 +95,7 @@ func failing(err error) *fakeManualLocks {
 
 // planOf returns a plan of the kind, as a dry run or not.
 func planOf(kind stack.UpdateKind, dryRun bool) stack.Plan {
-	return stack.Plan{Kind: kind, DryRun: dryRun, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: kind, DryRun: dryRun, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 }
 
 // withManualLocks returns the update service of f with the manual lock port locks.
@@ -282,7 +282,9 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 			locks.passJob = "job-1"
 			svc := withManualLocks(t, f, locks)
 
-			u, err := svc.Create(t.Context(), f.ref, planOf(stack.KindUpdate, false))
+			u, err := svc.Create(t.Context(), f.ref, stack.Plan{
+				Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: tc.jobID,
+			})
 			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}

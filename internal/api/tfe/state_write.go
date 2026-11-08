@@ -170,6 +170,15 @@ func (h *Handler) createStateVersion(
 ) {
 	ctx := r.Context()
 
+	// Defense in depth: the state guard and the gate refuse a job-token state
+	// write too. This guard does not rely on them.
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: true}
+	if err := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRef, guard); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	release, ok := h.hold(w, r, bodygate.Reservation(r, maxStateCreateBytes))
 	if !ok {
 		return

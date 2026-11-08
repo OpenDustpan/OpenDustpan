@@ -240,6 +240,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		DryRun:       false,
 		CreatedBy:    "alice@example.com",
 		RestoredFrom: 0,
+		JobID:        "",
 	})
 	checkpoint := f.checkpoint(t, running, 0, resourcedDeployment)
 
@@ -258,6 +259,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		DryRun:       false,
 		CreatedBy:    "bob@example.com",
 		RestoredFrom: finished.Version,
+		JobID:        "",
 	})
 
 	scopes := []secret.Scope{

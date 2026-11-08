@@ -92,7 +92,7 @@ func startWithToken(t *testing.T, f updateFixture, token string) (updatePaths, s
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -130,7 +130,10 @@ func TestRevokedTokenEndsLeaseRequests(t *testing.T) {
 		t,
 		allowAll(),
 		authn,
-		fixtureOptions{manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil,
+			jobs: nil, refusals: nil,
+		},
 	)
 	paths, lease := startWithToken(t, f, "test-token")
 
@@ -177,7 +180,10 @@ func TestBootstrapTokenUpdateSkipsTokenCheck(t *testing.T) {
 		t,
 		allowAll(),
 		authn,
-		fixtureOptions{manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil,
+			jobs: nil, refusals: nil,
+		},
 	)
 	paths, lease := startWithToken(t, f, "boot-token")
 

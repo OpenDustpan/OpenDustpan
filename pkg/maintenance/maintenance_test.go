@@ -687,6 +687,7 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 		Version:         1,
 		Revision:        2,
 		CreatedBy:       "admin",
+		JobID:           "",
 		RestoredFrom:    0,
 		CheckpointBytes: 0,
 	}

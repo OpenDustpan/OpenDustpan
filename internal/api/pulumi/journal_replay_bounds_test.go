@@ -29,6 +29,8 @@ func replayBoundFixture(t *testing.T) updateFixture {
 			cutoff:   0,
 			replayer: pulumijournal.NewReplayer(time.Now, ""),
 			guard:    nil,
+			jobs:     nil,
+			refusals: nil,
 		},
 	)
 }
@@ -41,7 +43,7 @@ func mintReplayBound(t *testing.T, f updateFixture) (stack.UpdateID, string) {
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)

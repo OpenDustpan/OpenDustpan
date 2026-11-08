@@ -109,7 +109,7 @@ func newUpdateFixtureWithGate(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil, stores: nil}
 }
 
 // newSecretFixtureWithGate builds a secrets fixture with batches bounded by

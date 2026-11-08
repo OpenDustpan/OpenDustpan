@@ -121,7 +121,7 @@ func newUpdateFixtureWithAddressGate(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil}
+	return updateFixture{handler: handler, updates: updates, ref: ref, mem: nil, sealer: nil, audit: nil, stores: nil}
 }
 
 // TestLeaseAddressGateDenies proves a denying address gate answers 403 on a
@@ -318,7 +318,15 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 		t.Fatalf("handler: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: setup.updates, ref: setup.ref, mem: nil, sealer: nil, audit: nil}
+	return updateFixture{
+		handler: handler,
+		updates: setup.updates,
+		ref:     setup.ref,
+		mem:     nil,
+		sealer:  nil,
+		audit:   nil,
+		stores:  nil,
+	}
 }
 
 // TestLeaseTokenBeforeAddressGate proves the token check runs before the

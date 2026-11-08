@@ -125,9 +125,9 @@ func TestForbiddenAnswersCatalogCodes(t *testing.T) {
 	t.Parallel()
 
 	for _, code := range []string{
-		errcode.AccessDenied, errcode.AccessIPNotAllowed, errcode.GateLimited,
-		errcode.GateRuleFailed, errcode.SessionCSRF, errcode.SessionOtherSite,
-		errcode.SignInRefused, errcode.AccessNoAction,
+		errcode.AccessDenied, errcode.AccessIPNotAllowed, errcode.AccessJobTokenAction,
+		errcode.AccessSecretsWithheld, errcode.GateLimited, errcode.GateRuleFailed, errcode.SessionCSRF,
+		errcode.SessionOtherSite, errcode.SignInRefused, errcode.AccessNoAction,
 	} {
 		spec, ok := errcode.Lookup(code)
 		if !ok {

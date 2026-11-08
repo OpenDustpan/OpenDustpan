@@ -58,6 +58,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 	}{
 		{name: "update round trip", test: testUpdateRoundTrip},
 		{name: "update keeps the access token that started it", test: testUpdateTokenIDRoundTrip},
+		{name: "update keeps the job that created or started it", test: testUpdateJobIDRoundTrip},
 		{name: "a delete appends its change entry in the same transaction", test: testDeleteAppendsChangeEntry},
 		{name: "a delete with a refused audit entry changes nothing", test: testDeleteRefusedEntryChangesNothing},
 		{name: "a delete whose audit append fails changes nothing", test: testDeleteFailedAppendChangesNothing},
@@ -291,6 +292,7 @@ func newUpdate(ref stack.Ref, id string, plan stack.Plan, createdBy string, rest
 		Revision:        1,
 		CreatedBy:       createdBy,
 		RestoredFrom:    restoredFrom,
+		JobID:           plan.JobID,
 		CheckpointBytes: 0,
 	}
 }
@@ -365,16 +367,16 @@ func (f fixture) stackVersion(t *testing.T, ref stack.Ref) int64 {
 }
 
 func mutating() stack.Plan {
-	return stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 }
 
 func preview() stack.Plan {
-	return stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 }
 
 // dryRun is the preview phase of `pulumi up`: the real kind, not mutating.
 func dryRun() stack.Plan {
-	return stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 }
 
 // historyFixture is a store holding namespace "acme" and stack
@@ -563,7 +565,12 @@ func testJournalEndKeepsStoredRefusal(t *testing.T, f fixture) {
 func testUpdateRoundTrip(t *testing.T, f fixture) {
 	t.Helper()
 
-	want := f.create(t, f.ref, "u1", stack.Plan{Kind: stack.KindRefresh, DryRun: true, CreatedBy: "", RestoredFrom: 0})
+	want := f.create(
+		t,
+		f.ref,
+		"u1",
+		stack.Plan{Kind: stack.KindRefresh, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+	)
 	assertUpdate(t, f, want)
 
 	want = f.start(t, want)
@@ -601,6 +608,48 @@ func testUpdateTokenIDRoundTrip(t *testing.T, f fixture) {
 
 	if bare.TokenID != "" {
 		t.Fatalf("update without a token answers token %q, want none", bare.TokenID)
+	}
+}
+
+// testUpdateJobIDRoundTrip checks that the job ID that a create records and
+// the job ID that a start records come back from every read, and that an
+// update with no job keeps an empty ID.
+func testUpdateJobIDRoundTrip(t *testing.T, f fixture) {
+	t.Helper()
+
+	created := f.create(t, f.ref, "u1", stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+	})
+	assertUpdate(t, f, created)
+
+	started := f.start(t, created)
+	if started.JobID != "job-1" {
+		t.Fatalf("start answers job %q, want %q", started.JobID, "job-1")
+	}
+
+	assertUpdate(t, f, started)
+
+	done := f.end(t, started, stack.StatusSucceeded)
+	assertUpdate(t, f, done)
+
+	bare := f.run(t, f.ref, "u2", mutating())
+	if bare.JobID != "" {
+		t.Fatalf("update without a job answers job %q, want none", bare.JobID)
+	}
+
+	assertUpdate(t, f, bare)
+
+	history, err := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(history) != 2 {
+		t.Fatalf("history = %d updates, want 2", len(history))
+	}
+
+	if history[0].JobID != "" || history[1].JobID != "job-1" {
+		t.Fatalf("history jobs = [%q %q], want [\"\" \"job-1\"]", history[0].JobID, history[1].JobID)
 	}
 }
 
@@ -842,7 +891,12 @@ func testStartVersions(t *testing.T, f fixture) {
 		t.Fatalf("preview version = %d, want 1", p.Version)
 	}
 
-	second := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	second := f.run(
+		t,
+		f.ref,
+		"u2",
+		stack.Plan{Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+	)
 	if second.Version != 2 {
 		t.Fatalf("second update version = %d, want 2", second.Version)
 	}
@@ -882,7 +936,7 @@ func testOneRunning(t *testing.T, f fixture) {
 		t,
 		f.ref,
 		"u2",
-		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 
 	// The refusal names the update that holds the stack, so the caller needs
@@ -1079,13 +1133,18 @@ func testListUpdates(t *testing.T, f fixture) {
 	f.end(t, f.run(t, f.ref, "p1", preview()), stack.StatusSucceeded)
 	f.end(
 		t,
-		f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0}),
+		f.run(
+			t,
+			f.ref,
+			"u2",
+			stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+		),
 		stack.StatusFailed,
 	)
 	f.end(t, f.run(t, f.ref, "p2", dryRun()), stack.StatusSucceeded)
 	f.end(t, f.run(t, f.ref, "u3", mutating()), stack.StatusCanceled)
 	f.create(t, f.ref, "waiting", mutating())
-	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""})
 	f.end(t, f.run(t, f.other(t), "other", mutating()), stack.StatusSucceeded)
 
 	for _, tc := range []struct {
@@ -1131,7 +1190,7 @@ func testHistoryCreator(t *testing.T, f historyFixture) {
 	restored := f.create(
 		t,
 		"u2",
-		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 		"bob@example.com",
 		want.Version,
 	)
@@ -1211,7 +1270,7 @@ func testHistoryKinds(t *testing.T, f historyFixture) {
 		f.run(
 			t,
 			"u1",
-			stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 			"alice@example.com",
 			0,
 		),
@@ -1221,7 +1280,7 @@ func testHistoryKinds(t *testing.T, f historyFixture) {
 	restored := f.run(
 		t,
 		"u2",
-		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 		"",
 		1,
 	)
@@ -2958,7 +3017,7 @@ func testInventoryAfterUpdateFinish(t *testing.T, f fixture) {
 func testInventoryHoldsRunningLock(t *testing.T, f fixture) {
 	t.Helper()
 
-	plan := stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "admin", RestoredFrom: 0, JobID: ""}
 	u := f.run(t, f.ref, "u1", plan)
 
 	entries := listUpdatesInventory(t, f)
@@ -3054,7 +3113,7 @@ func testUpdateInventoryLockFenced(t *testing.T, f fixture) {
 	t.Helper()
 
 	stale := namespace.Fence{Namespace: f.ref.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "admin", RestoredFrom: 0, JobID: ""}
 
 	u := f.create(t, f.ref, "u1", plan)
 
@@ -3133,10 +3192,20 @@ func sameUpdate(a, b stack.Update) bool {
 
 // sameUpdateRecord compares the fields of an update that are not times.
 func sameUpdateRecord(a, b stack.Update) bool {
-	return a.ID == b.ID && a.Ref == b.Ref && a.Kind == b.Kind && a.Status == b.Status &&
-		a.DryRun == b.DryRun && a.Version == b.Version && a.Revision == b.Revision &&
+	return sameUpdateIdentity(a, b) && sameUpdateState(a, b) && sameLease(a.Lease, b.Lease)
+}
+
+// sameUpdateIdentity compares the identity fields of two updates.
+func sameUpdateIdentity(a, b stack.Update) bool {
+	return a.ID == b.ID && a.Ref == b.Ref && a.Kind == b.Kind && a.Status == b.Status
+}
+
+// sameUpdateState compares the changing fields and the attribution fields of
+// two updates.
+func sameUpdateState(a, b stack.Update) bool {
+	return a.DryRun == b.DryRun && a.Version == b.Version && a.Revision == b.Revision &&
 		a.CreatedBy == b.CreatedBy && a.RestoredFrom == b.RestoredFrom && a.TokenID == b.TokenID &&
-		a.CheckpointBytes == b.CheckpointBytes && sameLease(a.Lease, b.Lease)
+		a.JobID == b.JobID && a.CheckpointBytes == b.CheckpointBytes
 }
 
 func sameLease(a, b stack.Lease) bool {
@@ -3283,7 +3352,12 @@ func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	other := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	other := f.run(
+		t,
+		f.ref,
+		"u2",
+		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+	)
 
 	st, err := f.s.GetStack(t.Context(), f.ref)
 	if err != nil {

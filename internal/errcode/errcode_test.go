@@ -33,6 +33,18 @@ func TestForbiddenOrder(t *testing.T) {
 	}{
 		{"missing permission", identity.ErrDenied, errcode.AccessDenied},
 		{"wrapped permission", fmt.Errorf("authorize: %w", identity.ErrDenied), errcode.AccessDenied},
+		{"job token action", identity.ErrJobTokenAction, errcode.AccessJobTokenAction},
+		{"secrets withheld", identity.ErrSecretsWithheld, errcode.AccessSecretsWithheld},
+		{
+			"job token action before denied",
+			errors.Join(identity.ErrDenied, identity.ErrJobTokenAction),
+			errcode.AccessJobTokenAction,
+		},
+		{
+			"secrets withheld before denied",
+			errors.Join(identity.ErrDenied, identity.ErrSecretsWithheld),
+			errcode.AccessSecretsWithheld,
+		},
 		{"csrf", sessionauth.ErrCSRF, errcode.SessionCSRF},
 		{"other site", sessionauth.ErrOtherSite, errcode.SessionOtherSite},
 		{"allowlist", ipallow.ErrAddressNotAllowed, errcode.AccessIPNotAllowed},

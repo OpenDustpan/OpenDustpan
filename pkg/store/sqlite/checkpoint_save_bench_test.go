@@ -182,6 +182,7 @@ func (f *benchSaveFixture) startBenchUpdate(b *testing.B, id string) stack.Updat
 		Revision:        1,
 		CreatedBy:       "",
 		RestoredFrom:    0,
+		JobID:           "",
 		CheckpointBytes: 0,
 	}
 

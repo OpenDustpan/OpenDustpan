@@ -172,7 +172,7 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
-				"journal_records_changed",
+				"journal_records_changed", "job_id",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},

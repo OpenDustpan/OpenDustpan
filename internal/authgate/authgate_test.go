@@ -323,6 +323,82 @@ func TestMemoResolvesOncePerRequest(t *testing.T) {
 	}
 }
 
+// refusingAuthenticator refuses each token and counts its lookups.
+type refusingAuthenticator struct {
+	lookups atomic.Int64
+}
+
+func (r *refusingAuthenticator) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	r.lookups.Add(1)
+
+	return identity.Principal{}, identity.ErrUnauthenticated
+}
+
+// TestMemoKeepsTheAnswerOfEachGate chains a gate that refuses each token
+// before another gate that knows the token, in one request. The gates have
+// other scopes, or one scope, and the miss of the first gate must not answer
+// for the second gate. Each gate looks up the token once in the request.
+func TestMemoKeepsTheAnswerOfEachGate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		first  string
+		second string
+	}{
+		{name: "token lookups then another scope", first: "", second: "job"},
+		{name: "two named scopes", first: "signin", second: "job"},
+		{name: "another scope then token lookups", first: "job", second: ""},
+		{name: "two gates of one scope", first: "job", second: "job"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			refusing := &refusingAuthenticator{lookups: atomic.Int64{}}
+			knowing := &countingAuthenticator{lookups: atomic.Int64{}}
+			chain := identity.Chain{
+				scopedGate(t, refusing, tt.first),
+				scopedGate(t, knowing, tt.second),
+			}
+			ctx := authgate.WithRequest(t.Context(), "192.0.2.1")
+
+			for i := range 2 {
+				p, err := chain.AuthenticateToken(ctx, "badgood")
+				if err != nil || p.TokenID != "tok-1" {
+					t.Fatalf("pass %d: authenticate = %+v, %v, want the principal of tok-1", i+1, p, err)
+				}
+			}
+
+			if got := refusing.lookups.Load(); got != 1 {
+				t.Errorf("lookups of the first gate = %d, want 1", got)
+			}
+
+			if got := knowing.lookups.Load(); got != 1 {
+				t.Errorf("lookups of the second gate = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// scopedGate returns a gate of scope in front of next, with a budget that a
+// test of the memo does not use up.
+func scopedGate(t *testing.T, next identity.Authenticator, scope string) *authgate.Gate {
+	t.Helper()
+
+	g, err := authgate.New(authgate.Config{
+		Next: next, Charge: chargeBad, Logger: nil, Now: newClock().Now, Failures: nil, Window: 0,
+		Scope: scope, CounterErrors: nil, Burst: 3, Refill: time.Second, Penalty: time.Hour,
+		MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		t.Fatalf("new gate of scope %q: %v", scope, err)
+	}
+
+	return g
+}
+
 func TestNoRequestStatePassesThrough(t *testing.T) {
 	t.Parallel()
 

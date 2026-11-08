@@ -112,12 +112,13 @@ func ParseUpdateKind(s string) (UpdateKind, error) {
 // and DryRun set, so the kind alone does not say whether an update changes
 // state. CreatedBy is the subject of the principal that asked; it stays
 // empty when the caller gives none. RestoredFrom is 0 unless Kind is
-// KindRestore.
+// KindRestore. JobID is the job whose job token asked, or empty.
 type Plan struct {
 	Kind         UpdateKind
 	DryRun       bool
 	CreatedBy    string
 	RestoredFrom int64
+	JobID        string
 }
 
 // UpdateStatus is where an update is in its lifecycle.
@@ -274,6 +275,9 @@ type Update struct {
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.
 	RestoredFrom int64
+	// JobID is the job whose job token created or started the update, or
+	// empty. A job token may cancel only an update that records its own job.
+	JobID string
 	// JournalVersion is the journal version that the server answered when the
 	// update started. It is 0 when the update saves checkpoints. The store
 	// keeps it with the update, so a restart does not change how a running

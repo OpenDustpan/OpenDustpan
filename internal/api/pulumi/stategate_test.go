@@ -111,6 +111,7 @@ func guardedFixture(t *testing.T, guard stategate.Guard) updateFixture {
 
 	return newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
 		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: guard,
+		jobs: nil, refusals: nil,
 	})
 }
 
@@ -171,7 +172,7 @@ func runCancel(t *testing.T, guard stategate.Guard) routeRun {
 	f := guardedFixture(t, guard)
 
 	u, err := f.updates.Create(t.Context(), f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

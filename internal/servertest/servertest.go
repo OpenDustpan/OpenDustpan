@@ -546,6 +546,7 @@ func serverOptions(
 		dustpan.WithSourceFilters(store.SourceFilters()),
 		dustpan.WithTrustRules(store.TrustRules()),
 		dustpan.WithJobStore(store.Jobs()),
+		dustpan.WithJobTokenStore(store.JobTokens()),
 		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
 			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
 		}),

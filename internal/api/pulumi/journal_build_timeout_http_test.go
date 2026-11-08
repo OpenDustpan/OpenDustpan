@@ -38,13 +38,14 @@ func TestJournalCompleteAnswers503OnBuildTimeoutHTTP(t *testing.T) {
 		tokenAuthenticator{},
 		fixtureOptions{
 			manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: buildTimeoutStallReplayer{}, guard: nil,
+			jobs: nil, refusals: nil,
 		},
 	)
 
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)

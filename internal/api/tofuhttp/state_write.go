@@ -29,12 +29,43 @@ func (h *Handler) writeStateRoutes() []Route {
 	}
 }
 
+// guardJobTokenWrite refuses a state write that the job of a job token may not
+// make. It writes the answer and returns false on a refusal.
+//
+// Defense in depth: the state guard and the gate refuse a job-token state
+// write too. This guard does not rely on them.
+func (h *Handler) guardJobTokenWrite(
+	ctx context.Context, w http.ResponseWriter, p identity.Principal, obj identity.Object,
+) bool {
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: true}
+	if err := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRef, guard); err != nil {
+		h.writeError(ctx, w, err)
+
+		return false
+	}
+
+	return true
+}
+
 // postState serves POST: one state version streamed from the body. The write
 // creates the workspace on first use, after the caller holds unit:manage on it
 // (ADR 49, decision 5). Its ?ID= names the lock; a write without it needs an
 // unlocked unit and the unlocked override.
 func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	ctx := r.Context()
+
+	obj, err := unitObject(c.ref)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// Defense in depth: the state guard and the gate refuse a job-token state
+	// write too. This guard does not rely on them.
+	if !h.guardJobTokenWrite(ctx, w, c.principal, obj) {
+		return
+	}
 
 	lease, ok := bodygate.NewLease(h.gate, bodygate.StreamReservation(r))
 	if !ok {
@@ -47,9 +78,9 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 
 	ctx = workspace.WithBudget(ctx, lease)
 
-	sum, err := contentMD5(r)
-	if err != nil {
-		h.writeError(ctx, w, err)
+	sum, sumErr := contentMD5(r)
+	if sumErr != nil {
+		h.writeError(ctx, w, sumErr)
 
 		return
 	}
@@ -65,13 +96,6 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	})
 	if err != nil {
 		h.writeFirstRefusal(ctx, w, err, h.writeError)
-
-		return
-	}
-
-	obj, err := unitObject(c.ref)
-	if err != nil {
-		h.writeError(ctx, w, err)
 
 		return
 	}

@@ -142,6 +142,21 @@ type Config struct {
 	// rule that matches it. Nil means the server keeps no placement rules: it
 	// then refuses to make a stack.
 	Placer *Placer
+	// jobs reads the facts of the job of a job token before an update that
+	// saves state. jobRefusals records each refusal of that guard.
+	// WithJobTokenPorts sets both.
+	jobs        identity.JobFacts
+	jobRefusals identity.JobTokenRefusals
+}
+
+// WithJobTokenPorts returns a copy of cfg with the job facts and the refusal
+// recorder of the job token update guard. A nil facts port refuses every job
+// token that asks.
+func (cfg Config) WithJobTokenPorts(facts identity.JobFacts, refusals identity.JobTokenRefusals) Config {
+	cfg.jobs = facts
+	cfg.jobRefusals = refusals
+
+	return cfg
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -165,10 +180,13 @@ type Handler struct {
 	guard *refusal.Recorder
 	// admit asks the state guard about each write of state and writes the
 	// audit entry of each refusal.
-	admit  *stategate.Admitter
-	placer *Placer
-	mux    *patternMux
-	routes []Route
+	admit *stategate.Admitter
+	// jobs and jobRefusals decide and record the job token update guard.
+	jobs        identity.JobFacts
+	jobRefusals identity.JobTokenRefusals
+	placer      *Placer
+	mux         *patternMux
+	routes      []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
 	// means the server hides the delta capability.
 	deltaCutoff int
@@ -240,6 +258,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditFailure: cfg.OnAuditFailure,
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
 		admit:          admit,
+		jobs:           cfg.jobs,
+		jobRefusals:    cfg.jobRefusals,
 		placer:         cfg.Placer,
 		mux:            newPatternMux(),
 		routes:         nil,
@@ -668,8 +688,17 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 
 type updateStackTagsResponse struct{}
 
-func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
+
+	// Defense in depth: the job token rule keeps a job token to the unit of
+	// its job, but it admits unit:write, and the tag store refuses only a
+	// stack that does not exist. This guard does not rely on them.
+	if err := identity.CheckJobTokenTagEdit(ctx, h.jobRefusals, p); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
 	if err != nil {
@@ -1066,6 +1095,9 @@ func classifyAuth(err error) (failure, bool) {
 		return coded(http.StatusForbidden, err.Error(), errcode.UpdateConsoleSession), true
 	case errors.Is(err, errSessionSecrets):
 		return coded(http.StatusForbidden, err.Error(), errcode.SecretConsoleSession), true
+	case errors.Is(err, identity.ErrJobTokenAction):
+		return coded(http.StatusForbidden, "forbidden: "+identity.JobTokenRefusalText(err),
+			errcode.Forbidden(err)), true
 	case errors.Is(err, identity.ErrDenied):
 		return coded(http.StatusForbidden, "forbidden", errcode.Forbidden(err)), true
 	}

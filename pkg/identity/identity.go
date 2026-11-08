@@ -4,6 +4,11 @@
 // OpenDustpan always issues its own access tokens; single sign-on providers
 // (OIDC, SAML, CAS, LDAP, local users) only authenticate humans so that a token
 // can be minted. Requests from tools are therefore always token-based.
+//
+// The job token ports live here: JobFacts, the JobFact it returns,
+// JobTokenRefusals and the job token sentinels. The job package imports this
+// package, so this package cannot import job to name a job. The ports name a
+// job by its ID instead.
 package identity
 
 import (
