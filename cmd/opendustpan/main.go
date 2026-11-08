@@ -304,6 +304,7 @@ type serveFlags struct {
 	ipAllowlists                 bool
 	ipAllowlistsIncludeBootstrap bool
 	gitHostAllowedRanges         string
+	allowPlainConnections        bool
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -529,6 +530,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
+	cli.ByFlag("allow-plain-connections").Bool(fs, &f.allowPlainConnections)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)

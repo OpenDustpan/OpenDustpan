@@ -117,7 +117,7 @@ func (r NamespaceServiceRule) Authorize(ctx context.Context, p Principal, action
 		obj.IsUnit() && obj.Namespace() == ns
 
 	if !allowed {
-		return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+		return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 	}
 
 	return nil

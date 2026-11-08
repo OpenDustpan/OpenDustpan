@@ -1443,6 +1443,9 @@
           "principal.managed-by-directory",
           "principal.not-disabled",
           "principal.not-found",
+          "principal.removal-alert-failed",
+          "principal.removal-alert-marker-invalid",
+          "principal.removal-alert-unrecorded",
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
@@ -5310,7 +5313,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"

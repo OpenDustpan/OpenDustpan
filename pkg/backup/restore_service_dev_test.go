@@ -175,25 +175,37 @@ func TestRestoreAllowsDevBackupWithTheSetting(t *testing.T) {
 	}
 }
 
-// TestRestoreStagesWithTheKindAndTheSetting proves that the service passes the
-// pinned manifest kind and the setting in the options of the one stage call.
-func TestRestoreStagesWithTheKindAndTheSetting(t *testing.T) {
+// TestRestoreStagesWithTheKindTheSettingAndTheClock proves that the service
+// passes the pinned manifest kind, the setting and the time of its clock in
+// the options of the one stage call.
+func TestRestoreStagesWithTheKindTheSettingAndTheClock(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name     string
-		manifest installation.Kind
-		allow    bool
+		name      string
+		manifest  installation.Kind
+		allow     bool
+		restoreAt time.Time
 	}{
-		{name: "production backup", manifest: installation.KindProduction, allow: false},
-		{name: "dev backup, setting on", manifest: installation.KindDev, allow: true},
-		{name: "production backup, setting on", manifest: installation.KindProduction, allow: true},
+		{
+			name: "production backup", manifest: installation.KindProduction, allow: false,
+			restoreAt: time.Date(2026, time.November, 8, 9, 30, 0, 0, time.UTC),
+		},
+		{
+			name: "dev backup, setting on", manifest: installation.KindDev, allow: true,
+			restoreAt: time.Date(2026, time.November, 8, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "production backup, setting on", manifest: installation.KindProduction, allow: true,
+			restoreAt: time.Date(2026, time.November, 8, 10, 30, 0, 0, time.UTC),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
 				cfg.AllowDevBackups = tc.allow
+				cfg.Now = func() time.Time { return tc.restoreAt }
 			})
 			setManifestKind(t, setup, tc.manifest)
 
@@ -206,7 +218,9 @@ func TestRestoreStagesWithTheKindAndTheSetting(t *testing.T) {
 				t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
 			}
 
-			want := backup.StageOptions{BackupKind: tc.manifest, AllowDev: tc.allow}
+			want := backup.StageOptions{
+				BackupKind: tc.manifest, AllowDev: tc.allow, RestoreAt: tc.restoreAt,
+			}
 			got := setup.live.devSnapshot().stageOpts
 
 			if len(got) != 1 || got[0] != want {
