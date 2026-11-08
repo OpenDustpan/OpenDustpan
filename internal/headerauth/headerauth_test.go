@@ -279,21 +279,29 @@ func TestParseALBKeyRefusesAnyOtherKey(t *testing.T) {
 	p384PEM := encodeKey(t, p384.Public()).pem
 
 	for name, body := range map[string][]byte{
-		"an RSA key":         rsaPEM,
-		"an Ed25519 key":     edPEM,
-		"a P-384 key":        p384PEM,
-		"two blocks":         slices.Concat(ecPEM, ecPEM),
-		"a certificate type": []byte(strings.Replace(string(ecPEM), "PUBLIC KEY", "CERTIFICATE", 2)),
-		"no PEM":             []byte(`{"keys":[]}`),
-		"empty":              nil,
+		"an RSA key":                        rsaPEM,
+		"an Ed25519 key":                    edPEM,
+		"a P-384 key":                       p384PEM,
+		"two blocks":                        slices.Concat(ecPEM, ecPEM),
+		"a certificate type":                []byte(strings.Replace(string(ecPEM), "PUBLIC KEY", "CERTIFICATE", 2)),
+		"no PEM":                            []byte(`{"keys":[]}`),
+		"empty":                             nil,
+		"a key after junk":                  slices.Concat([]byte("junk\n"), ecPEM),
+		"a key after a malformed block":     slices.Concat([]byte("-----BEGIN CERTIFICATE-----\nAAAA\n"), ecPEM),
+		"a key with an indented first line": slices.Concat([]byte("  "), ecPEM),
 	} {
 		if _, err := headerauth.ParseALBKey(body); !errors.Is(err, session.ErrMethodUnavailable) {
 			t.Fatalf("%s: ParseALBKey() = %v, want %v", name, err, session.ErrMethodUnavailable)
 		}
 	}
 
-	if _, err := headerauth.ParseALBKey(ecPEM); err != nil {
-		t.Fatalf("ParseALBKey() of a P-256 key = %v", err)
+	for name, body := range map[string][]byte{
+		"a P-256 key":                   ecPEM,
+		"a P-256 key after empty lines": slices.Concat([]byte("\n\n"), ecPEM),
+	} {
+		if _, err := headerauth.ParseALBKey(body); err != nil {
+			t.Fatalf("%s: ParseALBKey() = %v, want no error", name, err)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -38,6 +39,8 @@ type RecorderConfig struct {
 	Retention history.RetentionSettings
 	// Now is the time source. The default is time.Now.
 	Now func() time.Time
+	// Log receives the warnings of the recorder. It is required.
+	Log *slog.Logger
 }
 
 // DurableRecorder is the Recorder over a RecordStore, the blob store and the
@@ -58,6 +61,7 @@ type DurableRecorder struct {
 	namespaces NamespaceReader
 	retention  history.RetentionSettings
 	now        func() time.Time
+	log        *slog.Logger
 }
 
 var _ Recorder = (*DurableRecorder)(nil)
@@ -75,6 +79,8 @@ func NewRecorder(cfg RecorderConfig) (*DurableRecorder, error) {
 		return nil, fmt.Errorf("%w: item sealer", ErrInvalid)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace reader", ErrInvalid)
+	case cfg.Log == nil:
+		return nil, fmt.Errorf("%w: logger", ErrInvalid)
 	}
 
 	if err := cfg.Retention.Validate(); err != nil {
@@ -88,7 +94,7 @@ func NewRecorder(cfg RecorderConfig) (*DurableRecorder, error) {
 
 	return &DurableRecorder{
 		store: cfg.Store, jobs: cfg.Jobs, blobs: cfg.Blobs, sealer: cfg.Sealer, namespaces: cfg.Namespaces,
-		retention: cfg.Retention, now: now,
+		retention: cfg.Retention, now: now, log: cfg.Log,
 	}, nil
 }
 
@@ -773,6 +779,12 @@ func (r *DurableRecorder) deleteParts(ctx context.Context, at *planAt, parts []P
 	ctx = context.WithoutCancel(ctx)
 
 	for _, p := range parts {
-		_ = r.blobs.DeletePlanPart(ctx, at.part(p.Kind)) //nolint:errcheck // See above.
+		if err := r.blobs.DeletePlanPart(ctx, at.part(p.Kind)); err != nil {
+			// The artifact sweep deletes the part later. The warning names the
+			// part that stays, so that an operator can find it.
+			r.log.WarnContext(ctx, "delete of a plan part that was not stored failed",
+				slog.String("job_id", string(at.job)), slog.String("plan", at.plan),
+				slog.String("kind", string(p.Kind)), slog.String("error", err.Error()))
+		}
 	}
 }

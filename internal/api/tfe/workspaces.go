@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -300,7 +301,16 @@ func (h *Handler) createWorkspace(
 	// applies to the create: the phase of a job that started before the lock
 	// passes it, as on the OpenTofu HTTP backend. Any other token passes no
 	// job.
-	ws, err := h.workspaces.Create(workspace.WithJob(ctx, p.JobTokenID()), ref)
+	placement, err := h.placer.Place(ctx, tofuunit.PlaceRequest{
+		Request: r, Principal: p, Ref: ref, Guard: h.guard, Namespaces: h.namespaces, Workspaces: h.workspaces,
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	ws, err := h.workspaces.Create(workspace.WithJob(ctx, p.JobTokenID()), ref, placement)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
 			h.writeClassError(ctx, w, errorClass{
