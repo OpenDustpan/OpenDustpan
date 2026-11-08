@@ -3,6 +3,8 @@
 package sqlite
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -36,8 +38,8 @@ func TestReleaseUnlocksTheGuardFile(t *testing.T) {
 }
 
 // checkReleaseUnlocks releases a guard of a fresh database path, with a copy
-// of the descriptor when the case asks for it, and fails unless a new guard
-// of the path follows.
+// of the descriptor when the case asks for it, and fails unless the release
+// closed the file and a new guard of the path follows.
 func checkReleaseUnlocks(t *testing.T, tc guardReleaseCase) {
 	t.Helper()
 
@@ -61,8 +63,16 @@ func checkReleaseUnlocks(t *testing.T, tc guardReleaseCase) {
 		})
 	}
 
+	file := guard.file
+
 	if err = guard.release(); err != nil {
 		t.Fatalf("release guard: %v", err)
+	}
+
+	// The release must close the file too, not only unlock it: a second
+	// close reports that the file is already closed.
+	if closeErr := file.Close(); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("close after release = %v, want os.ErrClosed", closeErr)
 	}
 
 	second, err := acquireGuard(path)
