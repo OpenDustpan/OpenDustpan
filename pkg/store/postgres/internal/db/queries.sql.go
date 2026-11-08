@@ -629,6 +629,34 @@ func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableO
 	return err
 }
 
+const cancelUnmanagedScansOfTarget = `-- name: CancelUnmanagedScansOfTarget :execrows
+
+UPDATE unmanaged_scans SET status = 'canceled', ended_at_ms = $1
+WHERE namespace_id = $2 AND target = $3
+  AND status IN ('queued', 'dispatched', 'running')
+`
+
+type CancelUnmanagedScansOfTargetParams struct {
+	EndedAtMs   int64
+	NamespaceID string
+	Target      string
+}
+
+// Sweep targets and sweeps. A target names a runner pool of its namespace and
+// the account scopes that a sweep reads. A sweep is one run of a target, or one
+// state check of the namespace, and it keeps the name of a target that a person
+// deleted. A row holds the namespace ID, and the reads join the name of the
+// namespace, because a caller names a namespace by its name.
+// Cancels the sweeps of target that a cancel event allows: a sweep in the match
+// keeps its status. The caller appends one audit entry for the delete.
+func (q *Queries) CancelUnmanagedScansOfTarget(ctx context.Context, arg CancelUnmanagedScansOfTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelUnmanagedScansOfTarget, arg.EndedAtMs, arg.NamespaceID, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimDurableOperation = `-- name: ClaimDurableOperation :one
 WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
@@ -1718,6 +1746,27 @@ func (q *Queries) CountOpenRunnerJoinTokens(ctx context.Context, arg CountOpenRu
 	return count, err
 }
 
+const countOpenUnmanagedScansOfTarget = `-- name: CountOpenUnmanagedScansOfTarget :one
+SELECT COUNT(*) FROM unmanaged_scans
+WHERE namespace_id = $1 AND target = $2 AND kind = $3
+  AND status NOT IN ('succeeded', 'failed', 'canceled', 'expired')
+`
+
+type CountOpenUnmanagedScansOfTargetParams struct {
+	NamespaceID string
+	Target      string
+	Kind        string
+}
+
+// The sweeps of target that did not end. A start of a sweep refuses while one
+// exists.
+func (q *Queries) CountOpenUnmanagedScansOfTarget(ctx context.Context, arg CountOpenUnmanagedScansOfTargetParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenUnmanagedScansOfTarget, arg.NamespaceID, arg.Target, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPasskeys = `-- name: CountPasskeys :one
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1
 `
@@ -2122,6 +2171,31 @@ SELECT COUNT(*) FROM trust_rules WHERE namespace = $1
 
 func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRow(ctx, countTrustRulesInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargets = `-- name: CountUnmanagedTargets :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = $1
+`
+
+// The targets of a namespace, for the limit of MaxTargets.
+func (q *Queries) CountUnmanagedTargets(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnmanagedTargets, namespaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargetsOfPool = `-- name: CountUnmanagedTargetsOfPool :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = $1
+`
+
+// The targets that name a runner pool. A delete of the pool refuses while one
+// exists.
+func (q *Queries) CountUnmanagedTargetsOfPool(ctx context.Context, poolID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnmanagedTargetsOfPool, poolID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4388,6 +4462,23 @@ type DeleteUnitSettingsOfUnitParams struct {
 func (q *Queries) DeleteUnitSettingsOfUnit(ctx context.Context, arg DeleteUnitSettingsOfUnitParams) error {
 	_, err := q.db.Exec(ctx, deleteUnitSettingsOfUnit, arg.UnitID, arg.Namespace)
 	return err
+}
+
+const deleteUnmanagedTarget = `-- name: DeleteUnmanagedTarget :execrows
+DELETE FROM unmanaged_targets WHERE namespace_id = $1 AND name = $2
+`
+
+type DeleteUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+func (q *Queries) DeleteUnmanagedTarget(ctx context.Context, arg DeleteUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnmanagedTarget, arg.NamespaceID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec
@@ -8612,6 +8703,30 @@ func (q *Queries) GetRunnerPool(ctx context.Context, id string) (GetRunnerPoolRo
 	return i, err
 }
 
+const getRunnerPoolByName = `-- name: GetRunnerPoolByName :one
+SELECT id, purpose FROM runner_pools
+WHERE namespace_id = $1 AND name = $2
+`
+
+type GetRunnerPoolByNameParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetRunnerPoolByNameRow struct {
+	ID      string
+	Purpose string
+}
+
+// The pool of a namespace with the name, for a caller that names a pool as a
+// person does. It returns no row for a pool of another namespace.
+func (q *Queries) GetRunnerPoolByName(ctx context.Context, arg GetRunnerPoolByNameParams) (GetRunnerPoolByNameRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerPoolByName, arg.NamespaceID, arg.Name)
+	var i GetRunnerPoolByNameRow
+	err := row.Scan(&i.ID, &i.Purpose)
+	return i, err
+}
+
 const getRunnerSession = `-- name: GetRunnerSession :one
 SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
        COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1)::bigint AS runner_retired_at_ms
@@ -9549,6 +9664,80 @@ func (q *Queries) GetUnitStateVersion(ctx context.Context, arg GetUnitStateVersi
 	var version_id string
 	err := row.Scan(&version_id)
 	return version_id, err
+}
+
+const getUnmanagedScan = `-- name: GetUnmanagedScan :one
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1 AND s.id = $2
+`
+
+type GetUnmanagedScanParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetUnmanagedScanRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) GetUnmanagedScan(ctx context.Context, arg GetUnmanagedScanParams) (GetUnmanagedScanRow, error) {
+	row := q.db.QueryRow(ctx, getUnmanagedScan, arg.Namespace, arg.ID)
+	var i GetUnmanagedScanRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Seq,
+		&i.Target,
+		&i.Kind,
+		&i.Status,
+		&i.StartedBy,
+		&i.Reason,
+		&i.ScopesJson,
+		&i.CountsJson,
+		&i.CreatedAtMs,
+		&i.EndedAtMs,
+	)
+	return i, err
+}
+
+const getUnmanagedTarget = `-- name: GetUnmanagedTarget :one
+SELECT t.pool_id, p.purpose
+FROM unmanaged_targets AS t
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE t.namespace_id = $1 AND t.name = $2
+`
+
+type GetUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetUnmanagedTargetRow struct {
+	PoolID  string
+	Purpose string
+}
+
+// The pool of a target and its purpose, for a write of the target and for the
+// kind of the durable operation of a sweep.
+func (q *Queries) GetUnmanagedTarget(ctx context.Context, arg GetUnmanagedTargetParams) (GetUnmanagedTargetRow, error) {
+	row := q.db.QueryRow(ctx, getUnmanagedTarget, arg.NamespaceID, arg.Name)
+	var i GetUnmanagedTargetRow
+	err := row.Scan(&i.PoolID, &i.Purpose)
+	return i, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -12081,6 +12270,90 @@ func (q *Queries) InsertUnitSettings(ctx context.Context, arg InsertUnitSettings
 		arg.Namespace,
 		arg.Body,
 		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnmanagedScan = `-- name: InsertUnmanagedScan :exec
+INSERT INTO unmanaged_scans (
+    id, namespace_id, seq, target, kind, status, started_by, reason, scopes_json, counts_json,
+    created_at_ms, ended_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10,
+    $11, $12
+)
+`
+
+type InsertUnmanagedScanParams struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) InsertUnmanagedScan(ctx context.Context, arg InsertUnmanagedScanParams) error {
+	_, err := q.db.Exec(ctx, insertUnmanagedScan,
+		arg.ID,
+		arg.NamespaceID,
+		arg.Seq,
+		arg.Target,
+		arg.Kind,
+		arg.Status,
+		arg.StartedBy,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.CreatedAtMs,
+		arg.EndedAtMs,
+	)
+	return err
+}
+
+const insertUnmanagedTarget = `-- name: InsertUnmanagedTarget :execrows
+INSERT INTO unmanaged_targets (
+    namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8
+)
+ON CONFLICT (namespace_id, name) DO NOTHING
+`
+
+type InsertUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The caller checks the fence in the same transaction. A target of the same
+// name in the namespace is not written.
+func (q *Queries) InsertUnmanagedTarget(ctx context.Context, arg InsertUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnmanagedTarget,
+		arg.NamespaceID,
+		arg.Name,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
 	)
 	if err != nil {
 		return 0, err
@@ -17668,6 +17941,134 @@ func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateOb
 	return items, nil
 }
 
+const listUnmanagedScans = `-- name: ListUnmanagedScans :many
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1
+  AND ($2::text = '' OR s.target = $2)
+  AND ($3::text = '' OR s.seq < (
+      SELECT c.seq FROM unmanaged_scans AS c
+      WHERE c.namespace_id = s.namespace_id AND c.id = $3))
+ORDER BY s.seq DESC
+LIMIT $4
+`
+
+type ListUnmanagedScansParams struct {
+	Namespace string
+	Target    string
+	After     string
+	PageSize  int32
+}
+
+type ListUnmanagedScansRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+// The sweeps of a namespace for target, newest first, or of every target when
+// target is empty. It starts after the sweep whose ID is after, and an unknown
+// after gives no row.
+func (q *Queries) ListUnmanagedScans(ctx context.Context, arg ListUnmanagedScansParams) ([]ListUnmanagedScansRow, error) {
+	rows, err := q.db.Query(ctx, listUnmanagedScans,
+		arg.Namespace,
+		arg.Target,
+		arg.After,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedScansRow
+	for rows.Next() {
+		var i ListUnmanagedScansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Seq,
+			&i.Target,
+			&i.Kind,
+			&i.Status,
+			&i.StartedBy,
+			&i.Reason,
+			&i.ScopesJson,
+			&i.CountsJson,
+			&i.CreatedAtMs,
+			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmanagedTargets = `-- name: ListUnmanagedTargets :many
+SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
+       t.timeout_ms, t.enabled
+FROM unmanaged_targets AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE n.name = $1
+ORDER BY t.name
+`
+
+type ListUnmanagedTargetsRow struct {
+	Namespace   string
+	Name        string
+	PoolName    string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The targets of a namespace with the name of their pool, ordered by name.
+func (q *Queries) ListUnmanagedTargets(ctx context.Context, namespace string) ([]ListUnmanagedTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listUnmanagedTargets, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedTargetsRow
+	for rows.Next() {
+		var i ListUnmanagedTargetsRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.PoolName,
+			&i.ScopesJson,
+			&i.CommandJson,
+			&i.EveryMs,
+			&i.TimeoutMs,
+			&i.Enabled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -18513,6 +18914,21 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
+}
+
+const nextUnmanagedScanSeq = `-- name: NextUnmanagedScanSeq :one
+SELECT (COALESCE(MAX(s.seq), 0) + 1)::bigint AS seq
+FROM unmanaged_scans AS s
+WHERE s.namespace_id = $1
+`
+
+// The sequence number of the next sweep of a namespace. The write transaction
+// orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+func (q *Queries) NextUnmanagedScanSeq(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, nextUnmanagedScanSeq, namespaceID)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
@@ -22476,6 +22892,74 @@ func (q *Queries) UpdateUnitSettings(ctx context.Context, arg UpdateUnitSettings
 		arg.UpdatedAtMs,
 		arg.UnitID,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateUnmanagedScan = `-- name: UpdateUnmanagedScan :exec
+UPDATE unmanaged_scans SET status = $1, reason = $2,
+    scopes_json = $3, counts_json = $4, ended_at_ms = $5
+WHERE namespace_id = $6 AND id = $7
+`
+
+type UpdateUnmanagedScanParams struct {
+	Status      string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	EndedAtMs   int64
+	NamespaceID string
+	ID          string
+}
+
+// It replaces the status, the reason, the scopes, the counts and the end of the
+// sweep. The caller read the sweep in the same transaction.
+func (q *Queries) UpdateUnmanagedScan(ctx context.Context, arg UpdateUnmanagedScanParams) error {
+	_, err := q.db.Exec(ctx, updateUnmanagedScan,
+		arg.Status,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.EndedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+	)
+	return err
+}
+
+const updateUnmanagedTarget = `-- name: UpdateUnmanagedTarget :execrows
+UPDATE unmanaged_targets SET pool_id = $1, scopes_json = $2,
+    command_json = $3, every_ms = $4, timeout_ms = $5,
+    enabled = $6
+WHERE namespace_id = $7 AND name = $8
+`
+
+type UpdateUnmanagedTargetParams struct {
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+	NamespaceID string
+	Name        string
+}
+
+// It replaces the target of the same name. It changes no row when the target is
+// not there.
+func (q *Queries) UpdateUnmanagedTarget(ctx context.Context, arg UpdateUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnmanagedTarget,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
+		arg.NamespaceID,
+		arg.Name,
 	)
 	if err != nil {
 		return 0, err

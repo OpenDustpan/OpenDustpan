@@ -12,6 +12,7 @@ import (
 func scanCases() []suiteCase {
 	return []suiteCase{
 		{"sweeps: targets have unique names and a sweep pool of their namespace", testTargets},
+		{"sweeps: a disabled target reads back disabled", testTargetDisabled},
 		{"sweeps: one sweep of a target at a time", testScanBusy},
 		{"sweeps: the state table holds", testScanTable},
 		{"sweeps: a stale fence refuses each write", testScansFenced},
@@ -69,6 +70,37 @@ func testTargets(t *testing.T, h Harness) {
 
 	must(t, "delete", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e))
 	wantErr(t, "delete again", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e), unmanaged.ErrNotFound)
+}
+
+// testTargetDisabled proves that the enabled flag of a target survives a
+// write: a target that a person disabled reads back disabled, and an enabled
+// one reads back enabled.
+func testTargetDisabled(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+
+	off := targetOf("acme", "aws")
+	off.Enabled = false
+	must(t, "create disabled", h.Scans.CreateTarget(t.Context(), off, f, e))
+
+	got, err := h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets", err)
+
+	if len(got) != 1 || got[0].Enabled {
+		t.Errorf("targets %+v, want the one target disabled", got)
+	}
+
+	on := targetOf("acme", "aws")
+	must(t, "update enabled", h.Scans.UpdateTarget(t.Context(), on, f, e))
+
+	got, err = h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets", err)
+
+	if len(got) != 1 || !got[0].Enabled {
+		t.Errorf("targets %+v, want the one target enabled", got)
+	}
 }
 
 func testScanBusy(t *testing.T, h Harness) {
@@ -175,10 +207,12 @@ func testScanBusy(t *testing.T, h Harness) {
 
 	_, err = h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		first.ID,
-		unmanaged.ScanEventCancel,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        first.ID,
+			Event:     unmanaged.ScanEventCancel,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		e,
 	)
@@ -253,10 +287,12 @@ func testScanTable(t *testing.T, h Harness) {
 
 	_, err = h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		s.ID,
-		unmanaged.ScanEventDispatch,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        s.ID,
+			Event:     unmanaged.ScanEventDispatch,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		e,
 	)
@@ -264,10 +300,12 @@ func testScanTable(t *testing.T, h Harness) {
 
 	_, err = h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		"scn-none",
-		unmanaged.ScanEventCancel,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        "scn-none",
+			Event:     unmanaged.ScanEventCancel,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		e,
 	)
@@ -288,10 +326,12 @@ func testScanTable(t *testing.T, h Harness) {
 	for _, ev := range []unmanaged.ScanEvent{unmanaged.ScanEventUploaded, unmanaged.ScanEventMatched} {
 		s, err = h.Scans.AdvanceScan(
 			t.Context(),
-			"acme",
-			s.ID,
-			ev,
-			unmanaged.ScanUpdate{Counts: &counts, Scopes: nil, Reason: ""},
+			unmanaged.ScanAdvance{
+				Namespace: "acme",
+				ID:        s.ID,
+				Event:     ev,
+				Update:    unmanaged.ScanUpdate{Counts: &counts, Scopes: nil, Reason: ""},
+			},
 			f,
 			e,
 		)

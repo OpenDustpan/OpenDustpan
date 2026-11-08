@@ -59,6 +59,9 @@ const (
 	portColOwner         = "owner"
 	portColJobID         = "job_id"
 	portColBody          = "body"
+	portColPoolID        = "pool_id"
+	portColTarget        = "target"
+	portColEnabled       = "enabled"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -775,5 +778,6 @@ func portableSpec() []PortableTable {
 		portableSettingTables(),
 		portableSelfServiceTables(),
 		portableTrustRuleTables(),
+		portableUnmanagedTables(),
 	)
 }

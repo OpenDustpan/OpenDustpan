@@ -1241,7 +1241,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules, the
+// sweep targets and the sweeps.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
 		return err
@@ -1276,6 +1277,10 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	}
 
 	if err := checkStagedTrustRules(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedUnmanaged(ctx, conn); err != nil {
 		return err
 	}
 

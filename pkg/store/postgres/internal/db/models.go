@@ -1254,6 +1254,32 @@ type UnitStateVersion struct {
 	UpdatedAtMs int64
 }
 
+type UnmanagedScan struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+type UnmanagedTarget struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
 type Update struct {
 	ID                    string
 	Kind                  string

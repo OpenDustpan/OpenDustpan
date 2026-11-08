@@ -71,6 +71,8 @@ sql:
             go_type: bool
           - column: passkeys.backup_eligible
             go_type: bool
+          - column: unmanaged_targets.enabled
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql
