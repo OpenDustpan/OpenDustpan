@@ -1350,10 +1350,13 @@ func backupModel() costModel {
 //
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
+//
+// The fixed part also holds breakGlassFloorTrips: the swap counts the working
+// break-glass accounts before and after it.
 func restoreModel() costModel {
 	return costModel{
 		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
-			stagedPrincipalCheckTrips,
+			stagedPrincipalCheckTrips + breakGlassFloorTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1388,6 +1391,13 @@ const stagedJobCheckTrips = 1
 // query, once for each restore. The count is fixed: it does not grow with the
 // units or the tables.
 const stagedPrincipalCheckTrips = 2
+
+// breakGlassFloorTrips is the number of round trips of the check of the
+// working break-glass accounts in the swap step: the read of the clock of the
+// store, the count of the live data before the swap and the count after it,
+// once for each restore. The count is fixed: it does not grow with the units
+// or the tables.
+const breakGlassFloorTrips = 3
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer
