@@ -311,7 +311,7 @@ func TestNamespacePrincipalGrantDenialText(t *testing.T) {
 	bot := namespaceEscalation(t, f).bot
 
 	err := f.authz.Authorize(t.Context(), bot, identity.ActionServerBackup, identity.ServerObject())
-	if !errors.Is(err, identity.ErrDenied) {
+	if err == nil || !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("authorize = %v, want ErrDenied", err)
 	}
 
