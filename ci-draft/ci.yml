@@ -513,7 +513,7 @@ jobs:
           tar -xzf trufflehog.tar.gz -C "$HOME/.local/bin" trufflehog
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Save the scan tool archives
-        if: ${{ !cancelled() && steps.scan-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+        if: ${{ success() && steps.scan-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scan-archives
@@ -584,9 +584,10 @@ jobs:
       # The CLI archives are kept in one cache entry. A cache key is written
       # only once, so the entry has a key that changes when its content must
       # change. The pinned versions are in e2e/tool.go, so the key holds the
-      # hash of that file. The e2e fetcher checks each archive against its
-      # pinned sum and retries a failed download. The newest releases run only
-      # in the nightly workflow.
+      # hash of that file. On a download, the e2e fetcher checks each archive
+      # against its pinned sum and retries a failed download. On a cache hit,
+      # it runs the extracted binary without a sum check. The newest releases
+      # run only in the nightly workflow.
       - &cache-clis
         name: Cache the pinned CLI archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

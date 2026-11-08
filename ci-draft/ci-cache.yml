@@ -26,12 +26,9 @@ jobs:
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
       TRUFFLEHOG_VERSION: 3.99.2
       TRUFFLEHOG_SHA256: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+    # The job uses no repository file and no Go, so it has no checkout and no
+    # Go setup.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
       - name: Restore the scan tool archives
         id: scan-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -89,7 +86,7 @@ jobs:
           echo "${TRUFFLEHOG_SHA256}  trufflehog.tar.gz" | sha256sum -c -
           cp trivy.tar.gz trufflehog.tar.gz "$SCAN_ARCHIVES/"
       - name: Save the scan tool archives
-        if: ${{ !cancelled() && steps.scan-cache.outputs.cache-hit != 'true' }}
+        if: ${{ success() && steps.scan-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scan-archives

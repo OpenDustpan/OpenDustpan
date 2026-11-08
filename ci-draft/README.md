@@ -3,6 +3,19 @@
 A maintainer reviews this draft and moves the files into `.github/workflows/`
 by hand. The draft changes no file under `.github/`.
 
+## Move
+
+| Draft file | Target | Action |
+|---|---|---|
+| `ci-draft/ci.yml` | `.github/workflows/ci.yml` | Replaces the file. |
+| `ci-draft/e2e-nightly.yml` | `.github/workflows/e2e-nightly.yml` | Replaces the file. |
+| `ci-draft/ci-cache.yml` | `.github/workflows/ci-cache.yml` | New file. |
+
+1. Run actionlint once on the three files. The draft was not checked with
+   actionlint.
+2. Move the files as the table shows.
+3. Delete `ci-draft/`.
+
 ## Changes
 
 ### `ci-draft/ci.yml`
@@ -10,8 +23,8 @@ by hand. The draft changes no file under `.github/`.
 - Item 1: The scan job restores the Trivy and TruffleHog archives from the
   Actions cache. A missing or corrupt archive is downloaded with five attempts
   (waits of 5, 10, 20 and 40 seconds) and checked against its pinned SHA-256.
-  The save step writes the archives only on a cache miss and on a push to main
-  or the schedule.
+  The save step writes the archives only after the earlier steps succeed, on a
+  cache miss, and on a push to main or the schedule.
 - Item 1: The e2e, e2e-journal, upgrade-test, crash-test and faults jobs no
   longer look up the newest CLI versions or cache their archives. The pinned
   cache holds the whole CLI cache directory. The test steps set
@@ -35,7 +48,9 @@ by hand. The draft changes no file under `.github/`.
 - Item 3: New workflow that saves the scan tool archives cache entry. A
   workflow-level cancel of `ci.yml` cancels every job of the run, so the save
   lives in its own workflow with `cancel-in-progress: false`. The save step
-  runs only on a cache miss.
+  runs only on a cache miss and only after the download step succeeds. The job
+  has no checkout and no Go setup, because it uses no repository file and no
+  Go.
 
 ## Not changed
 
@@ -62,3 +77,20 @@ by hand. The draft changes no file under `.github/`.
   value from each upstream release. This is a choice for the maintainer.
 - A push run on main that a newer push cancels saves no Go cache. The next
   push run that finishes saves it.
+
+## Open items
+
+These items need a code change outside this draft.
+
+- A cache hit of the pinned CLI cache runs the extracted binary without a sum
+  check. `e2e.Fetcher.Install` returns the cached binary when `os.Stat` finds
+  it, and it checks the sum only on a download. The cache holds the extracted
+  directories, and this draft makes the cache the only CLI source of five
+  jobs. A fix keeps the archives in the cache and checks them on each
+  install, or checks the binary against a recorded sum.
+- The e2e-journal job is not pinned. `make e2e-journal` sets
+  `E2E_PULUMI_VERSIONS=3.268.0`, and `e2e/tool.go` has no pinned sum for that
+  version. So each run on a pull request, a merge group and a push gets the
+  published checksum file from get.pulumi.com, the host that also serves the
+  archive. A fix pins the sums of the 3.268.0 archives in `e2e/tool.go`, or
+  moves the journal test to a pinned version.

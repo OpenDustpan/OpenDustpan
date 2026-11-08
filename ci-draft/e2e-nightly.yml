@@ -70,14 +70,14 @@ jobs:
         id: latest-clis
         if: ${{ matrix.set == 'latest' }}
         run: scripts/e2e-latest-clis.sh >> "$GITHUB_OUTPUT"
-      - name: Cache the pinned CLI archives
+      - name: Cache the pinned CLI archives (pinned row)
         if: ${{ matrix.set == 'pinned' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/opendustpan-e2e
           key: e2e-clis-pinned-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
-      - name: Cache the pinned CLI archives
+      - name: Cache the pinned CLI archives (latest row)
         if: ${{ matrix.set == 'latest' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
