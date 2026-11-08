@@ -603,7 +603,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "closed_to_identity_provider",
 			},
 			orderBy: []string{"id"},
 		},
@@ -1977,6 +1977,10 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // the notification sinks, the triggers, the self-service blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedJobs(ctx, pool, staging); err != nil {
 		return err
 	}
 

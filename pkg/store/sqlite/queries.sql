@@ -1343,12 +1343,12 @@ UPDATE group_members SET removed_at_ms = ?
 WHERE principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL;
 
@@ -1356,7 +1356,7 @@ FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL;
 SELECT id FROM principal_groups WHERE name_key = sqlc.arg('name_key') AND deleted_at_ms IS NULL;
 
 -- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -1373,7 +1373,7 @@ WHERE deleted_at_ms IS NULL
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR name_key < sqlc.arg('high'));
 
 -- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = ?, name_key = ?, description = ?, updated_at_ms = ?
+UPDATE principal_groups SET name = ?, name_key = ?, description = ?, closed_to_identity_provider = ?, updated_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: DeleteGroup :execrows
@@ -1435,7 +1435,7 @@ GROUP BY g.name, g.name_key
 ORDER BY g.name_key;
 
 -- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
@@ -2008,6 +2008,16 @@ SELECT c.name
 FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = ?;
+
+-- name: GetUnitCollectionByName :one
+-- The ID and the collection of one live unit by its name, in one statement.
+-- The collection is NULL when the unit is in no collection. No row means that
+-- the namespace holds no live unit with the name.
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ? AND i.tool = ? AND i.name = ?;
 
 -- name: UnitCollectionID :one
 -- The stable ID of the collection of one unit by its ID.

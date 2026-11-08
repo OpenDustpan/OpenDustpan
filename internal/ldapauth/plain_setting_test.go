@@ -2,6 +2,7 @@ package ldapauth_test
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"net/netip"
 	"strings"
@@ -105,6 +106,57 @@ func TestAPlainConnectionNeedsTheInstallationSetting(t *testing.T) {
 
 			checkDialGuard(t, tc.rule, tc.want)
 			checkPlainOpen(t, s, tc.reader, tc.want)
+		})
+	}
+}
+
+// TestPlainSettingKeepsTheCertificateChecks proves that the installation
+// setting that allows plain connections never turns off a certificate check
+// of a TLS connection: ldaps:// and StartTLS refuse a certificate of another
+// authority with the setting on and with the setting off.
+func TestPlainSettingKeepsTheCertificateChecks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setting  string
+		startTLS bool
+	}{
+		{name: "ldaps with the setting on", setting: "true", startTLS: false},
+		{name: "ldaps with the setting off", setting: "false", startTLS: false},
+		{name: "StartTLS with the setting on", setting: "true", startTLS: true},
+		{name: "StartTLS with the setting off", setting: "false", startTLS: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t)
+			s.addUser(t, testPerson("alice"), goodPassword, nil)
+
+			other := x509.NewCertPool()
+			read := plainSettingsOf(plainSettingItem(tc.setting))
+
+			m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
+				c.RootCAs = other
+				c.AllowPlain = func(ctx context.Context) (bool, error) {
+					return plainconn.PlainAllowed(ctx, read), nil
+				}
+
+				if tc.startTLS {
+					c.URL, c.StartTLS = s.dir.PlainNameURL(), true
+				}
+			}))
+
+			a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
+			if !errors.Is(err, session.ErrMethodUnavailable) {
+				t.Fatalf("Verify() = %+v, %v, want ErrMethodUnavailable", a, err)
+			}
+
+			if errors.Is(err, ldapauth.ErrPlainRefused) {
+				t.Fatalf("Verify() = %v, want the refusal of the certificate check, not ErrPlainRefused", err)
+			}
 		})
 	}
 }

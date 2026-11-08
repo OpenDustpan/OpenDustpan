@@ -163,7 +163,7 @@ func mustCreateMemberGroup(t *testing.T, s reachStore, id, name, principalID str
 
 	g := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := s.CreateGroup(ctx, g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", name, err)

@@ -120,7 +120,8 @@ func RemovalAlertSettingDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingRemovalAlertCount, Level: setting.LevelInstallation, Kind: setting.KindInt,
-			Default: strconv.Itoa(DefaultRemovalAlertCount), Secret: false, Database: true, Apply: setting.ApplyLive,
+			Default: strconv.Itoa(DefaultRemovalAlertCount), Secret: false, Database: true,
+			StaticCredentialHost: false, Apply: setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := ParseRemovalAlertCount(value)
 
@@ -138,7 +139,8 @@ func RemovalAlertSettingDeclarations() []setting.Declaration {
 		},
 		{
 			Key: SettingRemovalAlertPercent, Level: setting.LevelInstallation, Kind: setting.KindInt,
-			Default: strconv.Itoa(DefaultRemovalAlertPercent), Secret: false, Database: true, Apply: setting.ApplyLive,
+			Default: strconv.Itoa(DefaultRemovalAlertPercent), Secret: false, Database: true,
+			StaticCredentialHost: false, Apply: setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := ParseRemovalAlertPercent(value)
 
@@ -157,7 +159,8 @@ func RemovalAlertSettingDeclarations() []setting.Declaration {
 		},
 		{
 			Key: SettingRemovalAlertWindow, Level: setting.LevelInstallation, Kind: setting.KindString,
-			Default: DefaultRemovalAlertWindow.String(), Secret: false, Database: true, Apply: setting.ApplyLive,
+			Default: DefaultRemovalAlertWindow.String(), Secret: false, Database: true,
+			StaticCredentialHost: false, Apply: setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := ParseRemovalAlertWindow(value)
 

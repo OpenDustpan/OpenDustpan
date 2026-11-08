@@ -19,7 +19,7 @@ func TestGroupsWithFlagsRefusesAMissingFlag(t *testing.T) {
 	group := func(id string) principal.Group {
 		return principal.Group{
 			CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: id, Name: id, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 	}
 

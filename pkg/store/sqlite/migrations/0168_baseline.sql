@@ -196,7 +196,7 @@ CREATE TABLE principal_groups (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     deleted_at_ms INTEGER
-) STRICT;
+, closed_to_identity_provider INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE group_members (
     group_id      TEXT    NOT NULL REFERENCES principal_groups (id),

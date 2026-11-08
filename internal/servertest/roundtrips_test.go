@@ -816,10 +816,9 @@ type requestFlow struct {
 // upload and unlock" holds 2.
 //
 // A lock and the declare of a state version refuse a workspace that no
-// collection holds. Each check reads the membership of the unit in one read
-// transaction: the begin, the read of the unit, the read of the membership and
-// the commit. So "lock" holds 5 round trips for it, "opentofu upload" holds 4,
-// and "lock, upload and unlock" holds both, 9.
+// collection holds. Each check reads the unit and its membership with one
+// statement and no transaction. So "lock" and "opentofu upload" each hold 1
+// round trip for it, and "lock, upload and unlock" holds 2.
 //
 // Each check of the state.write gates first reads the principal record of the
 // caller with one query, for its groups and its break-glass mark. So "lock",
@@ -827,12 +826,12 @@ type requestFlow struct {
 // round trip for that read.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 45, func(h *rtHarness) {
+		{"opentofu upload", 42, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 37, func(h *rtHarness) {
+		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -840,7 +839,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 97, func(h *rtHarness) {
+		{"lock, upload and unlock", 91, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -1340,11 +1339,15 @@ func backupModel() costModel {
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 //
+// The fixed part also holds stagedJobCheckTrips: the staged check of the job
+// rows reads the job rows of the staging schema in one statement, once for
+// each restore.
+//
 // The fixed part also holds removalAlertTrips for member_removal_alerts, a
 // table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips + removalAlertTrips,
+		fixed:        342 + 1 + forgeStripClassTrips + stagedJobCheckTrips + removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1360,6 +1363,12 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// stagedJobCheckTrips is the number of round trips of the staged check of the
+// job rows: the check reads the job rows of the staging schema in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedJobCheckTrips = 1
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

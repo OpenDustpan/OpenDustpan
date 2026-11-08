@@ -764,7 +764,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	grp := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -954,7 +954,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 	for _, id := range []string{"grp-1", "grp-2", "grp-3"} {
 		g := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: id, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := ps.CreateGroup(ctx, g, entry()); err != nil {
 			t.Fatalf("create group: %v", err)
