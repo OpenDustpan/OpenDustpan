@@ -95,7 +95,7 @@ func checkApprovalStartsOneSQLite(t *testing.T) {
 	srv := runChainServer(t, st, audit.ChainOff)
 	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
-	if status, body := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve: %d %s, want 202", status, body)
 	}
 
@@ -103,7 +103,7 @@ func checkApprovalStartsOneSQLite(t *testing.T) {
 		t.Fatalf("migration operations after the approval = %d, want 1", len(got))
 	}
 
-	if status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusConflict {
+	if status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusConflict {
 		t.Fatalf("second approval: %d, want 409", status)
 	}
 
@@ -135,7 +135,7 @@ func checkApprovalStartsOnePostgres(t *testing.T) {
 	srv := runPostgresChainServer(t, st)
 	waitForPostgresRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
-	if status, body := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve: %d %s, want 202", status, body)
 	}
 
@@ -143,7 +143,7 @@ func checkApprovalStartsOnePostgres(t *testing.T) {
 		t.Fatalf("migration operations after the approval = %d, want 1", len(got))
 	}
 
-	if status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusConflict {
+	if status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusConflict {
 		t.Fatalf("second approval: %d, want 409", status)
 	}
 

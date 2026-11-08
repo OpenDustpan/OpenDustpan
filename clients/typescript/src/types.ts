@@ -35,6 +35,15 @@ export interface Approvers {
   readonly users: ReadonlyArray<string>;
 }
 
+export interface AuditChain {
+  readonly changedAt?: string;
+  readonly changedBy?: string;
+  readonly migrating: boolean;
+  readonly pending: boolean;
+  readonly setting: string;
+  readonly state: string;
+}
+
 /** The error answer with the code backup.corrupt. */
 export interface BackupCorruptError {
   /** The HTTP status. */
@@ -285,6 +294,16 @@ export interface DeletedUnit {
   readonly reference: string;
   readonly tool: string;
   readonly unitID: string;
+}
+
+export interface DeletedUnitSweep {
+  readonly failed: number;
+  readonly finishedBlobPurges: number;
+  readonly pendingBlobPurges: number;
+  readonly purged: ReadonlyArray<SweptUnit>;
+  readonly skipped: number;
+  readonly waitingBlobPurges: number;
+  readonly waitingFor: string;
 }
 
 export interface DriftCheck {
@@ -1007,6 +1026,11 @@ export interface OutputSharing {
 
 export interface OutputSharingRequest {
   readonly newUnitDefault: string;
+}
+
+export interface OverrideSwitches {
+  readonly allowForcedWrites: boolean;
+  readonly allowUnlockedWrites: boolean;
 }
 
 export interface Passkey {
@@ -1779,6 +1803,13 @@ export interface StoreFailoverSettingInvalidError {
 /** The arguments of the text of the error with the code store.failover-setting-invalid. */
 export interface StoreFailoverSettingInvalidErrorArgs {
   readonly setting: string;
+}
+
+export interface SweptUnit {
+  readonly namespace: string;
+  readonly reference: string;
+  readonly tool: string;
+  readonly unitID: string;
 }
 
 export interface TerminalSchemes {

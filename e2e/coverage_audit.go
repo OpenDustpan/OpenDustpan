@@ -140,13 +140,13 @@ const auditChainCoveringTest = "TestAuditChain"
 func auditChainAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodGet, Path: "/api/server/audit/chain",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/audit/chain",
 			CoveringTest: auditChainCoveringTest,
 			Reason: "Operator route: no tool CLI reads the audit chain. " +
 				"The harness step reads the waiting change after each restart.",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/server/audit/chain",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/audit/chain",
 			CoveringTest: auditChainCoveringTest,
 			Reason: "Operator route: no tool CLI approves an audit chain change. " +
 				"The harness step approves the change to off, then to on.",

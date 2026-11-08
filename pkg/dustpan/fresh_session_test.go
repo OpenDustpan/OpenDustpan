@@ -284,7 +284,7 @@ func seedConsoleAdmin(t *testing.T, st consoleBackend) {
 func needsConsole(method, path string) bool {
 	switch method {
 	case http.MethodPost:
-		return path == "/api/server/audit/chain"
+		return path == "/api/dustpan/v1/audit/chain"
 	case http.MethodPut, http.MethodDelete:
 		return len(path) > len("/ip-allowlist") && path[len(path)-len("/ip-allowlist"):] == "/ip-allowlist"
 	default:

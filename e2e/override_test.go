@@ -237,7 +237,7 @@ func tofuOverrideSwitchesScenario(t *testing.T, env *e2e.Env) {
 	wsID := env.WorkspaceID(t.Context(), t)
 	currentPath := "/api/v2/workspaces/" + wsID + "/current-state-version"
 	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
-	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	nsSwitches := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/override-switches"
 	unlocked := []string{"state", "push", "-lock=false", "-"}
 
 	pulled := env.Step(t.Context(), t, e2e.StepSpec{

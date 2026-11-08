@@ -472,7 +472,7 @@ func runTofuHTTPForceUnlock(t *testing.T, env *e2e.Env, backendEnv []string) {
 	ctx := t.Context()
 	path := "/tofu/state/" + e2e.Namespace + "/" + e2e.Workspace
 	wsID := env.WorkspaceID(ctx, t)
-	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	nsSwitches := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/override-switches"
 	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
 	on := `{"allowForcedWrites":true,"allowUnlockedWrites":false}`
 	off := `{"allowForcedWrites":false,"allowUnlockedWrites":false}`
@@ -635,7 +635,7 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 	ctx := t.Context()
 	wsID := env.WorkspaceID(ctx, t)
 	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
-	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	nsSwitches := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/override-switches"
 	const unlockedPushStep = "http backend: state push without a lock under the manual lock"
 
 	on, off := `{"allow-forced-writes":false,"allow-unlocked-writes":true}`,

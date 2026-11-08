@@ -165,7 +165,7 @@ func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, 
 // withAuditChainGate refuses requests while the audit chain of this
 // instance does not agree with the stored state, in the error shape of the
 // adapter of each path. The probes under /health/, GET /api/server/metrics,
-// GET and POST /api/server/audit/chain, the paths under
+// GET and POST /api/dustpan/v1/audit/chain, the paths under
 // /api/server/maintenance, and the console files always pass. The maintenance
 // routes pass on purpose: an operator must be able to clear stale active work
 // on a single instance whose setting differs from the stored state. An
@@ -210,7 +210,7 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 
 // chainGateShape answers whether the audit chain gate covers the request,
 // and the error shape of its adapter. The probes under /health/, GET
-// /api/server/metrics, GET and POST /api/server/audit/chain, the paths under
+// /api/server/metrics, GET and POST /api/dustpan/v1/audit/chain, the paths under
 // /api/server/maintenance, and the console files bypass the gate.
 func chainGateShape(r *http.Request) (errorShape, bool) {
 	path := r.URL.Path
@@ -218,7 +218,7 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 	switch {
 	case strings.HasPrefix(path, "/health/"),
 		path == metricsPath && r.Method == http.MethodGet,
-		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
+		path == "/api/dustpan/v1/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false
 	case strings.HasPrefix(path, "/runner/v1/"):

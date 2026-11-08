@@ -1,6 +1,6 @@
 package client
 
-// Audit chain subcommands: a client of GET /api/server/audit/chain, and the
+// Audit chain subcommands: a client of GET /api/dustpan/v1/audit/chain, and the
 // approve command that points to the console.
 //
 //	opendustpan audit-chain status --server https://dustpan.example [--ca-file ca.pem]
@@ -44,7 +44,7 @@ const auditChainApproveInConsole = "Approve the audit chain change in the consol
 	"The CLI cannot give a fresh authentication."
 
 // auditChainPath is the route of the audit chain commands.
-const auditChainPath = "/api/server/audit/chain"
+const auditChainPath = "/api/dustpan/v1/audit/chain"
 
 // AuditChainAnswer is the state of the audit chain that the server answers.
 type AuditChainAnswer struct {

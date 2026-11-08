@@ -1269,7 +1269,7 @@ type pendingDeclare struct {
 func forcedRefusal() error {
 	return NewOverrideRefusedError(OverrideForced, fmt.Sprintf(
 		"%s: a forced write needs the forced-write switch on for the namespace "+
-			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/dustpan/v1/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write forced state (`unit:write-forced`)",
 		ErrOverrideRefused,
@@ -1285,7 +1285,7 @@ func unlockedRefusal(lockErr error) error {
 
 	return NewOverrideRefusedError(OverrideUnlocked, fmt.Sprintf(
 		"%s: a write without the lock needs the unlocked-write switch on for the namespace "+
-			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/dustpan/v1/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write without the lock (`unit:write-unlocked`)",
 		lockErr,

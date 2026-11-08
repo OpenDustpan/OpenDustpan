@@ -728,12 +728,12 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 //
 //nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
-	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
-	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
-	"POST /api/server/namespaces":                              `{"name":"acme"}`,
-	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
-	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
-	"POST /api/dustpan/v1/local-users/unlock":                  `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
+	"PUT /api/dustpan/v1/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"PUT /api/server/namespaces/{namespace}/ip-allowlist":          `{"cidrs":["10.0.0.0/8"]}`,
+	"POST /api/server/namespaces":                                  `{"name":"acme"}`,
+	"POST /api/dustpan/v1/store-checks":                            `{"target":"blobs"}`,
+	"POST /api/dustpan/v1/local-users":                             `{"userName":"routeuser","displayName":"","reason":"route test"}`,
+	"POST /api/dustpan/v1/local-users/unlock":                      `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
@@ -1272,7 +1272,7 @@ func freshAuthRoutes() []string {
 		"POST /api/server/groups/{id}/members",
 		"DELETE /api/server/groups/{id}/members/{principal}",
 		"DELETE /api/server/groups/{id}",
-		"POST /api/server/audit/chain",
+		"POST /api/dustpan/v1/audit/chain",
 		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
 		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
 		"POST /api/dustpan/v1/local-users/reset",

@@ -448,10 +448,10 @@ func classifyAccess(err error) (int, string, bool) {
 const (
 	notLockedText = "workspace is not locked: send LOCK first (OpenTofu sends it when locking is on). " +
 		"To write without the lock, turn on the unlocked-write switch of the namespace " +
-		"(PUT /api/server/namespaces/{namespace}/override-switches) and of the workspace " +
+		"(PUT /api/dustpan/v1/namespaces/{namespace}/override-switches) and of the workspace " +
 		"(PUT /api/v2/workspaces/{id}/override-switches), and hold unit:write-unlocked"
 	forcedText = "write refused: a forced write needs the forced-write switch of the namespace " +
-		"(PUT /api/server/namespaces/{namespace}/override-switches) and of the workspace " +
+		"(PUT /api/dustpan/v1/namespaces/{namespace}/override-switches) and of the workspace " +
 		"(PUT /api/v2/workspaces/{id}/override-switches) on, and unit:write-forced"
 	clientEncryptedText = "unlock refused: the state is encrypted by the client, so the server cannot fence it. " +
 		"Let the run that holds the lock finish, or force-unlock with unit:write-forced and both " +
