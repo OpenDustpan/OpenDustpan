@@ -82,6 +82,35 @@ func cacheDir(t *testing.T) string {
 	return filepath.Join(base, "opendustpan-e2e")
 }
 
+// fetchers holds one Fetcher for each cache directory. A Fetcher checks each
+// cached CLI one time. With a Fetcher for each test, each test checks the
+// cache again under the lock of the entry, and the parallel tests wait for
+// each other until their install limit ends.
+//
+//nolint:gochecknoglobals // One Fetcher for each cache directory, so that each process checks each cached CLI one time.
+var (
+	fetchersMu sync.Mutex
+	fetchers   = map[string]*e2e.Fetcher{}
+)
+
+// sharedFetcher returns the Fetcher of the cache directory of the tests.
+func sharedFetcher(t *testing.T) *e2e.Fetcher {
+	t.Helper()
+
+	dir := cacheDir(t)
+
+	fetchersMu.Lock()
+	defer fetchersMu.Unlock()
+
+	fetcher, ok := fetchers[dir]
+	if !ok {
+		fetcher = &e2e.Fetcher{Client: http.DefaultClient, CacheDir: dir}
+		fetchers[dir] = fetcher
+	}
+
+	return fetcher
+}
+
 // TestCLIs runs each tool's scenario against every version in its matrix.
 // Reports from both tools land in one summary.
 func TestCLIs(t *testing.T) {
@@ -107,7 +136,7 @@ func TestCLIs(t *testing.T) {
 		checkContracts(t, reports)
 	})
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -8380,7 +8409,7 @@ func TestBinaryRunAndRestart(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -8524,7 +8553,7 @@ func readRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
 func TestPairTwoLogins(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -8624,7 +8653,7 @@ func checkPairReport(t *testing.T, pair *e2e.Pair) {
 func TestPulumiFileImport(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -9065,7 +9094,7 @@ func checkSourceDirUnchanged(t *testing.T, dir, before string) {
 func TestPulumiServiceImport(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -9730,7 +9759,7 @@ func TestTofuPairHosts(t *testing.T) {
 		t.Skipf("the OpenTofu pair suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -9834,7 +9863,7 @@ func TestTofuImportReplay(t *testing.T) {
 		t.Skipf("the OpenTofu replay suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -10410,7 +10439,7 @@ func TestUpgradeCheck(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -11490,7 +11519,7 @@ func TestBackupCheck(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -11680,7 +11709,7 @@ const backupPollInterval = 100 * time.Millisecond
 func TestBackups(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -12264,7 +12293,7 @@ func TestBackupRestore(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -13720,7 +13749,7 @@ func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
 func TestMaintenance(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

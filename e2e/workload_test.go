@@ -42,7 +42,7 @@ func TestWorkloadTokenExchange(t *testing.T) {
 		t.Skip("the fake issuer is on the loopback, which only the in-process server may reach")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

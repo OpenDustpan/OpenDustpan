@@ -312,6 +312,11 @@ func semver(s string) []int {
 	parts := make([]int, 0, semverParts)
 
 	for _, f := range fields {
+		// Digits only: Atoi also accepts a sign, for example "+1".
+		if f == "" || strings.Trim(f, "0123456789") != "" {
+			return nil
+		}
+
 		n, err := strconv.Atoi(f)
 		if err != nil || n < 0 {
 			return nil

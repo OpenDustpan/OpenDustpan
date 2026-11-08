@@ -167,7 +167,7 @@ func soakWorkerCount(t *testing.T, name string) int {
 func soakInstallTools(ctx context.Context, t *testing.T, cfg soakConfig) soakTools {
 	t.Helper()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	pulumiTool := e2e.Pulumi()
 	pulumiVersion := pulumiTool.Single()
