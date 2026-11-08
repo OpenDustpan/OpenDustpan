@@ -33,7 +33,7 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColNamespaceID,
-				"pool_id",
+				backupColPoolID,
 				backupColSHA256,
 				backupColCreatedBy,
 				backupColCreatedAtMs,
@@ -48,7 +48,7 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColNamespaceID,
-				"pool_id",
+				backupColPoolID,
 				backupColName,
 				backupColKind,
 				"isolation",

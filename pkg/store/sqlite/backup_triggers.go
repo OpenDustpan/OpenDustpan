@@ -26,7 +26,7 @@ func sqliteTriggerBackupTables() []sqliteBackupTable {
 				"source_namespace",
 				"source_tool",
 				"source_unit_id",
-				"enabled",
+				backupColEnabled,
 				"last_saver_subject",
 				"last_saver_id",
 				backupColCreatedAtMs,

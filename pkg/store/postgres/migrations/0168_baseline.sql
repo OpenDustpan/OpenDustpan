@@ -1338,6 +1338,37 @@ CREATE TABLE unit_state_versions (
     updated_at_ms bigint NOT NULL
 );
 
+CREATE TABLE unmanaged_scans (
+    id text NOT NULL,
+    namespace_id text NOT NULL,
+    seq bigint NOT NULL,
+    target text NOT NULL,
+    kind text NOT NULL,
+    status text NOT NULL,
+    started_by text NOT NULL,
+    reason text NOT NULL,
+    scopes_json text NOT NULL,
+    counts_json text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    ended_at_ms bigint NOT NULL,
+    CONSTRAINT unmanaged_scans_kind_check CHECK ((kind = ANY (ARRAY['cloud'::text, 'state'::text]))),
+    CONSTRAINT unmanaged_scans_seq_check CHECK ((seq >= 1)),
+    CONSTRAINT unmanaged_scans_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'dispatched'::text, 'running'::text, 'matching'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text, 'expired'::text])))
+);
+
+CREATE TABLE unmanaged_targets (
+    namespace_id text NOT NULL,
+    name text NOT NULL,
+    pool_id text NOT NULL,
+    scopes_json text NOT NULL,
+    command_json text NOT NULL,
+    every_ms bigint NOT NULL,
+    timeout_ms bigint NOT NULL,
+    enabled boolean NOT NULL,
+    CONSTRAINT unmanaged_targets_every_ms_check CHECK ((every_ms >= 0)),
+    CONSTRAINT unmanaged_targets_timeout_ms_check CHECK ((timeout_ms >= 0))
+);
+
 CREATE TABLE update_events (
     update_id text NOT NULL,
     sequence bigint NOT NULL,
@@ -1846,6 +1877,15 @@ ALTER TABLE ONLY unit_settings
 ALTER TABLE ONLY unit_state_versions
     ADD CONSTRAINT unit_state_versions_pkey PRIMARY KEY (unit_id);
 
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_namespace_id_seq_key UNIQUE (namespace_id, seq);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_pkey PRIMARY KEY (namespace_id, name);
+
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_pkey PRIMARY KEY (stack_id, update_id, sequence);
 
@@ -2064,6 +2104,8 @@ CREATE INDEX trust_rules_principal ON trust_rules USING btree (principal_id);
 
 CREATE INDEX unit_settings_namespace ON unit_settings USING btree (namespace_id);
 
+CREATE INDEX unmanaged_scans_target ON unmanaged_scans USING btree (namespace_id, target, seq DESC);
+
 CREATE INDEX updates_history ON updates USING btree (stack_id, version) WHERE ((status <> 'not started'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
 
 CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE ((status = 'running'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
@@ -2244,6 +2286,15 @@ ALTER TABLE ONLY unit_settings
 
 ALTER TABLE ONLY unit_state_versions
     ADD CONSTRAINT unit_state_versions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_pool_id_fkey FOREIGN KEY (pool_id) REFERENCES runner_pools(id);
 
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;

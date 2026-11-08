@@ -208,6 +208,8 @@ var Tables = []string{
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
 	TableTrustRules,
+	"unmanaged_targets",
+	"unmanaged_scans",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

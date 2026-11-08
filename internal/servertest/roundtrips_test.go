@@ -1336,6 +1336,11 @@ func backupModel() costModel {
 // strip counts no rows in it, and the other statements for it are the staging
 // count and the read of the backup.
 //
+// The fixed part takes 2 off for the 2 tables of the sweeps (unmanaged_targets
+// and unmanaged_scans). The dev strip counts no rows in them either, so each
+// costs 5 round trips, 4 fewer in all. The check of the staged rows reads each
+// of the 2 tables once more, 2 more in all.
+//
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
@@ -1344,7 +1349,7 @@ func backupModel() costModel {
 // table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips + removalAlertTrips,
+		fixed:        340 + 1 + forgeStripClassTrips + removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,

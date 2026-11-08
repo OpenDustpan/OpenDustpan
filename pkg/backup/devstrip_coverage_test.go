@@ -181,6 +181,10 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "copy of the history text of a released lock; a repeated unlock needs its own authorization",
 	},
+	"unmanaged_scans.started_by": {
+		strip:  false,
+		reason: "history text of who started the sweep; a sweep grants no authority",
+	},
 }
 
 // TestDevStripCoversEveryPrincipalColumn lists the columns of the backup that

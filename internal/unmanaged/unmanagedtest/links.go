@@ -71,8 +71,10 @@ func stateCheck(t *testing.T, h Harness, acme namespace.Fence) {
 	_, err = h.Findings.ResolveUnseen(t.Context(), s, at(), acme)
 	must(t, "resolve unseen", err)
 
-	_, err = h.Scans.AdvanceScan(t.Context(), "acme", s.ID, unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""}, acme, auditOf("acme", "namespace:start-sweep"))
+	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+		Namespace: "acme", ID: s.ID, Event: unmanaged.ScanEventMatched,
+		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+	}, acme, auditOf("acme", "namespace:start-sweep"))
 	must(t, "end the state check", err)
 }
 
@@ -343,8 +345,10 @@ func testLinkSilentResolve(t *testing.T, h Harness) {
 	_, err := h.Findings.Record(t.Context(), first, classify(t, h, seenBucket, key), at(), acme)
 	must(t, "record first", err)
 
-	_, err = h.Scans.AdvanceScan(t.Context(), "acme", first.ID, unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""}, acme, auditOf("acme", "namespace:start-sweep"))
+	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+		Namespace: "acme", ID: first.ID, Event: unmanaged.ScanEventMatched,
+		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+	}, acme, auditOf("acme", "namespace:start-sweep"))
 	must(t, "end first", err)
 
 	// A unit of other, which acme did not link, starts to hold the key. The
@@ -360,8 +364,10 @@ func testLinkSilentResolve(t *testing.T, h Harness) {
 		t.Errorf("finding %+v counts %+v, want open and not elsewhere with no link", fd, counts)
 	}
 
-	_, err = h.Scans.AdvanceScan(t.Context(), "acme", second.ID, unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""}, acme, auditOf("acme", "namespace:start-sweep"))
+	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+		Namespace: "acme", ID: second.ID, Event: unmanaged.ScanEventMatched,
+		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+	}, acme, auditOf("acme", "namespace:start-sweep"))
 	must(t, "end second", err)
 
 	// With a link, the unit of other manages the resource, and the finding

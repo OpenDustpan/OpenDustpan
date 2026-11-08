@@ -320,6 +320,15 @@ type ScanUpdate struct {
 	Reason string
 }
 
+// ScanAdvance is one advance of a sweep: the sweep, the event and the update
+// of the event.
+type ScanAdvance struct {
+	Namespace namespace.Name
+	ID        string
+	Event     ScanEvent
+	Update    ScanUpdate
+}
+
 // ScanStore is the persistence port of sweep targets and sweeps. Every write
 // checks the fence of the namespace in the same transaction. Every adapter
 // runs the suite in unmanagedtest.
@@ -348,11 +357,11 @@ type ScanStore interface {
 	// ErrScanBusy when the target has a sweep that did not end, ErrNotFound
 	// for an unknown target, and namespace.ErrFenced.
 	StartScan(ctx context.Context, s Scan, fence namespace.Fence, e audit.Entry) (Scan, error)
-	// AdvanceScan applies ev with u to the sweep id of ns, by NextScan. At
-	// an end status, it appends e with the counts of the sweep. It returns
-	// the new sweep, ErrNotFound, ErrTransition and namespace.ErrFenced.
-	AdvanceScan(ctx context.Context, ns namespace.Name, id string, ev ScanEvent, u ScanUpdate,
-		fence namespace.Fence, e audit.Entry) (Scan, error)
+	// AdvanceScan applies a.Event with a.Update to the sweep a.ID of
+	// a.Namespace, by NextScan. At an end status, it appends e with the
+	// counts of the sweep. It returns the new sweep, ErrNotFound,
+	// ErrTransition and namespace.ErrFenced.
+	AdvanceScan(ctx context.Context, a ScanAdvance, fence namespace.Fence, e audit.Entry) (Scan, error)
 	// Scan returns the sweep id of ns, or ErrNotFound.
 	Scan(ctx context.Context, ns namespace.Name, id string) (Scan, error)
 	// Scans returns the sweeps of ns for target, newest first, or of every
