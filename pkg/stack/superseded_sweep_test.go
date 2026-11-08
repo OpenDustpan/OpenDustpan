@@ -22,6 +22,9 @@ var errNoDatabaseClock = errors.New("the clock of the database does not answer")
 // errMarksRead reports a store that cannot read the superseded marks.
 var errMarksRead = errors.New("the marks read failed")
 
+// errMarkDrop reports a store that cannot drop a superseded mark.
+var errMarkDrop = errors.New("the mark drop failed")
+
 // requireSweepResult checks the result of one sweep.
 func requireSweepResult(
 	t *testing.T, res stack.SupersededSweepResult, err error, want stack.SupersededSweepResult, when string,
@@ -31,6 +34,40 @@ func requireSweepResult(
 	if err != nil || res != want {
 		t.Fatalf("sweep %s = %+v, %v; want %+v, nil", when, res, err, want)
 	}
+}
+
+// requireFailedSweep checks a sweep that fails on its second page: the error,
+// the counts and bytes of the first page, and the mark and blob of the last
+// mark.
+func requireFailedSweep(
+	t *testing.T, f updatesFixture, before []stack.SupersededBlob, wantErr error, when string,
+) {
+	t.Helper()
+
+	var wantBytes int64
+
+	for _, mark := range before[:len(before)-1] {
+		wantBytes += mark.Size
+	}
+
+	res, err := f.svc.SweepSuperseded(t.Context())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("sweep with %s: %v, want %v", when, err, wantErr)
+	}
+
+	want := stack.SupersededSweepResult{Deleted: len(before) - 1, DeletedBytes: wantBytes, Kept: 0, Failed: 0}
+	if res != want {
+		t.Fatalf("sweep with %s = %+v, want %+v", when, res, want)
+	}
+
+	last := before[len(before)-1]
+
+	left := marksOf(t, f)
+	if len(left) != 1 || left[0].Key != last.Key {
+		t.Fatalf("marks after the failed run = %+v, want the mark of %q", left, last.Key)
+	}
+
+	requireBlobStored(t, f, last.Key, "after the failed run")
 }
 
 // requireBlobStored checks that the blob under key is in the store.
@@ -330,51 +367,55 @@ func TestSupersededSweepStopsWhenTheLeaseEnds(t *testing.T) {
 
 // TestSupersededSweepReturnsTheCountsOfAFailedRun proves that a sweep whose
 // second page fails returns the counts and the bytes of the first page with
-// the error.
+// the error, and that the marks of the second page stay.
 func TestSupersededSweepReturnsTheCountsOfAFailedRun(t *testing.T) {
 	t.Parallel()
 
 	const saves = 102
 
-	f := newUpdatesWrapped(t, newClock(), nil, func(m *memUpdates) stack.CheckpointStore {
-		return &failMarksAfter{memUpdates: m, err: errMarksRead, reads: 0}
-	})
-
-	s := f.started(t, stack.KindUpdate)
-
-	for seq := int64(1); seq <= saves; seq++ {
-		f.saveSeq(t, s, seq, `{"a":1}`)
+	tests := []struct {
+		name string
+		wrap func(*memUpdates) stack.CheckpointStore
+		want error
+	}{
+		{
+			name: "a failed read of the second page",
+			wrap: func(m *memUpdates) stack.CheckpointStore {
+				return &failMarksAfter{memUpdates: m, err: errMarksRead, reads: 0}
+			},
+			want: errMarksRead,
+		},
+		{
+			name: "a failed mark drop on the second page",
+			wrap: func(m *memUpdates) stack.CheckpointStore {
+				return &failDropAfter{memUpdates: m, err: errMarkDrop, drops: 0}
+			},
+			want: errMarkDrop,
+		},
 	}
 
-	before := marksOf(t, f)
-	if len(before) != saves-1 {
-		t.Fatalf("marks before the sweep = %d, want %d", len(before), saves-1)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdatesWrapped(t, newClock(), nil, tc.wrap)
+
+			s := f.started(t, stack.KindUpdate)
+
+			for seq := int64(1); seq <= saves; seq++ {
+				f.saveSeq(t, s, seq, `{"a":1}`)
+			}
+
+			before := marksOf(t, f)
+			if len(before) != saves-1 {
+				t.Fatalf("marks before the sweep = %d, want %d", len(before), saves-1)
+			}
+
+			f.clock.Advance(2 * blob.UnnamedGracePeriod)
+
+			requireFailedSweep(t, f, before, tc.want, tc.name)
+		})
 	}
-
-	var wantBytes int64
-
-	for _, mark := range before[:len(before)-1] {
-		wantBytes += mark.Size
-	}
-
-	f.clock.Advance(2 * blob.UnnamedGracePeriod)
-
-	res, err := f.svc.SweepSuperseded(t.Context())
-	if !errors.Is(err, errMarksRead) {
-		t.Fatalf("sweep with a failed second page: %v, want errMarksRead", err)
-	}
-
-	want := stack.SupersededSweepResult{Deleted: saves - 2, DeletedBytes: wantBytes, Kept: 0, Failed: 0}
-	if res != want {
-		t.Fatalf("sweep with a failed second page = %+v, want %+v", res, want)
-	}
-
-	left := marksOf(t, f)
-	if len(left) != 1 || left[0].Key != before[len(before)-1].Key {
-		t.Fatalf("marks after the failed run = %+v, want the mark of %q", left, before[len(before)-1].Key)
-	}
-
-	requireBlobStored(t, f, before[len(before)-1].Key, "after the failed run")
 }
 
 // TestSupersededSweepKeepsYoungMark proves that a mark newer than the grace
@@ -541,6 +582,27 @@ func (c *cancelAfterDrop) DropSupersededMark(
 	}
 
 	return keep, err
+}
+
+// failDropAfter is a checkpoint store that fails each mark drop after the
+// first page, so a sweep stops on its second page.
+type failDropAfter struct {
+	*memUpdates
+
+	err   error
+	drops int
+}
+
+// DropSupersededMark implements stack.CheckpointStore.
+func (f *failDropAfter) DropSupersededMark(
+	ctx context.Context, stackID stack.ID, key blob.Key,
+) (bool, error) {
+	f.drops++
+	if f.drops > 100 {
+		return false, f.err
+	}
+
+	return f.memUpdates.DropSupersededMark(ctx, stackID, key)
 }
 
 // failMarksAfter is a checkpoint store that fails the marks read after the

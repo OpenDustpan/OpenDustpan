@@ -37,9 +37,10 @@ type SupersededSweepResult struct {
 	// Deleted is the number of marked blobs that the run deleted, including
 	// the blobs that the blob store did not hold.
 	Deleted int `json:"deleted"`
-	// DeletedBytes is the sum of the sizes that the marks record of the
-	// marked blobs that the run deleted, including the blobs that the blob
-	// store did not hold.
+	// DeletedBytes is the sum of the sizes that the resolved marks record:
+	// the marks of the blobs that the run counts in Deleted. It can count a
+	// blob that an earlier run deleted before it stopped, because the blob
+	// store does not hold that blob.
 	DeletedBytes int64 `json:"deletedBytes"`
 	// Kept is the number of marked blobs that the run kept: the mark was
 	// missing, because another sweep dropped it and owns the delete, or a
