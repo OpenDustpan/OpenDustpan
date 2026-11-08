@@ -1201,6 +1201,40 @@ func (k NotificationStore) History(
 	return deliveriesOf(rows)
 }
 
+// CountBefore implements notify.Deliveries.
+func (k NotificationStore) CountBefore(
+	ctx context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, maxCount int,
+) (int, error) {
+	k.s.mu.RLock()
+	defer k.s.mu.RUnlock()
+
+	sub, err := k.s.queries.GetNotificationSubscription(ctx, id)
+
+	switch {
+	case err == nil && sub.Scope != scope.String():
+		return 0, fmt.Errorf("count deliveries of %s: %w", id, notify.ErrNotFound)
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return 0, fmt.Errorf("select subscription: %w", err)
+	default:
+		// The subscription is in the scope, or it was deleted and its history stays.
+	}
+
+	if after == nil || maxCount <= 0 {
+		return 0, nil
+	}
+
+	count, err := k.s.queries.CountNotificationDeliveriesOfSubscriptionBefore(ctx,
+		db.CountNotificationDeliveriesOfSubscriptionBeforeParams{
+			Scope: scope.String(), SubscriptionID: id,
+			AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: int64(maxCount),
+		})
+	if err != nil {
+		return 0, fmt.Errorf("count deliveries: %w", err)
+	}
+
+	return int(count), nil
+}
+
 // Redeliver implements notify.Deliveries.
 func (k NotificationStore) Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
 	k.s.mu.RLock()

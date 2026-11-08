@@ -255,12 +255,10 @@ type Page struct {
 }
 
 // HistoryRequest names one page of the history of a subscription. After is
-// the last delivery of the page before, or nil for the first page. Read is
-// the number of deliveries that the pages before returned. Size is the
-// largest number of deliveries on the page.
+// the last delivery of the page before, or nil for the first page. Size is
+// the largest number of deliveries on the page.
 type HistoryRequest struct {
 	After *notify.DeliveryCursor
-	Read  int
 	Size  int
 }
 
@@ -268,7 +266,8 @@ type HistoryRequest struct {
 // newest first, after req.After. A nil cursor starts at the newest delivery.
 // It returns notify.ErrNotFound for a subscription that ns does not hold. A
 // page that would reach past MaxHistory deliveries is cut at that count and
-// has no next page.
+// has no next page. The position of the cursor comes from the store, never
+// from the caller, so a cursor cannot reach past MaxHistory.
 func (s *Service) History(
 	ctx context.Context, ns namespace.Name, id string, req HistoryRequest,
 ) (Page, error) {
@@ -276,11 +275,26 @@ func (s *Service) History(
 		return Page{}, err
 	}
 
-	if req.Read < 0 || req.Size <= 0 || req.Read >= MaxHistory {
+	if req.Size <= 0 {
 		return Page{Deliveries: nil, More: false}, nil
 	}
 
-	size := min(req.Size, MaxHistory-req.Read)
+	read := 0
+
+	if req.After != nil {
+		count, err := s.deliveries.CountBefore(ctx, ns, id, req.After, MaxHistory)
+		if err != nil {
+			return Page{}, fmt.Errorf("history of %s: %w", id, err)
+		}
+
+		if count >= MaxHistory {
+			return Page{Deliveries: nil, More: false}, nil
+		}
+
+		read = count
+	}
+
+	size := min(req.Size, MaxHistory-read)
 
 	// One more row than the page says whether a next page exists.
 	all, err := s.deliveries.History(ctx, ns, id, req.After, size+1)
@@ -288,7 +302,7 @@ func (s *Service) History(
 		return Page{}, fmt.Errorf("history of %s: %w", id, err)
 	}
 
-	more := len(all) > size && req.Read+size < MaxHistory
+	more := len(all) > size && read+size < MaxHistory
 
 	return Page{Deliveries: all[:min(size, len(all))], More: more}, nil
 }

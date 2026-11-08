@@ -75,6 +75,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"enqueue refuses a repeated or invalid delivery", testEnqueueID},
 		{"history shows only the deliveries of its scope", testHistoryScope},
 		{"history pages by the keyset cursor", testHistoryCursor},
+		{"history counts the deliveries at or before a cursor", testHistoryCountBefore},
 		{"record needs a live claim and changes only the result", testRecordClaim},
 		{"redeliver of a pending delivery is ErrConflict", testRedeliverPending},
 		{"put subscription refuses an invalid subscription", testSubscriptionValidate},
@@ -911,6 +912,62 @@ func testHistoryCursor(t *testing.T, h Harness) {
 
 	if want := "[dlv-5 dlv-4 dlv-3 dlv-2 dlv-1 dlv-0]"; fmt.Sprint(seen) != want {
 		t.Fatalf("history by cursor = %s, want %s", fmt.Sprint(seen), want)
+	}
+}
+
+// testHistoryCountBefore counts the deliveries at or before a cursor, capped
+// at the limit. The count bounds a read of the history.
+func testHistoryCountBefore(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	next := now()
+	rows := make([]notify.Delivery, 0, 6)
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, delivery(fmt.Sprintf("dlv-%d", i), fmt.Sprintf("ntf-%d", i), next))
+	}
+
+	rows = append(rows, delivery("dlv-0", "ntf-0", next.Add(-time.Minute)))
+	enqueue(t, h, fence, rows...)
+
+	// The history order is dlv-5, dlv-4, dlv-3, dlv-2, dlv-1, dlv-0.
+	cursor := func(id string, at time.Time) *notify.DeliveryCursor {
+		return &notify.DeliveryCursor{NextAt: at, ID: id}
+	}
+
+	cases := []struct {
+		name  string
+		after *notify.DeliveryCursor
+		max   int
+		want  int
+	}{
+		{"no cursor", nil, 10, 0},
+		{"a cursor in the middle", cursor("dlv-3", next), 10, 3},
+		{"a cursor at the oldest", cursor("dlv-0", next.Add(-time.Minute)), 10, 6},
+		{"a cursor past the oldest", cursor("dlv-9", next.Add(-time.Hour)), 10, 6},
+		{"a cursor newer than every delivery", cursor("dlv-9", next.Add(time.Hour)), 10, 0},
+		{"the cap", cursor("dlv-3", next), 2, 2},
+		{"a cap above the rows", cursor("dlv-3", next), 100, 3},
+	}
+
+	for i := range cases {
+		got, err := h.Deliveries.CountBefore(t.Context(), shop, "sub-1", cases[i].after, cases[i].max)
+		if err != nil {
+			t.Fatalf("CountBefore of %s: %v", cases[i].name, err)
+		}
+
+		if got != cases[i].want {
+			t.Fatalf("CountBefore of %s = %d, want %d", cases[i].name, got, cases[i].want)
+		}
+	}
+
+	if got, err := h.Deliveries.CountBefore(t.Context(), other, "sub-1", cursor("dlv-3", next), 10); !errors.Is(
+		err,
+		notify.ErrNotFound,
+	) {
+		t.Fatalf("CountBefore of a subscription of another scope = %d (%v), want ErrNotFound", got, err)
 	}
 }
 

@@ -404,13 +404,11 @@ func (h *Handler) deleteSubscription(
 
 // historyToken is the page token of the delivery history. NextAt is the Unix
 // millisecond time of the last delivery of the page before and ID is its ID:
-// the next page starts after that pair. Read is the number of deliveries that
-// the pages before returned. Fingerprint binds the token to one namespace and
-// subscription.
+// the next page starts after that pair. Fingerprint binds the token to one
+// namespace and subscription.
 type historyToken struct {
 	NextAt      int64  `json:"t"`
 	ID          string `json:"i"`
-	Read        int    `json:"n"`
 	Fingerprint string `json:"f"`
 }
 
@@ -438,18 +436,24 @@ func historyPage(r *http.Request, fp string) (subscriptionsvc.HistoryRequest, er
 
 	raw := q.Get("pageToken")
 	if raw == "" {
-		return subscriptionsvc.HistoryRequest{After: nil, Read: 0, Size: size}, nil
+		return subscriptionsvc.HistoryRequest{After: nil, Size: size}, nil
 	}
 
 	var t historyToken
 	if decodeErr := pagetoken.Decode(raw, &t); decodeErr != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) ||
-		t.ID == "" || t.Read < 0 {
+		t.NextAt < 0 {
+		return subscriptionsvc.HistoryRequest{}, errPageToken
+	}
+
+	// Defense in depth: the store binds the cursor ID as a parameter, so a
+	// value that is not a delivery ID cannot change a query. This check stays
+	// so that a value of a token never reaches a store as a cursor at all.
+	if !notify.ValidDeliveryID(t.ID) {
 		return subscriptionsvc.HistoryRequest{}, errPageToken
 	}
 
 	return subscriptionsvc.HistoryRequest{
 		After: &notify.DeliveryCursor{NextAt: time.UnixMilli(t.NextAt).UTC(), ID: t.ID},
-		Read:  t.Read,
 		Size:  size,
 	}, nil
 }
@@ -482,8 +486,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, _ identity.Pri
 	if page.More {
 		last := page.Deliveries[len(page.Deliveries)-1]
 		token, encodeErr := pagetoken.Encode(historyToken{
-			NextAt: last.NextAt.UnixMilli(), ID: last.ID,
-			Read: window.Read + len(page.Deliveries), Fingerprint: fp,
+			NextAt: last.NextAt.UnixMilli(), ID: last.ID, Fingerprint: fp,
 		})
 		if encodeErr != nil {
 			h.writeSubscriptionError(ctx, w, encodeErr)

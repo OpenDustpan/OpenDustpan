@@ -1171,6 +1171,42 @@ func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{})
 	return count, err
 }
 
+const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = ?1 AND subscription_id = ?2
+      AND (next_at_ms > ?3
+        OR (next_at_ms = ?3 AND id >= ?4))
+    ORDER BY next_at_ms DESC, id DESC
+    LIMIT ?5
+) AS within_bound
+`
+
+type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int64
+}
+
+// The number of deliveries of the subscription at or before the cursor (next
+// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+// the deliveries that a page after the cursor leaves behind. The count stops
+// at max_rows.
+func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNotificationDeliveriesOfSubscriptionBefore,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countNotificationDeliveryRoute = `-- name: CountNotificationDeliveryRoute :one
 SELECT COUNT(*) FROM notification_deliveries
 WHERE scope = ?1 AND notification_id = ?2

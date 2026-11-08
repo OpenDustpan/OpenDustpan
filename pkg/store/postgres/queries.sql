@@ -4781,6 +4781,20 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
+-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+-- The number of deliveries of the subscription at or before the cursor (next
+-- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+-- the deliveries that a page after the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows.
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+      AND (next_at_ms > sqlc.arg(after_ms)
+        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
+    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+    LIMIT sqlc.arg(max_rows)
+) AS within_bound;
+
 -- name: ListNotificationDeliveriesOfSubscription :many
 SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version

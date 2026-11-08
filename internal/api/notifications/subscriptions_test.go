@@ -11,6 +11,8 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/pagetoken"
+	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -146,6 +148,37 @@ func (f fixture) seedDelivery(
 	t.Helper()
 
 	return f.seedDeliveryAt(t, ns, sub, state, f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond))
+}
+
+// seedDeliveries stores count pending deliveries of sub with the next time
+// nextAt, in one call of the store.
+func (f fixture) seedDeliveries(
+	t *testing.T,
+	ns namespace.Name,
+	sub subscriptionWire,
+	nextAt time.Time,
+	count int,
+) {
+	t.Helper()
+
+	n, err := f.namespaces.Get(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+
+	ds := make([]notify.Delivery, 0, count)
+	for range count {
+		ds = append(ds, notify.Delivery{
+			ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
+			Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
+			Attempts: 0, NextAt: nextAt, LastError: "",
+			DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
+		})
+	}
+
+	if err = f.store.Notifications().Enqueue(t.Context(), n.Fence(), ds); err != nil {
+		t.Fatalf("enqueue %d deliveries: %v", count, err)
+	}
 }
 
 // subscriptionEntries returns the audit entries of the subscription and
@@ -413,6 +446,120 @@ func TestDeliveryHistoryPages(t *testing.T) {
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(got.body),
 				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
 		})
+	}
+}
+
+// historyTokenWire is the page token of the delivery history, for a test that
+// forges one.
+type historyTokenWire struct {
+	NextAt      int64  `json:"t"`
+	ID          string `json:"i"`
+	Fingerprint string `json:"f"`
+}
+
+// historyTokenFor encodes a page token of the history of sub at the cursor
+// (nextAt, id). The fingerprint of the history is the namespace and the
+// subscription ID.
+func historyTokenFor(t *testing.T, sub subscriptionWire, nextAt int64, id string) string {
+	t.Helper()
+
+	raw, err := pagetoken.Encode(historyTokenWire{
+		NextAt: nextAt, ID: id, Fingerprint: "acme\x00" + sub.ID,
+	})
+	if err != nil {
+		t.Fatalf("encode page token: %v", err)
+	}
+
+	return raw
+}
+
+// TestDeliveryHistoryRefusesBadTokens checks the cursor guards of a history
+// token: an empty cursor ID, a next time before the Unix epoch and a cursor
+// ID that is not a delivery ID answer the refusal of a token that is not
+// valid.
+func TestDeliveryHistoryRefusesBadTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sub := f.makeSubscription(t)
+
+	nextAt := f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond).UnixMilli()
+
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{"empty cursor ID", historyTokenFor(t, sub, nextAt, "")},
+		{"next time before the Unix epoch", historyTokenFor(t, sub, -1, "dlv-aaaaaaaaaaaaaaaaaaaa")},
+		{"cursor ID that is not a delivery ID", historyTokenFor(t, sub, nextAt, "sub-aaaaaaaaaaaaaaaaaaaa")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			target := subscriptionsBase + "/" + sub.ID + "/deliveries?pageToken=" + tc.token
+
+			got := f.do(t, get("reader", target))
+			wantCode(t, tc.name, got, http.StatusBadRequest)
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(got.body),
+				errcodetest.Want{Code: errcode.RequestPageTokenInvalid, Args: nil, RequestBody: nil})
+		})
+	}
+}
+
+// TestDeliveryHistoryStopsAtTheBound pages a history that holds more
+// deliveries than the history reaches, and checks that the chain of pages
+// stops at the bound and never repeats a delivery.
+func TestDeliveryHistoryStopsAtTheBound(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sub := f.makeSubscription(t)
+
+	nextAt := f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	f.seedDeliveries(t, "acme", sub, nextAt, subscriptionsvc.MaxHistory+5)
+
+	path := subscriptionsBase + "/" + sub.ID + "/deliveries"
+
+	var (
+		seen  int
+		ids   = map[string]bool{}
+		token string
+	)
+
+	for pages := 0; ; pages++ {
+		if pages > subscriptionsvc.MaxHistory/200+1 {
+			t.Fatalf("the history does not stop: %d deliveries", seen)
+		}
+
+		target := path + "?pageSize=200"
+		if token != "" {
+			target += "&pageToken=" + token
+		}
+
+		answer := f.do(t, get("reader", target))
+		wantCode(t, fmt.Sprintf("page %d", pages+1), answer, http.StatusOK)
+
+		resp := decode[historyWire](t, answer)
+		for _, d := range resp.Deliveries {
+			if ids[d.ID] {
+				t.Fatalf("the page repeats the delivery %s", d.ID)
+			}
+
+			ids[d.ID] = true
+			seen++
+		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+
+		token = resp.NextPageToken
+	}
+
+	if seen != subscriptionsvc.MaxHistory {
+		t.Fatalf("the history returned %d deliveries, want %d", seen, subscriptionsvc.MaxHistory)
 	}
 }
 

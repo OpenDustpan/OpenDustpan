@@ -67,6 +67,25 @@ func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
 	return d.ID < c.ID
 }
 
+// CountBefore counts the rows of the fake at or before the cursor, capped at
+// maxCount, as the port says.
+func (f fakeDeliveries) CountBefore(
+	_ context.Context, _ namespace.Name, _ string, after *notify.DeliveryCursor, maxCount int,
+) (int, error) {
+	if after == nil || maxCount <= 0 {
+		return 0, nil
+	}
+
+	count := 0
+	for i := range f.rows {
+		if !afterCursor(f.rows[i], *after) {
+			count++
+		}
+	}
+
+	return min(count, maxCount), nil
+}
+
 // at is the fixed clock of the tests.
 func at() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
 
@@ -187,7 +206,7 @@ func pageIDs(t *testing.T, svc *subscriptionsvc.Service, rows, size int) []strin
 
 	for pages := 0; pages <= rows+1; pages++ {
 		page, err := svc.History(t.Context(), "acme", "sub-1", subscriptionsvc.HistoryRequest{
-			After: after, Read: len(seen), Size: size,
+			After: after, Size: size,
 		})
 		if err != nil {
 			t.Fatalf("history: %v", err)
@@ -222,23 +241,20 @@ func TestHistoryWindows(t *testing.T) {
 		name     string
 		total    int
 		after    *notify.DeliveryCursor
-		read     int
 		size     int
 		wantLen  int
 		wantMore bool
 	}{
-		{"first page with more", 5, nil, 0, 2, 2, true},
-		{"last page", 5, cursor("dlv-0003"), 3, 2, 2, false},
-		{"cursor after the last row", 3, cursor("dlv-0000"), 3, 2, 0, false},
-		{"negative read", 3, nil, -1, 2, 0, false},
-		{"size zero", 3, nil, 0, 0, 0, false},
-		{"page cut at the window", 5000, cursor("dlv-5000"), 998, 10, 2, false},
-		{"read at the window", 5000, nil, subscriptionsvc.MaxHistory, 10, 0, false},
+		{"first page with more", 5, nil, 2, 2, true},
+		{"last page", 5, cursor("dlv-0003"), 2, 2, false},
+		{"cursor after the last row", 3, cursor("dlv-0000"), 2, 0, false},
+		{"size zero", 3, nil, 0, 0, false},
+		{"page cut at the window", 5000, cursor("dlv-4006"), 10, 5, false},
+		{"cursor at the window", 5000, cursor("dlv-4001"), 10, 0, false},
 		{
 			"full window with more rows behind it",
 			5000,
 			nil,
-			0,
 			subscriptionsvc.MaxHistory,
 			subscriptionsvc.MaxHistory,
 			false,
@@ -252,7 +268,7 @@ func TestHistoryWindows(t *testing.T) {
 			svc := newService(t, historyRows(next, 1, tc.total))
 
 			page, err := svc.History(t.Context(), "acme", "sub-1", subscriptionsvc.HistoryRequest{
-				After: tc.after, Read: tc.read, Size: tc.size,
+				After: tc.after, Size: tc.size,
 			})
 			if err != nil {
 				t.Fatalf("history: %v", err)
@@ -266,13 +282,57 @@ func TestHistoryWindows(t *testing.T) {
 	}
 }
 
+// TestHistoryBoundFromTheStore reads the history at a cursor whose position
+// is past the window and checks that the service counts the deliveries at or
+// before the cursor in the store, never in a count of the caller.
+func TestHistoryBoundFromTheStore(t *testing.T) {
+	t.Parallel()
+
+	const total = 1500
+
+	next := at()
+	cursor := func(id string) *notify.DeliveryCursor {
+		return &notify.DeliveryCursor{NextAt: next, ID: id}
+	}
+
+	tests := []struct {
+		name     string
+		after    *notify.DeliveryCursor
+		wantLen  int
+		wantMore bool
+	}{
+		{"a cursor at the 1001st delivery", cursor("dlv-0500"), 0, false},
+		{"a cursor at the 990th delivery", cursor("dlv-0511"), 10, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := newService(t, historyRows(next, 1, total))
+
+			page, err := svc.History(t.Context(), "acme", "sub-1", subscriptionsvc.HistoryRequest{
+				After: tc.after, Size: 50,
+			})
+			if err != nil {
+				t.Fatalf("history: %v", err)
+			}
+
+			if len(page.Deliveries) != tc.wantLen || page.More != tc.wantMore {
+				t.Fatalf("page = %d deliveries, more = %t; want %d, %t",
+					len(page.Deliveries), page.More, tc.wantLen, tc.wantMore)
+			}
+		})
+	}
+}
+
 func TestHistoryOfUnknownSubscription(t *testing.T) {
 	t.Parallel()
 
 	svc := newService(t, historyRows(at(), 1, 1))
 
 	_, err := svc.History(t.Context(), "acme", "sub-2",
-		subscriptionsvc.HistoryRequest{After: nil, Read: 0, Size: 10})
+		subscriptionsvc.HistoryRequest{After: nil, Size: 10})
 	if !errors.Is(err, notify.ErrNotFound) {
 		t.Fatalf("history = %v, want notify.ErrNotFound", err)
 	}

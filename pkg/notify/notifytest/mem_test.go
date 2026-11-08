@@ -563,6 +563,43 @@ func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
 	return d.ID < c.ID
 }
 
+func (m *memStore) CountBefore(
+	_ context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, maxCount int,
+) (int, error) {
+	var (
+		count int
+		other bool
+	)
+
+	m.Read(func() {
+		if s, ok := m.subs[id]; ok && s.Scope != scope {
+			other = true
+
+			return
+		}
+
+		if after == nil {
+			return
+		}
+
+		for did := range m.deliveries {
+			if d := m.deliveries[did]; d.Subscription == id && d.Scope == scope && !afterCursor(d, *after) {
+				count++
+			}
+		}
+	})
+
+	if other {
+		return 0, fmt.Errorf("count deliveries of %s: %w", id, notify.ErrNotFound)
+	}
+
+	if maxCount <= 0 {
+		return 0, nil
+	}
+
+	return min(count, maxCount), nil
+}
+
 func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
 	return scopedID(m.writeEntry(fence, m.deliveryScope(id), e, func() error {
 		d := m.deliveries[id]

@@ -137,13 +137,17 @@ type memStore struct {
 	// hold, when set, runs at the start of every Put, before the store takes its
 	// lock. A test uses it to keep a write in flight.
 	hold func()
+	// defaultsAtPut, when set, replaces the defaults at the start of every
+	// Put, as another writer that commits between the read of the handler and
+	// the write. The write then returns the new defaults.
+	defaultsAtPut *unitsettings.NamespaceDefaults
 }
 
 func newMemStore(records idempotency.Store) *memStore {
 	return &memStore{
 		replays: records,
 		mu:      sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
-		entries: nil, writes: 0, failWith: nil, hold: nil,
+		entries: nil, writes: 0, failWith: nil, hold: nil, defaultsAtPut: nil,
 	}
 }
 
@@ -171,6 +175,10 @@ func (m *memStore) Put(
 
 	if m.failWith != nil {
 		return unitsettings.PutResult{}, m.failWith
+	}
+
+	if m.defaultsAtPut != nil {
+		m.defaults = *m.defaultsAtPut
 	}
 
 	if m.records[s.Unit.UnitID()].Version != expected {
