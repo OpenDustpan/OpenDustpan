@@ -8,6 +8,7 @@ internal/clientgen/typescript/testdata/golden/
 pkg/store/postgres/internal/db/
 pkg/store/sqlite/internal/db/
 internal/pulumijournal/entry_gen.go
+pkg/preferences/zones_gen.go
 docs/adr/INDEX.md
 .repowise/decisions.yaml
 docs/reference/configuration.md
