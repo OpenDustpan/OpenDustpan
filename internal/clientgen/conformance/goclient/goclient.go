@@ -179,9 +179,18 @@ func writeHandWritten(dir string) error {
 
 // goTool runs the go tool in dir with a short environment.
 func goTool(ctx context.Context, dir string, args ...string) error {
+	_, err := Run(ctx, dir, args...)
+
+	return err
+}
+
+// Run runs the go tool in dir with the environment of Build, and returns its
+// output. A test uses it to run a program of its own in the module that Build
+// wrote, for example a program that reads a value of the client.
+func Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
-		return fmt.Errorf("%w: find go: %w", ErrBuild, err)
+		return nil, fmt.Errorf("%w: find go: %w", ErrBuild, err)
 	}
 
 	cmd := exec.CommandContext(ctx, goBin, args...) //nolint:gosec // G204: go comes from PATH; the arguments are fixed.
@@ -193,10 +202,10 @@ func goTool(ctx context.Context, dir string, args ...string) error {
 	cmd.Stdout, cmd.Stderr = &out, &out
 
 	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("%w: go %s: %w\n%s", ErrBuild, strings.Join(args, " "), err, out.String())
+		return out.Bytes(), fmt.Errorf("%w: go %s: %w\n%s", ErrBuild, strings.Join(args, " "), err, out.String())
 	}
 
-	return nil
+	return out.Bytes(), nil
 }
 
 // Environ returns the allowlisted variables of this process, read by name,

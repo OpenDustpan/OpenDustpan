@@ -221,10 +221,12 @@ deliveries of the subscription, newest first. The query parameters:
 | `pageToken` | The `nextPageToken` of the page before, for the same subscription |
 
 The answer has `deliveries` and `nextPageToken`. `nextPageToken` is empty on the
-last page. The history reaches back at most 1000 deliveries. A page that would
-go past that count ends there and has no next page. A new delivery moves the
-older ones back, so a token shows the page by position. A token for another
-subscription answers 400 `request.page-token-invalid`.
+last page. The history reaches back at most 1000 deliveries, and the server
+enforces that count. A page that would go past it ends there and has no next
+page. A token names the last delivery of the page before. The next page starts
+after the delivery with that `nextAt` and ID. A page never skips or repeats a
+delivery while no delivery changes: a retry or a new send changes `nextAt`. A
+token for another subscription answers 400 `request.page-token-invalid`.
 
 | Field | Content |
 | --- | --- |

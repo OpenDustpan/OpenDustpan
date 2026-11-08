@@ -627,8 +627,8 @@ const (
 	VerificationUnverified Verification = "unverified"
 )
 
-// Valid reports whether v is one of the results of a verification, with the
-// empty result of a job that is not closed.
+// Valid reports whether v is one of the verification results of this
+// package. VerificationNone, the empty result, is one of them.
 func (v Verification) Valid() bool {
 	switch v {
 	case VerificationNone, VerificationPending, VerificationVerified, VerificationUnverified:

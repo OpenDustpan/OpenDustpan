@@ -333,11 +333,11 @@ const (
 	AgentModeDirect AgentMode = "direct"
 )
 
-// Valid reports whether m is one of the agent modes of this package, with the
-// empty mode of a job that no agent started.
+// Valid reports whether m is one of the agent modes of this package. The
+// empty mode is not one of them: it tells that no agent started the job.
 func (m AgentMode) Valid() bool {
 	switch m {
-	case "", AgentModeApproveFirst, AgentModeReviewRequest, AgentModeDirect:
+	case AgentModeApproveFirst, AgentModeReviewRequest, AgentModeDirect:
 		return true
 	default:
 		return false
