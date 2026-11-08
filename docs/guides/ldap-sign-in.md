@@ -81,20 +81,45 @@ Use `ldaps://`, or `ldap://` with StartTLS. The server checks the
 certificate of the directory against the CA bundle and the host name of
 the URL. It uses TLS 1.2 or later.
 
-The server refuses a connection with no TLS. It allows such a connection
-only in these cases:
-
-- The host of the URL is a loopback IP address, for example `127.0.0.1` or
-  `[::1]`. A host name, also `localhost`, is not enough, because its
-  address can change.
-- An operator allows plain connections for the installation. The setting is
-  off by default. It sends the bind password and the password of each
-  person over the network with no encryption.
+The server refuses a connection with no TLS, unless the host of the URL is
+a loopback IP address, for example `127.0.0.1` or `[::1]`, or the setting
+in [Plain connections](#plain-connections) is on. A host name, also
+`localhost`, is not enough, because its address can change.
 
 The server checks the address of each connection when the connection opens,
 after the name lookup. Each connection also goes through the egress rules
 of the installation. So the URL of a provider cannot reach an address that
 the egress rules refuse.
+
+## Plain connections
+
+The setting `egress.allowPlainConnections` allows a connection with no TLS
+to a host that is not a loopback IP address. It is off by default. The same
+setting allows an SMTP connection with no TLS.
+
+Set it with one call:
+
+```sh
+curl -X PATCH "$SERVER/api/dustpan/v1/settings" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/merge-patch+json" \
+  -H 'If-Match: "<revision>"' \
+  -d '{"egress.allowPlainConnections": true}'
+```
+
+An LDAP bind then sends the password of the service account and the
+password of each person over the network with no encryption. Set the
+setting only in a trusted network. The change makes the installation less
+secure, so it needs a fresh authentication.
+
+OpenDustpan Cloud locks the setting off. It sets the variable
+`DUSTPAN_ALLOW_PLAIN_CONNECTIONS` to `false`, so the API refuses a change
+with the error code `settings.locked`. The flag `--allow-plain-connections`,
+the variable and the file key `egress.allowPlainConnections` lock the
+setting the same way.
+
+The setting turns off no check of a connection with TLS. Each certificate
+check stays.
 
 ## Subject
 
@@ -163,6 +188,18 @@ would remove each membership of the person. To let a person with no group
 sign in, turn groups off, or put each person in a group. In Active
 Directory, the primary group of a user, for example `Domain Users`, is not
 in `memberOf`.
+
+### Mappings
+
+The server does not apply the groups of a directory to the memberships of a
+person yet. A sign-in reads the groups, but it changes no membership. A person
+who signs in keeps the memberships that a person made with the API.
+
+The server can store mappings. A mapping names the sign-in provider, one group
+name from the directory and one group of OpenDustpan. The server compares the
+name byte for byte: `Eng` and `eng` are two names. No route to read or write a
+mapping exists yet. A backup holds the mappings. A restore brings them back
+only for a caller with the `server:restore-access` action.
 
 ## Limits
 

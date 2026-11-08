@@ -262,6 +262,7 @@ linters:
             - "**/pkg/trustrule/**"
             - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
+            - "**/pkg/jobtoken/**"
             - "**/pkg/unitsettings/**"
             - "**/pkg/preferences/**"
             - "**/pkg/setting/**"
@@ -398,6 +399,80 @@ linters:
               desc: Only the machine runner pulls and unpacks OCI images (ADR 139).
             - pkg: opendustpan.org/opendustpan/cmd/dustpan-runner
               desc: The runner module imports the server module, never the reverse (ADR 139).
+        faultlog:
+          files:
+            - "**/internal/api/faultlog/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/apidesc$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/refusal$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        apidesc:
+          files:
+            - "**/internal/api/apidesc/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/refusal$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        refusal:
+          files:
+            - "**/internal/api/refusal/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/admit$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/idempotent$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        admit:
+          files:
+            - "**/internal/api/admit/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        idempotent:
+          files:
+            - "**/internal/api/idempotent/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/problem$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        problem:
+          files:
+            - "**/internal/api/problem/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/route$
+              desc: The import goes against the layer order of the helper packages.
+        stategate:
+          files:
+            - "**/internal/api/stategate/**"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/api/pulumi$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/tfe$
+              desc: The import goes against the layer order of the helper packages.
+            - pkg: opendustpan.org/opendustpan/internal/api/tofuhttp$
+              desc: The import goes against the layer order of the helper packages.
 
     dupl:
       threshold: 120
@@ -647,7 +722,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|server|settings|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|selfservice|server|settings|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

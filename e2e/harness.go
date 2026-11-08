@@ -1112,9 +1112,10 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 const CatchAllCollection = "e2e-default"
 
 // SeedCatchAllPlacement makes the collection CatchAllCollection in the
-// namespace ns and a placement rule for Pulumi stacks of any project and any
-// name that names it. The server refuses a new stack that no rule places, so
-// each scenario that makes a stack through the CLI needs the rule. The
+// namespace ns, a placement rule for Pulumi stacks of any project and any name,
+// and a placement rule for OpenTofu workspaces of any name. Both rules name the
+// collection. The server refuses a new stack or workspace that no rule places,
+// so each scenario that makes one through a CLI needs the rules. The
 // administrator token holds collection:create-unit on the collection.
 func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns string) {
 	tb.Helper()
@@ -1126,6 +1127,10 @@ func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns strin
 		{
 			base + "/placement-rules",
 			`{"tool":"pulumi","project":"*","stack":"*","collection":"` + CatchAllCollection + `"}`,
+		},
+		{
+			base + "/placement-rules",
+			`{"tool":"opentofu","project":"*","stack":"*","collection":"` + CatchAllCollection + `"}`,
 		},
 	} {
 		status, body, err := e.serverStatus(ctx, e.token, http.MethodPost, step.path, step.body)

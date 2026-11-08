@@ -1589,6 +1589,12 @@ ON CONFLICT DO NOTHING;
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 
+-- name: RestoreGroupMember :execrows
+-- Undoes RemoveGroupMember in the same transaction, for a removal that the
+-- last-site-administrator rule refuses.
+UPDATE group_members SET removed_at_ms = NULL
+WHERE group_id = $1 AND principal_id = $2 AND removed_at_ms = $3;
+
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -1609,6 +1615,14 @@ FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text);
+
+-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C";
 
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
@@ -1667,6 +1681,78 @@ SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':passkey sign
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+
+-- name: PutGroupMapping :execrows
+INSERT INTO group_mappings (source, source_id, claim_value, group_id, created_by, created_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteGroupMapping :execrows
+DELETE FROM group_mappings
+WHERE source = $1 AND source_id = $2 AND claim_value = $3 AND group_id = $4;
+
+-- name: ListGroupMappings :many
+SELECT source, source_id, claim_value, group_id, created_by, created_at_ms
+FROM group_mappings
+WHERE source = $1 AND source_id = $2
+ORDER BY claim_value COLLATE "C", group_id COLLATE "C";
+
+-- name: ListLiveGroupMappings :many
+-- The mappings of the source and the source ID whose group exists and was
+-- not deleted. A mapping of a deleted group stays in the table for the record
+-- and never answers here.
+SELECT m.claim_value, m.group_id
+FROM group_mappings m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.source = $1 AND m.source_id = $2 AND g.deleted_at_ms IS NULL
+ORDER BY m.claim_value COLLATE "C", m.group_id COLLATE "C";
+
+-- name: ListCurrentMembershipsOfPrincipal :many
+-- Each current membership of the principal, whatever its source, so that a
+-- group claim changes only the memberships of its own source and source ID.
+SELECT group_id, source, source_id, state, pinned
+FROM group_members
+WHERE principal_id = $1 AND removed_at_ms IS NULL
+ORDER BY group_id COLLATE "C";
+
+-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms;
+
+-- name: MemberRemovalAlertedAt :one
+-- The time of the last alert of one source, or 0 when the source has none.
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = @source_kind AND source_id = @source_id), 0)::bigint
+    AS alerted_at_ms;
+
+-- name: MemberRemovalTotals :one
+-- The totals of the removals of one source in one window: the members that
+-- the source removed from any group, the members that it removed from one
+-- group, and the largest group that it saw before a removal. The window
+-- holds the rows above low_ms and at most high_ms.
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = @group_id THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = @group_id THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = @source_kind AND source_id = @source_id
+  AND at_ms > @low_ms::bigint AND at_ms <= @high_ms::bigint;
+
+-- name: PruneMemberRemovals :execrows
+-- Deletes at most max_rows of the oldest rows of one source at or before
+-- cutoff_ms.
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = @source_kind AND m.source_id = @source_id
+      AND m.at_ms <= @cutoff_ms::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT @max_rows::bigint
+);
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
@@ -1831,6 +1917,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -1843,7 +1933,7 @@ LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1882,7 +1972,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
-  AND m.state = 'active'
+  AND (m.state = 'active' OR (NOT @history::boolean AND m.state = 'suspended'))
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1921,6 +2011,10 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   m.removed_at_ms AS member_removed_at_ms,
   COALESCE(m.principal_id, '')::text AS member_id,
   COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(m.source, '')::text AS member_source,
+  COALESCE(m.source_id, '')::text AS member_source_id,
+  (CASE WHEN m.state = 'suspended' AND m.suspended_at_ms <= @as_of_ms::bigint
+    THEN 1 ELSE 0 END)::bigint AS member_suspended,
   COALESCE(p.subject, pg.name, '')::text AS subject_name,
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
@@ -2523,6 +2617,16 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1;
 
+-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3;
+
+-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= $1;
+
 -- name: GetSessionPolicy :one
 SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
 
@@ -2932,9 +3036,10 @@ WHERE window_end_ms <= sqlc.arg('threshold_ms')::bigint;
 -- name: GetDurableSchedule :one
 SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = $1;
 
--- name: InsertDurableSchedule :exec
+-- name: InsertDurableSchedule :execrows
 INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
-VALUES (sqlc.arg('name')::text, sqlc.arg('interval_ms')::bigint, sqlc.arg('now_ms')::bigint, NULL);
+VALUES (sqlc.arg('name')::text, sqlc.arg('interval_ms')::bigint, sqlc.arg('now_ms')::bigint, NULL)
+ON CONFLICT (name) DO NOTHING;
 
 -- name: SetDurableScheduleInterval :exec
 -- Sets the interval, and moves the next run to now plus the interval when
@@ -2966,7 +3071,7 @@ DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms')::bigint;
 
 -- name: GetLatestDurableHeartbeat :one
 SELECT owner, at_ms, lease_ms FROM durable_heartbeats
-ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
+ORDER BY at_ms + 2 * lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- name: GetNamespaceID :one
 -- The stable ID of the namespace that has the name now.
@@ -4246,13 +4351,19 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 ORDER BY r.version COLLATE "C";
 
 -- name: ListRegistryAddresses :many
+-- One page of the distinct addresses of a kind in a namespace, after the
+-- cursor (name, system). The caller reads one row more than the page size, so
+-- that the extra row tells whether a next page exists.
 SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+  AND (r.name COLLATE "C" > sqlc.arg(after_name)
+    OR (r.name COLLATE "C" = sqlc.arg(after_name) AND r.system COLLATE "C" > sqlc.arg(after_system)))
 GROUP BY r.name, r.system
 -- The order is by code point, whatever the collation of the database.
-ORDER BY r.name COLLATE "C", r.system COLLATE "C";
+ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT sqlc.arg(lim);
 
 -- name: InsertRegistryKey :execrows
 -- The caller checks the fence in the same transaction. A key with the same
@@ -4735,11 +4846,41 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
+-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+-- The number of deliveries of the subscription at or before the cursor (next
+-- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+-- the deliveries that a page after the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
+-- the count; it stays so that the plan reads the index of the history in
+-- order and stops at max_rows.
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+      AND (next_at_ms > sqlc.arg(after_ms)
+        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
+    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+    LIMIT sqlc.arg(max_rows)
+) AS within_bound;
+
 -- name: ListNotificationDeliveriesOfSubscription :many
 SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+-- time, delivery ID): the rows with an older next time, or with the same next
+-- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+-- query. The bound on next_at_ms lets the index scan start at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+  AND (next_at_ms < sqlc.arg(after_ms)
+    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
 ORDER BY next_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
@@ -4818,9 +4959,9 @@ WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool 
 -- name: UpsertDriftResult :execrows
 -- The caller checks the fence, the job and the time in the same transaction.
 -- A row of the same unit ID in another namespace or of another tool is not
--- replaced: the count is 0. A stored row that is not older is not replaced
--- either (count 0), so that two writers cannot put an older result over a
--- newer one.
+-- replaced: the count is 0. A stored row of the same job is not replaced
+-- either (count 0). A stored row that is not older is not replaced either
+-- (count 0), so that two writers cannot put an older result over a newer one.
 INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
@@ -4830,6 +4971,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms;
 
 -- name: DeleteDriftResult :exec

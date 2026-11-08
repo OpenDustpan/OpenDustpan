@@ -96,6 +96,11 @@ var (
 	// maximum plan age. The job then plans again and asks for approval
 	// again.
 	ErrPlanStale = errors.New("plan is stale")
+	// ErrNoPlan reports the dispatch of an apply phase whose plan phase
+	// stored no plan. A new plan phase would store none either, so the job
+	// fails and does not plan again. An error with ErrNoPlan also wraps
+	// ErrPlanStale.
+	ErrNoPlan = errors.New("the plan phase stored no plan")
 	// ErrDelivered reports a cancel of a write-back job whose change is in
 	// git for good: a direct push, or a review request that merged. The job
 	// stays and waits for its state version.
@@ -612,6 +617,17 @@ const (
 	// it.
 	VerificationUnverified Verification = "unverified"
 )
+
+// Valid reports whether v is one of the verification results of this
+// package. VerificationNone, the empty result, is one of them.
+func (v Verification) Valid() bool {
+	switch v {
+	case VerificationNone, VerificationPending, VerificationVerified, VerificationUnverified:
+		return true
+	default:
+		return false
+	}
+}
 
 // StateVersion is a new state version of a unit, as the internal wiring
 // of the server reports it for the tool package that wrote it. Commit is

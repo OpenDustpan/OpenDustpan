@@ -5,7 +5,9 @@ apply, a destroy or a refresh. The jobs API lets a person or a client start a
 plan job, list jobs, read a job, its phases and the records of its phases, and read
 the log of a phase.
 
-This version starts plan jobs of OpenTofu workspaces on runners. The server defines the plan
+This version starts plan jobs of OpenTofu workspaces on runners. It does not accept an
+apply or a destroy yet: a start with the operation `apply` or `destroy` fails with 422 and
+the code `job.unsupported`. The server defines the plan
 step of a Pulumi stack too, but no runner runs it yet. No route
 cancels or approves jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
@@ -128,11 +130,11 @@ The `errorCode` is a stable code for a program.
 | 400 | `request.idempotency-key-invalid` | The key is not valid, or there is more than one key |
 | 400 | `job.invalid` | The operation, the unit name, the pool or the location is not valid |
 | 401 | | The caller did not sign in |
-| 403 | `access.denied` | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. The connection of the location is not usable. The job token of a job tries to start a job. |
+| 403 | `access.denied` | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. The connection of the location is not usable. |
 | 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 403 | `gate.limited` | An access limit forbids the start |
 | 403 | `gate.rule-failed` | An access limit failed to evaluate, so the start is refused |
-| 403 | `job.policy-denied` | The policy refused the start |
+| 403 | `job.policy-denied` | The policy refused the start. A job token cannot start a job, even when it holds the start grants. |
 | 403 | `job.agent-denied` | The agent mode does not allow the start |
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |
 | 404 | | The namespace does not exist, or the caller cannot read it |

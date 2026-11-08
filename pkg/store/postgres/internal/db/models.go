@@ -311,6 +311,15 @@ type Grant struct {
 	RevokedBy   string
 }
 
+type GroupMapping struct {
+	Source      string
+	SourceID    string
+	ClaimValue  string
+	GroupID     string
+	CreatedBy   string
+	CreatedAtMs int64
+}
+
 type GroupMember struct {
 	GroupID       string
 	PrincipalID   string
@@ -619,6 +628,22 @@ type ManualLock struct {
 	Holder    string
 	Reason    string
 	SinceMs   int64
+}
+
+type MemberRemoval struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
+type MemberRemovalAlert struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
 }
 
 type NameLock struct {
@@ -1302,6 +1327,12 @@ type UpdateJournalSequence struct {
 	Sequence int64
 	Arrival  int64
 	Sha256   []byte
+}
+
+type UsedTicket struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
 }
 
 type Workspace struct {
