@@ -95,6 +95,24 @@ type SupersededBlob struct {
 	At   time.Time
 }
 
+// SupersededMark is one mark of a superseded checkpoint blob, with the stack
+// and the namespace that hold it. It is what the sweep of the marked blobs
+// reads across every live stack.
+type SupersededMark struct {
+	StackID     ID
+	NamespaceID namespace.ID
+	Key         blob.Key
+	Size        int64
+	At          time.Time
+}
+
+// SupersededCursor is the position of a page of superseded marks: the stack
+// ID and the blob key of the last mark of the page before.
+type SupersededCursor struct {
+	StackID ID
+	Key     blob.Key
+}
+
 // CheckpointStore persists checkpoint metadata, one row for each mutating
 // update. Each write of the running update overwrites the row of that update.
 // The content lives in the blob store under the row's blob key. The store
@@ -146,14 +164,31 @@ type CheckpointStore interface {
 	// SupersededBlobs returns the marks of the stack, ordered by key: the
 	// blob of a checkpoint that a later save of the same update replaced,
 	// with the size of the stored blob and the time of the save that
-	// replaced it. A sweep deletes a marked blob after a grace period. The
-	// stack is named by its ID, the key that a sweep lists the blobs by, so
-	// a rename between the listing and this read changes nothing. A live
-	// stack without such rows yields an empty list. A stack that does not
-	// exist, or that is soft-deleted, returns ErrNotFound: an empty mark set
-	// would let a sweep delete the marked blobs of the stack without the
-	// grace period of a mark.
+	// replaced it. The sweep of the marked blobs deletes a marked blob after
+	// the grace period of a mark when no row names it. The stack is named by
+	// its ID, the key that a sweep lists the blobs by, so a rename between
+	// the listing and this read changes nothing. A live stack without such
+	// rows yields an empty list. A stack that does not exist, or that is
+	// soft-deleted, returns ErrNotFound: an empty mark set would let a sweep
+	// delete the marked blobs of the stack without the grace period of a
+	// mark.
 	SupersededBlobs(ctx context.Context, stackID ID) ([]SupersededBlob, error)
+	// SupersededMarks returns at most limit marks of every live stack whose
+	// mark time is before olderThan, ordered by stack ID and blob key and
+	// after the cursor. A soft-deleted stack has no marks in the result. The
+	// sweep of the marked blobs reads the marks page by page and deletes a
+	// blob after the grace period of a mark when no row names it.
+	SupersededMarks(
+		ctx context.Context, after SupersededCursor, olderThan time.Time, limit int,
+	) ([]SupersededMark, error)
+	// DropSupersededMark deletes the mark of the blob key of the stack in one
+	// transaction, and reports whether the blob must stay: keep is true when
+	// the mark was missing, because another sweep dropped it and owns the
+	// delete, or when a checkpoint row or a journal batch row of the stack
+	// still names the key, the rows that ReferencedBlobKeys reads. A missing
+	// mark is not an error. It returns the error of the transaction. The
+	// sweep deletes the blob only when keep is false.
+	DropSupersededMark(ctx context.Context, stackID ID, key blob.Key) (keep bool, err error)
 }
 
 // EventStore persists engine events.
@@ -538,9 +573,9 @@ type checkpointSave struct {
 // A row never names a missing blob: a crash between the blob write and the
 // commit leaves only an unreferenced blob, which the sweep below collects.
 // After the commit, the blob of the previous save of the same update stays in
-// the store: the store marks the blob of the row that a save replaces, and a
-// sweep deletes a marked blob after the grace period of a mark. The deployment
-// bytes travel exactly as received: the server never
+// the store: the store marks the blob of the row that a save replaces, and the
+// sweep of the marked blobs deletes a marked blob after the grace period of a
+// mark. The deployment bytes travel exactly as received: the server never
 // decodes and encodes them again. The save path holds one decompressed copy
 // (the input) with one compressed copy (the gzip buffer).
 func (s *Updates) SaveCheckpoint(
@@ -1205,8 +1240,8 @@ func (s *Updates) commitCheckpointRow(
 // best effort: a failure never fails the save, and the rows stay for the next
 // sweep. No log line names a blob key. The blob of the previous save of the
 // same update is not deleted here: the store marks the blob of the row that a
-// save replaces, and a sweep deletes a marked blob after the grace period of a
-// mark.
+// save replaces, and the sweep of the marked blobs deletes a marked blob after
+// the grace period of a mark.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
 	s.sweepUpdateBlobs(ctx, save.blobs, save.ref, save.stackID, save.id)
 }

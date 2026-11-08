@@ -45,6 +45,19 @@ func MarkSupersededCheckpointInTx(
 	})
 }
 
+// AgeSupersededMarks moves every mark of the stack before at, with a direct
+// SQL update. The cases of the superseded sweep need marks older than the
+// grace period without a wait.
+func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at time.Time) error {
+	const stmt = `UPDATE checkpoint_supersedes SET superseded_at_ms = ? WHERE stack_id = ?`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), stackID.String()); err != nil {
+		return fmt.Errorf("age superseded marks: %w", err)
+	}
+
+	return nil
+}
+
 // SettingWrite is the input of WriteSettingInTx.
 type SettingWrite struct {
 	Namespace namespace.Name

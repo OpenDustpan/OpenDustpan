@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -702,6 +703,94 @@ func (s *Store) SupersededBlobs(ctx context.Context, stackID stack.ID) ([]stack.
 	}
 
 	return out, nil
+}
+
+// SupersededMarks implements stack.CheckpointStore. One statement reads one
+// page of the marks of every live stack, ordered by stack ID and blob key. A
+// soft-deleted stack has no marks in the result.
+func (s *Store) SupersededMarks(
+	ctx context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListSupersededMarks(ctx, db.ListSupersededMarksParams{
+		OlderThanMs:  codec.Millis(olderThan),
+		AfterStackID: after.StackID.String(),
+		AfterBlobKey: after.Key.String(),
+		PageLimit:    int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select superseded marks: %w", err)
+	}
+
+	out := make([]stack.SupersededMark, 0, len(rows))
+
+	for _, row := range rows {
+		key, err := blob.ParseKey(row.BlobKey)
+		if err != nil {
+			return nil, fmt.Errorf("%w: blob key %q: %w", codec.ErrCorruptRow, row.BlobKey, err)
+		}
+
+		out = append(out, stack.SupersededMark{
+			StackID:     stack.ID(row.StackID),
+			NamespaceID: namespace.ID(row.NamespaceID),
+			Key:         key,
+			Size:        row.Size,
+			At:          codec.FromMillis(row.SupersededAtMs),
+		})
+	}
+
+	return out, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. One transaction deletes
+// the mark and reports whether the blob must stay: true when the mark was
+// missing, because another sweep dropped it and owns the delete, or when a
+// checkpoint row or a journal batch row of the stack still names the key. A
+// missing mark is not an error.
+func (s *Store) DropSupersededMark(ctx context.Context, stackID stack.ID, key blob.Key) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var keep bool
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		deleted, err := q.DeleteSupersededMark(ctx, db.DeleteSupersededMarkParams{
+			StackID: stackID.String(),
+			BlobKey: key.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("delete superseded mark: %w", err)
+		}
+
+		if deleted == 0 {
+			keep = true
+
+			return nil
+		}
+
+		present, err := q.BlobKeyNamed(ctx, db.BlobKeyNamedParams{
+			StackID: stackID.String(),
+			BlobKey: key.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("read the name of the blob key: %w", err)
+		}
+
+		keep = present != 0
+
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return keep, nil
 }
 
 // AppendEvents implements stack.EventStore.

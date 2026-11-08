@@ -502,6 +502,107 @@ func (m *memUpdates) SupersededBlobs(
 	return out, nil
 }
 
+// SupersededMarks implements stack.CheckpointStore.
+func (m *memUpdates) SupersededMarks(
+	_ context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	live := make(map[stack.ID]struct{}, len(m.stacks))
+
+	for ref := range m.stacks {
+		live[m.stacks[ref].ID] = struct{}{}
+	}
+
+	var out []stack.SupersededMark
+
+	for id, marks := range m.marks {
+		if _, ok := live[id]; !ok {
+			continue
+		}
+
+		out = append(out, marksAfter(id, marks, m.nsID, after, olderThan)...)
+	}
+
+	slices.SortFunc(out, compareSupersededMarks)
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
+// marksAfter returns the marks of id that are before olderThan and after the
+// cursor.
+func marksAfter(
+	id stack.ID, marks []stack.SupersededBlob, nsID namespace.ID,
+	after stack.SupersededCursor, olderThan time.Time,
+) []stack.SupersededMark {
+	var out []stack.SupersededMark
+
+	for _, mark := range marks {
+		if !mark.At.Before(olderThan) {
+			continue
+		}
+
+		if id < after.StackID || (id == after.StackID && mark.Key <= after.Key) {
+			continue
+		}
+
+		out = append(out, stack.SupersededMark{
+			StackID: id, NamespaceID: nsID, Key: mark.Key, Size: mark.Size, At: mark.At,
+		})
+	}
+
+	return out
+}
+
+// compareSupersededMarks orders marks by stack ID and then blob key.
+func compareSupersededMarks(a, b stack.SupersededMark) int {
+	if order := strings.Compare(string(a.StackID), string(b.StackID)); order != 0 {
+		return order
+	}
+
+	return strings.Compare(string(a.Key), string(b.Key))
+}
+
+// DropSupersededMark implements stack.CheckpointStore. A missing mark reports
+// keep true, because another sweep dropped it and owns the delete.
+func (m *memUpdates) DropSupersededMark(
+	_ context.Context, stackID stack.ID, key blob.Key,
+) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	marks := m.marks[stackID]
+
+	index := slices.IndexFunc(marks, func(mark stack.SupersededBlob) bool { return mark.Key == key })
+	if index < 0 {
+		return true, nil
+	}
+
+	m.marks[stackID] = slices.Delete(marks, index, index+1)
+
+	ref, ok := m.refOfLocked(stackID)
+	if !ok {
+		return false, nil
+	}
+
+	for id := range m.checkpoints {
+		if cp := m.checkpoints[id]; cp.Ref == ref && cp.BlobKey == key {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (m *memUpdates) AppendEvents(_ context.Context, batch stack.EventBatch, _ namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -722,11 +823,11 @@ func newUpdatesGuarded(
 // newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
 // nil wrap uses the in-memory store itself.
 func newUpdatesWrapped(
-	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
+	t *testing.T, clk *clock, blobs blob.Store, wrap func(*memUpdates) stack.CheckpointStore,
 ) updatesFixture {
 	t.Helper()
 
-	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
+	return newUpdatesFull(t, clk, blobs, nil, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
 }
 
 // updatesFixtureOptions holds the parts of the fixture that some tests set:

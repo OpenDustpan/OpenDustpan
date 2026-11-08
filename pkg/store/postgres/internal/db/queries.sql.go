@@ -417,6 +417,31 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const blobKeyNamed = `-- name: BlobKeyNamed :one
+SELECT EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = $1 AND c.blob_key = $2
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = $1 AND j.blob_key = $2
+) AS named
+`
+
+type BlobKeyNamedParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Reports whether a checkpoint row or a journal batch row of the stack names
+// the blob key. The sweep reads it in the transaction that drops a mark, so a
+// row that still names the key keeps the blob.
+func (q *Queries) BlobKeyNamed(ctx context.Context, arg BlobKeyNamedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, blobKeyNamed, arg.StackID, arg.BlobKey)
+	var named bool
+	err := row.Scan(&named)
+	return named, err
+}
+
 const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
 UPDATE namespaces
 SET failover_version = failover_version + 1
@@ -4285,6 +4310,26 @@ WHERE workspace_id = $1
 func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
 	_, err := q.db.Exec(ctx, deleteStateVersionsOfWorkspace, workspaceID)
 	return err
+}
+
+const deleteSupersededMark = `-- name: DeleteSupersededMark :execrows
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = $1 AND blob_key = $2
+`
+
+type DeleteSupersededMarkParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Deletes the mark of the blob key of the stack. A missing mark deletes no
+// row, which is not an error.
+func (q *Queries) DeleteSupersededMark(ctx context.Context, arg DeleteSupersededMarkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSupersededMark, arg.StackID, arg.BlobKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
@@ -17468,6 +17513,70 @@ func (q *Queries) ListSupersededBlobs(ctx context.Context, stackID string) ([]Li
 	for rows.Next() {
 		var i ListSupersededBlobsRow
 		if err := rows.Scan(&i.BlobKey, &i.Size, &i.SupersededAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSupersededMarks = `-- name: ListSupersededMarks :many
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS BIGINT) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < $1
+  AND (m.stack_id COLLATE "C" > $2
+    OR (m.stack_id = $2 AND m.blob_key COLLATE "C" > $3))
+ORDER BY m.stack_id COLLATE "C", m.blob_key COLLATE "C"
+LIMIT $4
+`
+
+type ListSupersededMarksParams struct {
+	OlderThanMs  int64
+	AfterStackID string
+	AfterBlobKey string
+	PageLimit    int32
+}
+
+type ListSupersededMarksRow struct {
+	StackID        string
+	NamespaceID    string
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// One page of the marks of every live stack whose save replaced the blob
+// before the given time, ordered by stack ID and blob key. The read starts
+// after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+// marks in the result.
+func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMarksParams) ([]ListSupersededMarksRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededMarks,
+		arg.OlderThanMs,
+		arg.AfterStackID,
+		arg.AfterBlobKey,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededMarksRow
+	for rows.Next() {
+		var i ListSupersededMarksRow
+		if err := rows.Scan(
+			&i.StackID,
+			&i.NamespaceID,
+			&i.BlobKey,
+			&i.Size,
+			&i.SupersededAtMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

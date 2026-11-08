@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -141,54 +142,55 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 // testServer returns a Server with only the fields that the job tests use.
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
-		kind:             kindState{store: nil, principals: nil, kind: ""},
-		instances:        instanceState{store: nil, id: "", version: "", registered: nil},
-		ready:            nil,
-		drainPeriod:      0,
-		tempAdmins:       nil,
-		manualLocks:      nil,
-		reconciler:       nil,
-		artifactSweeper:  nil,
-		nameLocks:        nameLockPrune{locks: nil},
-		issuer:           nil,
-		handler:          nil,
-		started:          nil,
-		ungated:          nil,
-		mounted:          nil,
-		root:             nil,
-		logger:           slog.New(slog.DiscardHandler),
-		listenAddr:       "",
-		listener:         nil,
-		secrets:          nil,
-		secretKeys:       nil,
-		secretWrapper:    nil,
-		workspaces:       nil,
-		backups:          nil,
-		restores:         nil,
-		storeChecks:      nil,
-		now:              nil,
-		registry:         nil,
-		tlsCertFile:      "",
-		tlsKeyFile:       "",
-		observed:         nil,
-		chain:            nil,
-		tokens:           nil,
-		shipper:          nil,
-		beforeServe:      nil,
-		deleted:          nil,
-		signInRequests:   nil,
-		signInPruneEvery: 0,
-		signInProviders:  providerBinding{store: nil, providers: nil},
-		durable:          durableStore,
-		durableOwner:     owner,
-		inactivityEvery:  scheduleTestEvery,
-		deletedEvery:     scheduleTestEvery,
-		idempotency:      nil,
-		idempotencyEvery: 0,
-		auditChainEvery:  0,
-		components:       AllComponents(),
-		watch:            nil,
-		flushDenials:     nil,
+		kind:              kindState{store: nil, principals: nil, kind: ""},
+		instances:         instanceState{store: nil, id: "", version: "", registered: nil},
+		ready:             nil,
+		drainPeriod:       0,
+		tempAdmins:        nil,
+		manualLocks:       nil,
+		reconciler:        nil,
+		artifactSweeper:   nil,
+		supersededSweeper: nil,
+		nameLocks:         nameLockPrune{locks: nil},
+		issuer:            nil,
+		handler:           nil,
+		started:           nil,
+		ungated:           nil,
+		mounted:           nil,
+		root:              nil,
+		logger:            slog.New(slog.DiscardHandler),
+		listenAddr:        "",
+		listener:          nil,
+		secrets:           nil,
+		secretKeys:        nil,
+		secretWrapper:     nil,
+		workspaces:        nil,
+		backups:           nil,
+		restores:          nil,
+		storeChecks:       nil,
+		now:               nil,
+		registry:          nil,
+		tlsCertFile:       "",
+		tlsKeyFile:        "",
+		observed:          nil,
+		chain:             nil,
+		tokens:            nil,
+		shipper:           nil,
+		beforeServe:       nil,
+		deleted:           nil,
+		signInRequests:    nil,
+		signInPruneEvery:  0,
+		signInProviders:   providerBinding{store: nil, providers: nil},
+		durable:           durableStore,
+		durableOwner:      owner,
+		inactivityEvery:   scheduleTestEvery,
+		deletedEvery:      scheduleTestEvery,
+		idempotency:       nil,
+		idempotencyEvery:  0,
+		auditChainEvery:   0,
+		components:        AllComponents(),
+		watch:             nil,
+		flushDenials:      nil,
 		stateWrite: stateWriteStart{
 			effective: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 			audit:     nil,
@@ -551,6 +553,42 @@ func TestJobScheduleArtifactSweepRuns(t *testing.T) {
 	// The interval is one hour, so the case runs the step of the kind itself
 	// instead of waiting for a tick.
 	runArtifactSweepStep(t, srv)
+}
+
+// TestJobScheduleSupersededSweepLists proves that a server with the update
+// service lists the schedule stack.superseded-checkpoint-sweep with an
+// interval of 15 minutes and a runner kind with one step.
+func TestJobScheduleSupersededSweepLists(t *testing.T) {
+	t.Parallel()
+
+	srv := testServer(nil, "a")
+	srv.supersededSweeper = &stack.Updates{}
+
+	var found *durable.ScheduleSpec
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == stack.SupersededSweepName {
+			found = &spec
+		}
+	}
+
+	if found == nil || found.Kind != stack.KindSupersededSweep || found.Version != stack.SupersededSweepVersion ||
+		found.Interval != 15*time.Minute {
+		t.Fatalf("schedules = %+v, want %s every 15 minutes with kind %s", srv.jobSchedules(),
+			stack.SupersededSweepName, stack.KindSupersededSweep)
+	}
+
+	var kind *durable.KindSpec
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == stack.KindSupersededSweep {
+			kind = &k
+		}
+	}
+
+	if kind == nil || len(kind.Steps) != 1 || kind.Version != stack.SupersededSweepVersion {
+		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), stack.KindSupersededSweep)
+	}
 }
 
 // dropRefusals is a scopeaudit.Recorder that drops every refusal.

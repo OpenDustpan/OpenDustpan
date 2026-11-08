@@ -979,6 +979,105 @@ func (s *fakeBackupStore) SupersededBlobs(
 	return out, nil
 }
 
+// SupersededMarks implements stack.CheckpointStore.
+func (s *fakeBackupStore) SupersededMarks(
+	_ context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	var out []stack.SupersededMark
+
+	for stackID, marks := range s.data.marks {
+		ref, ok := s.data.stackIDs[stackID]
+		if !ok {
+			continue
+		}
+
+		nsID := s.data.namespaces[s.data.stacks[ref].Ref.Namespace.String()].ID
+		out = append(out, fakeMarksAfter(stack.ID(stackID), marks, nsID, after, olderThan)...)
+	}
+
+	slices.SortFunc(out, func(a, b stack.SupersededMark) int {
+		if order := strings.Compare(string(a.StackID), string(b.StackID)); order != 0 {
+			return order
+		}
+
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
+// fakeMarksAfter returns the marks of id that are before olderThan and after
+// the cursor.
+func fakeMarksAfter(
+	id stack.ID, marks []stack.SupersededBlob, nsID namespace.ID,
+	after stack.SupersededCursor, olderThan time.Time,
+) []stack.SupersededMark {
+	var out []stack.SupersededMark
+
+	for _, mark := range marks {
+		if !mark.At.Before(olderThan) {
+			continue
+		}
+
+		if id < after.StackID || (id == after.StackID && mark.Key <= after.Key) {
+			continue
+		}
+
+		out = append(out, stack.SupersededMark{
+			StackID: id, NamespaceID: nsID, Key: mark.Key, Size: mark.Size, At: mark.At,
+		})
+	}
+
+	return out
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The backup fake keeps
+// no journal rows. A missing mark reports keep true, because another sweep
+// dropped it and owns the delete.
+func (s *fakeBackupStore) DropSupersededMark(
+	_ context.Context, stackID stack.ID, key blob.Key,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return false, errFakeClosed
+	}
+
+	id := stackID.String()
+	marks := s.data.marks[id]
+
+	index := slices.IndexFunc(marks, func(mark stack.SupersededBlob) bool { return mark.Key == key })
+	if index < 0 {
+		return true, nil
+	}
+
+	s.data.marks[id] = slices.Delete(marks, index, index+1)
+
+	for cpID := range s.data.checkpoints[id] {
+		if s.data.checkpoints[id][cpID].BlobKey == key {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // JournalBatches implements stack.JournalStore. The backup fake keeps no journal rows.
 func (s *fakeBackupStore) JournalBatches(context.Context, stack.ID, stack.UpdateID) ([]stack.JournalBatchRef, error) {
 	return nil, nil
