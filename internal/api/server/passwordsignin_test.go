@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -452,5 +455,97 @@ func TestLDAPRouteRefusesAnotherSite(t *testing.T) {
 	})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("sign-in from the console = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+}
+
+// TestLDAPRouteOfAnotherSiteHasABoundedAudit proves the bound of the audit of
+// the check against login CSRF on the password route of a provider. 50
+// refusals with 50 Origins and 50 source addresses write one denied entry for
+// the configured provider, and 50 refusals with 50 other provider names write
+// one denied entry for all of them. The caller cannot open a new key of the
+// limiter with the path, the Origin or the address.
+func TestLDAPRouteOfAnotherSiteHasABoundedAudit(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+	body := signInBody("alice", ldapRoutePassword)
+
+	for i := range 50 {
+		for _, path := range []string{ldapRoutePath, fmt.Sprintf("/api/dustpan/v1/sign-in/providers/p%d/password", i)} {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", fmt.Sprintf("https://evil-%d.example", i))
+			req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", i+1)
+
+			rec := httptest.NewRecorder()
+			e.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("refusal %d at %s = %d %s, want 401", i, path, rec.Code, rec.Body.String())
+			}
+		}
+	}
+
+	subjects := map[string]int{}
+
+	entries := e.serverEntries(t)
+	for i := range entries {
+		en := &entries[i]
+		if en.Outcome == audit.OutcomeDenied && en.Action == session.ActionSignIn &&
+			strings.Contains(en.Reason, "another site") {
+			subjects[en.Subject]++
+		}
+	}
+
+	want := map[string]int{"sign-in:" + ldapRouteID: 1, "sign-in:password": 1}
+	if !maps.Equal(subjects, want) {
+		t.Fatalf("denied sign-in entries by subject = %v, want %v", subjects, want)
+	}
+
+	if n := e.dir.Connections(); n != 0 {
+		t.Fatalf("the directory got %d connections, want 0", n)
+	}
+}
+
+// TestPasswordRoutesAnswerTheSameRefusal proves that a wrong password on the
+// route of a local user and on the route of a provider gets the same status
+// and the same text, so that a person sees one answer for every password
+// sign-in. Each route keeps its own error code.
+func TestPasswordRoutesAnswerTheSameRefusal(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	createRouteLocalUser(t, f)
+
+	local := publicPost(t, f, "/api/dustpan/v1/sign-in/password", `{"userName":"carol","password":"wrong-password"}`)
+
+	e := newLDAPRouteEnv(t)
+	ldap := e.post(t, ldapRoutePath, signInBody("alice", "wrong-password"))
+
+	type answer struct {
+		Message   string `json:"message"`
+		ErrorCode string `json:"errorCode"`
+		Code      int    `json:"code"`
+	}
+
+	var a, b answer
+
+	if err := json.Unmarshal(local.Body.Bytes(), &a); err != nil {
+		t.Fatalf("decode the local answer %q: %v", local.Body.String(), err)
+	}
+
+	if err := json.Unmarshal(ldap.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode the LDAP answer %q: %v", ldap.Body.String(), err)
+	}
+
+	const text = "The user name or the password is wrong."
+
+	if local.Code != http.StatusUnauthorized || ldap.Code != http.StatusUnauthorized ||
+		a.Message != text || b.Message != text || a.Code != b.Code {
+		t.Fatalf("answers = %d %+v and %d %+v, want 401 with %q on both routes", local.Code, a, ldap.Code, b, text)
+	}
+
+	if a.ErrorCode != "local-user.sign-in-failed" || b.ErrorCode != "sign-in.failed" {
+		t.Fatalf("error codes = %q and %q, want the code of each route", a.ErrorCode, b.ErrorCode)
 	}
 }

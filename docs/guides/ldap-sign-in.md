@@ -70,13 +70,14 @@ curl -X POST "$SERVER/api/dustpan/v1/sign-in/providers/corp-ldap/password" \
 | Answer | Meaning |
 | --- | --- |
 | `204` | The server signed the person in. The answer sets the session cookie of the console. |
-| `401` `sign-in.failed` | The server refused the sign-in. |
+| `401` `sign-in.failed` | The server refused the sign-in. The text is "The user name or the password is wrong.", the same as for a local user. |
 | `400` `request.body-invalid` | The body is not a JSON object of this route. |
 | `429` | The source address has too many failed sign-ins. Try again later. |
 | `503` `sign-in.unavailable` | The directory does not answer. Try again later. |
 
 Each refusal gets the same `401` answer: a wrong password, an unknown user,
-a locked name or person, a disabled person and an unknown provider. So the
+a locked name or person, a disabled person, an unknown provider, and a
+request that another site can send. So the
 answer does not tell that a user or a provider exists. The audit entry of
 the sign-in holds the real reason.
 

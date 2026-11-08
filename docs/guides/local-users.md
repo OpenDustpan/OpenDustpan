@@ -133,7 +133,7 @@ A good sign-in answers `204` with the session cookie. The session records the
 provider `local`.
 
 Each failure answers `401` with the error code `local-user.sign-in-failed`
-and the text "the user name or the password is wrong": for an unknown user
+and the text "The user name or the password is wrong.": for an unknown user
 name, a wrong password, a user with no password and a disabled person. The
 answer does not tell which. The audit entry `sign-in.password-failed`
 records the real reason. Each failure spends one unit of the password budget

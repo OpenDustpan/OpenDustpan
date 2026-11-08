@@ -107,7 +107,7 @@ var (
 	// errLocalUserBody.
 	errPasswordSignInFailed = &codedError{
 		status: http.StatusUnauthorized, code: errcode.SignInFailed, args: nil,
-		message: "sign-in failed: check the user name and the password",
+		message: passwordWrongText,
 	}
 	// errPasswordSignInUnavailable is the answer when the directory does not
 	// answer. It tells nothing about the person.
@@ -116,6 +116,14 @@ var (
 		message: "the directory of the sign-in provider does not answer: try again later",
 	}
 )
+
+// otherProviderActor is the actor of the audit entry of a sign-in of another
+// site whose path names no configured password provider.
+const otherProviderActor = "sign-in:password"
+
+// passwordWrongText is the message of each refused password sign-in, on the
+// route of a local user and on the route of a provider.
+const passwordWrongText = "The user name or the password is wrong."
 
 // errPasswordProvider reports a password provider that the handler cannot
 // serve.
@@ -198,8 +206,16 @@ func (h *Handler) providerPasswordSignIn(
 	}
 
 	// Login CSRF: refuse a request of another site before the budget and
-	// before any store or directory call. It spends nothing.
+	// before any store or directory call. It spends nothing. The audit entry
+	// names a fixed actor: a configured provider, or one actor for every
+	// other path value, so the caller cannot open new keys of the limiter.
 	if !h.signIn.checker.SignInFromBody(r) {
+		actor := otherProviderActor
+		if p, ok := h.signIn.passwordProviders[r.PathValue("provider")]; ok {
+			actor = "sign-in:" + p.ID
+		}
+
+		h.recordOtherSiteSignIn(ctx, r, actor)
 		h.writeError(ctx, w, errPasswordSignInFailed)
 
 		return

@@ -774,7 +774,7 @@ func localUserErrors() []localUserMapping {
 				status:  http.StatusUnauthorized,
 				code:    errcode.LocalUserSignInFailed,
 				args:    nil,
-				message: "the user name or the password is wrong",
+				message: passwordWrongText,
 			},
 		},
 		{

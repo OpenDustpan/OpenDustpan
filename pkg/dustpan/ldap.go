@@ -29,12 +29,12 @@ import (
 // of a private network that a connection to the directory may reach, in
 // addition to public addresses; NewServer refuses a range that is too wide
 // (see egress.ParseAllowedRanges). BindPassword is the password of the
-// service account, as a session.Password: its String and GoString never
-// show the value, so a log of the provider does not hold it. Subject is "entryUUID", "objectGUID" or the name of
-// another
-// attribute. Groups is "off", "search" or "memberOf"; the server reads the
-// groups of a person and applies no membership. AutoCreate makes a principal
-// at the first sign-in of a person, with no grant and no group.
+// service account, as a session.Password: its String and GoString never show
+// the value, so a log of the provider does not hold it. Subject is
+// "entryUUID", "objectGUID" or the name of another attribute. Groups is
+// "off", "search" or "memberOf"; the server reads the groups of a person and
+// applies no membership. AutoCreate makes a principal at the first sign-in of
+// a person, with no grant and no group.
 type LDAPProvider struct {
 	RootCAs                *x509.CertPool
 	AllowedRanges          []netip.Prefix
