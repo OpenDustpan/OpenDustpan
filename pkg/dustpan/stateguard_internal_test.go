@@ -218,11 +218,12 @@ func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
 // errPrincipalDown is the error of a principal read that does not answer.
 var errPrincipalDown = errors.New("principal down")
 
-// fakePrincipalReads serves one principal record and pages of groups.
+// fakePrincipalReads serves one principal record and a list of active group
+// names.
 type fakePrincipalReads struct {
 	record    principal.Principal
 	recordErr error
-	groups    [][]principal.Group
+	groups    []string
 	groupsErr error
 	calls     int
 }
@@ -241,29 +242,20 @@ func (f *fakePrincipalReads) GetPrincipalBySubject(
 	return f.record, nil
 }
 
-func (f *fakePrincipalReads) ListGroupsOf(
-	_ context.Context, principalID string, _ principal.Query,
-) ([]principal.Group, int64, error) {
+func (f *fakePrincipalReads) ListActiveGroupNamesOf(
+	_ context.Context, principalID string,
+) ([]string, error) {
 	f.calls++
 
 	if f.groupsErr != nil {
-		return nil, 0, f.groupsErr
+		return nil, f.groupsErr
 	}
 
 	if principalID != f.record.ID {
-		return nil, 0, principal.ErrNotFound
+		return nil, principal.ErrNotFound
 	}
 
-	total := int64(0)
-	for _, page := range f.groups {
-		total += int64(len(page))
-	}
-
-	if f.calls > len(f.groups) {
-		return nil, total, nil
-	}
-
-	return f.groups[f.calls-1], total, nil
+	return f.groups, nil
 }
 
 func TestPrincipalSubjects(t *testing.T) {
@@ -345,14 +337,7 @@ func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) 
 	glass := alice
 	glass.ID, glass.Subject, glass.DisplayName, glass.BreakGlass = "prn-glass", "glass", "Glass", true
 
-	group := func(name string) principal.Group {
-		return principal.Group{
-			CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: "grp-" + name, Name: name, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
-		}
-	}
-
-	aliceGroups := [][]principal.Group{{group("zeta")}, {group("alpha")}}
+	aliceGroups := []string{"zeta", "alpha", "zeta"}
 
 	var none principal.Principal
 
@@ -361,7 +346,7 @@ func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) 
 		principal      identity.Principal
 		record         principal.Principal
 		recordErr      error
-		groups         [][]principal.Group
+		groups         []string
 		groupsErr      error
 		signedIn       bool
 		wantGroups     []string
@@ -371,11 +356,11 @@ func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) 
 		wantGroupsRead int
 	}{
 		{
-			"a session with a sign-in and two pages of groups",
+			"a session with a sign-in and duplicate group names",
 			gatePrincipal("alice", identity.KindPerson, identity.CredentialSession),
 			alice, nil, aliceGroups, nil, true,
 			[]string{"alpha", "zeta"},
-			at, false, nil, 2,
+			at, false, nil, 1,
 		},
 		{
 			"an access token of the same person",
@@ -383,7 +368,7 @@ func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) 
 			alice, nil, aliceGroups, nil, false,
 			[]string{"alpha", "zeta"},
 			time.Time{},
-			false, nil, 2,
+			false, nil, 1,
 		},
 		{
 			"a session of a break-glass person",
@@ -472,7 +457,7 @@ func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) 
 			})
 
 			if reads.calls != tc.wantGroupsRead {
-				t.Fatalf("ListGroupsOf() calls = %d, want %d", reads.calls, tc.wantGroupsRead)
+				t.Fatalf("ListActiveGroupNamesOf() calls = %d, want %d", reads.calls, tc.wantGroupsRead)
 			}
 		})
 	}
@@ -488,7 +473,7 @@ func checkSubjectError(t *testing.T, err, want error, calls, wantCalls int) {
 	}
 
 	if calls != wantCalls {
-		t.Fatalf("ListGroupsOf() calls = %d, want %d", calls, wantCalls)
+		t.Fatalf("ListActiveGroupNamesOf() calls = %d, want %d", calls, wantCalls)
 	}
 }
 

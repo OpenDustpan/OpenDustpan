@@ -12571,6 +12571,35 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 	return items, nil
 }
 
+const listActiveGroupNamesOfPrincipal = `-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C"
+`
+
+func (q *Queries) ListActiveGroupNamesOfPrincipal(ctx context.Context, principalID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listActiveGroupNamesOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditChainMarks = `-- name: ListAuditChainMarks :many
 SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope
 `

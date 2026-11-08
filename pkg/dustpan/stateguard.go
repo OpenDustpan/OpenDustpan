@@ -294,23 +294,24 @@ func (f inventoryFacts) listed(ctx context.Context, unit identity.Object) (inven
 	return inventory.Entry{}, gate.ErrNotFound
 }
 
-// principalReads reads the record and the groups of a principal. The principal
-// store of the server meets it.
+// principalReads reads the record and the active groups of a principal. The
+// principal store of the server meets it.
 type principalReads interface {
 	// GetPrincipalBySubject returns the principal with the subject subject.
 	// It returns principal.ErrNotFound when no such principal exists or it
 	// was deleted.
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
-	// ListGroupsOf returns one page of the groups of the principal with the
-	// ID principalID, ordered by name without regard to case.
-	ListGroupsOf(
-		ctx context.Context, principalID string, q principal.Query,
-	) ([]principal.Group, int64, error)
+	// ListActiveGroupNamesOf returns the names of the groups in which the
+	// principal with the ID principalID has an active membership that is not
+	// removed, ordered by name without regard to case. It returns
+	// principal.ErrNotFound when no such principal exists or it was deleted.
+	ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error)
 }
 
 // principalSubjects gives the Subject of a principal from its credential and
 // its principal record. A session of a break-glass account is outside the
-// access limits, and the groups of the record are the groups of the subject.
+// access limits, and the active groups of the record are the groups of the
+// subject.
 type principalSubjects struct {
 	principals principalReads
 }
@@ -391,42 +392,25 @@ func credentialKind(c identity.Credential) (gate.CredentialKind, error) {
 	}
 }
 
-// groupsOf returns the sorted names of every group of the principal with the
-// ID principalID, each once. It reads every page of the group list.
+// groupsOf returns the sorted names of the active groups of the principal
+// with the ID principalID, each once.
 func groupsOf(ctx context.Context, reads principalReads, principalID string) ([]string, error) {
-	var (
-		names []string
-		after string
-		read  int64
-	)
+	groups, err := reads.ListActiveGroupNamesOf(ctx, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("active groups of principal %q: %w", principalID, err)
+	}
 
-	seen := map[string]struct{}{}
+	seen := make(map[string]struct{}, len(groups))
+	var names []string
 
-	for {
-		groups, total, err := reads.ListGroupsOf(ctx, principalID, principal.Query{
-			After: after, Low: "", High: "", Limit: principal.MaxLimit,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("groups of principal %q: %w", principalID, err)
+	for _, name := range groups {
+		if _, ok := seen[name]; ok {
+			continue
 		}
 
-		for i := range groups {
-			if _, ok := seen[groups[i].Name]; ok {
-				continue
-			}
+		seen[name] = struct{}{}
 
-			seen[groups[i].Name] = struct{}{}
-
-			names = append(names, groups[i].Name)
-		}
-
-		read += int64(len(groups))
-
-		if len(groups) == 0 || read >= total {
-			break
-		}
-
-		after = strings.ToLower(groups[len(groups)-1].Name)
+		names = append(names, name)
 	}
 
 	slices.Sort(names)
