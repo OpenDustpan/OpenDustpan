@@ -138,8 +138,11 @@ type ReviewPage struct {
 // ErrCollectionReview. A bad request returns ErrInvalid, and a store that
 // reads no review ErrNoReview.
 //
-// Review reads only. The caller writes the audit entry of the export (ADR
-// 52, decision 13).
+// Each page reads collection membership again, so units that join or leave
+// between pages change the next page. The snapshot fixes the time of the
+// grants, not collection membership.
+//
+// Review reads only. The caller writes the audit entry of the export.
 func (s *Service) Review(ctx context.Context, obj identity.Object, req ReviewRequest) (ReviewPage, error) {
 	rs, ok := s.store.(ReviewStore)
 	if !ok {

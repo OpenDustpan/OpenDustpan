@@ -402,10 +402,13 @@ func (h *Handler) deleteSubscription(
 	h.send(w, r, deletedAnswer(stateOf(ctx)), id)
 }
 
-// historyToken is the page token of the delivery history. Fingerprint binds it
-// to one namespace and subscription.
+// historyToken is the page token of the delivery history. NextAt is the Unix
+// millisecond time of the last delivery of the page before and ID is its ID:
+// the next page starts after that pair. Fingerprint binds the token to one
+// namespace and subscription.
 type historyToken struct {
-	Offset      int    `json:"o"`
+	NextAt      int64  `json:"t"`
+	ID          string `json:"i"`
 	Fingerprint string `json:"f"`
 }
 
@@ -416,20 +419,15 @@ func historyFingerprint(ns namespace.Name, id string) string {
 var errPageToken = problem.BadRequest(errcode.RequestPageTokenInvalid,
 	"pageToken does not belong to this subscription: start again without it")
 
-// pageRequest is the window of the history that a request asks for.
-type pageRequest struct {
-	offset, size int
-}
-
-// historyPage reads the size and the offset of the request.
-func historyPage(r *http.Request, fp string) (pageRequest, error) {
+// historyPage reads the size and the cursor of the request.
+func historyPage(r *http.Request, fp string) (subscriptionsvc.HistoryRequest, error) {
 	q := queryOf(r)
 	size := defaultPageSize
 
 	if raw := q.Get("pageSize"); raw != "" {
 		n, convErr := strconv.Atoi(raw)
 		if convErr != nil || n < 1 || n > maxPageSize {
-			return pageRequest{}, problem.BadRequest(errcode.RequestInvalidQuery,
+			return subscriptionsvc.HistoryRequest{}, problem.BadRequest(errcode.RequestInvalidQuery,
 				fmt.Sprintf("pageSize must be a number from 1 to %d", maxPageSize))
 		}
 
@@ -438,16 +436,26 @@ func historyPage(r *http.Request, fp string) (pageRequest, error) {
 
 	raw := q.Get("pageToken")
 	if raw == "" {
-		return pageRequest{offset: 0, size: size}, nil
+		return subscriptionsvc.HistoryRequest{After: nil, Size: size}, nil
 	}
 
 	var t historyToken
 	if decodeErr := pagetoken.Decode(raw, &t); decodeErr != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) ||
-		t.Offset < 0 {
-		return pageRequest{}, errPageToken
+		t.NextAt < 0 {
+		return subscriptionsvc.HistoryRequest{}, errPageToken
 	}
 
-	return pageRequest{offset: t.Offset, size: size}, nil
+	// Defense in depth: the store binds the cursor ID as a parameter, so a
+	// value that is not a delivery ID cannot change a query. This check stays
+	// so that a value of a token never reaches a store as a cursor at all.
+	if !notify.ValidDeliveryID(t.ID) {
+		return subscriptionsvc.HistoryRequest{}, errPageToken
+	}
+
+	return subscriptionsvc.HistoryRequest{
+		After: &notify.DeliveryCursor{NextAt: time.UnixMilli(t.NextAt).UTC(), ID: t.ID},
+		Size:  size,
+	}, nil
 }
 
 // history serves GET /subscriptions/{subscription_id}/deliveries.
@@ -463,7 +471,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, _ identity.Pri
 		return
 	}
 
-	page, err := h.subscriptions.History(ctx, ns, id, window.offset, window.size)
+	page, err := h.subscriptions.History(ctx, ns, id, window)
 	if err != nil {
 		h.writeSubscriptionError(ctx, w, err)
 
@@ -476,9 +484,10 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, _ identity.Pri
 	}
 
 	if page.More {
-		token, encodeErr := pagetoken.Encode(
-			historyToken{Offset: window.offset + len(page.Deliveries), Fingerprint: fp},
-		)
+		last := page.Deliveries[len(page.Deliveries)-1]
+		token, encodeErr := pagetoken.Encode(historyToken{
+			NextAt: last.NextAt.UnixMilli(), ID: last.ID, Fingerprint: fp,
+		})
 		if encodeErr != nil {
 			h.writeSubscriptionError(ctx, w, encodeErr)
 

@@ -604,6 +604,32 @@ func TestRoutingChangeNeedsOpen(t *testing.T) {
 	}
 }
 
+// TestRoutingChangeOfAFileExportNeedsOpen sends a write that moves the value
+// that exports.files reads to another secret, from a principal with
+// profile:write and no profile:open. The routing review must refuse it and
+// name the value.
+func TestRoutingChangeOfAFileExportNeedsOpen(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	doc := "schemaVersion: 1\nvalues:\n  dbPassword: \"${ values.source }\"\n" +
+		"  source: { $secret: abc }\n  other: { $secret: def }\n" +
+		"exports:\n  files:\n    DB_PASSWORD_FILE: \"${ values.dbPassword }\"\n"
+
+	created := f.create(t, "files", doc)
+	moved := jsonString(t, map[string]string{
+		"document": strings.Replace(doc, `dbPassword: "${ values.source }"`, `dbPassword: "${ values.other }"`, 1),
+	})
+	edit := send("writer", http.MethodPost, base+"/"+created.ID+"/revisions", moved).
+		withHeader("If-Match", created.ETag)
+
+	got := f.do(t, edit)
+	if got.code != http.StatusForbidden || !strings.Contains(got.body, "profile.routing-change-needs-open") ||
+		!strings.Contains(got.body, "values.dbPassword") {
+		t.Fatalf("change of a value that a file export reads, without open: %d %s", got.code, got.body)
+	}
+}
+
 func TestWriteAndDeleteNeedNoRead(t *testing.T) {
 	t.Parallel()
 

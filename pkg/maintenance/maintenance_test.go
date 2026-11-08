@@ -52,8 +52,8 @@ func (stubSealer) SealState(
 
 func (stubSealer) OpenState(
 	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
-) (io.Reader, error) {
-	return r, nil
+) (io.ReadCloser, error) {
+	return io.NopCloser(r), nil
 }
 
 func (stubSealer) SealOutputs(

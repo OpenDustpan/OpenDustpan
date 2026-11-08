@@ -104,6 +104,7 @@ const (
 	ErrorCodeAuthRateLimited                       ErrorCode = "auth.rate-limited"
 	ErrorCodeAuthUnauthenticated                   ErrorCode = "auth.unauthenticated"
 	ErrorCodeBackupCorrupt                         ErrorCode = "backup.corrupt"
+	ErrorCodeBackupTooManyUnverified               ErrorCode = "backup.too-many-unverified"
 	ErrorCodeCollectionAlreadyExists               ErrorCode = "collection.already-exists"
 	ErrorCodeCollectionChanged                     ErrorCode = "collection.changed"
 	ErrorCodeCollectionInvalidName                 ErrorCode = "collection.invalid-name"
