@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,49 @@ func floorCall(t *testing.T, h testHandler, method, path, token string) (int, st
 	return rec.Code, rec.Body.String()
 }
 
+// floorAnswerWriter passes the answer of a handler to a recorder. It runs a
+// callback once, on the first WriteHeader call, or on the first Write call
+// when WriteHeader was not called.
+type floorAnswerWriter struct {
+	recorder *httptest.ResponseRecorder
+	once     sync.Once
+	callback func()
+}
+
+func (w *floorAnswerWriter) Header() http.Header { return w.recorder.Header() }
+
+func (w *floorAnswerWriter) WriteHeader(status int) {
+	w.once.Do(w.callback)
+	w.recorder.WriteHeader(status)
+}
+
+func (w *floorAnswerWriter) Write(p []byte) (int, error) {
+	w.once.Do(w.callback)
+
+	n, err := w.recorder.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write the answer: %w", err)
+	}
+
+	return n, nil
+}
+
+// floorCallAtAnswer sends the request of one floor row through a
+// floorAnswerWriter and returns the answer. The callback runs when the
+// handler writes the answer.
+func floorCallAtAnswer(t *testing.T, h testHandler, tc floorCase, callback func()) floorResult {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), tc.method, floorPath(tc.method, floorIDA), nil)
+	req.Header.Set("Authorization", "Bearer "+tc.caller)
+
+	rec := httptest.NewRecorder()
+	w := &floorAnswerWriter{recorder: rec, once: sync.Once{}, callback: callback}
+	h.ServeHTTP(w, req)
+
+	return floorResult{body: rec.Body.String(), status: rec.Code}
+}
+
 // floorPath returns the path of one change of the principal id.
 func floorPath(method, id string) string {
 	if method == http.MethodDelete {
@@ -285,8 +329,25 @@ func runFloorCase(t *testing.T, tc floorCase) {
 
 	h, recorder, failures := floorHandler(t, svc, st, tc)
 
-	status, body := floorCall(t, h, tc.method, floorPath(tc.method, floorIDA), tc.caller)
-	result := floorResult{body: body, status: status}
+	var result floorResult
+
+	if tc.wantRefuse && !tc.auditFails {
+		action := identity.ActionServerManagePrincipals
+		object := principal.Ref(floorIDA)
+		countAtAnswer := -1
+
+		result = floorCallAtAnswer(t, h, tc, func() {
+			countAtAnswer = len(floorEntries(t, st, action, audit.OutcomeDenied, object))
+		})
+
+		if countAtAnswer != 1 {
+			t.Fatalf("%s has %d denied entries in the audit log when the server writes the answer, "+
+				"want 1: the denied entry must be in the audit log before the answer", tc.name, countAtAnswer)
+		}
+	} else {
+		status, body := floorCall(t, h, tc.method, floorPath(tc.method, floorIDA), tc.caller)
+		result = floorResult{body: body, status: status}
+	}
 
 	if !tc.wantRefuse {
 		if result.status != http.StatusOK {
