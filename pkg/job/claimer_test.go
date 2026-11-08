@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -22,9 +23,14 @@ func (o oneNamespace) GetNamespace(context.Context, namespace.Name) (namespace.N
 	return o.ns, nil
 }
 
-// oneJob is a job.Store that answers Get with j. Any other method of the port
-// panics on the nil embedded interface, which proves the claimer reads
-// nothing else.
+// errReachedWrite is the error of a write that a claimer makes after a check
+// that did not refuse the job. A test that expects the refusal then fails
+// with this error, not with a panic.
+var errReachedWrite = errors.New("the claimer reached a write")
+
+// oneJob is a job.Store that answers Get with j, and Apply with
+// errReachedWrite. Any other method of the port panics on the nil embedded
+// interface, which proves the claimer reads nothing else.
 type oneJob struct {
 	job.Store
 
@@ -34,6 +40,22 @@ type oneJob struct {
 // Get implements job.Store.
 func (o *oneJob) Get(context.Context, job.ID) (job.Job, error) {
 	return o.j, nil
+}
+
+// Apply implements job.Store.
+func (o *oneJob) Apply(context.Context, job.Change, namespace.Fence, []audit.Entry) (job.Job, error) {
+	return job.Job{}, errReachedWrite
+}
+
+// noOperations is a durable.Store whose Extend returns errReachedWrite. Any
+// other method of the port panics on the nil embedded interface.
+type noOperations struct {
+	durable.Store
+}
+
+// Extend implements durable.Store.
+func (noOperations) Extend(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+	return durable.Claim{}, errReachedWrite
 }
 
 // claimerUnit returns the unit of the tests and the namespace that holds it,
@@ -108,7 +130,7 @@ func TestRunningRefusesAnotherNamespaceID(t *testing.T) {
 			j := claimerJob(unit, tt.id)
 
 			c := job.NewClaimer(
-				&oneJob{Store: nil, j: j}, nil, oneNamespace{ns: held}, nil,
+				&oneJob{Store: nil, j: j}, noOperations{Store: nil}, oneNamespace{ns: held}, nil,
 				job.WithClaimerClock(func() time.Time { return at }),
 			)
 
@@ -138,7 +160,7 @@ func TestRenewRefusesAnotherNamespaceID(t *testing.T) {
 			j := claimerJob(unit, tt.id)
 
 			c := job.NewClaimer(
-				&oneJob{Store: nil, j: j}, nil, oneNamespace{ns: held}, nil,
+				&oneJob{Store: nil, j: j}, noOperations{Store: nil}, oneNamespace{ns: held}, nil,
 				job.WithClaimerClock(func() time.Time { return at }),
 			)
 
