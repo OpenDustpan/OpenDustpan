@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"opendustpan.org/opendustpan/internal/calendar"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -166,5 +169,51 @@ func TestCheckStagedBreakGlassReviewsRefusesAMissingNamespace(t *testing.T) {
 
 	if !strings.Contains(fmt.Sprint(err), "has no namespace") {
 		t.Fatalf("check = %v, want the refusal of a review with no namespace", err)
+	}
+}
+
+// TestBreakGlassReviewUseIsUnique proves the unique index on the use of a
+// review: a second row with the same kind and reference fails with a unique
+// violation, and another use inserts.
+func TestBreakGlassReviewUseIsUnique(t *testing.T) {
+	t.Parallel()
+
+	const insert = `INSERT INTO break_glass_reviews (
+id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason,
+use_at_ms, use_until_ms, state, created_at_ms, due_at_ms, calendar, calendar_from_namespace,
+calendar_from_group, step, next_notice_at_ms, verdict_reviewer, verdict_note, verdict_auth,
+verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version)
+VALUES ('bgr-2', ?, ?, ?, ?, 'alice', '["alice"]', 'Roll back the failed apply',
+	1, 0, 'pending', 1, 1, 'cal-default', 'acme', '', 0, 0, '', '', '', 0, 0, '[]', 1)`
+
+	for _, tc := range []struct {
+		name          string
+		kind          string
+		ref           string
+		scope         string
+		object        string
+		wantViolation bool
+	}{
+		{"the same kind and reference", "freeze-break", "job-1", "acme", "opentofu:acme/network", true},
+		{"another reference", "freeze-break", "job-2", "acme", "opentofu:acme/network", false},
+		{"another kind", "account-session", "job-1", "@server", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			seedBreakGlassReview(t, s)
+
+			_, err := s.conn.ExecContext(t.Context(), insert, tc.kind, tc.ref, tc.scope, tc.object)
+
+			if tc.wantViolation {
+				sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+				if !ok || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_UNIQUE {
+					t.Fatalf("insert = %v, want a unique violation", err)
+				}
+			} else if err != nil {
+				t.Fatalf("insert = %v, want nil", err)
+			}
+		})
 	}
 }
