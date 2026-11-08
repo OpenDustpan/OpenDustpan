@@ -259,6 +259,7 @@ func newAccessFixtureAll(
 		Schema:           stubSchema{migrations: nil},
 		Journal:          nil,
 		Principals:       principals,
+		Reach:            routeReach(st),
 		Tokens:           tokens,
 		Access:           grants,
 		Audit:            entries(st),

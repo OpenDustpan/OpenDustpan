@@ -81,6 +81,10 @@ var (
 	ErrUnitMoved = errors.New("the unit moved to another collection")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrUnknownAction reports an action that no family classifies. The
+	// protected check of a group returns it, so that a new action fails
+	// closed until it is classified.
+	ErrUnknownAction = errors.New("unknown action")
 )
 
 // Family names the group of actions that an action belongs to.
@@ -241,6 +245,37 @@ func Actions(f Family) []identity.Action {
 	sortActions(out)
 
 	return out
+}
+
+// SensitiveActions returns every sensitive action, sorted: each action of
+// the operator, the administration and the delegation families. The list
+// comes from the families, so a new action of one of them is in the list
+// with no other change.
+func SensitiveActions() []identity.Action {
+	out := Actions(FamilyOperator)
+	out = append(out, Actions(FamilyAdministration)...)
+	out = append(out, Actions(FamilyDelegation)...)
+
+	sortActions(out)
+
+	return out
+}
+
+// IsSensitive reports whether action is a sensitive action. It returns
+// false for an action that no family classifies: an unknown action is not
+// sensitive. A caller that must fail closed on an unknown action reads
+// FamilyOf itself, as the protected check of a group does.
+func IsSensitive(action identity.Action) bool {
+	family, ok := FamilyOf(action)
+
+	return ok && sensitiveFamily(family)
+}
+
+// sensitiveFamily reports whether a family holds sensitive actions: the
+// operator family, the administration family and the delegation family.
+func sensitiveFamily(family Family) bool {
+	return family == FamilyOperator || family == FamilyAdministration ||
+		family == FamilyDelegation
 }
 
 // SubjectKind names what a grant subject is.

@@ -192,7 +192,17 @@ the same name, without regard to case, gets `409` with the code
 | `GET /api/server/principals/{id}/groups` | `server:read-principals` | `200`, the groups of a principal |
 
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
-`createdAt`, `updatedAt` and `memberCount`.
+`createdAt`, `updatedAt`, `memberCount` and `protected`.
+
+`protected` is `true` when the group holds a sensitive action on the
+installation or on a principal of the installation through its own grants. A
+sensitive action manages the installation or its access: each operator
+action, each administration action and each delegation action. A grant
+inside one namespace, and a grant that a member holds as a person, do not
+make the group protected.
+
+A read that cannot check the group answers `500` with the code
+`server.internal`. It never answers `protected: false`.
 
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code

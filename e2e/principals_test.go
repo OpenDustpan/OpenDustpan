@@ -28,6 +28,7 @@ type e2eGroup struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Protected   bool   `json:"protected"`
 }
 
 // TestPrincipalsAndGroups drives every principal and group route of the

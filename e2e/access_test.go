@@ -101,6 +101,11 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated,
 	}, &ops)
+
+	if ops.Protected {
+		t.Fatal("the new group is protected, want false: it holds no grant")
+	}
+
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces", `{"name":"grants"}`, http.StatusCreated,
 	}, nil)
