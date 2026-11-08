@@ -23,6 +23,20 @@ type Tokens interface {
 	TokenManagers(ctx context.Context, id string) ([]string, error)
 }
 
+// GroupReach checks a membership add against the reach of the service
+// principals that the grants of the group reach. A membership gives the
+// grants of the group, and a grant on a service principal with a delegation
+// action lets its holder act as that principal, with every grant that it
+// has now or gets later, so the reach of each such principal must fit
+// inside the reach of the caller. access.Service meets it.
+type GroupReach interface {
+	// CheckGroupReach returns an error that wraps identity.ErrDenied when
+	// the reach of caller does not hold every action that the current
+	// grants of the group groupID reach, and when it cannot read what it
+	// needs.
+	CheckGroupReach(ctx context.Context, caller identity.Principal, groupID string) error
+}
+
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store Store
@@ -31,6 +45,12 @@ type Config struct {
 	// An installation that keeps no grants passes AdminOnlyGuard, which
 	// allows only an administrator.
 	Guard Guard
+	// GroupReach checks a membership add against the reach of the service
+	// principals that the grants of the group reach. Nil allows an
+	// administrator only, like AdminOnlyGuard, because the Service cannot
+	// compare the reaches without the port. An installation that keeps
+	// grants passes the access service.
+	GroupReach GroupReach
 	// Namespaces reads the fence of the namespace of a principal of a
 	// namespace. Nil means the Service keeps no principal of a namespace.
 	Namespaces Namespaces
@@ -65,6 +85,7 @@ type TempAdmins interface {
 type Service struct {
 	store      Store
 	guard      Guard
+	groupReach GroupReach
 	namespaces Namespaces
 	tempAdmins TempAdmins
 	tokens     Tokens
@@ -95,6 +116,7 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{
 		store:      cfg.Store,
 		guard:      cfg.Guard,
+		groupReach: cfg.GroupReach,
 		namespaces: cfg.Namespaces,
 		tempAdmins: cfg.TempAdmins,
 		tokens:     cfg.Tokens,
@@ -362,10 +384,10 @@ func (s *Service) ListGroups(ctx context.Context, req PageRequest) (Page[Group],
 	return pageOf(rows, total, limit, groupKey), nil
 }
 
-// GroupChange names the fields of a group that a change sets. A nil field
+// GroupUpdate names the fields of a group that a change sets. A nil field
 // keeps its value. A change that sets ClosedToIdentityProvider to its
 // current value is not an error.
-type GroupChange struct {
+type GroupUpdate struct {
 	Name        *string
 	Description *string
 	// ClosedToIdentityProvider sets the switch of the group: true closes
@@ -377,11 +399,20 @@ type GroupChange struct {
 // returns the stored group. A change of the switch ClosedToIdentityProvider
 // records the new value in the reason of the entry. A change of the name or
 // the description keeps its entry.
-func (s *Service) UpdateGroup(ctx context.Context, e audit.Entry, id string, c GroupChange) (Group, error) {
+//
+// A rename moves the members of the group from its old name to its new
+// name, so an access limit that names either name can lift for them: the
+// Guard checks the rename. A change of another field names the group as it
+// is, so it keeps the grants check.
+func (s *Service) UpdateGroup(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string, c GroupUpdate,
+) (Group, error) {
 	g, err := s.store.GetGroup(ctx, id)
 	if err != nil {
 		return Group{}, fmt.Errorf("update group %q: %w", id, err)
 	}
+
+	old := g.Name
 
 	if c.Name != nil {
 		g.Name = *c.Name
@@ -408,6 +439,12 @@ func (s *Service) UpdateGroup(ctx context.Context, e audit.Entry, id string, c G
 		return Group{}, err
 	}
 
+	if g.Name != old {
+		if err := s.checkGroup(ctx, caller, id, g.Name, GroupChangeRename); err != nil {
+			return Group{}, fmt.Errorf("update group %q: %w", id, err)
+		}
+	}
+
 	if err := s.store.UpdateGroup(ctx, g, entry); err != nil {
 		return Group{}, fmt.Errorf("update group %q: %w", id, err)
 	}
@@ -427,7 +464,7 @@ const (
 // entry e. The store revokes its grants in the same transaction, so the
 // Guard checks that caller holds every action that they give.
 func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
-	if err := s.checkGroup(ctx, caller, id); err != nil {
+	if err := s.checkGroup(ctx, caller, id, "", GroupChangeDelete); err != nil {
 		return fmt.Errorf("delete group %q: %w", id, err)
 	}
 
@@ -440,7 +477,9 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 
 // AddMember puts the principal principalID in the group groupID, with the
 // entry e. A membership gives the grants of the group, so it is a grant by
-// proxy: the Guard checks that caller holds every action that they give.
+// proxy: the Guard checks that caller holds every action that they give,
+// and GroupReach checks that the reach of caller holds the reach of every
+// service principal that they reach.
 //
 // The audit entry of a membership add of a service principal names, in the
 // change "tokenManagers", every holder of principal:manage-tokens on that
@@ -457,7 +496,14 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
-	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+	if err := s.checkGroup(ctx, caller, groupID, "", GroupChangeAddMember); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
+
+	// Defense in depth: the Guard checks the actions that the grants of the
+	// group give, in the transaction of the write, and the reach of the
+	// service principals that they reach is checked here, before the write.
+	if err := s.checkGroupReach(ctx, caller, groupID); err != nil {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}
 
@@ -513,7 +559,7 @@ func (s *Service) AddMember(
 func (s *Service) RemoveMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) error {
-	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+	if err := s.checkGroup(ctx, caller, groupID, "", GroupChangeRemoveMember); err != nil {
 		return fmt.Errorf("remove principal %q from group %q: %w", principalID, groupID, err)
 	}
 
@@ -784,16 +830,19 @@ func (s *Service) refuseServiceRecord(ctx context.Context, id string) error {
 	return refuseNamespaceServiceSubject(p.Subject)
 }
 
-// checkGroup asks the Guard whether caller may change who holds the grants
-// of the group groupID.
-func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
+// checkGroup asks the Guard whether caller may make the change of the group
+// groupID. newName is the name that the group takes in a rename, and "" for
+// another change.
+func (s *Service) checkGroup(
+	ctx context.Context, caller identity.Principal, groupID, newName string, change GroupChange,
+) error {
 	// Defense in depth: NewService refuses a missing Guard. This check stays so
 	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID)
+		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID, newName, change)
 	}
 
-	return s.guard.CheckGroupGrants(ctx, caller, groupID)
+	return s.guard.CheckGroupGrants(ctx, caller, groupID, newName, change)
 }
 
 // checkPrincipal asks the Guard whether caller may revoke the grants of the
@@ -806,6 +855,28 @@ func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal,
 	}
 
 	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)
+}
+
+// checkGroupReach asks GroupReach whether the reach of caller holds the
+// reach of every service principal that the grants of the group groupID
+// reach.
+func (s *Service) checkGroupReach(ctx context.Context, caller identity.Principal, groupID string) error {
+	// Defense in depth: NewService allows a missing GroupReach, for an
+	// installation that keeps no grants. This check stays so that a Service
+	// built any other way fails closed: without the port it allows only an
+	// administrator, like AdminOnlyGuard.
+	if s.groupReach == nil {
+		if caller.Admin {
+			return nil
+		}
+
+		return fmt.Errorf(
+			"%w: only an administrator adds a member when the server cannot check the reach of the group",
+			identity.ErrDenied,
+		)
+	}
+
+	return s.groupReach.CheckGroupReach(ctx, caller, groupID)
 }
 
 // existingSignIn returns the principal with the subject for a sign-in,

@@ -643,13 +643,19 @@ func deniedFailure(err error) (failure, bool) {
 
 // keepDenied maps the classes of a denial that keep their own text, as
 // problem.Writer.KeepDenied does. The status is 403 only. The text is built
-// from a sentinel, never from the wrap text.
+// from a sentinel or from a refusal of the domain, never from a wrapped
+// cause.
 func keepDenied(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, access.ErrEscalation):
 		// checkMoveGrant in pkg/access wraps this refusal in identity.ErrDenied
 		// when a grant of a move target gives more than the caller holds.
 		return keptForbidden(err, access.ErrEscalation.Error()), true
+	case errors.Is(err, accesstoken.ErrReachExceeded):
+		// The token service wraps this refusal in identity.ErrDenied. Its text
+		// names the principal and the actions of the principal that the caller
+		// does not hold. The refusal never holds a cause.
+		return keptForbidden(err, err.Error()), true
 	case errors.Is(err, errSignInRefused):
 		// The reason names no code, token or state: the sign-in handler adds it
 		// on purpose, as a signInRefusalError.

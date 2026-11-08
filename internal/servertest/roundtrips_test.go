@@ -1339,6 +1339,8 @@ func backupModel() costModel {
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 //
+// The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
+//
 // The fixed part also holds stagedJobCheckTrips: the staged check of the job
 // rows reads the job rows of the staging schema in one statement, once for
 // each restore.
@@ -1347,7 +1349,7 @@ func backupModel() costModel {
 // table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips + stagedJobCheckTrips + removalAlertTrips,
+		fixed:        342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1363,6 +1365,12 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// breakGlassReviewTrips is the number of round trips that the restore of the
+// table break_glass_reviews makes fewer than perTable gives. The measured run
+// makes 6 round trips for that table, not 7, at 3 and at 30 units, so the
+// difference does not grow with the units.
+const breakGlassReviewTrips = 1
 
 // stagedJobCheckTrips is the number of round trips of the staged check of the
 // job rows: the check reads the job rows of the staging schema in one

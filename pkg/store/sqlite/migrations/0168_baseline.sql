@@ -565,6 +565,36 @@ CREATE TABLE temp_admins (
   ended_at_ms BIGINT
 , review_opened_at_ms BIGINT);
 
+CREATE TABLE break_glass_reviews (
+    id                      TEXT    NOT NULL PRIMARY KEY,
+    use_kind                TEXT    NOT NULL,
+    use_ref                 TEXT    NOT NULL,
+    use_scope               TEXT    NOT NULL,
+    use_object              TEXT    NOT NULL,
+    use_subject             TEXT    NOT NULL,
+    use_people              TEXT    NOT NULL,
+    use_reason              TEXT    NOT NULL,
+    use_at_ms               INTEGER NOT NULL,
+    use_until_ms            INTEGER NOT NULL,
+    state                   TEXT    NOT NULL,
+    created_at_ms           INTEGER NOT NULL,
+    due_at_ms               INTEGER NOT NULL,
+    calendar                TEXT    NOT NULL,
+    calendar_from_namespace TEXT    NOT NULL,
+    calendar_from_group     TEXT    NOT NULL,
+    step                    INTEGER NOT NULL,
+    next_notice_at_ms       INTEGER NOT NULL,
+    verdict_reviewer        TEXT    NOT NULL,
+    verdict_note            TEXT    NOT NULL,
+    verdict_auth            TEXT    NOT NULL,
+    verdict_auth_at_ms      INTEGER NOT NULL,
+    verdict_reviewed_at_ms  INTEGER NOT NULL,
+    verdict_act_as          TEXT    NOT NULL,
+    version                 INTEGER NOT NULL,
+    CHECK (use_kind IN ('freeze-break', 'account-session', 'temp-admin')),
+    CHECK (state IN ('pending', 'accepted', 'disputed'))
+) STRICT;
+
 CREATE TABLE gate_records (
     id            TEXT    NOT NULL PRIMARY KEY,
     namespace_id  TEXT    NOT NULL,
@@ -1541,6 +1571,10 @@ CREATE INDEX object_context_owners_entry
     ON object_context_owners (namespace_id, object_kind, object_id, resource_key, source);
 
 CREATE INDEX inventory_changes_unit ON inventory_changes (namespace_id, tool, unit_id, seq, at_ms);
+
+CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews (use_kind, use_ref);
+
+CREATE INDEX break_glass_reviews_due ON break_glass_reviews (state, next_notice_at_ms);
 
 CREATE INDEX gate_records_change ON gate_records (namespace_id, change_kind, change_id, at_ms, id);
 

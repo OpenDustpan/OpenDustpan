@@ -1173,7 +1173,8 @@ func TestSignInProviderDown(t *testing.T) {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: allowAllGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: nil, Tokens: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)
@@ -1650,8 +1651,12 @@ func newSignInAccess(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: clock.Now, NewID: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

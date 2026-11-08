@@ -19,6 +19,8 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -78,6 +80,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 			TempAdmins: nil,
 			Store:      st,
 			Guard:      allowAllGuard{},
+			GroupReach: allowAllReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -99,6 +102,77 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 //
 //nolint:gochecknoglobals // A test-only registry: the service has no field for its sessions.
 var principalSessions sync.Map
+
+// newLimitedPrincipalStore returns a principal service whose guard refuses a
+// change that can lift an access limit of a scope that names the group, the
+// store, and the namespace acme, whose limits a test seeds.
+func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
+	t.Helper()
+
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+
+	err := st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.Unix(0, 0), Name: "acme", PrimaryInstallation: "acme",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	})
+	if err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st,
+	})
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	grants, err := access.NewService(access.ServiceConfig{
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("access service: %v", err)
+	}
+
+	principals, err := principal.NewService(
+		principal.Config{
+			TempAdmins: nil,
+			Store:      st,
+			Guard:      grants,
+			Namespaces: nil,
+			Tokens:     nil,
+			GroupReach: allowAllReach{},
+			Now:        nil,
+			NewID:      nil,
+		},
+	)
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	principalSessions.Store(principals, newStoreSessions(t, st))
+
+	return principals, st
+}
+
+// seedNamingLimit stores a limit of the namespace acme that names the group
+// name in an unless clause: an add of a member can lift it.
+func seedNamingLimit(t *testing.T, st *sqlite.Store, name string) {
+	t.Helper()
+
+	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject("acme"), time.Unix(0, 0), "access-limit:l1")
+
+	_, err := st.AccessLimits().Put(t.Context(), gate.AccessLimit{
+		Scope: gate.NamespaceScope("acme"), ID: "l1", Version: 0,
+		Policy: `forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"` + name + `" };`,
+	}, 0, fence, e)
+	if err != nil {
+		t.Fatalf("put access limit: %v", err)
+	}
+}
 
 // newPrincipalHandler builds a Handler with principals as its principal
 // service. Nil principals means a store that keeps none.
@@ -141,9 +215,21 @@ func reachConfigOf(principals *principal.Service) access.ReachConfig {
 
 // newReachPrincipalHandler builds a Handler like newAuditedPrincipalHandler
 // with reach as the reach config of the group routes, so a test can make the
-// check fail.
+// check fail. The handler discards its log records.
 func newReachPrincipalHandler(
 	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
+) testHandler {
+	t.Helper()
+
+	return newReachPrincipalHandlerWithLogger(t, principals, entries, reach, slog.New(slog.DiscardHandler))
+}
+
+// newReachPrincipalHandlerWithLogger builds a Handler like
+// newReachPrincipalHandler with logger as its logger, so a test can read the
+// records.
+func newReachPrincipalHandlerWithLogger(
+	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
+	logger *slog.Logger,
 ) testHandler {
 	t.Helper()
 
@@ -172,7 +258,7 @@ func newReachPrincipalHandler(
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
+		Logger:           logger,
 		Namespaces:       newTestNamespaces(t),
 		Backups:          nil,
 		Restores:         nil,
@@ -834,7 +920,7 @@ func TestPrincipalRoutesWithoutStore(t *testing.T) {
 func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 	t.Parallel()
 
-	svc, st := newTestPrincipalStore(t)
+	svc, st := newLimitedPrincipalStore(t)
 	h := newAuditedPrincipalHandler(t, svc, st)
 
 	var alice principalDoc
@@ -855,6 +941,15 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		`{"principalID":"` + alice.ID + `"}`, http.StatusCreated,
 	}, nil)
 
+	// A refusal by an access limit writes a failure entry too: the limit
+	// names the group in an unless clause, so an add of a member can lift
+	// it and the guard refuses the add of the caller.
+	seedNamingLimit(t, st, group.Name)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/" + group.ID + "/members",
+		`{"principalID":"` + alice.ID + `"}`, http.StatusForbidden,
+	}, nil)
+
 	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
@@ -864,6 +959,7 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		action, object string
 		outcome        audit.Outcome
 	}{
+		{"server:manage-groups", "group:" + group.ID + "#member:" + alice.ID, audit.OutcomeFailure},
 		{"server:manage-groups", "group:" + group.ID + "#member:" + alice.ID, audit.OutcomeSuccess},
 		{"server:manage-groups", "group:" + group.ID, audit.OutcomeSuccess},
 		{"server:manage-principals", "principals", audit.OutcomeFailure},
@@ -898,6 +994,42 @@ func withoutSessionEntries(entries []audit.Entry) []audit.Entry {
 	})
 }
 
+// TestGroupRenameThatCanLiftALimitIsRefused proves that the route of a group
+// change passes the caller to the service: a rename to a name that no access
+// limit names goes through, and a rename to the name of a group in an unless
+// clause of a limit answers 403 and keeps the name.
+func TestGroupRenameThatCanLiftALimitIsRefused(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newLimitedPrincipalStore(t)
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	var group groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated,
+	}, &group)
+
+	// The limit names the group auditors in an unless clause: a rename to
+	// that name can lift it for every member.
+	seedNamingLimit(t, st, "auditors")
+
+	mustCall(t, h, apiCall{
+		http.MethodPatch, "/api/server/groups/" + group.ID, `{"name":"ops2"}`, http.StatusOK,
+	}, nil)
+
+	status, body := call(t, h, apiCall{
+		http.MethodPatch, "/api/server/groups/" + group.ID, `{"name":"auditors"}`, http.StatusForbidden,
+	})
+	if status != http.StatusForbidden || !strings.Contains(body, "rename the group") {
+		t.Fatalf("the rename to auditors answers %d (%s), want 403 that names the change", status, body)
+	}
+
+	stored, err := svc.GetGroup(t.Context(), group.ID)
+	if err != nil || stored.Name != "ops2" {
+		t.Fatalf("the group after the refused rename = %+v, %v, want the name ops2", stored, err)
+	}
+}
+
 // failingStore is a principal store whose principal create fails the way a
 // lost audit append fails: inside the transaction, so nothing is stored.
 type failingStore struct {
@@ -923,6 +1055,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 			TempAdmins: nil,
 			Store:      failingStore{st},
 			Guard:      allowAllGuard{},
+			GroupReach: allowAllReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -1324,11 +1457,22 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 // check the routes, not the grant check, which the principal package tests.
 type allowAllGuard struct{}
 
-func (allowAllGuard) CheckGroupGrants(context.Context, identity.Principal, string) error { return nil }
+func (allowAllGuard) CheckGroupGrants(
+	context.Context, identity.Principal, string, string, principal.GroupChange,
+) error {
+	return nil
+}
 
 func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
 	return nil
 }
+
+// allowAllReach is a principal.GroupReach that allows every membership add.
+// These tests check the routes, not the reach check, which the principal
+// package tests.
+type allowAllReach struct{}
+
+func (allowAllReach) CheckGroupReach(context.Context, identity.Principal, string) error { return nil }
 
 // TestLastSiteAdministratorIsKept proves that each principal route that could end the
 // last site administrator answers 409 with a JSON error, changes nothing, and

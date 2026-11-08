@@ -94,8 +94,8 @@ func newFixture(t *testing.T) *fixture {
 	})
 
 	principals, err := principal.NewService(principal.Config{
-		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil, Now: nil,
-		NewID: nil,
+		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil,
+		GroupReach: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

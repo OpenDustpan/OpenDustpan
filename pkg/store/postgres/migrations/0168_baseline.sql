@@ -122,6 +122,36 @@ CREATE TABLE blob_purges (
     namespace_id text NOT NULL
 );
 
+CREATE TABLE break_glass_reviews (
+    id text NOT NULL,
+    use_kind text NOT NULL,
+    use_ref text NOT NULL,
+    use_scope text NOT NULL,
+    use_object text NOT NULL,
+    use_subject text NOT NULL,
+    use_people text NOT NULL,
+    use_reason text NOT NULL,
+    use_at_ms bigint NOT NULL,
+    use_until_ms bigint NOT NULL,
+    state text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    due_at_ms bigint NOT NULL,
+    calendar text NOT NULL,
+    calendar_from_namespace text NOT NULL,
+    calendar_from_group text NOT NULL,
+    step bigint NOT NULL,
+    next_notice_at_ms bigint NOT NULL,
+    verdict_reviewer text NOT NULL,
+    verdict_note text NOT NULL,
+    verdict_auth text NOT NULL,
+    verdict_auth_at_ms bigint NOT NULL,
+    verdict_reviewed_at_ms bigint NOT NULL,
+    verdict_act_as text NOT NULL,
+    version bigint NOT NULL,
+    CONSTRAINT break_glass_reviews_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'accepted'::text, 'disputed'::text]))),
+    CONSTRAINT break_glass_reviews_use_kind_check CHECK ((use_kind = ANY (ARRAY['freeze-break'::text, 'account-session'::text, 'temp-admin'::text])))
+);
+
 CREATE TABLE checkpoints (
     update_id text NOT NULL,
     lease_digest bytea NOT NULL,
@@ -1499,6 +1529,9 @@ ALTER TABLE ONLY audit_sink_leases
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);
 
+ALTER TABLE ONLY break_glass_reviews
+    ADD CONSTRAINT break_glass_reviews_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
 
@@ -1892,6 +1925,10 @@ CREATE INDEX access_tokens_principal ON access_tokens USING btree (principal_id,
 CREATE INDEX audit_entries_ns_time ON audit_entries USING btree (namespace, at_ms DESC, sequence DESC);
 
 CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLLATE "C", unit_id COLLATE "C");
+
+CREATE INDEX break_glass_reviews_due ON break_glass_reviews USING btree (state, next_notice_at_ms);
+
+CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews USING btree (use_kind, use_ref);
 
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 

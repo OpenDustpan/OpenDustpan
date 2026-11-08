@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -126,7 +127,8 @@ func TestNewServiceNeedsStore(t *testing.T) {
 
 	_, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
@@ -236,7 +238,7 @@ func TestServiceEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -274,7 +276,7 @@ func TestUpdateGroupSwitchEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -327,7 +329,13 @@ type switchStep struct {
 func (fx switchFixture) check(t *testing.T, step switchStep) {
 	t.Helper()
 
-	changed, err := fx.svc.UpdateGroup(t.Context(), fx.entry, fx.id, principal.GroupChange{
+	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Subject: "tester", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind: "", Credential: "", JobID: "",
+	}
+
+	changed, err := fx.svc.UpdateGroup(t.Context(), fx.entry, caller, fx.id, principal.GroupUpdate{
 		Name: nil, Description: nil, ClosedToIdentityProvider: step.value,
 	})
 	if err != nil {
@@ -396,6 +404,7 @@ func newServiceOverStore(t *testing.T) *principal.Service {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

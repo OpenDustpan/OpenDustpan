@@ -115,6 +115,34 @@ type BlobPurge struct {
 	NamespaceID string
 }
 
+type BreakGlassReview struct {
+	ID                    string
+	UseKind               string
+	UseRef                string
+	UseScope              string
+	UseObject             string
+	UseSubject            string
+	UsePeople             string
+	UseReason             string
+	UseAtMs               int64
+	UseUntilMs            int64
+	State                 string
+	CreatedAtMs           int64
+	DueAtMs               int64
+	Calendar              string
+	CalendarFromNamespace string
+	CalendarFromGroup     string
+	Step                  int64
+	NextNoticeAtMs        int64
+	VerdictReviewer       string
+	VerdictNote           string
+	VerdictAuth           string
+	VerdictAuthAtMs       int64
+	VerdictReviewedAtMs   int64
+	VerdictActAs          string
+	Version               int64
+}
+
 type Checkpoint struct {
 	UpdateID      string
 	LeaseDigest   []byte

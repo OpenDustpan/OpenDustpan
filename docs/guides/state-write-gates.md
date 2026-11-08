@@ -190,6 +190,13 @@ groups. The server knows the time of the last authentication only for a
 session. A session of a break-glass account is outside the access limits, and
 an access token of that account is not.
 
+A limit can test the group of the principal: `principal in
+OpenDustpan::Group::"sre"`. The right side of that test must name a group: one
+group entity, or a set of group entities. The save refuses any other right side
+with `400` and the code `gate.limit-membership`, for example `principal in
+resource.owners`. The server cannot check a change of the members of a group
+against such a limit, so it refuses to store one.
+
 ## What a refusal looks like
 
 A refusal always answers 403 on the OpenTofu routes. So OpenTofu does not read

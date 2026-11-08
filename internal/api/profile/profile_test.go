@@ -950,7 +950,8 @@ func TestSharedLimiterFlushReachesNamespace(t *testing.T) {
 
 	for range 3 {
 		other.Record(t.Context(), nil, bo, refusal.Denial{
-			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("acme"), Reason: "denied", Window: 0,
+			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("acme"), Reason: "denied",
+			ReasonWithin: nil, Window: 0,
 		})
 	}
 

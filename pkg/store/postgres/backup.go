@@ -137,6 +137,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopySelfServiceTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
+	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 
 	return tables
 }
@@ -1974,7 +1975,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
+// break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -2013,6 +2015,10 @@ func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string)
 	}
 
 	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
 		return err
 	}
 

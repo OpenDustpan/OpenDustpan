@@ -159,7 +159,8 @@ func newStoreSessions(t *testing.T, st *sqlite.Store) storeSessions {
 	}
 
 	principals, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: st, Guard: allowAllGuard{}, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil, Store: st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: st,
+		Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
