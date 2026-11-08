@@ -67,9 +67,9 @@ func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 var errGuardRead = errors.New("read of the backups registry failed")
 
 // newGuardSwitch returns a lease guard that answers that nothing runs and
-// holds no lease.
-func newGuardSwitch() *blobguardtest.Leases {
-	return blobguardtest.NewLeases(time.Now)
+// holds no lease, on the clock of the case.
+func newGuardSwitch(clk *testClock) *blobguardtest.Leases {
+	return blobguardtest.NewLeases(clk.Now)
 }
 
 // aheadClock runs ahead of the clock of the database by ahead, so that the
@@ -93,9 +93,12 @@ func (c aheadClock) DatabaseNow(ctx context.Context) (time.Time, error) {
 // every blob of a case is older than the grace period.
 const sweepAfter = blob.UnnamedGracePeriod + time.Minute
 
-// newSweeper returns the sweep over the stores of h, with the guard g and a
-// clock that is ahead by ahead.
-func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Leases, ahead time.Duration) *job.ArtifactSweeper {
+// newSweeper returns the sweep over the stores of h, with the guard g, the
+// clock clk and a clock of the database that is ahead by ahead. The clock of
+// the instance runs ahead by ahead too, so the two clocks agree.
+func newSweeper(
+	t *testing.T, h ArtifactSweepHarness, clk *testClock, g blobguard.Leases, ahead time.Duration,
+) *job.ArtifactSweeper {
 	t.Helper()
 
 	artifacts, err := job.NewArtifactBlobs(h.Blobs, noRefusals{})
@@ -106,7 +109,7 @@ func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Leases, ahead 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: g,
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: h.Audit, Logger: nil,
-		Now: func() time.Time { return time.Now().Add(ahead) },
+		Now: func() time.Time { return clk.Now().Add(ahead) },
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)
@@ -370,16 +373,17 @@ func testSweepDeletesOrphans(t *testing.T, h ArtifactSweepHarness) {
 
 	fx := newSweepFixture(t, h)
 	j := sweptJob(t, h, fx.a)
-	g := newGuardSwitch()
+	clk := newTestClock(t, h)
+	g := newGuardSwitch(clk)
 
 	// With the clock of now, every blob is young, and the sweep keeps all.
-	if res, err := newSweeper(t, h, g, 0).SweepJob(t.Context(), &j); err != nil || res.Deleted != 0 {
+	if res, err := newSweeper(t, h, clk, g, 0).SweepJob(t.Context(), &j); err != nil || res.Deleted != 0 {
 		t.Fatalf("young sweep = %+v, %v; want nothing deleted", res, err)
 	}
 
 	requireBlobs(t, h, append(slices.Clone(fx.named), fx.orphans...), nil)
 
-	res, err := newSweeper(t, h, g, sweepAfter).SweepJob(t.Context(), &j)
+	res, err := newSweeper(t, h, clk, g, sweepAfter).SweepJob(t.Context(), &j)
 	if err != nil || res.Deleted != len(fx.orphans) || res.Unknown != 1 {
 		t.Fatalf("old sweep = %+v, %v; want %d deleted and 1 unknown", res, err, len(fx.orphans))
 	}
@@ -406,6 +410,7 @@ func testSweepHeld(t *testing.T, h ArtifactSweepHarness) {
 
 	fx := newSweepFixture(t, h)
 	j := sweptJob(t, h, fx.a)
+	clk := newTestClock(t, h)
 
 	cases := []struct {
 		name string
@@ -426,10 +431,10 @@ func testSweepHeld(t *testing.T, h ArtifactSweepHarness) {
 	}
 
 	for _, tc := range cases {
-		g := newGuardSwitch()
+		g := newGuardSwitch(clk)
 		tc.set(g)
 
-		s := newSweeper(t, h, g, sweepAfter)
+		s := newSweeper(t, h, clk, g, sweepAfter)
 
 		if res, err := s.SweepJob(t.Context(), &j); err == nil || res.Deleted != 0 {
 			t.Errorf("%s: SweepJob = %+v, %v; want an error and nothing deleted", tc.name, res, err)
@@ -447,8 +452,9 @@ func testSweepRun(t *testing.T, h ArtifactSweepHarness) {
 	t.Helper()
 
 	fx := newSweepFixture(t, h)
+	clk := newTestClock(t, h)
 
-	res, err := newSweeper(t, h, newGuardSwitch(), sweepAfter).Sweep(t.Context())
+	res, err := newSweeper(t, h, clk, newGuardSwitch(clk), sweepAfter).Sweep(t.Context())
 	if err != nil || res.Held || res.Failed != 0 || res.Deleted != len(fx.orphans) {
 		t.Fatalf("Sweep = %+v, %v; want %d deleted", res, err, len(fx.orphans))
 	}
@@ -469,22 +475,25 @@ func testSweepStalledChunk(t *testing.T, h ArtifactSweepHarness) {
 
 	fx := newSweepFixture(t, h)
 	j := sweptJob(t, h, fx.a)
+	clk := newTestClock(t, h)
 
 	// The attempt of the reserved chunk 1 wrote its blob and stalled. The sweep
 	// deletes the blob once it is older than the grace period.
 	stalled := fx.orphans[1]
 	rel := stalled[len(namespacePrefix(t, h, fx.a)):]
 
-	if _, err := newSweeper(t, h, newGuardSwitch(), sweepAfter).SweepJob(t.Context(), &j); err != nil {
+	if _, err := newSweeper(t, h, clk, newGuardSwitch(clk), sweepAfter).SweepJob(t.Context(), &j); err != nil {
 		t.Fatalf("SweepJob = %v", err)
 	}
 
 	requireBlobs(t, h, nil, []string{stalled})
 
 	// The stalled confirm arrives. Its attempt started before the grace
-	// period, so the store refuses it and no row names the deleted blob.
+	// period, so the store refuses it and no row names the deleted blob. The
+	// case clock starts at the clock of the database, with which the store
+	// compares the start time.
 	late := chunkAttempt{
-		at: chunkAt{version: fx.version, seq: 1}, key: rel, started: time.Now().Add(-sweepAfter),
+		at: chunkAt{version: fx.version, seq: 1}, key: rel, started: clk.Now().Add(-sweepAfter),
 	}
 
 	if won, err := confirmStarted(t, h.RecorderHarness, fx.a, late); won || !errors.Is(err, blob.ErrAttemptExpired) {
@@ -525,11 +534,11 @@ func (a *auditTap) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry
 	return stored, nil
 }
 
-// tappedSweeper returns a sweep of h whose audit entries a case can read, with
-// the clock of the database ahead by ahead and the clock of the instance ahead
-// by ahead+instance.
+// tappedSweeper returns a sweep of h whose audit entries a case can read, on
+// the clock clk, with the clock of the database ahead by ahead and the clock
+// of the instance ahead by ahead+instance.
 func tappedSweeper(
-	t *testing.T, h ArtifactSweepHarness, ahead, instance time.Duration,
+	t *testing.T, h ArtifactSweepHarness, clk *testClock, ahead, instance time.Duration,
 ) (*job.ArtifactSweeper, *auditTap) {
 	t.Helper()
 
@@ -541,9 +550,9 @@ func tappedSweeper(
 	tap := &auditTap{inner: h.Audit, mu: sync.Mutex{}, entries: nil}
 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(),
+		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(clk),
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: tap, Logger: nil,
-		Now: func() time.Time { return time.Now().Add(ahead + instance) },
+		Now: func() time.Time { return clk.Now().Add(ahead + instance) },
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)
@@ -556,7 +565,7 @@ func testSweepRecordsItsRun(t *testing.T, h ArtifactSweepHarness) {
 	t.Helper()
 
 	fx := newSweepFixture(t, h)
-	s, tap := tappedSweeper(t, h, sweepAfter, 0)
+	s, tap := tappedSweeper(t, h, newTestClock(t, h), sweepAfter, 0)
 
 	res, err := s.Sweep(t.Context())
 	if err != nil || res.Deleted != len(fx.orphans) || res.Truncated {
@@ -582,7 +591,7 @@ func testSweepFastInstanceClock(t *testing.T, h ArtifactSweepHarness) {
 	t.Helper()
 
 	fx := newSweepFixture(t, h)
-	s, tap := tappedSweeper(t, h, sweepAfter, blob.AttemptSkew+time.Minute)
+	s, tap := tappedSweeper(t, h, newTestClock(t, h), sweepAfter, blob.AttemptSkew+time.Minute)
 
 	res, err := s.Sweep(t.Context())
 	if err != nil || res.Deleted != 0 || res.Skipped == "" {
