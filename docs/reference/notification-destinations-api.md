@@ -43,7 +43,7 @@ A write carries the fence of the namespace. A stale fence answers 409
 | `kind` | `webhook`, `chat` or `email` |
 | `platform` | For `chat`: `slack`, `teams`, `mattermost` or `matrix`. Not in the answer for another kind. |
 | `name` | 1 to 100 bytes |
-| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. The destination still sends. A change of it needs a host that passes. Absent otherwise. |
+| `hostNeedsUpdate` | `true` when the stored host of a `webhook` or `chat` destination fails the host check of a write. For a `webhook` destination, the destination still sends. It keeps the legacy webhook compatibility. For a `chat` destination, this field does not promise delivery. The chat sender sends only when the host of the URL passes the chat host check at send time. A URL that the chat host check rejects does not send. A change of the URL needs a host that passes the allowlist. Absent otherwise. |
 | `target` | The address of an `email` destination, or the host of a `webhook` or of a `chat` webhook. The answer never holds the path or the query of a URL. |
 | `urlSet` | `true` for a `webhook` or a `chat` destination that has a sealed URL item. `false` for a destination that has no URL item, and for a `webhook` that an upgrade left with no URL. It does not say that the server can open the URL. |
 | `createdBy` | The subject that made the destination |
@@ -145,10 +145,15 @@ sends no message and writes no audit entry. A test of a destination whose
 address the rules refuse counts against the limits too. The limits count in
 the database, so they hold for all server instances of one installation. Each
 limit uses fixed windows, and a refused test counts in its window too.
+The windows start at fixed times, so two adjacent windows can permit two tests
+of one destination and twenty tests of one namespace in a short interval: ten
+tests at the end of one minute window and ten at the start of the next.
 
 When the server cannot read or write the count, it sends no message and
 answers 503 `sink.test-limit-unavailable`. A test that the server cannot count
-would be a test without a limit.
+would be a test without a limit. When the database does not answer, the server
+returns 503 `namespace.unavailable` with the header `Retry-After` (5 seconds),
+also when the counter of the test limit wraps that error.
 
 The server sends the message only after these steps: this installation is the primary
 installation of the namespace, the limits take the test, the address passes the outbound rules,
@@ -216,10 +221,12 @@ deliveries of the subscription, newest first. The query parameters:
 | `pageToken` | The `nextPageToken` of the page before, for the same subscription |
 
 The answer has `deliveries` and `nextPageToken`. `nextPageToken` is empty on the
-last page. The history reaches back at most 1000 deliveries. A page that would
-go past that count ends there and has no next page. A new delivery moves the
-older ones back, so a token shows the page by position. A token for another
-subscription answers 400 `request.page-token-invalid`.
+last page. The history reaches back at most 1000 deliveries, and the server
+enforces that count. A page that would go past it ends there and has no next
+page. A token names the last delivery of the page before. The next page starts
+after the delivery with that `nextAt` and ID. A page never skips or repeats a
+delivery while no delivery changes: a retry or a new send changes `nextAt`. A
+token for another subscription answers 400 `request.page-token-invalid`.
 
 | Field | Content |
 | --- | --- |

@@ -1388,6 +1388,15 @@ CREATE TABLE updates (
     journal_records_changed boolean DEFAULT false NOT NULL
 );
 
+CREATE TABLE used_tickets (
+    provider_id text NOT NULL,
+    ticket_digest text NOT NULL,
+    until_ms bigint NOT NULL,
+    CONSTRAINT used_tickets_provider_id_check CHECK (((length(provider_id) >= 1) AND (length(provider_id) <= 256))),
+    CONSTRAINT used_tickets_ticket_digest_check CHECK ((ticket_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT used_tickets_until_ms_check CHECK ((until_ms > 0))
+);
+
 CREATE TABLE workspace_blame_cursors (
     workspace_id text NOT NULL,
     ordinal bigint NOT NULL,
@@ -1840,6 +1849,9 @@ ALTER TABLE ONLY update_journal_sequences
 ALTER TABLE ONLY updates
     ADD CONSTRAINT updates_pkey PRIMARY KEY (stack_id, id);
 
+ALTER TABLE ONLY used_tickets
+    ADD CONSTRAINT used_tickets_pkey PRIMARY KEY (provider_id, ticket_digest);
+
 ALTER TABLE ONLY workspace_blame_cursors
     ADD CONSTRAINT workspace_blame_cursors_pkey PRIMARY KEY (workspace_id);
 
@@ -2043,6 +2055,8 @@ CREATE INDEX unit_settings_namespace ON unit_settings USING btree (namespace_id)
 CREATE INDEX updates_history ON updates USING btree (stack_id, version) WHERE ((status <> 'not started'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
 
 CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE ((status = 'running'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
+
+CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 

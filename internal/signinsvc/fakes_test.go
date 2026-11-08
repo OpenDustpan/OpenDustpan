@@ -30,6 +30,8 @@ type world struct {
 	// What the ports answer.
 	principalErr   error
 	principal      principal.Principal
+	tempAdmin      bool
+	tempAdminErr   error
 	disableErr     error
 	startErr       error
 	auditErr       error
@@ -75,6 +77,13 @@ func (w *world) SignInPrincipal(
 	w.signInInputs = append(w.signInInputs, in)
 
 	return w.principal, false, w.principalErr
+}
+
+func (w *world) IsTempAdmin(_ context.Context, _ string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.tempAdmin, w.tempAdminErr
 }
 
 func (w *world) DisablePrincipal(_ context.Context, id string, _ audit.Entry) error {
@@ -180,7 +189,7 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 	}
 
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, Groups: groups,
+		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: groups,
 		Removals: removals, States: nil, Logger: slog.New(slog.DiscardHandler),
 		OnAuditFailure: func() { w.auditFailed++ },
 	})

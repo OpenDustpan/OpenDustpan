@@ -250,9 +250,14 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 		removals = in.removals
 	}
 
+	tempAdmins, ok := in.store.(principal.TempAdmins)
+	if !ok {
+		return nil, fmt.Errorf("%w: it keeps no temporary administrators", errSignInStore)
+	}
+
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
-		Audit: in.audit, Groups: nil, Removals: removals, States: generations, Logger: in.logger,
+		Audit: in.audit, TempAdmins: tempAdmins, Groups: nil, Removals: removals, States: generations, Logger: in.logger,
 		OnAuditFailure: in.onAuditFailure,
 	})
 	if err != nil {

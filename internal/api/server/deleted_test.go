@@ -49,6 +49,7 @@ func newSweepHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

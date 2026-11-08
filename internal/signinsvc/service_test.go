@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -696,32 +697,60 @@ func TestRefusalSurvivesAnAuditFailure(t *testing.T) {
 func TestNewRefusesAMissingPort(t *testing.T) {
 	t.Parallel()
 
-	var cfg signinsvc.Config
+	cases := []struct {
+		name  string
+		clear func(cfg *signinsvc.Config)
+	}{
+		{"principals", func(cfg *signinsvc.Config) { cfg.Principals = nil }},
+		{"disabler", func(cfg *signinsvc.Config) { cfg.Disabler = nil }},
+		{"generations", func(cfg *signinsvc.Config) { cfg.Generations = nil }},
+		{"sessions", func(cfg *signinsvc.Config) { cfg.Sessions = nil }},
+		{"audit log", func(cfg *signinsvc.Config) { cfg.Audit = nil }},
+		{"temporary administrators", func(cfg *signinsvc.Config) { cfg.TempAdmins = nil }},
+		{"logger", func(cfg *signinsvc.Config) { cfg.Logger = nil }},
+	}
 
-	if _, err := signinsvc.New(cfg); !errors.Is(err, signinsvc.ErrMissingDependency) {
-		t.Fatalf("New() = %v, want ErrMissingDependency", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			cfg := signinsvc.Config{
+				Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w,
+				Groups: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+			}
+			tc.clear(&cfg)
+
+			if _, err := signinsvc.New(cfg); !errors.Is(err, signinsvc.ErrMissingDependency) {
+				t.Fatalf("New() = %v, want ErrMissingDependency", err)
+			}
+		})
 	}
 }
 
-// lookupCase is one principal that a faulty lookup returns with a nil error.
+// lookupCase is one answer of a faulty lookup layer: a principal that the
+// lookup returns with a nil error, or a failed read of the temporary
+// administrators.
 type lookupCase struct {
-	change func(p *principal.Principal)
+	change func(w *world)
 	name   string
 }
 
-// hostileLookups returns the principals that the service must never sign in
-// or disable for the subject corp:sub-1, one for each condition of the check.
+// hostileLookups returns the answers that the service must never sign in or
+// disable for the subject corp:sub-1, one for each condition of the check.
 func hostileLookups() []lookupCase {
 	return []lookupCase{
-		{func(p *principal.Principal) { p.Subject = "other:sub-9" }, "other subject"},
-		{func(p *principal.Principal) { p.Kind = principal.KindService }, "not a person"},
-		{func(p *principal.Principal) { p.Namespace = "team-a" }, "principal of a namespace"},
-		{func(p *principal.Principal) { p.BreakGlass = true }, "break-glass account"},
+		{func(w *world) { w.principal.Subject = "other:sub-9" }, "other subject"},
+		{func(w *world) { w.principal.Kind = principal.KindService }, "not a person"},
+		{func(w *world) { w.principal.Namespace = "team-a" }, "principal of a namespace"},
+		{func(w *world) { w.principal.BreakGlass = true }, "break-glass account"},
+		{func(w *world) { w.tempAdmin = true }, "temporary administrator"},
+		{func(w *world) { w.tempAdminErr = errStoreStopped }, "temporary administrator read failed"},
 	}
 }
 
-// TestCompleteSubjectDisabledChecksTheLookup sends a principal that the
-// lookup should never return, with a nil error, to the disable step. The
+// TestCompleteSubjectDisabledChecksTheLookup sends the answers that the
+// lookup layer should never give, with a nil error, to the disable step. The
 // step must disable and bump nothing, as if the lookup layer had failed.
 func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 	t.Parallel()
@@ -731,7 +760,7 @@ func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 			t.Parallel()
 
 			w := newWorld()
-			tc.change(&w.principal)
+			tc.change(w)
 
 			_, err := w.service(t).Complete(t.Context(),
 				requestOf(oidcProvider(), disabledAssertion(), session.ErrSubjectDisabled))
@@ -748,7 +777,7 @@ func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 	}
 }
 
-// TestCompleteChecksTheLookup sends the same principals to the success path.
+// TestCompleteChecksTheLookup sends the same answers to the success path.
 // The service must refuse and start no session.
 func TestCompleteChecksTheLookup(t *testing.T) {
 	t.Parallel()
@@ -758,7 +787,7 @@ func TestCompleteChecksTheLookup(t *testing.T) {
 			t.Parallel()
 
 			w := newWorld()
-			tc.change(&w.principal)
+			tc.change(w)
 
 			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
 			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonNotTarget {
