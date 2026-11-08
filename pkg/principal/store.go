@@ -130,10 +130,10 @@ type GroupStore interface {
 	// ListGroups returns the groups that exist, ordered by name without
 	// regard to case: the rows of q, with the lower-case name as the key.
 	ListGroups(ctx context.Context, q Query) ([]Group, int64, error)
-	// UpdateGroup replaces the name, the description and the update time of
-	// the group with the ID g.ID. It returns ErrNotFound when no such group
-	// exists, and ErrAlreadyExists when another group has the name without
-	// regard to case.
+	// UpdateGroup replaces the name, the description, the identity-provider
+	// switch and the update time of the group with the ID g.ID. It returns
+	// ErrNotFound when no such group exists, and ErrAlreadyExists when
+	// another group has the name without regard to case.
 	UpdateGroup(ctx context.Context, g Group, e audit.Entry) error
 	// DeleteGroup ends the group with the ID id and each membership in it,
 	// at e.At. It returns ErrNotFound when no such group exists, and

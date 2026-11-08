@@ -763,14 +763,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		}
 	}
 
+	// The group carries the switch that closes it to the identity provider,
+	// so that the round trip compares that column too.
 	g := principal.Group{
-		CreatedAt:   now(),
-		UpdatedAt:   now(),
-		ID:          "grp-ops",
-		Name:        "Ops",
-		Description: "Runs the platform",
-		Source:      principal.SourceLocal,
-		MemberCount: 0,
+		CreatedAt:                now(),
+		UpdatedAt:                now(),
+		ID:                       "grp-ops",
+		Name:                     "Ops",
+		Description:              "Runs the platform",
+		Source:                   principal.SourceLocal,
+		MemberCount:              0,
+		ClosedToIdentityProvider: true,
 	}
 	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
 		t.Fatalf("create group: %v", err)
