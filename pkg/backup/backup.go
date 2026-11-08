@@ -71,6 +71,7 @@ const (
 	TableDurableHeartbeats    = "durable_heartbeats"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
+	TableJobTokens            = "job_tokens"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides

@@ -620,6 +620,14 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
 		},
+		{
+			table: backup.TableJobTokens,
+			columns: []string{
+				backupColDigest, backupColNamespaceID, "unit_namespace", "starter_id", backupColJobID, "unit_tool",
+				backupColUnitID, "unit_name", "claim_operation", "claim_token", backupColExpiresAtMs,
+				backupColCreatedAtMs,
+			},
+		},
 	}
 }
 

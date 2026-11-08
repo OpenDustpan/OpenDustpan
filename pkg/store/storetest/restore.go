@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -94,6 +95,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore keeps the live runner control rows", test: testRestoreKeepsRunnerControlRows},
 		{name: "a restore keeps the live used ticket records", test: testRestoreKeepsUsedTickets},
 		{name: "a restore leaves no replay record", test: testRestoreEmptiesIdempotencyRecords},
+		{name: "a restore leaves no job token", test: testRestoreEmptiesJobTokens},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
 		{
@@ -1389,4 +1391,52 @@ func workspaceInventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name,
 	t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
 
 	return nil
+}
+
+// JobTokenHolder is an optional store capability for the job token case of
+// the restore suite: it issues a job token of a new job through the store and
+// reports whether the store holds a digest.
+type JobTokenHolder interface {
+	IssueRestoreJobToken(t *testing.T, ns namespace.Name) jobtoken.Digest
+	HasJobToken(t *testing.T, d jobtoken.Digest) bool
+}
+
+// testRestoreEmptiesJobTokens proves that a restore leaves no job token: a
+// restored token would let a runner of an old job authenticate again.
+func testRestoreEmptiesJobTokens(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	dst := newStore(t)
+
+	srcTokens, ok := src.(JobTokenHolder)
+	if !ok {
+		t.Skip("the store keeps no job tokens")
+	}
+
+	dstTokens, ok := dst.(JobTokenHolder)
+	if !ok {
+		t.Skip("the store keeps no job tokens")
+	}
+
+	srcDigest := srcTokens.IssueRestoreJobToken(t, "acme")
+	dstDigest := dstTokens.IssueRestoreJobToken(t, "acme")
+
+	ps := portableRestoreStores(t, src, dst)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	for _, d := range []jobtoken.Digest{srcDigest, dstDigest} {
+		if dstTokens.HasJobToken(t, d) {
+			t.Fatalf("the restore kept the job token %s", d)
+		}
+	}
 }
