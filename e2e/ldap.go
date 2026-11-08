@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ldaptest"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // The LDAP providers of an env from NewEnvWithLDAP. Both read the same test
@@ -45,12 +46,30 @@ func (s *signInSetup) ldapOptions() []dustpan.Option {
 
 	provider := func(id, url string) dustpan.LDAPProvider {
 		return dustpan.LDAPProvider{
-			RootCAs: s.ldap.CertPool(), AllowedRanges: nil, ID: id, DisplayName: "", URL: url,
-			BindDN: ldaptest.ServiceDN, BindPassword: s.ldap.ServicePassword(), BaseDN: ldaptest.BaseDN,
-			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
-			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
-			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
-			DisabledValues: nil, DisabledMask: 0, StartTLS: false, AutoCreate: true,
+			RootCAs:                s.ldap.CertPool(),
+			AllowedRanges:          nil,
+			ID:                     id,
+			DisplayName:            "",
+			URL:                    url,
+			BindDN:                 ldaptest.ServiceDN,
+			BindPassword:           session.NewPassword(s.ldap.ServicePassword()),
+			BaseDN:                 ldaptest.BaseDN,
+			UserFilter:             "(&(objectClass=person)(uid={user}))",
+			UserNameAttribute:      "uid",
+			EmailAttribute:         "",
+			NameAttribute:          "",
+			Subject:                "entryUUID",
+			DisabledAttribute:      "",
+			Groups:                 "off",
+			GroupBaseDN:            "",
+			GroupFilter:            "",
+			GroupMemberAttribute:   "",
+			GroupMemberOfAttribute: "",
+			GroupNameAttribute:     "",
+			DisabledValues:         nil,
+			DisabledMask:           0,
+			StartTLS:               false,
+			AutoCreate:             true,
 		}
 	}
 

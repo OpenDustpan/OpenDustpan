@@ -102,8 +102,9 @@ type providerLDAP struct {
 var (
 	// errPasswordSignInFailed is the one answer of each refused sign-in: a
 	// wrong password, an unknown user, a locked name or person, a disabled
-	// person, an unknown provider and a body that is not valid. The audit
-	// entry holds the real reason.
+	// person, an unknown provider and a request of another site. The audit
+	// entry holds the real reason. A body that is not valid answers
+	// errLocalUserBody.
 	errPasswordSignInFailed = &codedError{
 		status: http.StatusUnauthorized, code: errcode.SignInFailed, args: nil,
 		message: "sign-in failed: check the user name and the password",
@@ -192,6 +193,14 @@ func (h *Handler) providerPasswordSignIn(
 	// change to the route table never serves a password check with no limit.
 	if h.signIn == nil || len(h.signIn.passwordProviders) == 0 || h.signIn.service == nil {
 		h.writeError(ctx, w, errLocalUsersUnavailable)
+
+		return
+	}
+
+	// Login CSRF: refuse a request of another site before the budget and
+	// before any store or directory call. It spends nothing.
+	if !h.signIn.checker.SignInFromBody(r) {
+		h.writeError(ctx, w, errPasswordSignInFailed)
 
 		return
 	}

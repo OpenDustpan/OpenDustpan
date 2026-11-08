@@ -6,6 +6,7 @@ import (
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 )
 
@@ -24,7 +25,7 @@ func newEveryModuleServer(t *testing.T) *dustpan.Server {
 func describedLDAPProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
 		RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
-		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: "service-password",
+		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: session.NewPassword("service-password"),
 		BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(&(objectClass=person)(uid={user}))",
 		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",
 		DisabledAttribute: "", Groups: "off", GroupBaseDN: "", GroupFilter: "", GroupMemberAttribute: "",

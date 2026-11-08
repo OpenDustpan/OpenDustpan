@@ -1,6 +1,9 @@
 package dustpan_test
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"testing"
@@ -53,7 +56,7 @@ func ldapSetupCases() []ldapSetupCase {
 			p.UserFilter = "(objectClass=person)"
 		}, want: "ldap sign-in", withOIDC: false},
 		{name: "no bind password", publicURL: public, change: func(p *dustpan.LDAPProvider) {
-			p.BindPassword = ""
+			p.BindPassword = session.NewPassword("")
 		}, want: "ldap sign-in", withOIDC: false},
 		{name: "unknown groups source", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.Groups = "all"
@@ -108,7 +111,7 @@ func TestNewServerLDAPSetup(t *testing.T) {
 				t.Fatalf("NewServer: %v", err)
 			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 				t.Fatalf("NewServer error = %v, want one that holds %q", err, tc.want)
-			case err != nil && strings.Contains(err.Error(), p.BindPassword) && p.BindPassword != "":
+			case err != nil && p.BindPassword.Reveal() != "" && strings.Contains(err.Error(), p.BindPassword.Reveal()):
 				t.Fatalf("the start error holds the bind password: %v", err)
 			default:
 			}
@@ -119,12 +122,52 @@ func TestNewServerLDAPSetup(t *testing.T) {
 // ldapProvider returns a valid LDAP provider with the ID corp-ldap.
 func ldapProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
-		RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
-		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: "bind-password-of-the-test",
-		BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(&(objectClass=person)(uid={user}))",
-		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",
-		DisabledAttribute: "", Groups: "off", GroupBaseDN: "", GroupFilter: "", GroupMemberAttribute: "",
-		GroupMemberOfAttribute: "", GroupNameAttribute: "", DisabledValues: nil, DisabledMask: 0, StartTLS: false,
-		AutoCreate: true,
+		RootCAs:                nil,
+		AllowedRanges:          nil,
+		ID:                     "corp-ldap",
+		DisplayName:            "Corp",
+		URL:                    "ldaps://ldap.example.org",
+		BindDN:                 "cn=dustpan,ou=services,dc=example,dc=org",
+		BindPassword:           session.NewPassword("bind-password-of-the-test"),
+		BaseDN:                 "ou=people,dc=example,dc=org",
+		UserFilter:             "(&(objectClass=person)(uid={user}))",
+		UserNameAttribute:      "uid",
+		EmailAttribute:         "mail",
+		NameAttribute:          "cn",
+		Subject:                "entryUUID",
+		DisabledAttribute:      "",
+		Groups:                 "off",
+		GroupBaseDN:            "",
+		GroupFilter:            "",
+		GroupMemberAttribute:   "",
+		GroupMemberOfAttribute: "",
+		GroupNameAttribute:     "",
+		DisabledValues:         nil,
+		DisabledMask:           0,
+		StartTLS:               false,
+		AutoCreate:             true,
+	}
+}
+
+// TestLDAPProviderHidesTheBindPassword formats an LDAP provider as an
+// embedder can log it, and proves that no form holds the bind password.
+func TestLDAPProviderHidesTheBindPassword(t *testing.T) {
+	t.Parallel()
+
+	p := ldapProvider()
+	secret := p.BindPassword.Reveal()
+
+	var logs bytes.Buffer
+
+	slog.New(slog.NewTextHandler(&logs, nil)).Info("provider", slog.Any("provider", p))
+	slog.New(slog.NewJSONHandler(&logs, nil)).Info("provider", slog.Any("provider", p), slog.Any("ptr", &p))
+
+	for name, text := range map[string]string{
+		"%v": fmt.Sprintf("%v", p), "%+v": fmt.Sprintf("%+v", p), "%#v": fmt.Sprintf("%#v", p),
+		"%+v of a pointer": fmt.Sprintf("%+v", &p), "slog": logs.String(),
+	} {
+		if strings.Contains(text, secret) {
+			t.Errorf("the form %s holds the bind password: %s", name, text)
+		}
 	}
 }

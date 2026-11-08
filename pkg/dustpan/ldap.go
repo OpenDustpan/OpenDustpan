@@ -29,7 +29,9 @@ import (
 // of a private network that a connection to the directory may reach, in
 // addition to public addresses; NewServer refuses a range that is too wide
 // (see egress.ParseAllowedRanges). BindPassword is the password of the
-// service account. Subject is "entryUUID", "objectGUID" or the name of another
+// service account, as a session.Password: its String and GoString never
+// show the value, so a log of the provider does not hold it. Subject is "entryUUID", "objectGUID" or the name of
+// another
 // attribute. Groups is "off", "search" or "memberOf"; the server reads the
 // groups of a person and applies no membership. AutoCreate makes a principal
 // at the first sign-in of a person, with no grant and no group.
@@ -40,7 +42,7 @@ type LDAPProvider struct {
 	DisplayName            string
 	URL                    string
 	BindDN                 string
-	BindPassword           string
+	BindPassword           session.Password
 	BaseDN                 string
 	UserFilter             string
 	UserNameAttribute      string
@@ -153,7 +155,7 @@ func ldapConfig(cfg *settings, p *LDAPProvider, settingsSvc *setting.Service) ld
 		Now: cfg.now, Logger: cfg.logger, RootCAs: p.RootCAs, ProviderID: p.ID, URL: p.URL,
 		BindDN: p.BindDN, BaseDN: p.BaseDN, UserFilter: p.UserFilter, UserNameAttribute: p.UserNameAttribute,
 		EmailAttribute: p.EmailAttribute, NameAttribute: p.NameAttribute,
-		BindPassword: session.NewPassword(p.BindPassword), Subject: subject,
+		BindPassword: p.BindPassword, Subject: subject,
 		Disabled: ldapauth.Disabled{Attribute: p.DisabledAttribute, Values: p.DisabledValues, Mask: p.DisabledMask},
 		Groups: ldapauth.Groups{
 			Source: ldapauth.GroupSource(groupsOr(p.Groups)), BaseDN: p.GroupBaseDN, Filter: p.GroupFilter,

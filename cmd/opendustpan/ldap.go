@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Variables of the password of the service account of the LDAP sign-in. A
@@ -193,7 +194,7 @@ func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
 		DisplayName:            l.displayName,
 		URL:                    strings.TrimSpace(l.url),
 		BindDN:                 l.bindDN,
-		BindPassword:           password,
+		BindPassword:           session.NewPassword(password),
 		BaseDN:                 l.baseDN,
 		UserFilter:             l.userFilter,
 		UserNameAttribute:      l.userNameAttribute,

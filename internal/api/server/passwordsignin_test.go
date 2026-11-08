@@ -85,7 +85,19 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 func (e ldapRouteEnv) post(t *testing.T, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
+	return e.postWith(t, path, body, map[string]string{"Content-Type": "application/json"})
+}
+
+// postWith sends a password sign-in with body and headers to path, with no
+// credential.
+func (e ldapRouteEnv) postWith(t *testing.T, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
 
@@ -376,5 +388,69 @@ func TestLDAPProviderListShowsNoPassword(t *testing.T) {
 
 	if strings.Contains(rec.Body.String(), e.dir.ServicePassword()) {
 		t.Fatal("the list holds the bind password")
+	}
+}
+
+// TestLDAPRouteRefusesAnotherSite proves the check against login CSRF at the
+// password route of a provider: a request that another site can send gets the
+// answer of a failed sign-in, no cookie, no spend of the budget and no
+// connection to the directory, also with the right password. A request of the
+// console signs in.
+func TestLDAPRouteRefusesAnotherSite(t *testing.T) {
+	t.Parallel()
+
+	const evil = "https://evil.example"
+
+	body := signInBody("alice", ldapRoutePassword)
+
+	cases := []struct {
+		headers map[string]string
+		name    string
+	}{
+		{name: "a text/plain request of another site", headers: map[string]string{
+			"Content-Type": "text/plain", "Origin": evil, "Sec-Fetch-Site": "cross-site",
+		}},
+		{name: "a URL-encoded form", headers: map[string]string{"Content-Type": "application/x-www-form-urlencoded"}},
+		{name: "a multipart form", headers: map[string]string{"Content-Type": "multipart/form-data; boundary=x"}},
+		{name: "no media type", headers: map[string]string{}},
+		{
+			name:    "JSON from a foreign origin",
+			headers: map[string]string{"Content-Type": "application/json", "Origin": evil},
+		},
+		{
+			name:    "JSON from the null origin",
+			headers: map[string]string{"Content-Type": "application/json", "Origin": "null"},
+		},
+		{name: "JSON marked cross-site", headers: map[string]string{
+			"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site",
+		}},
+	}
+
+	e := newLDAPRouteEnv(t)
+
+	for _, tc := range cases {
+		before := e.limiter.count()
+
+		rec := e.postWith(t, ldapRoutePath, body, tc.headers)
+		if rec.Code != http.StatusUnauthorized || errorCodeOf(t, rec.Body.String()) != "sign-in.failed" {
+			t.Fatalf("%s: answer = %d %s, want 401 sign-in.failed", tc.name, rec.Code, rec.Body.String())
+		}
+
+		if e.limiter.count() != before {
+			t.Fatalf("%s: the refusal spent the budget", tc.name)
+		}
+
+		checkLDAPAnswerIsClean(t, e, tc.name, rec)
+	}
+
+	if n := e.dir.Connections(); n != 0 {
+		t.Fatalf("the directory got %d connections from requests of another site, want 0", n)
+	}
+
+	rec := e.postWith(t, ldapRoutePath, body, map[string]string{
+		"Content-Type": "application/json", "Origin": signInBase, "Sec-Fetch-Site": "same-origin",
+	})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("sign-in from the console = %d %s, want 204", rec.Code, rec.Body.String())
 	}
 }

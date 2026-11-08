@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -47,7 +48,9 @@ func newLDAPServer(t *testing.T) ldapServer {
 	provider := func(id, url string) dustpan.LDAPProvider {
 		p := ldapProvider()
 		p.ID, p.URL, p.RootCAs = id, url, dir.CertPool()
-		p.BindDN, p.BaseDN, p.BindPassword = ldaptest.ServiceDN, ldaptest.BaseDN, dir.ServicePassword()
+		p.BindDN, p.BaseDN, p.BindPassword = ldaptest.ServiceDN, ldaptest.BaseDN, session.NewPassword(
+			dir.ServicePassword(),
+		)
 		p.EmailAttribute, p.NameAttribute = "", ""
 
 		return p
