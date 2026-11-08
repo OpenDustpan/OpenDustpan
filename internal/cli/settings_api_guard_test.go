@@ -91,6 +91,7 @@ func TestStaticCredentialHostsAreStaticOnly(t *testing.T) {
 		{key: "backup-target", receives: "the S3 credentials"},
 		{key: "blob-store", receives: "the S3 credentials"},
 		{key: "database", receives: "the password inside the URL"},
+		{key: "ldap.url", receives: "the LDAP bind password and the password of each person"},
 		{key: "log-sink", receives: "the log webhook secret and the OTLP headers"},
 		{key: "oidc-issuer", receives: "the OpenID Connect client secret"},
 		{key: "s3-endpoint", receives: "the S3 credentials"},
