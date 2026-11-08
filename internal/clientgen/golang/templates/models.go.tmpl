@@ -35,6 +35,32 @@ func requireFields(data []byte, required, notNull []string) error {
 
 	return nil
 }
+{{- if .HasChoice}}
+
+// jsonKind names the JSON type of the bytes of a value, for the check of a
+// type list and for an error message.
+func jsonKind(data []byte) string {
+	data = bytes.TrimLeft(data, " \t\r\n")
+	if len(data) == 0 {
+		return "nothing"
+	}
+
+	switch data[0] {
+	case 'n':
+		return "null"
+	case 't', 'f':
+		return "boolean"
+	case '"':
+		return "string"
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	default:
+		return "number"
+	}
+}
+{{- end}}
 {{range $t := .Types}}
 {{typeDoc $t.Name $t.Doc}}type {{$t.Name}} {{if $t.IsEnum}}string
 
@@ -61,6 +87,30 @@ func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("%q is not a value of {{$t.Name}}", s)
 }
 {{end}}
+{{- else if $t.HasChoice}}json.RawMessage
+
+// UnmarshalJSON accepts only the JSON types of the list.
+func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
+	kind := jsonKind(data)
+
+	switch kind {
+	case {{range $i, $k := $t.Choice}}{{if $i}}, {{end}}{{goString $k}}{{end}}:
+		*v = {{$t.Name}}(append([]byte(nil), data...))
+
+		return nil
+	default:
+		return fmt.Errorf("want {{$t.ChoiceText}}, got %s", kind)
+	}
+}
+
+// MarshalJSON writes the value back.
+func (v {{$t.Name}}) MarshalJSON() ([]byte, error) {
+	if len(v) == 0 {
+		return nil, fmt.Errorf("{{$t.Name}} holds no JSON value")
+	}
+
+	return v, nil
+}
 {{- else}}struct {
 {{- range $t.Fields}}
 {{comment "\t" .Doc}}	{{.Name}} {{.Type}} {{.Tag}}

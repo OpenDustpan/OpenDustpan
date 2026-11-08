@@ -49,6 +49,77 @@ func TestGenerateIsDeterministicAndFollowsTheDescription(t *testing.T) {
 	}
 }
 
+// TestBuildTypeListClient builds the package of a description that has a type
+// list, compiles it strictly, and runs a program against the compiled package:
+// each JSON type of the list comes back from the validator, and every other
+// type is refused.
+func TestBuildTypeListClient(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("tsc"); err != nil {
+		t.Skip("tsc is not on the PATH")
+	}
+
+	raw, err := os.ReadFile("../testdata/typelist.json")
+	if err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	dir := t.TempDir()
+
+	built, err := tsclient.Build(t.Context(), tsclient.Options{Description: raw, ServerRelease: "test", Dir: dir})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	check := filepath.Join(dir, "typelist-check.mjs")
+	if err = os.WriteFile(check, []byte(typeListCheck), 0o600); err != nil {
+		t.Fatalf("write the check: %v", err)
+	}
+
+	cmd := exec.CommandContext(t.Context(), built.Command, check) //nolint:gosec // Both names come from this test.
+	cmd.Dir = dir
+	cmd.Env = tsclient.Environ()
+
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		t.Fatalf("run the check: %v\n%s", runErr, out)
+	}
+
+	if built.ClientVersion != "0.1.0" || built.DescriptionVersion != "0.1.0" {
+		t.Errorf("versions: %+v", built)
+	}
+}
+
+// typeListCheck is a program that runs against the compiled package of the
+// type list description. It checks the validator of a type list: each JSON
+// type of the list comes back, and every other type is refused.
+const typeListCheck = `import { decodeWidget } from "./dist/index.js";
+
+for (const value of ["text", 1, 1.5, true]) {
+  const widget = decodeWidget({ value, state: "open" }, "$");
+  if (widget.value !== value) {
+    fail("decodeWidget gave " + JSON.stringify(widget.value) + " for " + JSON.stringify(value));
+  }
+}
+
+for (const value of [null, {}, []]) {
+  let refused = false;
+  try {
+    decodeWidget({ value, state: "open" }, "$");
+  } catch {
+    refused = true;
+  }
+  if (!refused) {
+    fail("decodeWidget accepted " + JSON.stringify(value));
+  }
+}
+
+function fail(text) {
+  process.stderr.write(text + "\n");
+  process.exit(1);
+}
+`
+
 func TestBuildRefusesADescriptionOutsideTheSubset(t *testing.T) {
 	t.Parallel()
 
