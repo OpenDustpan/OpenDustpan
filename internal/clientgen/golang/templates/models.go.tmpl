@@ -6,6 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+{{- if .NeedsInteger}}
+	"strconv"
+	"strings"
+{{- end}}
 )
 
 // requireFields checks that a JSON object holds every required member, and that
@@ -35,6 +39,85 @@ func requireFields(data []byte, required, notNull []string) error {
 
 	return nil
 }
+{{- if .HasChoice}}
+
+// jsonKind names the JSON type of the bytes of a value, for the check of a
+// type list and for an error message.
+func jsonKind(data []byte) string {
+	data = bytes.TrimLeft(data, " \t\r\n")
+	if len(data) == 0 {
+		return "nothing"
+	}
+
+	switch data[0] {
+	case 'n':
+		return "null"
+	case 't', 'f':
+		return "boolean"
+	case '"':
+		return "string"
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	default:
+		return "number"
+	}
+}
+{{- end}}
+{{- if .NeedsInteger}}
+
+// jsonInteger reports whether the bytes of a JSON number hold an integer
+// value: no fraction, and no exponent that gives one.
+func jsonInteger(data []byte) bool {
+	const decimal = "0123456789"
+
+	text := strings.TrimPrefix(string(data), "-")
+
+	mantissa, exponent := text, ""
+	if i := strings.IndexAny(text, "eE"); i >= 0 {
+		mantissa, exponent = text[:i], text[i+1:]
+
+		if exponent == "" {
+			return false
+		}
+	}
+
+	intPart, fracPart, hasPoint := strings.Cut(mantissa, ".")
+
+	if intPart == "" || strings.Trim(intPart, decimal) != "" ||
+		(hasPoint && (fracPart == "" || strings.Trim(fracPart, decimal) != "")) {
+		return false
+	}
+
+	exp := 0
+
+	if exponent != "" {
+		n, err := strconv.Atoi(exponent)
+		if err != nil {
+			return false
+		}
+
+		exp = n
+	}
+
+	digits := strings.TrimLeft(intPart+fracPart, "0")
+	if digits == "" {
+		return true
+	}
+
+	shift := exp - len(fracPart)
+	if shift >= 0 {
+		return true
+	}
+
+	if -shift > len(digits) {
+		return false
+	}
+
+	return strings.Trim(digits[len(digits)+shift:], "0") == ""
+}
+{{- end}}
 {{range $t := .Types}}
 {{typeDoc $t.Name $t.Doc}}type {{$t.Name}} {{if $t.IsEnum}}string
 
@@ -61,6 +144,36 @@ func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("%q is not a value of {{$t.Name}}", s)
 }
 {{end}}
+{{- else if $t.HasChoice}}json.RawMessage
+
+// UnmarshalJSON accepts only the JSON types of the list.
+func (v *{{$t.Name}}) UnmarshalJSON(data []byte) error {
+	kind := jsonKind(data)
+{{- if $t.Integer}}
+
+	if kind == "number" && !jsonInteger(data) {
+		return fmt.Errorf("want {{$t.ChoiceText}}, got a number that is not an integer")
+	}
+{{- end}}
+
+	switch kind {
+	case {{range $i, $k := $t.Choice}}{{if $i}}, {{end}}{{goString $k}}{{end}}:
+		*v = {{$t.Name}}(append([]byte(nil), data...))
+
+		return nil
+	default:
+		return fmt.Errorf("want {{$t.ChoiceText}}, got %s", kind)
+	}
+}
+
+// MarshalJSON writes the value back.
+func (v {{$t.Name}}) MarshalJSON() ([]byte, error) {
+	if len(v) == 0 {
+		return nil, fmt.Errorf("{{$t.Name}} holds no JSON value")
+	}
+
+	return v, nil
+}
 {{- else}}struct {
 {{- range $t.Fields}}
 {{comment "\t" .Doc}}	{{.Name}} {{.Type}} {{.Tag}}
