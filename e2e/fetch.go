@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -26,6 +27,7 @@ const (
 	maxExtractBytes = 4 << 30
 	dirMode         = 0o750
 	fileMode        = 0o750
+	lockMode        = 0o600
 	// downloadAttempts is how many times a download of an archive is tried.
 	// The wait before attempt n+1 is n times downloadRetryWait.
 	downloadAttempts  = 3
@@ -124,6 +126,16 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 		return inst, nil
 	}
 
+	// Many Fetchers and processes can share one cache directory. Without
+	// this lock, one call could see the directory of another call before its
+	// archive is published, refuse it and remove a CLI that is in use.
+	unlock, err := lockEntry(f.CacheDir, archive)
+	if err != nil {
+		return Install{}, err
+	}
+
+	defer unlock()
+
 	rel := release{
 		url:     tool.releaseFile(version, archive),
 		archive: archive,
@@ -151,6 +163,59 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	f.markCacheChecked(key)
 
 	return inst, nil
+}
+
+// lockEntry takes an exclusive lock on the lock file of archive in cacheDir
+// and returns the unlock function. The lock holds across Fetchers and
+// processes, because each call opens the file again.
+func lockEntry(cacheDir, archive string) (func(), error) {
+	if err := os.MkdirAll(cacheDir, dirMode); err != nil {
+		return nil, fmt.Errorf("create cache dir: %w", err)
+	}
+
+	cacheRoot, err := os.OpenRoot(cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("open cache dir: %w", err)
+	}
+
+	defer ignoreErr(cacheRoot.Close)
+
+	lockFile, err := cacheRoot.OpenFile(archive+".lock", os.O_CREATE|os.O_RDWR, lockMode)
+	if err != nil {
+		return nil, fmt.Errorf("open cache lock: %w", err)
+	}
+
+	if err := flock(lockFile, syscall.LOCK_EX); err != nil {
+		return nil, errors.Join(fmt.Errorf("lock cache entry: %w", err), lockFile.Close())
+	}
+
+	return func() {
+		ignoreErr(func() error { return flock(lockFile, syscall.LOCK_UN) })
+		ignoreErr(lockFile.Close)
+	}, nil
+}
+
+// flock applies how to the open file f.
+func flock(f *os.File, how int) error {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("lock file: %w", err)
+	}
+
+	var lockErr error
+
+	controlErr := conn.Control(func(fd uintptr) {
+		lockErr = syscall.Flock(int(fd), how)
+	})
+	if controlErr != nil {
+		return fmt.Errorf("lock file: %w", controlErr)
+	}
+
+	if lockErr != nil {
+		return fmt.Errorf("lock file: %w", lockErr)
+	}
+
+	return nil
 }
 
 func (f *Fetcher) cacheChecked(key checkKey) bool {

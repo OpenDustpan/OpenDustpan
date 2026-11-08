@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -289,8 +290,16 @@ func TestFetchRejectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("read cache: %v", readErr)
 	}
 
-	if len(entries) != 0 {
-		t.Errorf("cache holds %d entries after a rejected download, want none", len(entries))
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	// The lock file of the entry stays; nothing else may.
+	for _, entry := range entries {
+		if entry.Name() != name+".lock" {
+			t.Errorf("cache holds %q after a rejected download, want only the lock file", entry.Name())
+		}
 	}
 }
 
@@ -1090,5 +1099,84 @@ func TestFetchChecksCachedEntryOnce(t *testing.T) {
 
 	if got := downloads.Load(); got != 2 {
 		t.Errorf("archive downloaded %d times, want 2", got)
+	}
+}
+
+// TestFetchSerializesInstallsOfOneEntry runs a second Install with its own
+// Fetcher on the same cache directory while the first one downloads. The
+// second call reads the checksums, then must wait for the first one and use
+// its entry. It must not refuse that entry and download again.
+func TestFetchSerializesInstallsOfOneEntry(t *testing.T) {
+	t.Parallel()
+
+	archive := validArchive(t)
+	tool := e2e.Pulumi()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	sum := sha256.Sum256(archive)
+
+	var (
+		downloads, checksums atomic.Int32
+		secondChecksum       = make(chan struct{})
+	)
+
+	cache := filepath.Join(t.TempDir(), "cache")
+	second := make(chan error, 1)
+
+	var client *http.Client
+
+	ctx := t.Context()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if downloads.Add(1) == 1 {
+			go func(ctx context.Context) {
+				fresh := &e2e.Fetcher{Client: client, CacheDir: cache}
+				_, installErr := fresh.Install(ctx, tool, fakeVersion)
+				second <- installErr
+			}(ctx)
+
+			<-secondChecksum
+		}
+
+		serveFull(t, w, archive)
+	})
+	mux.HandleFunc("/pulumi-"+fakeVersion+"-checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), name); writeErr != nil {
+			t.Errorf("serve checksums: %v", writeErr)
+		}
+
+		if checksums.Add(1) == 2 {
+			close(secondChecksum)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	client = ts.Client()
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	first := &e2e.Fetcher{Client: client, CacheDir: cache}
+
+	inst, err := first.Install(t.Context(), tool, fakeVersion)
+	if err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+
+	if err := <-second; err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+
+	if got := downloads.Load(); got != 1 {
+		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+
+	if _, err := os.Stat(inst.Binary()); err != nil {
+		t.Errorf("binary missing after the second install: %v", err)
 	}
 }
