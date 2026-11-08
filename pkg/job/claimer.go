@@ -599,8 +599,10 @@ func (c *DurableClaimer) endOperation(ctx context.Context, claim durable.Claim, 
 // giveBackOrEnd gives back the claim of an operation whose namespace read
 // failed, and ends it failed when the namespace does not exist. A namespace
 // ID is random and is never given again, so the namespace of the job does
-// not come back: giving the operation back would make every poll claim it
-// again and hold the kind of the operation.
+// not come back. Its name can come back, but a namespace that is created
+// again under that name is another namespace, and the job must not run in
+// it. Giving the operation back would make every poll claim it again and
+// hold the kind of the operation.
 //
 // The end of the job record cannot carry this reason: every write of a job
 // carries the fence of its namespace, and a missing namespace fails that

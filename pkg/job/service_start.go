@@ -549,17 +549,19 @@ func requestHash(source SourceKind, req *StartRequest) string {
 		put("")
 	}
 
-	// The trigger joins the hash when there is one, so a request without a
-	// trigger keeps its hash.
+	// A marker says whether the request has a trigger, so that the fields of
+	// a trigger never read as the edits of a request without one.
 	if req.Trigger != nil {
+		put("trigger")
 		put(req.Trigger.ID)
 		put(req.Trigger.Saver)
+	} else {
+		put("")
 	}
 
-	// The count of the edits and the count of the keys of each edit join the
-	// hash, so that the keys of one edit never read as the keys of another.
-	put(strconv.Itoa(len(req.Edits)))
-
+	// The count of the keys of each edit joins the hash, so that the keys of
+	// one edit never read as the keys of another. The edits are last, so
+	// these counts separate them without a count of the edits.
 	for i := range req.Edits {
 		put(req.Edits[i].Path)
 		put(strconv.Itoa(len(req.Edits[i].Keys)))

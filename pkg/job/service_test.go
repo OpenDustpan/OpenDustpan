@@ -1050,6 +1050,13 @@ func TestStartKeyConflictForAnotherRequest(t *testing.T) {
 			func(req *job.StartRequest) { req.Source = job.SourceAPI },
 			func(req *job.StartRequest) { req.Source = job.SourceSelfService },
 		},
+		{
+			// Without the trigger marker, the trigger fields "p" and "0"
+			// read as one edit at path "p" with no keys.
+			"a trigger against an edit",
+			func(req *job.StartRequest) { req.Trigger = &job.TriggerRef{ID: "p", Saver: "0"} },
+			func(req *job.StartRequest) { req.Edits = []job.FileEdit{{Path: "p", Keys: map[string][]byte{}}} },
+		},
 	}
 
 	for _, tt := range tests {
