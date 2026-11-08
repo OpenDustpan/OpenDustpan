@@ -50,7 +50,9 @@ const typesDocument = `{
     "status": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}]},
     "maybeStatus": {"anyOf": [{"$ref": "#/components/schemas/Status"}, {"type": "string"}, {"type": "null"}]},
     "state": {"$ref": "#/components/schemas/State"},
+    "describedState": {"$ref": "#/components/schemas/State", "description": "The described state."},
     "parent": {"oneOf": [{"$ref": "#/components/schemas/Widget"}, {"type": "null"}]},
+    "mixed": {"type": ["string", "number", "boolean"], "description": "A mixed value."},
     "note": {"type": ["string", "null"], "description": "A note.", "minLength": 1, "maxLength": 10}}},
    "Status": {"type": "string", "enum": ["onCall", "awaiting-approval"]},
    "State": {"type": "string", "enum": ["open", "closed"]},
@@ -63,11 +65,19 @@ const typesDocument = `{
 
 // typ makes a type with the fields that the test does not care about empty.
 func typ(kind model.TypeKind) model.Type {
-	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
 }
 
 func nullableOf(t model.Type) model.Type {
 	t.Nullable = true
+
+	return t
+}
+
+// unionOf makes the type of a list of primitive type names.
+func unionOf(kinds ...model.TypeKind) model.Type {
+	t := typ(model.TypeUnion)
+	t.Members = kinds
 
 	return t
 }
@@ -105,21 +115,26 @@ func wantWidgetFields() map[string]model.Field {
 	note := fieldOf("note", nullableOf(str), false)
 	note.Description = "A note."
 
+	mixed := fieldOf("mixed", unionOf(model.TypeString, model.TypeNumber, model.TypeBoolean), false)
+	mixed.Description = "A mixed value."
+
 	return map[string]model.Field{
-		"id":          fieldOf("id", str, true),
-		"count":       fieldOf("count", int64Type, false),
-		"ratio":       fieldOf("ratio", typ(model.TypeNumber), false),
-		"flag":        fieldOf("flag", typ(model.TypeBoolean), false),
-		"tags":        fieldOf("tags", listOf(model.TypeArray, str), false),
-		"labels":      fieldOf("labels", listOf(model.TypeMap, str), false),
-		"anything":    fieldOf("anything", listOf(model.TypeMap, typ(model.TypeAny)), false),
-		"value":       described(fieldOf("value", typ(model.TypeAny), false), "Any JSON value."),
-		"bare":        fieldOf("bare", typ(model.TypeAny), false),
-		"status":      fieldOf("status", refTo("Status", false), false),
-		"maybeStatus": fieldOf("maybeStatus", refTo("Status", true), false),
-		"state":       fieldOf("state", refTo("State", false), true),
-		"parent":      fieldOf("parent", refTo("Widget", true), false),
-		"note":        note,
+		"id":             fieldOf("id", str, true),
+		"count":          fieldOf("count", int64Type, false),
+		"ratio":          fieldOf("ratio", typ(model.TypeNumber), false),
+		"flag":           fieldOf("flag", typ(model.TypeBoolean), false),
+		"tags":           fieldOf("tags", listOf(model.TypeArray, str), false),
+		"labels":         fieldOf("labels", listOf(model.TypeMap, str), false),
+		"anything":       fieldOf("anything", listOf(model.TypeMap, typ(model.TypeAny)), false),
+		"value":          described(fieldOf("value", typ(model.TypeAny), false), "Any JSON value."),
+		"bare":           fieldOf("bare", typ(model.TypeAny), false),
+		"status":         fieldOf("status", refTo("Status", false), false),
+		"maybeStatus":    fieldOf("maybeStatus", refTo("Status", true), false),
+		"state":          fieldOf("state", refTo("State", false), true),
+		"describedState": described(fieldOf("describedState", refTo("State", false), false), "The described state."),
+		"parent":         fieldOf("parent", refTo("Widget", true), false),
+		"mixed":          mixed,
+		"note":           note,
 	}
 }
 
@@ -234,6 +249,89 @@ func TestParsePageNeedsAllNames(t *testing.T) {
 				t.Fatalf("want ErrInvalidDescription, got %v", err)
 			}
 		})
+	}
+}
+
+// TestParseRefusesBadTypeValue checks that a type value that the subset does
+// not allow is an error that names the value, never a fallback type.
+func TestParseRefusesBadTypeValue(t *testing.T) {
+	t.Parallel()
+
+	const old = `"mixed": {"type": ["string", "number", "boolean"]`
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			"an object name in a list without null",
+			`["object", "string"]`,
+			`type name "object" that is not a primitive type name`,
+		},
+		{
+			"an array name in a list without null",
+			`["array", "number"]`,
+			`type name "array" that is not a primitive type name`,
+		},
+		{"an empty list", `[]`, `type list [] that holds fewer than two names`},
+		{"a list with one name", `["string"]`, `type list ["string"] that holds fewer than two names`},
+		{"a list with null alone", `["null"]`, `type list ["null"] that holds fewer than two names`},
+		{"null before the name", `["null", "string"]`, `type name "null" that is not a primitive type name`},
+		{"null before an integer", `["null", "integer"]`, `type name "null" that is not a primitive type name`},
+		{"an unknown name", `["text", "number"]`, `type name "text" that is not a primitive type name`},
+		{"a repeated name", `["string", "string"]`, `type name "string" that is in the list two times`},
+		{"a non-string item", `["string", 5]`, `type name 5 that is not a string`},
+		{"a type that is a number", `5`, `type 5`},
+		{"a type that is a boolean", `true`, `type true`},
+		{"an enum beside a type list", `["string", "number"], "enum": ["a"]`, `enum beside a type list`},
+		{"a format beside a type list", `["string", "number"], "format": "date-time"`, `format beside a type list`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !strings.Contains(typesDocument, old) {
+				t.Fatalf("the document has no %q", old)
+			}
+
+			doc := strings.Replace(typesDocument, old, `"mixed": {"type": `+tt.value, 1)
+
+			_, err := clientgen.NewParser().Parse([]byte(doc))
+			if !errors.Is(err, clientgen.ErrUnsupported) {
+				t.Fatalf("want ErrUnsupported, got %v", err)
+			}
+
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("the error does not name the value: want %q in %q", tt.want, err)
+			}
+		})
+	}
+}
+
+// TestParseRefusesAKeyBesideARef checks that a $ref takes a description of the
+// field and no other key.
+func TestParseRefusesAKeyBesideARef(t *testing.T) {
+	t.Parallel()
+
+	const old = `"describedState": {"$ref": "#/components/schemas/State", "description": "The described state."}`
+
+	if !strings.Contains(typesDocument, old) {
+		t.Fatalf("the document has no %q", old)
+	}
+
+	doc := strings.Replace(typesDocument, old,
+		`"describedState": {"$ref": "#/components/schemas/State", "format": "date"}`, 1)
+
+	_, err := clientgen.NewParser().Parse([]byte(doc))
+	if !errors.Is(err, clientgen.ErrUnsupported) {
+		t.Fatalf("want ErrUnsupported, got %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "key beside $ref") ||
+		!strings.Contains(err.Error(), "/properties/describedState/format") {
+		t.Fatalf("the error does not name the key: %v", err)
 	}
 }
 

@@ -808,6 +808,12 @@ times the number.
 | 25 | Backup and restore engines: the shared order of the steps in `sqlstore`, the engines stay in each dialect | 1,500 | **high** | 6, 7, #1485 |
 | 26 | Delete the empty helpers. Update `CLAUDE.md`, `GLOSSARY.md` and `.golangci.yml` | small | low | all |
 
+A third engine adds an ongoing cost to CI. It needs an additional real-server
+conformance job. The current CI starts real database servers as job services:
+for example, a PostgreSQL job starts a `postgres:18` image
+(`.github/workflows/ci.yml:183-188`). The new engine adds an additional job of
+this kind. That job needs runner and server resources.
+
 The order puts the core first (1 to 7), because each area needs it. Step 3
 changes no behavior: it moves the checks into one function, and each dialect
 keeps its own gate. The gate change is step 5, after the conformance case of

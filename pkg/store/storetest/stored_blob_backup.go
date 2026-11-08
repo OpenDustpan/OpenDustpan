@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -141,8 +142,10 @@ func RunStoredBlobBackup(t *testing.T, newRig StoredBlobBackupFactory) {
 // without the size and the MD5 of its stored bytes, as a row of an earlier
 // version of the server does: the backup copies no such blob, lists its key in
 // the manifest, and still copies every blob that it can check; a restore of
-// that backup works; and a restore of a backup whose manifest does not list
-// such a blob refuses, with ErrBlobsNotBacked.
+// that backup works; a restore of a manifest with more keys than the bound on
+// the unverified keys works and records the count and the bound; and a restore
+// of a backup whose manifest does not list such a blob refuses, with
+// ErrBlobsNotBacked.
 func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory) {
 	t.Helper()
 
@@ -175,6 +178,11 @@ func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory)
 	}
 
 	waitItemKeyRestore(t, listed.Restores, listedID)
+
+	// The bound on unverified keys stops a new backup. A manifest that an
+	// earlier version of the server wrote stays restorable, also when it
+	// names more keys than the bound allows.
+	checkRestoreOverTheBound(t, newRig, in, backupID)
 
 	// A manifest that does not list the blobs is the manifest of a backup that
 	// lost them. The restore refuses it before it changes anything.
@@ -433,6 +441,56 @@ func readBlob(t *testing.T, store blob.Store, key string) []byte {
 	return data
 }
 
+// checkRestoreOverTheBound fills the manifest of the backup id in the target
+// of in with one key above the bound on the unverified keys, restores it, and
+// proves that the restore succeeds with the count and the bound in the audit
+// log. The bound stops a new backup; a manifest that an earlier version of the
+// server wrote stays restorable.
+func checkRestoreOverTheBound(
+	t *testing.T, newRig StoredBlobBackupFactory, in StoredBlobBackupInput, backupID backup.ID,
+) {
+	t.Helper()
+
+	fillUnverified(t, in.Target, backupID, backup.MaxUnverifiedKeys+1)
+
+	over := newRig(t, in)
+	overID := backup.RestoreID(ident.NewID("rst-"))
+
+	if err := over.Restores.Start(t.Context(), overID, restoreRequest(backupID)); err != nil {
+		t.Fatalf("start restore of the backup over the bound: %v", err)
+	}
+
+	waitItemKeyRestore(t, over.Restores, overID)
+
+	entries, err := over.Recorder.Domain.AuditEntries(t.Context(), audit.ServerScope)
+	if err != nil {
+		t.Fatalf("read the audit log: %v", err)
+	}
+
+	var noted []string
+
+	for i := range entries {
+		if strings.Contains(entries[i].Object, "more than the limit of") {
+			noted = append(noted, entries[i].Object)
+		}
+	}
+
+	if len(noted) != 1 {
+		t.Fatalf("audit entries that name the unverified keys = %v, want one", noted)
+	}
+
+	for _, want := range []string{
+		fmt.Sprintf("%d blobs without a size and an MD5", backup.MaxUnverifiedKeys+1),
+		fmt.Sprintf("more than the limit of %d", backup.MaxUnverifiedKeys),
+		overID.String(),
+		backupID.String(),
+	} {
+		if !strings.Contains(noted[0], want) {
+			t.Fatalf("audit entry = %q, want %q", noted[0], want)
+		}
+	}
+}
+
 // dropUnverified rewrites the manifest of the backup id in target without its
 // list of blobs that the backup does not hold.
 func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
@@ -450,6 +508,60 @@ func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
 	}
 
 	delete(doc, "unverified")
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode the manifest: %v", err)
+	}
+
+	if err = target.Delete(t.Context(), key); err != nil {
+		t.Fatalf("delete the manifest: %v", err)
+	}
+
+	if err = target.Put(t.Context(), key, bytes.NewReader(data)); err != nil {
+		t.Fatalf("write the manifest: %v", err)
+	}
+}
+
+// fillUnverified rewrites the manifest of the backup id in target so that its
+// list of blobs that the backup does not hold names count keys. The keys that
+// the manifest already names stay, and the extra keys are keys that no row of
+// the data names, so a restore of the manifest still works. The list stays
+// sorted, as the check of the restore reads it.
+func fillUnverified(t *testing.T, target blob.Store, id backup.ID, count int) {
+	t.Helper()
+
+	key := mustBlobKey(t, "backups/"+id.String()+"/manifest.json")
+
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(readBlob(t, target, key.String()), &doc); err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+
+	var listed []string
+
+	if raw, ok := doc["unverified"]; ok {
+		if err := json.Unmarshal(raw, &listed); err != nil {
+			t.Fatalf("decode the list of blobs that the backup does not hold: %v", err)
+		}
+	}
+
+	if len(listed) > count {
+		t.Fatalf("the manifest lists %d blobs that the backup does not hold, want at most %d", len(listed), count)
+	}
+
+	for i := len(listed); i < count; i++ {
+		listed = append(listed, fmt.Sprintf("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/extra/blob-%08d", i))
+	}
+
+	slices.Sort(listed)
+
+	raw, err := json.Marshal(listed)
+	if err != nil {
+		t.Fatalf("encode the list of blobs that the backup does not hold: %v", err)
+	}
+
+	doc["unverified"] = raw
 
 	data, err := json.Marshal(doc)
 	if err != nil {

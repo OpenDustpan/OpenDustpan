@@ -224,3 +224,21 @@ The flag `--allow-plain-connections`, the variable
 static layer and lock it.
 
 A namespace has no declared setting yet.
+
+### Bounds of a PostgreSQL store
+
+A server over a PostgreSQL store declares each bound of its code as a
+read-only setting. The value is a Go duration, the source is `default`, and a
+`PATCH` of one answers 409 with `settings.static-only`. A server over a
+SQLite store declares none of these settings.
+
+| Key | Kind | Default | Apply | Meaning |
+| --- | --- | --- | --- | --- |
+| `database.postgres.statementTimeout` | `string` | `25s` | `restart` | The statement timeout of each connection of the PostgreSQL store. |
+| `database.postgres.idleInTransactionTimeout` | `string` | `1m0s` | `restart` | The idle-in-transaction timeout of each connection of the PostgreSQL store. |
+| `database.postgres.clientConnectionCheckInterval` | `string` | `5s` | `restart` | The interval at which the PostgreSQL server checks that a client of a connection of the store is still there. |
+| `database.postgres.backup.statementTimeout` | `string` | `1h0m0s` | `restart` | The statement timeout of a backup, a restore and the copy of the rows of a backup in the PostgreSQL store. |
+| `database.postgres.backup.idleInTransactionTimeout` | `string` | `15m0s` | `restart` | The idle-in-transaction timeout of a backup, a restore and the copy of the rows of a backup in the PostgreSQL store. |
+| `database.postgres.schemaChange.statementTimeout` | `string` | `10m0s` | `restart` | The statement timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
+| `database.postgres.schemaChange.idleInTransactionTimeout` | `string` | `1m0s` | `restart` | The idle-in-transaction timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
+| `database.postgres.migration.timeout` | `string` | `15m0s` | `restart` | The statement timeout and the idle-in-transaction timeout of the migration transaction of the PostgreSQL store. |

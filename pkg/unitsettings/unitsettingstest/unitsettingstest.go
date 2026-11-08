@@ -168,8 +168,10 @@ func trySetDefaults(
 // putIn writes s with the context ctx, which can carry a Completion.
 func putIn(
 	ctx context.Context, h Harness, s *unitsettings.Settings, expected int64, fence namespace.Fence,
-) (unitsettings.Settings, error) {
-	return h.Store.Put(ctx, s, expected, fence, auditEntry(fence.Namespace))
+) error {
+	_, err := h.Store.Put(ctx, s, expected, fence, auditEntry(fence.Namespace))
+
+	return err
 }
 
 // deleteIn removes the record of unit with the context ctx.

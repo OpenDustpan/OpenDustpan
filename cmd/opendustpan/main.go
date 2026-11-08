@@ -1129,7 +1129,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
-	tail, tailErr := f.storeOptions(st, wrapper)
+	tail, tailErr := f.storeOptions(st, wrapper, logger)
 
 	return append(opts, tail...), tailErr
 }
@@ -1149,7 +1149,7 @@ func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
 // storeOptions returns the options of the components and of the stores that
 // the store may or may not keep: the durable operations, the runners and the
 // profiles.
-func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.Option, error) {
+func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog.Logger) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -1165,7 +1165,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, sourceFilterStoreOption(st)...)
 	opts = append(opts, trustRuleStoreOption(st)...)
-	opts = append(opts, jobStoreOption(st)...)
+	opts = append(opts, jobStoreOption(st, logger)...)
 	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, unitSettingsStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
@@ -1279,20 +1279,20 @@ func trustRuleStoreOption(st store) []dustpan.Option {
 // for st, or nil when st keeps no jobs. The claimer takes the phases of the
 // jobs as durable operations, so a poll of a runner of a pool for jobs finds
 // work.
-func jobStoreOption(st store) []dustpan.Option {
+func jobStoreOption(st store, logger *slog.Logger) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
 			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
 			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
 			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
 			}),
 		}
 	default:
