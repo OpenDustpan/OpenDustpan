@@ -42,6 +42,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -272,6 +273,9 @@ type settings struct {
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
 	trustRules trustRuleSettings
+	// selfService keeps the store of the blueprints of the self-service API.
+	// See WithSelfServiceBlueprints.
+	selfService selfServiceSettings
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
@@ -678,7 +682,7 @@ func defaultSettings() *settings {
 		eventStore:              nil,
 		secretKeys:              nil,
 		secretWrapper:           nil,
-		streamStop:              nil,
+		streamStop:              &streamStop{stopped: atomic.Bool{}},
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
@@ -741,6 +745,7 @@ func defaultSettings() *settings {
 		runners:                 nil,
 		sourceFilters:           nil,
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
+		selfService:             selfServiceSettings{store: nil},
 		jobClaimer:              nil,
 		jobRecorder:             nil,
 		components:              AllComponents(),
@@ -1227,6 +1232,8 @@ type neutralHandlers struct {
 	sourceFilter http.Handler
 	// trustRules is nil when no trust rule store is set.
 	trustRules http.Handler
+	// selfService is nil when no blueprint store is set.
+	selfService http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1297,6 +1304,7 @@ func newNeutralHandlers(
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
+		selfService:  settingAPIs.selfService,
 	}, nil
 }
 
@@ -1344,6 +1352,7 @@ func newProfileAPIs(
 type namespaceSettingHandlers struct {
 	sourceFilter http.Handler
 	trustRules   http.Handler
+	selfService  http.Handler
 }
 
 // newNamespaceSettingHandlers builds the source filter API and the trust rule
@@ -1357,14 +1366,21 @@ func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) 
 	if cfg.sourceFilters != nil {
 		out.sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
 		if err != nil {
-			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}
 	}
 
 	if cfg.trustRules.store != nil {
 		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
 		if err != nil {
-			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
+		}
+	}
+
+	if cfg.selfService.store != nil {
+		out.selfService, err = newSelfServiceHandler(svc, cfg, onFailure)
+		if err != nil {
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}
 	}
 
@@ -1463,6 +1479,7 @@ func newTofuHTTPHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1531,7 +1548,7 @@ func newTFEHandler(
 		return nil, err
 	}
 
-	registryProtocol, err := newRegistryProtocol(cfg, base.String())
+	registryProtocol, err := newRegistryProtocol(cfg, base.String(), func() { observed.IncAuditAppendFailure() })
 	if err != nil {
 		return nil, err
 	}
@@ -1567,6 +1584,7 @@ func newTFEHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -3645,7 +3663,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
 		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.unitSettings,
-		a.drift, a.sourceFilter, a.trustRules,
+		a.drift, a.sourceFilter, a.trustRules, a.selfService,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

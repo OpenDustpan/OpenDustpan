@@ -140,7 +140,9 @@ func TestSharedBodyGateAcrossAdapters(t *testing.T) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	ws, err := f.srv.Workspaces().Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := f.srv.Workspaces().Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

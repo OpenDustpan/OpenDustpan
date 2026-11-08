@@ -97,6 +97,11 @@ const (
 	// for the end of the first lease. It is long enough that a slow store
 	// cannot end it before the Extend.
 	firstLease = expiryWait
+	// extendFirstLease is the lease of the first claim of the Extend case.
+	// The case waits for the end of the first lease, so half of firstLease
+	// keeps the case short, and it is long enough that a slow store cannot
+	// end the claim before the Extend.
+	extendFirstLease = firstLease / 2
 	// instanceSkew is the clock offset of the instances in the clock case.
 	instanceSkew = time.Hour
 	// longLease does not expire inside one case.
@@ -639,7 +644,7 @@ func testExtend(t *testing.T, h Harness) {
 
 	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
-	held := mustClaim(t, a, ownerA, firstLease, kindA)
+	held := mustClaim(t, a, ownerA, extendFirstLease, kindA)
 
 	extended, err := a.Extend(t.Context(), held.Claim, longLease)
 	if err != nil {

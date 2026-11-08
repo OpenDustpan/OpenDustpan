@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	go test -count=1 ./internal/adrnumbers
 	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
