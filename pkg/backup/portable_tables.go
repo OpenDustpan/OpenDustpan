@@ -564,6 +564,19 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "member_removals",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: "source_kind", Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
+				{Name: portColGroupID, Kind: KindText},
+				{Name: "removed", Kind: KindInteger},
+				{Name: "members_before", Kind: KindInteger},
+				{Name: portColAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table:   TableTempAdmins,
 			OrderBy: []string{portColPrincipalID},
 			Columns: []Column{

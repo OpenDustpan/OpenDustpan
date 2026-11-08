@@ -59,6 +59,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "delete of a missing group is ErrNotFound", test: testDeleteMissingGroup},
 		{name: "member round trip", test: testMemberRoundTrip},
 		{name: "a principal can be in more than one group", test: testManyGroups},
+		{name: "list active group names of a principal", test: testActiveGroupNames},
 		{name: "duplicate membership is ErrAlreadyExists", test: testDuplicateMember},
 		{name: "membership needs the group and the principal", test: testMemberMissing},
 		{name: "remove of a missing membership is ErrNotFound", test: testRemoveMissingMember},
@@ -804,6 +805,79 @@ func testManyGroups(t *testing.T, s principal.Store) {
 	}
 
 	equalStrings(t, "groups", groupNames(groups), []string{"Dev", "ops"})
+}
+
+func testActiveGroupNames(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-ops", "Ops"))
+	mustCreateGroup(t, s, newGroup("grp-alpha", "alpha"))
+	mustCreateGroup(t, s, newGroup("grp-suspended", "Suspended"))
+	mustCreateGroup(t, s, newGroup("grp-removed", "Removed"))
+	mustCreateGroup(t, s, newGroup("grp-deleted", "Deleted"))
+
+	mustAddMember(t, s, "grp-ops", "prn-1")
+	mustAddMember(t, s, "grp-alpha", "prn-1")
+
+	suspended := principal.Membership{
+		AddedAt: at(2), SuspendedAt: at(3), GroupID: "grp-suspended", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceLocal, SourceID: "",
+		State: principal.MembershipStateSuspended, Pinned: false,
+	}
+	if err := s.AddMember(ctx, suspended, entry(), nil); err != nil {
+		t.Fatalf("add a suspended member: %v", err)
+	}
+
+	mustAddMember(t, s, "grp-removed", "prn-1")
+
+	if err := s.RemoveMember(ctx, "grp-removed", "prn-1", entry()); err != nil {
+		t.Fatalf("remove the member: %v", err)
+	}
+
+	mustAddMember(t, s, "grp-deleted", "prn-1")
+
+	if err := s.DeleteGroup(ctx, "grp-deleted", entry()); err != nil {
+		t.Fatalf("delete the group: %v", err)
+	}
+
+	cases := []struct {
+		name        string
+		principalID string
+		want        []string
+		wantErr     error
+	}{
+		{
+			"active memberships in name order without regard to case", "prn-1",
+			[]string{"alpha", "Ops"},
+			nil,
+		},
+		{"a missing principal", "prn-missing", nil, principal.ErrNotFound},
+	}
+
+	for _, tc := range cases {
+		got, err := s.ListActiveGroupNamesOf(ctx, tc.principalID)
+		if tc.wantErr != nil {
+			wantErr(t, tc.name, err, tc.wantErr)
+
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		equalStrings(t, tc.name, got, tc.want)
+	}
+
+	if err := s.DeletePrincipal(ctx, "prn-1", entry()); err != nil {
+		t.Fatalf("delete the principal: %v", err)
+	}
+
+	_, err := s.ListActiveGroupNamesOf(ctx, "prn-1")
+	wantErr(t, "a deleted principal", err, principal.ErrNotFound)
 }
 
 func testDuplicateMember(t *testing.T, s principal.Store) {

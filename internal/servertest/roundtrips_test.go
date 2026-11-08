@@ -820,6 +820,11 @@ type requestFlow struct {
 // transaction: the begin, the read of the unit, the read of the membership and
 // the commit. So "lock" holds 5 round trips for it, "opentofu upload" holds 4,
 // and "lock, upload and unlock" holds both, 9.
+//
+// Each check of the state.write gates first reads the principal record of the
+// caller with one query, for its groups and its break-glass mark. So "lock",
+// "lock, upload and unlock" and each pulumi flow that meets the gates hold 1
+// round trip for that read.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 45, func(h *rtHarness) {
@@ -827,7 +832,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 36, func(h *rtHarness) {
+		{"lock", 37, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -835,7 +840,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 96, func(h *rtHarness) {
+		{"lock, upload and unlock", 97, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -881,28 +886,28 @@ func requestFlows() []requestFlow {
 		// its own fenced transaction are part of each budget. A stack is in a
 		// collection, so each of these flows also reads or deletes the
 		// membership of the unit: one more round trip in each budget.
-		{"pulumi stack rm", 38, func(h *rtHarness) {
+		{"pulumi stack rm", 39, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 65, func(h *rtHarness) {
+		{"pulumi stack import", 66, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 66, func(h *rtHarness) {
+		{"pulumi stack restore", 67, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 35, func(h *rtHarness) {
+		{"pulumi stack rename", 36, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 31, func(h *rtHarness) {
+		{"pulumi cancel", 32, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
@@ -1325,17 +1330,18 @@ func backupModel() costModel {
 // the fixed part takes 1 off for passkey_challenges, the table of the open
 // passkey ceremonies, which a restore leaves empty.
 //
-// The fixed part takes 2 off for group_mappings. The run makes 5 round trips
-// for that table, 2 fewer than the cost of a table in the model: the dev strip
-// counts no rows in it, and the other statements for it are the staging count
-// and the read of the backup.
+// The fixed part takes 2 off for each table of Tables that the dev strip never
+// counts, group_mappings and member_removals. The run makes 5 round trips for
+// one of those tables, 2 fewer than the cost of a table in the model: the dev
+// strip counts no rows in it, and the other statements for it are the staging
+// count and the read of the backup.
 //
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + 1 + forgeStripClassTrips,
+		fixed:        342 + 1 + forgeStripClassTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
