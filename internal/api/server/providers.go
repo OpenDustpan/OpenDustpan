@@ -153,23 +153,23 @@ func (h *Handler) signInProviderRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: signInProvidersPath, Scope: ScopeAuthorized, Actions: read,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.listSignInProviders,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.listSignInProviders,
 		},
 		{
 			Method: http.MethodPost, Path: signInProvidersPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.createSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.createSignInProvider,
 		},
 		{
 			Method: http.MethodGet, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: read,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.readSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.readSignInProvider,
 		},
 		{
 			Method: http.MethodPatch, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.changeSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeSignInProvider,
 		},
 		{
 			Method: http.MethodDelete, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.deleteSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.deleteSignInProvider,
 		},
 	}
 }

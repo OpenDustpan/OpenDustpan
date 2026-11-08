@@ -38,8 +38,8 @@ func (h *Handler) checkpointRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    []identity.Action{identity.ActionServerManageAudit},
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.newCheckpointEpoch,
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.newCheckpointEpoch,
 		},
 	}
 }

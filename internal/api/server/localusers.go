@@ -244,24 +244,24 @@ func (h *Handler) localUserRoutes() []Route {
 	routes = append(routes, []Route{
 		{
 			Method: http.MethodPost, Path: localUsersPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.createLocalUser,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.createLocalUser,
 		},
 		{
 			Method: http.MethodGet, Path: localUserPolicyPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.getLocalUserPolicy,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.getLocalUserPolicy,
 		},
 		{
 			Method: http.MethodPost, Path: localUserResetPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
 		},
 		{
 			Method: http.MethodPost, Path: localUserUnlockPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.unlockLocalUser,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.unlockLocalUser,
 		},
 		{
 			Method: http.MethodGet, Path: localUserLocksPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.getLocalUserLocks,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.getLocalUserLocks,
 		},
 	}...)
 
@@ -272,15 +272,15 @@ func (h *Handler) localUserRoutes() []Route {
 	return append(routes,
 		Route{
 			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.redeemLocalUserCode,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.redeemLocalUserCode,
 		},
 		Route{
 			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.changeOwnPassword,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeOwnPassword,
 		},
 		Route{
 			Method: http.MethodPost, Path: localSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.passwordSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.passwordSignIn,
 		},
 	)
 }

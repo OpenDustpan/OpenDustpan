@@ -263,24 +263,38 @@ func quotedRevision(s string) (int64, error) {
 func (h *Handler) settingsRoutes() []Route {
 	return []Route{
 		{
-			Method: http.MethodGet, Path: settingsPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerReadSettings}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getSettings,
+			Method: http.MethodGet,
+			Path:   settingsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerReadSettings,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.getSettings,
 		},
 		{
-			Method: http.MethodPatch, Path: settingsPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerManageSettings}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.patchSettings,
+			Method: http.MethodPatch,
+			Path:   settingsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerManageSettings,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.patchSettings,
 		},
 		{
 			Method: http.MethodGet, Path: namespaceSettingsPath, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceReadSettings}, Resolve: resolveNamespacePath,
-			ActionsFor: nil, Serve: h.getSettings,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.getSettings,
 		},
 		{
 			Method: http.MethodPatch, Path: namespaceSettingsPath, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageSettings}, Resolve: resolveNamespacePath,
-			ActionsFor: nil, Serve: h.patchSettings,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.patchSettings,
 		},
 	}
 }

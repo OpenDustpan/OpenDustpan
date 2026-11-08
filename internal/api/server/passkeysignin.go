@@ -116,11 +116,11 @@ func (h *Handler) passkeySignInRoutes() []Route {
 	return append(routes,
 		Route{
 			Method: http.MethodPost, Path: signInWebauthnBeginPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.beginPasskeySignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.beginPasskeySignIn,
 		},
 		Route{
 			Method: http.MethodPost, Path: signInWebauthnFinishPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.finishPasskeySignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.finishPasskeySignIn,
 		},
 	)
 }

@@ -127,7 +127,7 @@ func (h *Handler) storeCheckRoutes() []Route {
 		return Route{
 			Method: method, Path: path, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionInstallationStoreCheck},
-			Resolve: resolveServer, ActionsFor: nil, Serve: serve,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
 		}
 	}
 

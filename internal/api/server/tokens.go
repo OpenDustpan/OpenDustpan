@@ -295,22 +295,35 @@ func (h *Handler) tokenRoutes() []Route {
 
 	return append([]Route{
 		{
-			Method: http.MethodGet, Path: tokensPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(listTokens),
+			Method:       http.MethodGet,
+			Path:         tokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listTokens),
 		},
 		{
-			Method: http.MethodGet, Path: tokenPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(getToken),
+			Method:       http.MethodGet,
+			Path:         tokenPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(getToken),
 		},
 		{
 			// A service token needs principal:manage-tokens on its
 			// principal, a personal token server:manage-tokens on the
 			// installation.
 			Method: http.MethodDelete, Path: tokenPath, Scope: ScopeAuthorized,
-			Actions:    []identity.Action{identity.ActionServerManageTokens, identity.ActionPrincipalManageTokens},
-			Resolve:    h.resolveTokenOwner,
-			ActionsFor: revokeActions,
-			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
+			Actions:      []identity.Action{identity.ActionServerManageTokens, identity.ActionPrincipalManageTokens},
+			Resolve:      h.resolveTokenOwner,
+			ActionsFor:   revokeActions,
+			OpaqueDenial: true,
+			Serve:        h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
 		},
 	}, h.serviceTokenRoutes()...)
 }
@@ -326,29 +339,47 @@ func (h *Handler) serviceTokenRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodPost, Path: serviceTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolveServiceTokenCreate, ActionsFor: nil, Serve: serve(createToken(accesstoken.ScopeService)),
+			Method:       http.MethodPost,
+			Path:         serviceTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      resolveServiceTokenCreate,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        serve(createToken(accesstoken.ScopeService)),
 		},
 		{
-			Method: http.MethodPost, Path: serviceTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
-			Resolve: h.resolveTokenOwner, ActionsFor: nil, Serve: serve(rotateToken(accesstoken.ScopeService)),
+			Method:       http.MethodPost,
+			Path:         serviceTokenPath + "/rotate",
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      h.resolveTokenOwner,
+			ActionsFor:   nil,
+			OpaqueDenial: true,
+			Serve:        serve(rotateToken(accesstoken.ScopeService)),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: serve(createPrincipalToken),
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false, Serve: serve(createPrincipalToken),
 		},
 		{
-			Method: http.MethodGet, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: h.serveTokenRead(listPrincipalTokens),
+			Method:       http.MethodGet,
+			Path:         principalTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      resolvePrincipalPath,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listPrincipalTokens),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: serve(ofPathPrincipal(rotateToken(accesstoken.ScopeService))),
 		},
 		{
 			Method: http.MethodDelete, Path: principalTokenPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: serve(ofPathPrincipal(revokeToken(accesstoken.ScopeService))),
 		},
 	}
@@ -503,8 +534,14 @@ func (h *Handler) ownTokenRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: ownTokensPath, Scope: ScopeAuthorized,
-			Actions: own, Resolve: resolveCaller, ActionsFor: nil, Serve: h.serveTokenRead(listOwnTokens),
+			Method:       http.MethodGet,
+			Path:         ownTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      own,
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listOwnTokens),
 		},
 		{
 			Method:     http.MethodPost,
@@ -512,8 +549,8 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    own,
 			Resolve:    resolveCaller,
-			ActionsFor: nil,
-			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -521,12 +558,12 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    own,
 			Resolve:    resolveCaller,
-			ActionsFor: nil,
-			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
 		},
 		{
 			Method: http.MethodPost, Path: ownTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
 		},
 	}
