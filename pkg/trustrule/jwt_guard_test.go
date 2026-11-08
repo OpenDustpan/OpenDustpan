@@ -92,12 +92,14 @@ func TestTokenPayloadRefusesInvalidUTF8(t *testing.T) {
 
 	raw := s.rawToken(t, s.header(), strings.Replace(string(body), issuer, issuer+"\xff", 1))
 
-	if _, verifyErr := trustrule.Verify(raw, ks); !errors.Is(verifyErr, trustrule.ErrToken) {
-		t.Errorf("Verify = %v, want ErrToken", verifyErr)
+	if _, verifyErr := trustrule.Verify(raw, ks); !errors.Is(verifyErr, trustrule.ErrToken) ||
+		!strings.Contains(verifyErr.Error(), "the payload is not UTF-8") {
+		t.Errorf("Verify = %v, want ErrToken with the payload is not UTF-8", verifyErr)
 	}
 
-	if _, issuerErr := trustrule.UnverifiedIssuer(raw); !errors.Is(issuerErr, trustrule.ErrToken) {
-		t.Errorf("UnverifiedIssuer = %v, want ErrToken", issuerErr)
+	if _, issuerErr := trustrule.UnverifiedIssuer(raw); !errors.Is(issuerErr, trustrule.ErrToken) ||
+		!strings.Contains(issuerErr.Error(), "the payload is not UTF-8") {
+		t.Errorf("UnverifiedIssuer = %v, want ErrToken with the payload is not UTF-8", issuerErr)
 	}
 }
 
