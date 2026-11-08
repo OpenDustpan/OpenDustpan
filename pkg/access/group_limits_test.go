@@ -33,6 +33,7 @@ type limitKey struct {
 // error.
 type fakeLimits struct {
 	lifted map[limitKey]bool
+	kind   access.LimitKind
 	err    error
 }
 
@@ -40,14 +41,14 @@ func (f fakeLimits) LimitLiftedBy(
 	_ context.Context, groupID, newName string, change principal.GroupChange,
 ) (access.LimitRef, bool, error) {
 	if f.err != nil {
-		return access.LimitRef{ID: "", Scope: ""}, false, f.err
+		return access.LimitRef{ID: "", Scope: "", Kind: ""}, false, f.err
 	}
 
 	if !f.lifted[limitKey{group: groupID, newName: newName, change: change}] {
-		return access.LimitRef{ID: "", Scope: ""}, false, nil
+		return access.LimitRef{ID: "", Scope: "", Kind: ""}, false, nil
 	}
 
-	return access.LimitRef{ID: "lim-1", Scope: "namespace/acme"}, true, nil
+	return access.LimitRef{ID: "lim-1", Scope: "namespace/acme", Kind: f.kind}, true, nil
 }
 
 // failingGrantsStore is the fixture store with a read of the grants that
@@ -102,7 +103,7 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 			table[limitKey{group: readers.ID, newName: "", change: change}] = true
 		}
 
-		return fakeLimits{lifted: table, err: nil}
+		return fakeLimits{lifted: table, kind: access.LimitKindAccessLimit, err: nil}
 	}
 
 	cases := []struct {
@@ -168,7 +169,8 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 				lifted: map[limitKey]bool{
 					{group: readers.ID, newName: "auditors", change: principal.GroupChangeRename}: true,
 				},
-				err: nil,
+				kind: access.LimitKindAccessLimit,
+				err:  nil,
 			},
 			change:  principal.GroupChangeRename,
 			newName: "auditors",
@@ -182,7 +184,8 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 				lifted: map[limitKey]bool{
 					{group: readers.ID, newName: "auditors", change: principal.GroupChangeRename}: true,
 				},
-				err: nil,
+				kind: access.LimitKindAccessLimit,
+				err:  nil,
 			},
 			change:  principal.GroupChangeRename,
 			newName: "readers-two",
@@ -219,7 +222,7 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 		{
 			name:    "a group that no limit names keeps the grants check",
 			caller:  acct,
-			limits:  fakeLimits{lifted: map[limitKey]bool{}, err: nil},
+			limits:  fakeLimits{lifted: map[limitKey]bool{}, kind: access.LimitKindAccessLimit, err: nil},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
 			text:    "",
@@ -232,7 +235,8 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 				lifted: map[limitKey]bool{
 					{group: "grp-other", newName: "", change: principal.GroupChangeAddMember}: true,
 				},
-				err: nil,
+				kind: access.LimitKindAccessLimit,
+				err:  nil,
 			},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
@@ -242,7 +246,7 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 		{
 			name:    "the read of the limits fails and refuses the change",
 			caller:  acct,
-			limits:  fakeLimits{lifted: nil, err: errLimitsRead},
+			limits:  fakeLimits{lifted: nil, kind: access.LimitKindAccessLimit, err: errLimitsRead},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
 			text:    "",
@@ -251,7 +255,7 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 		{
 			name:    "a limit that does not parse refuses the change",
 			caller:  acct,
-			limits:  fakeLimits{lifted: nil, err: errLimitParse},
+			limits:  fakeLimits{lifted: nil, kind: access.LimitKindAccessLimit, err: errLimitParse},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
 			text:    "",
@@ -286,6 +290,119 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 	}
 }
 
+// TestCheckGroupGrantsNamesTheKindOfTheObject proves that the refusal of a
+// change that can widen access through a gate or an approval rule carries the
+// sentinel that the routes map to 403, names the kind and the ID of the
+// object when the caller may read the gates of the namespace, and names
+// neither the ID nor the scope when the caller may not.
+func TestCheckGroupGrantsNamesTheKindOfTheObject(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	acct := f.accountAdministrator(t, "acct")
+	carol := f.person(t, "carol")
+
+	// readers holds a viewer grant on acme, which the account
+	// administrator holds too, so the grants check lets the change pass.
+	readers := f.group(t, "readers")
+	f.grant(t, readers, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	// ops holds no grant, so the grants check lets carol pass.
+	ops := f.group(t, "ops")
+
+	cases := []struct {
+		name   string
+		caller identity.Principal
+		group  access.Subject
+		kind   access.LimitKind
+		want   error
+		// wants are the texts that the refusal must hold.
+		wants []string
+		// hides are the texts that the refusal must not hold.
+		hides []string
+	}{
+		{
+			name:   "a gate that the caller may read names its kind and ID",
+			caller: acct, group: readers, kind: access.LimitKindGate, want: access.ErrEscalation,
+			wants: []string{`a gate "lim-1" of namespace/acme`, readers.ID},
+			hides: nil,
+		},
+		{
+			name:   "an approval rule that the caller may read names its kind and ID",
+			caller: acct, group: readers, kind: access.LimitKindApprovalRule, want: access.ErrEscalation,
+			wants: []string{`an approval rule "lim-1" of namespace/acme`, readers.ID},
+			hides: nil,
+		},
+		{
+			name:   "a gate that the caller may not read names no ID and no scope",
+			caller: carol, group: ops, kind: access.LimitKindGate, want: access.ErrEscalation,
+			wants: []string{"a gate that you cannot read", ops.ID},
+			hides: []string{"lim-1", "namespace/acme", "acme"},
+		},
+		{
+			name:   "an approval rule that the caller may not read names no ID and no scope",
+			caller: carol, group: ops, kind: access.LimitKindApprovalRule, want: access.ErrEscalation,
+			wants: []string{"an approval rule that you cannot read", ops.ID},
+			hides: []string{"lim-1", "namespace/acme", "acme"},
+		},
+		{
+			name:   "a site administrator passes a gate",
+			caller: admin(), group: readers, kind: access.LimitKindGate, want: nil,
+			wants: nil, hides: nil,
+		},
+		{
+			name:   "a site administrator passes an approval rule",
+			caller: admin(), group: readers, kind: access.LimitKindApprovalRule, want: nil,
+			wants: nil, hides: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			limits := fakeLimits{
+				lifted: map[limitKey]bool{
+					{group: tc.group.ID, newName: "", change: principal.GroupChangeAddMember}: true,
+				},
+				kind: tc.kind,
+				err:  nil,
+			}
+			svc := serviceWithLimits(t, f, limits)
+
+			err := svc.CheckGroupGrants(ctx, tc.caller, tc.group.ID, "", principal.GroupChangeAddMember)
+			checkKindRefusal(t, err, tc.want, tc.wants, tc.hides)
+		})
+	}
+}
+
+// checkKindRefusal checks the refusal of a change that can widen access
+// through an object of a kind.
+func checkKindRefusal(t *testing.T, err, want error, wants, hides []string) {
+	t.Helper()
+
+	if !errors.Is(err, want) {
+		t.Fatalf("CheckGroupGrants() = %v, want %v", err, want)
+	}
+
+	if err == nil {
+		return
+	}
+
+	for _, text := range wants {
+		if !strings.Contains(err.Error(), text) {
+			t.Fatalf("the refusal = %q, want %q", err, text)
+		}
+	}
+
+	for _, text := range hides {
+		if strings.Contains(err.Error(), text) {
+			t.Fatalf("the refusal = %q, want no %q", err, text)
+		}
+	}
+}
+
 // TestCheckGroupGrantsAllowsASiteAdministratorByTheDecision proves that the
 // limit check lets a change pass for a caller whom the access decision makes
 // a site administrator, and refuses a caller who holds less, though it holds
@@ -313,7 +430,8 @@ func TestCheckGroupGrantsAllowsASiteAdministratorByTheDecision(t *testing.T) {
 		lifted: map[limitKey]bool{
 			{group: readers.ID, newName: "", change: principal.GroupChangeAddMember}: true,
 		},
-		err: nil,
+		kind: access.LimitKindAccessLimit,
+		err:  nil,
 	}
 
 	cases := []struct {
@@ -372,7 +490,8 @@ func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
 			lifted: map[limitKey]bool{
 				{group: ops.ID, newName: "", change: principal.GroupChangeAddMember}: true,
 			},
-			err: nil,
+			kind: access.LimitKindAccessLimit,
+			err:  nil,
 		},
 	})
 	if err != nil {
@@ -405,7 +524,9 @@ func TestCheckGroupGrantsRefusalNamesTheLimit(t *testing.T) {
 	ops := f.group(t, "ops")
 	f.grant(t, ops, access.RoleSiteAdministrator, identity.ServerObject())
 
-	svc := serviceWithLimits(t, f, fakeLimits{lifted: map[limitKey]bool{}, err: nil})
+	svc := serviceWithLimits(t, f, fakeLimits{
+		lifted: map[limitKey]bool{}, kind: access.LimitKindAccessLimit, err: nil,
+	})
 
 	grantsErr := svc.CheckGroupGrants(ctx, acct, ops.ID, "", principal.GroupChangeRemoveMember)
 	if grantsErr == nil || !errors.Is(grantsErr, access.ErrEscalation) {
@@ -420,7 +541,8 @@ func TestCheckGroupGrantsRefusalNamesTheLimit(t *testing.T) {
 		lifted: map[limitKey]bool{
 			{group: readers.ID, newName: "", change: principal.GroupChangeAddMember}: true,
 		},
-		err: nil,
+		kind: access.LimitKindAccessLimit,
+		err:  nil,
 	})
 
 	limitErr := svc.CheckGroupGrants(ctx, acct, readers.ID, "", principal.GroupChangeAddMember)
@@ -470,7 +592,8 @@ func TestCheckGroupGrantsRefusalHidesALimitThatTheCallerCannotRead(t *testing.T)
 			{group: readers.ID, newName: "", change: principal.GroupChangeAddMember}: true,
 			{group: ops.ID, newName: "", change: principal.GroupChangeAddMember}:     true,
 		},
-		err: nil,
+		kind: access.LimitKindAccessLimit,
+		err:  nil,
 	})
 
 	readErr := svc.CheckGroupGrants(ctx, acct, readers.ID, "", principal.GroupChangeAddMember)

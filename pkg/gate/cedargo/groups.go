@@ -10,7 +10,7 @@ import (
 )
 
 // GroupDirections reports the changes of the members of a group that can
-// lift the forbid of one access limit.
+// lift the forbid of one access limit or the match of one gate.
 type GroupDirections struct {
 	// Add reports that an add of a member can lift the forbid.
 	Add bool
@@ -69,14 +69,50 @@ func LimitGroupDirections(text string) (map[string]GroupDirections, error) {
 			pol = negative
 		}
 
-		// Defense in depth: walk refuses the membership tests that it
-		// visits. This pass stays so that a membership test inside a node
-		// type that the walk does not open is refused too.
-		if err := checkMemberships(c.Body); err != nil {
+		if err := directions.addClause(c.Body, pol); err != nil {
+			return nil, err
+		}
+	}
+
+	return directions.byName, nil
+}
+
+// GateGroupDirections returns, for each group name that the condition or the
+// unless of a gate names, the changes of its members that can lift the gate.
+//
+// A gate matches when its condition is true and its unless is false. So an
+// add of a member to a group that the unless names can lift the gate for that
+// member, and a remove of a member from a group that the condition names can
+// lift it too. A group in any other position is read as one that both changes
+// can lift: such a text is refused at save, and both directions are the safe
+// answer for a stored row that no save wrote.
+//
+// An empty clause names no group.
+//
+// A membership test of principal must name a group or a set of groups. It
+// returns ErrLimitMembership for a text that names another value: the server
+// cannot tell which group such a gate names, so the save refuses the text and
+// a reader of a stored row refuses the change.
+//
+// It returns errPolicy for a clause that the engine refuses.
+func GateGroupDirections(condition, unless string) (map[string]GroupDirections, error) {
+	directions := &groupDirections{byName: map[string]GroupDirections{}}
+
+	for _, clause := range []struct {
+		template string
+		body     string
+		kind     xast.Condition
+		pol      polarity
+	}{
+		{template: whenTemplate, body: condition, kind: xast.ConditionWhen, pol: positive},
+		{template: unlessTemplate, body: unless, kind: xast.ConditionUnless, pol: negative},
+	} {
+		body, err := clauseBody(clause.template, clause.body, clause.kind)
+		if err != nil {
 			return nil, err
 		}
 
-		if err := directions.walk(c.Body, pol); err != nil {
+		if err := directions.addClause(body.AsIsNode(), clause.pol); err != nil {
 			return nil, err
 		}
 	}
@@ -108,6 +144,18 @@ func (p polarity) flip() polarity {
 // policy for each group name that the policy names.
 type groupDirections struct {
 	byName map[string]GroupDirections
+}
+
+// addClause walks one clause with its polarity and adds its groups.
+func (d *groupDirections) addClause(body xast.IsNode, p polarity) error {
+	// Defense in depth: walk refuses the membership tests that it visits.
+	// This pass stays so that a membership test inside a node type that the
+	// walk does not open is refused too.
+	if err := checkMemberships(body); err != nil {
+		return err
+	}
+
+	return d.walk(body, p)
 }
 
 // addPrincipalScope adds the groups of the principal scope, which is a

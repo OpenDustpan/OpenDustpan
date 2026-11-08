@@ -35,6 +35,12 @@ type groupLimitFixture struct {
 	other principal.Group
 	// free is the group readers, which no limit names.
 	free principal.Group
+	// gated is the group that the unless of a gate names: an add can lift
+	// the gate.
+	gated principal.Group
+	// approved is the group that an approval rule names by ID: an add makes
+	// the member an approver.
+	approved principal.Group
 }
 
 // newGroupLimitFixture returns the fixture of TestGroupGuardReadsTheAccessLimits.
@@ -81,25 +87,31 @@ func newGroupLimitFixture(t *testing.T) groupLimitFixture {
 	named := createGroup(t, svc, "sre")
 	other := createGroup(t, svc, "platform")
 	free := createGroup(t, svc, "readers")
+	gated := createGroup(t, svc, "gated")
+	approved := createGroup(t, svc, "approved")
 
 	// Each group holds the member, so a remove and a delete find it. The
 	// administrator makes the adds: the guard of the caller refuses an add
 	// to the group of the unless clause.
-	for _, group := range []*principal.Group{&named, &other, &free} {
+	for _, group := range []*principal.Group{&named, &other, &free, &gated, &approved} {
 		if _, err := svc.AddMember(ctx, adminEntry(), admin(), group.ID, member.ID); err != nil {
 			t.Fatalf("add the member to group %s: %v", group.Name, err)
 		}
 	}
 
+	seedGateAndRule(t, st, gated.Name, approved.ID)
+
 	return groupLimitFixture{
-		svc:    svc,
-		store:  st,
-		caller: caller,
-		member: member,
-		added:  createPerson(t, svc, "peter"),
-		named:  named,
-		other:  other,
-		free:   free,
+		svc:      svc,
+		store:    st,
+		caller:   caller,
+		member:   member,
+		added:    createPerson(t, svc, "peter"),
+		named:    named,
+		other:    other,
+		free:     free,
+		gated:    gated,
+		approved: approved,
 	}
 }
 
@@ -179,6 +191,16 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "an add to a group of an unless clause of a gate is refused",
+			run:  func(f groupLimitFixture) error { return add(f, f.gated) },
+			want: access.ErrEscalation,
+		},
+		{
+			name: "an add to a group of an approval rule is refused",
+			run:  func(f groupLimitFixture) error { return add(f, f.approved) },
+			want: access.ErrEscalation,
+		},
+		{
 			name: "a rename to the name of a group of an unless clause is refused",
 			run:  func(f groupLimitFixture) error { return rename(f, f.caller, f.free, f.named.Name) },
 			want: access.ErrEscalation,
@@ -221,6 +243,24 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 			name: "an administrator removes from a group of a when clause",
 			run: func(f groupLimitFixture) error {
 				return f.svc.RemoveMember(t.Context(), adminEntry(), admin(), f.other.ID, f.member.ID)
+			},
+			want: nil,
+		},
+		{
+			name: "an administrator adds to a group of an unless clause of a gate",
+			run: func(f groupLimitFixture) error {
+				_, err := f.svc.AddMember(t.Context(), adminEntry(), admin(), f.gated.ID, f.added.ID)
+
+				return err
+			},
+			want: nil,
+		},
+		{
+			name: "an administrator adds to a group of an approval rule",
+			run: func(f groupLimitFixture) error {
+				_, err := f.svc.AddMember(t.Context(), adminEntry(), admin(), f.approved.ID, f.added.ID)
+
+				return err
 			},
 			want: nil,
 		},
@@ -325,6 +365,43 @@ func seedNamingLimits(t *testing.T, st *sqlite.Store) {
 		},
 	} {
 		putLimit(t, st, limit)
+	}
+}
+
+// seedGateAndRule stores the namespace acme and the gate and approval rule of
+// it: the unless of the gate names the group gateName, and the approval rule
+// names the group with the ID ruleGroupID as its approver.
+func seedGateAndRule(t *testing.T, st *sqlite.Store, gateName, ruleGroupID string) {
+	t.Helper()
+
+	ctx := t.Context()
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	e := namespaceChange("acme")
+
+	_, err := st.Gates().Put(ctx, gate.Gate{
+		Scope: gate.NamespaceScope("acme"), ID: "g1", Version: 0,
+		DecisionPoint: gate.PointChangePlanned, Condition: "",
+		Unless:  `principal in OpenDustpan::Group::"` + gateName + `"`,
+		Outcome: gate.OutcomeDeny, Message: "", Mode: gate.ModeEnforce, OnError: gate.OnErrorFail,
+		Final: false, Reads: nil,
+		CheckedWith: gate.CheckedWith{
+			Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		},
+		State: "",
+	}, 0, fence, e)
+	if err != nil {
+		t.Fatalf("put gate: %v", err)
+	}
+
+	_, err = st.ApprovalRules().Put(ctx, gate.ApprovalRule{
+		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 0,
+		Approvers: gate.Approvers{
+			Groups: []string{"approved"}, GroupIDs: []string{ruleGroupID}, Users: nil, UnitOwners: false,
+		},
+		Count: 1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
+	}, 0, fence, e)
+	if err != nil {
+		t.Fatalf("put approval rule: %v", err)
 	}
 }
 
