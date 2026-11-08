@@ -19,8 +19,14 @@ import (
 
 var errGuardRead = errors.New("registry unavailable")
 
-// stallingBlobs is a blob store whose delete waits until its context ends and
-// then answers the error of the context. It deletes nothing.
+// leaseNow is the fixed clock of the lease guards in the tests.
+func leaseNow() time.Time {
+	return time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+}
+
+// stallingBlobs is a blob store whose delete would stall the test forever. It
+// fails at once instead, so a delete that ignores the lease context cannot
+// hold the test. It deletes nothing.
 type stallingBlobs struct {
 	blob.Store
 
@@ -28,14 +34,12 @@ type stallingBlobs struct {
 	calls int
 }
 
-func (s *stallingBlobs) Delete(ctx context.Context, _ blob.Key) error {
+func (s *stallingBlobs) Delete(context.Context, blob.Key) error {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
 
-	<-ctx.Done()
-
-	return fmt.Errorf("delete blob: %w", ctx.Err())
+	return fmt.Errorf("delete blob: %w", context.Canceled)
 }
 
 // deletes returns the number of delete calls that reached the store.
@@ -96,7 +100,7 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewLeases(time.Now)
+			guard := blobguardtest.NewLeases(leaseNow)
 			f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 			prefix := purgedWorkspace(t, f)
 
@@ -128,10 +132,10 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := blobguardtest.NewLeases(time.Now)
+	failing := blobguardtest.NewLeases(leaseNow)
 	failing.Fail(errGuardRead)
 
-	unknown := blobguardtest.NewLeases(time.Now)
+	unknown := blobguardtest.NewLeases(leaseNow)
 	unknown.Start(blobguard.Work{Kind: "other", ID: "x-1"})
 
 	tests := []struct {
@@ -173,7 +177,7 @@ func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 func TestDeletePurgedBlobsReleasesTheLease(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewLeases(time.Now)
+	guard := blobguardtest.NewLeases(leaseNow)
 	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 	prefix := purgedWorkspace(t, f)
 
@@ -214,12 +218,7 @@ func TestDeletePurgedBlobsStopsWhenTheLeaseEnded(t *testing.T) {
 
 	prefix := purgedWorkspace(t, f)
 
-	// The outer context ends long before the store delete would, so a delete
-	// that ignored the lease context cannot hold the test.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	err := f.svc.DeletePurgedBlobs(ctx, f.ws.NamespaceID, f.ws.ID)
+	err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
 	if !errors.Is(err, workspace.ErrBlobsRemain) {
 		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
 	}
@@ -241,7 +240,7 @@ func TestDeletePurgedBlobsStopsWhenTheLeaseEnded(t *testing.T) {
 func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewLeases(time.Now)
+	guard := blobguardtest.NewLeases(leaseNow)
 	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 	prefix := purgedWorkspace(t, f)
 

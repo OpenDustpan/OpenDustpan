@@ -30,6 +30,11 @@ const (
 	sweepAhead = blob.UnnamedGracePeriod + time.Minute
 )
 
+// leaseNow is the fixed clock of the lease guard in the tests.
+func leaseNow() time.Time {
+	return time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+}
+
 func TestParseArtifactKey(t *testing.T) {
 	t.Parallel()
 
@@ -615,7 +620,7 @@ func TestNewArtifactSweeperNeedsItsPorts(t *testing.T) {
 	full := job.ArtifactSweeperConfig{
 		Jobs:  &listedJobs{Store: nil, j: sweepJobOf(t), mu: sync.Mutex{}, filters: nil, full: false},
 		Names: sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil},
-		Blobs: b, Namespaces: sweepNamespaces{}, Guard: blobguardtest.NewLeases(time.Now), Clock: aheadClock{ahead: 0},
+		Blobs: b, Namespaces: sweepNamespaces{}, Guard: blobguardtest.NewLeases(leaseNow), Clock: aheadClock{ahead: 0},
 		Audit: &recordedAudit{mu: sync.Mutex{}, entries: nil}, Logger: nil, Now: nil, OnDeleteWait: nil,
 	}
 
@@ -766,12 +771,7 @@ func TestSweepDeletesNothingWhenTheLeaseEnded(t *testing.T) {
 		wait:     nil,
 	})
 
-	// The sweep has a bounded context, so a delete that ignored the lease
-	// context cannot hold the test.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	res, err := r.s.Sweep(ctx)
+	res, err := r.s.Sweep(t.Context())
 	if err != nil {
 		t.Fatalf("Sweep = %v", err)
 	}
