@@ -30,18 +30,25 @@ type rule struct {
 	names *regexp.Regexp
 	// listOf is the rule of each item of a list.
 	listOf string
+	// values limits each item of a list to a string that matches the pattern,
+	// when it is not nil.
+	values *regexp.Regexp
 }
 
 func object(keys map[string]string) rule {
-	return rule{keys: keys, mapOf: "", names: nil, listOf: ""}
+	return rule{keys: keys, mapOf: "", names: nil, listOf: "", values: nil}
 }
 
 func mapOfRule(next string, names *regexp.Regexp) rule {
-	return rule{keys: nil, mapOf: next, names: names, listOf: ""}
+	return rule{keys: nil, mapOf: next, names: names, listOf: "", values: nil}
 }
 
 func listOfRule(next string) rule {
-	return rule{keys: nil, mapOf: "", names: nil, listOf: next}
+	return rule{keys: nil, mapOf: "", names: nil, listOf: next, values: nil}
+}
+
+func enumOfRule(values *regexp.Regexp) rule {
+	return rule{keys: nil, mapOf: "", names: nil, listOf: "", values: values}
 }
 
 // subsetRules is the allowlist of the subset table, by rule name.
@@ -104,10 +111,11 @@ func subsetRules() map[string]rule {
 		"schema": object(map[string]string{
 			"$ref": "", "type": "", "properties": "properties",
 			"required": "", "additionalProperties": "additionalProperties",
-			"items": "schema", "enum": "", "format": "", "description": "",
+			"items": "schema", "enum": "enumValues", "format": "", "description": "",
 			"minLength": "", "maxLength": "", "anyOf": "schemaList",
 			"oneOf": "schemaList", "discriminator": "discriminator",
 		}),
+		"enumValues": enumOfRule(enumValuePattern()),
 		// A discriminator names the member and maps its values to schemas.
 		"discriminator": object(map[string]string{"propertyName": "", "mapping": "mapping"}),
 		// The mapping has free keys, the values of the member, and string values.
@@ -209,6 +217,17 @@ func (w *walker) walkObject(ctx string, r rule, v map[string]any, ptr string) {
 }
 
 func (w *walker) walkList(ctx string, r rule, v []any, ptr string) {
+	if r.values != nil {
+		for i, child := range v {
+			s, ok := child.(string)
+			if !ok || !r.values.MatchString(s) {
+				w.report(fmt.Sprintf("%s/%d", ptr, i), "enum value is not in the subset")
+			}
+		}
+
+		return
+	}
+
 	if r.listOf == "" && ctx != "securityRequirement" {
 		w.report(ptr, "a list is not in the subset here")
 
@@ -308,6 +327,50 @@ func TestSubsetRefusesOtherConstructs(t *testing.T) {
 			bad := checkDocument(t, []byte(tt.doc))
 			if !strings.Contains(strings.Join(bad, "\n"), tt.want) {
 				t.Errorf("walk = %q, want a report with %q", bad, tt.want)
+			}
+		})
+	}
+}
+
+// TestSubsetEnumValues checks the enum allowlist of the walk: a value in the
+// allowlist passes, and a value outside it is reported at its JSON pointer,
+// also in a nested schema.
+func TestSubsetEnumValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		doc  string
+		want []string
+	}{
+		{
+			"the values of the allowlist pass",
+			`{"components":{"schemas":{"A":{"type":"string","enum":["onCall","awaiting-approval","lock.locked"]}}}}`,
+			nil,
+		},
+		{
+			"a value outside the allowlist",
+			`{"components":{"schemas":{"A":{"type":"string","enum":["Bad"]}}}}`,
+			[]string{"/components/schemas/A/enum/0: enum value is not in the subset"},
+		},
+		{
+			"a value outside the allowlist in a nested schema",
+			`{"components":{"schemas":{"A":{"properties":{"b":{"type":"string","enum":["a b"]}}}}}}`,
+			[]string{"/components/schemas/A/properties/b/enum/0: enum value is not in the subset"},
+		},
+		{
+			"a value that is not a string",
+			`{"components":{"schemas":{"A":{"type":"string","enum":[1]}}}}`,
+			[]string{"/components/schemas/A/enum/0: enum value is not in the subset"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if bad := checkDocument(t, []byte(tt.doc)); !slices.Equal(bad, tt.want) {
+				t.Errorf("walk = %q, want %q", bad, tt.want)
 			}
 		})
 	}

@@ -69,6 +69,11 @@ const (
 	// enough that a slow store cannot expire it before the renew, and the
 	// case waits for its end after the renew.
 	firstLease = expiryWait
+	// renewFirstLease is the lease of the first claim of the renew case. The
+	// case waits for the end of the first lease, so half of firstLease keeps
+	// the case short, and it is long enough that a slow store cannot expire
+	// the claim before the renew.
+	renewFirstLease = firstLease / 2
 )
 
 // request returns a claim request of owner for the kinds ks.
@@ -575,7 +580,7 @@ func testRenew(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	a := claim(t, h, runnerOne, firstLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, renewFirstLease, runnerKind(&j))
 
 	got, err := h.Claimer.Renew(t.Context(), a.Claim, longRenew)
 	if err != nil {

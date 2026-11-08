@@ -48,8 +48,8 @@ func NewService(starter JobStarter, now func() time.Time) (*Service, error) {
 // may set another source kind. The service takes the runner pool and the code
 // location from the request or from the defaults of the job service.
 func (s *Service) Check(ctx context.Context, actor job.Actor, req drift.CheckRequest) (job.ID, error) {
-	if !req.Unit.IsUnit() {
-		return "", fmt.Errorf("%w: a drift check needs a unit", drift.ErrInvalid)
+	if err := req.Validate(); err != nil {
+		return "", err
 	}
 
 	j, err := s.starter.Start(ctx, actor, job.StartRequest{

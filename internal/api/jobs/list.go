@@ -196,7 +196,10 @@ func (h *Handler) openCursor(ctx context.Context, ns namespace.Name, fingerprint
 	id := cursor
 
 	if h.cursors != nil {
-		sealed, err := base64.RawURLEncoding.DecodeString(cursor)
+		// Defense in depth: Unwrap refuses a sealed cursor whose bytes
+		// changed; the strict decode also refuses a text that is not the
+		// canonical encoding, so one cursor has one spelling only.
+		sealed, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
 		if err != nil {
 			return "", errPageToken
 		}

@@ -78,6 +78,13 @@ func TestDurableHeartbeatConformance(t *testing.T) {
 
 				return ops
 			},
+			Seed: func(t *testing.T, owner string, at time.Time, lease time.Duration) {
+				t.Helper()
+
+				if err := sqlite.SeedHeartbeatRow(t.Context(), s, owner, at, lease); err != nil {
+					t.Fatalf("seed heartbeat: %v", err)
+				}
+			},
 		}
 	})
 }
