@@ -127,6 +127,7 @@ const (
 	ErrorCodeGateFinal                             ErrorCode = "gate.final"
 	ErrorCodeGateInvalid                           ErrorCode = "gate.invalid"
 	ErrorCodeGateLimit                             ErrorCode = "gate.limit"
+	ErrorCodeGateLimitGroupReach                   ErrorCode = "gate.limit-group-reach"
 	ErrorCodeGateLimitMembership                   ErrorCode = "gate.limit-membership"
 	ErrorCodeGateLimited                           ErrorCode = "gate.limited"
 	ErrorCodeGateNotFound                          ErrorCode = "gate.not-found"

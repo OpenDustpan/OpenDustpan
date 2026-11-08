@@ -1320,6 +1320,7 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-group-reach",
           "gate.limit-membership",
           "gate.limited",
           "gate.not-found",
