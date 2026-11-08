@@ -181,14 +181,16 @@ func TestQuotaBackupRestore(t *testing.T) {
 	}
 }
 
-// waitQuotaRestore polls the restore until it succeeds, and runs its
-// operation, as a worker does. StuckTestLimit only ends a stuck test.
+// quotaRestoreRuns bounds the runs of the restore operation in
+// waitQuotaRestore. Each run takes one step, and a restore has fewer steps.
+const quotaRestoreRuns = 100
+
+// waitQuotaRestore runs the restore operation, as a worker does, until the
+// restore succeeds. It fails the test after quotaRestoreRuns runs.
 func waitQuotaRestore(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
 	t.Helper()
 
-	deadline := time.Now().Add(storetest.StuckTestLimit)
-
-	for {
+	for range quotaRestoreRuns {
 		row, err := restores.Get(t.Context(), id)
 		if err != nil {
 			t.Fatalf("get restore: %v", err)
@@ -207,15 +209,7 @@ func waitQuotaRestore(t *testing.T, restores *backup.RestoreService, id backup.R
 			t.Context().Err() == nil {
 			t.Logf("run a restore operation: %v", err)
 		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("restore %s never succeeded", id)
-		}
-
-		select {
-		case <-t.Context().Done():
-			t.Fatalf("restore %s: %v", id, t.Context().Err())
-		case <-time.After(10 * time.Millisecond):
-		}
 	}
+
+	t.Fatalf("restore %s did not succeed after %d runs", id, quotaRestoreRuns)
 }

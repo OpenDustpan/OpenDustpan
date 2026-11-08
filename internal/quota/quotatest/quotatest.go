@@ -65,6 +65,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"two reservations at the same time never both take the last unit", testReserveRace},
 		{"two records at the same time never both take the last request", testRecordRace},
 		{"settle moves a unit from reserved to settled", testSettle},
+		{"two settles of one reservation at the same time add one settled unit", testSettleRace},
 		{"release ends a reservation with no unit", testRelease},
 		{"an unknown reservation is ErrNotFound", testUnknown},
 		{"a reservation after its end time counts no more", testExpired},
@@ -343,6 +344,35 @@ func testSettle(t *testing.T, h Harness, fence namespace.Fence) {
 	if err := h.Counter.Release(t.Context(), "req-1/1", fence); !errors.Is(err, quota.ErrEnded) {
 		t.Fatalf("Release(settled) = %v, want ErrEnded", err)
 	}
+}
+
+func testSettleRace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	const tries = 2
+
+	k := key("namespace")
+	mustReserve(t, h, fence, reservation("req-1/1", k), check(k, 1))
+
+	errs := make([]error, tries)
+
+	var wg sync.WaitGroup
+
+	for i := range tries {
+		wg.Go(func() {
+			errs[i] = h.Counter.Settle(t.Context(), "req-1/1", fence)
+		})
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Settle() %d = %v, want nil", i, err)
+		}
+	}
+
+	wantUsage(t, h, k, 1, 0)
 }
 
 func testRelease(t *testing.T, h Harness, fence namespace.Fence) {
