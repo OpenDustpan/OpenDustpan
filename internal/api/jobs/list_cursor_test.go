@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -37,24 +38,20 @@ func pagedHandler(t *testing.T, rows []job.Job, cursors secret.Wrapper) testHand
 	t.Helper()
 
 	jobs := newFakeJobs()
-	jobs.listed = func(f job.Filter) []job.Job {
-		start := 0
-
-		if f.After != "" {
-			for i := range rows {
-				if rows[i].ID == f.After {
-					start = i + 1
-				}
-			}
-		}
-
+	jobs.listed = func(f job.Filter) job.Page {
+		start := afterIndex(rows, f.After)
 		end := min(start+f.Limit, len(rows))
 
-		return rows[start:end]
+		out := job.Page{Jobs: append([]job.Job(nil), rows[start:end]...), Damaged: nil, After: ""}
+		if end < len(rows) {
+			out.After = rows[end-1].ID
+		}
+
+		return out
 	}
 
 	return newWorkerHandler(t, newAuthorizer(readsUnits("unt-a")...), handlerDeps{
-		jobs: jobs, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: cursors,
+		jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: cursors,
 	}, nil)
 }
 
@@ -227,6 +224,64 @@ func TestListWithoutASealerScansToTheEnd(t *testing.T) {
 	}
 }
 
+// TestListScanLimitCountsDamagedRows proves that a damaged row counts against
+// the scan limit, whether the caller may list its unit or not: a list whose
+// pages hold damaged rows only ends at the limit, answers a token, and reads
+// the store no more than a scan of full pages at the limit takes.
+func TestListScanLimitCountsDamagedRows(t *testing.T) {
+	t.Parallel()
+
+	// A scan of full pages at the limit reads the store this many times, with
+	// one more read for the page that the limit cuts. A store that ignores
+	// the limit would loop forever, so the fake fails the test after the
+	// bound plus a margin.
+	bound := jobsapi.MaxScanned/jobsapi.ScanBatch + 1
+	margin := 5
+
+	calls := 0
+
+	jobs := newFakeJobs()
+	jobs.listed = func(job.Filter) job.Page {
+		calls++
+		if calls > bound+margin {
+			t.Fatalf("the list read the store %d times, want at most %d: a damaged row does not count "+
+				"against the scan limit", calls, bound)
+		}
+
+		damaged := make([]job.DamagedRow, 0, jobsapi.ScanBatch)
+		for i := range jobsapi.ScanBatch {
+			damaged = append(damaged, job.DamagedRow{
+				ID:     job.ID(fmt.Sprintf("job-d%019d", (calls-1)*jobsapi.ScanBatch+i)),
+				UnitID: "unt-a",
+				Reason: "the body is not JSON",
+			})
+		}
+
+		return job.Page{Jobs: nil, Damaged: damaged, After: damaged[len(damaged)-1].ID}
+	}
+
+	h := newWorkerHandler(t, newAuthorizer(readsNamespace()...), handlerDeps{
+		jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: testWrapper(t),
+	}, nil)
+
+	code, got := getList(t, h, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+
+	if len(got.Jobs) != 0 {
+		t.Errorf("jobs = %v, want none", ids(got))
+	}
+
+	if got.NextPageToken == "" {
+		t.Error("nextPageToken is empty, want the token that continues after the last row read")
+	}
+
+	if calls > bound {
+		t.Errorf("the list read the store %d times, want at most %d", calls, bound)
+	}
+}
+
 var errAuthorizerDown = errors.New("authorizer store down")
 
 // failingAuthorizer fails the job:read check with an error that is no refusal.
@@ -248,12 +303,15 @@ func TestListLeavesOutAJobWhenTheAuthorizerFails(t *testing.T) {
 	t.Parallel()
 
 	jobs := newFakeJobs()
-	jobs.listed = func(job.Filter) []job.Job {
-		return []job.Job{listedJob(t, "acme", "job-aaaaaaaaaaaaaaaaaaaa", "unt-a")}
+	jobs.listed = func(job.Filter) job.Page {
+		return job.Page{
+			Jobs: []job.Job{listedJob(t, "acme", "job-aaaaaaaaaaaaaaaaaaaa", "unt-a")}, Damaged: nil,
+			After: "",
+		}
 	}
 
 	h := newWorkerHandler(t, failingAuthorizer{newAuthorizer(readsUnits("unt-a")...)}, handlerDeps{
-		jobs: jobs, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: nil,
+		jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: nil,
 	}, nil)
 
 	code, got := getList(t, h, "")

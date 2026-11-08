@@ -92,13 +92,18 @@ func (r recordedLimits) Delete(_ context.Context, ref gate.ObjectRef, f namespac
 type fakeEngine struct {
 	gate.Engine
 
-	diags  []gate.Diagnostic
-	err    error
-	checks []gate.Policy
-	schema []gate.Schema
+	diags         []gate.Diagnostic
+	err           error
+	membershipErr error
+	checks        []gate.Policy
+	schema        []gate.Schema
 }
 
 func (*fakeEngine) Version() string { return "fake/1" }
+
+func (f *fakeEngine) CheckLimitMembership(context.Context, string) error {
+	return f.membershipErr
+}
 
 func (f *fakeEngine) Check(_ context.Context, schema gate.Schema, ps []gate.Policy) ([]gate.Diagnostic, error) {
 	f.checks = append(f.checks, ps...)
@@ -142,7 +147,7 @@ func goodLimit(scope gate.Scope) gate.AccessLimit {
 func TestPutGateStoresWhatTheEngineChecked(t *testing.T) {
 	t.Parallel()
 
-	engine := &fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}
+	engine := &fakeEngine{Engine: nil, diags: nil, err: nil, membershipErr: nil, checks: nil, schema: nil}
 	svc, st := newObjectService(t, engine)
 	scope := gate.NamespaceScope("acme")
 
@@ -239,7 +244,7 @@ func TestPutGateRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			engine := &fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}
+			engine := &fakeEngine{Engine: nil, diags: nil, err: nil, membershipErr: nil, checks: nil, schema: nil}
 			svc, st := newObjectService(t, engine)
 
 			_, err := svc.PutGate(t.Context(), tt.gate, 0, "", callerEntry())
@@ -268,12 +273,26 @@ func TestPutGateEngineFailsClosed(t *testing.T) {
 	}{
 		{
 			"diagnostic",
-			&fakeEngine{Engine: nil, diags: []gate.Diagnostic{diag}, err: nil, checks: nil, schema: nil},
+			&fakeEngine{
+				Engine:        nil,
+				diags:         []gate.Diagnostic{diag},
+				err:           nil,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
+			},
 			gate.ErrInvalid,
 		},
 		{
 			"engine error",
-			&fakeEngine{Engine: nil, diags: nil, err: gate.ErrUnavailable, checks: nil, schema: nil},
+			&fakeEngine{
+				Engine:        nil,
+				diags:         nil,
+				err:           gate.ErrUnavailable,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
+			},
 			gate.ErrUnavailable,
 		},
 		{"no engine", nil, gate.ErrUnavailable},
@@ -307,7 +326,7 @@ func TestPutGateReasonAndModeSwitch(t *testing.T) {
 	t.Parallel()
 
 	scope := gate.NamespaceScope("acme")
-	engine := &fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}
+	engine := &fakeEngine{Engine: nil, diags: nil, err: nil, membershipErr: nil, checks: nil, schema: nil}
 	svc, st := newObjectService(t, engine)
 
 	old := goodGate(scope)
@@ -382,38 +401,82 @@ func TestAccessLimitWrites(t *testing.T) {
 		engine gate.Engine
 		want   error
 	}{
-		{"good", goodLimit(scope), &fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}, nil},
+		{
+			"good",
+			goodLimit(scope),
+			&fakeEngine{Engine: nil, diags: nil, err: nil, membershipErr: nil, checks: nil, schema: nil},
+			nil,
+		},
 		{
 			"permit refused by the engine",
 			goodLimit(scope),
 			&fakeEngine{
-				Engine: nil,
-				diags:  []gate.Diagnostic{permit},
-				err:    nil,
-				checks: nil,
-				schema: nil,
+				Engine:        nil,
+				diags:         []gate.Diagnostic{permit},
+				err:           nil,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
 			},
 			gate.ErrInvalid,
+		},
+		{
+			"membership test of a value that is not a group",
+			goodLimit(scope),
+			&fakeEngine{
+				Engine:        nil,
+				diags:         nil,
+				err:           nil,
+				membershipErr: gate.ErrLimitMembership,
+				checks:        nil,
+				schema:        nil,
+			},
+			gate.ErrLimitMembership,
 		},
 		{"no engine", goodLimit(scope), nil, gate.ErrUnavailable},
 		{
 			"empty policy",
 			gate.AccessLimit{Scope: scope, ID: "x", Version: 0, Policy: " "},
-			&fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}, gate.ErrInvalid,
+			&fakeEngine{
+				Engine:        nil,
+				diags:         nil,
+				err:           nil,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
+			},
+			gate.ErrInvalid,
 		},
 		{
 			"policy too long",
 			gate.AccessLimit{Scope: scope, ID: "x", Version: 0, Policy: strings.Repeat("p", gate.MaxConditionBytes+1)},
-			&fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}, gate.ErrLimit,
+			&fakeEngine{Engine: nil, diags: nil, err: nil, membershipErr: nil, checks: nil, schema: nil}, gate.ErrLimit,
 		},
 		{
 			"bad id",
 			gate.AccessLimit{Scope: scope, ID: "Bad", Version: 0, Policy: goodLimit(scope).Policy},
-			&fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}, gate.ErrInvalid,
+			&fakeEngine{
+				Engine:        nil,
+				diags:         nil,
+				err:           nil,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
+			},
+			gate.ErrInvalid,
 		},
 		{
-			"installation scope", goodLimit(gate.InstallationScope()),
-			&fakeEngine{Engine: nil, diags: nil, err: nil, checks: nil, schema: nil}, gate.ErrInvalid,
+			"installation scope",
+			goodLimit(gate.InstallationScope()),
+			&fakeEngine{
+				Engine:        nil,
+				diags:         nil,
+				err:           nil,
+				membershipErr: nil,
+				checks:        nil,
+				schema:        nil,
+			},
+			gate.ErrInvalid,
 		},
 	}
 

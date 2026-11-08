@@ -127,7 +127,7 @@ func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 	case parts.grantFails:
 		svc, err := access.NewService(access.ServiceConfig{
 			Store: failingGrants{Store: d.st}, Directory: d.st, Namespaces: d.st, Authorizer: d.grants.Authorizer(),
-			Now: nil, NewID: nil, BootstrapAdmins: nil,
+			Now: nil, NewID: nil, BootstrapAdmins: nil, LimitGroups: nil,
 		})
 		if err != nil {
 			t.Fatalf("failing access service: %v", err)
@@ -158,6 +158,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

@@ -94,6 +94,11 @@ type Domain interface {
 	// show what a takeover does after a begin that an earlier claim
 	// recorded.
 	RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error
+	// DamageJobBody replaces the body of the job id with text that this
+	// version cannot decode, as a restore or another version of the server
+	// wrote it. The SQL adapters run a direct update of the body column; the
+	// suite uses it to put a damaged row in the store.
+	DamageJobBody(ctx context.Context, id job.ID) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -174,7 +179,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases(), reconcileCases())
+	}, createRuleCases(), reconcileCases(), damagedCases())
 
 	for _, tc := range slices.Concat(cases, claimerCases(), missingNamespaceCases(), endClaimCases(), claimBoundCases(),
 		claimGateCases(), finalVersionCases()) {

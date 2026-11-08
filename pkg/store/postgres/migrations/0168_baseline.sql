@@ -122,6 +122,36 @@ CREATE TABLE blob_purges (
     namespace_id text NOT NULL
 );
 
+CREATE TABLE break_glass_reviews (
+    id text NOT NULL,
+    use_kind text NOT NULL,
+    use_ref text NOT NULL,
+    use_scope text NOT NULL,
+    use_object text NOT NULL,
+    use_subject text NOT NULL,
+    use_people text NOT NULL,
+    use_reason text NOT NULL,
+    use_at_ms bigint NOT NULL,
+    use_until_ms bigint NOT NULL,
+    state text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    due_at_ms bigint NOT NULL,
+    calendar text NOT NULL,
+    calendar_from_namespace text NOT NULL,
+    calendar_from_group text NOT NULL,
+    step bigint NOT NULL,
+    next_notice_at_ms bigint NOT NULL,
+    verdict_reviewer text NOT NULL,
+    verdict_note text NOT NULL,
+    verdict_auth text NOT NULL,
+    verdict_auth_at_ms bigint NOT NULL,
+    verdict_reviewed_at_ms bigint NOT NULL,
+    verdict_act_as text NOT NULL,
+    version bigint NOT NULL,
+    CONSTRAINT break_glass_reviews_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'accepted'::text, 'disputed'::text]))),
+    CONSTRAINT break_glass_reviews_use_kind_check CHECK ((use_kind = ANY (ARRAY['freeze-break'::text, 'account-session'::text, 'temp-admin'::text])))
+);
+
 CREATE TABLE checkpoints (
     update_id text NOT NULL,
     lease_digest bytea NOT NULL,
@@ -662,6 +692,31 @@ CREATE TABLE manual_locks (
     CONSTRAINT manual_locks_reason_check CHECK (((reason <> ''::text) AND (char_length(reason) <= 500)))
 );
 
+CREATE TABLE member_removal_alerts (
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    alerted_at_ms bigint NOT NULL,
+    CONSTRAINT member_removal_alerts_alerted_at_ms_check CHECK ((alerted_at_ms > 0)),
+    CONSTRAINT member_removal_alerts_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removal_alerts_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
+CREATE TABLE member_removals (
+    id text NOT NULL,
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    group_id text NOT NULL,
+    removed bigint NOT NULL,
+    members_before bigint NOT NULL,
+    at_ms bigint NOT NULL,
+    CONSTRAINT member_removals_at_ms_check CHECK ((at_ms > 0)),
+    CONSTRAINT member_removals_group_id_check CHECK ((group_id <> ''::text)),
+    CONSTRAINT member_removals_members_before_check CHECK ((members_before >= removed)),
+    CONSTRAINT member_removals_removed_check CHECK ((removed >= 1)),
+    CONSTRAINT member_removals_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removals_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
 CREATE TABLE name_lock_key (
     id integer NOT NULL,
     key bytea NOT NULL,
@@ -899,7 +954,8 @@ CREATE TABLE principal_groups (
     source text DEFAULT 'local'::text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
-    deleted_at_ms bigint
+    deleted_at_ms bigint,
+    closed_to_identity_provider boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE principal_session_generations (
@@ -1473,6 +1529,9 @@ ALTER TABLE ONLY audit_sink_leases
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);
 
+ALTER TABLE ONLY break_glass_reviews
+    ADD CONSTRAINT break_glass_reviews_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
 
@@ -1628,6 +1687,12 @@ ALTER TABLE ONLY local_users
 
 ALTER TABLE ONLY manual_locks
     ADD CONSTRAINT manual_locks_pkey PRIMARY KEY (kind, object_id);
+
+ALTER TABLE ONLY member_removal_alerts
+    ADD CONSTRAINT member_removal_alerts_pkey PRIMARY KEY (source_kind, source_id);
+
+ALTER TABLE ONLY member_removals
+    ADD CONSTRAINT member_removals_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY name_lock_key
     ADD CONSTRAINT name_lock_key_pkey PRIMARY KEY (id);
@@ -1861,6 +1926,10 @@ CREATE INDEX audit_entries_ns_time ON audit_entries USING btree (namespace, at_m
 
 CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLLATE "C", unit_id COLLATE "C");
 
+CREATE INDEX break_glass_reviews_due ON break_glass_reviews USING btree (state, next_notice_at_ms);
+
+CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews USING btree (use_kind, use_ref);
+
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
 CREATE UNIQUE INDEX drift_results_job ON drift_results USING btree (job_id);
@@ -1958,6 +2027,8 @@ CREATE INDEX jobs_unit ON jobs USING btree (unit_id, seq);
 CREATE INDEX local_user_resets_expiry ON local_user_resets USING btree (expires_at_ms);
 
 CREATE INDEX manual_locks_namespace ON manual_locks USING btree (namespace);
+
+CREATE INDEX member_removals_source ON member_removals USING btree (source_kind, source_id, at_ms);
 
 CREATE UNIQUE INDEX namespaces_id ON namespaces USING btree (id);
 

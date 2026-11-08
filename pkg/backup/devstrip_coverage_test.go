@@ -42,6 +42,7 @@ var devColumnDecisions = map[string]devDecision{
 	},
 	"grants.subject_id":                {strip: true, reason: "ID of the principal that holds the grant"},
 	"group_members.principal_id":       {strip: true, reason: "membership of a removed principal"},
+	"member_removals.members_before":   {strip: false, reason: "a count of members, not a principal"},
 	"sessions.principal_id":            {strip: true, reason: "session of a removed principal"},
 	"person_preferences.principal_id":  {strip: true, reason: "preferences of a removed principal"},
 	"access_tokens.principal_id":       {strip: true, reason: "token of a removed principal"},
@@ -93,6 +94,10 @@ var devColumnDecisions = map[string]devDecision{
 	"principals.display_name": {
 		strip:  false,
 		reason: "label of a principal that the strip removes with its row",
+	},
+	"principal_groups.closed_to_identity_provider": {
+		strip:  false,
+		reason: "a flag of the group; it names no principal",
 	},
 	"profile_revisions.author":   {strip: false, reason: "history text of who wrote the revision"},
 	"profiles.created_by":        {strip: false, reason: "history text of who made the profile"},
@@ -179,6 +184,11 @@ var devColumnDecisions = map[string]devDecision{
 	"inventory.last_release_by": {
 		strip:  false,
 		reason: "copy of the history text of a released lock; a repeated unlock needs its own authorization",
+	},
+	"break_glass_reviews.use_subject": {
+		strip: false,
+		reason: "history text of who broke the glass; a review records a use that already happened and " +
+			"grants no authority",
 	},
 }
 

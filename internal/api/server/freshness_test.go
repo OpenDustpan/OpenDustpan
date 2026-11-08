@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // freshErrorCode is the errorCode of a change that has no fresh authentication.
@@ -368,7 +369,7 @@ func checkFreshAuthRoute(t *testing.T, route freshRoute) {
 		}
 	}
 
-	checkTokenRefused(t, e, route, path, body)
+	checkTokenRefused(t, e.handler, route.method, path, body)
 
 	rec := e.sendWithSession(t, route.method, e.staleSession(t), path, body)
 
@@ -387,19 +388,118 @@ func checkFreshAuthRoute(t *testing.T, route freshRoute) {
 
 // checkTokenRefused proves that an access token never gives a fresh
 // authentication: the route answers 403 with mfa.fresh-step-required.
-func checkTokenRefused(t *testing.T, e providerEnv, route freshRoute, path, body string) {
+func checkTokenRefused(t *testing.T, h testHandler, method, path, body string) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), route.method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
 
 	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 
 	got := decodeErrorBody(t, rec)
 	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode || got.Code != http.StatusForbidden {
 		t.Errorf("access token = %d %s, want 403 with errorCode %s", rec.Code, rec.Body.String(), freshErrorCode)
 	}
+}
+
+// hostFreshRoute is a Git host write that needs a fresh authentication. setup
+// runs once before the requests and makes the object that the write needs.
+type hostFreshRoute struct {
+	setup  func(t *testing.T, e *hostEnv)
+	name   string
+	method string
+	target string
+	body   string
+	want   int
+}
+
+// hostFreshRoutes lists the Git host writes that need a fresh authentication:
+// the writes of the registration of the app and of the map of installations.
+// The writes of the connections and of the account links need no fresh
+// authentication, so they are not here.
+func hostFreshRoutes() []hostFreshRoute {
+	registerApp := func(t *testing.T, e *hostEnv) {
+		t.Helper()
+
+		wantHost(t, e.send(t, http.MethodPut, hostAppPath, hostAppBody()), http.StatusCreated)
+	}
+	assignInstallation := func(t *testing.T, e *hostEnv) {
+		t.Helper()
+
+		wantHost(t, e.send(t, http.MethodPut, hostInstallationsPath+"/101", `{"namespace":"acme"}`), http.StatusCreated)
+	}
+
+	return []hostFreshRoute{
+		{nil, "register the app", http.MethodPut, hostAppPath, hostAppBody(), http.StatusCreated},
+		{registerApp, "delete the app", http.MethodDelete, hostAppPath, "", http.StatusNoContent},
+		{
+			nil, "assign an installation", http.MethodPut, hostInstallationsPath + "/102", `{"namespace":"acme"}`,
+			http.StatusCreated,
+		},
+		{
+			assignInstallation, "unassign an installation", http.MethodDelete, hostInstallationsPath + "/101", "",
+			http.StatusNoContent,
+		},
+	}
+}
+
+// hostStaleSignInAge is the age of a sign-in that is older than the token
+// freshness window of the Git host handler.
+const hostStaleSignInAge = session.DefaultTokenFreshness + time.Minute
+
+// TestFreshAuthGitHostRoutes proves for each Git host write that needs a fresh
+// authentication: an access token is refused with 403 and
+// mfa.fresh-step-required, a console session with an old sign-in is refused
+// with the path of a new sign-in and the same code, and a console session with
+// a recent sign-in is allowed.
+func TestFreshAuthGitHostRoutes(t *testing.T) {
+	t.Parallel()
+
+	for _, route := range hostFreshRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newHostEnv(t, hostAllowAll())
+
+			if route.setup != nil {
+				route.setup(t, e)
+			}
+
+			checkTokenRefused(t, e.handler, route.method, route.target, route.body)
+
+			rec := sendHostSession(t, e, route, hostStaleSignInAge)
+
+			got := decodeErrorBody(t, rec)
+			if rec.Code != http.StatusUnauthorized || got.ErrorCode != freshErrorCode ||
+				!strings.HasPrefix(got.Reauthenticate, "/api/server/sign-in/corp?fresh=1") {
+				t.Errorf("stale session = %d %s, want 401 with errorCode %s and a path of a new sign-in", rec.Code,
+					rec.Body.String(), freshErrorCode)
+			}
+
+			rec = sendHostSession(t, e, route, 0)
+			if rec.Code != route.want {
+				t.Errorf("fresh session = %d %s, want %d", rec.Code, rec.Body.String(), route.want)
+			}
+		})
+	}
+}
+
+// sendHostSession sends a Git host request as a console session whose sign-in
+// is age old.
+func sendHostSession(
+	t *testing.T, e *hostEnv, route hostFreshRoute, age time.Duration,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), route.method, route.target, strings.NewReader(route.body))
+	req.RemoteAddr = hostRemote
+	startSession(t, e.handler, req, age)
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	return rec
 }
 
 // TestFreshAuthTokenCreateInMaintenanceMode proves that a token change with

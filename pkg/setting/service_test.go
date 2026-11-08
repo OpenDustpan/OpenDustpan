@@ -3,10 +3,12 @@ package setting_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
@@ -99,6 +101,76 @@ func TestServicePatchStampsTheEntry(t *testing.T) {
 	if e.At.UnixMilli() != 1_700_000_000_123 || e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess ||
 		e.Namespace != audit.ServerScope || e.Subject != "alice" {
 		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// TestServicePatchOfThePlainConnectionSettingNeedsAFreshStep proves the
+// security rule of the setting at the service: a change from off to on
+// without a fresh step changes nothing, and with one it stores the value and
+// writes one entry that names the key.
+func TestServicePatchOfThePlainConnectionSettingNeedsAFreshStep(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry(plainconn.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	m := newMemStore()
+	now := func() time.Time { return time.UnixMilli(1_700_000_000_123) }
+	svc := setting.NewService(m, reg, nil, nil, now)
+	patch := setting.Patch{{Key: plainconn.SettingAllowPlainConnections, Value: "true", Delete: false}}
+
+	_, err = svc.Patch(t.Context(), setting.InstallationScope(), patch, request("@server"))
+	if !errors.Is(err, setting.ErrFreshStepRequired) {
+		t.Fatalf("Patch without a fresh step = %v, want ErrFreshStepRequired", err)
+	}
+
+	checkNothingWritten(t, m)
+
+	req := request("@server")
+	req.Fresh = true
+
+	res, err := svc.Patch(t.Context(), setting.InstallationScope(), patch, req)
+	if err != nil {
+		t.Fatalf("Patch with a fresh step: %v", err)
+	}
+
+	checkPlainConnectionChange(t, res, m)
+}
+
+// checkNothingWritten fails the test when m holds a value, a revision or an
+// audit entry.
+func checkNothingWritten(t *testing.T, m *memStore) {
+	t.Helper()
+
+	if entries := m.entries[audit.ServerScope]; len(entries) != 0 {
+		t.Fatalf("entries = %d, want none", len(entries))
+	}
+
+	stored, err := m.Load(t.Context(), setting.InstallationScope())
+	if err != nil || stored.Revision != 0 || len(stored.Values) != 0 {
+		t.Fatalf("stored = %+v, %v; want nothing written", stored, err)
+	}
+}
+
+// checkPlainConnectionChange fails the test unless res holds the change of
+// the plain-connection setting and m holds the one entry of it.
+func checkPlainConnectionChange(t *testing.T, res setting.Result, m *memStore) {
+	t.Helper()
+
+	if res.Resource.Revision != 1 || !slices.Equal(res.Changed, []string{plainconn.SettingAllowPlainConnections}) {
+		t.Fatalf("result = %+v, want the key changed", res)
+	}
+
+	entries := m.entries[audit.ServerScope]
+	if len(entries) != 1 || len(entries[0].Changes) != 1 {
+		t.Fatalf("entries = %+v, want one entry with one change", entries)
+	}
+
+	change := entries[0].Changes[0]
+	if change.Key != plainconn.SettingAllowPlainConnections || change.New != "true" {
+		t.Fatalf("change = %+v, want the key set to true", change)
 	}
 }
 

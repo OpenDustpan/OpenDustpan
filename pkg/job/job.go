@@ -42,6 +42,15 @@ var (
 	ErrInvalid = errors.New("job request is not valid")
 	// ErrNotFound reports a job ID that the store does not know.
 	ErrNotFound = errors.New("job not found")
+	// ErrDamaged reports a stored job row that this version cannot read: the
+	// body is not JSON, or it holds a value that this version does not know,
+	// for example a source kind, an agent mode or a verification result that
+	// another version of the server wrote. Store.Get returns it for such a
+	// row. Store.List and Store.Orphans report the row in Damaged and leave
+	// it out of their jobs, and every batch reader skips it: the server
+	// never dispatches, expires or closes a damaged job. A person reads the
+	// reason and cancels the job by its ID (Store.CancelDamaged).
+	ErrDamaged = errors.New("stored job is damaged")
 	// ErrKeyConflict reports a start whose idempotency key names a job with
 	// another request: another spec, or the same spec with another reason,
 	// pool or code location.
@@ -617,6 +626,17 @@ const (
 	// it.
 	VerificationUnverified Verification = "unverified"
 )
+
+// Valid reports whether v is one of the verification results of this
+// package. VerificationNone, the empty result, is one of them.
+func (v Verification) Valid() bool {
+	switch v {
+	case VerificationNone, VerificationPending, VerificationVerified, VerificationUnverified:
+		return true
+	default:
+		return false
+	}
+}
 
 // StateVersion is a new state version of a unit, as the internal wiring
 // of the server reports it for the tool package that wrote it. Commit is

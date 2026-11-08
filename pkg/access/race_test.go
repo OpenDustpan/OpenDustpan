@@ -72,7 +72,7 @@ func racingServiceWith(
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: f.store, Namespaces: f.store, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

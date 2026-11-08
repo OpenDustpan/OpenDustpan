@@ -1620,6 +1620,23 @@ func BenchmarkAuthorizer(b *testing.B) {
 	accesstest.Bench(b, s)
 }
 
+// BenchmarkProtectedGroups measures the protected flag of 1000 groups at the
+// scale of accesstest.Bench: one group at a time, and one page.
+func BenchmarkProtectedGroups(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchProtectedGroups(b, s)
+}
+
 // revocationStore adds to the store the two hooks of the revocation suite: the
 // runner pools of the store, and a write to the revocation journal that the
 // CHECK constraint of the table does not stop.
