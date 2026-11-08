@@ -38,6 +38,7 @@ const (
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
 	backupColSourceID    = "source_id"
+	backupColSourceKind  = "source_kind"
 	backupColGroupID     = "group_id"
 	backupColKind        = "kind"
 	backupColUsedAtMs    = "used_at_ms"
@@ -759,10 +760,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "member_removal_alerts",
+			columns: []string{
+				backupColSourceKind,
+				backupColSourceID,
+				"alerted_at_ms",
+			},
+		},
+		{
 			table: "member_removals",
 			columns: []string{
 				"id",
-				"source_kind",
+				backupColSourceKind,
 				backupColSourceID,
 				backupColGroupID,
 				"removed",

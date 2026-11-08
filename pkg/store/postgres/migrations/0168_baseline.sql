@@ -662,6 +662,15 @@ CREATE TABLE manual_locks (
     CONSTRAINT manual_locks_reason_check CHECK (((reason <> ''::text) AND (char_length(reason) <= 500)))
 );
 
+CREATE TABLE member_removal_alerts (
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    alerted_at_ms bigint NOT NULL,
+    CONSTRAINT member_removal_alerts_alerted_at_ms_check CHECK ((alerted_at_ms > 0)),
+    CONSTRAINT member_removal_alerts_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removal_alerts_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
 CREATE TABLE member_removals (
     id text NOT NULL,
     source_kind text NOT NULL,
@@ -1644,6 +1653,9 @@ ALTER TABLE ONLY local_users
 
 ALTER TABLE ONLY manual_locks
     ADD CONSTRAINT manual_locks_pkey PRIMARY KEY (kind, object_id);
+
+ALTER TABLE ONLY member_removal_alerts
+    ADD CONSTRAINT member_removal_alerts_pkey PRIMARY KEY (source_kind, source_id);
 
 ALTER TABLE ONLY member_removals
     ADD CONSTRAINT member_removals_pkey PRIMARY KEY (id);

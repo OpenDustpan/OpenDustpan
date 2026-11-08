@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -42,6 +43,7 @@ func SettingDeclarations() []setting.Declaration {
 	held := localuser.SettingDeclarations()
 	held = append(held, session.SettingDeclarations()...)
 	held = append(held, plainconn.SettingDeclarations()...)
+	held = append(held, principal.RemovalAlertSettingDeclarations()...)
 	held = append(held, brandingPresetDeclaration())
 
 	declared := make(map[string]bool, len(held))

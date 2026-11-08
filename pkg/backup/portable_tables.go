@@ -32,6 +32,7 @@ const (
 	portColDisabledAtMs  = "disabled_at_ms"
 	portColSource        = "source"
 	portColSourceID      = "source_id"
+	portColSourceKind    = "source_kind"
 	portColGroupID       = "group_id"
 	portColClaimValue    = "claim_value"
 	portColKind          = "kind"
@@ -563,11 +564,20 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "member_removal_alerts",
+			OrderBy: []string{portColSourceKind, portColSourceID},
+			Columns: []Column{
+				{Name: portColSourceKind, Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
+				{Name: "alerted_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "member_removals",
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
-				{Name: "source_kind", Kind: KindText},
+				{Name: portColSourceKind, Kind: KindText},
 				{Name: portColSourceID, Kind: KindText},
 				{Name: portColGroupID, Kind: KindText},
 				{Name: "removed", Kind: KindInteger},
