@@ -247,7 +247,7 @@ func NewEnvWithSignInSecretInVariable(ctx context.Context, tb testing.TB, cli In
 	tb.Helper()
 
 	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{
-		issuer: nil, realTime: false, ipAllowlists: false, secretInVariable: true,
+		issuer: nil, ldap: nil, realTime: false, ipAllowlists: false, secretInVariable: true,
 	})
 }
 
@@ -297,7 +297,7 @@ func NewEnvWithIPAllowlistsAndSignIn(ctx context.Context, tb testing.TB, cli Ins
 // signInEnvOptions are the switches of a sign-in env.
 type signInEnvOptions struct {
 	issuer           *OIDCIssuerFake
-	ldap         *ldaptest.Server
+	ldap             *ldaptest.Server
 	realTime         bool
 	ipAllowlists     bool
 	secretInVariable bool
@@ -329,7 +329,7 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 		disableJournaling:      false,
 		ipAllowlists:           opts.ipAllowlists,
 		issuer:                 opts.issuer,
-		ldap:              opts.ldap,
+		ldap:                   opts.ldap,
 		signIn:                 true,
 		signInSecretInVariable: opts.secretInVariable,
 		signInRealTime:         realTime,

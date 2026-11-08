@@ -34,7 +34,7 @@ func NewEnvWithLDAP(ctx context.Context, tb testing.TB, cli Install, store Store
 	}
 
 	return startSignInEnvWith(ctx, tb, cli, store,
-		signInEnvOptions{issuer: nil, ldap: dir, realTime: true, ipAllowlists: false})
+		signInEnvOptions{issuer: nil, ldap: dir, realTime: true, ipAllowlists: false, secretInVariable: false})
 }
 
 // ldapOptions returns the options of the LDAP providers of the sign-in, or
