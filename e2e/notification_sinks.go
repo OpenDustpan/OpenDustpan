@@ -89,7 +89,7 @@ func (e *Env) storeDelivery(
 	d := notify.Delivery{
 		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 		Subscription: seed.Subscription, Sink: seed.Sink, Contact: "", Principal: seed.Principal,
-		State: notify.DeliveryPending, Attempts: 0, NextAt: now.Add(-time.Minute), LastError: "",
+		State: notify.DeliveryPending, Attempts: 0, Redeliveries: 0, NextAt: now.Add(-time.Minute), LastError: "",
 		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
