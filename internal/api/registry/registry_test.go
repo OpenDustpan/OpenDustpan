@@ -404,6 +404,7 @@ type publishedWire struct {
 	KeyFingerprint string          `json:"keyFingerprint"`
 	PublishedBy    string          `json:"publishedBy"`
 	Files          []publishedFile `json:"files"`
+	Served         bool            `json:"served"`
 }
 
 type publishedFile struct {
@@ -472,7 +473,32 @@ func TestPublishFlow(t *testing.T) {
 	}
 }
 
-// servedRelease is the part of a release list that the served test reads.
+// TestPublishAnswerServed proves that the answer of a publish says that the
+// release is served: a publish passed the check of a trusted signing key.
+func TestPublishAnswerServed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sg := pgpfixture.NewSigner(t)
+	f.trust(t, "acme", sg)
+
+	got := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: base + "/providers/payments/versions/1.0.0",
+		body: f.publishBody(t, buildSet(t, sg)), headers: map[string]string{"Idempotency-Key": "publish-served"},
+	})
+	wantCode(t, "publish", got, http.StatusOK)
+
+	var doc publishedWire
+	if err := json.Unmarshal([]byte(got.body), &doc); err != nil {
+		t.Fatalf("publish answer = %q, %v", got.body, err)
+	}
+
+	if !doc.Served {
+		t.Fatalf("publish answer = %q, want served true", got.body)
+	}
+}
+
+// servedRelease is the part of a release answer that the served tests read.
 type servedRelease struct {
 	Version string `json:"version"`
 	Served  bool   `json:"served"`
@@ -597,6 +623,64 @@ func TestListReleasesServed(t *testing.T) {
 			// exactly when the protocol offers its download.
 			if protocol := f.protocolServed(t); !sameServed(served, protocol) {
 				t.Errorf("served = %v, but the protocol serves %v", served, protocol)
+			}
+		})
+	}
+}
+
+// TestGetReleaseServed proves that the management read of one release marks a
+// release that the registry protocol serves as served, and a release whose
+// signing key the namespace removed as not served.
+func TestGetReleaseServed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remove     []string
+		version    string
+		wantServed bool
+	}{
+		{"the keys are trusted", nil, "1.0.0", true},
+		{"the key of another release is removed", []string{"current"}, "1.0.0", true},
+		{"the key of the release is removed", []string{"old"}, "1.0.0", false},
+		{"every key is removed", []string{"old", "current"}, "2.0.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			old, current := pgpfixture.NewSigner(t), pgpfixture.NewSigner(t)
+			keys := map[string]pgpfixture.Signer{"old": old, "current": current}
+
+			f.trust(t, "acme", old)
+			f.trust(t, "acme", current)
+			f.publishVersion(t, old, "1.0.0")
+			f.publishVersion(t, current, "2.0.0")
+
+			for _, label := range tt.remove {
+				wantCode(t, "remove the "+label+" key", f.call(t, "admin", http.MethodDelete,
+					base+"/keys/"+keys[label].Key.Fingerprint, nil), http.StatusNoContent)
+			}
+
+			got := f.call(t, "reader", http.MethodGet,
+				base+"/providers/"+providerName+"/versions/"+tt.version, nil)
+			wantCode(t, "get the release", got, http.StatusOK)
+
+			var rel servedRelease
+			if err := json.Unmarshal([]byte(got.body), &rel); err != nil {
+				t.Fatalf("release answer = %q, %v", got.body, err)
+			}
+
+			if rel.Version != tt.version || rel.Served != tt.wantServed {
+				t.Fatalf("release = %+v, want version %s served %t", rel, tt.version, tt.wantServed)
+			}
+
+			// The list of the protocol is the rule: a version is served
+			// exactly when the protocol offers its download.
+			if protocol := f.protocolServed(t); rel.Served != protocol[tt.version] {
+				t.Errorf("served = %t, but the protocol serves %t", rel.Served, protocol[tt.version])
 			}
 		})
 	}

@@ -213,6 +213,14 @@ func TestGitHostRefusedChangesNameTheirConnection(t *testing.T) {
 	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath,
 		`{"kind":"github","auth":"token","installationID":"101"}`), http.StatusBadRequest)
 
+	// A hostile ID holds an encoded newline, an encoded slash and 300
+	// characters. The mux routes it to the handler, which refuses it before it
+	// reads a connection.
+	hostile := "hostile%0Atext%2F" + strings.Repeat("a", 300)
+
+	wantHost(t, e.send(t, http.MethodDelete, hostConnectionsPath+"/"+hostile, ""), http.StatusNotFound)
+	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath+"/"+hostile+"/make-default", ""), http.StatusNotFound)
+
 	tests := []struct {
 		name   string
 		object string
@@ -221,9 +229,14 @@ func TestGitHostRefusedChangesNameTheirConnection(t *testing.T) {
 		{"a refused delete", "git-host-connection:delete:" + first, 1},
 		{"a refused make-default", "git-host-connection:make-default:" + second, 2},
 		{"a refused create", "git-host-connection:create", 1},
+		{"a refused delete of a hostile ID", "git-host-connection:delete", 1},
+		{"a refused make-default of a hostile ID", "git-host-connection:make-default", 1},
 	}
 
 	entries := e.auditEntries(t, "acme")
+
+	// No failure entry holds any part of the hostile ID.
+	wantNoHostilePart(t, entries, "hostile", strings.Repeat("a", 300))
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -383,4 +396,22 @@ func countEntries(entries []audit.Entry, outcome audit.Outcome, object string) i
 	}
 
 	return n
+}
+
+// wantNoHostilePart fails the test when a failure entry of the namespace holds
+// part of a hostile path ID.
+func wantNoHostilePart(t *testing.T, entries []audit.Entry, parts ...string) {
+	t.Helper()
+
+	for i := range entries {
+		if entries[i].Outcome != audit.OutcomeFailure {
+			continue
+		}
+
+		for _, part := range parts {
+			if strings.Contains(entries[i].Object, part) {
+				t.Fatalf("entry = %+v, want no part %q of the hostile ID", entries[i], part)
+			}
+		}
+	}
 }
