@@ -3,8 +3,10 @@ package server_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +20,51 @@ import (
 
 // errGrantRead is the error of a failed read of the grants of a reach check.
 var errGrantRead = errors.New("grant store is down")
+
+// storedGroupWarning is the message of the warning of a failed protected
+// check of a stored group.
+const storedGroupWarning = "the protected check of a stored group failed"
+
+// grantCauseType is the type that causeType reports for the error of a failed
+// grant read. The reach wraps the plain error, and causeType names the type of
+// a chain that holds no typed error.
+const grantCauseType = "*fmt.wrapError"
+
+// capturedLog is a slog.Handler that keeps the records of a test handler.
+type capturedLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler.
+func (h *capturedLog) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (h *capturedLog) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (h *capturedLog) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup implements slog.Handler.
+func (h *capturedLog) WithGroup(string) slog.Handler { return h }
+
+// snapshot returns the records of the test handler.
+func (h *capturedLog) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+
+	return out
+}
 
 // failingGrantReads fails each read of the grants of a reach check.
 type failingGrantReads struct {
@@ -213,7 +260,9 @@ func runStoredGroupCase(t *testing.T, tc storedGroupCase, at time.Time) {
 		reach = failingGrantReach(st)
 	}
 
-	handler := newReachPrincipalHandler(t, svc, st, reach)
+	log := &capturedLog{mu: sync.Mutex{}, records: nil}
+
+	handler := newReachPrincipalHandlerWithLogger(t, svc, st, reach, slog.New(log))
 
 	path := "/api/server/groups"
 	if tc.seed {
@@ -240,7 +289,100 @@ func runStoredGroupCase(t *testing.T, tc storedGroupCase, at time.Time) {
 		groupID = group.ID
 	}
 
+	if tc.failing {
+		checkStoredGroupWarning(t, log, groupID)
+	} else {
+		checkNoStoredGroupWarning(t, log)
+	}
+
 	checkStoredGroupEntries(t, st, groupID)
+}
+
+// checkStoredGroupWarning proves that a failed protected check of a stored
+// group writes one warning that names the group and the cause type, and that
+// no record carries the text of the failed grant read.
+func checkStoredGroupWarning(t *testing.T, log *capturedLog, groupID string) {
+	t.Helper()
+
+	records := log.snapshot()
+	checkNoGrantReadText(t, records)
+
+	warnings := storedGroupWarnings(records)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings of a failed check = %d, want 1", len(warnings))
+	}
+
+	if got := attrOf(warnings[0], "group"); got != groupID {
+		t.Errorf("group of the warning = %q, want %q", got, groupID)
+	}
+
+	if got := attrOf(warnings[0], "cause"); got != grantCauseType {
+		t.Errorf("cause of the warning = %q, want %q", got, grantCauseType)
+	}
+}
+
+// checkNoStoredGroupWarning proves that a working check writes no warning.
+func checkNoStoredGroupWarning(t *testing.T, log *capturedLog) {
+	t.Helper()
+
+	records := log.snapshot()
+	checkNoGrantReadText(t, records)
+
+	if warnings := storedGroupWarnings(records); len(warnings) != 0 {
+		t.Errorf("warnings of a working check = %d, want 0", len(warnings))
+	}
+}
+
+// checkNoGrantReadText proves that no message and no attribute of records
+// holds the text of the failed grant read.
+func checkNoGrantReadText(t *testing.T, records []slog.Record) {
+	t.Helper()
+
+	for i := range records {
+		rec := records[i]
+
+		if strings.Contains(rec.Message, errGrantRead.Error()) {
+			t.Errorf("log record %q holds the text of the failed grant read", rec.Message)
+		}
+
+		rec.Attrs(func(a slog.Attr) bool {
+			if strings.Contains(a.Value.String(), errGrantRead.Error()) {
+				t.Errorf("attribute %q of log record %q holds the text of the failed grant read", a.Key, rec.Message)
+			}
+
+			return true
+		})
+	}
+}
+
+// storedGroupWarnings returns the warnings of a failed protected check.
+func storedGroupWarnings(records []slog.Record) []slog.Record {
+	var warnings []slog.Record
+
+	for i := range records {
+		if records[i].Level == slog.LevelWarn && records[i].Message == storedGroupWarning {
+			warnings = append(warnings, records[i])
+		}
+	}
+
+	return warnings
+}
+
+// attrOf returns the value of the attribute key of rec, or the empty string.
+func attrOf(rec slog.Record, key string) string {
+	var value string
+
+	rec.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			value = a.Value.String()
+
+			return false
+		}
+
+		return true
+	})
+
+	return value
 }
 
 // seedStoredGroup stores a plain group directly, so that a change row starts
