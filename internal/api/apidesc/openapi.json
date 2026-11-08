@@ -1288,8 +1288,10 @@
         "enum": [
           "access.denied",
           "access.ip-not-allowed",
+          "access.job-token-action",
           "access.last-site-administrator",
           "access.no-action",
+          "access.secrets-withheld",
           "audit.entry-not-found",
           "audit.entry-read-unavailable",
           "audit.export-not-recorded",

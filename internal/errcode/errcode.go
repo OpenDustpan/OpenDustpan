@@ -85,6 +85,10 @@ func Forbidden(err error) string {
 		return GateLimited
 	case errors.Is(err, gate.ErrRuleFailed):
 		return GateRuleFailed
+	case errors.Is(err, identity.ErrJobTokenAction):
+		return AccessJobTokenAction
+	case errors.Is(err, identity.ErrSecretsWithheld):
+		return AccessSecretsWithheld
 	case errors.Is(err, identity.ErrDenied):
 		return AccessDenied
 	default:

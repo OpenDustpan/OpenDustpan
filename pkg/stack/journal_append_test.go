@@ -8,6 +8,68 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
+// TestAppendJournalRefusesAnUpdateThatDoesNotMutate checks that a journal
+// write and a checkpoint of a preview or a dry run are refused with
+// ErrWrongUpdateState while the lease token stays valid.
+func TestAppendJournalRefusesAnUpdateThatDoesNotMutate(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		plan stack.Plan
+	}{
+		{
+			name: "preview",
+			plan: stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		},
+		{
+			name: "dry run",
+			plan: stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runPlanOnlyWriteCase(t, tc.plan)
+		})
+	}
+}
+
+// runPlanOnlyWriteCase checks that neither a journal write nor a checkpoint of
+// plan is allowed.
+func runPlanOnlyWriteCase(t *testing.T, plan stack.Plan) {
+	t.Helper()
+
+	f := newUpdatesWith(t, newClock(), nil, nil)
+
+	u, err := f.svc.Create(t.Context(), f.ref, plan)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	s, err := f.svc.StartWithJournalVersion(t.Context(), f.ref, u.ID, 1)
+	if err != nil {
+		t.Fatalf("start with journal version 1: %v", err)
+	}
+
+	if s.Update.Mutates() {
+		t.Fatal("the started update mutates, want a plan-only update")
+	}
+
+	err = f.svc.AppendJournal(t.Context(), f.ref, s.Update.ID, s.Token, []byte(`{"entries":[]}`))
+	if !errors.Is(err, stack.ErrWrongUpdateState) {
+		t.Errorf("journal write: err = %v, want ErrWrongUpdateState", err)
+	}
+
+	err = f.svc.SaveCheckpoint(
+		t.Context(), f.ref, s.Update.ID, s.Token, checkpoint(1, envelope("{}")),
+	)
+	if !errors.Is(err, stack.ErrWrongUpdateState) {
+		t.Errorf("checkpoint: err = %v, want ErrWrongUpdateState", err)
+	}
+}
+
 // TestAppendJournalRefusesAnUpdateWithoutJournaling checks that a batch for an
 // update that saves checkpoints is refused with ErrNotJournaled. The refusal is
 // an ErrWrongUpdateState, and its text is the one the Pulumi CLI shows.

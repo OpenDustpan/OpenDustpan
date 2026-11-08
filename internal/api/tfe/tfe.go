@@ -289,6 +289,21 @@ type Config struct {
 	// placement rule that matches it. Nil means the server keeps no placement
 	// rules: it then refuses to make a workspace.
 	Placer *tofuunit.Placer
+	// jobs reads the facts of the job of a job token before a state version
+	// create. jobRef records each refusal of that guard. WithJobTokenPorts
+	// sets both.
+	jobs   identity.JobFacts
+	jobRef identity.JobTokenRefusals
+}
+
+// WithJobTokenPorts returns a copy of cfg with the job facts and the refusal
+// recorder of the job token state guard. A nil facts port refuses every job
+// token that asks.
+func (cfg Config) WithJobTokenPorts(facts identity.JobFacts, refusals identity.JobTokenRefusals) Config {
+	cfg.jobs = facts
+	cfg.jobRef = refusals
+
+	return cfg
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -315,6 +330,8 @@ type Handler struct {
 	registry *registryState
 	// admit asks the state.write guard before each checked write.
 	admit  *stategate.Admitter
+	jobs   identity.JobFacts
+	jobRef identity.JobTokenRefusals
 	placer *tofuunit.Placer
 	mux    *patternMux
 	routes []Route
@@ -381,6 +398,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		maxState:       cfg.MaxStateBytes,
 		admit:          admit,
+		jobs:           cfg.jobs,
+		jobRef:         cfg.jobRef,
 		placer:         cfg.Placer,
 		mux:            newPatternMux(),
 		routes:         nil,

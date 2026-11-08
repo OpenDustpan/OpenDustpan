@@ -577,7 +577,10 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil,
+			jobs: nil, refusals: nil,
+		},
 	)
 }
 
@@ -594,6 +597,9 @@ type fixtureOptions struct {
 	// guard is the state guard of the handler. Nil gives the guard of
 	// stategate.Off.
 	guard stategate.Guard
+	// jobs and refusals serve the job token update guard.
+	jobs     identity.JobFacts
+	refusals identity.JobTokenRefusals
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -687,7 +693,7 @@ func newUpdateFixtureWithAuthenticator(
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
 		DenialLimiter:           nil,
-	})
+	}.WithJobTokenPorts(opts.jobs, opts.refusals))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

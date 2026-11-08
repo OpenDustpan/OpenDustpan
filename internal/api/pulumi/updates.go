@@ -364,14 +364,16 @@ const (
 // createUpdateHandler returns the handler that creates an update of kind.
 // The five kinds share this shape; each has its own route.
 func (h *Handler) createUpdateHandler(kind stack.UpdateKind) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		h.createUpdate(w, r, kind, p.Subject)
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		h.createUpdate(w, r, kind, p, obj)
 	}
 }
 
-// createUpdate records a new update without locking the stack. subject is
-// the caller, which the update records as its creator (ADR 28 decision 4).
-func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, subject string) {
+// createUpdate records a new update without locking the stack. p is the
+// caller, which the update records as its creator (ADR 28 decision 4).
+func (h *Handler) createUpdate(
+	w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, p identity.Principal, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -394,8 +396,19 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 		}
 	}
 
+	// Defense in depth: the stack domain refuses a checkpoint and a journal
+	// write of an update that does not mutate, and the job token rule refuses
+	// unit:encrypt to a plan-only job. This guard does not rely on them.
+	mutates := !req.Options.DryRun && kind != stack.KindPreview
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: mutates}
+	if err := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	u, err := h.updates.Create(ctx, ref, stack.Plan{
-		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: subject, RestoredFrom: 0,
+		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: p.Subject, RestoredFrom: 0,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -409,7 +422,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 // startUpdate starts the update and hands out its lease. The request tags
 // are ignored in milestone 1: they only annotate the stack. The journal version
 // is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
-func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
@@ -419,6 +432,23 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 
 	offer, ok := h.startOffer(w, r)
 	if !ok {
+		return
+	}
+
+	current, err := h.updates.Get(ctx, ref, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// Defense in depth: the stack domain refuses a checkpoint and a journal
+	// write of an update that does not mutate, and the job token rule refuses
+	// unit:encrypt to a plan-only job. This guard does not rely on them.
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: current.Mutates()}
+	if guardErr := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); guardErr != nil {
+		h.writeError(ctx, w, guardErr)
+
 		return
 	}
 

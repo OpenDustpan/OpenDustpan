@@ -5,6 +5,12 @@ import "fmt"
 // AccessLastSiteAdministrator means that the change would leave the installation with no site administrator.
 const AccessLastSiteAdministrator = "access.last-site-administrator"
 
+// AccessJobTokenAction is an action that a job token may not ask for.
+const AccessJobTokenAction = "access.job-token-action"
+
+// AccessSecretsWithheld is a read of secret values that a job token may not do.
+const AccessSecretsWithheld = "access.secrets-withheld"
+
 // accessSpecs are the codes of a request that the access rules refuse.
 func accessSpecs() []Spec {
 	return []Spec{
@@ -24,6 +30,11 @@ func accessSpecs() []Spec {
 			Args:    nil,
 		},
 		{
+			Code:    AccessJobTokenAction,
+			Meaning: "the action is not one that a job token may ask for",
+			Args:    nil,
+		},
+		{
 			Code:    AccessLastSiteAdministrator,
 			Meaning: "the change would leave the installation with no site administrator",
 			Args:    nil,
@@ -31,6 +42,11 @@ func accessSpecs() []Spec {
 		{
 			Code:    AccessNoAction,
 			Meaning: "the route declares no authorization action for the object of the request, so the server refuses it",
+			Args:    nil,
+		},
+		{
+			Code:    AccessSecretsWithheld,
+			Meaning: "the job token may not read the secret values of this job",
 			Args:    nil,
 		},
 	}

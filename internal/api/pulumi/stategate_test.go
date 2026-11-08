@@ -111,6 +111,7 @@ func guardedFixture(t *testing.T, guard stategate.Guard) updateFixture {
 
 	return newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
 		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: guard,
+		jobs: nil, refusals: nil,
 	})
 }
 

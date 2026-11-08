@@ -44,6 +44,42 @@ func (s *jobTokenStore) GetByDigest(_ context.Context, d jobtoken.Digest) (jobto
 	return s.match, nil
 }
 
+// jobFactStore is a job.Store with one stored job or one error. Its embedded
+// store is nil: the wiring under test calls only Get.
+type jobFactStore struct {
+	job.Store
+
+	stored job.Job
+	err    error
+}
+
+// Get implements job.Store.
+func (s *jobFactStore) Get(context.Context, job.ID) (job.Job, error) {
+	if s.err != nil {
+		return job.Job{}, s.err
+	}
+
+	return s.stored, nil
+}
+
+// namespacesStore embeds a namespace store under a name of its own, so that a
+// test store can embed it beside an audit store.
+type namespacesStore struct {
+	namespace.Store
+}
+
+// auditEntriesStore embeds an audit store under a name of its own.
+type auditEntriesStore struct {
+	audit.Store
+}
+
+// auditNamespaceStore is a namespace store that also keeps audit entries. Its
+// embedded stores are nil: the test reads only the type.
+type auditNamespaceStore struct {
+	namespacesStore
+	auditEntriesStore
+}
+
 // jobTokenMatch returns the live record of secret at now.
 func jobTokenMatch(t *testing.T, secret jobtoken.Secret, now time.Time) jobtoken.Match {
 	t.Helper()
@@ -192,11 +228,9 @@ func (a *allowAllAuthorizer) ListObjects(
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true}, nil
 }
 
-// jobTokenAuthFixture returns the job token principal, the authorizer ports
-// of newAuthPorts and the configured authorizer.
-func jobTokenAuthFixture(
-	t *testing.T,
-) (identity.Principal, authPorts, *allowAllAuthorizer) {
+// jobTokenPrincipal returns a consistent job token of job-1 on the unit of
+// the test world.
+func jobTokenPrincipal(t *testing.T) identity.Principal {
 	t.Helper()
 
 	ns, err := namespace.ParseName("acme")
@@ -209,12 +243,26 @@ func jobTokenAuthFixture(
 		t.Fatalf("unit: %v", err)
 	}
 
-	p := identity.Principal{
+	return identity.Principal{
 		Subject: "alice", DisplayName: "alice", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: true, TemporaryExpiresAt: time.Unix(1_700_000_000, 0).UTC(),
 		Kind: identity.KindPerson, Credential: identity.CredentialJobToken, JobID: "job-1",
 		JobUnit: unit.WithUnitID("unt-1"),
 	}
+}
+
+// jobTokenJob returns the stored job of p.
+func jobTokenJob(p identity.Principal) job.Job {
+	stored := jobTokenTestJob(jobTokenTestSpec(p.JobUnit, job.OperationApply), job.SourceAPI)
+	stored.ID = job.ID(p.JobID)
+
+	return stored
+}
+
+// jobTokenAuthPorts returns the authorizer ports of newAuthPorts with jobs,
+// and the configured authorizer.
+func jobTokenAuthPorts(t *testing.T, jobs job.Store) (authPorts, *allowAllAuthorizer) {
+	t.Helper()
 
 	var none identity.Principal
 
@@ -222,11 +270,25 @@ func jobTokenAuthFixture(
 
 	cfg := defaultSettings()
 	cfg.authorizer = next
+	cfg.jobStore = jobs
 
 	ports, err := newAuthPorts(cfg, nil)
 	if err != nil {
 		t.Fatalf("auth ports: %v", err)
 	}
+
+	return ports, next
+}
+
+// jobTokenAuthFixture returns the job token principal, the authorizer ports
+// of newAuthPorts and the configured authorizer.
+func jobTokenAuthFixture(
+	t *testing.T,
+) (identity.Principal, authPorts, *allowAllAuthorizer) {
+	t.Helper()
+
+	p := jobTokenPrincipal(t)
+	ports, next := jobTokenAuthPorts(t, &jobFactStore{Store: nil, stored: jobTokenJob(p), err: nil})
 
 	return p, ports, next
 }
@@ -281,5 +343,73 @@ func TestNewAuthPortsLimitsAJobTokenToItsUnit(t *testing.T) {
 
 	if next.asked != 1 {
 		t.Fatalf("the configured authorizer was asked %d times for job:write-cost, want 1", next.asked)
+	}
+}
+
+// TestJobTokenRuleWiresBothPorts proves that the server builds the job token
+// rule with the job facts and the refusal recorder when the stores keep them.
+func TestJobTokenRuleWiresBothPorts(t *testing.T) {
+	t.Parallel()
+
+	p := jobTokenPrincipal(t)
+
+	cfg := defaultSettings()
+	cfg.jobStore = &jobFactStore{Store: nil, stored: jobTokenJob(p), err: nil}
+
+	var tokens jobTokenStore
+	cfg.jobTokenStore = &tokens
+
+	var namespaces auditNamespaceStore
+	cfg.namespaceStore = namespaces
+	cfg.authorizer = &allowAllAuthorizer{asked: 0, got: zeroPrincipalForTest()}
+
+	rule := jobTokenRule(cfg, cfg.authorizer)
+
+	if rule.Jobs == nil {
+		t.Fatal("the rule has no job facts port")
+	}
+
+	if rule.Refusals == nil {
+		t.Fatal("the rule has no refusal recorder")
+	}
+}
+
+// zeroPrincipalForTest returns a principal with no value.
+func zeroPrincipalForTest() identity.Principal {
+	return identity.Principal{
+		Subject: "", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.Kind(""),
+		Credential: identity.Credential(""), JobID: "", JobUnit: identity.Object{},
+	}
+}
+
+// TestNewAuthPortsDeniesAJobTokenWithNoJob proves that a server with a job
+// token store and no job for the token denies every action of the token, also
+// when the configured authorizer allows everything.
+func TestNewAuthPortsDeniesAJobTokenWithNoJob(t *testing.T) {
+	t.Parallel()
+
+	p := jobTokenPrincipal(t)
+
+	for _, action := range []identity.Action{
+		identity.ActionUnitRead, identity.ActionUnitEncrypt, identity.ActionJobWriteCost,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+
+			ports, next := jobTokenAuthPorts(t, &jobFactStore{
+				Store: nil, stored: jobTokenJob(p), err: job.ErrNotFound,
+			})
+
+			if err := ports.authorizer.Authorize(t.Context(), p, action, p.JobUnit); !errors.Is(
+				err, identity.ErrDenied,
+			) {
+				t.Fatalf("Authorize = %v, want ErrDenied", err)
+			}
+
+			if next.asked != 0 {
+				t.Fatalf("the configured authorizer was asked %d times, want 0", next.asked)
+			}
+		})
 	}
 }

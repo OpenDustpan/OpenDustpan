@@ -1,2 +1,4 @@
+access.job-token-action
 access.last-site-administrator
 access.no-action
+access.secrets-withheld
