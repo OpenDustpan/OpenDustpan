@@ -32,14 +32,20 @@ func (f *serveFlags) staticLayer() *cli.StaticLayer {
 // settingsWiring returns the settings wiring for st, or the zero value when
 // st keeps no settings.
 func (f *serveFlags) settingsWiring(st store) (settingsWiring, error) {
+	var ss setting.Store
+
 	switch s := st.(type) {
 	case sqliteStore:
-		return f.wireSettings(s.SettingStore(), storeSettingDeclarations(st)...)
+		ss = s.SettingStore()
 	case postgresStore:
-		return f.wireSettings(s.SettingStore(), storeSettingDeclarations(st)...)
+		ss = s.SettingStore()
 	default:
 		return settingsWiring{options: nil, sync: nil}, nil
 	}
+
+	// One call for every store kind, so that the declarations of the store
+	// cannot differ between the cases.
+	return f.wireSettings(ss, storeSettingDeclarations(st)...)
 }
 
 // storeSettingDeclarations returns the declarations of the settings of the
