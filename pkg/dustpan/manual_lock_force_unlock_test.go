@@ -79,6 +79,8 @@ func tofuTFEForceUnlock() forceUnlockTool {
 		hold: func(t *testing.T, f fixture) string {
 			t.Helper()
 
+			seedWebWorkspace(t, f)
+
 			if code, body := tofuDo(t, f, "LOCK", tofuLockBody); code != http.StatusOK {
 				t.Fatalf("LOCK = %d, want 200: %s", code, body)
 			}
@@ -122,7 +124,9 @@ func tofuHTTPForceUnlock() forceUnlockTool {
 
 			svc := f.srv.Workspaces()
 
-			w, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+			w, err := svc.Create(
+				t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.store, "acme"),
+			)
 			if err != nil {
 				t.Fatalf("create workspace: %v", err)
 			}

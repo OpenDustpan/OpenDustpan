@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -133,6 +134,7 @@ func NewRecorderHarnessWithRetention(
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: parts.Records, Jobs: parts.Harness.Jobs, Blobs: artifacts, Sealer: sealer,
 		Namespaces: parts.Harness.Namespaces, Retention: retention, Now: time.Now,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
