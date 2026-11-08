@@ -174,3 +174,4 @@ both together.
 | [124](0124-codegen-for-discovered-resources.md) | Code for unmanaged resources: a verified floor in each language, and a placement engine | discussing |
 | [125](0125-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
 | [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |
+| [128](0128-reach-growth-and-token-managers.md) | Reach growth and token managers | discussing |
