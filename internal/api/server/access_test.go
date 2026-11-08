@@ -124,16 +124,18 @@ func newAccessFixtureFull(
 }
 
 // accessFixtureParts holds the optional parts of a fixture: its audit store,
-// its passkey service, the change of its console sign-in, its link service and
-// the clock of its access service. A nil passkey service gets a real one over
-// the store, a nil link service mounts no link route, and a nil clock is
-// time.Now.
+// its passkey service, the change of its console sign-in, its link service,
+// the clock of its access service and the logger of its handler. A nil
+// passkey service gets a real one over the store, a nil link service mounts
+// no link route, a nil clock is time.Now, and a nil logger discards its
+// lines.
 type accessFixtureParts struct {
 	entries  func(st *sqlite.Store) auditStore
 	passkeys apiserver.PasskeyService
 	tweak    func(in *apiserver.SignIn, st *sqlite.Store)
 	links    func(*sqlite.Store) *forgelink.Service
 	now      func() time.Time
+	logger   *slog.Logger
 }
 
 // newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
@@ -146,7 +148,7 @@ func newAccessFixtureSignIn(
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks, now: nil,
+		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks, now: nil, logger: nil,
 	})
 }
 
@@ -167,20 +169,31 @@ func newAccessFixtureLinks(
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: nil, tweak: nil, links: links, now: nil,
+		entries: entries, passkeys: nil, tweak: nil, links: links, now: nil, logger: nil,
 	})
 }
 
 // newAccessFixtureClock is newAccessFixtureWith with the clock now of the
-// access service, which stamps the audit entry of an export.
+// access service, which stamps the audit entry of an export, and the logger
+// of the handler, so a test reads the lines of a request.
 func newAccessFixtureClock(
-	t *testing.T, entries func(st *sqlite.Store) auditStore, now func() time.Time,
+	t *testing.T, entries func(st *sqlite.Store) auditStore, now func() time.Time, logger *slog.Logger,
 ) accessFixture {
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks, now: now,
+		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks, now: now, logger: logger,
 	})
+}
+
+// handlerLogger returns logger, or a logger that discards its lines when
+// logger is nil.
+func handlerLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+
+	return slog.New(slog.DiscardHandler)
 }
 
 // newAccessFixtureAll builds the fixture with the parts of a fixture.
@@ -194,6 +207,8 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
 	}
+
+	logger := handlerLogger(parts.logger)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
@@ -280,7 +295,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
 		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
+		Logger:           logger,
 		Namespaces:       namespaces,
 		Backups:          nil,
 		Restores:         nil,

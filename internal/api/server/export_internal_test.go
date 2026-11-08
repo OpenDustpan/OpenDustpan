@@ -39,6 +39,12 @@ func ClassifyForTest(err error) (int, string) {
 	return f.status, f.message
 }
 
+// ReviewExportErrorForTest returns the error of an export that failed and
+// whose audit entry also failed, so a test reads its message.
+func ReviewExportErrorForTest(export, appendErr error) error {
+	return reviewExportError{export: export, append: appendErr}
+}
+
 // WriteErrorForTest writes the error answer of err, as a handler of the
 // installation API does.
 func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {

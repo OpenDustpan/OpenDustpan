@@ -54,6 +54,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -266,6 +267,9 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 		if err != nil {
 			appendErr := h.appendReviewFailure(r, c, action, reviewAuditObject(c.obj, req, nil), svc.Now())
 			if appendErr != nil {
+				h.logger.WarnContext(r.Context(), "the audit entry of a failed access review export was not written",
+					slog.String("action", string(action)), slog.String("error", appendErr.Error()))
+
 				return failed(""), reviewExportError{export: err, append: appendErr}
 			}
 
@@ -284,15 +288,15 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 // entry also failed. The error of the export decides the answer, as it does
 // when the entry succeeds: the handler maps an error to a status by its wrap
 // chain, and the error of the entry would answer its own class instead (an
-// unavailable store answers 503, a fenced append 409). The text of both
-// errors stays in the message.
+// unavailable store answers 503, a fenced append 409). The error of the
+// entry goes to the log, not to the message.
 type reviewExportError struct {
 	export error
 	append error
 }
 
 func (e reviewExportError) Error() string {
-	return e.export.Error() + "; " + e.append.Error()
+	return e.export.Error()
 }
 
 // Unwrap returns the error of the export, which decides the answer.
