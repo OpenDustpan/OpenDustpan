@@ -269,6 +269,7 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

@@ -38,7 +38,7 @@ func pushStates(t *testing.T, f fixture, contents ...string) []workspace.StateVe
 func newRollbackFixture(t *testing.T) fixture {
 	t.Helper()
 
-	return newFixtureSized(t, openFixtureBlobs(t), nil, 512)
+	return newFixtureSized(t, openFixtureBlobs(t), nil, nil, 512)
 }
 
 // TestReadRollbackChange proves that the change comes from the two states: the
@@ -204,7 +204,7 @@ func TestRestoreExpecting(t *testing.T) {
 		t.Parallel()
 
 		blobs, dir := openDirBlobs(t)
-		f := newFixtureSized(t, blobs, blobguardtest.None{}, 512)
+		f := newFixtureSized(t, blobs, blobguardtest.None{}, nil, 512)
 		versions := pushStates(t, f, stateA, stateAB, stateA)
 		blobsBefore := listBlobDir(t, dir)
 

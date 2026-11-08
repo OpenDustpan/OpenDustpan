@@ -433,6 +433,7 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 		MaxStateBytes:      memMaxStateBytes,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if svcErr != nil {
 		tb.Fatalf("service: %v", svcErr)

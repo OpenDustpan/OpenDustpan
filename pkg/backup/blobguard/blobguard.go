@@ -67,6 +67,51 @@ func (e *WaitError) Is(target error) bool {
 	return target == ErrWait
 }
 
+// WaitReason names why a blob delete did not run. It is the label value of
+// the counter of the blob deletes that wait.
+type WaitReason string
+
+const (
+	// WaitBackup counts a delete that waits for a backup.
+	WaitBackup WaitReason = "backup"
+	// WaitRestore counts a delete that waits for a restore.
+	WaitRestore WaitReason = "restore"
+	// WaitNoGuard counts a delete of a deleter that has no guard.
+	WaitNoGuard WaitReason = "no-guard"
+	// WaitGuardError counts a delete that a failed take, an unknown answer or
+	// another guard failure kept back.
+	WaitGuardError WaitReason = "guard-error"
+)
+
+// WaitCounter counts each refused take of a blob delete lease by reason. A
+// deleter calls it with ReasonOf(err) after HoldLease refuses the take. A nil
+// WaitCounter counts nothing: the caller tests it before the call.
+type WaitCounter func(reason WaitReason)
+
+// ReasonOf returns the reason of the refused take that HoldLease answered
+// with err: the running work for a *WaitError, WaitNoGuard for ErrNoWatch,
+// and WaitGuardError for every other error, including a nil error and a
+// *WaitError with a kind that this package does not know. So an unknown
+// answer counts as a guard failure: fail closed.
+func ReasonOf(err error) WaitReason {
+	if wait, ok := errors.AsType[*WaitError](err); ok {
+		switch wait.Work.Kind {
+		case Backup:
+			return WaitBackup
+		case Restore:
+			return WaitRestore
+		default:
+			return WaitGuardError
+		}
+	}
+
+	if errors.Is(err, ErrNoWatch) {
+		return WaitNoGuard
+	}
+
+	return WaitGuardError
+}
+
 // Watch is the guard of the blob deletes. A deleter of a blob that a backup
 // snapshot can name, or that restored data can name, calls it after the
 // commit that removed or replaced the last row that names the blob, and

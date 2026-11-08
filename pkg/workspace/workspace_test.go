@@ -1148,11 +1148,24 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Leases) fixture {
 	t.Helper()
 
-	return newFixtureSized(t, blobs, guard, 64)
+	return newFixtureSized(t, blobs, guard, nil, 64)
 }
 
-// newFixtureSized is newFixtureGuarded with a state size limit of maxState.
-func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Leases, maxState int64) fixture {
+// newFixtureWaiting is newFixtureGuarded with wait as the hook of the refused
+// blob delete takes.
+func newFixtureWaiting(
+	t *testing.T, blobs blob.Store, guard blobguard.Leases, wait blobguard.WaitCounter,
+) fixture {
+	t.Helper()
+
+	return newFixtureSized(t, blobs, guard, wait, 64)
+}
+
+// newFixtureSized is newFixtureGuarded with wait as the hook of the refused
+// blob delete takes and a state size limit of maxState.
+func newFixtureSized(
+	t *testing.T, blobs blob.Store, guard blobguard.Leases, wait blobguard.WaitCounter, maxState int64,
+) fixture {
 	t.Helper()
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
@@ -1180,6 +1193,7 @@ func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Leases, max
 
 	svc, err := workspace.NewService(workspace.Config{
 		BlobGuard:          guard,
+		OnDeleteWait:       wait,
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
@@ -1236,6 +1250,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          2 * time.Hour,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1350,6 +1365,7 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1461,6 +1477,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1635,6 +1652,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		MaxStateBytes:      64,
 		MaxPendingVersions: limit,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -3268,6 +3286,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		MaxStateBytes:      64,
 		MaxPendingVersions: 2,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -3454,6 +3473,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("second service: %v", err)
@@ -4338,6 +4358,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		Logger:             nil,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -4501,6 +4522,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		Logger:             nil,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -4683,6 +4705,7 @@ func newSealedFixture(t *testing.T) fixture {
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -4760,6 +4783,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if !errors.Is(err, workspace.ErrMissingSealer) {
 		t.Fatalf("NewService without a sealer: err = %v, want ErrMissingSealer", err)

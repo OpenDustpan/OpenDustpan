@@ -484,7 +484,7 @@ func newArtifactSweepServer(t *testing.T) *Server {
 
 	sweeper, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: store.Jobs(), Names: store.Jobs(), Blobs: artifacts, Namespaces: store, Guard: store,
-		Clock: store, Audit: store, Logger: nil, Now: nil,
+		Clock: store, Audit: store, Logger: nil, Now: nil, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("new sweeper: %v", err)

@@ -768,6 +768,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 		MaxStateBytes:      1 << 20,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

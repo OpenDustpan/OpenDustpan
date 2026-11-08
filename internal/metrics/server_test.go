@@ -258,6 +258,49 @@ func TestServerObserveDeletedSweep(t *testing.T) {
 	}
 }
 
+// TestServerBlobDeleteWaiting proves the blob delete wait series: the four
+// reasons start at zero, each count lands on its series, and an unknown
+// reason counts as a guard failure.
+func TestServerBlobDeleteWaiting(t *testing.T) {
+	t.Parallel()
+
+	m := metrics.NewServerMetrics("dev", time.Now())
+
+	got := scrapeServer(t, m)
+
+	for _, reason := range []string{"backup", "restore", "no-guard", "guard-error"} {
+		want := `dustpan_blob_deletes_waiting_total{reason="` + reason + `"} 0`
+		if !strings.Contains(got, want) {
+			t.Fatalf("the series does not start at zero, output misses %q:\n%s", want, got)
+		}
+	}
+
+	m.IncBlobDeleteWaiting(metrics.BlobDeleteWaitBackup)
+	m.IncBlobDeleteWaiting(metrics.BlobDeleteWaitRestore)
+	m.IncBlobDeleteWaiting(metrics.BlobDeleteWaitRestore)
+	m.IncBlobDeleteWaiting(metrics.BlobDeleteWaitNoGuard)
+	m.IncBlobDeleteWaiting(metrics.BlobDeleteWaitGuardError)
+	m.IncBlobDeleteWaiting("other")
+
+	got = scrapeServer(t, m)
+
+	for _, want := range []string{
+		"# TYPE dustpan_blob_deletes_waiting_total counter",
+		`dustpan_blob_deletes_waiting_total{reason="backup"} 1`,
+		`dustpan_blob_deletes_waiting_total{reason="restore"} 2`,
+		`dustpan_blob_deletes_waiting_total{reason="no-guard"} 1`,
+		`dustpan_blob_deletes_waiting_total{reason="guard-error"} 2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+
+	if strings.Contains(got, `reason="other"`) {
+		t.Errorf("output holds an unknown reason:\n%s", got)
+	}
+}
+
 func TestServerSignInCounterErrors(t *testing.T) {
 	t.Parallel()
 

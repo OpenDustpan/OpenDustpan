@@ -89,6 +89,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_signin_failure_counter_errors_total` | `operation` |
 | `dustpan_blob_purge_pending` | (none) |
 | `dustpan_blob_purge_oldest_age_seconds` | (none) |
+| `dustpan_blob_deletes_waiting_total` | `reason` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -174,6 +175,16 @@ shows that the sweep does not finish the records.
 Each scrape reads the store. Both gauges share one read, which is at most 2
 seconds old. A failed read exports 0 for both gauges, so a store outage hides
 the backlog. The worker gauges behave the same way.
+
+`dustpan_blob_deletes_waiting_total` counts the blob deletes that did not run
+because the take of their lease was refused, with the label `reason`.
+`backup` counts a delete that waits for a running backup.
+`restore` counts a delete that waits for a running restore.
+`no-guard` counts a delete of a deleter that has no guard.
+`guard-error` counts a delete that a failed take or an unknown answer kept
+back.
+A counter that rises for a long time while no backup or restore runs means
+the deletes do not drain.
 
 ## Request log
 

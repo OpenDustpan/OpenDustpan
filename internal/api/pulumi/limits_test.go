@@ -73,6 +73,7 @@ func newUpdateFixtureWithGate(
 		MaxCheckpointBytes: limit,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

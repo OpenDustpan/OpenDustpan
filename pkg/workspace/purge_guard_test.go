@@ -2,6 +2,7 @@ package workspace_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +190,59 @@ func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 
 	if left := stateBlobCount(t, f, prefix); left != 1 {
 		t.Fatalf("state blobs left after the restore started = %d, want exactly one", left)
+	}
+}
+
+// TestDeletePurgedBlobsCountsRefusedTakes proves that each refused take of
+// the purge counts once with its reason: the running work, the missing guard
+// and the failed take.
+func TestDeletePurgedBlobsCountsRefusedTakes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		reason blobguard.WaitReason
+		guard  func() blobguard.Leases
+	}{
+		{name: "a backup", reason: blobguard.WaitBackup, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(time.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
+
+			return g
+		}},
+		{name: "a restore", reason: blobguard.WaitRestore, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(time.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+
+			return g
+		}},
+		{name: "no guard", reason: blobguard.WaitNoGuard, guard: func() blobguard.Leases { return nil }},
+		{name: "a failed take", reason: blobguard.WaitGuardError, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(time.Now)
+			g.Fail(errGuardRead)
+
+			return g
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []blobguard.WaitReason
+
+			f := newFixtureWaiting(t, openFixtureBlobs(t), tc.guard(),
+				func(reason blobguard.WaitReason) { got = append(got, reason) })
+			purgedWorkspace(t, f)
+
+			err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
+			if err == nil {
+				t.Fatal("delete with a refused take: want an error")
+			}
+
+			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
+				t.Fatalf("counted reasons = %v, want [%s]", got, tc.reason)
+			}
+		})
 	}
 }

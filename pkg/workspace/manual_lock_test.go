@@ -136,6 +136,7 @@ func withManualLocks(t *testing.T, f fixture, locks workspace.ManualLocks) *work
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -617,6 +618,7 @@ func TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

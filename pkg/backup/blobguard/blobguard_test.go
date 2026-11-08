@@ -3,6 +3,7 @@ package blobguard_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -43,6 +44,9 @@ func leaseAnswer(work blobguard.Work, ok bool, err error) fakeLeases {
 }
 
 var errWrite = errors.New("write failed")
+
+// errOther is an error that names no reason, for the test of ReasonOf.
+var errOther = errors.New("another failure")
 
 // holdLeaseCase is one case of TestHoldLease: the answer of the fake Leases,
 // the holder of the call, and the result that the call must give.
@@ -308,5 +312,50 @@ func TestHoldLeaseNamesTheWork(t *testing.T) {
 
 	if release != nil {
 		t.Fatal("HoldLease returned a release function with a WaitError")
+	}
+}
+
+// TestReasonOf maps each refused take to its reason.
+func TestReasonOf(t *testing.T) {
+	t.Parallel()
+
+	backup := &blobguard.WaitError{Work: blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}}
+	restore := &blobguard.WaitError{Work: blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"}}
+
+	tests := []struct {
+		name string
+		err  error
+		want blobguard.WaitReason
+	}{
+		{name: "a backup", err: backup, want: blobguard.WaitBackup},
+		{name: "a restore", err: restore, want: blobguard.WaitRestore},
+		{name: "a wrapped backup", err: fmt.Errorf("hold the lease: %w", backup), want: blobguard.WaitBackup},
+		{name: "a wrapped restore", err: fmt.Errorf("hold the lease: %w", restore), want: blobguard.WaitRestore},
+		{name: "no guard", err: blobguard.ErrNoWatch, want: blobguard.WaitNoGuard},
+		{
+			name: "a wrapped no guard",
+			err:  fmt.Errorf("hold the lease: %w", blobguard.ErrNoWatch),
+			want: blobguard.WaitNoGuard,
+		},
+		{
+			name: "an unknown kind",
+			err:  &blobguard.WaitError{Work: blobguard.Work{Kind: "other", ID: "x-1"}},
+			want: blobguard.WaitGuardError,
+		},
+		{name: "no holder", err: blobguard.ErrNoHolder, want: blobguard.WaitGuardError},
+		{name: "an unknown answer", err: blobguard.ErrUnknown, want: blobguard.WaitGuardError},
+		{name: "a failed take", err: errWrite, want: blobguard.WaitGuardError},
+		{name: "an unknown error", err: errOther, want: blobguard.WaitGuardError},
+		{name: "no error", err: nil, want: blobguard.WaitGuardError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := blobguard.ReasonOf(tc.err); got != tc.want {
+				t.Errorf("ReasonOf(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }

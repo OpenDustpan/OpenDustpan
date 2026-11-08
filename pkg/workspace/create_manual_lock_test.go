@@ -51,6 +51,7 @@ func serviceOver(t *testing.T, f fixture, store workspace.Store, locks workspace
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

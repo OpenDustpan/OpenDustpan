@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -719,5 +720,72 @@ func TestJournalBuildReadsTheGuardBeforeEachBatchDelete(t *testing.T) {
 
 	if kept != 1 {
 		t.Fatalf("batch blobs left after a restore started between two deletes = %d, want exactly one", kept)
+	}
+}
+
+// TestBlobDeleteWaitsAreCounted proves that each refused take of the stack
+// deletes counts once with its reason: the purge of a stack and the sweep
+// that a start runs.
+func TestBlobDeleteWaitsAreCounted(t *testing.T) {
+	t.Parallel()
+
+	guardClock := newClock()
+
+	tests := []struct {
+		name   string
+		reason blobguard.WaitReason
+		guard  func() blobguard.Leases
+	}{
+		{name: "a backup", reason: blobguard.WaitBackup, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
+
+			return g
+		}},
+		{name: "a restore", reason: blobguard.WaitRestore, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+
+			return g
+		}},
+		{name: "no guard", reason: blobguard.WaitNoGuard, guard: func() blobguard.Leases { return nil }},
+		{name: "a failed take", reason: blobguard.WaitGuardError, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Fail(errRegistry)
+
+			return g
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []blobguard.WaitReason
+
+			clk := newClock()
+			f := newUpdatesWaiting(t, clk, tc.guard(), func(reason blobguard.WaitReason) {
+				got = append(got, reason)
+			})
+			orphan := f.orphanOfNewUpdate(t)
+
+			if err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test"); err == nil {
+				t.Fatal("the purge with a refused take: want an error")
+			}
+
+			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
+				t.Fatalf("the purge counted %v, want [%s]", got, tc.reason)
+			}
+
+			// The sweep that a start runs reads the guard again, with the
+			// orphan of the purge left.
+			got = nil
+			f.complete(t, orphan.update)
+			f.started(t, stack.KindPreview)
+
+			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
+				t.Fatalf("the sweep counted %v, want [%s]", got, tc.reason)
+			}
+		})
 	}
 }
