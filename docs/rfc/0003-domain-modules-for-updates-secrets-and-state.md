@@ -4,13 +4,13 @@ title: Domain modules for updates, secrets and OpenTofu state
 status: accepted
 adr: 20, 23, 26
 created: 2026-10-09
-was: proposed ADR 11
+was: proposed under number 11
 ---
 
 # RFC 3. Domain modules for updates, secrets and OpenTofu state
 
 Status: accepted as ADR 20 (part 1, the Pulumi update cycle), ADR 23
-(part 2, secrets) and ADR 26 (part 3, OpenTofu state). It was proposed ADR 11
+(part 2, secrets) and ADR 26 (part 3, OpenTofu state). It was proposed under number 11
 until ADR 15 moved every undecided proposal to `docs/rfc/`.
 
 Part 1, the Pulumi update cycle, is accepted as ADR 20.

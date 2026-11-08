@@ -255,6 +255,7 @@ func config(t *testing.T, f *fakeServer) runConfig {
 		Logger:     slog.New(slog.NewTextHandler(messages, nil)),
 		Grace:      func(bool) time.Duration { return 2 * time.Second },
 		RenewEvery: 50 * time.Millisecond, ChunkSize: 0, FlushEvery: 50 * time.Millisecond, Retry: time.Millisecond,
+		Sleep: nil,
 	}}
 }
 

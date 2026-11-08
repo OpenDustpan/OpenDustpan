@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -515,6 +516,37 @@ func TestAuditEntryReaderConformance(t *testing.T) {
 
 		return s
 	})
+}
+
+// TestAuditCheckpointEpochChange runs the case of a checkpoint write after
+// an epoch change on PostgreSQL entries.
+func TestAuditCheckpointEpochChange(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	s, err := postgres.Open(t.Context(), isolatedURL(t, base))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	blobs, err := blobfs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	audittest.CheckEpochChangeStopsWrite(t, s, blobs)
 }
 
 // chainApprovalStore wraps a Store with its schema URL, so the approval

@@ -29,6 +29,9 @@ func reviewCases() []struct {
 		{name: "review of a unit matches its stable ID, not its name", test: testReviewUnit},
 		{name: "review snapshot reads the grants and memberships at its time", test: testReviewAsOf},
 		{name: "review expand puts each member of a group in its own row", test: testReviewExpand},
+		{name: "review reads each membership source", test: testReviewMembershipSources},
+		{name: "review snapshots show suspension at the snapshot time", test: testReviewMembershipSuspension},
+		{name: "review rejects an unknown stored membership source", test: testReviewUnknownMembershipSource},
 		{name: "review history keeps a container grant with any custom role", test: testReviewCustomRoles},
 		{name: "review of a principal reads the grants on its token namespace", test: testReviewTokenNamespace},
 		{name: "review counts only when asked", test: testReviewCount},
@@ -36,7 +39,7 @@ func reviewCases() []struct {
 		{name: "review last access reads the latest use of each principal", test: testLastAccess},
 		{name: "review last access counts the use of a console session", test: testLastAccessSessions},
 		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
-		{name: "review hides a suspended member", test: testReviewHidesSuspendedMember},
+		{name: "review history hides a suspended member", test: testReviewHistoryHidesSuspendedMember},
 	}
 }
 
