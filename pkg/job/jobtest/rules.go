@@ -200,7 +200,7 @@ func testRunningOperationFails(t *testing.T, h Harness) {
 func onlyOrphan(t *testing.T, h Harness, id job.ID) job.Orphan {
 	t.Helper()
 
-	orphans, err := h.Jobs.Orphans(t.Context(), orphanPage)
+	orphans, _, err := h.Jobs.Orphans(t.Context(), orphanPage)
 	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != id || orphans[0].Missing {
 		t.Fatalf("Orphans = %v, %v; want only %s with an ended operation", orphanIDs(orphans), err, id)
 	}

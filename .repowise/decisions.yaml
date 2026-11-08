@@ -3961,3 +3961,27 @@ decisions:
   accepted_artifact: "docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md"
   evidence:
   - "docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md"
+- id: "adr-0359"
+  title: "ADR 359: Review requests: mirrored approvals, checks, comment commands and apply timing"
+  decision: "1. **Mirrored approvals (owner, 2026-10-18).** When the forge integration uses OAuth, the server mirrors approvals in both directions between the review request and the change order. An approval on the forge shows on the change order. An approval on the change order shows on the forge.\n2. **No OAuth: read-only change order (owner, 2026-10-18).** Without OAuth, the change-order page is read-only. This holds for units that come from a VCS.\n3. **Checks (owner, 2026-10-18).** A review request gets one required summary check with a fixed name. It also gets one check for each unit. The unit checks are not required.\n4. **The table in the plan comment (owner, 2026-10-18).** The server edits one comment in place (ADR 299 decision 25). It has a table with one row for each unit. A row shows the status, the `+ ~ -` counts and a link to the change order.\n5. **Comment commands follow Atlantis for apply before merge (owner, 2026-10-18).** For teams that apply before the merge, the comment commands follow the semantics of Atlantis.\n6. **Merge first: commands that do not apply (owner, 2026-10-18).** Some repositories merge first and apply after. There, the server accepts only commands that do not apply. `plan` and similar commands are in this group.\n7. **No state commands (owner, 2026-10-18).** A review request does not accept state commands.\n8. **Imports need research first (owner, 2026-10-18).** An import from a comment needs deep research first.\n9. **Apply timing at each level (owner, 2026-10-18).** The namespace and the collection each set a default for the apply timing. Each also allows or forbids an override at the levels below it, down to the unit. So an apply before the merge is possible.\n10. **Apply after the merge is the recommended default (owner, 2026-10-18).** An apply after the merge is the strong recommendation and the recommended default. The project researches this flow and writes it in the docs."
+  reason: "RFC 27 asks how a review request shows plans, takes approvals and starts work. ADR 299 records the review modes and the plan comment that the server edits in place (decision 25). ADR 271 decision 7 and ADR 300 decision 9 record the comment commands. On 18 October 2026 the owner answered four more questions of the RFC. No ADR records these answers. This ADR records them and nothing else."
+  scope:
+  - "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"
+  evidence:
+  - "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"
+- id: "adr-0360"
+  title: "ADR 360: Catalog: three paths to a new blueprint version, and time to live of units"
+  decision: "1. **Three paths to a new blueprint version (owner, 2026-10-18).** A Catalog request moves to a new blueprint version by one of three paths: 1. **Requester upgrade.** The server maps the answers by name. The requester fills the new required inputs. 2. **Migrations and batch upgrades.** The blueprint declares migrations, written in Expr. The platform team can run batch upgrades. 3. **Publisher edits of answers.** The publisher edits the answers.\n2. **Time to live is a unit setting (owner, 2026-10-18).** The time to live is a setting of a unit. A blueprint gives a default for it. A namespace gives a maximum for it."
+  reason: "The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 7 November 2026 found no ADR that states them. ADR 112 lists two open questions. The first: who migrates the answers of existing requests when a new version renames or deletes an input, or adds a required one? The second: does a blueprint get a time to live for its units? Version 1 of ADR 112 asks the requester to submit an upgrade with valid answers. ADR 308 records other decisions of the same day for the Catalog."
+  scope:
+  - "GLOSSARY.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"
+  evidence:
+  - "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"

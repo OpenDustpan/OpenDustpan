@@ -762,6 +762,35 @@ func (s *Store) ListGroupsOf(
 	return out, total, nil
 }
 
+// ListActiveGroupNamesOf implements principal.Store. It reads the principal
+// and the names in one REPEATABLE READ snapshot.
+func (s *Store) ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error) {
+	var out []string
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		principals, err := q.PrincipalExists(ctx, principalID)
+		if err != nil {
+			return fmt.Errorf("count principals: %w", err)
+		}
+
+		if principals == 0 {
+			return principal.ErrNotFound
+		}
+
+		out, err = q.ListActiveGroupNamesOfPrincipal(ctx, principalID)
+		if err != nil {
+			return fmt.Errorf("select active group names of principal: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // principalFields are the columns of a principal that every read selects.
 type principalFields struct {
 	id, subject, displayName, kind, source string

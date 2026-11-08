@@ -175,7 +175,8 @@ func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
 	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planPartCases(),
-		planReadCases(), deliveryCases(), keyTxCases(), chunkKeyCases())
+		planReadCases(),
+		reserveBindingCases(), deliveryCases(), keyTxCases(), chunkKeyCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
