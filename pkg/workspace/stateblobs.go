@@ -84,7 +84,7 @@ func (b *stateBlobs) put(ctx context.Context, ns namespace.ID, ws ID, key blob.K
 		return err
 	}
 
-	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), scopeaudit.PlaceOf(v, key))
+	return b.refuse(ctx, ns, opPut, redactKey(v.Put(ctx, key, r), key), scopeaudit.PlaceOf(v, key))
 }
 
 // get opens the blob under key, for the workspace ws of the namespace with ID
@@ -98,7 +98,7 @@ func (b *stateBlobs) get(ctx context.Context, ns namespace.ID, ws ID, key blob.K
 
 	r, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, ns, opGet, err, scopeaudit.PlaceOf(v, key))
+		return nil, b.refuse(ctx, ns, opGet, redactKey(err, key), scopeaudit.PlaceOf(v, key))
 	}
 
 	return r, nil
@@ -113,7 +113,7 @@ func (b *stateBlobs) delete(ctx context.Context, ns namespace.ID, ws ID, key blo
 		return err
 	}
 
-	return b.refuse(ctx, ns, opDelete, v.Delete(ctx, key), scopeaudit.PlaceOf(v, key))
+	return b.refuse(ctx, ns, opDelete, redactKey(v.Delete(ctx, key), key), scopeaudit.PlaceOf(v, key))
 }
 
 // deleteRetried is delete with a retry of a transient failure after a short
@@ -124,7 +124,7 @@ func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, 
 		return err
 	}
 
-	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), scopeaudit.PlaceOf(v, key))
+	return b.refuse(ctx, ns, opDelete, redactKey(blob.DeleteRetried(ctx, v, key), key), scopeaudit.PlaceOf(v, key))
 }
 
 // walk calls fn with each page of the blobs of the workspace ws, in the
@@ -235,7 +235,8 @@ const stateKeyRestParts = 3
 // refuse writes the refusal to the recorder when err is blob.ErrOutOfScope.
 // It returns blob.ErrOutOfScope, joined with the error of the recorder when
 // the record fails, so the caller still sees the refusal. Any other error, and
-// nil, pass through.
+// nil, pass through. A store error that names a key is redacted by the caller,
+// with redactKey, before it gets here.
 func (b *stateBlobs) refuse(
 	ctx context.Context, ns namespace.ID, op string, err error, where scopeaudit.Where,
 ) error {
@@ -253,6 +254,45 @@ func (b *stateBlobs) refuse(
 	}
 
 	return blob.ErrOutOfScope
+}
+
+// redactedError reports a store error whose blob key is replaced in its text.
+// The chain is kept, so errors.Is and errors.As still see every sentinel that
+// the store error carries.
+//
+// Unwrap exposes the original text, which holds the key. A caller must log or
+// return this error, never the unwrapped error.
+type redactedError struct {
+	text string
+	err  error
+}
+
+// Error returns the text of the store error with the key replaced.
+func (e *redactedError) Error() string { return e.text }
+
+// Unwrap returns the store error, so the chain of errors.Is and errors.As holds.
+func (e *redactedError) Unwrap() error { return e.err }
+
+// Redacted marks the error as a redaction, so a reader of the chain, such as
+// the log of a 500, skips it and names the error it wraps.
+func (e *redactedError) Redacted() {}
+
+// redactKey returns err with the blob key replaced by a placeholder in its
+// text. The chain of err is kept, so errors.Is and errors.As still match. The
+// caller passes the key it used; an empty key or an error without it returns
+// err unchanged.
+//
+// This is best-effort. It replaces only the exact key text. A store error that
+// holds the key in another form, such as percent-encoded or split into a
+// directory and a name, keeps that form, and an error from reading the stream
+// after get returns is not redacted here. Callers must not log the unwrapped
+// error.
+func redactKey(err error, key blob.Key) error {
+	if err == nil || key.String() == "" || !strings.Contains(err.Error(), key.String()) {
+		return err
+	}
+
+	return &redactedError{text: strings.ReplaceAll(err.Error(), key.String(), "<key>"), err: err}
 }
 
 // StateBlobKey names the parts of one state content blob key.

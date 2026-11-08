@@ -18,6 +18,9 @@ import (
 type NamespaceService interface {
 	// Get returns the namespace called name, or namespace.ErrNotFound.
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+	// WritableHere returns the namespace if this installation may write to it,
+	// or namespace.ErrNotHome when another installation is its primary.
+	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
 // rules returns the override and audit rules of OpenTofu units, which this

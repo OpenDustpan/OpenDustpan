@@ -15,6 +15,13 @@ sender. The kind `email` and the other chat platforms have none yet, so you can
 make and read their destinations, but the test route answers `sink.no-sender`
 for them. See `docs/guides/slack-notifications.md` for Slack.
 
+The renderer for Mattermost limits its text to 15000 bytes. It cuts a long
+title, summary or field value and ends it with an ellipsis. It leaves out
+links that do not fit, and it adds a line that says how many it left out. It
+does not cut the whole message. Mattermost limits a post to 16383 characters by
+default (its server setting `MaxPostSize`). A character is at least one byte,
+so 15000 bytes stay below that limit.
+
 The paths in this guide are under `/api/dustpan/v1/`. See
 `docs/reference/notification-destinations-api.md` for every field and error.
 

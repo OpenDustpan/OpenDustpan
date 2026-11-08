@@ -176,7 +176,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases(), reconcileCases())
 
-	for _, tc := range slices.Concat(cases, claimerCases(), endClaimCases(), claimBoundCases(), claimGateCases(), finalVersionCases()) {
+	for _, tc := range slices.Concat(cases, claimerCases(), missingNamespaceCases(), endClaimCases(), claimBoundCases(),
+		claimGateCases(), finalVersionCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))

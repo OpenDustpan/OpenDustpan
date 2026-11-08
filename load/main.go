@@ -722,9 +722,10 @@ type placementPorts interface {
 	collection.PlacementStore
 }
 
-// seedLoadPlacement makes a collection and a placement rule for Pulumi stacks
-// of any project and any name in the namespace ns. The server refuses a new
-// stack that no rule places, and the recorded traffic makes stacks.
+// seedLoadPlacement makes a collection, a placement rule for Pulumi stacks of
+// any project and any name, and a placement rule for OpenTofu workspaces of any
+// name in the namespace ns. The server refuses a new stack or workspace that no
+// rule places, and the recorded traffic makes both.
 func seedLoadPlacement(ctx context.Context, stores namespace.Store, ns namespace.Name) error {
 	ports, ok := stores.(placementPorts)
 	if !ok {
@@ -748,11 +749,13 @@ func seedLoadPlacement(ctx context.Context, stores namespace.Store, ns namespace
 		return fmt.Errorf("create collection: %w", err)
 	}
 
-	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: loadCollection, Position: 0}
-	ruled := loadEntry(ns, identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+	for _, tool := range []string{collection.ToolPulumi, collection.ToolOpenTofu} {
+		in := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", Collection: loadCollection, Position: 0}
+		ruled := loadEntry(ns, identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
-	if _, err = rules.Create(ctx, ns, in, ruled); err != nil {
-		return fmt.Errorf("create placement rule: %w", err)
+		if _, err = rules.Create(ctx, ns, in, ruled); err != nil {
+			return fmt.Errorf("create %s placement rule: %w", tool, err)
+		}
 	}
 
 	return nil
