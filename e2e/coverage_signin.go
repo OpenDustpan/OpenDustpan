@@ -84,6 +84,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Journal:        nil,
 		Principals:     principals,
 		Access:         nil,
+		Reach:          coverageReach(),
 		Tokens:         nil,
 		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,

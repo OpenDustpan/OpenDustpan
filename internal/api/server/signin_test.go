@@ -254,6 +254,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Schema:           st,
 		Journal:          st,
 		Principals:       principals,
+		Reach:            routeReach(st),
 		Tokens:           seedRouteTokens(t, st),
 		Access:           grants,
 		Audit:            st,
@@ -1161,6 +1162,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
