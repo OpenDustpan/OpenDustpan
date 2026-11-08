@@ -199,10 +199,10 @@ func (r Revocation) ReplayEntry(invalid error) audit.Entry {
 	return e
 }
 
-// ReasonLastBreakGlass is the reason of the audit entry of a replayed disable
+// ReasonNoWorkingBreakGlass is the reason of the audit entry of a replayed disable
 // that the restore skipped, because it would leave the installation with no
-// enabled break-glass account. It is the catalog code principal.last-break-glass.
-const ReasonLastBreakGlass = "principal.last-break-glass"
+// enabled break-glass account. It is the catalog code principal.no-working-break-glass.
+const ReasonNoWorkingBreakGlass = "principal.no-working-break-glass"
 
 // KeptEntry returns the audit entry of a replayed revocation that the restore
 // skipped on purpose and that left its target as the restored data holds it:

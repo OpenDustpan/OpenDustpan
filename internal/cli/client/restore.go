@@ -93,6 +93,11 @@ const restoreDamagedHelp = "put the good bytes back at the keys above from a cop
 const restoreMissingHelp = "run opendustpan store check --server %s --target blobs to check the blob store " +
 	"setting of the server, then " + restoreRerunHelp
 
+// restoreBreakGlassHelp names the one action that helps after a restore that
+// stopped because the restored data would hold fewer working break-glass
+// accounts than the live data, and fewer than 2.
+const restoreBreakGlassHelp = "restore a backup that holds at least 2 working break-glass accounts"
+
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
 	server    string
@@ -591,8 +596,9 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 // restore. A restore without --force that active work stopped gets the
 // --force command. A restore that damaged or missing live blobs stopped gets
 // the repair or the check of the blob store first. A restore of a backup with
-// corrupt data gets the backup check command. Every other failure gets the
-// same restore command again.
+// corrupt data gets the backup check command. A restore that would leave too
+// few working break-glass accounts gets the request to restore another
+// backup. Every other failure gets the same restore command again.
 func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
 	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
 		return fmt.Sprintf(restoreForceHelp, server, id)
@@ -609,6 +615,8 @@ func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id st
 		return fmt.Sprintf(restoreCorruptHelp, server, id)
 	case backup.CodePreBackupForeign:
 		return fmt.Sprintf(restoreRerunHelp, server, id)
+	case backup.CodeNoWorkingBreakGlass:
+		return restoreBreakGlassHelp
 	}
 
 	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {

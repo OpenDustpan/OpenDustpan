@@ -201,5 +201,5 @@ code and the message.
 | `404` | The role or the grant does not exist. |
 | `409` | A name is taken, the role is built in or in use, or the grant already exists. |
 
-Principal refusals, such as `principal.last-break-glass` and
+Principal refusals, such as `principal.no-working-break-glass` and
 `access.last-site-administrator`, carry an `errorCode`.

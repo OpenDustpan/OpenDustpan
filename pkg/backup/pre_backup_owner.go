@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // ErrPreBackupForeign reports that the backup before a restore is not one
@@ -41,11 +43,17 @@ const (
 	// CodePreBackupForeign is the code of a restore that stopped because the
 	// backup before it is not one that it started.
 	CodePreBackupForeign RestoreErrorCode = "restore.pre-backup-foreign"
+	// CodeNoWorkingBreakGlass is the code of a restore that stopped because
+	// it would leave too few working break-glass accounts.
+	CodeNoWorkingBreakGlass RestoreErrorCode = "principal.no-working-break-glass"
 )
 
 // RestoreErrorCodes lists every code that a restore row can hold.
 func RestoreErrorCodes() []RestoreErrorCode {
-	return []RestoreErrorCode{CodeBlobsNotBacked, CodeLiveBlobsDamaged, CodeLiveBlobsMissing, CodePreBackupForeign}
+	return []RestoreErrorCode{
+		CodeBlobsNotBacked, CodeLiveBlobsDamaged, CodeLiveBlobsMissing, CodePreBackupForeign,
+		CodeNoWorkingBreakGlass,
+	}
 }
 
 // restoreErrorCode returns the code of the refusal err, or an empty code for
@@ -60,6 +68,8 @@ func restoreErrorCode(err error) RestoreErrorCode {
 		return CodeLiveBlobsMissing
 	case errors.Is(err, ErrBlobsNotBacked):
 		return CodeBlobsNotBacked
+	case errors.Is(err, principal.ErrNoWorkingBreakGlass):
+		return CodeNoWorkingBreakGlass
 	default:
 		return ""
 	}

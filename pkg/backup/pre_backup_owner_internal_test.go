@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // listOps is a durable store whose List returns ops.
@@ -258,6 +260,10 @@ func TestRestoreErrorCodeOfEachRefusal(t *testing.T) {
 		},
 		{err: errors.Join(errThrottled, ErrPreBackupForeign), want: CodePreBackupForeign},
 		{err: &BlobsNotBackedError{Count: 1, First: liveKey}, want: CodeBlobsNotBacked},
+		{
+			err:  fmt.Errorf("apply the restore: %w", principal.ErrNoWorkingBreakGlass),
+			want: CodeNoWorkingBreakGlass,
+		},
 		{err: ErrCorrupt, want: ""},
 		{err: errThrottled, want: ""},
 	} {

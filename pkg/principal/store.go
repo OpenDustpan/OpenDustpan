@@ -81,7 +81,7 @@ type RecordStore interface {
 	// write runs in maintenance mode, as a revocation does. It returns
 	// ErrNotFound when no such principal exists, ErrDisabled when it is
 	// disabled, access.ErrLastSiteAdministrator when it disables the last
-	// site administrator (see Store), and ErrLastBreakGlass when it disables
+	// site administrator (see Store), and ErrNoWorkingBreakGlass when it disables
 	// the last enabled break-glass account. The store checks this in the
 	// transaction of the write, so two concurrent disables of the last two
 	// accounts disable one.

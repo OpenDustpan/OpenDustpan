@@ -58,12 +58,14 @@ var (
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
-	// ErrLastBreakGlass reports a disable or a delete of the last enabled
-	// break-glass account of the installation. An installation keeps one
-	// enabled break-glass account at least, as an emergency way in.
-	ErrLastBreakGlass = errors.New(
-		"cannot remove the last enabled break-glass account: keep a second enabled break-glass account first",
-	)
+	// ErrNoWorkingBreakGlass reports a change that leaves too few working
+	// break-glass accounts. An installation keeps its floors of break-glass
+	// accounts, as an emergency way in.
+	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
+	// ErrBreakGlassUnavailable reports that the store cannot count the
+	// working break-glass accounts. A caller that cannot count refuses the
+	// change (fail closed).
+	ErrBreakGlassUnavailable = errors.New("break-glass account count unavailable")
 	// ErrBreakGlassPassword reports a write that sets the break-glass flag on
 	// a person who has a local password. A break-glass account signs in with
 	// a passkey or a hardware key only, so the password goes first.

@@ -12,7 +12,9 @@ package server
 // Each change writes its audit entry in the transaction of the change (fail
 // closed): when the entry cannot be written, the change fails with 500 and
 // the store does not change. A refused change writes a failure entry after
-// the fact, best effort: a lost failure entry is logged and counted.
+// the fact, best effort: a lost failure entry is logged and counted. A
+// refusal that leaves too few working break-glass accounts writes one denied
+// entry before the answer instead.
 //
 // The list routes answer one page: the query parameters limit (1 to 1000;
 // 100 when the request names none, and 0 answers 400), cursor (the
@@ -62,6 +64,12 @@ var (
 // Both SQL adapters keep them, so only a custom store without the port
 // answers it.
 var errNoPrincipalStore = errors.New("the store of this server keeps no principals")
+
+// noWorkingBreakGlassMessage is the answer of a change that leaves too few
+// working break-glass accounts.
+const noWorkingBreakGlassMessage = "The change leaves too few working break-glass accounts. " +
+	"Add or enable a working break-glass account, then try again. " +
+	"See the break-glass accounts guide."
 
 // principalResponse is one principal on the wire. Times are UTC in RFC 3339
 // with nanoseconds, the wire form of the other installation routes. Source
@@ -413,53 +421,59 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); err == nil {
-			h.writePrincipalResult(w, r, res)
+		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none})
+		if err != nil {
+			h.writeError(r.Context(), w, err)
+
+			return
 		}
+
+		h.writePrincipalResult(w, r, res)
 	}
 }
 
 // servePrincipalChange adapts a change to a route handler. The Service
 // writes the success entry in the transaction of the change. A refused
 // change writes one failure entry here, best effort, with the missing
-// actions of a reach refusal.
+// actions of a reach refusal. A refusal that leaves too few working
+// break-glass accounts writes one denied entry in its own write before the
+// answer, and no failure entry.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		if err == nil {
+			h.writePrincipalResult(w, r, res)
 
-		if err != nil && res.object != "" && h.principals != nil {
+			return
+		}
+
+		if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+			h.appendBreakGlassRefusal(r, p, action, res.object)
+			h.writeError(r.Context(), w, err)
+
+			return
+		}
+
+		h.writeError(r.Context(), w, err)
+
+		if res.object != "" && h.principals != nil {
 			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
 			}, reachReason(err))
 		}
-
-		if err == nil {
-			h.writePrincipalResult(w, r, res)
-		}
 	}
 }
 
-// runPrincipalOp runs op and writes its error. It answers the result in both
-// cases, and the error of the operation.
+// runPrincipalOp runs op and answers its result and its error. It writes
+// nothing, so that the caller can write an audit entry before the answer.
 func (h *Handler) runPrincipalOp(
 	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
 ) (principalResult, error) {
-	ctx := r.Context()
-
 	if h.principals == nil {
-		h.writeError(ctx, w, errNoPrincipalStore)
-
 		return principalResult{body: nil, object: "", status: 0}, errNoPrincipalStore
 	}
 
-	res, err := op(w, r, h.principals, c.e, c.p)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return res, err
-	}
-
-	return res, nil
+	return op(w, r, h.principals, c.e, c.p)
 }
 
 // writePrincipalResult writes the status and the body of a success. A body
@@ -1031,8 +1045,8 @@ func classifyPrincipal(err error) (failure, bool) {
 		return f, true
 	}
 
-	if errors.Is(err, principal.ErrLastBreakGlass) {
-		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalLastBreakGlass), true
+	if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+		return failCoded(http.StatusConflict, noWorkingBreakGlassMessage, errcode.PrincipalNoWorkingBreakGlass), true
 	}
 
 	return classifyPrincipalState(err)

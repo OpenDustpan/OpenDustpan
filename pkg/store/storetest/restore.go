@@ -3,18 +3,23 @@ package storetest
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -69,6 +74,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "the running restore records its end after the swap", test: testRestoreRecordsEndAfterSwap},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
+		{name: "apply refuses too few working break-glass accounts", test: testRestoreRefusesTooFewWorkingBreakGlass},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
 		{name: "apply keeps the installation state of the target", test: testRestoreKeepsInstallationState},
 		{name: "apply keeps the installation kind of the target", test: testRestoreKeepsInstallationKind},
@@ -720,6 +726,404 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 
 	if err := pdst.ApplyStaging(ctx); !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("apply after the swap: err = %v, want ErrCorrupt", err)
+	}
+}
+
+// breakGlassRestoreStore is every port that the working break-glass restore
+// case seeds and reads.
+type breakGlassRestoreStore interface {
+	PortableRestoreStore
+	backup.AccessKeepingApplier
+	principal.WorkingBreakGlassCounter
+	principal.Store
+	mfa.PasskeyStore
+	access.GrantStore
+}
+
+// testRestoreRefusesTooFewWorkingBreakGlass proves that an apply refuses a
+// restore that lowers the working break-glass count below the floor, and
+// changes nothing, while a restore that does not lower the count is allowed.
+// A restore that keeps the access tables keeps the live working accounts, so
+// a staged account does not lower the count.
+func testRestoreRefusesTooFewWorkingBreakGlass(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	tests := []breakGlassRestoreCase{
+		replaceRestoreCase("replace refuses two live working accounts that become one", 2, 1, false, true),
+		replaceRestoreCase("replace refuses a replay that leaves one of two", 2, 2, true, true),
+		replaceRestoreCase("replace refuses one live working account that becomes none", 1, 0, false, true),
+		replaceRestoreCase("replace allows two live working accounts that stay two", 2, 2, false, false),
+		replaceRestoreCase("replace allows one live working account that stays one", 1, 1, false, false),
+		replaceRestoreCase("replace allows one live working account that becomes two", 1, 2, false, false),
+		keepAccessRestoreCase("keep access allows two live working accounts and one staged", 2, 1, false),
+		keepAccessRestoreCase("keep access allows a replay that cannot lower the kept live data", 2, 2, true),
+		keepAccessRestoreCase("keep access allows two live working accounts that stay two", 2, 2, false),
+		keepAccessRestoreCase("keep access allows one live working account that stays one", 1, 0, false),
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runBreakGlassRestoreCase(t, newStore, tc)
+		})
+	}
+}
+
+// breakGlassRestoreCase is one row of the working break-glass restore case.
+type breakGlassRestoreCase struct {
+	name       string
+	live       int
+	staged     int
+	revoke     bool
+	keepAccess bool
+	refuse     bool
+}
+
+// replaceRestoreCase returns a row of a restore that replaces the access
+// tables.
+func replaceRestoreCase(name string, live, staged int, revoke, refuse bool) breakGlassRestoreCase {
+	return breakGlassRestoreCase{
+		name: name, live: live, staged: staged, revoke: revoke, keepAccess: false, refuse: refuse,
+	}
+}
+
+// keepAccessRestoreCase returns a row of a restore that keeps the access
+// tables.
+func keepAccessRestoreCase(name string, live, staged int, revoke bool) breakGlassRestoreCase {
+	return breakGlassRestoreCase{
+		name: name, live: live, staged: staged, revoke: revoke, keepAccess: true, refuse: false,
+	}
+}
+
+// runBreakGlassRestoreCase runs one row of the working break-glass restore
+// case: it seeds the live and the staged data, stages the backup, applies it,
+// and checks the refusal or the count that is live after the swap.
+func runBreakGlassRestoreCase(t *testing.T, newStore RestoreFactory, tc breakGlassRestoreCase) {
+	t.Helper()
+
+	if tc.keepAccess {
+		runBreakGlassKeepAccessCase(t, newStore, tc)
+
+		return
+	}
+
+	ctx := t.Context()
+	src, dst := newStore(t), newStore(t)
+
+	srcStore, srcOK := src.(breakGlassRestoreStore)
+	dstStore, dstOK := dst.(breakGlassRestoreStore)
+
+	if !srcOK || !dstOK {
+		t.Skip("the store keeps no portable principals, passkeys or grants")
+	}
+
+	liveIDs, revoked := seedBreakGlassReplace(t, srcStore, dstStore, tc)
+
+	checkLiveBreakGlassCount(t, dstStore, tc.live)
+
+	live := breakGlassLiveStateOf(t, dstStore, liveIDs)
+
+	applyErr := dstStore.ApplyStaging(ctx)
+
+	if tc.refuse {
+		if !errors.Is(applyErr, principal.ErrNoWorkingBreakGlass) {
+			t.Fatalf("apply = %v, want ErrNoWorkingBreakGlass", applyErr)
+		}
+
+		assertBreakGlassLiveState(t, dstStore, liveIDs, live)
+
+		return
+	}
+
+	if applyErr != nil {
+		t.Fatalf("apply: %v", applyErr)
+	}
+
+	checkLiveBreakGlassCount(t, dstStore, tc.staged)
+
+	if revoked != "" {
+		if _, err := dstStore.GetPrincipal(ctx, revoked); err != nil {
+			t.Fatalf("get the revoked break-glass account after the apply: %v", err)
+		}
+	}
+}
+
+// seedBreakGlassReplace seeds the staged data in src and the live data in
+// dst, stages the backup into dst, and returns the live account IDs and the
+// account that a revocation disables.
+func seedBreakGlassReplace(
+	t *testing.T, src, dst breakGlassRestoreStore, tc breakGlassRestoreCase,
+) ([]string, string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	seedBackupStore(t, src)
+	seedBackupStore(t, dst)
+
+	stagedIDs := breakGlassIDs(tc.staged)
+
+	for _, id := range stagedIDs {
+		seedWorkingBreakGlass(t, src, id)
+	}
+
+	liveIDs := breakGlassLiveIDs(tc, stagedIDs)
+
+	for _, id := range liveIDs {
+		seedWorkingBreakGlass(t, dst, id)
+	}
+
+	sink, sum, files := exportPortable(t, src)
+
+	if _, err := dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, dst)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	revoked := ""
+	if tc.revoke {
+		revoked = stagedIDs[tc.live-1]
+		disableBreakGlassForRestore(t, dst, revoked)
+	}
+
+	return liveIDs, revoked
+}
+
+// runBreakGlassKeepAccessCase runs one row that keeps the access tables. The
+// backup comes from the same store, because the kept access rows name its
+// namespace IDs. The live working accounts are the seeded ones plus the ones
+// that the case adds after the export.
+func runBreakGlassKeepAccessCase(t *testing.T, newStore RestoreFactory, tc breakGlassRestoreCase) {
+	t.Helper()
+
+	ctx := t.Context()
+	s := newStore(t)
+
+	store, ok := s.(breakGlassRestoreStore)
+	if !ok {
+		t.Skip("the store keeps no portable principals, passkeys or grants")
+	}
+
+	seedBackupStore(t, store)
+
+	stagedIDs := breakGlassIDs(tc.staged)
+	liveIDs := breakGlassLiveIDs(tc, stagedIDs)
+
+	for _, id := range stagedIDs {
+		seedWorkingBreakGlass(t, store, id)
+	}
+
+	sink, sum, files := exportPortable(t, store)
+
+	for _, id := range liveIDs {
+		if slices.Contains(stagedIDs, id) {
+			continue
+		}
+
+		seedWorkingBreakGlass(t, store, id)
+	}
+
+	revoked := ""
+	if tc.revoke {
+		revoked = stagedIDs[tc.live-1]
+		disableBreakGlassForRestore(t, store, revoked)
+	}
+
+	checkLiveBreakGlassCount(t, store, tc.live)
+
+	live := breakGlassLiveStateOf(t, store, liveIDs)
+
+	if _, err := store.StagePortable(ctx, sink.read, sum, files, StageAs(t, store)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if _, applyErr := store.ApplyStagingKeepingAccess(ctx); applyErr != nil {
+		t.Fatalf("apply keeping the access tables: %v", applyErr)
+	}
+
+	checkLiveBreakGlassCount(t, store, tc.live)
+
+	assertBreakGlassLiveState(t, store, liveIDs, live)
+
+	if revoked != "" {
+		if _, err := store.GetPrincipal(ctx, revoked); err != nil {
+			t.Fatalf("get the revoked break-glass account after the apply: %v", err)
+		}
+	}
+}
+
+// checkLiveBreakGlassCount counts the live working break-glass accounts and
+// returns the count after it proves the want.
+func checkLiveBreakGlassCount(t *testing.T, s breakGlassRestoreStore, want int) int64 {
+	t.Helper()
+
+	got, err := s.CountWorkingBreakGlass(t.Context(), now())
+	if err != nil {
+		t.Fatalf("count the live working break-glass accounts: %v", err)
+	}
+
+	if got != int64(want) {
+		t.Fatalf("live working break-glass accounts = %d, want %d", got, want)
+	}
+
+	return got
+}
+
+// breakGlassIDs returns the IDs of the first n break-glass accounts.
+func breakGlassIDs(n int) []string {
+	out := make([]string, 0, n)
+
+	for i := 1; i <= n; i++ {
+		out = append(out, fmt.Sprintf("prn-bg-%d", i))
+	}
+
+	return out
+}
+
+// breakGlassLiveIDs returns the IDs of the live break-glass accounts of tc.
+// A revocation case seeds one more account than the live count and disables
+// it, so that the journal holds a revocation that lowers the restored data.
+func breakGlassLiveIDs(tc breakGlassRestoreCase, stagedIDs []string) []string {
+	want := tc.live
+	if tc.revoke {
+		want++
+	}
+
+	out := make([]string, 0, want)
+
+	for i := 1; i <= want; i++ {
+		if i <= len(stagedIDs) {
+			out = append(out, stagedIDs[i-1])
+
+			continue
+		}
+
+		out = append(out, fmt.Sprintf("prn-bg-live-%d", i))
+	}
+
+	return out
+}
+
+// disableBreakGlassForRestore enters maintenance mode and disables the
+// break-glass account id, so the journal holds the revocation.
+func disableBreakGlassForRestore(t *testing.T, s breakGlassRestoreStore, id string) {
+	t.Helper()
+
+	if err := s.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	if err := s.DisablePrincipal(t.Context(), id, ServerChange(now(), "principal:"+id)); err != nil {
+		t.Fatalf("disable staged break-glass account: %v", err)
+	}
+}
+
+// seedWorkingBreakGlass stores a working break-glass account.
+func seedWorkingBreakGlass(t *testing.T, s breakGlassRestoreStore, id string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	p := principal.Principal{
+		CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{},
+		ID: id, Subject: id + "@example.com", DisplayName: id, Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	if err := s.CreatePrincipal(ctx, p, ServerChange(now(), "principal:"+id)); err != nil {
+		t.Fatalf("create break-glass principal %q: %v", id, err)
+	}
+
+	passkey := mfa.Passkey{
+		CreatedAt: now(), LastUsedAt: time.Time{}, SuspendedAt: time.Time{},
+		ID: "pky-" + id, PersonID: id, Name: "key-" + id,
+		CredentialID: []byte("credential-" + id), PublicKey: []byte("public-key-" + id),
+		Transports: nil, AAGUID: [16]byte{}, SignCount: 0, BackupEligible: false,
+	}
+
+	if err := s.AddPasskey(ctx, passkey, ServerChange(now(), "passkey:pky-"+id)); err != nil {
+		t.Fatalf("add passkey of %q: %v", id, err)
+	}
+
+	grant := access.Grant{
+		CreatedAt: now(), Condition: nil, Object: identity.ServerObject(), ID: "grt-" + id,
+		Role: access.RoleSiteAdministrator, CreatedBy: "admin",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},
+	}
+
+	err := s.CreateGrant(
+		ctx,
+		grant,
+		namespace.Fence{Namespace: "", FailoverVersion: 0},
+		ServerChange(now(), "grant:grt-"+id),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create grant of %q: %v", id, err)
+	}
+}
+
+// breakGlassLiveState holds the live rows that a refused restore must keep.
+type breakGlassLiveState struct {
+	principals map[string]principal.Principal
+	passkeys   map[string][]mfa.Passkey
+	grants     map[string]access.Grant
+}
+
+// breakGlassLiveStateOf reads the live rows of ids.
+func breakGlassLiveStateOf(t *testing.T, s breakGlassRestoreStore, ids []string) breakGlassLiveState {
+	t.Helper()
+
+	ctx := t.Context()
+
+	out := breakGlassLiveState{
+		principals: make(map[string]principal.Principal, len(ids)),
+		passkeys:   make(map[string][]mfa.Passkey, len(ids)),
+		grants:     make(map[string]access.Grant, len(ids)),
+	}
+
+	for _, id := range ids {
+		p, err := s.GetPrincipal(ctx, id)
+		if err != nil {
+			t.Fatalf("get principal %q: %v", id, err)
+		}
+
+		out.principals[id] = p
+
+		keys, err := s.Passkeys(ctx, id)
+		if err != nil {
+			t.Fatalf("get passkeys of %q: %v", id, err)
+		}
+
+		out.passkeys[id] = keys
+
+		grant, err := s.GetGrant(ctx, "grt-"+id)
+		if err != nil {
+			t.Fatalf("get grant of %q: %v", id, err)
+		}
+
+		out.grants[id] = grant
+	}
+
+	return out
+}
+
+// assertBreakGlassLiveState fails unless the live rows of ids are what want
+// holds.
+func assertBreakGlassLiveState(t *testing.T, s breakGlassRestoreStore, ids []string, want breakGlassLiveState) {
+	t.Helper()
+
+	got := breakGlassLiveStateOf(t, s, ids)
+
+	if !reflect.DeepEqual(got.principals, want.principals) {
+		t.Fatalf("live principals after the refused apply = %+v, want %+v", got.principals, want.principals)
+	}
+
+	if !reflect.DeepEqual(got.passkeys, want.passkeys) {
+		t.Fatalf("live passkeys after the refused apply = %+v, want %+v", got.passkeys, want.passkeys)
+	}
+
+	if !reflect.DeepEqual(got.grants, want.grants) {
+		t.Fatalf("live grants after the refused apply = %+v, want %+v", got.grants, want.grants)
 	}
 }
 

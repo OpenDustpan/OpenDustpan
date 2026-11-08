@@ -32,12 +32,16 @@ that a grant seems to allow.
 ## Break-glass accounts
 
 - The server refuses to disable or delete the last enabled break-glass account
-  with 409 and the code `principal.last-break-glass`. The request changes
-  nothing. The server writes one failure entry in the audit log for the
-  refusal, best effort
+  with 409 and the code `principal.no-working-break-glass`. The request
+  changes nothing. Before the answer, the server writes one audit entry with
+  the outcome `denied`. When the server cannot write this entry, it still
+  answers 409 and logs the failure
   ([Keep a break-glass account](../guides/break-glass-accounts.md#the-rule)).
 - A restore does not replay a disable that would leave no enabled break-glass
   account. The account stays as the restored data holds it, and the server
   writes an audit entry with the outcome `denied` and the reason
-  `principal.last-break-glass`
+  `principal.no-working-break-glass`
   ([Revocations in maintenance mode](../guides/backup-restore-upgrade.md#revocations-in-maintenance-mode)).
+- A restore stops with the code `principal.no-working-break-glass` when it
+  lowers the count of working break-glass accounts and leaves fewer than two
+  ([Other paths](../guides/break-glass-accounts.md#other-paths)).

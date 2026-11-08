@@ -203,7 +203,7 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 		s.swapHook(ctx)
 	}
 
-	if err := s.swapIn(ctx, tx, live, plan, dropped); err != nil {
+	if err := s.swapInWithBreakGlassFloor(ctx, tx, live, plan, dropped); err != nil {
 		return err
 	}
 
@@ -212,6 +212,37 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 	}
 
 	return nil
+}
+
+// swapInWithBreakGlassFloor swaps plan.staging in for live, and refuses a
+// swap that lowers the working break-glass count below the floor. It counts
+// the live data before the swap and the data that is live after it, in the
+// same transaction.
+func (s *Store) swapInWithBreakGlassFloor(
+	ctx context.Context, tx pgx.Tx, live string, plan swapPlan, dropped *int64,
+) error {
+	nowMs, nowErr := storeNow(ctx, s.queries.WithTx(tx))
+	if nowErr != nil {
+		return nowErr
+	}
+
+	at := codec.FromMillis(nowMs)
+
+	before, beforeErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	if beforeErr != nil {
+		return beforeErr
+	}
+
+	if err := s.swapIn(ctx, tx, live, plan, dropped); err != nil {
+		return err
+	}
+
+	after, afterErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	if afterErr != nil {
+		return afterErr
+	}
+
+	return checkWorkingBreakGlassFloor(before, after)
 }
 
 // swapIn swaps plan.staging in for live in tx, after the swap lock and the

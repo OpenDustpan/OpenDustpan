@@ -2193,6 +2193,58 @@ func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace stri
 	return count, err
 }
 
+const countWorkingBreakGlassPrincipals = `-- name: CountWorkingBreakGlassPrincipals :one
+SELECT COUNT(*) FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.namespace = ''
+  AND p.deleted_at_ms IS NULL
+  AND p.disabled_at_ms IS NULL
+  AND p.source = 'local'
+  AND p.created_at_ms <= $1::bigint
+  AND EXISTS (
+    SELECT 1 FROM passkeys pk
+    WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
+      AND pk.created_at_ms <= $1::bigint
+  )
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.object_kind = 'installation'
+      AND g.role IN ('site-administrator', 'account-administrator')
+      AND g.revoked_at_ms IS NULL
+      AND g.condition IS NULL
+      AND g.created_at_ms <= $1::bigint
+      AND (
+        (g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id
+            AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL
+            AND m.state = 'active'
+            AND pg.deleted_at_ms IS NULL
+            AND m.added_at_ms <= $1::bigint
+            AND pg.created_at_ms <= $1::bigint
+        ))
+      )
+  )
+`
+
+// The working break-glass accounts of the installation: an enabled local
+// person of the installation with a passkey that is not suspended, and a
+// current grant without a condition of an administration role on the
+// installation, directly or through an active membership of a group that
+// exists. An installation-level IP allowlist must join this count when one
+// exists; the current allowlists are per namespace and do not apply to
+// installation sign-in.
+func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, atMs int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, atMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countWorkspacePage = `-- name: CountWorkspacePage :one
 SELECT COUNT(*)
 FROM workspaces AS w

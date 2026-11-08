@@ -65,7 +65,7 @@ func passkeyCases() []passkeyCase {
 		{name: "a remove of the last passkey of a user with a password deletes it", test: testRemoveLastWithPassword},
 		{
 			name: "a remove of the last passkey of a break-glass person fails with ErrLastCredential",
-			test: testRemoveLastBreakGlass,
+			test: testRemoveBreakGlassPasskey,
 		},
 		{
 			name: "a remove of the last live passkey of a user with no password fails with ErrLastCredential when " +
@@ -856,7 +856,7 @@ func testRemoveLastWithPassword(t *testing.T, s PasskeyStore) {
 	}
 }
 
-func testRemoveLastBreakGlass(t *testing.T, s PasskeyStore) {
+func testRemoveBreakGlassPasskey(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
 	bg := principalOf("prn-bg", "break-glass-1", principal.KindPerson)

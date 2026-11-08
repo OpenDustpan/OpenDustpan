@@ -67,10 +67,10 @@ func countEnabled(t *testing.T, s principal.Store, ids ...string) int {
 	return n
 }
 
-// testLastBreakGlassRefused proves that a disable and a delete of the last
+// testNoWorkingBreakGlassRefused proves that a disable and a delete of the last
 // enabled break-glass account are refused and change nothing, and that the
 // same writes work while a second enabled one remains.
-func testLastBreakGlassRefused(t *testing.T, s principal.Store) {
+func testNoWorkingBreakGlassRefused(t *testing.T, s principal.Store) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -83,9 +83,9 @@ func testLastBreakGlassRefused(t *testing.T, s principal.Store) {
 	}
 
 	wantErr(t, "disable of the last break-glass account", s.DisablePrincipal(ctx, "prn-2", entry()),
-		principal.ErrLastBreakGlass)
+		principal.ErrNoWorkingBreakGlass)
 	wantErr(t, "delete of the last break-glass account", s.DeletePrincipal(ctx, "prn-2", entry()),
-		principal.ErrLastBreakGlass)
+		principal.ErrNoWorkingBreakGlass)
 
 	// Each refused write left the account as it was.
 	wantEnabled(t, s, "prn-2")
@@ -101,7 +101,7 @@ func testLastBreakGlassRefused(t *testing.T, s principal.Store) {
 	}
 
 	wantErr(t, "disable of the one break-glass account that is left", s.DisablePrincipal(ctx, "prn-1", entry()),
-		principal.ErrLastBreakGlass)
+		principal.ErrNoWorkingBreakGlass)
 }
 
 // testBreakGlassDisabledOrEndedDoNotCount proves that only an enabled
@@ -125,9 +125,9 @@ func testBreakGlassDisabledOrEndedDoNotCount(t *testing.T, s principal.Store) {
 	}
 
 	wantErr(t, "disable with a disabled and an ended account left", s.DisablePrincipal(ctx, "prn-1", entry()),
-		principal.ErrLastBreakGlass)
+		principal.ErrNoWorkingBreakGlass)
 	wantErr(t, "delete with a disabled and an ended account left", s.DeletePrincipal(ctx, "prn-1", entry()),
-		principal.ErrLastBreakGlass)
+		principal.ErrNoWorkingBreakGlass)
 
 	// The delete of a disabled account takes no enabled one.
 	if err := s.DeletePrincipal(ctx, "prn-2", entry()); err != nil {
@@ -259,7 +259,7 @@ func testBreakGlassParallelDelete(t *testing.T, s principal.Store) {
 }
 
 // assertOneRefused fails the test unless exactly one of results is
-// principal.ErrLastBreakGlass and the others are nil.
+// principal.ErrNoWorkingBreakGlass and the others are nil.
 func assertOneRefused(t *testing.T, what string, results []error) {
 	t.Helper()
 
@@ -268,10 +268,10 @@ func assertOneRefused(t *testing.T, what string, results []error) {
 	for _, err := range results {
 		switch {
 		case err == nil:
-		case errors.Is(err, principal.ErrLastBreakGlass):
+		case errors.Is(err, principal.ErrNoWorkingBreakGlass):
 			refused++
 		default:
-			t.Fatalf("%s = %v, want nil or ErrLastBreakGlass", what, err)
+			t.Fatalf("%s = %v, want nil or ErrNoWorkingBreakGlass", what, err)
 		}
 	}
 

@@ -560,7 +560,7 @@ func applyReplayPlan(ctx context.Context, tx pgx.Tx, r maintenance.Revocation, p
 // keptBreakGlassEntry returns the entry of a replayed disable that changed no
 // row. When the target is an enabled break-glass account of the restored data,
 // the conditional update kept it as the last one: the entry has the outcome
-// denied and the reason principal.last-break-glass. Otherwise the target was
+// denied and the reason principal.no-working-break-glass. Otherwise the target was
 // disabled, ended or not in the restored data, and kept is false.
 func keptBreakGlassEntry(
 	ctx context.Context, tx pgx.Tx, live string, r maintenance.Revocation,
@@ -581,7 +581,7 @@ func keptBreakGlassEntry(
 		return none, false, nil
 	}
 
-	entry := r.KeptEntry(maintenance.ReasonLastBreakGlass)
+	entry := r.KeptEntry(maintenance.ReasonNoWorkingBreakGlass)
 	if err = entry.Validate(); err != nil {
 		return none, false, fmt.Errorf("replay revocation %d: %w", r.ID, err)
 	}
