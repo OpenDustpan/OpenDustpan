@@ -47,6 +47,13 @@ SELECT ip_allowlist
 FROM namespaces
 WHERE name = $1;
 
+-- name: NamespacesWithList :many
+-- Lists the namespaces that have an IP allowlist.
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name;
+
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
 UPDATE namespaces

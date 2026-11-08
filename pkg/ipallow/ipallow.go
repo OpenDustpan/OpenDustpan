@@ -26,6 +26,10 @@ type Store interface {
 	// closed): the change and the entry commit together or not at all. It
 	// returns namespace.ErrNotFound for an unknown namespace.
 	SetNamespaceList(ctx context.Context, ns namespace.Name, l List, fence namespace.Fence, e audit.Entry) error
+	// NamespacesWithList returns the names of the namespaces that have a
+	// non-zero list, in name order. It returns an empty slice when no
+	// namespace has a list.
+	NamespacesWithList(ctx context.Context) ([]namespace.Name, error)
 }
 
 // Config holds the dependencies of a Service.

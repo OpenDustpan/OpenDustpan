@@ -35,6 +35,22 @@ func (s *Store) NamespaceList(ctx context.Context, ns namespace.Name) (ipallow.L
 	return l, nil
 }
 
+// NamespacesWithList implements ipallow.Store. It returns the names of the
+// namespaces with a list, in name order.
+func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
+	names, err := s.queries.NamespacesWithList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select namespaces with an IP allowlist: %w", err)
+	}
+
+	out := make([]namespace.Name, 0, len(names))
+	for _, name := range names {
+		out = append(out, namespace.Name(name))
+	}
+
+	return out, nil
+}
+
 // SetNamespaceList implements ipallow.Store. It replaces the allowlist column
 // of the namespace and appends the audit entry e to the chain of the
 // namespace in one fenced transaction (ADR 60, fail closed).
