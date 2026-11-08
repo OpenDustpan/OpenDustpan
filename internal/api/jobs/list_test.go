@@ -168,6 +168,44 @@ func unitsOf(ids ...string) fakeUnits {
 	return out
 }
 
+// unitsIn returns the entries of unitsOf with the namespace of every entry
+// set to ns.
+func unitsIn(ns namespace.Name, ids ...string) fakeUnits {
+	out := unitsOf(ids...)
+
+	for id := range out {
+		e := out[id]
+		e.Namespace = ns
+		out[id] = e
+	}
+
+	return out
+}
+
+// unitsWithInvalidID returns the entries of unitsOf with a leading "-" on
+// each unit ID, as a damaged row carries the unit ID.
+func unitsWithInvalidID(ids ...string) fakeUnits {
+	valid := unitsOf(ids...)
+	out := fakeUnits{}
+
+	for _, id := range ids {
+		e := valid[id]
+		e.UnitID = "-" + id
+		out[e.UnitID] = e
+	}
+
+	return out
+}
+
+// failUnits is the inventory of fakeUnits, with a GetUnit that answers the
+// entry and then fails the read.
+type failUnits struct{ fakeUnits }
+
+// GetUnit implements inventory.Reader.
+func (f failUnits) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
+	return f.fakeUnits[unitID], errUnexpected
+}
+
 // unitFailAuthorizer fails the job:read check on the unit named by unit with
 // an error that is no refusal, so the check fails closed.
 type unitFailAuthorizer struct {
@@ -337,26 +375,25 @@ func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
 		{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-b", Reason: "the body is not JSON"},
 	}
 
-	read := func(job.Filter) job.Page {
-		return job.Page{Jobs: nil, Damaged: slices.Clone(rows), After: ""}
-	}
-
 	tests := []struct {
 		name  string
 		authz identity.Authorizer
 		units coreinventory.Reader
+		rows  []job.DamagedRow
 		want  int
 	}{
 		{
 			"a caller that may list unit A only",
 			newAuthorizer(readsUnits("unt-a")...),
 			unitsOf("unt-a", "unt-b"),
+			nil,
 			1,
 		},
 		{
 			"a caller that may list both units",
 			newAuthorizer(readsUnits("unt-a", "unt-b")...),
 			unitsOf("unt-a", "unt-b"),
+			nil,
 			2,
 		},
 		{
@@ -366,13 +403,39 @@ func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
 				unit:                "opentofu:acme/net-unt-b",
 			},
 			unitsOf("unt-a", "unt-b"),
+			nil,
 			1,
 		},
 		{
 			"a unit that the inventory does not hold",
 			newAuthorizer(readsUnits("unt-a", "unt-b")...),
 			unitsOf("unt-a"),
+			nil,
 			1,
+		},
+		{
+			"a unit of another namespace",
+			newAuthorizer(readsUnits("unt-a", "unt-b")...),
+			unitsIn("other", "unt-a", "unt-b"),
+			nil,
+			0,
+		},
+		{
+			"an invalid unit ID",
+			newAuthorizer(readsUnits("unt-a", "unt-b")...),
+			unitsWithInvalidID("unt-a", "unt-b"),
+			[]job.DamagedRow{
+				{ID: "job-aaaaaaaaaaaaaaaaaaaa", UnitID: "-unt-a", Reason: "the body is not JSON"},
+				{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "-unt-b", Reason: "the body is not JSON"},
+			},
+			0,
+		},
+		{
+			"an inventory that fails",
+			newAuthorizer(readsUnits("unt-a", "unt-b")...),
+			failUnits{fakeUnits: unitsOf("unt-a", "unt-b")},
+			nil,
+			0,
 		},
 	}
 
@@ -380,8 +443,15 @@ func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			damaged := tc.rows
+			if damaged == nil {
+				damaged = rows
+			}
+
 			jobs := newFakeJobs()
-			jobs.listed = read
+			jobs.listed = func(job.Filter) job.Page {
+				return job.Page{Jobs: nil, Damaged: slices.Clone(damaged), After: ""}
+			}
 
 			h := newWorkerHandler(t, tc.authz, handlerDeps{
 				jobs: jobs, units: tc.units, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: nil,
