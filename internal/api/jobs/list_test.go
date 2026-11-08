@@ -20,6 +20,7 @@ type listedID struct {
 type listAnswer struct {
 	Jobs          []listedID `json:"jobs"`
 	NextPageToken string     `json:"nextPageToken"`
+	Damaged       int        `json:"damaged"`
 	ErrorCode     string     `json:"errorCode"`
 }
 
@@ -42,27 +43,53 @@ func listHandler(t *testing.T, holds []string, rows ...job.Job) testHandler {
 	t.Helper()
 
 	jobs := newFakeJobs()
-	jobs.listed = func(f job.Filter) []job.Job {
-		out := []job.Job{}
-		skip := f.After != ""
+	jobs.listed = func(f job.Filter) job.Page {
+		var out job.Page
 
-		for i := range rows {
-			if skip {
-				skip = rows[i].ID != f.After
-
+		for i := afterIndex(rows, f.After); i < len(rows); i++ {
+			if !selected(&rows[i], f) {
 				continue
 			}
 
-			if (f.UnitID == "" || rows[i].Spec.Unit.UnitID() == f.UnitID) &&
-				(len(f.States) == 0 || slices.Contains(f.States, rows[i].State)) {
-				out = append(out, rows[i])
+			if f.Limit > 0 && len(out.Jobs) == f.Limit {
+				out.After = out.Jobs[len(out.Jobs)-1].ID
+
+				break
 			}
+
+			out.Jobs = append(out.Jobs, rows[i])
 		}
 
 		return out
 	}
 
 	return newHandler(t, newAuthorizer(holds...), jobs)
+}
+
+// afterIndex returns the index of the first row after the row with the ID
+// after, and 0 when after is empty or names no row.
+func afterIndex(rows []job.Job, after job.ID) int {
+	if after == "" {
+		return 0
+	}
+
+	for i := range rows {
+		if rows[i].ID == after {
+			return i + 1
+		}
+	}
+
+	return 0
+}
+
+// selected reports whether the row matches the unit and the states of the
+// filter.
+func selected(row *job.Job, f job.Filter) bool {
+	if f.UnitID != "" && row.Spec.Unit.UnitID() != f.UnitID {
+		return false
+	}
+
+	return len(f.States) == 0 || slices.Contains(f.States, row.State)
 }
 
 func getList(t *testing.T, h http.Handler, query string) (int, listAnswer) {
@@ -151,10 +178,10 @@ func TestListJobsStatusFilterReachesTheStore(t *testing.T) {
 	var seen job.Filter
 
 	jobs := newFakeJobs()
-	jobs.listed = func(f job.Filter) []job.Job {
+	jobs.listed = func(f job.Filter) job.Page {
 		seen = f
 
-		return nil
+		return job.Page{Jobs: nil, Damaged: nil, After: ""}
 	}
 
 	h := newHandler(t, newAuthorizer(readsNamespace()...), jobs)
@@ -207,6 +234,34 @@ func TestListJobsPages(t *testing.T) {
 			t.Errorf("token of another query = %d %q", code, got.ErrorCode)
 		}
 	})
+}
+
+// TestListJobsCountsDamagedRows proves that the list answers the jobs that
+// read and the number of rows that did not decode, without the reason of a
+// row.
+func TestListJobsCountsDamagedRows(t *testing.T) {
+	t.Parallel()
+
+	good := listedJob(t, "acme", "job-aaaaaaaaaaaaaaaaaaaa", "unt-a")
+
+	jobs := newFakeJobs()
+	jobs.listed = func(job.Filter) job.Page {
+		return job.Page{
+			Jobs: []job.Job{good},
+			Damaged: []job.DamagedRow{
+				{ID: "job-bbbbbbbbbbbbbbbbbbbb", Reason: "the body is not JSON"},
+				{ID: "job-cccccccccccccccccccc", Reason: "the body names an unknown source"},
+			},
+			After: "",
+		}
+	}
+
+	h := newHandler(t, newAuthorizer(readsUnits("unt-a")...), jobs)
+
+	code, got := getList(t, h, "")
+	if code != http.StatusOK || !slices.Equal(ids(got), []string{string(good.ID)}) || got.Damaged != 2 {
+		t.Fatalf("page = %d %v with %d damaged rows, want the good job and 2", code, ids(got), got.Damaged)
+	}
 }
 
 func TestListJobsRefusesBadQuery(t *testing.T) {

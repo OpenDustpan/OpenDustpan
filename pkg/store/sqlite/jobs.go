@@ -34,7 +34,7 @@ type JobStore interface {
 //
 //nolint:ireturn // Store-agnostic wiring takes the ports.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s})
+	return jobstore.New(jobRunner{s: s}, s.logger)
 }
 
 // PutUnitStateVersion records version as the current state version of the unit

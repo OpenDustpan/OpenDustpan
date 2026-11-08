@@ -37,20 +37,16 @@ func pagedHandler(t *testing.T, rows []job.Job, cursors secret.Wrapper) testHand
 	t.Helper()
 
 	jobs := newFakeJobs()
-	jobs.listed = func(f job.Filter) []job.Job {
-		start := 0
-
-		if f.After != "" {
-			for i := range rows {
-				if rows[i].ID == f.After {
-					start = i + 1
-				}
-			}
-		}
-
+	jobs.listed = func(f job.Filter) job.Page {
+		start := afterIndex(rows, f.After)
 		end := min(start+f.Limit, len(rows))
 
-		return rows[start:end]
+		out := job.Page{Jobs: append([]job.Job(nil), rows[start:end]...), Damaged: nil, After: ""}
+		if end < len(rows) {
+			out.After = rows[end-1].ID
+		}
+
+		return out
 	}
 
 	return newWorkerHandler(t, newAuthorizer(readsUnits("unt-a")...), handlerDeps{
@@ -248,8 +244,11 @@ func TestListLeavesOutAJobWhenTheAuthorizerFails(t *testing.T) {
 	t.Parallel()
 
 	jobs := newFakeJobs()
-	jobs.listed = func(job.Filter) []job.Job {
-		return []job.Job{listedJob(t, "acme", "job-aaaaaaaaaaaaaaaaaaaa", "unt-a")}
+	jobs.listed = func(job.Filter) job.Page {
+		return job.Page{
+			Jobs: []job.Job{listedJob(t, "acme", "job-aaaaaaaaaaaaaaaaaaaa", "unt-a")}, Damaged: nil,
+			After: "",
+		}
 	}
 
 	h := newWorkerHandler(t, failingAuthorizer{newAuthorizer(readsUnits("unt-a")...)}, handlerDeps{

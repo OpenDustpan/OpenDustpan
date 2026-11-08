@@ -2,6 +2,7 @@ package jobstore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -255,7 +256,7 @@ func encodeSpec(s *job.Spec) specBody {
 func decodeSpec(b *specBody) (job.Spec, error) {
 	unit, err := decodeUnit(b.Unit)
 	if err != nil {
-		return job.Spec{}, err
+		return job.Spec{}, fmt.Errorf("%w: %w", errBodyUnit, err)
 	}
 
 	out := job.Spec{
@@ -456,7 +457,7 @@ func decodeStateVersion(b *stateVersionBody) (*job.StateVersion, error) {
 
 	unit, err := decodeUnit(b.Unit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errBodyUnit, err)
 	}
 
 	return &job.StateVersion{
@@ -510,10 +511,72 @@ func encodeBody(j *job.Job) (string, error) {
 	return string(raw), nil
 }
 
+// The kinds of damage of a stored job row. DamageReason returns their text as
+// the reason of a job.DamagedRow. The text never holds a value that the body
+// stored.
+var (
+	// errBodyJSON reports a body that is not JSON.
+	errBodyJSON = errors.New("the body is not JSON")
+	// errBodyValue reports a body that holds a value that this version does
+	// not know, for example a source kind, an agent mode or a verification
+	// result that another version of the server wrote.
+	errBodyValue = errors.New("the body holds a value that this version does not know")
+	// errBodyUnit reports a body that holds a unit reference that this
+	// version does not know.
+	errBodyUnit = errors.New("the body holds a unit reference that this version does not know")
+	// errBodyTrigger reports a body that holds a trigger reference that is
+	// not valid.
+	errBodyTrigger = errors.New("the body holds a trigger reference that is not valid")
+	// errRowUnit reports a body that names another namespace or another unit
+	// than its row.
+	errRowUnit = errors.New("the body names another namespace or unit than its row")
+)
+
+// DamageReason returns the kind of a decode error, for the reason of a
+// job.DamagedRow. It never returns a value that the body stored.
+func DamageReason(err error) string {
+	switch {
+	case errors.Is(err, errBodyJSON):
+		return errBodyJSON.Error()
+	case errors.Is(err, errBodyValue):
+		return errBodyValue.Error()
+	case errors.Is(err, errBodyUnit):
+		return errBodyUnit.Error()
+	case errors.Is(err, errBodyTrigger):
+		return errBodyTrigger.Error()
+	case errors.Is(err, errRowUnit):
+		return errRowUnit.Error()
+	default:
+		return "the body does not decode"
+	}
+}
+
+// checkBodyValues returns the damage of a body that holds a value that this
+// version does not know. A stored row is untrusted: a restore or another
+// version of the server may have written it. The error names the kind of the
+// value only, never the value itself, so that no stored value reaches a
+// reader of a damaged row.
+func checkBodyValues(b *jobBody) error {
+	switch {
+	case b.Source != "" && !job.SourceKind(b.Source).Valid():
+		return fmt.Errorf("%w: source", errBodyValue)
+	case !job.AgentMode(b.AgentMode).Valid():
+		return fmt.Errorf("%w: agent mode", errBodyValue)
+	case !job.Verification(b.Verification).Valid():
+		return fmt.Errorf("%w: verification", errBodyValue)
+	default:
+		return nil
+	}
+}
+
 // decodeBody fills the fields of j that the body holds.
 func decodeBody(body string, j *job.Job) error {
 	var b jobBody
 	if err := json.Unmarshal([]byte(body), &b); err != nil {
+		return fmt.Errorf("decode job %s: %w: %w", j.ID, errBodyJSON, err)
+	}
+
+	if err := checkBodyValues(&b); err != nil {
 		return fmt.Errorf("decode job %s: %w", j.ID, err)
 	}
 
@@ -545,7 +608,7 @@ func decodeBody(body string, j *job.Job) error {
 		// A stored row is untrusted: a restore or another version may have
 		// written it. The read handler trusts this reference to find a saver.
 		if err := ref.Validate(); err != nil {
-			return fmt.Errorf("decode job %s: trigger: %w", j.ID, err)
+			return fmt.Errorf("decode job %s: %w: trigger", j.ID, errBodyTrigger)
 		}
 
 		j.Trigger = ref

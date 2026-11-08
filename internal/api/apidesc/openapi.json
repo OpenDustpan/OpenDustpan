@@ -2869,6 +2869,10 @@
       },
       "ListJobsResponse": {
         "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
           "jobs": {
             "items": {
               "$ref": "#/components/schemas/Job"
@@ -2880,6 +2884,7 @@
           }
         },
         "required": [
+          "damaged",
           "jobs"
         ],
         "type": "object"

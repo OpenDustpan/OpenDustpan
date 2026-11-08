@@ -37,7 +37,7 @@ type JobStore interface {
 //
 //nolint:ireturn // The stores of jobs and freezes are two ports over one adapter.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s})
+	return jobstore.New(jobRunner{s: s}, s.logger)
 }
 
 // PutUnitStateVersion records version as the current state version of the unit

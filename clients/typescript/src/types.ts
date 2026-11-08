@@ -721,6 +721,7 @@ export interface ListGitHostLinksResponse {
 }
 
 export interface ListJobsResponse {
+  readonly damaged: number;
   readonly jobs: ReadonlyArray<Job>;
   readonly nextPageToken?: string;
 }

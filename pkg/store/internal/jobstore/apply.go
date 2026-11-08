@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -245,7 +246,7 @@ func (s *Store) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		var err error
 
-		closed, err = observeIn(ctx, tx, &v, fence.Namespace)
+		closed, err = observeIn(ctx, tx, &v, fence.Namespace, s.log)
 
 		return err
 	})
@@ -259,7 +260,9 @@ func (s *Store) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 // observeIn closes the jobs that the final state version v closes, and
 // records v as the last final version of its unit. It does nothing for a
 // version that is not final.
-func observeIn(ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Name) ([]job.Job, error) {
+func observeIn(
+	ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Name, log *slog.Logger,
+) ([]job.Job, error) {
 	if !v.Final {
 		return nil, nil
 	}
@@ -269,7 +272,7 @@ func observeIn(ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Nam
 		return nil, err
 	}
 
-	closed, err := closeAwaiting(ctx, tx, ns, rows, v)
+	closed, err := closeRun{tx: tx, ns: ns, log: log}.closeAwaiting(ctx, rows, v)
 	if err != nil {
 		return nil, err
 	}
@@ -281,12 +284,21 @@ func observeIn(ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Nam
 	return closed, err
 }
 
+// closeRun carries what the close of a state version reads with: the
+// transaction, the namespace of the version, and the logger that records a
+// damaged row.
+type closeRun struct {
+	tx  Tx
+	ns  namespace.Name
+	log *slog.Logger
+}
+
 // closeAwaiting closes each job of rows that v closes, and returns them. It
-// refuses a row of another namespace than ns.
-func closeAwaiting(
-	ctx context.Context, tx Tx, ns namespace.Name, rows []Row, v *job.StateVersion,
-) ([]job.Job, error) {
-	now, nowErr := tx.Now(ctx)
+// refuses a row of another namespace than the run, and it skips a row that
+// does not decode: a damaged job is never closed, and the log records it
+// once.
+func (c closeRun) closeAwaiting(ctx context.Context, rows []Row, v *job.StateVersion) ([]job.Job, error) {
+	now, nowErr := c.tx.Now(ctx)
 	if nowErr != nil {
 		return nil, nowErr
 	}
@@ -297,20 +309,30 @@ func closeAwaiting(
 		// Defense in depth: the query of Awaiting filters by the namespace too;
 		// this check stays so that a Tx that skips that filter cannot close the
 		// job of another namespace.
-		if rows[i].Namespace != ns {
+		if rows[i].Namespace != c.ns {
 			return nil, job.ErrNotFound
 		}
 
 		j, err := jobOf(&rows[i])
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, job.ErrDamaged) {
+				return nil, err
+			}
+
+			// A damaged row stays where it is: the close loop cannot read
+			// it, so it never closes it. A person reads the reason and
+			// cancels the job by its ID.
+			c.log.WarnContext(ctx, "close of a state version skipped a damaged job row",
+				slog.String("job", string(rows[i].ID)), slog.String("reason", DamageReason(err)))
+
+			continue
 		}
 
 		if !j.ClosedBy(*v) {
 			continue
 		}
 
-		if err := closeJob(ctx, tx, &j, *v); err != nil {
+		if err := closeJob(ctx, c.tx, &j, *v); err != nil {
 			return nil, err
 		}
 
@@ -318,7 +340,7 @@ func closeAwaiting(
 		j.Version++
 		j.UpdatedAt, j.StateChangedAt = now, now
 
-		if err := update(ctx, tx, &j, prev); err != nil {
+		if err := update(ctx, c.tx, &j, prev); err != nil {
 			return nil, err
 		}
 

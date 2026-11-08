@@ -333,6 +333,17 @@ const (
 	AgentModeDirect AgentMode = "direct"
 )
 
+// Valid reports whether m is one of the agent modes of this package, with the
+// empty mode of a job that no agent started.
+func (m AgentMode) Valid() bool {
+	switch m {
+	case "", AgentModeApproveFirst, AgentModeReviewRequest, AgentModeDirect:
+		return true
+	default:
+		return false
+	}
+}
+
 // DirectSwitches are the three settings that allow AgentModeDirect. Each
 // is off by default, and each is a separate opt-in: the installation
 // setting of the server, the setting of the namespace of the unit, and

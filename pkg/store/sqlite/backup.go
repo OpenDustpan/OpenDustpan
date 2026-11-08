@@ -1247,6 +1247,10 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
+	if err := checkStagedJobs(ctx, conn); err != nil {
+		return err
+	}
+
 	if err := checkStagedUnitSettings(ctx, conn); err != nil {
 		return err
 	}
