@@ -293,10 +293,49 @@ func TestFetchRejectsChecksumMismatch(t *testing.T) {
 }
 
 func TestFetchPinnedVersionFailsClosed(t *testing.T) {
-	t.Setenv("E2E_TOFU_VERSIONS", "")
+	tofu := e2e.OpenTofu()
+	pulumi := e2e.Pulumi()
 
-	tool := e2e.OpenTofu()
-	label := tool.Single()
+	cases := []struct {
+		name      string
+		tool      e2e.Tool
+		env       string
+		versions  string
+		label     string
+		checksums string
+	}{
+		{
+			name:      "opentofu default",
+			tool:      tofu,
+			env:       "E2E_TOFU_VERSIONS",
+			versions:  "",
+			label:     tofu.Single(),
+			checksums: "tofu_" + tofu.Single() + "_SHA256SUMS",
+		},
+		{
+			name:      "pulumi journal version",
+			tool:      pulumi,
+			env:       "E2E_PULUMI_VERSIONS",
+			versions:  "3.268.0",
+			label:     "3.268.0",
+			checksums: "pulumi-3.268.0-checksums.txt",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.versions)
+
+			checkPinnedFailsClosed(t, tc.tool, tc.label, tc.checksums)
+		})
+	}
+}
+
+// checkPinnedFailsClosed installs label, whose sum is pinned, against a fake
+// server whose archive has another sum. It checks that Install fails closed and
+// requests neither the checksum file nor the latest version.
+func checkPinnedFailsClosed(t *testing.T, tool e2e.Tool, label, checksumFile string) {
+	t.Helper()
 
 	name, err := tool.ArchiveName(label)
 	if err != nil {
@@ -313,7 +352,7 @@ func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 			t.Errorf("serve archive: %v", werr)
 		}
 	})
-	mux.HandleFunc("/tofu_"+label+"_SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/"+checksumFile, func(w http.ResponseWriter, _ *http.Request) {
 		checksums.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	})

@@ -77,6 +77,11 @@ func Pulumi() Tool {
 		checksums: func(version string) string { return "pulumi-" + version + "-checksums.txt" },
 		// sha256 sums copied from https://get.pulumi.com/releases/sdk/pulumi-<version>-checksums.txt.
 		pinned: map[string]string{
+			// The journal tests (make e2e-journal) run this version.
+			"pulumi-v3.268.0-darwin-arm64.tar.gz": "ef509a84f0ad8f4ed0ec04be957e6688f094eb9a1cdc676a4864103d66d8a4e9",
+			"pulumi-v3.268.0-darwin-x64.tar.gz":   "b0c4e37e9fd9573d3e09b65606124486ef2c2049db1237ca6037c4204c6a99a8",
+			"pulumi-v3.268.0-linux-arm64.tar.gz":  "47c1b9283b7997337b0a373d240f771a6aeb42ee5dd2e213c14604247c7ff15a",
+			"pulumi-v3.268.0-linux-x64.tar.gz":    "903cafeaa9f6327e4bf53a8b7b99ae660f26198acfa804a2f982bf5de3f1de0b",
 			"pulumi-v3.262.0-darwin-arm64.tar.gz": "a3c2ff50ef94962711649e234a28ed3803618cbb2f313505a88ca86c30da98e0",
 			"pulumi-v3.262.0-darwin-x64.tar.gz":   "7db45a6fb6f876e7181925861613b1aa2ae4eea7629f2fb495b221c67c0ec117",
 			"pulumi-v3.262.0-linux-arm64.tar.gz":  "224ffde7339807abca1ee8866372e37fcf23f27a1e31056326188f81823b69a4",
