@@ -211,12 +211,14 @@ func (l *listedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 
 // sweepSetup is the setup of one sweep case: the names that the rows give,
 // how far the clock of the database runs ahead of the clock of the test, how
-// far the clock of the instance runs ahead of the database, a wrapper of
-// the blob store, and the job store when a case needs its own.
+// far the clock of the instance runs ahead of the database, how far the
+// clock of the instance moves on each read, a wrapper of the blob store, and
+// the job store when a case needs its own.
 type sweepSetup struct {
 	names    job.ArtifactKeyStore
 	ahead    time.Duration
 	instance time.Duration
+	step     time.Duration
 	wrap     func(blob.Store) blob.Store
 	jobs     job.Store
 }
@@ -277,7 +279,7 @@ func sweepCase(t *testing.T, names job.ArtifactKeyStore, ahead time.Duration) (*
 ) {
 	t.Helper()
 
-	r := newSweepRig(t, sweepSetup{names: names, ahead: ahead, instance: 0, wrap: nil, jobs: nil})
+	r := newSweepRig(t, sweepSetup{names: names, ahead: ahead, instance: 0, step: 0, wrap: nil, jobs: nil})
 
 	return r.s, r.store, r.jobs
 }
@@ -304,6 +306,17 @@ func newSweepRig(t *testing.T, setup sweepSetup) *sweepRig {
 		}
 	}
 
+	// reads counts the reads of the instance clock, so a case with a step
+	// moves the clock between two reads: the elapsed time of a take then uses
+	// the whole window of the delete lease.
+	reads := 0
+	now := func() time.Time {
+		out := time.Now().Add(setup.ahead + setup.instance + time.Duration(reads)*setup.step)
+		reads++
+
+		return out
+	}
+
 	leases := blobguardtest.NewLeases(func() time.Time { return time.Now().Add(setup.ahead + setup.instance) })
 
 	r := &sweepRig{
@@ -320,7 +333,7 @@ func newSweepRig(t *testing.T, setup sweepSetup) *sweepRig {
 	r.s, err = job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: jobStore, Names: setup.names, Blobs: b, Namespaces: sweepNamespaces{}, Guard: leases,
 		Clock: aheadClock{ahead: setup.ahead}, Audit: r.audit, Logger: nil,
-		Now: func() time.Time { return time.Now().Add(setup.ahead + setup.instance) },
+		Now: now,
 	})
 	if err != nil {
 		t.Fatalf("NewArtifactSweeper = %v", err)
@@ -414,7 +427,7 @@ func TestSweepDeletesNothingWhenTheTakeIsRefused(t *testing.T) {
 
 	r := newSweepRig(t, sweepSetup{
 		names: sweepNames{names: job.ArtifactNames{Plans: []string{"pln-1"}, ChunkKeys: nil}, err: nil},
-		ahead: sweepAhead, instance: 0, wrap: nil, jobs: nil,
+		ahead: sweepAhead, instance: 0, step: 0, wrap: nil, jobs: nil,
 	})
 	r.leases.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
 
@@ -441,7 +454,7 @@ func TestSweepReleasesTheDeleteLease(t *testing.T) {
 
 	r := newSweepRig(t, sweepSetup{
 		names: sweepNames{names: job.ArtifactNames{Plans: []string{"pln-1"}, ChunkKeys: nil}, err: nil},
-		ahead: sweepAhead, instance: 0, wrap: nil, jobs: nil,
+		ahead: sweepAhead, instance: 0, step: 0, wrap: nil, jobs: nil,
 	})
 
 	res, err := r.s.SweepJob(t.Context(), &r.jobs.j)
@@ -564,7 +577,7 @@ func TestSweepRecordsItsRun(t *testing.T) {
 	t.Parallel()
 
 	named := sweepNames{names: job.ArtifactNames{Plans: []string{"pln-1"}, ChunkKeys: nil}, err: nil}
-	r := newSweepRig(t, sweepSetup{names: named, ahead: sweepAhead, instance: 0, wrap: nil, jobs: nil})
+	r := newSweepRig(t, sweepSetup{names: named, ahead: sweepAhead, instance: 0, step: 0, wrap: nil, jobs: nil})
 
 	res, err := r.s.Sweep(t.Context())
 	if err != nil {
@@ -615,7 +628,9 @@ func TestSweepDeletesNothingOnClockSkew(t *testing.T) {
 	nothing := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
 
 	for _, skew := range []time.Duration{blob.AttemptSkew + time.Minute, -blob.AttemptSkew - time.Minute} {
-		r := newSweepRig(t, sweepSetup{names: nothing, ahead: sweepAhead, instance: skew, wrap: nil, jobs: nil})
+		r := newSweepRig(t, sweepSetup{
+			names: nothing, ahead: sweepAhead, instance: skew, step: 0, wrap: nil, jobs: nil,
+		})
 
 		res, err := r.s.Sweep(t.Context())
 		if err != nil || res.Deleted != 0 || res.Jobs != 0 || !strings.Contains(res.Skipped, "do not agree") {
@@ -631,6 +646,63 @@ func TestSweepDeletesNothingOnClockSkew(t *testing.T) {
 		}
 
 		requireStored(t, r.store, chunkKey, planPart)
+	}
+}
+
+// agedTimes is a blob store whose list reports every object as older than the
+// grace period, so a case proves the lease of a delete without moving the
+// clock of the database.
+type agedTimes struct{ blob.Store }
+
+func (a agedTimes) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := a.Store.ListPage(ctx, req)
+	if err != nil {
+		return blob.Page{}, fmt.Errorf("list page: %w", err)
+	}
+
+	for i := range page.Objects {
+		page.Objects[i].ModifiedAt = page.Objects[i].ModifiedAt.Add(-2 * blob.UnnamedGracePeriod)
+	}
+
+	return page, nil
+}
+
+// TestSweepDeletesNothingWhenTheLeaseEnded proves that the sweep deletes no
+// blob when the context of the delete lease ended before the delete: the
+// clock of the instance moves by a lease time on each read, so the take uses
+// the whole window of the lease and the context ends at once. The blobs
+// stay, and the result reports the failed job.
+func TestSweepDeletesNothingWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	nothing := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
+	r := newSweepRig(t, sweepSetup{
+		names:    nothing,
+		ahead:    0,
+		instance: 0,
+		step:     blobguard.LeaseTTL,
+		wrap:     func(s blob.Store) blob.Store { return agedTimes{Store: s} },
+		jobs:     nil,
+	})
+
+	// The sweep has a bounded context, so a delete that ignored the lease
+	// context cannot hold the test.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	res, err := r.s.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("Sweep = %v", err)
+	}
+
+	if res.Deleted != 0 || res.Failed == 0 {
+		t.Fatalf("Sweep = %+v, want the failed job and no deleted blob", res)
+	}
+
+	requireStored(t, r.store, chunkKey, planPart)
+
+	if got := r.store.Calls("Delete"); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
 	}
 }
 
@@ -660,6 +732,7 @@ func TestSweepKeepsABlobWithNoModificationTime(t *testing.T) {
 		names:    nothing,
 		ahead:    sweepAhead,
 		instance: 0,
+		step:     0,
 		wrap:     func(s blob.Store) blob.Store { return zeroTimes{Store: s} },
 		jobs:     nil,
 	})
@@ -700,7 +773,7 @@ func TestSweepCapsOnlyWhenJobsRemain(t *testing.T) {
 
 		store := &pagedJobs{Store: nil, j: sweepJobOf(t), ids: ids, mu: sync.Mutex{}}
 		named := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
-		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil, jobs: store})
+		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, step: 0, wrap: nil, jobs: store})
 
 		res, err := r.s.Sweep(t.Context())
 		if err != nil {
@@ -735,7 +808,7 @@ func TestSweepReportsACappedPass(t *testing.T) {
 
 	for _, tc := range cases {
 		named := sweepNames{names: job.ArtifactNames{Plans: nil, ChunkKeys: nil}, err: nil}
-		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, wrap: nil, jobs: nil})
+		r := newSweepRig(t, sweepSetup{names: named, ahead: 0, instance: 0, step: 0, wrap: nil, jobs: nil})
 		r.jobs.full = tc.full
 
 		res, err := r.s.Sweep(t.Context())

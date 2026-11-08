@@ -42,6 +42,10 @@ var (
 	// ErrNoWatch reports a deleter without the guard. A deleter that has no
 	// guard deletes nothing.
 	ErrNoWatch = errors.New("no guard for blob deletes")
+	// ErrNoClock reports a deleter without a clock. A deleter that has no
+	// clock cannot bound the context of its delete, so it takes no lease and
+	// deletes nothing.
+	ErrNoClock = errors.New("no clock for blob deletes")
 	// ErrUnknown reports an answer of the guard that names a kind of work that
 	// this package does not know, or no ID. The deleter deletes nothing.
 	ErrUnknown = errors.New("unknown kind of running work")
@@ -89,6 +93,13 @@ type Watch interface {
 // stopped holds a restore back at most this long.
 const LeaseTTL = time.Minute
 
+// leaseWindow is the time that a deleter has for its delete: half of the
+// lease time, measured from the start that the deleter read before the take.
+// The row of the lease ends at the clock of the database plus LeaseTTL, so
+// the other half covers the time of the take and a difference between the
+// clock of the instance and the clock of the database.
+const leaseWindow = LeaseTTL / 2
+
 // Leases is the lease of the blob deletes. The guard of Watch holds a deleter
 // back that reads it while a backup runs or a restore checks or applies. It
 // does not hold back a deleter that read the guard before the restore
@@ -115,32 +126,64 @@ type Leases interface {
 	LiveLeases(ctx context.Context) (int, error)
 }
 
-// HoldLease takes the lease of holder and returns the function that releases
-// it. It returns a *WaitError when a backup or a restore runs, ErrNoWatch
-// when l is nil, ErrNoHolder when holder is empty, and the error of the
-// write, wrapped, when the write fails. An answer with an unknown kind or an
-// empty ID returns ErrUnknown. So every result but a release function means:
-// delete nothing.
-func HoldLease(ctx context.Context, l Leases, holder string) (func(context.Context) error, error) {
+// HoldLease takes the lease of holder and returns the context of the delete
+// and the function that releases the lease. The deleter deletes only under
+// the returned context, and it deletes nothing more once that context ends.
+// The window of the delete is half the lease time (LeaseTTL/2) from the
+// start, where the start is the clock read before the take: the lease row
+// ends at the clock of the database plus LeaseTTL, so the half leaves room
+// for the time of the take and for a difference between the clock of the
+// instance and the clock of the database. The injected clock measures the
+// time of the take, and the context ends when the rest of the window passes:
+// a take that used the whole window ends the context at once. The release
+// function cancels the context of the delete first, and then releases the
+// lease. It takes its own context, so a caller can release after the context
+// of the delete ended.
+//
+// It returns a *WaitError when a backup or a restore runs, ErrNoWatch when l
+// is nil, ErrNoClock when now is nil, ErrNoHolder when holder is empty, and
+// the error of the write, wrapped, when the write fails. An answer with an
+// unknown kind or an empty ID returns ErrUnknown. Every error path returns a
+// nil context and a nil release function. So every result but a context and a
+// release function means: delete nothing.
+func HoldLease(
+	ctx context.Context, l Leases, holder string, now func() time.Time,
+) (context.Context, func(context.Context) error, error) {
 	if l == nil {
-		return nil, ErrNoWatch
+		return nil, nil, ErrNoWatch
+	}
+
+	if now == nil {
+		return nil, nil, ErrNoClock
 	}
 
 	// A lease names the deleter that holds it. An empty holder takes no
 	// lease: its row would hold back every restore for the whole TTL, and no
 	// record would name who took it.
 	if holder == "" {
-		return nil, ErrNoHolder
+		return nil, nil, ErrNoHolder
 	}
+
+	// The start comes before the take, so the context of the delete ends
+	// before the row that the take writes.
+	start := now()
 
 	work, ok, err := l.TakeLease(ctx, holder, LeaseTTL)
 	if err != nil {
-		return nil, fmt.Errorf("take the blob delete lease: %w", err)
+		return nil, nil, fmt.Errorf("take the blob delete lease: %w", err)
 	}
 
 	if !ok {
-		return func(ctx context.Context) error {
-			if err := l.ReleaseLease(ctx, holder); err != nil {
+		// The injected clock measures the time of the take, and only the
+		// rest of the window runs on a timer.
+		elapsed := now().Sub(start)
+
+		leaseCtx, cancel := context.WithTimeout(ctx, leaseWindow-elapsed)
+
+		return leaseCtx, func(releaseCtx context.Context) error {
+			cancel()
+
+			if err := l.ReleaseLease(releaseCtx, holder); err != nil {
 				return fmt.Errorf("release the blob delete lease: %w", err)
 			}
 
@@ -152,8 +195,8 @@ func HoldLease(ctx context.Context, l Leases, holder string) (func(context.Conte
 	// stays so that a new adapter or a fake cannot turn an unknown answer
 	// into permission to delete.
 	if (work.Kind != Backup && work.Kind != Restore) || work.ID == "" {
-		return nil, ErrUnknown
+		return nil, nil, ErrUnknown
 	}
 
-	return nil, &WaitError{Work: work}
+	return nil, nil, &WaitError{Work: work}
 }

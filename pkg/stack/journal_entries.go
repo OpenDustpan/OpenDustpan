@@ -329,10 +329,18 @@ func (j *JournalEntries) RemoveBlobs(
 }
 
 // removeJournalBlobs deletes the blobs under keys through the scoped access bl.
+// A context that ended deletes nothing: the check comes before each delete, so
+// no batch blob goes after the context of the delete lease ended.
 func removeJournalBlobs(ctx context.Context, bl *scopedBlobs, keys []blob.Key) error {
 	var errs []error
 
 	for _, key := range keys {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			errs = append(errs, fmt.Errorf("delete journal blob: %w", ctxErr))
+
+			break
+		}
+
 		if err := bl.Delete(ctx, key); err != nil {
 			errs = append(errs, fmt.Errorf("delete journal blob: %w", err))
 		}

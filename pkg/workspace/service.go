@@ -654,14 +654,14 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 			// read, stops the walk. The error keeps the blob purge record,
 			// and the retention sweep tries again. The holder is new for each
 			// delete, so the lease row names the delete that holds it.
-			release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+			leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 			if holdErr != nil {
 				guardErr = holdErr
 
 				return holdErr
 			}
 
-			deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key)
+			deleteErr := s.blobs.deleteRetried(leaseCtx, ns, id, obj.Key)
 
 			if releaseErr := release(ctx); releaseErr != nil {
 				s.logger.WarnContext(ctx, "blob delete lease not released",
