@@ -278,6 +278,7 @@ func TestParseRefusesBadTypeValue(t *testing.T) {
 		{"a list with one name", `["string"]`, `type list ["string"] that holds fewer than two names`},
 		{"a list with null alone", `["null"]`, `type list ["null"] that holds fewer than two names`},
 		{"null before the name", `["null", "string"]`, `type name "null" that is not a primitive type name`},
+		{"null before an integer", `["null", "integer"]`, `type name "null" that is not a primitive type name`},
 		{"an unknown name", `["text", "number"]`, `type name "text" that is not a primitive type name`},
 		{"a repeated name", `["string", "string"]`, `type name "string" that is in the list two times`},
 		{"a non-string item", `["string", 5]`, `type name 5 that is not a string`},

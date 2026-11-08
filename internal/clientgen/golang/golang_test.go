@@ -460,6 +460,9 @@ func TestRenderTypeList(t *testing.T) {
 	note := model.Field{
 		Name: "note", Type: unionOf(model.TypeString, model.TypeBoolean), Required: false, Description: "",
 	}
+	count := model.Field{
+		Name: "count", Type: unionOf(model.TypeInteger, model.TypeString), Required: true, Description: "",
+	}
 	described := model.Field{
 		Name: "described", Type: refTo("Settings"), Required: false, Description: "The described settings.",
 	}
@@ -468,7 +471,7 @@ func TestRenderTypeList(t *testing.T) {
 		Title: "T", Version: descriptionVersion(), Tags: nil, Operations: nil, Error: "ErrorResponse",
 		Schemas: []model.Schema{
 			objectSchema("Settings", "The settings."),
-			objectSchema("Widget", "", value, note, described),
+			objectSchema("Widget", "", value, note, count, described),
 			objectSchema("ErrorResponse", ""),
 		},
 	}
@@ -483,8 +486,12 @@ func TestRenderTypeList(t *testing.T) {
 	for _, want := range []string{
 		"// WidgetValue holds a string, a number or a boolean.\ntype WidgetValue json.RawMessage",
 		"// WidgetNote holds a string or a boolean.\ntype WidgetNote json.RawMessage",
+		"// WidgetCount holds an integer or a string.\ntype WidgetCount json.RawMessage",
 		`case "string", "number", "boolean":`,
 		`case "string", "boolean":`,
+		`case "number", "string":`,
+		`if kind == "number" && !jsonInteger(data) {`,
+		"func jsonInteger(data []byte) bool {",
 		`return fmt.Errorf("want a string, a number or a boolean, got %s", kind)`,
 		"// The value.\n\tValue WidgetValue",
 		"Note  *WidgetNote",

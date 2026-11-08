@@ -92,7 +92,8 @@ func TestBuildTypeListClient(t *testing.T) {
 
 // typeListCheck is a program that runs against the compiled package of the
 // type list description. It checks the validator of a type list: each JSON
-// type of the list comes back, and every other type is refused.
+// type of the list comes back, and every other type is refused. It checks the
+// list with integer too: a number comes back only when it holds an integer.
 const typeListCheck = `import { decodeWidget } from "./dist/index.js";
 
 for (const value of ["text", 1, 1.5, true]) {
@@ -100,6 +101,24 @@ for (const value of ["text", 1, 1.5, true]) {
   if (widget.value !== value) {
     fail("decodeWidget gave " + JSON.stringify(widget.value) + " for " + JSON.stringify(value));
   }
+}
+
+const withInteger = decodeWidget({ value: "text", count: 2, amount: 1.5, state: "open" }, "$");
+if (withInteger.count !== 2) {
+  fail("decodeWidget gave " + JSON.stringify(withInteger.count) + " for the list with integer");
+}
+if (withInteger.amount !== 1.5) {
+  fail("decodeWidget gave " + JSON.stringify(withInteger.amount) + " for the list with number");
+}
+
+let refusedFraction = false;
+try {
+  decodeWidget({ value: "text", count: 1.5, state: "open" }, "$");
+} catch {
+  refusedFraction = true;
+}
+if (!refusedFraction) {
+  fail("decodeWidget accepted 1.5 for the list with integer");
 }
 
 for (const value of [null, {}, []]) {

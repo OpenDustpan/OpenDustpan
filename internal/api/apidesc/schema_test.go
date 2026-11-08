@@ -684,6 +684,30 @@ func TestReflectorRefusesWhatItCannotTell(t *testing.T) {
 			})),
 		},
 		{
+			"a type list with null first",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"null", "string"},
+			})),
+		},
+		{
+			"a type list with an unknown name and null",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"text", "null"},
+			})),
+		},
+		{
+			"a type list with an enum",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number"}, "enum": []any{"a"},
+			})),
+		},
+		{
+			"a type list with a format",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number"}, "format": "date-time",
+			})),
+		},
+		{
 			"a type that is a number",
 			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{"type": 3})),
 		},
@@ -919,14 +943,6 @@ func TestReflectorAcceptsDeclaredTypes(t *testing.T) {
 			})),
 			`{"HoldsOwn":{"type":"object","required":["value"],"properties":{
 			"value":{"type":["string","null"]}}}}`,
-		},
-		{
-			"a declared type list with null behind a pointer keeps its order",
-			apidesc.Typed[holdsOwnPointer]("HoldsOwnPointer", apidesc.Declare[own](map[string]any{
-				"type": []any{"null", "string"},
-			})),
-			`{"HoldsOwnPointer":{"type":"object","required":["value"],"properties":{
-			"value":{"type":["null","string"]}}}}`,
 		},
 	}
 

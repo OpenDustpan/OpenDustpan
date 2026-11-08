@@ -129,7 +129,8 @@ func TestBuildTypeListClient(t *testing.T) {
 // typeListCheck is a program that runs against the client of the type list
 // description. It checks the named type of a type list: each JSON type of the
 // list comes back from the value and from the bytes, and every other type is
-// refused.
+// refused. It checks the list with integer too: a number comes back only when
+// it holds an integer.
 const typeListCheck = `package main
 
 import (
@@ -156,6 +157,28 @@ func main() {
 		if string(out) != in {
 			fail(in + " came back as " + string(out))
 		}
+	}
+
+	for _, in := range []string{"2", "1e2", "\"text\""} {
+		var v client.WidgetCount
+
+		if err := json.Unmarshal([]byte(in), &v); err != nil {
+			fail("unmarshal " + in + " into the list with integer: " + err.Error())
+		}
+	}
+
+	for _, in := range []string{"1.5", "1e-2"} {
+		var v client.WidgetCount
+
+		if err := json.Unmarshal([]byte(in), &v); err == nil {
+			fail("unmarshal " + in + " into the list with integer: want an error")
+		}
+	}
+
+	var amount client.WidgetAmount
+
+	if err := json.Unmarshal([]byte("1.5"), &amount); err != nil {
+		fail("unmarshal 1.5 into the list with number: " + err.Error())
 	}
 
 	for _, in := range []string{"null", "{}", "[]"} {

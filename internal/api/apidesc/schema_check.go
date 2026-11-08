@@ -30,6 +30,10 @@ func checkDeclared(schema any) error {
 		return fmt.Errorf("%w: a schema is not an object", errDeclared)
 	}
 
+	if err := checkTypeValue(errDeclared, members); err != nil {
+		return err
+	}
+
 	for key, child := range members {
 		if !slices.Contains(subsetSchemaKeys, key) {
 			return fmt.Errorf("%w: member %q is not in the subset", errDeclared, key)
@@ -43,12 +47,9 @@ func checkDeclared(schema any) error {
 	return nil
 }
 
-// checkDeclaredMember checks the type and the schemas that a member of a
-// schema holds.
+// checkDeclaredMember checks the schemas that a member of a schema holds.
 func checkDeclaredMember(key string, child any) error {
 	switch key {
-	case keyType:
-		return checkTypeValue(errDeclared, child)
 	case keyProperties:
 		return checkDeclaredProperties(child)
 	case keyItems:
@@ -94,14 +95,20 @@ func isPrimitiveTypeName(name string) bool {
 }
 
 // checkTypeValue checks the type member of a schema: one string, or a list of
-// type names. It wraps sentinel in the error, so that each caller reports the
-// member with its own error type.
-func checkTypeValue(sentinel error, value any) error {
+// type names. It reads the members beside the type too, because an enum or a
+// format is refused beside a type list. It wraps sentinel in the error, so
+// that each caller reports the member with its own error type.
+func checkTypeValue(sentinel error, schema map[string]any) error {
+	value, hasType := schema[keyType]
+	if !hasType {
+		return nil
+	}
+
 	switch v := value.(type) {
 	case string:
 		return nil
 	case []any:
-		return checkTypeList(sentinel, v)
+		return checkTypeList(sentinel, schema, v)
 	default:
 		return fmt.Errorf("%w: the type %v is not a string or a list of names", sentinel, value)
 	}
@@ -109,46 +116,80 @@ func checkTypeValue(sentinel error, value any) error {
 
 // checkTypeList checks the names of a type list. The list holds at least two
 // names that the subset knows, with no repeat. A list without null holds
-// primitives only. The name null stands next to one other name only, and that
-// name is any type name: it is the nullable form of a schema, which the
-// reflector writes for a pointer to a map or to a slice.
-func checkTypeList(sentinel error, names []any) error {
+// primitives only. The name null stands in the second place of a list of two
+// names, and the first name is any type name: it is the nullable form
+// [X, "null"], which the reflector writes for a pointer to a map or to a
+// slice. A list that is not the nullable form carries no enum and no format:
+// the enum or the format would apply to one name of the list only.
+func checkTypeList(sentinel error, schema map[string]any, names []any) error {
 	if len(names) < typeListMinNames {
 		return fmt.Errorf("%w: the type list %v has fewer than two names", sentinel, names)
 	}
 
+	parsed, seen, err := typeListNames(sentinel, names)
+	if err != nil {
+		return err
+	}
+
+	if seen[typeNull] {
+		return checkNullableForm(sentinel, parsed)
+	}
+
+	return checkPlainList(sentinel, schema, parsed)
+}
+
+// typeListNames checks each name of a type list: a string that names a type
+// that the subset knows, with no repeat.
+func typeListNames(sentinel error, names []any) ([]string, map[string]bool, error) {
 	seen := make(map[string]bool, len(names))
 	parsed := make([]string, 0, len(names))
 
 	for _, item := range names {
 		name, isString := item.(string)
 		if !isString {
-			return fmt.Errorf("%w: the type name %v is not a string", sentinel, item)
+			return nil, nil, fmt.Errorf("%w: the type name %v is not a string", sentinel, item)
 		}
 
 		if !isTypeName(name) {
-			return fmt.Errorf("%w: the type name %q is not a type name", sentinel, name)
+			return nil, nil, fmt.Errorf("%w: the type name %q is not a type name", sentinel, name)
 		}
 
 		if seen[name] {
-			return fmt.Errorf("%w: the type name %q is listed twice", sentinel, name)
+			return nil, nil, fmt.Errorf("%w: the type name %q is listed twice", sentinel, name)
 		}
 
 		seen[name] = true
 		parsed = append(parsed, name)
 	}
 
-	if seen[typeNull] {
-		if len(parsed) != typeListNullNames {
-			return fmt.Errorf("%w: the type name %q stands next to more than one other name", sentinel, typeNull)
-		}
+	return parsed, seen, nil
+}
 
-		return nil
+// checkNullableForm checks the nullable form [X, "null"]: the name null stands
+// in the second place of a list of two names only.
+func checkNullableForm(sentinel error, names []string) error {
+	if len(names) != typeListNullNames || names[1] != typeNull {
+		return fmt.Errorf(
+			"%w: the type name %q stands in the second place of a list of two names only",
+			sentinel, typeNull,
+		)
 	}
 
-	for _, name := range parsed {
+	return nil
+}
+
+// checkPlainList checks a type list without null: every name is primitive, and
+// the schema carries no enum and no format.
+func checkPlainList(sentinel error, schema map[string]any, names []string) error {
+	for _, name := range names {
 		if !isPrimitiveTypeName(name) {
 			return fmt.Errorf("%w: the type name %q is not a primitive type name", sentinel, name)
+		}
+	}
+
+	for _, key := range []string{keyEnum, keyFormat} {
+		if schema[key] != nil {
+			return fmt.Errorf("%w: %s beside a type list", sentinel, key)
 		}
 	}
 
@@ -282,10 +323,8 @@ func checkSchemaType(value any) error {
 		return nil
 	}
 
-	if child, hasType := schema[keyType]; hasType {
-		if err := checkTypeValue(ErrInvalidBody, child); err != nil {
-			return err
-		}
+	if err := checkTypeValue(ErrInvalidBody, schema); err != nil {
+		return err
 	}
 
 	for key, child := range schema {

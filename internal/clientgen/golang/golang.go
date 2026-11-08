@@ -180,6 +180,9 @@ type data struct {
 	// HasChoice says that a schema holds a field with a type list, so that
 	// models.go needs the jsonKind helper.
 	HasChoice bool
+	// NeedsInteger says that a type list holds integer and no number, so that
+	// models.go needs the jsonInteger helper.
+	NeedsInteger bool
 }
 
 type typeView struct {
@@ -197,6 +200,9 @@ type typeView struct {
 	// the order of the list, with no repeat. Such a type holds the bytes of
 	// the value and checks its type in UnmarshalJSON.
 	Choice []string
+	// Integer says that the list holds integer and no number: the JSON number
+	// type is accepted only when it holds an integer.
+	Integer bool
 	// ChoiceText names the JSON types of a choice for an error message.
 	ChoiceText string
 }
@@ -470,6 +476,7 @@ func (d *data) fieldType(schemaName string, f model.Field) (string, error) {
 
 		d.Types = append(d.Types, tv)
 		d.HasChoice = true
+		d.NeedsInteger = d.NeedsInteger || tv.Integer
 
 		if f.Required {
 			return name, nil
@@ -515,8 +522,20 @@ func choiceView(name string, t model.Type) (typeView, error) {
 		return typeView{}, fmt.Errorf("%w: the type list of %s has no member", clientgen.ErrUnsupported, name)
 	}
 
+	// JSON holds one number type, so an integer and a number take one name in
+	// the list of the accepted JSON types. A list that holds integer and no
+	// number takes only the integers of that type.
+	tv.Integer = slices.Contains(t.Members, model.TypeInteger) && !slices.Contains(t.Members, model.TypeNumber)
+
 	texts := make([]string, 0, len(tv.Choice))
+
 	for _, typ := range tv.Choice {
+		if typ == numberType && tv.Integer {
+			texts = append(texts, "an integer")
+
+			continue
+		}
+
 		texts = append(texts, "a "+typ)
 	}
 
@@ -531,8 +550,8 @@ func choiceView(name string, t model.Type) (typeView, error) {
 func choiceMember(kind model.TypeKind) (string, error) {
 	names := map[model.TypeKind]string{
 		model.TypeString:  stringType,
-		model.TypeInteger: "number",
-		model.TypeNumber:  "number",
+		model.TypeInteger: numberType,
+		model.TypeNumber:  numberType,
 		model.TypeBoolean: "boolean",
 	}
 
@@ -593,6 +612,9 @@ const rawMessage = "json.RawMessage"
 // stringType is the name of the JSON type of a string, and of the Go type that
 // holds one.
 const stringType = "string"
+
+// numberType is the name of the JSON type of a number.
+const numberType = "number"
 
 // typeExpr writes a model type as a Go type. A value that can be absent or
 // null is a pointer, where the zero value of the type is also a value. qual is

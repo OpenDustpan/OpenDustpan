@@ -19,6 +19,8 @@
   "schemas": {
    "Widget": {"type": "object", "required": ["value", "state"], "properties": {
     "value": {"type": ["string", "number", "boolean"], "description": "The value."},
+    "count": {"type": ["integer", "string"], "description": "A count or a text."},
+    "amount": {"type": ["number", "string"], "description": "An amount or a text."},
     "note": {"type": ["string", "null"], "description": "A note."},
     "state": {"$ref": "#/components/schemas/State", "description": "The state."}}},
    "State": {"type": "string", "enum": ["open", "closed"]},
