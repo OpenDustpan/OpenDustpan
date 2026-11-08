@@ -29,6 +29,7 @@ func (a subjectAuthenticator) AuthenticateToken(context.Context, string) (identi
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: a.subject,
 		DisplayName: "", Admin: false, TokenID: "tok", TokenExpiresAt: time.Time{},
 		Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 
@@ -451,6 +452,7 @@ func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "bo@example.com",
 		DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		Kind: identity.KindPerson, Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 
 	for range 3 {

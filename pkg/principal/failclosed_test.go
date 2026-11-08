@@ -16,6 +16,7 @@ func callerOf(admin bool) identity.Principal {
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "tester", DisplayName: "", Admin: admin, TokenID: "", TokenExpiresAt: time.Time{},
 		Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

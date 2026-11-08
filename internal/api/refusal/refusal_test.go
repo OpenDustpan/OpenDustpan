@@ -253,6 +253,7 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		}, identity.ActionUnitWrite, tc.obj)
 
 	if !errors.Is(err, tc.wantErr) {

@@ -387,6 +387,7 @@ func TestCheckAgent(t *testing.T) {
 				Kind:       "",
 				Credential: "",
 				JobID:      "",
+				JobUnit:    identity.Object{},
 			}, Agent: tt.agent, Mode: tt.mode, ConfirmAuth: job.ConfirmAuthMFA, AuthAt: time.Time{}}
 
 			confirm, err := job.CheckAgent(&tt.spec, a, tt.sw)
@@ -477,6 +478,7 @@ func TestCheckAgentFreshAuth(t *testing.T) {
 				Kind:       "",
 				Credential: "",
 				JobID:      "",
+				JobUnit:    identity.Object{},
 			}, Agent: "dusty", Mode: tt.mode, ConfirmAuth: tt.auth, AuthAt: time.Time{}}
 
 			confirm, err := job.CheckAgent(&spec, a, all)

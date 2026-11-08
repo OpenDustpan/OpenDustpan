@@ -563,6 +563,7 @@ func (h *Handler) auditItemKeyRefusal(r *http.Request, call LeaseCall) {
 	p := identity.Principal{
 		Subject: u.CreatedBy, DisplayName: "", Admin: false, TokenID: u.TokenID, TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 
 	entry := requestEntry(ctx, r, p, obj, auditDetail{

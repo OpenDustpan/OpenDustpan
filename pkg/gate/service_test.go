@@ -186,6 +186,7 @@ func principal(subject string, admin bool) identity.Principal {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 }
 

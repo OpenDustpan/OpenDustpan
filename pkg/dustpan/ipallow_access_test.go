@@ -150,6 +150,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		},
 		instAdminToken: {
 			Subject:                "instadmin",
@@ -162,6 +163,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		},
 	}}
 

@@ -105,6 +105,7 @@ func actor(subject string) *profile.Actor {
 		Principal: identity.Principal{
 			Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: epochTime(),
 			TemporaryAdministrator: false, TemporaryExpiresAt: epochTime(), Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		By: auditTemplate(),
 	}

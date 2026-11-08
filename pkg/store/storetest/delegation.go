@@ -167,6 +167,7 @@ func bootstrap() identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 
@@ -182,6 +183,7 @@ func signedIn(p principal.Principal) identity.Principal {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 }
 

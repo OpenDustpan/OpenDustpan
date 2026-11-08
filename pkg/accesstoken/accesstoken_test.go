@@ -152,6 +152,7 @@ func admin() identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 
@@ -379,6 +380,7 @@ func TestAuthenticate(t *testing.T) {
 		Kind:                   identity.KindService,
 		Credential:             identity.CredentialAccessToken,
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 	if got != want {
 		t.Fatalf("principal = %+v, want %+v", got, want)
@@ -476,6 +478,7 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -523,6 +526,7 @@ func TestCheckActive(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -836,6 +840,7 @@ func as(p principal.Principal) identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 

@@ -463,6 +463,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	viewer := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
@@ -474,6 +475,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	objs := []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()}
@@ -712,6 +714,7 @@ func TestChain(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
@@ -723,6 +726,7 @@ func TestChain(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	unauth := fixedAuthenticator{err: identity.ErrUnauthenticated, principal: none}
 	broken := fixedAuthenticator{err: errStoreDown, principal: none}
@@ -775,6 +779,7 @@ func TestSelfAllowed(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	ns, err := identity.ParseObject("acme")
 	if err != nil {
@@ -833,6 +838,7 @@ func TestSelfAllowedListObjectsForwards(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
@@ -906,6 +912,7 @@ func TestActsAsPerson(t *testing.T) {
 				Kind:           tc.kind,
 				Credential:     tc.credential,
 				JobID:          "",
+				JobUnit:        identity.Object{},
 			}
 
 			if got := p.ActsAsPerson(); got != tc.want {
@@ -945,6 +952,7 @@ func TestJobTokenID(t *testing.T) {
 		return identity.Principal{
 			Subject: "", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: cred, JobID: jobID,
+			JobUnit: identity.Object{},
 		}
 	}
 

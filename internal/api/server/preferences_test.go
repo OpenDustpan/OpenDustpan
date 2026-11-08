@@ -46,6 +46,7 @@ func caller(subject string, kind identity.Kind, credential identity.Credential, 
 		Subject: subject, DisplayName: subject, Admin: admin, TokenID: "tok-" + subject,
 		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Kind: kind, Credential: credential, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

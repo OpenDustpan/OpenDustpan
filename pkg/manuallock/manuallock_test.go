@@ -166,6 +166,7 @@ func person(sub string) identity.Principal {
 		Subject: sub, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: identity.CredentialAccessToken, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

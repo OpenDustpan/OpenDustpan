@@ -28,6 +28,7 @@ func person(subject string) identity.Principal {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 }
 

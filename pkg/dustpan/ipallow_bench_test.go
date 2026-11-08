@@ -229,6 +229,7 @@ func BenchmarkIPAllowlistAuthorize1000Stacks(b *testing.B) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	objs := make([]identity.Object, 0, 1000)

@@ -400,6 +400,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		Subject: ada, DisplayName: "", Admin: false, TokenID: "tok-1", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: identity.CredentialAccessToken, JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

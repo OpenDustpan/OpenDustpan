@@ -211,6 +211,7 @@ func (h *harness) actor(subject string) *profile.Actor {
 		Principal: identity.Principal{
 			Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		By: auditBy(""),
 	}

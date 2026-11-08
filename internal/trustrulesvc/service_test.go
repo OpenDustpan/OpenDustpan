@@ -155,6 +155,7 @@ func person() identity.Principal {
 		Subject: "ada", DisplayName: "ada", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: identity.CredentialSession, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

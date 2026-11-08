@@ -67,6 +67,7 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	secrets := make([]accesstoken.Secret, 0, 2)

@@ -64,6 +64,7 @@ var errSignInSetup = errors.New("console sign-in")
 var noDevAdmin = identity.Principal{
 	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
 	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	JobUnit: identity.Object{},
 }
 
 // hasStaticSignIn reports whether cfg names a sign-in that needs no stored

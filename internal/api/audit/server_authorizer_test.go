@@ -33,6 +33,7 @@ func (realTokenAuthenticator) AuthenticateToken(_ context.Context, token string)
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}, nil
 }
 

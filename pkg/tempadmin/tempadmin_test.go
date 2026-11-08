@@ -657,6 +657,7 @@ func TestDecoratorSetsTheFlagAndWritesASignInEntry(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 
 	dec := signInDecorator(t, store, audits, caller)
@@ -706,6 +707,7 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 
 	dec := signInDecorator(t, store, audits, caller)
@@ -787,6 +789,7 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}).AuthenticateToken(t.Context(), "good")
 	if err != nil {
 		t.Fatalf("bootstrap sign-in: %v", err)
@@ -808,6 +811,7 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}).AuthenticateToken(t.Context(), "good")
 	if err != nil {
 		t.Fatalf("ordinary sign-in: %v", err)
@@ -849,6 +853,7 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		}},
 		Records:    store,
 		Principals: store,
@@ -978,6 +983,7 @@ func TestDecoratorReusedSubjectNotLockedOut(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	got, err := signInDecorator(t, store, audits, caller).AuthenticateToken(t.Context(), "good")
@@ -1423,6 +1429,7 @@ func expiredUseLog(t *testing.T, fail error) string {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		}},
 		Records: store, Principals: store, Request: nil, Expirer: store, Audit: newFakeAudit(),
 		Now: func() time.Time { return rec.ExpiresAt }, Logger: testLogger(&logs),

@@ -89,6 +89,7 @@ func callerOf(subject string, kind identity.Kind, credential identity.Credential
 	return identity.Principal{
 		Subject: subject, DisplayName: "", Admin: false, TokenID: "tok-1", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: credential, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

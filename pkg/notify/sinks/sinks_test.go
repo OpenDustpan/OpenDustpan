@@ -226,6 +226,7 @@ func person(kind identity.Kind) identity.Principal {
 	return identity.Principal{
 		Subject: "alice", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

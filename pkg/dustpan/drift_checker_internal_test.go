@@ -213,7 +213,8 @@ func driftActor() job.Actor {
 		Principal: identity.Principal{
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
 			Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindPerson, Credential: "",
-			JobID: "",
+			JobID:   "",
+			JobUnit: identity.Object{},
 		},
 		Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{},
 	}

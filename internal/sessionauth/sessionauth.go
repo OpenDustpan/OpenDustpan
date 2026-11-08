@@ -151,6 +151,7 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		Kind:           identity.KindPerson,
 		Credential:     identity.CredentialSession,
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	return p, Caller{Match: m, Secret: secret}, nil

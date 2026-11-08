@@ -302,6 +302,7 @@ func kindedPrincipal(kind identity.Kind, credential identity.Credential, jobID s
 		Kind:           kind,
 		Credential:     credential,
 		JobID:          jobID,
+		JobUnit:        identity.Object{},
 	}
 }
 
