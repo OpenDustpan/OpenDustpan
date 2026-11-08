@@ -285,7 +285,7 @@ func testRuleInvalid(t *testing.T, s PlacementStore) {
 		{"too long", func(r *collection.Rule) {
 			r.Project = collection.Pattern(string(make([]byte, collection.MaxPatternLength+1)))
 		}, collection.ErrInvalidPattern},
-		{"tool without rules", func(r *collection.Rule) { r.Tool = toolOpenTofu }, collection.ErrInvalidPlacementTool},
+		{"tool without rules", func(r *collection.Rule) { r.Tool = "terraform" }, collection.ErrInvalidPlacementTool},
 		{"invalid collection name", func(r *collection.Rule) { r.Collection = "a" }, collection.ErrInvalidName},
 	}
 

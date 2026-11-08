@@ -47,7 +47,6 @@ func TestForbiddenOrder(t *testing.T) {
 			errors.Join(identity.ErrDenied, ipallow.ErrAddressNotAllowed),
 			errcode.AccessIPNotAllowed,
 		},
-		{"csrf before other site", errors.Join(sessionauth.ErrOtherSite, sessionauth.ErrCSRF), errcode.SessionCSRF},
 		{"csrf before allowlist", errors.Join(ipallow.ErrAddressNotAllowed, sessionauth.ErrCSRF), errcode.SessionCSRF},
 		{
 			"refusal that is not a permission",

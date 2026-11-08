@@ -223,6 +223,9 @@ type Config struct {
 	Generations Generations
 	Sessions    Sessions
 	Audit       Audit
+	// TempAdmins tells the temporary administrators among the principals. The
+	// service refuses a sign-in and a disable for one.
+	TempAdmins principal.TempAdmins
 	// Groups applies the group claims of an Assertion. Nil means that no
 	// mapping exists, so no sign-in joins a group.
 	Groups principal.GroupClaimApplier
@@ -254,6 +257,8 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: sessions", ErrMissingDependency)
 	case cfg.Audit == nil:
 		return nil, fmt.Errorf("%w: audit log", ErrMissingDependency)
+	case cfg.TempAdmins == nil:
+		return nil, fmt.Errorf("%w: temporary administrators", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
@@ -331,10 +336,11 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 		return none, fmt.Errorf("find the principal of a sign-in: %w", err)
 	}
 
-	// Defense in depth: SignInPrincipal returns only a person of this subject.
-	// This check does not rely on it, so that a faulty lookup can never start a
-	// session for another person or for a principal of another kind.
-	if !isTarget(&p, subject) {
+	// Defense in depth: SignInPrincipal returns only a person of this subject,
+	// and refuses a temporary administrator. This check does not rely on it, so
+	// that a faulty lookup can never start a session for another person, for a
+	// principal of another kind or for a temporary administrator.
+	if !s.isTarget(ctx, &p, subject) {
 		return none, s.refuse(ctx, req, &refusal{
 			reason: ReasonNotTarget, answer: AnswerRefused, idpSubject: a.Subject, cause: nil,
 		})
@@ -463,9 +469,25 @@ func (s *Service) admit(ctx context.Context, req *Request) (principal.Source, *r
 
 // isTarget reports whether the principal p is the person of the subject that
 // an identity provider may sign in or disable: a person of exactly this
-// subject, in no namespace, and not a break-glass account.
-func isTarget(p *principal.Principal, subject string) bool {
-	return p.Subject == subject && p.Kind == principal.KindPerson && p.Namespace == "" && !p.BreakGlass
+// subject, in no namespace, not a break-glass account and not a temporary
+// administrator. An error of the read of the temporary administrators is not
+// a target: the caller fails closed.
+func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject string) bool {
+	if p.Subject != subject || p.Kind != principal.KindPerson || p.Namespace != "" || p.BreakGlass {
+		return false
+	}
+
+	// Defense in depth: SignInPrincipal refuses a temporary administrator too.
+	// This check does not rely on it, so that a faulty lookup can never start
+	// a session for, or disable, a temporary administrator.
+	temp, err := s.cfg.TempAdmins.IsTempAdmin(ctx, p.ID)
+	if err != nil {
+		// The read failed: fail closed. The caller refuses as for a principal
+		// that is not a target.
+		return false
+	}
+
+	return !temp
 }
 
 // checkLocal returns the reason for which the Assertion of req is not the

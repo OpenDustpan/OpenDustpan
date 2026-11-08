@@ -102,6 +102,8 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 		Now:                        nil,
 		PollInterval:               0,
 		DenialLimiter:              nil,
+		Plans:                      nil,
+		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
 	})
 	if err != nil {
