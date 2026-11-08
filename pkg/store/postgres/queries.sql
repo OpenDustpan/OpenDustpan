@@ -1853,6 +1853,14 @@ FROM grants
 WHERE subject_kind = $1 AND subject_id = $2 AND revoked_at_ms IS NULL
 ORDER BY target, role;
 
+-- name: GrantsOfSubjects :many
+-- The current grants of each subject of the list, in one query. The unique
+-- index grants_current starts with the subject, so each subject is one seek.
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY(@subjects::text[]) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role;
+
 -- name: CountRoleGrantsBelowInstallation :one
 SELECT COUNT(*) FROM grants
 WHERE role = $1 AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL;
@@ -2749,6 +2757,61 @@ WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND pr
 UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
 
+-- name: InsertBreakGlassReview :execrows
+-- Inserts the review of a new use. The unique index on (use_kind, use_ref)
+-- keeps one review for each use and the primary key keeps one for each ID,
+-- so a repeated open stores no second review.
+INSERT INTO break_glass_reviews (
+  id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+  $24, $25
+) ON CONFLICT DO NOTHING;
+
+-- name: GetBreakGlassReview :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE id = $1;
+
+-- name: GetBreakGlassReviewByUse :one
+-- The review of the kind and the reference of a use, for an open that runs
+-- again after a crash. The unique index makes at most one row match.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE use_kind = $1 AND use_ref = $2;
+
+-- name: UpdateBreakGlassReviewVerdict :execrows
+-- Stores the verdict of a review and clears the next notice. It changes no
+-- row when the stored version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET state = sqlc.arg('state'), verdict_reviewer = sqlc.arg('verdict_reviewer'),
+  verdict_note = sqlc.arg('verdict_note'), verdict_auth = sqlc.arg('verdict_auth'),
+  verdict_auth_at_ms = sqlc.arg('verdict_auth_at_ms'),
+  verdict_reviewed_at_ms = sqlc.arg('verdict_reviewed_at_ms'), verdict_act_as = sqlc.arg('verdict_act_as'),
+  next_notice_at_ms = 0, version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: UpdateBreakGlassReviewStep :execrows
+-- Stores the notice step of a review. It changes no row when the stored
+-- version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET step = sqlc.arg('step'), next_notice_at_ms = sqlc.arg('next_notice_at_ms'), version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: DueBreakGlassReviews :many
+-- The pending reviews with a notice due at or before now, oldest first.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews
+WHERE state = 'pending' AND next_notice_at_ms <> 0 AND next_notice_at_ms <= sqlc.arg('now_ms')::bigint
+ORDER BY next_notice_at_ms, id
+LIMIT sqlc.arg('max_rows')::bigint;
+
 -- name: InsertOIDCProvider :exec
 -- The first start with a provider ID records its issuer. A later start
 -- keeps the record.
@@ -3332,6 +3395,13 @@ SELECT id, version, body
 FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind)
 ORDER BY id COLLATE "C";
+
+-- name: ListGateObjectsOfKind :many
+-- Every object of one kind, of every scope, ordered by scope key and ID.
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = sqlc.arg(kind)
+ORDER BY scope_key COLLATE "C", id COLLATE "C";
 
 -- name: ListGateObjectsOfScope :many
 -- Every object and setting of one scope, ordered by kind and ID.

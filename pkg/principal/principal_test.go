@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -327,7 +328,13 @@ type switchStep struct {
 func (fx switchFixture) check(t *testing.T, step switchStep) {
 	t.Helper()
 
-	changed, err := fx.svc.UpdateGroup(t.Context(), fx.entry, fx.id, principal.GroupChange{
+	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Subject: "tester", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind: "", Credential: "", JobID: "",
+	}
+
+	changed, err := fx.svc.UpdateGroup(t.Context(), fx.entry, caller, fx.id, principal.GroupUpdate{
 		Name: nil, Description: nil, ClosedToIdentityProvider: step.value,
 	})
 	if err != nil {

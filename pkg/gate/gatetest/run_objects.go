@@ -24,6 +24,7 @@ func objectRunners() map[string]runner {
 		"unit-name-with-slash":             eachKind(caseUnitNameSlash),
 		"get-other-scope-not-found":        eachKind(caseGetOtherScope),
 		"list-own-scope-by-id":             eachKind(caseListOwnScope),
+		"list-every-scope-by-id":           eachKind(caseListEveryScope),
 		"delete-removes":                   eachKind(caseDeleteRemoves),
 		"delete-stale-version-conflicts":   eachKind(caseDeleteStale),
 		"delete-unknown-not-found":         eachKind(caseDeleteUnknown),
@@ -196,6 +197,62 @@ func caseListOwnScope(t *testing.T, e *env, k kindOps) {
 		if !slices.Equal(have, want) {
 			t.Fatalf("List(%s) = %v, want %v", scope, have, want)
 		}
+	}
+}
+
+// caseListEveryScope lists the objects of one kind of the installation, of
+// the installation scope and of two namespaces, and checks that the objects
+// of another kind stay out of the list.
+func caseListEveryScope(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	scopes := []gate.Scope{e.fx.installation, e.fx.acme, e.fx.globex}
+	ids := map[gate.Scope][]gate.ID{
+		e.fx.installation: {"i2", "i1"},
+		e.fx.acme:         {"a3", "a1", "a2"},
+		e.fx.globex:       {"g1"},
+	}
+
+	for _, scope := range scopes {
+		for _, id := range ids[scope] {
+			_, err := k.put(e, scope, id, "one", 0)
+			mustNil(t, "Put("+scope.Key()+"/"+string(id)+")", err)
+		}
+	}
+
+	for _, other := range allKinds(t, e.h.Store) {
+		if other.kind() == k.kind() {
+			continue
+		}
+
+		_, err := other.put(e, e.fx.acme, "other", "one", 0)
+		mustNil(t, "Put(other kind)", err)
+
+		break
+	}
+
+	got, err := k.listEveryScope(e)
+	mustNil(t, "ListEveryScope()", err)
+
+	have := make([]string, 0, len(got))
+
+	for _, ref := range got {
+		have = append(have, ref.Scope.Key()+"/"+string(ref.ID))
+	}
+
+	want := make([]string, 0, len(have))
+
+	for _, scope := range scopes {
+		for _, id := range ids[scope] {
+			want = append(want, scope.Key()+"/"+string(id))
+		}
+	}
+
+	slices.Sort(have)
+	slices.Sort(want)
+
+	if !slices.Equal(have, want) {
+		t.Fatalf("ListEveryScope() = %v, want %v", have, want)
 	}
 }
 

@@ -27,6 +27,10 @@ func (f failingGrantReads) GrantsOf(context.Context, access.Subject) ([]access.G
 	return nil, f.err
 }
 
+func (f failingGrantReads) GrantsOfSubjects(context.Context, []access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
 // TestGroupProtectedFlag proves that the group list and the group get answer
 // the protected flag of each group, and that a check that cannot read answers
 // an error, never protected: false.
