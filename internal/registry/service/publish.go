@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/registry/modulecheck"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -25,6 +26,10 @@ const (
 	// checksums file and the signature file.
 	maxFilesOfRequest = registry.MaxArchives + 2
 )
+
+// changeRelease is the key of the audit change that names a release that a
+// publish stored or refused.
+const changeRelease = "registry.release"
 
 // Staged is a file that the server stored under a staging key. The SHA-256 and
 // the size are the values that the server computed while it wrote the file.
@@ -216,10 +221,14 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 
 	rel, err := s.verify(ctx, c, p)
 	if err != nil {
+		s.recordDenied(ctx, c, p, err)
+
 		return registry.Release{}, err
 	}
 
 	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
+		s.recordDenied(ctx, c, p, refuseErr)
+
 		return registry.Release{}, refuseErr
 	}
 
@@ -304,6 +313,50 @@ func (s *Service) refuseOtherContent(ctx context.Context, p publishing, rel regi
 	}
 
 	return nil
+}
+
+// recordDenied appends the audit entry of a publish that the server denied.
+// The object is the namespace, and the changes name the address and the
+// version. An error that is not a denial writes nothing. A failure of the
+// append does not change the refusal: the caller still returns err, and
+// OnAuditFailure runs.
+func (s *Service) recordDenied(ctx context.Context, c *Caller, p publishing, err error) {
+	reason := deniedReason(err)
+	if reason == "" {
+		return
+	}
+
+	e := s.entry(c, p.addr.Namespace, identity.ActionRegistryPublish, p.addr.Namespace.String())
+	e.Outcome, e.Reason = audit.OutcomeDenied, reason
+	e.Changes = []audit.Change{
+		{Key: changeRelease, Old: nil, New: p.addr.Label() + "@" + p.req.Version, Layer: "", TakesEffect: ""},
+	}
+
+	if _, appendErr := s.audit.Append(ctx, p.rec.Fence(), e); appendErr != nil && s.onAuditErr != nil {
+		s.onAuditErr()
+	}
+}
+
+// deniedReason returns the reason of a publish that the server denied, or ""
+// when err is not a denial. The text is fixed: the entry never holds a byte
+// of the request.
+func deniedReason(err error) string {
+	switch {
+	case errors.Is(err, registry.ErrVersionExists):
+		return "the version exists with other content"
+	case errors.Is(err, modulecheck.ErrRefused):
+		return "the module archive failed a check"
+	case errors.Is(err, releasecheck.ErrRefused):
+		return "the archive set failed a check"
+	case errors.Is(err, registry.ErrBadSignature):
+		return "the signature is not valid for the checksums file"
+	case errors.Is(err, registry.ErrUntrustedKey):
+		return "no trusted key of the namespace made the signature"
+	case errors.Is(err, ErrNoKeys):
+		return "the namespace trusts no signing key"
+	default:
+		return ""
+	}
 }
 
 // record stores rel with its fence and audit entry, and returns the release as
@@ -627,7 +680,7 @@ func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 	if rel.Address.Kind == registry.KindModule {
 		e.Changes = []audit.Change{
 			{
-				Key: "registry.release", Old: nil, New: rel.Address.Label() + "@" + rel.Version,
+				Key: changeRelease, Old: nil, New: rel.Address.Label() + "@" + rel.Version,
 				Layer: "", TakesEffect: "",
 			},
 			{Key: "registry.archiveSha256", Old: nil, New: rel.Archives[0].SHA256, Layer: "", TakesEffect: ""},
@@ -638,7 +691,7 @@ func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 
 	e.Changes = []audit.Change{
 		{
-			Key:         "registry.release",
+			Key:         changeRelease,
 			Old:         nil,
 			New:         "provider/" + rel.Address.Name + "@" + rel.Version,
 			Layer:       "",

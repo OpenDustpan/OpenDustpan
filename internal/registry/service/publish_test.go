@@ -132,6 +132,9 @@ type refusal struct {
 	want  error
 	// text is a part of the error text, such as the name of a file.
 	text string
+	// denied is true when the refusal denies the release: it writes one
+	// audit entry with the outcome denied.
+	denied bool
 }
 
 // withRequest stages a good set, changes the request, and publishes it.
@@ -172,7 +175,7 @@ func refusals() []refusal {
 			build: withSet("payments", "1.0.0", func(s *set) {
 				s.sums = append(s.sums, ' ') // changed after the signature
 			}),
-			want: registry.ErrBadSignature, text: "SHA256SUMS.sig",
+			want: registry.ErrBadSignature, text: "SHA256SUMS.sig", denied: true,
 		},
 		{
 			name: "signature by a key that is not trusted",
@@ -183,7 +186,7 @@ func refusals() []refusal {
 
 				return err
 			},
-			want: registry.ErrUntrustedKey, text: "SHA256SUMS.sig",
+			want: registry.ErrUntrustedKey, text: "SHA256SUMS.sig", denied: true,
 		},
 		{
 			name: "signature by a key of another namespace",
@@ -197,14 +200,14 @@ func refusals() []refusal {
 
 				return err
 			},
-			want: registry.ErrUntrustedKey,
+			want: registry.ErrUntrustedKey, denied: true,
 		},
 		{
 			name: "archive changed after the signature",
 			build: withSet("payments", "1.0.0", func(s *set) {
 				s.archives[s.order[0]] = []byte("tampered")
 			}),
-			want: releasecheck.ErrRefused, text: "linux_amd64.zip",
+			want: releasecheck.ErrRefused, text: "linux_amd64.zip", denied: true,
 		},
 		{
 			name: "namespace with no trusted key",
@@ -215,7 +218,7 @@ func refusals() []refusal {
 
 				return err
 			},
-			want: service.ErrNoKeys,
+			want: service.ErrNoKeys, denied: true,
 		},
 		{
 			name:  "provider name with a capital letter",
@@ -249,7 +252,7 @@ func refusals() []refusal {
 
 				return err
 			},
-			want: releasecheck.ErrRefused,
+			want: releasecheck.ErrRefused, denied: true,
 		},
 		{
 			name:  "unknown namespace",
@@ -313,6 +316,8 @@ func checkRefusal(t *testing.T, tc refusal) {
 		t.Fatalf("error %q does not name %q", err, tc.text)
 	}
 
+	checkDeniedAudit(t, tc, e)
+
 	for name, id := range e.ids {
 		if got := e.listing(t, id, "sha256"); len(got) != 0 {
 			t.Fatalf("namespace %s holds content keys after a refusal: %v", name, got)
@@ -324,8 +329,29 @@ func checkRefusal(t *testing.T, tc refusal) {
 	}
 }
 
+// checkDeniedAudit proves that a refusal wrote the denied entry of a denial,
+// and no denied entry otherwise.
+func checkDeniedAudit(t *testing.T, tc refusal, e *env) {
+	t.Helper()
+
+	denied := e.deniedEntries()
+	if tc.denied && len(denied) != 1 {
+		t.Fatalf("%d denied audit entries, want 1", len(denied))
+	}
+
+	if !tc.denied && len(denied) != 0 {
+		t.Fatalf("a refusal wrote %d denied audit entries, want 0", len(denied))
+	}
+
+	if tc.denied && (denied[0].Action != "registry:publish" || denied[0].Subject != subject ||
+		len(denied[0].Changes) != 1 || denied[0].Changes[0].New != "provider/payments@1.0.0") {
+		t.Fatalf("denied audit entry = %+v", denied[0])
+	}
+}
+
 // TestPublishRefusals sends hostile input to the publish. Each case must
-// refuse, must leave no content key, and must store no release.
+// refuse, must leave no content key, and must store no release. A denial of
+// the release must also write one audit entry with the outcome denied.
 func TestPublishRefusals(t *testing.T) {
 	t.Parallel()
 

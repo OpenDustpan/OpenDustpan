@@ -11,6 +11,7 @@ import (
 
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	registryservice "opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
@@ -70,8 +71,8 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
-		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
-		MaxModuleArchiveBytes: 0,
+		Namespaces: coverageRegistryNamespaces{}, Audit: coverageRegistryAudit{}, OnAuditFailure: nil, Now: nil,
+		MaxArchiveBytes: 0, MaxReleaseBytes: 0, MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)
@@ -109,6 +110,14 @@ type coverageRegistryNamespaces struct{}
 
 func (coverageRegistryNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{}, namespace.ErrNotFound
+}
+
+// coverageRegistryAudit echoes the entries of denied publishes. The build of
+// the route table runs no publish, so it stores none.
+type coverageRegistryAudit struct{}
+
+func (coverageRegistryAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	return e, nil
 }
 
 // registryAllowEntries covers the routes of the registry API. No CLI calls

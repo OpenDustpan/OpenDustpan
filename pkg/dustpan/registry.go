@@ -55,14 +55,20 @@ func WithRegistryURLKey(key []byte) Option {
 }
 
 // newRegistryService builds the registry service, or returns nil when no
-// registry store is set.
-func newRegistryService(cfg *settings) (*service.Service, error) {
+// registry store is set. onAuditFailure runs once for each denial entry that
+// the audit store refuses.
+func newRegistryService(cfg *settings, onAuditFailure func()) (*service.Service, error) {
 	if cfg.registry == nil || cfg.registry.releases == nil || cfg.registry.keys == nil {
 		return nil, nil //nolint:nilnil // No registry: no registry store is set.
 	}
 
 	if cfg.blobStore == nil {
 		return nil, fmt.Errorf("the registry needs a blob store: %w", ErrMissingOption)
+	}
+
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
 	}
 
 	verifier := pgpverify.Verifier{Now: nil}
@@ -74,6 +80,8 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 		Inspector:             verifier,
 		Blobs:                 cfg.blobStore,
 		Namespaces:            cfg.namespaceStore,
+		Audit:                 entries,
+		OnAuditFailure:        onAuditFailure,
 		Now:                   cfg.now,
 		MaxArchiveBytes:       0,
 		MaxReleaseBytes:       0,
@@ -89,7 +97,7 @@ func newRegistryService(cfg *settings) (*service.Service, error) {
 // newRegistryHandler builds the registry API, or returns nil when no registry
 // store is set.
 func newRegistryHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
-	regSvc, err := newRegistryService(cfg)
+	regSvc, err := newRegistryService(cfg, onFailure)
 	if err != nil || regSvc == nil {
 		return nil, err
 	}
@@ -126,7 +134,7 @@ var errRegistryURL = errors.New("the public URL has no host")
 // set: the host check compares each request with the host of the public URL, so
 // without one every request would fail.
 func newRegistryProtocol(cfg *settings, publicURL string) (*tfe.RegistryConfig, error) {
-	regSvc, err := newRegistryService(cfg)
+	regSvc, err := newRegistryService(cfg, nil)
 	if err != nil || regSvc == nil || publicURL == "" {
 		return nil, err
 	}

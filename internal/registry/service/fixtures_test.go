@@ -89,6 +89,27 @@ func (m *memStore) Publish(_ context.Context, r registry.Release, _ namespace.Fe
 	return nil
 }
 
+// Append stores the entry of a publish that the server denied. It checks the
+// entry and the fence, as the SQL stores do.
+func (m *memStore) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("validate: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return audit.Entry{}, fmt.Errorf(
+			"%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace,
+		)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.audits = append(m.audits, e)
+
+	return e, nil
+}
+
 func (m *memStore) Get(_ context.Context, a registry.Address, v string) (registry.Release, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -291,6 +312,8 @@ func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.
 		Inspector:             v,
 		Blobs:                 blobs,
 		Namespaces:            ns,
+		Audit:                 store,
+		OnAuditFailure:        nil,
 		Now:                   func() time.Time { return at },
 		MaxArchiveBytes:       1 << 20,
 		MaxReleaseBytes:       3 << 20,
@@ -425,6 +448,20 @@ func (e *env) listing(t *testing.T, id namespace.ID, dir string) []string {
 	out := make([]string, 0, len(objects))
 	for _, o := range objects {
 		out = append(out, o.Key.String())
+	}
+
+	return out
+}
+
+// deniedEntries returns the audit entries of the store with the outcome
+// denied.
+func (e *env) deniedEntries() []audit.Entry {
+	var out []audit.Entry
+
+	for i := range e.store.audits {
+		if e.store.audits[i].Outcome == audit.OutcomeDenied {
+			out = append(out, e.store.audits[i])
+		}
 	}
 
 	return out

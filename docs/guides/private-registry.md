@@ -317,7 +317,13 @@ Every refusal of an authorization check writes an audit entry, as the other
 routes do. A publish and a key change write one entry each. The entry of a
 publish names the provider, the version, the fingerprint of the key and the
 hashes of the checksums file and the signature file. The entry of a module
-publish names the module, the version and the hash of the archive.
+publish names the module, the version and the hash of the archive. A publish
+that the server refuses writes one entry with the outcome `denied`: a
+signature that is not valid, a key that the namespace does not trust, a
+provider archive set or a module archive that fails a check, a namespace that
+trusts no key, or a version that exists with other content. The entry names
+the provider or the module and the version. A request that fails its checks,
+for example a name outside the rule, writes no entry.
 
 ## Limits
 

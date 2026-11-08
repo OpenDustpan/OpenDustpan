@@ -77,6 +77,12 @@ type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// AuditAppender appends an audit entry in a namespace. audit.Store
+// implements it.
+type AuditAppender interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
 // Config holds the dependencies of a Service. Every field except Now and
 // Limits is required.
 type Config struct {
@@ -86,6 +92,11 @@ type Config struct {
 	Inspector  registry.KeyInspector
 	Blobs      blob.Store
 	Namespaces Namespaces
+	// Audit appends the entries of the publishes that the server denies.
+	Audit AuditAppender
+	// OnAuditFailure, when set, runs once for each denial entry that the
+	// audit store refuses. The entry never changes the answer of the call.
+	OnAuditFailure func()
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// MaxArchiveBytes and MaxReleaseBytes override the defaults when above zero.
@@ -103,6 +114,8 @@ type Service struct {
 	inspector  registry.KeyInspector
 	blobs      blob.Store
 	namespaces Namespaces
+	audit      AuditAppender
+	onAuditErr func()
 	now        func() time.Time
 	maxFile    int64
 	maxRelease int64
@@ -124,12 +137,14 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
 	}
 
 	s := &Service{
 		store: cfg.Store, keys: cfg.Keys, verifier: cfg.Verifier, inspector: cfg.Inspector, blobs: cfg.Blobs,
-		namespaces: cfg.Namespaces, now: cfg.Now, maxFile: cfg.MaxArchiveBytes, maxRelease: cfg.MaxReleaseBytes,
-		maxModule: cfg.MaxModuleArchiveBytes,
+		namespaces: cfg.Namespaces, audit: cfg.Audit, onAuditErr: cfg.OnAuditFailure, now: cfg.Now,
+		maxFile: cfg.MaxArchiveBytes, maxRelease: cfg.MaxReleaseBytes, maxModule: cfg.MaxModuleArchiveBytes,
 	}
 
 	if s.now == nil {

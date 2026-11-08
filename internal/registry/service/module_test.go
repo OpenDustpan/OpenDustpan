@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/registry/modulecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
@@ -226,72 +227,95 @@ func TestPublishModuleRepeatAndConflict(t *testing.T) {
 	}
 }
 
+// moduleVersionRow is one scenario of TestPublishModuleVersionRows.
+type moduleVersionRow struct {
+	name       string
+	version    string
+	data       string
+	wantErr    error
+	wantKeys   int
+	wantAudits int
+	// wantOutcome is the outcome of the last new audit entry. It is empty
+	// when the publish writes no entry.
+	wantOutcome audit.Outcome
+}
+
 // TestPublishModuleVersionRows proves that a version that exists with other
 // content is refused before a content key is written. The key count and the
-// audit count show what each publish wrote.
+// audit count show what each publish wrote, and the outcome shows a denial.
 func TestPublishModuleVersionRows(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		version    string
-		data       string
-		wantErr    error
-		wantKeys   int
-		wantAudits int
-	}{
+	rows := []moduleVersionRow{
 		{
-			name:       "new version",
-			version:    "1.1.0",
-			data:       "two",
-			wantErr:    nil,
-			wantKeys:   1,
-			wantAudits: 1,
+			name:        "new version",
+			version:     "1.1.0",
+			data:        "two",
+			wantErr:     nil,
+			wantKeys:    1,
+			wantAudits:  1,
+			wantOutcome: audit.OutcomeSuccess,
 		},
 		{
-			name:       "same version with the same content",
-			version:    "1.0.0",
-			data:       "one",
-			wantErr:    nil,
-			wantKeys:   0,
-			wantAudits: 0,
+			name:        "same version with the same content",
+			version:     "1.0.0",
+			data:        "one",
+			wantErr:     nil,
+			wantKeys:    0,
+			wantAudits:  0,
+			wantOutcome: "",
 		},
 		{
-			name:       "same version with other content",
-			version:    "1.0.0",
-			data:       "two",
-			wantErr:    registry.ErrVersionExists,
-			wantKeys:   0,
-			wantAudits: 0,
+			name:        "same version with other content",
+			version:     "1.0.0",
+			data:        "two",
+			wantErr:     registry.ErrVersionExists,
+			wantKeys:    0,
+			wantAudits:  1,
+			wantOutcome: audit.OutcomeDenied,
 		},
 	}
 
-	for _, tc := range tests {
+	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			e := newEnv(t, false)
-
-			if _, err := e.publishModule("1.0.0", moduleTarGz(t, "one")); err != nil {
-				t.Fatalf("PublishModule: %v", err)
-			}
-
-			keysBefore := len(e.listing(t, e.ids[acme], "sha256"))
-			auditsBefore := len(e.store.audits)
-
-			_, err := e.publishModule(tc.version, moduleTarGz(t, tc.data))
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("PublishModule = %v, want %v", err, tc.wantErr)
-			}
-
-			if got := len(e.listing(t, e.ids[acme], "sha256")) - keysBefore; got != tc.wantKeys {
-				t.Fatalf("new content keys = %d, want %d", got, tc.wantKeys)
-			}
-
-			if got := len(e.store.audits) - auditsBefore; got != tc.wantAudits {
-				t.Fatalf("new audit entries = %d, want %d", got, tc.wantAudits)
-			}
+			checkModuleVersionRow(t, tc)
 		})
+	}
+}
+
+// checkModuleVersionRow publishes version 1.0.0, runs the publish of tc, and
+// checks its error, the content keys and the audit entries after it.
+func checkModuleVersionRow(t *testing.T, tc moduleVersionRow) {
+	t.Helper()
+
+	e := newEnv(t, false)
+
+	if _, err := e.publishModule("1.0.0", moduleTarGz(t, "one")); err != nil {
+		t.Fatalf("PublishModule: %v", err)
+	}
+
+	keysBefore := len(e.listing(t, e.ids[acme], "sha256"))
+	auditsBefore := len(e.store.audits)
+
+	_, err := e.publishModule(tc.version, moduleTarGz(t, tc.data))
+	if !errors.Is(err, tc.wantErr) {
+		t.Fatalf("PublishModule = %v, want %v", err, tc.wantErr)
+	}
+
+	if got := len(e.listing(t, e.ids[acme], "sha256")) - keysBefore; got != tc.wantKeys {
+		t.Fatalf("new content keys = %d, want %d", got, tc.wantKeys)
+	}
+
+	if got := len(e.store.audits) - auditsBefore; got != tc.wantAudits {
+		t.Fatalf("new audit entries = %d, want %d", got, tc.wantAudits)
+	}
+
+	if tc.wantAudits > 0 {
+		last := e.store.audits[len(e.store.audits)-1]
+		if last.Outcome != tc.wantOutcome {
+			t.Fatalf("outcome of the last audit entry = %q, want %q", last.Outcome, tc.wantOutcome)
+		}
 	}
 }
 
@@ -375,7 +399,7 @@ func TestPublishModuleRefusals(t *testing.T) {
 }
 
 // checkNothingKept proves that a refused publish left no content key, no
-// staged file, no audit entry and no release.
+// staged file and no release, and that it wrote one denied audit entry.
 func (e *env) checkNothingKept(t *testing.T) {
 	t.Helper()
 
@@ -387,8 +411,15 @@ func (e *env) checkNothingKept(t *testing.T) {
 		t.Fatalf("staged files after a refusal = %v", got)
 	}
 
-	if len(e.store.audits) != 0 {
-		t.Fatalf("a refusal wrote %d audit entries", len(e.store.audits))
+	if len(e.store.audits) != 1 {
+		t.Fatalf("%d audit entries after a refusal, want 1", len(e.store.audits))
+	}
+
+	entry := e.store.audits[0]
+	if entry.Outcome != audit.OutcomeDenied || entry.Action != string(identity.ActionRegistryPublish) ||
+		entry.Namespace != acme || entry.Subject != subject || len(entry.Changes) != 1 ||
+		entry.Changes[0].New != "module/vpc/aws@1.0.0" {
+		t.Fatalf("audit entry after a refusal = %+v", entry)
 	}
 
 	_, err := e.svc.ModuleRelease(context.Background(), acme, "vpc", "aws", "1.0.0")

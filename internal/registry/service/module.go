@@ -89,8 +89,12 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 		return registry.Release{}, measureErr
 	}
 
+	p := modulePublishing(view, req, addr, rec)
+
 	format, err := modulecheck.Check(f.bytes)
 	if err != nil {
+		s.recordDenied(ctx, c, p, err)
+
 		return registry.Release{}, fmt.Errorf("check the module archive: %w", err)
 	}
 
@@ -102,10 +106,10 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 		return registry.Release{}, fmt.Errorf("check the release: %w", err)
 	}
 
-	p := modulePublishing(view, req, addr, rec)
-
 	// The check runs before move, so a refused publish writes no content key.
 	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
+		s.recordDenied(ctx, c, p, refuseErr)
+
 		return registry.Release{}, refuseErr
 	}
 
