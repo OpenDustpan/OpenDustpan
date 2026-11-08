@@ -1,8 +1,147 @@
 package postgres
 
 import (
+	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/trigger"
 )
+
+// TestTriggerTxNowReadsTheClockOfTheDatabase proves the layer of the clock: the
+// time of a trigger write comes from the database, in the transaction of the
+// write. A canceled context fails the read of the database; the clock of the
+// process never fails.
+func TestTriggerTxNowReadsTheClockOfTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := (triggerTx{q: s.queries}).Now(ctx); err == nil {
+		t.Fatal("Now with a canceled context gave no error")
+	}
+}
+
+// statementLog is a pgx.QueryTracer that keeps the text of each statement that
+// its pool sends. The pool can call it from more than one connection, so a
+// mutex guards the list.
+type statementLog struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+// TraceQueryStart implements pgx.QueryTracer.
+func (l *statementLog) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	l.mu.Lock()
+	l.sql = append(l.sql, data.SQL)
+	l.mu.Unlock()
+
+	return ctx
+}
+
+// TraceQueryEnd implements pgx.QueryTracer.
+func (*statementLog) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// reset drops the statements that the pool sent so far.
+func (l *statementLog) reset() {
+	l.mu.Lock()
+	l.sql = nil
+	l.mu.Unlock()
+}
+
+// saw reports whether the pool sent a statement whose text contains query.
+func (l *statementLog) saw(query string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, sql := range l.sql {
+		if strings.Contains(sql, query) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// openWithStatementLog opens a store whose pool reports each statement to log.
+func openWithStatementLog(t *testing.T, log *statementLog) *Store {
+	t.Helper()
+
+	s, err := Open(t.Context(), membershipURL(t), WithQueryTracer(log))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return s
+}
+
+// TestTriggerWritesReadTheClockOfTheDatabase proves that Put and ClaimDue each
+// read the clock of the database in their transaction, through the
+// DatabaseNowMs statement. Without it the slot of a schedule would come from the
+// clock of the process, which one instance can have wrong.
+func TestTriggerWritesReadTheClockOfTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	log := &statementLog{}
+	s := openWithStatementLog(t, log)
+	seedTriggers(t, s)
+
+	found, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("read the namespace: %v", err)
+	}
+
+	fence := found.Fence()
+
+	// Put reads the clock of the database.
+	log.reset()
+
+	tr := trigger.Trigger{
+		ID: "h1", Unit: graph.Unit{Namespace: "acme", Tool: "opentofu", ID: "b"}, Kind: trigger.KindSchedule,
+		Frequency: trigger.Frequency{Preset: "", Cron: "0 * * * *"}, Source: graph.Unit{},
+		Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
+	}
+	if err := s.Triggers().Put(t.Context(), tr, fence, triggerAuditEntry()); err != nil {
+		t.Fatalf("put trigger: %v", err)
+	}
+
+	if !log.saw("DatabaseNowMs") {
+		t.Error("Put did not read the clock of the database")
+	}
+
+	// ClaimDue reads the clock of the database too. The slot is the start of the
+	// hour before this one on the clock of the database, so a claim of it is due.
+	nowMs, err := storeNow(t.Context(), s.queries)
+	if err != nil {
+		t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	past := time.UnixMilli(nowMs).UTC().Truncate(time.Hour).Add(-time.Hour)
+	if _, err := s.pool.Exec(t.Context(), `UPDATE triggers SET next_slot_ms = $1 WHERE id = 'h1'`, past.UnixMilli()); err != nil {
+		t.Fatalf("set the next slot: %v", err)
+	}
+
+	log.reset()
+
+	claim := trigger.Claim{Namespace: "acme", Trigger: "h1", Slot: past}
+	if err := s.Triggers().ClaimDue(t.Context(), claim, fence, triggerAuditEntry()); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if !log.saw("DatabaseNowMs") {
+		t.Error("ClaimDue did not read the clock of the database")
+	}
+}
 
 // TestSlotColumnRefusesAnEnabledScheduleTriggerWithoutOne proves the layer of the
 // table: an enabled schedule trigger cannot lose its next slot, whatever the code

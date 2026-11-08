@@ -3,11 +3,13 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/triggerstore"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 // pgCopyTriggerTables holds the COPY columns of the trigger table, in the order
@@ -27,13 +29,21 @@ func pgCopyTriggerTables() []pgCopyTable {
 }
 
 // checkStagedTriggers checks each trigger row of a staged backup with the rules
-// of a stored trigger. A row that fails makes the backup corrupt, so a restore
-// never brings in a trigger that the server would not serve. It returns
+// of a stored trigger and of its next slot, against the clock of the database
+// in the same transaction. A row that fails makes the backup corrupt, so a
+// restore never brings in a trigger that the server would not serve. It returns
 // backup.ErrCorrupt.
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
-func checkStagedTriggers(ctx context.Context, pool pgQuerier, staging string) error {
+func checkStagedTriggers(ctx context.Context, pool db.DBTX, staging string) error {
+	nowMs, err := storeNow(ctx, db.New(pool))
+	if err != nil {
+		return err
+	}
+
+	now := time.UnixMilli(nowMs).UTC()
+
 	query := "SELECT n.name, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace, " +
 		"t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, " +
 		"t.updated_at_ms, t.next_slot_ms FROM " +
@@ -53,7 +63,7 @@ func checkStagedTriggers(ctx context.Context, pool pgQuerier, staging string) er
 			return scanErr
 		}
 
-		if _, trErr := triggerstore.Trigger(row); trErr != nil {
+		if trErr := triggerstore.CheckStaged(row, now); trErr != nil {
 			return fmt.Errorf("staged trigger %q is not valid: %w: %w", row.ID, trErr, backup.ErrCorrupt)
 		}
 	}

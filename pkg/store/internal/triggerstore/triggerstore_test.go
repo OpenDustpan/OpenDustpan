@@ -158,6 +158,60 @@ func TestTriggerRefusesACorruptRow(t *testing.T) {
 	}
 }
 
+// TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach checks the rule of a
+// staged row: an enabled schedule trigger whose next slot is not a slot of its
+// schedule, or is after the first slot of the schedule after now, would never be
+// due, so the schedule would stop. A trigger that is off, or of another kind,
+// has no slot to check.
+func TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 30, 11, 30, 0, 0, time.UTC)
+	first := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	in2100 := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	rowWithSlot := func(tr trigger.Trigger, slot time.Time) triggerstore.Row {
+		row := triggerstore.RowOf(tr, now.UnixMilli())
+		row.NextSlotMs = slot.UnixMilli()
+
+		return row
+	}
+
+	off := hourly()
+	off.Enabled = false
+
+	cases := []struct {
+		name string
+		row  triggerstore.Row
+		want error
+	}{
+		{"the first slot after now", rowWithSlot(hourly(), first), nil},
+		{"a slot in 2100", rowWithSlot(hourly(), in2100), triggerstore.ErrCorrupt},
+		{"a time that is not a slot of the schedule", rowWithSlot(hourly(), first.Add(-30*time.Minute)), triggerstore.ErrCorrupt},
+		{"a trigger that is off", triggerstore.RowOf(off, 1), nil},
+		{"a follows trigger", triggerstore.RowOf(follows("f1", unitA(), unitC()), 1), nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := triggerstore.CheckStaged(tc.row, now)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("check = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, tc.want) || !errors.Is(err, trigger.ErrInvalid) {
+				t.Fatalf("check = %v, want ErrCorrupt and ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestTriggersFailsOnTheFirstCorruptRow(t *testing.T) {
 	t.Parallel()
 

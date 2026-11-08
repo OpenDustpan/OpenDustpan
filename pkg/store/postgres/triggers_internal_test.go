@@ -104,6 +104,29 @@ func TestCheckStagedTriggers(t *testing.T) {
 	}
 }
 
+// TestCheckStagedTriggersRefusesANextSlotInTheFuture proves the restore check:
+// an enabled hourly trigger whose next slot is in 2100 would never be due, so
+// the schedule would stop. The staged row is corrupt.
+func TestCheckStagedTriggersRefusesANextSlotInTheFuture(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedTriggers(t, s)
+
+	next := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+
+	_, err := s.pool.Exec(t.Context(),
+		`UPDATE triggers SET preset = '', cron = '0 * * * *', next_slot_ms = $1 WHERE id = 's1'`, next)
+	if err != nil {
+		t.Fatalf("change the row: %v", err)
+	}
+
+	err = checkStagedTriggers(t.Context(), s.pool, currentSchema(t, s))
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, triggerstore.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt of the backup and of the store", err)
+	}
+}
+
 // TestCheckStagedTriggersRefusesAMissingNamespace proves that a trigger whose
 // namespace the backup does not hold is corrupt. An inner join would skip such a
 // row, and the restore would bring it in.

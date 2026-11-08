@@ -80,7 +80,7 @@ type Store interface {
 	Delete(ctx context.Context, ns namespace.Name, id ID, fence namespace.Fence, e audit.Entry) error
 	// NextSlot returns the next slot of the schedule trigger id of the
 	// namespace ns: the first slot that a claim can still take. Put sets it to
-	// the first slot after the time of its audit entry (NextSlot of the
+	// the first slot after the clock of the store (NextSlot of the
 	// package) when the trigger is an enabled schedule trigger and is new, was
 	// off, or has another frequency. A replace that keeps an enabled schedule
 	// trigger and its frequency keeps the slot. ClaimDue moves it. It returns

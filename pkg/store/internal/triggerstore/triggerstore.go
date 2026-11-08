@@ -136,6 +136,47 @@ func Trigger(r Row) (trigger.Trigger, error) {
 	return t, nil
 }
 
+// CheckStaged checks the trigger row r that a restore stages, with now as the
+// clock of the store. It checks the row with Trigger, and then refuses an
+// enabled schedule trigger whose next slot is not a slot of its schedule, or is
+// after the first slot of the schedule after now: every claim of a real slot
+// would answer ErrNotDue, so the schedule would stop. A trigger that is off, or
+// a trigger of another kind, has no slot, and this rule does not apply to it.
+// It returns ErrCorrupt for a row that fails.
+//
+// Defense in depth: the store checks a row again when it reads it, and Put
+// writes the slot from the same clock. This check stays so that a bad row fails
+// the restore and does not wait for a claim.
+func CheckStaged(r Row, now time.Time) error {
+	t, err := Trigger(r)
+	if err != nil {
+		return err
+	}
+
+	if t.Kind != trigger.KindSchedule || !t.Enabled {
+		return nil
+	}
+
+	next := NextSlot(r)
+
+	if !trigger.IsSlot(t, next) {
+		return fmt.Errorf("%w: %w: the next slot %v is not a slot of the schedule",
+			ErrCorrupt, trigger.ErrInvalid, next)
+	}
+
+	after, err := trigger.NextSlot(t, now)
+	if err != nil {
+		return fmt.Errorf("%w: %w: %w", ErrCorrupt, trigger.ErrInvalid, err)
+	}
+
+	if next.After(after) {
+		return fmt.Errorf("%w: %w: the next slot %v is after the first slot after the clock of the store, %v",
+			ErrCorrupt, trigger.ErrInvalid, next, after)
+	}
+
+	return nil
+}
+
 // Triggers returns the triggers of rows, in the order of rows. A row that
 // fails its checks fails the call (fail closed): no row after it is served.
 func Triggers(rows []Row) ([]trigger.Trigger, error) {
