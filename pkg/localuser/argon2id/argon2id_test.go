@@ -250,18 +250,56 @@ func TestBudgetWaitsForRoom(t *testing.T) {
 		errs <- err
 	})
 
-	// Give the waiter time to find the budget full before the release.
-	// The test passes in either order.
-	select {
-	case <-time.After(20 * time.Millisecond):
-	case <-t.Context().Done():
-	}
+	waitForWaiting(t, b, 1)
 
 	release()
 	wg.Wait()
 
 	if err := <-errs; err != nil {
 		t.Fatalf("acquire after a release: %v", err)
+	}
+}
+
+// TestBudgetGrantAndCancelAtOnceLeaksNoMemory checks the race where the budget
+// grants a waiter its memory at the same time as the context of the waiter
+// ends: the memory comes back either way, so the budget holds nothing and no
+// waiter stays after each round.
+func TestBudgetGrantAndCancelAtOnceLeaksNoMemory(t *testing.T) {
+	t.Parallel()
+
+	b, err := argon2id.NewBudgetWithWait(localuser.MinHashMemoryBudgetKiB, 5*time.Second)
+	if err != nil {
+		t.Fatalf("new budget: %v", err)
+	}
+
+	for round := 1; round <= 500; round++ {
+		hold, err := b.Acquire(t.Context(), localuser.MaxMemoryKiB)
+		if err != nil {
+			t.Fatalf("round %d: acquire the hold: %v", round, err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		waiter := acquireAsync(ctx, b, localuser.MinMemoryKiB)
+		waitForWaiting(t, b, 1)
+
+		// End the context first, so the waiter meets the end of the context
+		// and the grant of the release together.
+		cancel()
+		hold()
+
+		got := waitForAcquired(t, waiter)
+		if got.err == nil {
+			got.release()
+		}
+
+		if inUse := b.InUse(); inUse != 0 {
+			t.Fatalf("round %d: in use = %d KiB, want 0", round, inUse)
+		}
+
+		if waiting := b.Waiting(); waiting != 0 {
+			t.Fatalf("round %d: waiting = %d, want 0", round, waiting)
+		}
 	}
 }
 

@@ -43,3 +43,9 @@ func lockFile(path string) (*os.File, error) {
 
 	return os.NewFile(uintptr(handle), path), nil
 }
+
+// unlockFile does nothing: the handle has no sharing, and the close releases
+// it.
+func unlockFile(_ *os.File) error {
+	return nil
+}

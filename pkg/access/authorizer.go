@@ -170,7 +170,7 @@ func authorizeNamespaceService(p identity.Principal, action identity.Action, obj
 
 // deny returns the error of a refused action.
 func deny(p identity.Principal, action identity.Action, obj identity.Object) error {
-	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	return &identity.DeniedError{Subject: p.Subject, Action: action, Object: obj}
 }
 
 // Access is what a principal can do on one object, and the grants that give
