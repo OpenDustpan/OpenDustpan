@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // settingsWiring holds what serve needs for the settings resource: the option
@@ -35,15 +36,16 @@ func (f *serveFlags) settingsWiring(st store) (settingsWiring, error) {
 	case sqliteStore:
 		return f.wireSettings(s.SettingStore())
 	case postgresStore:
-		return f.wireSettings(s.SettingStore())
+		return f.wireSettings(s.SettingStore(), postgres.SettingDeclarations()...)
 	default:
 		return settingsWiring{options: nil, sync: nil}, nil
 	}
 }
 
-// wireSettings builds the wiring over the settings store ss.
-func (f *serveFlags) wireSettings(ss setting.Store) (settingsWiring, error) {
-	declarations := cli.SettingDeclarations()
+// wireSettings builds the wiring over the settings store ss. extra holds the
+// declarations of the settings of the store itself, when the store has any.
+func (f *serveFlags) wireSettings(ss setting.Store, extra ...setting.Declaration) (settingsWiring, error) {
+	declarations := append(cli.SettingDeclarations(), extra...)
 
 	registry, err := setting.NewRegistry(declarations)
 	if err != nil {
