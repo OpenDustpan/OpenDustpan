@@ -1346,9 +1346,16 @@ func backupModel() costModel {
 //
 // The fixed part also holds blobDeleteLeaseTrips: the waits for the blob
 // deleters.
+//
+// The fixed part also holds stagedJobCheckTrips: the staged check of the job
+// rows reads the job rows of the staging schema in one statement, once for
+// each restore.
+//
+// The fixed part also holds removalAlertTrips for member_removal_alerts, a
+// table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips,
+		fixed:        342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips + stagedJobCheckTrips + removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1372,6 +1379,19 @@ const forgeStripClassTrips = 2
 // empties, and it costs 1 round trip, not the 2 of perOther, so the model takes
 // 1 off.
 const blobDeleteLeaseTrips = 3 - 1
+
+// stagedJobCheckTrips is the number of round trips of the staged check of the
+// job rows: the check reads the job rows of the staging schema in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedJobCheckTrips = 1
+
+// removalAlertTrips is the change in the fixed part for the table
+// member_removal_alerts. Like member_removals, it costs 2 round trips fewer
+// than a table in the model, because the dev strip counts no rows in it. The
+// restore reads the staged rows of the table once more, to refuse an alert
+// marker after the time of the restore, which adds 1 round trip.
+const removalAlertTrips = -2 + 1
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

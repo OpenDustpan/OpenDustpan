@@ -1770,6 +1770,17 @@ ORDER BY group_id COLLATE "C";
 INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
+-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms;
+
+-- name: MemberRemovalAlertedAt :one
+-- The time of the last alert of one source, or 0 when the source has none.
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = @source_kind AND source_id = @source_id), 0)::bigint
+    AS alerted_at_ms;
+
 -- name: MemberRemovalTotals :one
 -- The totals of the removals of one source in one window: the members that
 -- the source removed from any group, the members that it removed from one

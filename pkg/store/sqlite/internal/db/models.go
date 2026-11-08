@@ -645,6 +645,12 @@ type MemberRemoval struct {
 	AtMs          int64
 }
 
+type MemberRemovalAlert struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
+}
+
 type NameLock struct {
 	Scope         string
 	Name          string
