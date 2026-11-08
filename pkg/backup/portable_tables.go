@@ -797,6 +797,7 @@ func portableSpec() []PortableTable {
 		portableItemKeyTables(),
 		portableSettingTables(),
 		portableSelfServiceTables(),
+		portableQuotaTables(),
 		portableTrustRuleTables(),
 	)
 }

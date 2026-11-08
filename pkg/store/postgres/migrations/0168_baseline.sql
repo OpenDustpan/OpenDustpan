@@ -973,6 +973,45 @@ CREATE TABLE profiles (
     CONSTRAINT profiles_latest_check CHECK ((latest >= 1))
 );
 
+CREATE TABLE quota_keys (
+    namespace_id text NOT NULL,
+    blueprint text NOT NULL,
+    kind text NOT NULL,
+    scope text NOT NULL,
+    settled_count bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT quota_keys_kind_check CHECK ((kind = ANY (ARRAY['units'::text, 'requests'::text, 'expr'::text]))),
+    CONSTRAINT quota_keys_settled_count_check CHECK ((settled_count >= 0))
+);
+
+CREATE TABLE quota_requests (
+    id text NOT NULL,
+    namespace_id text NOT NULL,
+    blueprint text NOT NULL,
+    kind text NOT NULL,
+    scope text NOT NULL,
+    at_ms bigint NOT NULL,
+    CONSTRAINT quota_requests_kind_check CHECK ((kind = 'requests'::text))
+);
+
+CREATE TABLE quota_reservation_keys (
+    namespace_id text NOT NULL,
+    reservation_id text NOT NULL,
+    blueprint text NOT NULL,
+    kind text NOT NULL,
+    scope text NOT NULL,
+    CONSTRAINT quota_reservation_keys_kind_check CHECK ((kind = 'units'::text))
+);
+
+CREATE TABLE quota_reservations (
+    namespace_id text NOT NULL,
+    id text NOT NULL,
+    state text NOT NULL,
+    at_ms bigint NOT NULL,
+    ends_at_ms bigint NOT NULL,
+    CONSTRAINT quota_reservations_check CHECK ((ends_at_ms > at_ms)),
+    CONSTRAINT quota_reservations_state_check CHECK ((state = ANY (ARRAY['open'::text, 'settled'::text, 'released'::text])))
+);
+
 CREATE TABLE registry_keys (
     namespace_id text NOT NULL,
     fingerprint text NOT NULL,
@@ -1741,6 +1780,18 @@ ALTER TABLE ONLY profile_revisions
 ALTER TABLE ONLY profiles
     ADD CONSTRAINT profiles_pkey PRIMARY KEY (namespace_id, id);
 
+ALTER TABLE ONLY quota_keys
+    ADD CONSTRAINT quota_keys_pkey PRIMARY KEY (namespace_id, blueprint, kind, scope);
+
+ALTER TABLE ONLY quota_requests
+    ADD CONSTRAINT quota_requests_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY quota_reservation_keys
+    ADD CONSTRAINT quota_reservation_keys_pkey PRIMARY KEY (namespace_id, reservation_id, blueprint, kind, scope);
+
+ALTER TABLE ONLY quota_reservations
+    ADD CONSTRAINT quota_reservations_pkey PRIMARY KEY (namespace_id, id);
+
 ALTER TABLE ONLY registry_keys
     ADD CONSTRAINT registry_keys_pkey PRIMARY KEY (namespace_id, fingerprint);
 
@@ -2026,6 +2077,10 @@ CREATE UNIQUE INDEX principals_subject ON principals USING btree (subject COLLAT
 
 CREATE UNIQUE INDEX profiles_live_name ON profiles USING btree (namespace_id, name) WHERE (deleted_at_ms = 0);
 
+CREATE INDEX quota_requests_window ON quota_requests USING btree (namespace_id, blueprint, kind, scope, at_ms);
+
+CREATE INDEX quota_reservation_keys_key ON quota_reservation_keys USING btree (namespace_id, blueprint, kind, scope);
+
 CREATE UNIQUE INDEX roles_name_key ON roles USING btree (name_key COLLATE "C") WHERE (deleted_at_ms IS NULL);
 
 CREATE INDEX runner_join_tokens_pool ON runner_join_tokens USING btree (pool_id, created_at_ms, id);
@@ -2181,6 +2236,18 @@ ALTER TABLE ONLY principal_session_generations
 
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_namespace_id_profile_id_fkey FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles(namespace_id, id);
+
+ALTER TABLE ONLY quota_keys
+    ADD CONSTRAINT quota_keys_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY quota_requests
+    ADD CONSTRAINT quota_requests_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY quota_reservation_keys
+    ADD CONSTRAINT quota_reservation_keys_namespace_id_reservation_id_fkey FOREIGN KEY (namespace_id, reservation_id) REFERENCES quota_reservations(namespace_id, id);
+
+ALTER TABLE ONLY quota_reservations
+    ADD CONSTRAINT quota_reservations_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY registry_keys
     ADD CONSTRAINT registry_keys_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
