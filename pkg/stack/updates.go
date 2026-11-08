@@ -204,6 +204,10 @@ type UpdatesConfig struct {
 	// when nothing runs. Nil is a guard that never lets a delete run: the
 	// blobs stay for a later sweep.
 	BlobGuard blobguard.Leases
+	// OnDeleteWait receives the reason of each refused take of BlobGuard, so
+	// an operator can see the blob deletes that wait. A nil hook counts
+	// nothing.
+	OnDeleteWait blobguard.WaitCounter
 }
 
 // ManualLocks is the read side of the manual locks of the shared core. The
@@ -242,6 +246,7 @@ type Updates struct {
 	replayer       JournalReplayer
 	manual         ManualLocks
 	guard          blobguard.Leases
+	onDeleteWait   blobguard.WaitCounter
 	sealer         secret.ItemSealer
 	skipMu         sync.Mutex
 	skipLogged     string
@@ -310,6 +315,7 @@ func buildUpdates(cfg *UpdatesConfig, access blobAccess) *Updates {
 		replayer:       cfg.Replayer,
 		manual:         cfg.ManualLocks,
 		guard:          cfg.BlobGuard,
+		onDeleteWait:   cfg.OnDeleteWait,
 		sealer:         cfg.Sealer,
 		skipMu:         sync.Mutex{},
 		skipLogged:     "",
@@ -609,6 +615,8 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		// row names the delete that holds it.
 		leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 		if holdErr != nil {
+			s.onDeleteWait.Count(holdErr)
+
 			guardErr = holdErr
 
 			return holdErr
@@ -1334,6 +1342,8 @@ func (s *Updates) takeDeleteLease(
 	if err == nil {
 		return leaseCtx, release, true
 	}
+
+	s.onDeleteWait.Count(err)
 
 	wait, isWait := errors.AsType[*blobguard.WaitError](err)
 	if !isWait {

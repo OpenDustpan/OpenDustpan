@@ -47,6 +47,7 @@ func stateAtService(t *testing.T, f fixture, answer workspace.StateAt, err error
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if newErr != nil {
 		t.Fatalf("service: %v", newErr)
@@ -235,6 +236,7 @@ func namedFixture(t *testing.T, names inventory.Names, logErr error) (*workspace
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if newErr != nil {
 		t.Fatalf("service: %v", newErr)

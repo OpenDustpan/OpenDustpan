@@ -134,7 +134,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 		ManualLocks: nil, BlobGuard: blobguardtest.None{},
 		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
-		Replayer: nil, Refusals: stacktest.NewRefusals(),
+		Replayer: nil, Refusals: stacktest.NewRefusals(), OnDeleteWait: nil,
 	})
 	if err != nil {
 		b.Fatalf("updates service: %v", err)

@@ -70,6 +70,7 @@ func newSealFixture(t *testing.T) sealFixture {
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)

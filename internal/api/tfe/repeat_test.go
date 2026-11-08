@@ -144,7 +144,8 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		BlobGuard: blobguardtest.None{}, ManualLocks: nil, Workspaces: store, States: store, Blobs: blobs,
 		Namespaces: namespaces, OutOfScope: workspacetest.NewRefusals(), Sealer: repeatSealer{},
 		Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxStateBytes: 0, MaxPendingVersions: 0,
-		Retention: 0,
+		Retention:    0,
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("workspaces: %v", err)

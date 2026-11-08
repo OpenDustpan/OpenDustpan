@@ -3,6 +3,8 @@ package blobguard_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,6 +45,9 @@ func leaseAnswer(work blobguard.Work, ok bool, err error) fakeLeases {
 }
 
 var errWrite = errors.New("write failed")
+
+// errOther is an error that names no reason, for the test of ReasonOf.
+var errOther = errors.New("another failure")
 
 // leaseStart returns the time that the clock of the cases answers.
 func leaseStart() time.Time {
@@ -601,5 +606,106 @@ func TestHoldLeaseNamesTheWork(t *testing.T) {
 
 	if release != nil {
 		t.Fatal("HoldLease returned a release function with a WaitError")
+	}
+}
+
+// TestReasonOf maps each refused take to its reason. A canceled context has
+// no reason: its second result is false.
+func TestReasonOf(t *testing.T) {
+	t.Parallel()
+
+	backup := &blobguard.WaitError{Work: blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}}
+	restore := &blobguard.WaitError{Work: blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"}}
+
+	tests := []struct {
+		name string
+		err  error
+		want blobguard.WaitReason
+		ok   bool
+	}{
+		{name: "a backup", err: backup, want: blobguard.WaitBackup, ok: true},
+		{name: "a restore", err: restore, want: blobguard.WaitRestore, ok: true},
+		{name: "a wrapped backup", err: fmt.Errorf("hold the lease: %w", backup), want: blobguard.WaitBackup, ok: true},
+		{
+			name: "a wrapped restore",
+			err:  fmt.Errorf("hold the lease: %w", restore),
+			want: blobguard.WaitRestore,
+			ok:   true,
+		},
+		{name: "no guard", err: blobguard.ErrNoWatch, want: blobguard.WaitNoGuard, ok: true},
+		{
+			name: "a wrapped no guard",
+			err:  fmt.Errorf("hold the lease: %w", blobguard.ErrNoWatch),
+			want: blobguard.WaitNoGuard,
+			ok:   true,
+		},
+		{
+			name: "an unknown kind",
+			err:  &blobguard.WaitError{Work: blobguard.Work{Kind: "other", ID: "x-1"}},
+			want: blobguard.WaitGuardError,
+			ok:   true,
+		},
+		{name: "no holder", err: blobguard.ErrNoHolder, want: blobguard.WaitGuardError, ok: true},
+		{name: "an unknown answer", err: blobguard.ErrUnknown, want: blobguard.WaitGuardError, ok: true},
+		{name: "a failed take", err: errWrite, want: blobguard.WaitGuardError, ok: true},
+		{name: "an unknown error", err: errOther, want: blobguard.WaitGuardError, ok: true},
+		{name: "no error", err: nil, want: blobguard.WaitGuardError, ok: true},
+		{name: "a canceled context", err: context.Canceled, want: "", ok: false},
+		{
+			name: "a wrapped canceled context",
+			err:  fmt.Errorf("hold the lease: %w", context.Canceled),
+			want: "",
+			ok:   false,
+		},
+		{name: "an expired context", err: context.DeadlineExceeded, want: blobguard.WaitGuardError, ok: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := blobguard.ReasonOf(tc.err)
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("ReasonOf(%v) = %q, %v; want %q, %v", tc.err, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// TestCount proves Count counts a known reason once, and counts nothing for
+// a nil counter or a canceled context.
+func TestCount(t *testing.T) {
+	t.Parallel()
+
+	backup := &blobguard.WaitError{Work: blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}}
+
+	tests := []struct {
+		name    string
+		err     error
+		nilFunc bool
+		want    []blobguard.WaitReason
+	}{
+		{name: "a nil counter", err: backup, nilFunc: true, want: nil},
+		{name: "a canceled context", err: context.Canceled, nilFunc: false, want: nil},
+		{name: "a backup", err: backup, nilFunc: false, want: []blobguard.WaitReason{blobguard.WaitBackup}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []blobguard.WaitReason
+
+			var counter blobguard.WaitCounter
+			if !tc.nilFunc {
+				counter = func(reason blobguard.WaitReason) { got = append(got, reason) }
+			}
+
+			counter.Count(tc.err)
+
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Count(%v) counted %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }

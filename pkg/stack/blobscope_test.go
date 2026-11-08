@@ -515,6 +515,7 @@ func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Re
 		Journal:            nil,
 		Replayer:           nil,
 		ManualLocks:        nil,
+		OnDeleteWait:       nil,
 	}
 }
 

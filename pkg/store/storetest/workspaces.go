@@ -4230,6 +4230,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			MaxStateBytes:      0,
 			MaxPendingVersions: 0,
 			Retention:          0,
+			OnDeleteWait:       nil,
 		})
 		if err != nil {
 			t.Fatalf("workspace service: %v", err)

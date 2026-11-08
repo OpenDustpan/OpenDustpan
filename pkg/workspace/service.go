@@ -295,7 +295,11 @@ type Config struct {
 	// purge and runs only when nothing runs. Nil is a guard that never lets a
 	// delete run: the blobs stay for the retention sweep.
 	BlobGuard blobguard.Leases
-	Now       func() time.Time
+	// OnDeleteWait receives the reason of each refused take of BlobGuard, so
+	// an operator can see the blob deletes that wait. A nil hook counts
+	// nothing.
+	OnDeleteWait blobguard.WaitCounter
+	Now          func() time.Time
 	// MaxStateBytes bounds one state version; zero means DefaultMaxStateBytes.
 	MaxStateBytes int64
 	// MaxPendingVersions bounds the pending state versions of one
@@ -345,21 +349,22 @@ const lockStripes = 64
 // workspaces, locking, and state versions uploaded through single-use
 // capabilities.
 type Service struct {
-	workspaces Store
-	states     StateStore
-	blobs      *stateBlobs
-	namespaces *namespace.Service
-	sealer     Sealer
-	logger     *slog.Logger
-	guard      blobguard.Leases
-	now        func() time.Time
-	maxState   int64
-	maxPending int
-	retention  time.Duration
-	manual     ManualLocks
-	stateAt    StateAtReader
-	names      inventory.HistoryReader
-	stripes    [lockStripes]sync.Mutex
+	workspaces   Store
+	states       StateStore
+	blobs        *stateBlobs
+	namespaces   *namespace.Service
+	sealer       Sealer
+	logger       *slog.Logger
+	guard        blobguard.Leases
+	onDeleteWait blobguard.WaitCounter
+	now          func() time.Time
+	maxState     int64
+	maxPending   int
+	retention    time.Duration
+	manual       ManualLocks
+	stateAt      StateAtReader
+	names        inventory.HistoryReader
+	stripes      [lockStripes]sync.Mutex
 }
 
 // attachOptionalReaders sets the optional reads of the state store. A store
@@ -395,21 +400,22 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	s := &Service{
-		workspaces: cfg.Workspaces,
-		states:     cfg.States,
-		blobs:      &stateBlobs{store: cfg.Blobs, refusals: cfg.OutOfScope},
-		namespaces: cfg.Namespaces,
-		sealer:     cfg.Sealer,
-		logger:     cfg.Logger,
-		guard:      cfg.BlobGuard,
-		now:        cfg.Now,
-		maxState:   cfg.MaxStateBytes,
-		maxPending: cfg.MaxPendingVersions,
-		retention:  cfg.Retention,
-		manual:     cfg.ManualLocks,
-		stateAt:    nil,
-		names:      nil,
-		stripes:    [lockStripes]sync.Mutex{},
+		workspaces:   cfg.Workspaces,
+		states:       cfg.States,
+		blobs:        &stateBlobs{store: cfg.Blobs, refusals: cfg.OutOfScope},
+		namespaces:   cfg.Namespaces,
+		sealer:       cfg.Sealer,
+		logger:       cfg.Logger,
+		guard:        cfg.BlobGuard,
+		onDeleteWait: cfg.OnDeleteWait,
+		now:          cfg.Now,
+		maxState:     cfg.MaxStateBytes,
+		maxPending:   cfg.MaxPendingVersions,
+		retention:    cfg.Retention,
+		manual:       cfg.ManualLocks,
+		stateAt:      nil,
+		names:        nil,
+		stripes:      [lockStripes]sync.Mutex{},
 	}
 
 	attachOptionalReaders(s, cfg.States)
@@ -656,6 +662,8 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 			// delete, so the lease row names the delete that holds it.
 			leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 			if holdErr != nil {
+				s.onDeleteWait.Count(holdErr)
+
 				guardErr = holdErr
 
 				return holdErr

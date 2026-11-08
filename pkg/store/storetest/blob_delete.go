@@ -227,6 +227,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 		BlobGuard: r.store, ManualLocks: nil, Workspaces: r.store, States: r.store, Blobs: r.live,
 		Namespaces: nsSvc, OutOfScope: workspacetest.NewRefusals(), Sealer: testSealer(t, nsSvc), Logger: nil,
 		Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0, Retention: 0,
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -244,6 +245,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: r.store, Events: r.store,
 		Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: nil, Logger: nil,
 		MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)

@@ -119,6 +119,7 @@ func withManualLocks(t *testing.T, f updatesFixture, locks stack.ManualLocks) *s
 		MaxCheckpointBytes: 1024,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
