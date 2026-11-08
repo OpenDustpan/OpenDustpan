@@ -26,6 +26,22 @@ import (
 // one thread only shows as a step without it.
 const stepCount = 30
 
+// needMemory skips the test when dir is not on tmpfs. In CI the test fails,
+// so that a runner without tmpfs does not pass with no check run.
+func needMemory(t *testing.T, dir string) {
+	t.Helper()
+
+	if onMemory(dir) {
+		return
+	}
+
+	if os.Getenv("CI") != "" {
+		t.Fatalf("needs %s on tmpfs in CI", dir)
+	}
+
+	t.Skipf("needs %s on tmpfs", dir)
+}
+
 // sessionServer is the session side of a server, in memory: it opens one
 // session with steps, stores the log of each step and the finish.
 type sessionServer struct {
@@ -106,9 +122,7 @@ func (s *sessionServer) writeJSON(w http.ResponseWriter, v any) {
 func TestEachStepHasNoNewPrivs(t *testing.T) {
 	t.Parallel()
 
-	if !onMemory("/dev/shm") {
-		t.Skip("needs /dev/shm on tmpfs")
-	}
+	needMemory(t, "/dev/shm")
 
 	grep, err := exec.LookPath("grep")
 	if err != nil {
@@ -201,9 +215,7 @@ func runAgainst(t *testing.T, ts *httptest.Server, bin string, extra ...*os.File
 func TestNoInheritedDescriptorReachesAStep(t *testing.T) {
 	t.Parallel()
 
-	if !onMemory("/dev/shm") {
-		t.Skip("needs /dev/shm on tmpfs")
-	}
+	needMemory(t, "/dev/shm")
 
 	ls, err := exec.LookPath("ls")
 	if err != nil {

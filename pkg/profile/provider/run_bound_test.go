@@ -230,3 +230,87 @@ func TestRunGivesNoTokenAfterTheBlockEnds(t *testing.T) {
 			lateErr, src.calls.Load())
 	}
 }
+
+// cancelSource cancels the open while the issuer signs the token, as a block
+// that the caller cancels during the issuance.
+type cancelSource struct {
+	cancel context.CancelFunc
+	src    entrySource
+}
+
+func (s *cancelSource) Token(ctx context.Context, aud string, lifetime time.Duration) (profile.Token, error) {
+	tok, err := s.src.Token(ctx, aud, lifetime)
+	s.cancel()
+
+	return tok, err
+}
+
+// tokenAnswer is what the adapter read from the token source.
+type tokenAnswer struct {
+	tok profile.Token
+	err error
+}
+
+// TestTokenCanceledDuringIssuanceBeforeClose cancels the open while the
+// issuer signs the token, before the recorder of the block closes. The
+// adapter gets no value, and the entry of the signed token stays.
+//
+// The recorder can close before or after it records the token. The test
+// repeats the scenario, so that a value that leaves in either order fails.
+func TestTokenCanceledDuringIssuanceBeforeClose(t *testing.T) {
+	t.Parallel()
+
+	for range 20 {
+		ctx, cancel := context.WithCancel(t.Context())
+
+		src := &cancelSource{cancel: cancel, src: entrySource{calls: atomic.Int32{}}}
+		answer := make(chan tokenAnswer, 1)
+
+		f := newLogin(nil, func(ctx context.Context, r provider.Request) (provider.Result, error) {
+			tok, err := r.Tokens.Token(ctx, "aud", time.Minute)
+			answer <- tokenAnswer{tok: tok, err: err}
+
+			return provider.Result{}, err
+		})
+		f.spec.MintsTokens = true
+		reg := registry(t, f)
+
+		var mu sync.Mutex
+
+		var late []provider.Issued
+
+		out, err := reg.Run(ctx, []provider.Block{login("a")}, provider.Call{
+			Claims: nil, Tokens: func(string) provider.TokenSource { return src },
+			Late: func(i provider.Issued) {
+				mu.Lock()
+				late = append(late, i)
+				mu.Unlock()
+			},
+			Limit: 0,
+		})
+
+		got := <-answer
+		cancel()
+
+		if got.tok.Value != "" || !errors.Is(got.err, provider.ErrUnavailable) {
+			t.Fatalf("the adapter got err %v and a token value: %t, want provider.ErrUnavailable and no token",
+				got.err, got.tok.Value != "")
+		}
+
+		if !errors.Is(err, provider.ErrUnavailable) {
+			t.Fatalf("Run = %v, want provider.ErrUnavailable", err)
+		}
+
+		mu.Lock()
+		issued := append(append([]provider.Issued(nil), out.Tokens...), late...)
+		mu.Unlock()
+
+		if len(issued) != 1 {
+			t.Fatalf("the caller got %d entries, want the one entry of the signed token", len(issued))
+		}
+
+		if i := issued[0]; i.Delivered || i.Block != "a" || i.ID != "jti-1" || i.Entry.ObjectID != "jti-1" {
+			t.Fatalf("the entry = %+v, want the entry of jti-1, not delivered", i)
+		}
+	}
+}
