@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -141,54 +143,55 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 // testServer returns a Server with only the fields that the job tests use.
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
-		kind:             kindState{store: nil, principals: nil, kind: ""},
-		instances:        instanceState{store: nil, id: "", version: "", registered: nil},
-		ready:            nil,
-		drainPeriod:      0,
-		tempAdmins:       nil,
-		manualLocks:      nil,
-		reconciler:       nil,
-		artifactSweeper:  nil,
-		nameLocks:        nameLockPrune{locks: nil},
-		issuer:           nil,
-		handler:          nil,
-		started:          nil,
-		ungated:          nil,
-		mounted:          nil,
-		root:             nil,
-		logger:           slog.New(slog.DiscardHandler),
-		listenAddr:       "",
-		listener:         nil,
-		secrets:          nil,
-		secretKeys:       nil,
-		secretWrapper:    nil,
-		workspaces:       nil,
-		backups:          nil,
-		restores:         nil,
-		storeChecks:      nil,
-		now:              nil,
-		registry:         nil,
-		tlsCertFile:      "",
-		tlsKeyFile:       "",
-		observed:         nil,
-		chain:            nil,
-		tokens:           nil,
-		shipper:          nil,
-		beforeServe:      nil,
-		deleted:          nil,
-		signInRequests:   nil,
-		signInPruneEvery: 0,
-		signInProviders:  providerBinding{store: nil, providers: nil},
-		durable:          durableStore,
-		durableOwner:     owner,
-		inactivityEvery:  scheduleTestEvery,
-		deletedEvery:     scheduleTestEvery,
-		idempotency:      nil,
-		idempotencyEvery: 0,
-		auditChainEvery:  0,
-		components:       AllComponents(),
-		watch:            nil,
-		flushDenials:     nil,
+		kind:              kindState{store: nil, principals: nil, kind: ""},
+		instances:         instanceState{store: nil, id: "", version: "", registered: nil},
+		ready:             nil,
+		drainPeriod:       0,
+		tempAdmins:        nil,
+		manualLocks:       nil,
+		reconciler:        nil,
+		artifactSweeper:   nil,
+		supersededSweeper: nil,
+		nameLocks:         nameLockPrune{locks: nil},
+		issuer:            nil,
+		handler:           nil,
+		started:           nil,
+		ungated:           nil,
+		mounted:           nil,
+		root:              nil,
+		logger:            slog.New(slog.DiscardHandler),
+		listenAddr:        "",
+		listener:          nil,
+		secrets:           nil,
+		secretKeys:        nil,
+		secretWrapper:     nil,
+		workspaces:        nil,
+		backups:           nil,
+		restores:          nil,
+		storeChecks:       nil,
+		now:               nil,
+		registry:          nil,
+		tlsCertFile:       "",
+		tlsKeyFile:        "",
+		observed:          nil,
+		chain:             nil,
+		tokens:            nil,
+		shipper:           nil,
+		beforeServe:       nil,
+		deleted:           nil,
+		signInRequests:    nil,
+		signInPruneEvery:  0,
+		signInProviders:   providerBinding{store: nil, providers: nil},
+		durable:           durableStore,
+		durableOwner:      owner,
+		inactivityEvery:   scheduleTestEvery,
+		deletedEvery:      scheduleTestEvery,
+		idempotency:       nil,
+		idempotencyEvery:  0,
+		auditChainEvery:   0,
+		components:        AllComponents(),
+		watch:             nil,
+		flushDenials:      nil,
 		stateWrite: stateWriteStart{
 			effective: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 			audit:     nil,
@@ -553,6 +556,42 @@ func TestJobScheduleArtifactSweepRuns(t *testing.T) {
 	runArtifactSweepStep(t, srv)
 }
 
+// TestJobScheduleSupersededSweepLists proves that a server with the update
+// service lists the schedule stack.superseded-checkpoint-sweep with an
+// interval of 15 minutes and a runner kind with one step.
+func TestJobScheduleSupersededSweepLists(t *testing.T) {
+	t.Parallel()
+
+	srv := testServer(nil, "a")
+	srv.supersededSweeper = &stack.Updates{}
+
+	var found *durable.ScheduleSpec
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name == stack.SupersededSweepName {
+			found = &spec
+		}
+	}
+
+	if found == nil || found.Kind != stack.KindSupersededSweep || found.Version != stack.SupersededSweepVersion ||
+		found.Interval != 15*time.Minute {
+		t.Fatalf("schedules = %+v, want %s every 15 minutes with kind %s", srv.jobSchedules(),
+			stack.SupersededSweepName, stack.KindSupersededSweep)
+	}
+
+	var kind *durable.KindSpec
+
+	for _, k := range srv.jobKinds() {
+		if k.Kind == stack.KindSupersededSweep {
+			kind = &k
+		}
+	}
+
+	if kind == nil || len(kind.Steps) != 1 || kind.Version != stack.SupersededSweepVersion {
+		t.Fatalf("kinds = %+v, want %s with one step", srv.jobKinds(), stack.KindSupersededSweep)
+	}
+}
+
 // dropRefusals is a scopeaudit.Recorder that drops every refusal.
 type dropRefusals struct{}
 
@@ -669,5 +708,193 @@ func TestNoNameLockPruneWithoutCounts(t *testing.T) {
 		if k.Kind == kindNameLockPrune {
 			t.Fatalf("kinds = %+v, want no %s", srv.jobKinds(), kindNameLockPrune)
 		}
+	}
+}
+
+// logRecordHandler is a slog.Handler that keeps the records that it handles.
+type logRecordHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler.
+func (h *logRecordHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (h *logRecordHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (h *logRecordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup implements slog.Handler.
+func (h *logRecordHandler) WithGroup(string) slog.Handler { return h }
+
+// all returns the records that the handler kept.
+func (h *logRecordHandler) all() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return append([]slog.Record(nil), h.records...)
+}
+
+// fakeSupersededSweeper answers the sweep with the result and the error of a
+// test.
+type fakeSupersededSweeper struct {
+	res stack.SupersededSweepResult
+	err error
+}
+
+// SweepSuperseded implements supersededSweeper.
+func (f fakeSupersededSweeper) SweepSuperseded(context.Context) (stack.SupersededSweepResult, error) {
+	return f.res, f.err
+}
+
+// recordCounts returns the integer attributes of r by name.
+func recordCounts(r slog.Record) map[string]int64 {
+	counts := map[string]int64{}
+
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Value.Kind() == slog.KindInt64 {
+			counts[a.Key] = a.Value.Int64()
+		}
+
+		return true
+	})
+
+	return counts
+}
+
+// errSweepStopped reports a sweep that stops before it ends.
+var errSweepStopped = errors.New("the sweep stopped")
+
+// TestSupersededSweepStepLogsCounts proves that the step logs the counts of a
+// run that ends, and of a run that stops with an error, with the bytes that
+// the run deleted.
+func TestSupersededSweepStepLogsCounts(t *testing.T) {
+	t.Parallel()
+
+	res := stack.SupersededSweepResult{Deleted: 3, DeletedBytes: 4096, Kept: 2, Failed: 1}
+
+	tests := []struct {
+		name    string
+		err     error
+		level   slog.Level
+		message string
+	}{
+		{
+			name: "a run that ends", err: nil, level: slog.LevelInfo,
+			message: "superseded checkpoint sweep: deleted the marked blobs that no row names",
+		},
+		{
+			name: "a run that stops with an error", err: errSweepStopped, level: slog.LevelWarn,
+			message: "superseded checkpoint sweep: stopped with an error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkSupersededSweepStep(t, res, tc.err, tc.level, tc.message)
+		})
+	}
+}
+
+// checkSupersededSweepStep runs the step with res and errSweep, and checks its
+// output and its single log record.
+func checkSupersededSweepStep(
+	t *testing.T, res stack.SupersededSweepResult, errSweep error, level slog.Level, message string,
+) {
+	t.Helper()
+
+	handler := &logRecordHandler{mu: sync.Mutex{}, records: nil}
+	srv := testServer(nil, "a")
+	srv.logger = slog.New(handler)
+	srv.supersededSweeper = fakeSupersededSweeper{res: res, err: errSweep}
+
+	kind := srv.supersededSweepKind()
+	if len(kind.Steps) != 1 {
+		t.Fatalf("steps of the superseded sweep = %d, want one", len(kind.Steps))
+	}
+
+	var step durable.StepContext
+
+	out, err := kind.Steps[0].Run(t.Context(), step)
+	checkSupersededSweepOut(t, out, err, res, errSweep)
+
+	records := handler.all()
+	if len(records) != 1 || records[0].Level != level || records[0].Message != message {
+		t.Fatalf("records = %+v, want one %s record %q", records, level, message)
+	}
+
+	checkSupersededSweepCounts(t, records[0], res)
+
+	if errSweep != nil {
+		checkSupersededSweepError(t, records[0], errSweep)
+	}
+}
+
+// checkSupersededSweepOut checks the output and the error of the step.
+func checkSupersededSweepOut(
+	t *testing.T, out []byte, err error, res stack.SupersededSweepResult, wantErr error,
+) {
+	t.Helper()
+
+	if wantErr != nil {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("run the step: %v, want the error of the sweep", err)
+		}
+
+		if out != nil {
+			t.Fatalf("step output = %s with an error, want nil", out)
+		}
+
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("run the step: %v", err)
+	}
+
+	var got stack.SupersededSweepResult
+	if decodeErr := json.Unmarshal(out, &got); decodeErr != nil || got != res {
+		t.Fatalf("step output = %s, %v; want %+v", out, decodeErr, res)
+	}
+}
+
+// checkSupersededSweepCounts checks the counts of a log record of a run.
+func checkSupersededSweepCounts(t *testing.T, r slog.Record, res stack.SupersededSweepResult) {
+	t.Helper()
+
+	counts := recordCounts(r)
+	if len(counts) != 4 || counts["deleted"] != int64(res.Deleted) ||
+		counts["deleted_bytes"] != res.DeletedBytes || counts["kept"] != int64(res.Kept) ||
+		counts["failed"] != int64(res.Failed) {
+		t.Fatalf("counts of the record = %v, want the counts of the run %+v", counts, res)
+	}
+}
+
+// checkSupersededSweepError checks the error attribute of a log record.
+func checkSupersededSweepError(t *testing.T, r slog.Record, want error) {
+	t.Helper()
+
+	var got string
+
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "error" {
+			got = a.Value.String()
+		}
+
+		return true
+	})
+
+	if got != want.Error() {
+		t.Fatalf("error of the record = %q, want %q", got, want.Error())
 	}
 }

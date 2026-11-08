@@ -607,6 +607,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// supersededSweeper deletes the marked checkpoint blobs that a later save
+	// replaced: the schedule stack.superseded-checkpoint-sweep. It is nil
+	// without the update service.
+	supersededSweeper supersededSweeper
 	// nameLocks holds the counts of the lockout by name: the schedule
 	// name-lock-prune deletes the counts that can no longer change a lock.
 	// It is nil when the store keeps no such counts.
@@ -1050,7 +1054,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
-		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
+		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components, nameLocks: nameLocksOf(cfg),

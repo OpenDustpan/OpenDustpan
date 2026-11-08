@@ -301,6 +301,18 @@ func (fakeCheckpoints) SupersededBlobs(context.Context, stack.ID) ([]stack.Super
 	return nil, nil
 }
 
+func (fakeCheckpoints) SupersededMarks(
+	context.Context, stack.SupersededCursor, time.Time, int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The fake holds no mark,
+// so every drop is a missing mark that keeps the blob.
+func (fakeCheckpoints) DropSupersededMark(context.Context, stack.ID, blob.Key) (bool, error) {
+	return true, nil
+}
+
 // newTestBlobs opens a blob store in a fresh directory that the test closes
 // at cleanup. The cancel path writes no checkpoint, so it stays empty.
 func newTestBlobs(t *testing.T) *fs.Store {

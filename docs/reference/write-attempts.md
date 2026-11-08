@@ -48,7 +48,29 @@ own, then commits the row that names the blob.
 | Blobs | Sweep | When it runs |
 | --- | --- | --- |
 | Checkpoints and journal batches of an update | the sweep of the update and the sweep of the stack | after a checkpoint save, and at the start of an update |
+| Checkpoint blobs that a later save replaced | the schedule `stack.superseded-checkpoint-sweep` | one time each 15 minutes, on one instance |
 | Plans and log chunks of a job | the schedule `job.artifact-sweep` | one time each hour, on one instance |
+
+The schedule `stack.superseded-checkpoint-sweep` deletes the checkpoint blob
+that a later save of the same update replaced. It deletes a marked blob only
+after the grace period of a mark. It keeps a blob that a checkpoint row or a
+journal batch row names again. It deletes nothing while a backup or a restore
+runs. A delete that fails leaves the blob for the sweep of unnamed blobs. One
+run reads the marks page by page and holds one blob delete lease for each
+page.
+
+Each run of `stack.superseded-checkpoint-sweep` keeps a record of what it
+did:
+
+| Record | Content |
+| --- | --- |
+| The output of the step of its durable operation | Four counts. `deleted`: the number of deleted blobs. `deletedBytes`: the sum of the sizes that the resolved marks record. `kept`: the number of kept blobs. `failed`: the number of failed deletes. |
+| One log line, `superseded checkpoint sweep` | The same counts. The log line names the size `deleted_bytes`. |
+
+`deletedBytes` can count a blob that an earlier run deleted before it stopped.
+
+A run that stops with an error logs the counts of what it did before the
+error.
 
 The schedule `job.artifact-sweep` sweeps each job that has not ended, and
 each job whose state changed in the last 25 hours. One run reads at most 2,000

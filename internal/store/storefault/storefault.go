@@ -427,6 +427,28 @@ func (s *Store) SupersededBlobs(ctx context.Context, stackID stack.ID) ([]stack.
 	return s.inner.SupersededBlobs(ctx, stackID)
 }
 
+// SupersededMarks returns the marks of the superseded checkpoint blobs of
+// every live stack, unless a fault fires first.
+func (s *Store) SupersededMarks(
+	ctx context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	if err := s.before(ctx, "SupersededMarks"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.SupersededMarks(ctx, after, olderThan, limit)
+}
+
+// DropSupersededMark drops the mark of the blob key of the stack and reports
+// whether a row of the stack still names the key, unless a fault fires first.
+func (s *Store) DropSupersededMark(ctx context.Context, stackID stack.ID, key blob.Key) (bool, error) {
+	if err := s.before(ctx, "DropSupersededMark"); err != nil {
+		return false, err
+	}
+
+	return s.inner.DropSupersededMark(ctx, stackID, key)
+}
+
 // StateAt returns the update that held the state of the stack at a time,
 // unless a fault fires first.
 func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {

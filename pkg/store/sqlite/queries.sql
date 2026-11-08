@@ -389,6 +389,24 @@ LEFT JOIN (
 WHERE st.id = sqlc.arg('stack_id') AND st.deleted_at_ms IS NULL
 ORDER BY 1;
 
+-- name: BlobKeyNamed :one
+-- Reports whether a checkpoint row or a journal batch row of the stack names
+-- the blob key. The sweep reads it in the transaction that drops a mark, so a
+-- row that still names the key keeps the blob.
+SELECT CAST(EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = sqlc.arg(stack_id) AND c.blob_key = sqlc.arg(blob_key)
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = sqlc.arg(stack_id) AND j.blob_key = sqlc.arg(blob_key)
+) AS INTEGER) AS named;
+
+-- name: DeleteSupersededMark :execrows
+-- Deletes the mark of the blob key of the stack. A missing mark deletes no
+-- row, which is not an error.
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = sqlc.arg(stack_id) AND blob_key = sqlc.arg(blob_key);
+
 -- name: ListSupersededBlobs :many
 -- Every mark of one live stack, ordered by blob key: the blob that a later
 -- save of the same update replaced, with the size of the stored blob and the
@@ -402,6 +420,23 @@ FROM stacks AS st
 LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
 WHERE st.id = sqlc.arg('stack_id') AND st.deleted_at_ms IS NULL
 ORDER BY 1;
+
+-- name: ListSupersededMarks :many
+-- One page of the marks of every live stack whose save replaced the blob
+-- before the given time, ordered by stack ID and blob key. The read starts
+-- after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+-- marks in the result.
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS INTEGER) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < sqlc.arg(older_than_ms)
+  AND (m.stack_id > sqlc.arg(after_stack_id)
+    OR (m.stack_id = sqlc.arg(after_stack_id) AND m.blob_key > sqlc.arg(after_blob_key)))
+ORDER BY m.stack_id, m.blob_key
+LIMIT sqlc.arg(page_limit);
 
 -- name: MarkSupersededCheckpoint :exec
 -- Marks the checkpoint blob that a save of the update replaces, with the time

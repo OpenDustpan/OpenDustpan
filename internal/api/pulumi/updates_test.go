@@ -399,6 +399,22 @@ func (m *memUpdateStore) SupersededBlobs(
 	return nil, nil
 }
 
+// SupersededMarks implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	return false, nil
+}
+
 func (m *memUpdateStore) AppendEvents(
 	_ context.Context,
 	batch stack.EventBatch,
