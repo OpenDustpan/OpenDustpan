@@ -328,6 +328,7 @@ func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
 		"registry":     func(h http.Handler) { a.registry = h },
 		"sourcefilter": func(h http.Handler) { a.sourceFilter = h },
 		"trustrules":   func(h http.Handler) { a.trustRules = h },
+		"selfservice":  func(h http.Handler) { a.selfService = h },
 		"pulumi":       func(h http.Handler) { a.pulumi = h },
 		"tfe":          func(h http.Handler) { a.tfe = h },
 		"tofuhttp":     func(h http.Handler) { a.tofuHTTP = h },
