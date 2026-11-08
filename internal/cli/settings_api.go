@@ -5,7 +5,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -32,14 +34,27 @@ func (brandingPresetError) Error() string {
 //
 // A serve setting is static only: a flag, a variable or the file sets it, and
 // a change takes effect at the next start. A change through the API answers a
-// conflict for it. The settings that the database layer can hold are
-// declared here by key, and the static layer can lock each of them: the
-// branding preset and the settings of the password sign-in.
+// conflict for it. A serve setting whose file key a database declaration
+// already declares is not declared again: that declaration gives the key its
+// static layer, so a flag, a variable or the file can lock it.
 func SettingDeclarations() []setting.Declaration {
 	var out []setting.Declaration
 
+	held := localuser.SettingDeclarations()
+	held = append(held, session.SettingDeclarations()...)
+	held = append(held, plainconn.SettingDeclarations()...)
+	held = append(held, principal.RemovalAlertSettingDeclarations()...)
+	held = append(held, brandingPresetDeclaration())
+
+	declared := make(map[string]bool, len(held))
+	for _, d := range held {
+		if d.Database {
+			declared[d.Key] = true
+		}
+	}
+
 	for _, s := range ServeSettings() {
-		if s.File == "" || s.File == brandingPresetKey {
+		if s.File == "" || declared[s.File] {
 			continue
 		}
 
@@ -50,10 +65,13 @@ func SettingDeclarations() []setting.Declaration {
 		})
 	}
 
-	out = append(out, localuser.SettingDeclarations()...)
-	out = append(out, session.SettingDeclarations()...)
+	return append(out, held...)
+}
 
-	return append(out, setting.Declaration{
+// brandingPresetDeclaration returns the declaration of the branding preset,
+// which the database layer holds.
+func brandingPresetDeclaration() setting.Declaration {
+	return setting.Declaration{
 		Key: brandingPresetKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",
 		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive, ReducesSecurity: nil,
 		Check: func(value string) error {
@@ -64,7 +82,7 @@ func SettingDeclarations() []setting.Declaration {
 			return nil
 		},
 		Doc: "The name of the branding preset of the installation. Empty means the standard palette.",
-	})
+	}
 }
 
 // kindOf converts the kind of a flag to the kind of a setting.

@@ -2,6 +2,7 @@ package sqlite //nolint:testpackage // The white-box template state is unexporte
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
+
+// DB returns the database handle of s, so a test can read or change rows
+// with direct SQL.
+func DB(s *Store) *sql.DB {
+	return s.conn
+}
 
 // RemoveInternalTemplates removes the white-box template directory built for
 // this test binary. It skips removal when the template was never built.
