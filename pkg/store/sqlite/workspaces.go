@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -30,48 +31,92 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToWorkspaceRow(w)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if err := refuseUnderNamespaceLock(ctx, q, w.Ref, workspace.LockPassFrom(ctx)); err != nil {
+		return createWorkspaceRows(ctx, q, w)
+	})
+}
+
+// CreateWorkspacePlaced implements workspace.PlacedStore. The workspace, its
+// inventory entry, its membership of the collection and the audit entry of the
+// placement share one fenced transaction.
+func (s *Store) CreateWorkspacePlaced(
+	ctx context.Context, w workspace.Workspace, p workspace.Placement, fence namespace.Fence,
+) error {
+	// Defense in depth: the service and the handler check the placement too.
+	// This check stays so that a new caller of the store cannot make a
+	// workspace that no collection holds.
+	if !p.Complete(w.Ref.Namespace) {
+		return collection.ErrNoCollection
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	e := p.Entry
+
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		if err := createWorkspaceRows(ctx, q, w); err != nil {
 			return err
 		}
 
-		n, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
-			ID:                    row.ID,
-			Namespace:             row.Namespace,
-			Name:                  row.Name,
-			Revision:              row.Revision,
-			LockID:                row.LockID,
-			LockHolder:            row.LockHolder,
-			LockReason:            row.LockReason,
-			LockedAtMs:            row.LockedAtMs,
-			CurrentStateVersionID: row.CurrentStateVersion,
-			AllowForcedWrites:     row.AllowForcedWrites,
-			AllowUnlockedWrites:   row.AllowUnlockedWrites,
-			CreatedAtMs:           row.CreatedAtMs,
-			UpdatedAtMs:           row.UpdatedAtMs,
-			LastReleaseLockID:     row.LastReleaseLockID,
-			LastReleaseHolder:     row.LastReleaseHolder,
-			LastReleaseBy:         row.LastReleaseBy,
-			LastReleaseKind:       row.LastReleaseKind,
-			LastReleaseAtMs:       row.LastReleaseAtMs,
-		})
-		if err != nil {
-			return fmt.Errorf("insert workspace: %w", err)
-		}
-
-		if n == 0 {
-			return workspace.ErrAlreadyExists
-		}
-
-		return publishWorkspaceInventory(
-			ctx,
-			q,
-			w.Ref,
-			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
-		)
+		return setUnitCollection(ctx, q, workspacePlacementMove(w, p), e)
 	})
+}
+
+// workspacePlacementMove returns the move that puts the new workspace w in the
+// collection of p: the workspace has no collection yet.
+func workspacePlacementMove(w workspace.Workspace, p workspace.Placement) collection.Move {
+	return collection.Move{
+		Unit: collection.UnitRef{
+			Namespace: w.Ref.Namespace, Tool: workspaceInventoryTool, Name: w.Ref.Name.String(),
+		},
+		From: "", To: p.Collection, ToID: p.CollectionID, EndsLock: false,
+	}
+}
+
+// createWorkspaceRows inserts the workspace and its inventory entry in the
+// transaction of q.
+func createWorkspaceRows(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+	row := codec.ToWorkspaceRow(w)
+
+	if err := refuseUnderNamespaceLock(ctx, q, w.Ref, workspace.LockPassFrom(ctx)); err != nil {
+		return err
+	}
+
+	n, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		ID:                    row.ID,
+		Namespace:             row.Namespace,
+		Name:                  row.Name,
+		Revision:              row.Revision,
+		LockID:                row.LockID,
+		LockHolder:            row.LockHolder,
+		LockReason:            row.LockReason,
+		LockedAtMs:            row.LockedAtMs,
+		CurrentStateVersionID: row.CurrentStateVersion,
+		AllowForcedWrites:     row.AllowForcedWrites,
+		AllowUnlockedWrites:   row.AllowUnlockedWrites,
+		CreatedAtMs:           row.CreatedAtMs,
+		UpdatedAtMs:           row.UpdatedAtMs,
+		LastReleaseLockID:     row.LastReleaseLockID,
+		LastReleaseHolder:     row.LastReleaseHolder,
+		LastReleaseBy:         row.LastReleaseBy,
+		LastReleaseKind:       row.LastReleaseKind,
+		LastReleaseAtMs:       row.LastReleaseAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("insert workspace: %w", err)
+	}
+
+	if n == 0 {
+		return workspace.ErrAlreadyExists
+	}
+
+	return publishWorkspaceInventory(
+		ctx,
+		q,
+		w.Ref,
+		unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+	)
 }
 
 // GetWorkspace implements workspace.Store.
