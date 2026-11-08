@@ -83,7 +83,7 @@ func seedBetaGroupGrant(t *testing.T, f accessFixture, at time.Time) {
 
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-beta", Name: "beta-ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	groupChange := storetest.ServerChange(at, "group:grp-beta")
 	if groupErr := f.store.CreateGroup(t.Context(), group, groupChange); groupErr != nil {

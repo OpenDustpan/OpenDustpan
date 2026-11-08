@@ -838,14 +838,15 @@ type Principal struct {
 }
 
 type PrincipalGroup struct {
-	ID          string
-	Name        string
-	NameKey     string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	DeletedAtMs pgtype.Int8
+	ID                       string
+	Name                     string
+	NameKey                  string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	DeletedAtMs              pgtype.Int8
+	ClosedToIdentityProvider bool
 }
 
 type PrincipalSessionGeneration struct {

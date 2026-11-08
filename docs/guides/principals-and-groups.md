@@ -187,16 +187,42 @@ the same name, without regard to case, gets `409` with the code
 | --- | --- | --- |
 | `GET /api/server/groups` | `server:read-principals` | `200`, a page ordered by name |
 | `GET /api/server/groups/{id}` | `server:read-principals` | `200` |
-| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, or both. |
+| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, `closedToIdentityProvider`, or a combination of them. |
 | `DELETE /api/server/groups/{id}` | `server:manage-groups`, with a fresh sign-in | `204` |
 | `GET /api/server/principals/{id}/groups` | `server:read-principals` | `200`, the groups of a principal |
 
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
-`createdAt`, `updatedAt` and `memberCount`.
+`createdAt`, `updatedAt`, `memberCount` and `closedToIdentityProvider`.
 
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
 `mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
+
+### Close a group to the identity provider
+
+A group carries the switch `closedToIdentityProvider`. The default is `false`:
+the group is open. A `true` value marks the group as closed to the identity
+provider.
+
+A caller with `server:manage-groups` changes the switch with
+`PATCH /api/server/groups/{id}`. The body holds the switch as a JSON boolean:
+
+```sh
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"closedToIdentityProvider":true}' \
+  https://dustpan.example.com/api/server/groups/grp-...
+```
+
+A value of another type gets `400` with the code `request.body-invalid`. A
+change of the switch writes an audit entry for the group. The reason of the
+entry names the new value: `the identity provider may add members: off` for a
+closed group, and `the identity provider may add members: on` for an open one.
+A call that names the current value again is not an error.
+
+The server stores the switch. SCIM and the group claims of a sign-in do not
+read it yet, so the identity provider can still add a member to a closed
+group.
 
 ## Manage group members
 

@@ -725,6 +725,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"closed_to_identity_provider",
 			},
 		},
 		{
