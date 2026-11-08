@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -352,6 +353,7 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
 		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})

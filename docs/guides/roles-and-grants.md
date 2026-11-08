@@ -145,6 +145,9 @@ Some rules apply to a create:
 - A role with operator or administration actions goes on the installation only.
 - A grant on a service principal names a service principal, and it takes only
   delegation roles.
+- A grant of a delegation role, such as `token-manager`, on a service principal
+  needs a caller that holds the reach of that principal. Otherwise the answer is
+  `403`. See [Access tokens](access-tokens.md) for the reach.
 - The caller must hold every action of the role on that object. Otherwise the
   answer is `403`.
 - A current grant with the same subject, role and object gets `409`.

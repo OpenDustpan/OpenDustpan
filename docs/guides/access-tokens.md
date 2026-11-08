@@ -126,9 +126,21 @@ principal and each action that the caller does not hold, with its object:
 principal "prn-x" holds actions that you do not hold: server:backup on the installation
 ```
 
+The message names the object of an action only when the caller holds the read
+action of that object. Otherwise it writes `an object that you cannot read` in
+place of the object.
+
 A holder of `principal:manage-tokens` on the service principal itself is not
 compared. A site administrator holds every action, so it passes. A rotation
 follows the same rule.
+
+The same compare protects the grant that lets its holder act as the principal.
+A grant of a delegation role, such as `token-manager`, on a service principal
+needs a granter that holds the reach of that principal. A membership add to a
+group that holds such a grant needs the same. Otherwise the answer is `403`,
+and the change does not happen. The refusal names the principal only when the
+caller holds `server:read-principals`. A revoke, and a removal of a member,
+take access away, so they never run this compare.
 
 ## Revoke a token
 

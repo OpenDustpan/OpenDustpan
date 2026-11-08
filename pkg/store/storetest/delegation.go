@@ -120,7 +120,9 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
+		Now:   nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"},
 	})
 	if err != nil {
@@ -128,7 +130,10 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{TempAdmins: nil, Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil, Store: st, Guard: svc, GroupReach: svc, Namespaces: st, Tokens: svc,
+			Now: nil, NewID: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

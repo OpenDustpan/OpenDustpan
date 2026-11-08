@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -154,6 +155,7 @@ func (e *env) serve(authz identity.Authorizer) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
 		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil, Now: nil,
 		NewID: nil,
 	})

@@ -32,6 +32,7 @@ func newSignInFixture(t *testing.T) signInFixture {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},
@@ -180,6 +181,7 @@ func TestSignInPrincipalRefusesDisabled(t *testing.T) {
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})
@@ -319,6 +321,7 @@ func TestSignInRefusesTempAdmin(t *testing.T) {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

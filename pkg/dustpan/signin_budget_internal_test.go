@@ -49,7 +49,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil, Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
-		Now: func() time.Time { return now }, NewID: nil,
+		GroupReach: nil, Now: func() time.Time { return now }, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

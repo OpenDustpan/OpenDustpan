@@ -141,9 +141,6 @@ func newReachFixture(t *testing.T) reachFixture {
 	rf.bare = rf.serviceOf(t, "ci-bare")
 
 	server := identity.ServerObject()
-	principalSubject := func(p principal.Principal) access.Subject {
-		return access.Subject{Kind: access.SubjectPrincipal, ID: p.ID}
-	}
 
 	rf.grant(t, "grt-account", principalSubject(rf.account), access.RoleAccountAdministrator, server)
 	rf.grant(t, "grt-site", principalSubject(rf.site), access.RoleSiteAdministrator, server)
@@ -214,6 +211,48 @@ func (f *reachFixture) grant(
 	}
 }
 
+// principalSubject returns the grant subject of the principal p.
+func principalSubject(p principal.Principal) access.Subject {
+	return access.Subject{Kind: access.SubjectPrincipal, ID: p.ID}
+}
+
+// grantTokenRoleAs grants the token role on obj to subject for granter,
+// through every check of the access service, so a test makes a grant as the
+// server makes it.
+func (f *reachFixture) grantTokenRoleAs(
+	t *testing.T, granter identity.Principal, subject access.Subject, obj identity.Object,
+) {
+	t.Helper()
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: f.store, Directory: f.store, Namespaces: f.store, Authorizer: f.authorizerOf(t),
+		Reach: f.reach, Now: f.clock.Now, NewID: nil, BootstrapAdmins: []string{"admin"},
+	})
+	if err != nil {
+		t.Fatalf("access service: %v", err)
+	}
+
+	_, err = svc.Grant(t.Context(), caller(), granter,
+		access.GrantInput{Object: obj, Role: access.RoleTokenManager, Subject: subject})
+	if err != nil {
+		t.Fatalf("grant %s on %q to %s: %v", access.RoleTokenManager, obj.String(), subject.String(), err)
+	}
+}
+
+// authorizerOf returns the authorizer of the grants of the store.
+func (f *reachFixture) authorizerOf(t *testing.T) *access.Authorizer {
+	t.Helper()
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: f.store, Collections: nil, Units: f.store, Principals: f.store,
+	})
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	return authz
+}
+
 // newService returns a token service over the store of f with the reach
 // config reach and the authorizer of the grants of the store.
 func (f *reachFixture) newService(t *testing.T, reach access.ReachConfig) *accesstoken.Service {
@@ -230,16 +269,9 @@ func (f *reachFixture) newServiceWith(
 ) *accesstoken.Service {
 	t.Helper()
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: f.store, Callers: f.store, Collections: nil, Units: f.store, Principals: f.store,
-	})
-	if err != nil {
-		t.Fatalf("authorizer: %v", err)
-	}
-
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      f.store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
+		Store:      f.store, Principals: principals, Freshness: nil, Authorizer: f.authorizerOf(t), Reach: reach,
 		Logger: nil, Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
@@ -503,8 +535,10 @@ func TestDirectTokenHolderIsNotCompared(t *testing.T) {
 
 // TestInstallationAndPrincipalHolderIsNotCompared proves that a caller that
 // holds principal:manage-tokens on the installation and on the target
-// principal is not compared: the hold on the principal decides alone,
-// directly or through a group.
+// principal is not compared at token time: the hold on the principal decides
+// alone, directly or through a group. The compare of the reach at grant time
+// is what protects this path: the grants of this setup come from an
+// administrator, whose reach holds the reach of the operator principal.
 func TestInstallationAndPrincipalHolderIsNotCompared(t *testing.T) {
 	t.Parallel()
 
@@ -512,10 +546,8 @@ func TestInstallationAndPrincipalHolderIsNotCompared(t *testing.T) {
 	ctx := t.Context()
 
 	direct := f.personOf(t, "both-direct@example.com")
-	f.grant(t, "grt-both-direct-server", access.Subject{Kind: access.SubjectPrincipal, ID: direct.ID},
-		access.RoleTokenManager, identity.ServerObject())
-	f.grant(t, "grt-both-direct-principal", access.Subject{Kind: access.SubjectPrincipal, ID: direct.ID},
-		access.RoleTokenManager, identity.PrincipalObject(f.ops.ID))
+	f.grantTokenRoleAs(t, admin(), principalSubject(direct), identity.ServerObject())
+	f.grantTokenRoleAs(t, admin(), principalSubject(direct), identity.PrincipalObject(f.ops.ID))
 
 	group, err := f.principals.CreateGroup(ctx, caller(), principal.GroupInput{Name: "both-holders", Description: ""})
 	if err != nil {
@@ -528,10 +560,9 @@ func TestInstallationAndPrincipalHolderIsNotCompared(t *testing.T) {
 		t.Fatalf("add member: %v", err)
 	}
 
-	f.grant(t, "grt-both-group-server", access.Subject{Kind: access.SubjectGroup, ID: group.ID},
-		access.RoleTokenManager, identity.ServerObject())
-	f.grant(t, "grt-both-group-principal", access.Subject{Kind: access.SubjectGroup, ID: group.ID},
-		access.RoleTokenManager, identity.PrincipalObject(f.ops.ID))
+	groupSubject := access.Subject{Kind: access.SubjectGroup, ID: group.ID}
+	f.grantTokenRoleAs(t, admin(), groupSubject, identity.ServerObject())
+	f.grantTokenRoleAs(t, admin(), groupSubject, identity.PrincipalObject(f.ops.ID))
 
 	// The principals port fails: a compare would refuse the change.
 	svc := f.newService(t, access.ReachConfig{
@@ -696,6 +727,104 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 				t.Fatalf("create with %s = %q, want it to hold %q", tc.name, err, want)
 			}
 		})
+	}
+}
+
+// TestReachRefusalNamesOnlyReadableObjects proves that the refusal of the
+// reach check names the object of an action only when the reach of the
+// caller holds the read action of that object: a namespace that the caller
+// cannot read stays unnamed, and one that it reads is named.
+func TestReachRefusalNamesOnlyReadableObjects(t *testing.T) {
+	t.Parallel()
+
+	f := newReachFixture(t)
+	ctx := t.Context()
+
+	ns := namespace.Namespace{
+		CreatedAt:           f.clock.Now(),
+		ID:                  namespace.NewID(),
+		Name:                "acme",
+		PrimaryInstallation: "eu-west",
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+		FailoverVersion:     1,
+	}
+
+	if err := f.store.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	// The reader holds the token role on the installation and reads the
+	// namespace, so a refusal may name it. The token manager reads no
+	// namespace.
+	reader := f.personOf(t, "reader@example.com")
+
+	f.grant(t, "grt-reader-token", access.Subject{Kind: access.SubjectPrincipal, ID: reader.ID},
+		access.RoleTokenManager, identity.ServerObject())
+	f.grant(t, "grt-reader-viewer", access.Subject{Kind: access.SubjectPrincipal, ID: reader.ID},
+		access.RoleViewer, identity.NamespaceObject(ns.Name))
+
+	// The blind principal reaches the reads of the namespace, which the
+	// token manager does not hold. The writer principal reaches more than
+	// the reader holds.
+	blind := f.serviceOf(t, "ci-blind")
+	f.grant(t, "grt-blind-viewer", access.Subject{Kind: access.SubjectPrincipal, ID: blind.ID},
+		access.RoleViewer, identity.NamespaceObject(ns.Name))
+
+	writer := f.serviceOf(t, "ci-writer")
+	f.grant(t, "grt-writer-writer", access.Subject{Kind: access.SubjectPrincipal, ID: writer.ID},
+		access.RoleWriter, identity.NamespaceObject(ns.Name))
+
+	const hidden = "an object that you cannot read"
+
+	tests := []struct {
+		name    string
+		caller  principal.Principal
+		target  principal.Principal
+		want    []string
+		notWant []string
+	}{
+		{
+			name:   "a caller that cannot read the namespace",
+			caller: f.tm, target: blind,
+			want: []string{hidden}, notWant: []string{ns.Name.String()},
+		},
+		{
+			name:   "a caller that reads the namespace",
+			caller: reader, target: writer,
+			want: []string{fmt.Sprintf("namespace %q", ns.Name)}, notWant: []string{hidden},
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := f.createAs(ctx, as(tc.caller), tc.target)
+			if !errors.Is(err, accesstoken.ErrReachExceeded) {
+				t.Fatalf("create = %v, want accesstoken.ErrReachExceeded", err)
+			}
+
+			checkRefusalText(t, err, tc.want, tc.notWant)
+		})
+	}
+}
+
+// checkRefusalText checks that the refusal err holds every text of want,
+// and no text of notWant.
+func checkRefusalText(t *testing.T, err error, want, notWant []string) {
+	t.Helper()
+
+	for _, text := range want {
+		if !strings.Contains(err.Error(), text) {
+			t.Errorf("refusal %q does not hold %q", err, text)
+		}
+	}
+
+	for _, text := range notWant {
+		if strings.Contains(err.Error(), text) {
+			t.Errorf("refusal %q holds %q", err, text)
+		}
 	}
 }
 

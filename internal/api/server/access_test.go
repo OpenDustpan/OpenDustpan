@@ -188,7 +188,11 @@ func newAccessFixtureAll(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"},
 	})
 	if err != nil {
@@ -200,6 +204,7 @@ func newAccessFixtureAll(
 			TempAdmins: nil,
 			Store:      st,
 			Guard:      grants,
+			GroupReach: grants,
 			Namespaces: st,
 			Tokens:     grants,
 			Now:        nil,

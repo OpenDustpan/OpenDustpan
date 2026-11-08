@@ -100,6 +100,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        c.Now,
 			NewID:      nil,
 		},

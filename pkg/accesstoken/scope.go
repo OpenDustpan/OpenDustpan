@@ -293,39 +293,39 @@ func (s *Service) requireReach(ctx context.Context, caller identity.Principal, p
 		return nil
 	}
 
-	missing, err := s.missingActions(ctx, caller, principalID)
+	holder, missing, err := s.missingActions(ctx, caller, principalID)
 	if err != nil {
 		return refuseReach(principalID, err)
 	}
 
 	if len(missing) > 0 {
-		return refuseMissing(principalID, missing)
+		return refuseMissing(ctx, holder, principalID, missing)
 	}
 
 	return nil
 }
 
-// missingActions returns the actions of the reach of the principal
-// principalID that the reach of the caller does not hold.
+// missingActions returns the reach of the caller and the actions of the
+// reach of the principal principalID that it does not hold.
 func (s *Service) missingActions(
 	ctx context.Context, caller identity.Principal, principalID string,
-) ([]access.HeldAction, error) {
+) (access.Reach, []access.HeldAction, error) {
 	holder, err := s.reachOf(ctx, caller)
 	if err != nil {
-		return nil, err
+		return access.Reach{}, nil, err
 	}
 
 	target, err := access.ReachOf(ctx, s.reach, principalID)
 	if err != nil {
-		return nil, fmt.Errorf("read the reach of the principal: %w", err)
+		return holder, nil, fmt.Errorf("read the reach of the principal: %w", err)
 	}
 
 	missing, err := holder.Missing(ctx, target)
 	if err != nil {
-		return nil, fmt.Errorf("compare the reaches: %w", err)
+		return holder, nil, fmt.Errorf("compare the reaches: %w", err)
 	}
 
-	return missing, nil
+	return holder, missing, nil
 }
 
 // reachOf returns the reach of the caller: the reach of the principal
@@ -473,20 +473,48 @@ func (r *reachCheckError) Unwrap() []error {
 	return []error{identity.ErrDenied, ErrReachExceeded, r.cause}
 }
 
+// missingObjectText is what a refusal writes in place of the object of an
+// action that the caller cannot read.
+const missingObjectText = "an object that you cannot read"
+
 // reachExceededError reports a caller whose reach does not hold every
 // action of the principal principalID. It wraps identity.ErrDenied and
 // ErrReachExceeded. Its text names the principal and the actions that the
-// caller does not hold, sorted, with the object of each.
+// caller does not hold, sorted, with the object of each. It names the
+// object of an action only when the reach of the caller holds the read
+// action of that object, so the text never names an object that the caller
+// cannot read. It writes the actions of such an object in one part, with
+// missingObjectText, and it keeps the parts in the sorted order of the
+// actions.
 type reachExceededError struct {
 	principalID string
 	missing     []access.HeldAction
+	// readable tells, for each entry of missing, whether the reach of the
+	// caller holds the read action of its object.
+	readable []bool
 }
 
 // Error implements error.
 func (r *reachExceededError) Error() string {
 	parts := make([]string, 0, len(r.missing))
+
 	for i := range r.missing {
-		parts = append(parts, string(r.missing[i].Action)+" on "+objectText(r.missing[i].Object))
+		text := objectText(r.missing[i].Object)
+		if !r.readable[i] {
+			text = missingObjectText
+		}
+
+		// The actions of one object that the caller cannot read share one
+		// part when they are neighbors in the sorted list. Another object
+		// between them takes a part of its own, so the order stays sorted.
+		if i > 0 && !r.readable[i] && !r.readable[i-1] &&
+			r.missing[i].Object.String() == r.missing[i-1].Object.String() {
+			parts[len(parts)-1] += ", " + string(r.missing[i].Action)
+
+			continue
+		}
+
+		parts = append(parts, string(r.missing[i].Action)+" on "+text)
 	}
 
 	return fmt.Sprintf("principal %q holds actions that you do not hold: %s",
@@ -503,9 +531,58 @@ func refuseReach(principalID string, err error) error {
 }
 
 // refuseMissing returns the refusal of a caller whose reach does not hold
-// every action of the principal principalID.
-func refuseMissing(principalID string, missing []access.HeldAction) error {
-	return &reachExceededError{principalID: principalID, missing: missing}
+// every action of the principal principalID. It reads, for each action, the
+// read action of its object with the reach of the caller, so the text names
+// no object that the caller cannot read.
+func refuseMissing(
+	ctx context.Context, holder access.Reach, principalID string, missing []access.HeldAction,
+) error {
+	readable := make([]bool, len(missing))
+	for i := range missing {
+		readable[i] = readsObject(ctx, holder, missing[i].Object)
+	}
+
+	return &reachExceededError{principalID: principalID, missing: missing, readable: readable}
+}
+
+// readsObject reports whether the reach of holder holds the read action of
+// obj, so a refusal may name it. The installation and the caller answer
+// true: a caller always reads them. A read that fails answers false, so the
+// refusal names no object that it cannot check.
+func readsObject(ctx context.Context, holder access.Reach, obj identity.Object) bool {
+	if obj.IsServer() || obj.IsCaller() {
+		return true
+	}
+
+	action, ok := readActionOf(obj)
+	if !ok {
+		return false
+	}
+
+	holds, err := holder.Has(ctx, action, obj)
+	if err != nil {
+		return false
+	}
+
+	return holds
+}
+
+// readActionOf returns the action that reads an object of the kind of obj.
+// A principal reads as the principals of the installation, which is an
+// action on the installation.
+func readActionOf(obj identity.Object) (identity.Action, bool) {
+	switch {
+	case obj.IsNamespace():
+		return identity.ActionNamespaceRead, true
+	case obj.IsCollection():
+		return identity.ActionCollectionRead, true
+	case obj.IsUnit():
+		return identity.ActionUnitRead, true
+	case obj.IsPrincipal():
+		return identity.ActionServerReadPrincipals, true
+	default:
+		return "", false
+	}
 }
 
 // objectText returns the object of an action for a refusal: "the

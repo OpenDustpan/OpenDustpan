@@ -2973,9 +2973,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	var tokens principal.Tokens
 
+	var reach principal.GroupReach
+
 	if grants != nil {
 		guard = grants
 		tokens = grants
+		reach = grants
 	}
 
 	// Both SQL adapters keep the temporary administrators, so a sign-in
@@ -2987,7 +2990,8 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: temps,
-		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		Store:      store, Guard: guard, GroupReach: reach, Namespaces: cfg.namespaceStore,
+		Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -3175,8 +3179,14 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	reach, reachErr := reachConfig(cfg)
+	if reachErr != nil {
+		return nil, fmt.Errorf("access service: %w", reachErr)
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
+		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
+		Reach: reach, Now: nil, NewID: nil,
 		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
 	})
 	if err != nil {
