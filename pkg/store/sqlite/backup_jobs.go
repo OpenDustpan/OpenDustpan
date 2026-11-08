@@ -108,7 +108,9 @@ FROM jobs AS j LEFT JOIN namespaces AS n ON n.id = j.namespace_id`
 	}
 
 	defer func() {
-		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
 	}()
 
 	for rows.Next() {
