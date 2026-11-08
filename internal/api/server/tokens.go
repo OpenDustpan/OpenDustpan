@@ -323,7 +323,10 @@ func (h *Handler) tokenRoutes() []Route {
 			Resolve:      h.resolveTokenOwner,
 			ActionsFor:   revokeActions,
 			OpaqueDenial: true,
-			Serve:        h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
+			Serve: h.serveTokenChange(
+				identity.ActionServerManageTokens,
+				opaqueTokenState(revokeToken(accesstoken.ScopePersonal)),
+			),
 		},
 	}, h.serviceTokenRoutes()...)
 }
@@ -356,7 +359,7 @@ func (h *Handler) serviceTokenRoutes() []Route {
 			Resolve:      h.resolveTokenOwner,
 			ActionsFor:   nil,
 			OpaqueDenial: true,
-			Serve:        serve(rotateToken(accesstoken.ScopeService)),
+			Serve:        serve(opaqueTokenState(rotateToken(accesstoken.ScopeService))),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
@@ -404,8 +407,11 @@ func resolvePrincipalPath(_ http.ResponseWriter, r *http.Request) (identity.Obje
 
 // resolveTokenOwner returns the object of a change of the token in the
 // path: the principal of a service token, else the installation. A token
-// that does not exist resolves to the installation, and the Service
-// answers 404 after the route check.
+// that does not exist, a malformed ID and a token of the wrong kind resolve
+// to the installation, so the route check runs. On DELETE
+// /api/server/tokens/{id} and POST /api/server/service-tokens/{id}/rotate,
+// the handler then answers the opaque 403, so a caller cannot learn whether
+// the token exists.
 func (h *Handler) resolveTokenOwner(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	if h.tokens == nil {
 		return identity.ServerObject(), nil
@@ -811,6 +817,35 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 	}
 
 	return accesstoken.TokenRef(t.PrincipalID, id)
+}
+
+// opaqueTokenState answers the opaque denial of the two routes whose object
+// comes from the stored token for a token that does not exist, a malformed
+// token ID and a token of the wrong kind. It keeps the full text for the log
+// and unwraps only to identity.ErrDenied. Only the read of the token in the
+// path decides about a malformed ID: an invalid request of op, for example
+// an end time of a rotation in the past, keeps its own answer.
+func opaqueTokenState(op tokenOp) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		id := r.PathValue("id")
+
+		// Defense in depth: the route check refuses a caller without the
+		// action; this layer stops a caller that holds the action from
+		// learning whether a token ID exists.
+		if _, err := svc.Get(r.Context(), id); errors.Is(err, accesstoken.ErrNotFound) ||
+			errors.Is(err, accesstoken.ErrInvalid) {
+			return failed(accesstoken.Ref(id)), opaqueDenialError{err: err}
+		}
+
+		res, err := op(w, r, svc, p, e)
+		if errors.Is(err, accesstoken.ErrNotFound) || errors.Is(err, accesstoken.ErrWrongKind) {
+			return res, opaqueDenialError{err: err}
+		}
+
+		return res, err
+	}
 }
 
 // classifyToken maps the access token errors to their status and message.

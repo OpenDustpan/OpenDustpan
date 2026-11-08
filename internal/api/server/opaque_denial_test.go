@@ -101,6 +101,242 @@ func checkTokenDenial(t *testing.T, rec *httptest.ResponseRecorder, want, id str
 	}
 }
 
+// TestTokenRoutesHideStoredTokenState proves that the two token routes whose
+// object comes from the stored token answer the opaque 403 for a token that
+// is missing, malformed or of the wrong kind, also to a caller that holds
+// server:manage-tokens and to an administrator. Another token route and a
+// store failure keep their answer.
+func TestTokenRoutesHideStoredTokenState(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedService(t, "deploy")
+
+	var role roleDoc
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/roles", `{"name":"token-revoker","actions":["server:manage-tokens"]}`,
+		http.StatusCreated,
+	}, &role)
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:prn-bob","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	var service, personal tokenDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/principals/prn-deploy/tokens", `{"name":"ci"}`, http.StatusCreated,
+	}, &service)
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
+	}, &personal)
+
+	const (
+		deletePath = "/api/server/tokens/"
+		rotatePath = "/api/server/service-tokens/"
+	)
+
+	want := f.asToken(t, "olga", http.MethodDelete, deletePath+service.ID, nil).Body.String()
+
+	broken := newAccessFixture(t)
+	if err := broken.store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	tests := []tokenStateCase{
+		{
+			name: "holder delete unknown well-formed ID", subject: "bob", method: http.MethodDelete,
+			path: deletePath + "tok-unknown", body: "", id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "holder delete malformed ID", subject: "bob", method: http.MethodDelete,
+			path: deletePath + "not-a-token", body: "", id: "not-a-token",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "holder delete service token of another principal", subject: "bob", method: http.MethodDelete,
+			path: deletePath + service.ID, body: "", id: service.ID,
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "holder rotate unknown well-formed ID", subject: "bob", method: http.MethodPost,
+			path: rotatePath + "tok-unknown/rotate", body: "{}", id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "holder rotate malformed ID", subject: "bob", method: http.MethodPost,
+			path: rotatePath + "not-a-token/rotate", body: "{}", id: "not-a-token",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "holder rotate service token of another principal", subject: "bob", method: http.MethodPost,
+			path: rotatePath + service.ID + "/rotate", body: "{}", id: service.ID,
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "administrator delete unknown well-formed ID", subject: "admin", method: http.MethodDelete,
+			path: deletePath + "tok-unknown", body: "", id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: false,
+		},
+		{
+			name: "administrator rotate unknown well-formed ID", subject: "admin", method: http.MethodPost,
+			path: rotatePath + "tok-unknown/rotate", body: "{}", id: "tok-unknown",
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: true,
+		},
+		{
+			name: "administrator rotate personal token", subject: "admin", method: http.MethodPost,
+			path: rotatePath + personal.ID + "/rotate", body: "{}", id: personal.ID,
+			wantStatus: http.StatusForbidden, wantDenial: true, broken: false, session: true,
+		},
+		{
+			name: "administrator read unknown token", subject: "admin", method: http.MethodGet,
+			path: deletePath + "tok-unknown", body: "", id: "tok-unknown",
+			wantStatus: http.StatusNotFound, wantDenial: false, broken: false, session: false,
+		},
+		{
+			name: "store failure delete", subject: "admin", method: http.MethodDelete,
+			path: deletePath + "tok-unknown", body: "", id: "tok-unknown",
+			wantStatus: http.StatusInternalServerError, wantDenial: false, broken: true, session: false,
+		},
+		{
+			name: "store failure rotate", subject: "admin", method: http.MethodPost,
+			path: rotatePath + "tok-unknown/rotate", body: "{}", id: "tok-unknown",
+			wantStatus: http.StatusInternalServerError, wantDenial: false, broken: true, session: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkTokenStateCase(t, f, broken, tc, want)
+		})
+	}
+}
+
+// TestOpaqueTokenRoutesKeepRequestErrors proves that the opaque denial of the
+// token routes covers only the state of the token in the path: an invalid
+// request on a token that the caller may change keeps its own answer.
+func TestOpaqueTokenRoutesKeepRequestErrors(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedService(t, "deploy")
+
+	var service tokenDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/principals/prn-deploy/tokens", `{"name":"ci"}`, http.StatusCreated,
+	}, &service)
+
+	tests := []struct {
+		name       string
+		body       string
+		wantCode   string
+		wantStatus int
+	}{
+		{
+			name: "an end time of the old token in the past", body: `{"oldTokenEndsAt":"2000-01-01T00:00:00Z"}`,
+			wantStatus: http.StatusBadRequest, wantCode: errcode.TokenInvalid,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := f.asSessionRequest(t, "admin", http.MethodPost,
+				"/api/server/service-tokens/"+service.ID+"/rotate", tc.body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			var body denialBody
+			decodeInto(t, rec.Body.String(), &body)
+
+			if body.ErrorCode != tc.wantCode {
+				t.Errorf("errorCode = %q, want %q", body.ErrorCode, tc.wantCode)
+			}
+		})
+	}
+}
+
+// tokenStateCase is one request of TestTokenRoutesHideStoredTokenState.
+type tokenStateCase struct {
+	name       string
+	subject    string
+	method     string
+	path       string
+	body       string
+	id         string
+	wantStatus int
+	wantDenial bool
+	broken     bool
+	session    bool
+}
+
+// checkTokenStateCase sends one request of TestTokenRoutesHideStoredTokenState
+// and checks its answer.
+func checkTokenStateCase(t *testing.T, f, broken accessFixture, tc tokenStateCase, want string) {
+	t.Helper()
+
+	fixture := f
+	if tc.broken {
+		fixture = broken
+	}
+
+	var rec *httptest.ResponseRecorder
+	if tc.session {
+		rec = fixture.asSessionRequest(t, tc.subject, tc.method, tc.path, tc.body)
+	} else {
+		rec = fixture.asToken(t, tc.subject, tc.method, tc.path, []byte(tc.body))
+	}
+
+	if tc.wantDenial {
+		checkTokenDenial(t, rec, want, tc.id)
+
+		return
+	}
+
+	if rec.Code != tc.wantStatus {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.wantStatus, rec.Body.String())
+	}
+
+	var body denialBody
+	decodeInto(t, rec.Body.String(), &body)
+
+	wantCode := errcode.TokenNotFound
+	if tc.wantStatus == http.StatusInternalServerError {
+		wantCode = errcode.ServerInternal
+	}
+
+	if body.ErrorCode != wantCode {
+		t.Errorf("errorCode = %q, want %q", body.ErrorCode, wantCode)
+	}
+}
+
+// asSessionRequest sends one request in a new console session of subject and
+// returns its answer. A rotation needs a fresh sign-in, so its rows use this
+// helper.
+func (f accessFixture) asSessionRequest(
+	t *testing.T, subject, method, target, body string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	f.seedSessionAdmin(t, subject)
+
+	cookie, csrf := f.sessionOf(t, subject, f.sessions.Now())
+
+	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
+	req.AddCookie(cookie)
+	req.Header.Set(apiserver.CSRFHeader, csrf)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
 // TestOpaqueDenialField proves that OpaqueDenial changes only the text of a
 // refusal on its own route: a denial answers the plain text, the same denial
 // without the field names the action and the kind, and any other error keeps
