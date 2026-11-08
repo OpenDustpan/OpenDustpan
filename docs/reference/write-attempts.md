@@ -64,7 +64,7 @@ did:
 
 | Record | Content |
 | --- | --- |
-| The output of the step of its durable operation | The number of deleted blobs (`deleted`), the sum of the sizes that the resolved marks record (`deletedBytes`), the number of kept blobs (`kept`) and the number of failed deletes (`failed`). |
+| The output of the step of its durable operation | Four counts. `deleted`: the number of deleted blobs. `deletedBytes`: the sum of the sizes that the resolved marks record. `kept`: the number of kept blobs. `failed`: the number of failed deletes. |
 | One log line, `superseded checkpoint sweep` | The same counts. The log line names the size `deleted_bytes`. |
 
 `deletedBytes` can count a blob that an earlier run deleted before it stopped.
