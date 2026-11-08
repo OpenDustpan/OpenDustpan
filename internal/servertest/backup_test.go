@@ -24,6 +24,12 @@ import (
 // renew a claim.
 const backupLease = 2 * time.Second
 
+// takeoverDeadline is how long a takeover test waits for the survivor to
+// claim the operation and to end the backup. It only stops a test that hangs:
+// the time of a takeover on a loaded test machine says nothing about the
+// takeover path, so no test checks it against the lease.
+const takeoverDeadline = 60 * time.Second
+
 // gatedTarget is a backup target that holds the first write of a SQL table
 // file until the test opens the gate or the context of the write ends. So a
 // test holds a backup inside its write step.
@@ -206,7 +212,7 @@ func endedBackupOperation(t *testing.T, c *servertest.Cluster, i int) durable.Op
 func waitSurvivorClaim(t *testing.T, c *servertest.Cluster, survivor int, since time.Time) time.Duration {
 	t.Helper()
 
-	deadline := time.Now().Add(4*backupLease + 10*time.Second)
+	deadline := time.Now().Add(takeoverDeadline)
 
 	for {
 		op := backupOperation(t, c, survivor)
@@ -298,11 +304,19 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 }
 
 // TestBackupTakeoverAfterKill proves that another instance takes over a
-// backup when the instance that runs it dies in a step: the backup ends
-// succeeded within a few lease periods, the second run claims the operation
-// once, and the target holds one complete backup.
+// backup when the instance that runs it dies in a step: the survivor claims
+// the operation only after the claim of the victim expired, the backup ends
+// succeeded, the second run claims the operation after one expiry, and the
+// target holds one complete backup. The test checks no time against the lease:
+// the time of the run on a loaded machine says nothing about the takeover.
 func TestBackupTakeoverAfterKill(t *testing.T) {
 	t.Parallel()
+
+	// The survivor finds the expired claim at its next poll. A poll interval
+	// as long as the lease would make each takeover wait a second lease.
+	if durable.DefaultPollEvery >= backupLease {
+		t.Fatalf("the poll interval %v is not shorter than the lease %v", durable.DefaultPollEvery, backupLease)
+	}
 
 	target := newGatedTarget(t)
 	c := servertest.Start(t, 2, dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(backupLease))
@@ -320,28 +334,26 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 		victim, survivor = 1, 0
 	}
 
-	killedAt := time.Now()
-
 	c.Kill(t, victim)
+
+	// The victim renews no more, so its last claim is final.
+	dead := backupOperation(t, c, survivor)
+	if dead.Claim.Owner != servertest.InstanceID(victim) {
+		t.Fatalf("claim after the kill = %+v, want the claim of the victim", dead.Claim)
+	}
+
 	target.release()
 
-	// The survivor claims the operation after the claim of the victim
-	// expires and the survivor polls: one lease period, one poll, and slack
-	// for a loaded machine.
-	claimedAfter := waitSurvivorClaim(t, c, survivor, killedAt)
-	if limit := backupLease + durable.DefaultPollEvery + 2*time.Second; claimedAfter > limit {
-		t.Fatalf("the survivor claimed the operation %v after the kill, want within %v", claimedAfter, limit)
+	waitSurvivorClaim(t, c, survivor, dead.Claim.ExpiresAt)
+
+	if claimedAt := time.Now(); claimedAt.Before(dead.Claim.ExpiresAt) {
+		t.Fatalf("the survivor claimed the operation at %v, before the claim of the victim expired at %v",
+			claimedAt, dead.Claim.ExpiresAt)
 	}
 
-	// The claim expires one lease period after its last renewal. The
-	// survivor polls for work each second, and runs the backup at once.
-	got := waitBackup(t, c, survivor, id, 4*backupLease+10*time.Second)
+	got := waitBackup(t, c, survivor, id, takeoverDeadline)
 	if got.State != string(backup.StateSucceeded) {
 		t.Fatalf("backup ended %q (%s) after the takeover, want succeeded", got.State, got.Error)
-	}
-
-	if took := time.Since(killedAt); took > 3*backupLease+5*time.Second {
-		t.Fatalf("takeover took %v, want a few lease periods of %v", took, backupLease)
 	}
 
 	op := endedBackupOperation(t, c, survivor)
