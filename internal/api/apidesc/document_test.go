@@ -515,6 +515,10 @@ func TestSubsetCheckSeesTheForbiddenForms(t *testing.T) {
 
 	bad := map[string]string{
 		"type list with an object":           `{"type":["object","string"]}`,
+		"type list with an enum":             `{"type":["string","number"],"enum":["a"]}`,
+		"type list with a format":            `{"type":["string","number"],"format":"date"}`,
+		"type list with a name twice":        `{"type":["string","string"]}`,
+		"type list of one name":              `{"type":["string"]}`,
 		"null type alone":                    `{"type":["null"]}`,
 		"closed enum":                        `{"type":"string","enum":["a","b"]}`,
 		"const":                              `{"const":"a"}`,
