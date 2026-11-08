@@ -441,6 +441,8 @@ func cachedEntryCases() []cachedEntryCase {
 		{name: "one byte of the binary changed", archive: nil, change: changeBinary, wantDownloads: 2, check: nil},
 		{name: "binary of another size", archive: nil, change: changeBinarySize, wantDownloads: 2, check: nil},
 		{name: "binary removed", archive: nil, change: removeBinary, wantDownloads: 2, check: nil},
+		{name: "binary not executable", archive: nil, change: removeBinaryExecBit, wantDownloads: 2, check: nil},
+		{name: "binary with the setuid bit", archive: nil, change: addBinarySetuidBit, wantDownloads: 2, check: nil},
 		{
 			name:          "other file removed",
 			archive:       archiveWithSibling,
@@ -483,6 +485,22 @@ func changeBinary(t *testing.T, inst e2e.Install, _ string) {
 
 	if err := os.WriteFile(inst.Binary(), []byte("#!/bin/shX"), 0o600); err != nil {
 		t.Fatalf("change binary: %v", err)
+	}
+}
+
+func removeBinaryExecBit(t *testing.T, inst e2e.Install, _ string) {
+	t.Helper()
+
+	if err := os.Chmod(inst.Binary(), 0o600); err != nil {
+		t.Fatalf("change binary mode: %v", err)
+	}
+}
+
+func addBinarySetuidBit(t *testing.T, inst e2e.Install, _ string) {
+	t.Helper()
+
+	if err := os.Chmod(inst.Binary(), 0o750|os.ModeSetuid); err != nil {
+		t.Fatalf("change binary mode: %v", err)
 	}
 }
 
@@ -710,8 +728,14 @@ func fillCacheEntry(root *os.Root, archiveName string, archive []byte, tree cach
 			return fmt.Errorf("create %q: %w", target, err)
 		}
 
-		if err := root.WriteFile(target, []byte(content), 0o600); err != nil {
+		if err := root.WriteFile(target, []byte(content), 0o750); err != nil {
 			return fmt.Errorf("write %q: %w", target, err)
+		}
+
+		// The mode that extraction sets, so that only the planted change
+		// differs from a fresh entry.
+		if err := root.Chmod(target, 0o750); err != nil {
+			return fmt.Errorf("set the mode of %q: %w", target, err)
 		}
 	}
 

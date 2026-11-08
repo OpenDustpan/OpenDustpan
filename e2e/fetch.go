@@ -563,6 +563,13 @@ func checkFile(root *os.Root, name string, info fs.FileInfo, want archiveEntry) 
 		return fmt.Errorf("%w: cached %q is not a regular file", ErrCacheMismatch, name)
 	}
 
+	// The full mode, not only the permission bits: a setuid, setgid or
+	// sticky bit refuses the entry too.
+	if info.Mode() != fileMode {
+		return fmt.Errorf("%w: cached %q has mode %v, want %v",
+			ErrCacheMismatch, name, info.Mode(), fs.FileMode(fileMode))
+	}
+
 	if info.Size() != want.size {
 		// Defense in depth: the hash below also covers a change in size; this
 		// check does not rely on it and refuses a large file before it reads it.
@@ -776,6 +783,12 @@ func writeFile(root *os.Root, name string, src io.Reader, size int64) error {
 
 	if _, err := io.CopyN(f, src, size); err != nil {
 		return errors.Join(fmt.Errorf("write %q: %w", name, err), f.Close())
+	}
+
+	// The umask can remove bits from the mode of OpenFile. Set the mode
+	// exactly, so that the cache check can compare it.
+	if err := f.Chmod(fileMode); err != nil {
+		return errors.Join(fmt.Errorf("set the mode of %q: %w", name, err), f.Close())
 	}
 
 	if err := f.Close(); err != nil {
