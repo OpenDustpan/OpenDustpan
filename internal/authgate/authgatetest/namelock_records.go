@@ -326,13 +326,13 @@ func testPruneEndedLocks(t *testing.T, h NameLockHarness) {
 	// This count has no lock.
 	add(t, c, key(authgate.ScopePassword, "plain", "s"), rule(limitFive, longLock), nil)
 
-	now := h.Now(t).Add(doubleLock)
+	h.Age(t, doubleLock)
 
 	n, err := c.PruneNameLocks(
 		t.Context(),
-		now,
 		shortLock,
-		pruneLimits(),
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
 		pruneEntry(),
 	)
 	if err != nil || n != limitThree {
@@ -381,13 +381,12 @@ func testPruneEndedBound(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
 	}
 
-	now := h.Now(t).Add(doubleLock)
-	limits := authgate.PruneLimits{Limit: authgate.MaxNamePruneRows, EndedLimit: 1}
+	h.Age(t, doubleLock)
 
 	// A limit of one for the ended locks deletes one of them in a run, and
 	// no run deletes an ended lock with no entry.
 	for run := range limitThree {
-		n, err := c.PruneNameLocks(t.Context(), now, shortLock, limits, pruneEntry())
+		n, err := c.PruneNameLocks(t.Context(), shortLock, authgate.MaxNamePruneRows, 1, pruneEntry())
 		if err != nil || n != 1 {
 			t.Fatalf("run %d = %d, %v; want 1", run+1, n, err)
 		}
@@ -483,14 +482,12 @@ func testPruneEndedAboveLimit(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
 	}
 
-	now := h.Now(t).Add(doubleLock)
-	above := authgate.PruneLimits{Limit: 1, EndedLimit: authgate.MaxNamePruneEnded}
-	one := authgate.PruneLimits{Limit: 1, EndedLimit: 1}
+	h.Age(t, doubleLock)
 
 	before := len(h.Entries(t))
 
 	// A limit of 1 with an ended limit of 1000 asks for more than the limit.
-	_, err := c.PruneNameLocks(t.Context(), now, shortLock, above, pruneEntry())
+	_, err := c.PruneNameLocks(t.Context(), shortLock, 1, authgate.MaxNamePruneEnded, pruneEntry())
 	if !errors.Is(err, authgate.ErrInvalidLock) {
 		t.Fatalf("prune with an ended limit above the limit = %v, want ErrInvalidLock", err)
 	}
@@ -500,7 +497,7 @@ func testPruneEndedAboveLimit(t *testing.T, h NameLockHarness) {
 	}
 
 	// A prune with the limit 1 deletes one count and no more.
-	n, err := c.PruneNameLocks(t.Context(), now, shortLock, one, pruneEntry())
+	n, err := c.PruneNameLocks(t.Context(), shortLock, 1, 1, pruneEntry())
 	if err != nil || n != 1 {
 		t.Fatalf("prune with a limit of 1 = %d, %v; want 1", n, err)
 	}

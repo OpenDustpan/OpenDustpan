@@ -4,10 +4,18 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
+
+// Pool returns the connection pool of s, so a test can read or change rows
+// with direct SQL.
+func Pool(s *Store) *pgxpool.Pool {
+	return s.pool
+}
 
 // CheckSettingFence runs the comparison of the fence and the namespace that
 // SetSetting makes before it opens a transaction.

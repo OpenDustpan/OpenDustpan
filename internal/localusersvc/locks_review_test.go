@@ -364,9 +364,7 @@ type failingPrune struct {
 	authgate.NameLockCounter
 }
 
-func (failingPrune) PruneNameLocks(
-	context.Context, time.Time, time.Duration, authgate.PruneLimits, audit.Entry,
-) (int64, error) {
+func (failingPrune) PruneNameLocks(context.Context, time.Duration, int, int, audit.Entry) (int64, error) {
 	return 0, errDiskOnFire
 }
 

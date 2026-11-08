@@ -131,8 +131,7 @@ type NameFailure struct {
 // counts the same as a known one. The sub-key splits the counts of one name,
 // for example by source prefix, so that an administrator can list and clear
 // every count of one name. The store takes the time of each call from its
-// own clock, apart from the prune, which measures against the now of its
-// caller.
+// own clock.
 //
 // The caller adds a failure before it compares the credential, and clears a
 // count only after the commit of a full sign-in. A failed clear leaves the
@@ -176,35 +175,18 @@ type NameLockCounter interface {
 	// NameLocks returns every count of name in scope, one for each sub-key,
 	// in the order of the sub-key. A name with no count returns no entry.
 	NameLocks(ctx context.Context, scope, name string) ([]NameLock, error)
-	// PruneNameLocks deletes at most limits.Limit counts whose last failure
-	// is age or longer ago on now, whose lock ended by now and whose level is
-	// past its reset time on now, and returns how many it deleted. Of these,
-	// at most limits.EndedLimit are counts whose lock ended and that no
-	// attempt saw: each of them gets the audit entry of the end of its lock
-	// (see EndedEntry, built from e with the action ActionNameLockEnded). The
-	// same transaction appends e with the changes of PrunedChanges. The
-	// scheduled prune of the server calls it, so each run, its entries of
-	// the end of a lock and its audit entry commit together or not at all.
-	// It returns ErrInvalidLock for a request that CheckPruneRequest
-	// refuses, and audit.ErrInvalidEntry for an entry that fails validation;
-	// both change nothing.
-	PruneNameLocks(
-		ctx context.Context, now time.Time, age time.Duration, limits PruneLimits, e audit.Entry,
-	) (int64, error)
-}
-
-// PruneLimits is the two limits of one run of the prune of the name counts:
-// the most counts that the run deletes, and the most of them with an ended
-// lock that no attempt saw.
-type PruneLimits struct {
-	// Limit is the most counts that one run deletes. The next run deletes
-	// the rest.
-	Limit int
-	// EndedLimit is the most counts with an ended lock, that no attempt saw,
-	// that one run deletes. Each one gets the entry of the end of its lock,
-	// so this limit is also the most entries of that kind that one run
-	// appends. The next run deletes the rest.
-	EndedLimit int
+	// PruneNameLocks deletes at most limit counts whose last failure is age
+	// or longer ago, whose lock ended and whose level is past its reset
+	// time, and returns how many it deleted. Of these, at most endedLimit
+	// are counts whose lock ended and that no attempt saw: each of them gets
+	// the audit entry of the end of its lock (see EndedEntry, built from e
+	// with the action ActionNameLockEnded). The same transaction appends e
+	// with the changes of PrunedChanges. The scheduled prune of the server
+	// calls it, so each run, its entries of the end of a lock and its audit
+	// entry commit together or not at all. It returns ErrInvalidLock for a
+	// request that CheckPruneRequest refuses, and audit.ErrInvalidEntry for
+	// an entry that fails validation; both change nothing.
+	PruneNameLocks(ctx context.Context, age time.Duration, limit, endedLimit int, e audit.Entry) (int64, error)
 }
 
 // Limits of the keys of a name count. A name is a keyed digest or a
@@ -250,24 +232,21 @@ func CheckClearRequest(scopes []string, name string) error {
 	return nil
 }
 
-// CheckPruneRequest returns ErrInvalidLock for a prune with a zero now, an
-// age of 0 or less, a limit below 1 or above MaxNamePruneRows, or an ended
-// limit below 1, above MaxNamePruneEnded or above the limit. Each adapter of
-// NameLockCounter calls it before PruneNameLocks writes, so a request that it
-// refuses changes nothing.
-func CheckPruneRequest(now time.Time, age time.Duration, limits PruneLimits) error {
+// CheckPruneRequest returns ErrInvalidLock for a prune with an age of 0 or
+// less, with a limit below 1 or above MaxNamePruneRows, or with an ended
+// limit below 1, above MaxNamePruneEnded or above the limit. Each adapter of NameLockCounter
+// calls it before PruneNameLocks writes, so a request that it refuses changes
+// nothing.
+func CheckPruneRequest(age time.Duration, limit, endedLimit int) error {
 	switch {
-	case now.IsZero():
-		return fmt.Errorf("%w: prune with a zero time", ErrInvalidLock)
 	case age <= 0:
 		return fmt.Errorf("%w: prune age %s", ErrInvalidLock, age)
-	case limits.Limit < 1 || limits.Limit > MaxNamePruneRows:
-		return fmt.Errorf("%w: prune limit %d", ErrInvalidLock, limits.Limit)
-	case limits.EndedLimit < 1 || limits.EndedLimit > MaxNamePruneEnded:
-		return fmt.Errorf("%w: prune limit of ended locks %d", ErrInvalidLock, limits.EndedLimit)
-	case limits.EndedLimit > limits.Limit:
-		return fmt.Errorf("%w: prune limit of ended locks %d above the limit %d", ErrInvalidLock,
-			limits.EndedLimit, limits.Limit)
+	case limit < 1 || limit > MaxNamePruneRows:
+		return fmt.Errorf("%w: prune limit %d", ErrInvalidLock, limit)
+	case endedLimit < 1 || endedLimit > MaxNamePruneEnded:
+		return fmt.Errorf("%w: prune limit of ended locks %d", ErrInvalidLock, endedLimit)
+	case endedLimit > limit:
+		return fmt.Errorf("%w: prune limit of ended locks %d above the limit %d", ErrInvalidLock, endedLimit, limit)
 	default:
 		return nil
 	}

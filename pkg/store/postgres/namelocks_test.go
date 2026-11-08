@@ -35,15 +35,10 @@ func TestNameLockConformance(t *testing.T) {
 
 				return openURL(t, schemaURL)
 			},
-			Now: func(t *testing.T) time.Time {
+			Age: func(t *testing.T, d time.Duration) {
 				t.Helper()
 
-				now, err := openURL(t, schemaURL).DatabaseNow(t.Context())
-				if err != nil {
-					t.Fatalf("read the clock of the store: %v", err)
-				}
-
-				return now
+				ageNameLocks(t, openURL(t, schemaURL), d)
 			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
@@ -113,4 +108,20 @@ func serverNotices(t *testing.T, n notify.Outbox) []notify.Notification {
 	}
 
 	return got
+}
+
+// ageNameLocks moves every time column of every name count of s back by d,
+// so a case reaches the age of a count without a wait. A time of 0, a count
+// with no lock or no end, stays 0.
+func ageNameLocks(t *testing.T, s *postgres.Store, d time.Duration) {
+	t.Helper()
+
+	_, err := postgres.Pool(s).Exec(t.Context(), `UPDATE name_locks SET
+		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN locked_until_ms - $1 ELSE 0 END,
+		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN last_failure_ms - $1 ELSE 0 END,
+		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN last_lock_end_ms - $1 ELSE 0 END`,
+		d.Milliseconds())
+	if err != nil {
+		t.Fatalf("age the name counts: %v", err)
+	}
 }

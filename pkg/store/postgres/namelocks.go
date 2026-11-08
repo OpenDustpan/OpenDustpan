@@ -201,14 +201,13 @@ func (s *Store) NameLocks(ctx context.Context, scope, name string) ([]authgate.N
 	return out, nil
 }
 
-// PruneNameLocks implements authgate.NameLockCounter. It measures the age of
-// each count, the end of a lock and the reset of a level against now, the
-// time that its caller gives. The delete, the entries of the end of the locks
-// and the append of e run in one transaction.
+// PruneNameLocks implements authgate.NameLockCounter. It reads the time from
+// the clock of the store. The delete, the entries of the end of the locks and
+// the append of e run in one transaction.
 func (s *Store) PruneNameLocks(
-	ctx context.Context, now time.Time, age time.Duration, limits authgate.PruneLimits, e audit.Entry,
+	ctx context.Context, age time.Duration, limit, endedLimit int, e audit.Entry,
 ) (int64, error) {
-	if err := authgate.CheckPruneRequest(now, age, limits); err != nil {
+	if err := authgate.CheckPruneRequest(age, limit, endedLimit); err != nil {
 		return 0, err
 	}
 
@@ -219,23 +218,26 @@ func (s *Store) PruneNameLocks(
 	var n int64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		nowMs := codec.Millis(now)
+		now, err := q.DatabaseNowMs(ctx)
+		if err != nil {
+			return fmt.Errorf("read the clock of the store: %w", err)
+		}
 
-		before := nowMs - age.Milliseconds()
+		before := now - age.Milliseconds()
 
 		// Defense in depth: CheckPruneRequest refuses an ended limit above the
 		// limit too. This bound stays so that a change of that check never lets
 		// a run delete more counts than its limit.
 		ended, err := pruneEnded(ctx, q, e, endedPrune{
-			before: before, now: nowMs, limit: int64(min(limits.EndedLimit, limits.Limit)),
+			before: before, now: now, limit: int64(min(endedLimit, limit)),
 		})
 		if err != nil {
 			return err
 		}
 
-		rest := max(int64(limits.Limit)-ended, 0)
+		rest := max(int64(limit)-ended, 0)
 
-		plain, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: nowMs, MaxRows: rest})
+		plain, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: now, MaxRows: rest})
 		if err != nil {
 			return fmt.Errorf("prune name counts: %w", err)
 		}
