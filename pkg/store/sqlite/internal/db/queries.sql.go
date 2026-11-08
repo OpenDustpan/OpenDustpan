@@ -1079,6 +1079,20 @@ func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerPa
 	return count, err
 }
 
+const countLiveBlobDeleteLeases = `-- name: CountLiveBlobDeleteLeases :one
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+`
+
+// The number of lease rows that end after the database clock. A restore waits
+// for zero of them before it applies the data.
+func (q *Queries) CountLiveBlobDeleteLeases(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveBlobDeleteLeases)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m
@@ -19633,6 +19647,17 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 	return err
 }
 
+const releaseBlobDeleteLease = `-- name: ReleaseBlobDeleteLease :exec
+DELETE FROM blob_delete_leases
+WHERE holder = ?
+`
+
+// Deletes the lease row of one holder. A holder with no row is not an error.
+func (q *Queries) ReleaseBlobDeleteLease(ctx context.Context, holder string) error {
+	_, err := q.db.ExecContext(ctx, releaseBlobDeleteLease, holder)
+	return err
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL
@@ -21623,6 +21648,37 @@ type SweepIdempotencyRecordsParams struct {
 // it, for tests.
 func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempotencyRecordsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, sweepIdempotencyRecords, arg.NowOverrideMs, arg.RecordTtlMs, arg.PendingTtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const takeBlobDeleteLease = `-- name: TakeBlobDeleteLease :execrows
+INSERT INTO blob_delete_leases (holder, expires_at_ms)
+SELECT ?1,
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+           + CAST(?2 AS INTEGER)
+WHERE NOT EXISTS (
+    SELECT 1 FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT 1 FROM restores WHERE state IN ('checking', 'applying')
+)
+ON CONFLICT (holder) DO UPDATE SET expires_at_ms = excluded.expires_at_ms
+`
+
+type TakeBlobDeleteLeaseParams struct {
+	Holder string
+	TtlMs  int64
+}
+
+// Writes the lease of holder, ending at the database clock plus ttl_ms, in
+// one statement, and reports one changed row. While a backup runs or a
+// restore checks or applies, it writes nothing and reports no changed row:
+// the caller then reads the running work in the same transaction. A take for
+// a holder with a row replaces that row.
+func (q *Queries) TakeBlobDeleteLease(ctx context.Context, arg TakeBlobDeleteLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, takeBlobDeleteLease, arg.Holder, arg.TtlMs)
 	if err != nil {
 		return 0, err
 	}

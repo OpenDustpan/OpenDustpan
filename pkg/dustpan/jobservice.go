@@ -967,7 +967,7 @@ func newArtifactSweeper(svc services, cfg *settings) (*job.ArtifactSweeper, bool
 // artifactSweepPorts are the ports of the stores that the artifact sweep needs.
 type artifactSweepPorts struct {
 	names   job.ArtifactKeyStore
-	guard   blobguard.Watch
+	guard   blobguard.Leases
 	clock   blob.DatabaseClock
 	entries audit.ServerStore
 }
@@ -985,7 +985,7 @@ func artifactSweepPortsOf(cfg *settings, log *slog.Logger) (artifactSweepPorts, 
 		return p, false
 	}
 
-	if p.guard, ok = cfg.namespaceStore.(blobguard.Watch); !ok {
+	if p.guard, ok = cfg.namespaceStore.(blobguard.Leases); !ok {
 		log.Warn("the store cannot tell whether a backup or a restore runs: the server deletes no artifact blob")
 
 		return p, false

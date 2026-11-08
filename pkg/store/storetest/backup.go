@@ -57,6 +57,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.KeyPeeker
 	backup.Registry
 	blobguard.Watch
+	blobguard.Leases
 	// GetRestore and ListRestores read the restores table, as
 	// backup.RestoreOperations does. The cases that write restore rows
 	// assert the store to the restore operation ports.
@@ -138,6 +139,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the running work read returns none when every backup ended", test: testRunningEnded},
 		{name: "a takeover leaves the backup row running", test: testRunningTakeover},
 		{name: "a refused start gives no running work", test: testRunningRefusedStart},
+		{name: "a lease take writes one live lease and a release deletes it", test: testRunningLease},
 	}
 
 	for _, tc := range cases {

@@ -871,6 +871,7 @@ func newRouteTestRestores(
 		Backups:         service,
 		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:           live,
+		Leases:          st,
 		Target:          target,
 		Key:             nil,
 		Installation:    "test",

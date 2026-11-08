@@ -415,7 +415,7 @@ func newBuildFixtureGuarded(
 	clk *clock,
 	replayer stack.JournalReplayer,
 	wrap func(*journalMemStore) stack.CheckpointStore,
-	guard blobguard.Watch,
+	guard blobguard.Leases,
 ) *buildFixture {
 	t.Helper()
 

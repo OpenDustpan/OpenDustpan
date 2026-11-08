@@ -1020,6 +1020,18 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 // other ("main" in ASCII).
 const writeLockClass int32 = 0x6d61696e
 
+// blobDeleteLockClass is the first key of the advisory lock that orders the
+// take of a blob delete lease against the start of the work that the lease
+// holds back ("blob" in ASCII). A take transaction takes the shared form
+// before it reads the running work, and each transaction that writes a
+// running backup row or a checking or applying restore row takes the
+// exclusive form before that write. So the take sees every row that the lock
+// ordered before it, and the write waits for the take: a take and a start
+// cannot interleave, and a deleter that holds a lease never started after the
+// work that it must wait for. The second key is the schema, so two
+// installations in one database do not wait for each other.
+const blobDeleteLockClass int32 = 0x626c6f62
+
 // writeLockSQL takes the shared form of the write lock for this transaction.
 const writeLockSQL = `SELECT pg_advisory_xact_lock_shared($1, hashtext(current_schema()))`
 

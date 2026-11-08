@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -97,9 +98,9 @@ type ArtifactSweeperConfig struct {
 	Blobs *ArtifactBlobs
 	// Namespaces gives the ID of the namespace of a job.
 	Namespaces NamespaceReader
-	// Guard tells whether a backup or a restore runs. The sweep deletes
-	// nothing while one runs.
-	Guard blobguard.Watch
+	// Guard holds the leases of the blob deletes. The sweep deletes nothing
+	// while a backup or a restore runs.
+	Guard blobguard.Leases
 	// Clock reads the clock of the database. The sweep takes now from it.
 	Clock blob.DatabaseClock
 	// Operations reads the durable operation of a plan phase, to tell whether
@@ -184,7 +185,7 @@ type ArtifactSweeper struct {
 	names      ArtifactKeyStore
 	blobs      *ArtifactBlobs
 	namespaces NamespaceReader
-	guard      blobguard.Watch
+	guard      blobguard.Leases
 	clock      blob.DatabaseClock
 	operations PhaseOperations
 	audit      audit.ServerStore
@@ -459,20 +460,40 @@ func (s *ArtifactSweeper) sweepPage(
 			continue
 		}
 
-		// The guard comes after the listing and after the read of the names.
-		// A blob that is unnamed here lost its row, or never had one, before
-		// that read, so a backup that the guard does not see cannot name it.
-		// The guard is read again before each delete, so a restore that starts
-		// during the loop keeps the blobs that are left.
-		if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
-			return fmt.Errorf("%w: %w", errHeld, holdErr)
-		}
-
-		if delErr := s.blobs.DeleteJobBlob(ctx, at.nsID, at.job, b.Rel); delErr != nil {
-			return fmt.Errorf("delete an artifact blob: %w", delErr)
+		if delErr := s.deleteUnderLease(ctx, at, b.Rel); delErr != nil {
+			return delErr
 		}
 
 		res.add("namespaces/" + at.nsID.String() + "/" + b.Rel)
+	}
+
+	return nil
+}
+
+// deleteUnderLease deletes the artifact blob rel of the job of at, with the
+// lease of one blob delete around it. The lease comes after the listing and
+// after the read of the names: a blob that is unnamed here lost its row, or
+// never had one, before that read, so a backup that the guard does not see
+// cannot name it. A lease is taken again before each delete, so a restore
+// that starts during the loop keeps the blobs that are left. The holder is new
+// for each delete, so the lease row names the delete that holds it. The delete
+// runs only under the context of the lease, so it deletes nothing once that
+// context ends.
+func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel string) error {
+	leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
+	if holdErr != nil {
+		return fmt.Errorf("%w: %w", errHeld, holdErr)
+	}
+
+	delErr := s.blobs.DeleteJobBlob(leaseCtx, at.nsID, at.job, rel)
+
+	if releaseErr := release(ctx); releaseErr != nil {
+		s.logger.WarnContext(ctx, "blob delete lease not released",
+			slog.String("job_id", string(at.job)), slog.String("error", releaseErr.Error()))
+	}
+
+	if delErr != nil {
+		return fmt.Errorf("delete an artifact blob: %w", delErr)
 	}
 
 	return nil

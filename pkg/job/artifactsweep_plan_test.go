@@ -68,7 +68,7 @@ func planRig(
 	t.Helper()
 
 	r := newSweepRig(t, sweepSetup{
-		names: sweepNames{names: names, err: nil}, ahead: 0, instance: 0, wrap: nil, jobs: nil,
+		names: sweepNames{names: names, err: nil}, ahead: 0, instance: 0, step: 0, wrap: nil, jobs: nil,
 		ops: ops, at: sweepFixedNow(),
 	})
 

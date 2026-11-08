@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -197,6 +198,7 @@ func restoreStreamedBackup(
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

@@ -156,9 +156,10 @@ type settings struct {
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
 	stackRefusals scopeaudit.Recorder
-	// blobGuard tells the blob deleters whether a backup or a restore runs.
-	// newUpdateService attaches it.
-	blobGuard       blobguard.Watch
+	// blobGuard holds the leases of the blob deletes: the namespace store,
+	// which reads the backups table and the restores table. newUpdateService
+	// attaches it.
+	blobGuard       blobguard.Leases
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore

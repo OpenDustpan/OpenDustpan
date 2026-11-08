@@ -8,12 +8,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -66,31 +66,13 @@ func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 	}
 }
 
-// guardSwitch is a blobguard.Watch whose answer a case sets.
-type guardSwitch struct {
-	work atomic.Pointer[blobguard.Work]
-	fail atomic.Bool
-}
-
 // errGuardRead is the failure of a guard read in the cases.
 var errGuardRead = errors.New("read of the backups registry failed")
 
-// Running implements blobguard.Watch.
-func (g *guardSwitch) Running(context.Context) (blobguard.Work, bool, error) {
-	if g.fail.Load() {
-		return blobguard.Work{Kind: "", ID: ""}, false, errGuardRead
-	}
-
-	if w := g.work.Load(); w != nil {
-		return *w, true, nil
-	}
-
-	return blobguard.Work{Kind: "", ID: ""}, false, nil
-}
-
-// newGuardSwitch returns a guard that answers that nothing runs.
-func newGuardSwitch() *guardSwitch {
-	return &guardSwitch{work: atomic.Pointer[blobguard.Work]{}, fail: atomic.Bool{}}
+// newGuardSwitch returns a lease guard that answers that nothing runs and
+// holds no lease.
+func newGuardSwitch() *blobguardtest.Leases {
+	return blobguardtest.NewLeases(time.Now)
 }
 
 // aheadClock runs ahead of the clock of the database by ahead, so that the
@@ -116,7 +98,7 @@ const sweepAfter = blob.UnnamedGracePeriod + time.Minute
 
 // newSweeper returns the sweep over the stores of h, with the guard g and a
 // clock that is ahead by ahead.
-func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Watch, ahead time.Duration) *job.ArtifactSweeper {
+func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Leases, ahead time.Duration) *job.ArtifactSweeper {
 	t.Helper()
 
 	artifacts, err := job.NewArtifactBlobs(h.Blobs, noRefusals{})
@@ -458,19 +440,19 @@ func testSweepHeld(t *testing.T, h ArtifactSweepHarness) {
 
 	cases := []struct {
 		name string
-		set  func(g *guardSwitch)
+		set  func(g *blobguardtest.Leases)
 	}{
 		{
 			"a running backup",
-			func(g *guardSwitch) { g.work.Store(&blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}) },
+			func(g *blobguardtest.Leases) { g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"}) },
 		},
-		{"a running restore", func(g *guardSwitch) {
-			g.work.Store(&blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+		{"a running restore", func(g *blobguardtest.Leases) {
+			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
 		}},
-		{"a failed guard read", func(g *guardSwitch) { g.fail.Store(true) }},
+		{"a failed guard read", func(g *blobguardtest.Leases) { g.Fail(errGuardRead) }},
 		{
 			"an unknown answer of the guard",
-			func(g *guardSwitch) { g.work.Store(&blobguard.Work{Kind: "other", ID: "x"}) },
+			func(g *blobguardtest.Leases) { g.Start(blobguard.Work{Kind: "other", ID: "x"}) },
 		},
 	}
 
