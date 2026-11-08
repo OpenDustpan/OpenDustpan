@@ -41,34 +41,27 @@ ADR 55 decision 8 gives the IP allowlist its scopes. ADR 218 decision 1 makes
 the namespace the object of the allowlist. ADR 122 decision 6 says that a
 list filters with `Authorizer.ListObjects` and says when it left objects out.
 
-The owner decided on 8 November 2026 for option A.
+The owner decided on 8 November 2026 for option A. The owner said, verbatim:
+"Yes on A" (8 November 2026, about 01:12 UTC, to the product manager,
+answering the options of #698). The decision is also recorded in a comment
+on #698.
 
 ## Decision
 
 1. **A scope that covers every object can name the namespaces that it leaves
    out (owner, 2026-11-08).** `identity.Scope` gets a list of excluded
    namespaces next to `All`. The list has a meaning only when `All` is set.
-2. **The IP allowlist gate fills the list.** For a scope with `All` set, the
+2. **The IP allowlist gate fills the list (owner, option A of #698).** For a scope with `All` set, the
    gate puts in the list each namespace whose allowlist refuses the client
    address. It reads the namespaces that have an allowlist through a new
    method of the `ipallow` store port. Both SQL adapters implement the
    method. The method gets conformance tests before any adapter implements
    it.
-3. **Every consumer of the scope applies the list.** The consumers are the
-   namespace filter of both SQL dialects (a `NOT IN` clause), the
-   deleted-units read scope, the namespace list and the caller-access API.
-   The caller-access API shows the list next to `all`, so that a user can see
-   why a namespace is not in a list.
-4. **Fail closed.** A consumer that cannot apply the list refuses the
-   request. A read error of the allowlist store gives a refusal, not a scope
-   without the list. A test with a principal whose scope has `All` set, a
-   namespace allowlist and a client address outside it shows that the
-   principal does not list that namespace.
-5. **The caller-access and caller-grants routes go through the gate too, so
-   that an explicit namespace object of a refused namespace is not listed.**
-6. **The gated `Authorize` does not change.** It already refuses each object
-   of a refused namespace. The list only makes the lists agree with
-   `Authorize`.
+3. **Every consumer of the scope applies the list (owner, option A of
+   #698).** The consumers are the namespace filter of both SQL dialects (a
+   `NOT IN` clause), the deleted-units read scope, the namespace list and the
+   caller-access API. The caller-access API shows the list next to `all`, so
+   that a user can see why a namespace is not in a list.
 
 ## Not decided here
 
@@ -80,9 +73,20 @@ The owner decided on 8 November 2026 for option A.
 ## Consequences
 
 - A new field that each consumer of a scope must read.
-- The risk that a new consumer ignores it, and the test that guards this: a
-  scope test, or a lint that every consumer reads the field, as the
-  implementation decides.
+- (PM) Fail closed. A consumer that cannot apply the list refuses the
+  request. A read error of the allowlist store gives a refusal, not a scope
+  without the list. A test with a principal whose scope has `All` set, a
+  namespace allowlist and a client address outside it shows that the
+  principal does not list that namespace.
+- (PM) The caller-access and caller-grants routes go through the gate too, so
+  that an explicit namespace object of a refused namespace is not listed.
+- (PM) The gated `Authorize` does not change. It already refuses each object
+  of a refused namespace. The list only makes the lists agree with
+  `Authorize`.
+- (PM) The every-object case is a closed type ("all except") that consumers
+  read only through `Scope.Contains` and one shared SQL filter helper, with
+  no bare `All` field, so a consumer that ignores the exclusions is a compile
+  error, not a silent leak. Each consumer has a hostile test.
 - The namespace list and the caller-access API change shape. This is allowed
   before 1.0.
 - The slice that implements it carries the user docs change of the IP
