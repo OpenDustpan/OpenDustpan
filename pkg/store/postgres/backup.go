@@ -1070,8 +1070,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows, the removal alert markers
-// and the feature rows.
+// sealed state, the namespace IDs, the owned rows, the grants and the
+// memberships of principals of a namespace, the removal alert markers and the
+// feature rows.
 func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
@@ -1087,6 +1088,14 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt tim
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
+		return grantErr
+	}
+
+	if memberErr := checkStagedNamespacePrincipalMemberships(ctx, q, staging); memberErr != nil {
+		return memberErr
 	}
 
 	if markerErr := checkStagedRemovalAlerts(ctx, q, staging, restoreAt); markerErr != nil {
