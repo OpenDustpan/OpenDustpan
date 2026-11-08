@@ -505,9 +505,9 @@ func rowOf(j *job.Job) (Row, error) {
 	}
 
 	r := Row{
-		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), UnitID: j.Spec.Unit.UnitID(), Seq: 0, State: j.State,
-		Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
-		Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), NamespaceID: j.NamespaceID, UnitID: j.Spec.Unit.UnitID(), Seq: 0,
+		State: j.State, Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey,
+		Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
 		StateChangedMs: j.StateChangedAt.UnixMilli(),
 	}
 
@@ -522,11 +522,11 @@ func rowOf(j *job.Job) (Row, error) {
 // jobOf returns the job that a row holds.
 func jobOf(r *Row) (job.Job, error) {
 	j := job.Job{
-		ID: r.ID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "", Phases: nil, Current: r.Phase,
-		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
-		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
-		StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
+		ID: r.ID, NamespaceID: r.NamespaceID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "",
+		Phases: nil, Current: r.Phase, StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil,
+		Trigger: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: r.Key,
+		RequestHash: "", Version: r.Version, CreatedAt: time.UnixMilli(r.CreatedMs).UTC(),
+		UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(), StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
 	}
 
 	if err := decodeBody(r.Body, &j); err != nil {
@@ -600,6 +600,7 @@ func emptySpec() job.Spec {
 func noJob() job.Job {
 	return job.Job{
 		ID:             "",
+		NamespaceID:    "",
 		Spec:           emptySpec(),
 		State:          "",
 		Wait:           "",

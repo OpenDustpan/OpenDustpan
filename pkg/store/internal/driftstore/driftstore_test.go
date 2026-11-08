@@ -82,8 +82,8 @@ func jobBody(tool, ns, unitID, purpose string) string {
 // ten minutes.
 func jobRow(id job.ID, state job.State, body string) jobstore.Row {
 	return jobstore.Row{
-		ID: id, Namespace: "acme", UnitID: "wsp-1", Seq: 1, State: state, Wait: "", Phase: 0, Changes: false,
-		Operation: "", Key: "", Version: 1, Body: body, CreatedMs: epoch().UnixMilli(),
+		ID: id, Namespace: "acme", NamespaceID: "", UnitID: "wsp-1", Seq: 1, State: state, Wait: "", Phase: 0,
+		Changes: false, Operation: "", Key: "", Version: 1, Body: body, CreatedMs: epoch().UnixMilli(),
 		UpdatedMs:      epoch().Add(10 * time.Minute).UnixMilli(),
 		StateChangedMs: 0,
 	}

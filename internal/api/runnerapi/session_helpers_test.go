@@ -195,9 +195,9 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	}
 
 	return job.Job{
-		ID: id, Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0, StartedBy: "",
-		Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
+		ID: id, NamespaceID: "", Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0,
+		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil,
+		Closed: nil, Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
 		UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
 	}, nil
 }

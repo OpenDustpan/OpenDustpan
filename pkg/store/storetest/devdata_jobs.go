@@ -90,8 +90,8 @@ func checkDevJobAfterStrip(t *testing.T, dst DevDataStore) {
 	}
 
 	row := jobstore.Row{
-		ID: "job-dev", Namespace: "acme", UnitID: "unt-dev", Seq: 1000, State: job.StateQueued, Wait: job.WaitNone,
-		Phase: 0, Changes: false, Operation: "", Key: "", Version: 1, Body: textOf(mine, "body"),
+		ID: "job-dev", Namespace: "acme", NamespaceID: "", UnitID: "unt-dev", Seq: 1000, State: job.StateQueued,
+		Wait: job.WaitNone, Phase: 0, Changes: false, Operation: "", Key: "", Version: 1, Body: textOf(mine, "body"),
 		CreatedMs: 1, UpdatedMs: 1, StateChangedMs: 1,
 	}
 

@@ -174,7 +174,8 @@ func seedFixtureJob(ctx context.Context, p ports, unit identity.Object, fence na
 	}
 
 	queued := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{

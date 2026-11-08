@@ -358,6 +358,7 @@ func TestCheckCancel(t *testing.T) {
 func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 	return job.Job{
 		ID:             "job-a",
+		NamespaceID:    "",
 		Spec:           newSpec(identity.NamespaceObject("acme"), job.OperationApply, job.ExecutorWriteBack),
 		State:          s,
 		Wait:           job.WaitNone,

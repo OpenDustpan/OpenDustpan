@@ -52,7 +52,8 @@ func RunJobBackup(t *testing.T, newBackup func(t *testing.T) JobBackup) {
 
 	for _, list := range [][]string{nil, {"pool"}, {"pool", "location", "profile"}} {
 		j := job.Job{
-			ID: job.ID(ident.NewID(job.IDPrefix)),
+			ID:          job.ID(ident.NewID(job.IDPrefix)),
+			NamespaceID: "",
 			Spec: job.Spec{
 				Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 				Location: job.Location{

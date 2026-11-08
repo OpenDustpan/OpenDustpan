@@ -230,8 +230,8 @@ func (m *memDB) SetStateVersion(_ context.Context, fence namespace.Fence, unit i
 	return nil
 }
 
-// GetNamespace implements job.NamespaceReader: it answers the name and the
-// failover version, which is all that the claimer reads.
+// GetNamespace implements job.NamespaceReader: it answers the name, the ID
+// and the failover version, which is all that the claimer reads.
 func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -314,6 +314,7 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 
 	now := time.Now().UTC()
 	stored := copyJob(&j)
+	stored.NamespaceID = m.nsIDs[ns]
 	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
 	stored.StateChangedAt = now
 

@@ -39,6 +39,7 @@ func recordJob() *job.Job {
 
 	return &job.Job{
 		ID:             "job-1",
+		NamespaceID:    "",
 		State:          job.StateRunning,
 		Current:        0,
 		Wait:           job.WaitNone,
