@@ -235,6 +235,7 @@ type DeliveryRow struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	CreatedAtMs    int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64
@@ -267,7 +268,7 @@ func Delivery(r DeliveryRow) (notify.Delivery, error) {
 	d := notify.Delivery{
 		ID: r.ID, Notification: r.NotificationID, Scope: namespace.Name(r.Scope), Subscription: r.SubscriptionID,
 		Sink: r.SinkID, Contact: r.Contact, Principal: r.Principal, State: notify.DeliveryState(r.State),
-		Attempts: int(r.Attempts), NextAt: Time(r.NextAtMs), LastError: r.LastError,
+		Attempts: int(r.Attempts), CreatedAt: Time(r.CreatedAtMs), NextAt: Time(r.NextAtMs), LastError: r.LastError,
 		DeliveredAt: Time(r.DeliveredAtMs), Owner: r.Owner, LeaseUntil: Time(r.LeaseUntilMs), Version: r.Version,
 	}
 
@@ -330,12 +331,12 @@ func (r *SubscriptionRow) Check() (string, error) {
 }
 
 // Dest implements StagedRow for the columns id, scope, notification_id,
-// subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-// last_error, delivered_at_ms, owner, lease_until_ms and version.
+// subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+// next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms and version.
 func (r *DeliveryRow) Dest() []any {
 	return []any{
 		&r.ID, &r.Scope, &r.NotificationID, &r.SubscriptionID, &r.SinkID, &r.Contact, &r.Principal, &r.State,
-		&r.Attempts, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner, &r.LeaseUntilMs, &r.Version,
+		&r.Attempts, &r.CreatedAtMs, &r.NextAtMs, &r.LastError, &r.DeliveredAtMs, &r.Owner, &r.LeaseUntilMs, &r.Version,
 	}
 }
 

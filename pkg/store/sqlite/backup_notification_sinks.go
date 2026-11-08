@@ -93,6 +93,7 @@ func sqliteOutboxBackupTables() []sqliteBackupTable {
 				sinkColPrincipal,
 				backupColState,
 				"attempts",
+				"created_at_ms",
 				"next_at_ms",
 				"last_error",
 				"delivered_at_ms",

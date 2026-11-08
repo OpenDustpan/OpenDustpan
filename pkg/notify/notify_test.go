@@ -735,10 +735,22 @@ func TestBeforeAttempt(t *testing.T) {
 
 	d := func(principal, contact string) notify.Delivery {
 		return notify.Delivery{
-			ID: "dlv-1", Notification: "ntf-1", Scope: "shop", Subscription: "sub-1", Sink: "snk-1",
-			Contact: contact, Principal: principal, State: notify.DeliveryPending, Attempts: 1,
-			NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{}, Owner: "i-1", LeaseUntil: time.Time{},
-			Version: 2,
+			ID:           "dlv-1",
+			Notification: "ntf-1",
+			Scope:        "shop",
+			Subscription: "sub-1",
+			Sink:         "snk-1",
+			Contact:      contact,
+			Principal:    principal,
+			State:        notify.DeliveryPending,
+			Attempts:     1,
+			CreatedAt:    time.Time{},
+			NextAt:       time.Time{},
+			LastError:    "",
+			DeliveredAt:  time.Time{},
+			Owner:        "i-1",
+			LeaseUntil:   time.Time{},
+			Version:      2,
 		}
 	}
 

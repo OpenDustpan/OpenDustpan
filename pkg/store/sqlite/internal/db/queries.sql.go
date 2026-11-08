@@ -484,8 +484,8 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT ?5
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
 type ClaimNotificationDeliveriesParams struct {
@@ -523,6 +523,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -1203,9 +1204,8 @@ const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificat
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = ?1 AND subscription_id = ?2
-      AND (next_at_ms > ?3
-        OR (next_at_ms = ?3 AND id >= ?4))
-    ORDER BY next_at_ms DESC, id DESC
+      AND (created_at_ms, id) >= (CAST(?3 AS INTEGER), CAST(?4 AS TEXT))
+    ORDER BY created_at_ms DESC, id DESC
     LIMIT ?5
 ) AS within_bound
 `
@@ -1218,11 +1218,13 @@ type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
 	MaxRows        int64
 }
 
-// The number of deliveries of the subscription at or before the cursor (next
-// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
-// the deliveries that a page after the cursor leaves behind. The count stops
-// at max_rows. The ORDER BY does not change the count; it stays so that the
-// plan reads the index of the history in order and stops at max_rows.
+// The number of deliveries of the subscription at or before the cursor
+// (creation time, delivery ID) in the order of
+// ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+// the cursor leaves behind. The count stops at max_rows. The row
+// comparison is a bound of the index of the history, so the scan reads only
+// the rows that it counts. The ORDER BY does not change the count; it stays so
+// that the plan reads that index in order and stops at max_rows.
 func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNotificationDeliveriesOfSubscriptionBefore,
 		arg.Scope,
@@ -7126,8 +7128,8 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = ?1
 `
@@ -7145,6 +7147,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.CreatedAtMs,
 		&i.NextAtMs,
 		&i.LastError,
 		&i.DeliveredAtMs,
@@ -10767,11 +10770,12 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
-    ?6, ?7, 'pending', 0, ?8, '', 0, '', 0, 1
+    ?6, ?7, 'pending', 0, ?8, ?9, '', 0, '',
+    0, 1
 )
 `
 
@@ -10783,6 +10787,7 @@ type InsertNotificationDeliveryParams struct {
 	SinkID         string
 	Contact        string
 	Principal      string
+	CreatedAtMs    int64
 	NextAtMs       int64
 }
 
@@ -10795,6 +10800,7 @@ func (q *Queries) InsertNotificationDelivery(ctx context.Context, arg InsertNoti
 		arg.SinkID,
 		arg.Contact,
 		arg.Principal,
+		arg.CreatedAtMs,
 		arg.NextAtMs,
 	)
 	return err
@@ -15072,11 +15078,11 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
-ORDER BY next_at_ms DESC, id DESC
+ORDER BY created_at_ms DESC, id DESC
 LIMIT ?3
 `
 
@@ -15105,6 +15111,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -15126,13 +15133,12 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
-  AND (next_at_ms < ?3
-    OR (next_at_ms = ?3 AND id < ?4))
-ORDER BY next_at_ms DESC, id DESC
+  AND (created_at_ms, id) < (CAST(?3 AS INTEGER), CAST(?4 AS TEXT))
+ORDER BY created_at_ms DESC, id DESC
 LIMIT ?5
 `
 
@@ -15144,10 +15150,10 @@ type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
 	MaxRows        int64
 }
 
-// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
-// time, delivery ID): the rows with an older next time, or with the same next
-// time and a smaller ID. The bound on next_at_ms lets the index scan start at
-// the cursor.
+// The page of ListNotificationDeliveriesOfSubscription after the cursor
+// (creation time, delivery ID): the rows with an older creation time, or with
+// the same creation time and a smaller ID. The row comparison is a bound of the
+// index of the history, so the scan starts at the cursor.
 func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
 	rows, err := q.db.QueryContext(ctx, listNotificationDeliveriesOfSubscriptionAfter,
 		arg.Scope,
@@ -15173,6 +15179,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,

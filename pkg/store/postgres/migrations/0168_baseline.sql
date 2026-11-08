@@ -747,6 +747,7 @@ CREATE TABLE notification_deliveries (
     principal text NOT NULL,
     state text NOT NULL,
     attempts bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
     next_at_ms bigint NOT NULL,
     last_error text NOT NULL,
     delivered_at_ms bigint NOT NULL,
@@ -1996,7 +1997,7 @@ CREATE UNIQUE INDEX namespaces_id ON namespaces USING btree (id);
 
 CREATE INDEX notification_deliveries_due ON notification_deliveries USING btree (scope, next_at_ms, id) WHERE (state = 'pending'::text);
 
-CREATE INDEX notification_deliveries_subscription ON notification_deliveries USING btree (scope, subscription_id, next_at_ms DESC, id DESC);
+CREATE INDEX notification_deliveries_subscription ON notification_deliveries USING btree (scope, subscription_id, created_at_ms DESC, id COLLATE "C" DESC);
 
 CREATE INDEX notification_sink_secrets_sink ON notification_sink_secrets USING btree (scope, sink_id, "position");
 

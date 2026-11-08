@@ -75,6 +75,7 @@ type deliveryDocument struct {
 	Principal    string    `json:"principal"`
 	State        string    `json:"state"`
 	Attempts     int       `json:"attempts"`
+	CreatedAt    time.Time `json:"createdAt"`
 	NextAt       time.Time `json:"nextAt"`
 	LastError    string    `json:"lastError,omitempty"`
 	DeliveredAt  time.Time `json:"deliveredAt,omitzero"`
@@ -123,7 +124,8 @@ func nonNil(list []string) []string {
 func toDeliveryDocument(d *notify.Delivery) deliveryDocument {
 	return deliveryDocument{
 		ID: d.ID, Notification: d.Notification, Subscription: d.Subscription, Sink: d.Sink, Contact: d.Contact,
-		Principal: d.Principal, State: string(d.State), Attempts: d.Attempts, NextAt: d.NextAt.UTC(),
+		Principal: d.Principal, State: string(d.State), Attempts: d.Attempts, CreatedAt: d.CreatedAt.UTC(),
+		NextAt:    d.NextAt.UTC(),
 		LastError: d.LastError, DeliveredAt: d.DeliveredAt.UTC(), Version: d.Version,
 	}
 }
@@ -402,12 +404,12 @@ func (h *Handler) deleteSubscription(
 	h.send(w, r, deletedAnswer(stateOf(ctx)), id)
 }
 
-// historyToken is the page token of the delivery history. NextAt is the Unix
-// millisecond time of the last delivery of the page before and ID is its ID:
-// the next page starts after that pair. Fingerprint binds the token to one
-// namespace and subscription.
+// historyToken is the page token of the delivery history. CreatedAt is the
+// Unix millisecond creation time of the last delivery of the page before and
+// ID is its ID: the next page starts after that pair. Fingerprint binds the
+// token to one namespace and subscription.
 type historyToken struct {
-	NextAt      int64  `json:"t"`
+	CreatedAt   int64  `json:"t"`
 	ID          string `json:"i"`
 	Fingerprint string `json:"f"`
 }
@@ -441,7 +443,7 @@ func historyPage(r *http.Request, fp string) (subscriptionsvc.HistoryRequest, er
 
 	var t historyToken
 	if decodeErr := pagetoken.Decode(raw, &t); decodeErr != nil || !pagetoken.SameFingerprint(t.Fingerprint, fp) ||
-		t.NextAt < 0 {
+		t.CreatedAt < 0 {
 		return subscriptionsvc.HistoryRequest{}, errPageToken
 	}
 
@@ -453,7 +455,7 @@ func historyPage(r *http.Request, fp string) (subscriptionsvc.HistoryRequest, er
 	}
 
 	return subscriptionsvc.HistoryRequest{
-		After: &notify.DeliveryCursor{NextAt: time.UnixMilli(t.NextAt).UTC(), ID: t.ID},
+		After: &notify.DeliveryCursor{CreatedAt: time.UnixMilli(t.CreatedAt).UTC(), ID: t.ID},
 		Size:  size,
 	}, nil
 }
@@ -486,7 +488,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, _ identity.Pri
 	if page.More {
 		last := page.Deliveries[len(page.Deliveries)-1]
 		token, encodeErr := pagetoken.Encode(historyToken{
-			NextAt: last.NextAt.UnixMilli(), ID: last.ID, Fingerprint: fp,
+			CreatedAt: last.CreatedAt.UnixMilli(), ID: last.ID, Fingerprint: fp,
 		})
 		if encodeErr != nil {
 			h.writeSubscriptionError(ctx, w, encodeErr)

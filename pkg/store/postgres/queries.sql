@@ -4793,8 +4793,8 @@ SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_de
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
 
@@ -4805,11 +4805,12 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(created_at_ms), sqlc.arg(next_at_ms), '', 0, '',
+    0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -4832,8 +4833,8 @@ WHERE notification_deliveries.id IN (
     LIMIT sqlc.arg(max_rows)
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version;
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
@@ -4847,41 +4848,42 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
--- The number of deliveries of the subscription at or before the cursor (next
--- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
--- the deliveries that a page after the cursor leaves behind, in byte order
--- (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
--- the count; it stays so that the plan reads the index of the history in
--- order and stops at max_rows.
+-- The number of deliveries of the subscription at or before the cursor
+-- (creation time, delivery ID) in the order of
+-- ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+-- the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows. The row
+-- comparison is a bound of the index of the history, so the scan reads only
+-- the rows that it counts. The ORDER BY does not change the count; it stays so
+-- that the plan reads that index in order and stops at max_rows.
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-      AND (next_at_ms > sqlc.arg(after_ms)
-        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
-    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+      AND (created_at_ms, id COLLATE "C") >= (sqlc.arg(after_ms)::bigint, sqlc.arg(after_id)::text)
+    ORDER BY created_at_ms DESC, id COLLATE "C" DESC
     LIMIT sqlc.arg(max_rows)
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: ListNotificationDeliveriesOfSubscriptionAfter :many
--- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
--- time, delivery ID): the rows with an older next time, or with the same next
--- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
--- query. The bound on next_at_ms lets the index scan start at the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor
+-- (creation time, delivery ID): the rows with an older creation time, or with
+-- the same creation time and a smaller ID, in byte order (COLLATE "C"), as
+-- the order of the query. The row comparison is a bound of the
+-- index of the history, so the scan starts at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-  AND (next_at_ms < sqlc.arg(after_ms)
-    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+  AND (created_at_ms, id COLLATE "C") < (sqlc.arg(after_ms)::bigint, sqlc.arg(after_id)::text)
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows

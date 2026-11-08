@@ -213,7 +213,7 @@ deliveries stay in the history.
 ## Deliveries
 
 `GET /subscriptions/{subscription_id}/deliveries` answers one page of the
-deliveries of the subscription, newest first. The query parameters:
+deliveries of the subscription, newest `createdAt` first. The query parameters:
 
 | Parameter | Content |
 | --- | --- |
@@ -224,9 +224,11 @@ The answer has `deliveries` and `nextPageToken`. `nextPageToken` is empty on the
 last page. The history reaches back at most 1000 deliveries, and the server
 enforces that count. A page that would go past it ends there and has no next
 page. A token names the last delivery of the page before. The next page starts
-after the delivery with that `nextAt` and ID. A page never skips or repeats a
-delivery while no delivery changes: a retry or a new send changes `nextAt`. A
-token for another subscription answers 400 `request.page-token-invalid`.
+after the delivery with that `createdAt` and ID. No attempt changes `createdAt`,
+so a page never skips or repeats a delivery, also when a retry changes `nextAt`
+between two pages. A delivery that the server makes after the first page is
+newer than the token, so only a new first page shows it. A token for another
+subscription answers 400 `request.page-token-invalid`.
 
 | Field | Content |
 | --- | --- |
@@ -238,6 +240,7 @@ token for another subscription answers 400 `request.page-token-invalid`.
 | `principal` | The subject whose access decides the delivery |
 | `state` | `pending`, `delivered`, `abandoned` or `skipped` |
 | `attempts` | The number of attempts |
+| `createdAt` | When the server made the delivery. It does not change. |
 | `nextAt` | When the next attempt is due |
 | `lastError` | `refused`, `permanent` or `temporary`. Absent when the last attempt did not fail. |
 | `deliveredAt` | Absent until the receiver accepts the delivery |

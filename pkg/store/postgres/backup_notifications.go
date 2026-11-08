@@ -139,7 +139,7 @@ func checkStagedDeliveryRows(ctx context.Context, pool pgQuerier, staging string
 		ctx,
 		pool,
 		"delivery",
-		"SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM "+stagingTable(
+		"SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM "+stagingTable(
 			staging,
 			"notification_deliveries",
 		),

@@ -76,6 +76,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"history shows only the deliveries of its scope", testHistoryScope},
 		{"history pages by the keyset cursor", testHistoryCursor},
 		{"history counts the deliveries at or before a cursor", testHistoryCountBefore},
+		{"a retry between two pages of the history skips and repeats no delivery", testHistoryRetryBetweenPages},
 		{"record needs a live claim and changes only the result", testRecordClaim},
 		{"redeliver of a pending delivery is ErrConflict", testRedeliverPending},
 		{"put subscription refuses an invalid subscription", testSubscriptionValidate},
@@ -217,6 +218,8 @@ func subscriptionIn(scope namespace.Name, sinkID string) notify.Subscription {
 	}
 }
 
+// delivery returns a new pending delivery of the subscription sub-1 in shop.
+// Its creation time and its next time are both next.
 func delivery(id, ntf string, next time.Time) notify.Delivery { return deliveryIn(shop, id, ntf, next) }
 
 func deliveryIn(scope namespace.Name, id, ntf string, next time.Time) notify.Delivery {
@@ -230,6 +233,7 @@ func deliveryIn(scope namespace.Name, id, ntf string, next time.Time) notify.Del
 		Principal:    "alice",
 		State:        notify.DeliveryPending,
 		Attempts:     0,
+		CreatedAt:    next,
 		NextAt:       next,
 		LastError:    "",
 		DeliveredAt:  time.Time{},
@@ -828,6 +832,7 @@ func invalidDeliveries() []struct {
 		{"a stored ID", change(func(d *notify.Delivery) { d.ID = "dlv-1" })},
 		{"an ID with no prefix", change(func(d *notify.Delivery) { d.ID = "x-2" })},
 		{"no principal", change(func(d *notify.Delivery) { d.Principal = "" })},
+		{"no creation time", change(func(d *notify.Delivery) { d.CreatedAt = time.Time{} })},
 		{"no subscription and no contact", change(func(d *notify.Delivery) { d.Subscription = "" })},
 		{"an unknown state", change(func(d *notify.Delivery) { d.State = "bogus" })},
 		{"a delivered state", change(func(d *notify.Delivery) { d.State = notify.DeliveryDone })},
@@ -857,8 +862,8 @@ func testHistoryScope(t *testing.T, h Harness) {
 }
 
 // testHistoryCursor pages the history with the keyset cursor. Many rows share
-// one NextAt, so a page edge between them is the case that a cursor of the
-// next time alone would skip or repeat.
+// one CreatedAt, so a page edge between them is the case that a cursor of the
+// creation time alone would skip or repeat.
 func testHistoryCursor(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -874,8 +879,8 @@ func testHistoryCursor(t *testing.T, h Harness) {
 	rows = append(rows, delivery("dlv-0", "ntf-0", next.Add(-time.Minute)))
 	enqueue(t, h, fence, rows...)
 
-	// The newest next time comes first, and the greatest ID first among the
-	// rows that share it.
+	// The newest creation time comes first, and the greatest ID first among
+	// the rows that share it.
 	var (
 		seen  []string
 		sizes []int
@@ -902,11 +907,11 @@ func testHistoryCursor(t *testing.T, h Harness) {
 		}
 
 		last := got[len(got)-1]
-		after = &notify.DeliveryCursor{NextAt: last.NextAt, ID: last.ID}
+		after = &notify.DeliveryCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 	}
 
 	if want := "[2 2 2]"; fmt.Sprint(sizes) != want {
-		t.Fatalf("page sizes = %s, want %s: a page edge skips or repeats rows of one next time",
+		t.Fatalf("page sizes = %s, want %s: a page edge skips or repeats rows of one creation time",
 			fmt.Sprint(sizes), want)
 	}
 
@@ -934,7 +939,7 @@ func testHistoryCountBefore(t *testing.T, h Harness) {
 
 	// The history order is dlv-5, dlv-4, dlv-3, dlv-2, dlv-1, dlv-0.
 	cursor := func(id string, at time.Time) *notify.DeliveryCursor {
-		return &notify.DeliveryCursor{NextAt: at, ID: id}
+		return &notify.DeliveryCursor{CreatedAt: at, ID: id}
 	}
 
 	cases := []struct {
@@ -968,6 +973,77 @@ func testHistoryCountBefore(t *testing.T, h Harness) {
 		notify.ErrNotFound,
 	) {
 		t.Fatalf("CountBefore of a subscription of another scope = %d (%v), want ErrNotFound", got, err)
+	}
+}
+
+// testHistoryRetryBetweenPages pages the history while an attempt of a
+// delivery that no page has shown yet sets its next time after every other
+// delivery. The attempt changes NextAt and not CreatedAt, so the later pages
+// still show that delivery, and each delivery shows exactly once.
+func testHistoryRetryBetweenPages(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	// dlv-1 is the oldest delivery, so the last page shows it. Its next time
+	// is also the oldest, so a claim of one delivery takes it.
+	rows := make([]notify.Delivery, 0, 5)
+	for i := 1; i <= 5; i++ {
+		at := now().Add(time.Duration(i-6) * time.Minute)
+		rows = append(rows, delivery(fmt.Sprintf("dlv-%d", i), fmt.Sprintf("ntf-%d", i), at))
+	}
+
+	enqueue(t, h, fence, rows...)
+
+	first, err := h.Deliveries.History(t.Context(), shop, "sub-1", nil, 2)
+	if err != nil {
+		t.Fatalf("History of the first page: %v", err)
+	}
+
+	if got := ids(first); got != "[dlv-5 dlv-4]" {
+		t.Fatalf("first page = %s, want [dlv-5 dlv-4]", got)
+	}
+
+	// An attempt of dlv-1 fails, and the retry is due after every other
+	// delivery.
+	claimed := claim(t, h, fence, now(), 1)
+	if len(claimed) != 1 || claimed[0].ID != "dlv-1" {
+		t.Fatalf("claim = %s, want [dlv-1]", ids(claimed))
+	}
+
+	retry := attempt(claimed[0], now())
+	retry.State, retry.DeliveredAt = notify.DeliveryPending, time.Time{}
+	retry.LastError, retry.NextAt = notify.ClassTemporary, now().Add(time.Hour)
+
+	if recErr := h.Deliveries.Record(t.Context(), fence, retry); recErr != nil {
+		t.Fatalf("Record of the retry: %v", recErr)
+	}
+
+	seen := slices.Clone(first)
+
+	for pages := 0; ; pages++ {
+		if pages > 4 {
+			t.Fatalf("the history by cursor does not end: %s", ids(seen))
+		}
+
+		last := seen[len(seen)-1]
+		after := &notify.DeliveryCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+
+		got, histErr := h.Deliveries.History(t.Context(), shop, "sub-1", after, 2)
+		if histErr != nil {
+			t.Fatalf("History: %v", histErr)
+		}
+
+		if len(got) == 0 {
+			break
+		}
+
+		seen = append(seen, got...)
+	}
+
+	if got, want := ids(seen), "[dlv-5 dlv-4 dlv-3 dlv-2 dlv-1]"; got != want {
+		t.Fatalf("history by cursor with a retry between pages = %s, want %s", got, want)
 	}
 }
 

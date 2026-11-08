@@ -54,16 +54,16 @@ func (f fakeDeliveries) History(
 	}
 
 	slices.SortFunc(out, func(a, b notify.Delivery) int {
-		return cmp.Or(b.NextAt.Compare(a.NextAt), strings.Compare(b.ID, a.ID))
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(b.ID, a.ID))
 	})
 
 	return out[:min(limit, len(out))], nil
 }
 
 // afterCursor reports whether d comes after the cursor c in the history
-// order: an older next time, or the same next time and a smaller ID.
+// order: an older creation time, or the same creation time and a smaller ID.
 func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
-	if order := d.NextAt.Compare(c.NextAt); order != 0 {
+	if order := d.CreatedAt.Compare(c.CreatedAt); order != 0 {
 		return order < 0
 	}
 
@@ -96,16 +96,17 @@ func (f fakeDeliveries) CountBefore(
 // at is the fixed clock of the tests.
 func at() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
 
-// historyRows returns count deliveries of sub-1 with the next time next, with
-// the IDs dlv-<first> to dlv-<first+count-1>, zero-padded so that their byte
-// order is their number order.
+// historyRows returns count deliveries of sub-1 with the creation time and the
+// next time next, with the IDs dlv-<first> to dlv-<first+count-1>, zero-padded
+// so that their byte order is their number order.
 func historyRows(next time.Time, first, count int) []notify.Delivery {
 	out := make([]notify.Delivery, 0, count)
 	for i := range count {
 		out = append(out, notify.Delivery{
 			ID: fmt.Sprintf("dlv-%04d", first+i), Notification: "ntf-1", Scope: "acme", Subscription: "sub-1",
 			Sink: "snk-1", Contact: "", Principal: "alice", State: notify.DeliveryDone, Attempts: 0,
-			NextAt: next, LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
+			CreatedAt: next, NextAt: next, LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{},
+			Version: 0,
 		})
 	}
 
@@ -148,10 +149,10 @@ func newService(t *testing.T, rows []notify.Delivery) *subscriptionsvc.Service {
 	return svc
 }
 
-// TestHistorySameNextAtPages reads the history of many deliveries that share
-// one next time, with a page edge between them. Every delivery comes back
+// TestHistorySameCreatedAtPages reads the history of many deliveries that
+// share one creation time, with a page edge between them. Every delivery comes back
 // once, in the order of the history.
-func TestHistorySameNextAtPages(t *testing.T) {
+func TestHistorySameCreatedAtPages(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -228,7 +229,7 @@ func pageIDs(t *testing.T, svc *subscriptionsvc.Service, rows, size int) []strin
 		}
 
 		last := page.Deliveries[len(page.Deliveries)-1]
-		after = &notify.DeliveryCursor{NextAt: last.NextAt, ID: last.ID}
+		after = &notify.DeliveryCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 	}
 
 	t.Fatalf("the history does not end: %v", seen)
@@ -241,7 +242,7 @@ func TestHistoryWindows(t *testing.T) {
 
 	next := at()
 	cursor := func(id string) *notify.DeliveryCursor {
-		return &notify.DeliveryCursor{NextAt: next, ID: id}
+		return &notify.DeliveryCursor{CreatedAt: next, ID: id}
 	}
 
 	tests := []struct {
@@ -299,7 +300,7 @@ func TestHistoryBoundFromTheStore(t *testing.T) {
 
 	next := at()
 	cursor := func(id string) *notify.DeliveryCursor {
-		return &notify.DeliveryCursor{NextAt: next, ID: id}
+		return &notify.DeliveryCursor{CreatedAt: next, ID: id}
 	}
 
 	tests := []struct {
@@ -345,8 +346,8 @@ func TestHistoryReturnsTheCountError(t *testing.T) {
 		name  string
 		after *notify.DeliveryCursor
 	}{
-		{"a cursor inside the history", &notify.DeliveryCursor{NextAt: at(), ID: "dlv-0003"}},
-		{"a cursor after the last row", &notify.DeliveryCursor{NextAt: at(), ID: "dlv-0000"}},
+		{"a cursor inside the history", &notify.DeliveryCursor{CreatedAt: at(), ID: "dlv-0003"}},
+		{"a cursor after the last row", &notify.DeliveryCursor{CreatedAt: at(), ID: "dlv-0000"}},
 	}
 
 	for _, tc := range tests {

@@ -3701,6 +3701,10 @@
           "contact": {
             "type": "string"
           },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
           "deliveredAt": {
             "format": "date-time",
             "type": "string"
@@ -3737,6 +3741,7 @@
         },
         "required": [
           "attempts",
+          "createdAt",
           "id",
           "nextAt",
           "notification",

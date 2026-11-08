@@ -244,7 +244,9 @@ func ValidDeliveryID(id string) bool {
 // The dispatcher checks it again before each attempt (BeforeAttempt).
 // LastError holds the Class of the error of the last attempt, and nothing
 // else. Owner and LeaseUntil are the claim of the delivery: the store sets
-// them in Claim and clears them in Record.
+// them in Claim and clears them in Record. CreatedAt is the time of the
+// enqueue. Nothing changes it after the enqueue, so it orders the history of a
+// subscription while attempts change NextAt.
 // Deliveries are not ordered: a receiver orders notifications by their
 // scope and sequence.
 type Delivery struct {
@@ -257,6 +259,7 @@ type Delivery struct {
 	Principal    string
 	State        DeliveryState
 	Attempts     int
+	CreatedAt    time.Time
 	NextAt       time.Time
 	LastError    string
 	DeliveredAt  time.Time
@@ -267,8 +270,8 @@ type Delivery struct {
 
 // Validate returns ErrInvalid for a delivery with no ID of the prefix
 // DeliveryIDPrefix, no notification ID of the prefix IDPrefix, no scope, no
-// principal, an unknown state, neither a subscription nor a contact, or a
-// LastError that is not empty or a Class.
+// principal, no creation time, an unknown state, neither a subscription nor a
+// contact, or a LastError that is not empty or a Class.
 func (d Delivery) Validate() error {
 	switch {
 	case !ValidDeliveryID(d.ID) || !strings.HasPrefix(d.Notification, IDPrefix):
@@ -276,6 +279,8 @@ func (d Delivery) Validate() error {
 			DeliveryIDPrefix, IDPrefix)
 	case d.Scope == "" || d.Principal == "":
 		return fmt.Errorf("%w: a delivery needs a scope and a principal", ErrInvalid)
+	case d.CreatedAt.IsZero():
+		return fmt.Errorf("%w: a delivery needs a creation time", ErrInvalid)
 	case d.Subscription == "" && d.Contact == "":
 		return fmt.Errorf("%w: a delivery needs a subscription or a contact", ErrInvalid)
 	case !validState(d.State):
@@ -376,7 +381,7 @@ type Deliveries interface {
 	Claim(ctx context.Context, fence namespace.Fence, req ClaimRequest) ([]Delivery, error)
 	// Record stores the result a of an attempt and clears the claim. It
 	// changes only State, Attempts, NextAt, LastError and DeliveredAt:
-	// never the scope, the notification, the subscription, the contact or
+	// never CreatedAt, the scope, the notification, the subscription, the contact or
 	// the principal. It needs the live claim that returned the delivery:
 	// a.Owner and a.Version are the owner and the version of the stored
 	// claim, and its lease has not passed at a.Now. A later claim changes
@@ -388,15 +393,18 @@ type Deliveries interface {
 	Record(ctx context.Context, fence namespace.Fence, a Attempt) error
 	// History returns the deliveries of the subscription id in scope,
 	// newest first, at most limit, after the cursor. A nil cursor starts
-	// at the newest delivery. The rows order by NextAt, newest first, and
-	// then by ID, greatest first, so the cursor pair names one row and a
-	// page that starts after it never skips or repeats a row that has the
-	// same NextAt. It returns ErrNotFound when the subscription id is in
+	// at the newest delivery. The rows order by CreatedAt, newest first,
+	// and then by ID, greatest first. Nothing changes the CreatedAt or the
+	// ID of a delivery, so the cursor pair names one row, and a page that
+	// starts after it never skips or repeats a row, also while an attempt
+	// changes NextAt between two pages. A delivery enqueued between two
+	// pages is newer than the cursor, so the later pages do not show it.
+	// It returns ErrNotFound when the subscription id is in
 	// another scope, so a caller with the read action on one scope sees no
 	// delivery of another.
 	History(ctx context.Context, scope namespace.Name, id string, after *DeliveryCursor, limit int) ([]Delivery, error)
 	// CountBefore returns how many deliveries of the subscription id in
-	// scope come at or before the cursor in the history order (NextAt,
+	// scope come at or before the cursor in the history order (CreatedAt,
 	// newest first, then ID, greatest first): the deliveries that the
 	// pages before a page that starts after the cursor returned. It stops
 	// counting at maxCount, so a caller bounds a read without counting a
@@ -419,13 +427,13 @@ type Deliveries interface {
 }
 
 // DeliveryCursor names one delivery of the history of a subscription: the
-// next page starts after the delivery with this NextAt and ID. The history
-// orders by NextAt, newest first, and then by ID, greatest first, so the
+// next page starts after the delivery with this CreatedAt and ID. The history
+// orders by CreatedAt, newest first, and then by ID, greatest first, so the
 // pair names one row and a page edge never skips or repeats a row that has
-// the same NextAt.
+// the same CreatedAt.
 type DeliveryCursor struct {
-	NextAt time.Time
-	ID     string
+	CreatedAt time.Time
+	ID        string
 }
 
 // ClaimRequest asks Claim for the due deliveries of Scope at Now. Lease is
