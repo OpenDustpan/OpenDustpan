@@ -159,6 +159,12 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("branding.preset = %+v, want the default, unlocked, with a database layer", preset)
 	}
 
+	plain := settingFor(t, doc, "egress.allowPlainConnections")
+	if plain.Source != "default" || plain.Locked || !plain.DatabaseLayer || plain.Value != false ||
+		plain.Apply != "live" {
+		t.Fatalf("egress.allowPlainConnections = %+v, want the default, unlocked, with a database layer", plain)
+	}
+
 	if listen := settingFor(t, doc, "listen"); !listen.Locked || listen.DatabaseLayer || listen.Apply != "restart" {
 		t.Fatalf("listen = %+v, want a setting that only the static layer sets", listen)
 	}

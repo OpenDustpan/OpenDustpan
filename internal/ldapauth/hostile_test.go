@@ -218,13 +218,13 @@ func TestTheDialGuardChecksTheResolvedAddress(t *testing.T) {
 			"",
 		},
 		{
-			"the refusal of a plain connection names the transports to use",
+			"the refusal of a plain connection names the setting",
 			"10.0.0.5:389",
 			ldapauth.ErrPlainRefused,
 			private,
 			ldapauth.PlainLoopbackOnlyForTest,
-			"use ldaps:// or StartTLS",
-			"setting",
+			"egress.allowPlainConnections",
+			"",
 		},
 		{
 			"plain to a private address with the setting",
