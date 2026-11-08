@@ -148,7 +148,7 @@ func TestCheckStagedUnmanagedRefusesAMissingNamespace(t *testing.T) {
 			execWithoutForeignKeys(t, s, tc.update)
 
 			err := checkStagedUnmanaged(t.Context(), s.conn)
-			if !errors.Is(err, backup.ErrCorrupt) {
+			if err == nil || !errors.Is(err, backup.ErrCorrupt) {
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 
@@ -338,7 +338,7 @@ func TestCheckStagedUnmanagedRefusesAForeignPool(t *testing.T) {
 	repointTarget(t, s, foreign.ID)
 
 	err := checkStagedUnmanaged(t.Context(), s.conn)
-	if !errors.Is(err, backup.ErrCorrupt) {
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("check = %v, want ErrCorrupt", err)
 	}
 

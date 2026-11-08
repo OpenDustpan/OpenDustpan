@@ -151,7 +151,7 @@ func TestCheckStagedUnmanagedRefusesAMissingNamespace(t *testing.T) {
 			}
 
 			err := checkStagedUnmanaged(t.Context(), s.pool, currentSchema(t, s))
-			if !errors.Is(err, backup.ErrCorrupt) {
+			if err == nil || !errors.Is(err, backup.ErrCorrupt) {
 				t.Fatalf("check = %v, want ErrCorrupt", err)
 			}
 
@@ -216,7 +216,7 @@ func TestCheckStagedUnmanagedRefusesAForeignPool(t *testing.T) {
 	}
 
 	err := checkStagedUnmanaged(t.Context(), s.pool, currentSchema(t, s))
-	if !errors.Is(err, backup.ErrCorrupt) {
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("check = %v, want ErrCorrupt", err)
 	}
 
