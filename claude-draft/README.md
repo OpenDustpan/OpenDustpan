@@ -27,6 +27,14 @@ some dangerous forms.
   and can answer `allow` with its own matcher. A command that it rewrites no
   longer starts with the text of a deny rule. Test this file with the installed
   `rtk` version before you rely on it.
+- `rtk` 1.1.0 does not honor a `Bash` deny pattern that contains `:`. It
+  reads `X:Y` as the old `prefix:*` form. So the deny `Bash(git push *main*)`
+  has no colon, and the file allows no push to `origin`. A push to the
+  repository URL prompts when `rtk` gives no decision.
+- No deny pattern without a colon catches the delete of a branch with an empty
+  source (`git push <url> :name`). Only the GitHub ruleset stops it.
+- `rtk` does not apply `Read()` deny rules to the commands that it allows.
+  So the secret files have a `Read()` deny and a `Bash` deny on their path.
 
 ## Base
 
@@ -50,14 +58,17 @@ Then delete the directory `claude-draft/`.
   `golangci-lint`, `make`, `sqlc`, `go run`, `go generate`, `gofmt`.
 - Git reads, `git add` of named files, `git commit`, `git merge`, `git fetch`
   from `OpenDustpan` and `origin`, and `git push` of `HEAD` to the repository
-  URL or to `origin`.
+  URL. A push to `origin` is not allowed.
 - `gh api` with no explicit method: GET reads and the implicit POST of a
-  comment (`-F body=@file`).
+  comment (`-F body=@file`). The deny of `-X` also blocks `-X GET`. For a
+  search, put the query in the URL:
+  `gh api 'search/code?q=<terms>'`.
 - `go env` and `go env GO...` reads, and three `git config --get` keys:
   `remote.origin.url`, `user.name` and `user.email`.
 - `psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc ...` only.
-- `sha256sum`, `npx ctx7@latest`, `python3 -I scripts/...`, `rg`, `head` and
-  `tail`.
+- `sha256sum`, `npx ctx7@0.8.2` (a pinned release at least two weeks old),
+  `python3 -I scripts/...` (not with `..` in the path), `rg` (not with
+  `--pre` or `--hostname-bin`, which run a program), `head` and `tail`.
 - The MCP tools `register_repo_root` and `get_session`. `add_repo` is not
   allowed, so the owner sees each repository that an agent attaches.
 
@@ -65,13 +76,18 @@ Then delete the directory `claude-draft/`.
 
 - Reads of the environment: `env`, `printenv`, `set`, `export -p`, the
   `environ` files under `/proc`, and the Read tool under `/proc`.
+- Reads of the GitHub CLI configuration, `~/.git-credentials`, `~/.ssh` and
+  `~/.netrc`, with the Read tool and with any `Bash` command that names them.
 - `psql` shell escapes (`\!`), and `go env -w` and `go env -u`.
-- `gh api` with any explicit method (`-X`, `--method`), `graphql`, and the
-  paths of collaborators, hooks, keys, branch protection, rulesets, renames,
-  contents, dispatches, actions, environments, merges and the ref of `main`.
-- `git push` to `main` (with or without more arguments after it), a push with
-  an empty source (a delete), `-d`, `--delete`, `--mirror`, `+`, and force
-  flags, also bundled (`-uf`, `-fu`).
+- `gh api` with any explicit method (`-X`, `--method`), `--input`, `graphql`,
+  and the paths of collaborators, hooks, keys, branch protection, rulesets,
+  renames, contents, dispatches, actions, environments, merges, releases, Git
+  refs and tags, forks, reviews (reviews go through the MCP tool), and new
+  repositories (`user/repos`, `orgs/.../repos`). A field flag (`-f`, `-F`)
+  makes `gh api` send a POST, so these paths are denied for every method.
+- `git push` of any command text that contains `main`, a push with an empty
+  source (a delete), `-d`, `--delete`, `--mirror`, `+`, and force flags, also
+  bundled (`-uf`, `-fu`).
 - `git -C`, `git -c`, `git --git-dir` and `git --work-tree`. Run `cd` first.
 - `git reset --hard`, `git rebase`, `git commit --amend`, `git stash`,
   `git clean`, `git checkout --`, `git checkout -f`,
