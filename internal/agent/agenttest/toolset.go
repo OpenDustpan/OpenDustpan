@@ -163,12 +163,12 @@ func caseToolsetRead(t *testing.T, h *ToolsetHarness) {
 		t.Fatalf("record actor = %+v, want the person and the agent of the call", rec.Actor)
 	}
 
-	wantDigest(t, rec, h.Unit.String())
+	wantDigest(t, &rec, h.Unit.String())
 }
 
 // wantDigest fails t unless rec holds the digest of the arguments of a call
 // on unit, and no argument.
-func wantDigest(t *testing.T, rec agent.ToolCallRecord, unit string) {
+func wantDigest(t *testing.T, rec *agent.ToolCallRecord, unit string) {
 	t.Helper()
 
 	want, err := agent.ArgsDigest(json.RawMessage(fmt.Sprintf(`{"unit":%q}`, unit)))

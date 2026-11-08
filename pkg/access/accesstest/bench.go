@@ -88,6 +88,7 @@ func Bench(b *testing.B, s BenchStore) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	b.Run("check", func(b *testing.B) {

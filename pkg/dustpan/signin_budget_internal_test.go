@@ -53,6 +53,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 	entry := audit.Entry{
 		At: now, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
@@ -79,9 +80,17 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	cfg.authenticator, cfg.namespaceStore = refuseAll{}, st
 	cfg.logger, cfg.now = slog.New(slog.DiscardHandler), func() time.Time { return now }
 
-	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	chain, gates, err := gatedAuthenticator(gatedAuthenticatorConfig{
+		next: cfg.authenticator, tokens: tokens, jobTokens: nil, store: cfg.namespaceStore,
+		logger: cfg.logger, now: cfg.now,
+	})
 	if err != nil {
 		t.Fatalf("gated authenticator: %v", err)
+	}
+
+	links, ok := chain.(identity.Chain)
+	if !ok || len(links) != 2 {
+		t.Fatalf("chain = %T with %d links, want an identity.Chain of 2 with no job token store", chain, len(links))
 	}
 
 	return budgetFixture{cfg: cfg, tokens: tokens, chain: chain, gates: gates, valid: secret.Reveal()}

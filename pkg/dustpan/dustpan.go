@@ -85,6 +85,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -185,6 +186,7 @@ type settings struct {
 	issuerOutbox         notify.Outbox
 	sinks                sinkSettings
 	jobStore             job.Store
+	jobTokenStore        jobtoken.Store
 	triggerStore         trigger.Store
 	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
@@ -696,6 +698,7 @@ func defaultSettings() *settings {
 		issuerOutbox:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		jobTokenStore:           nil,
 		triggerStore:            nil,
 		unitSettingsStore:       nil,
 		driftStore:              nil,
@@ -859,32 +862,38 @@ type authPorts struct {
 // inside out, is:
 //
 //  1. the configured authenticator, then the stored access tokens behind
-//     their failure gate;
+//     their failure gate, then the job tokens behind their failure gate;
 //  2. the marks of the temporary administrators;
 //  3. the refusal of dev subjects on an installation that is not dev;
 //  4. the refusal of the subjects of namespace service principals.
 //
 // The authorizer chain, from the inside out, is the configured authorizer,
-// the self actions, the namespace service rule and the IP allowlist gate.
-// Each step is one statement here, in this order.
+// the self actions, the job token rule, the namespace service rule and the IP
+// allowlist gate. Each step is one statement here, in this order.
 func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error) {
 	var none authPorts
 
-	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	authn, gates, err := gatedAuthenticator(gatedAuthenticatorConfig{
+		next: cfg.authenticator, tokens: tokens, jobTokens: cfg.jobTokenStore, store: cfg.namespaceStore,
+		logger: cfg.logger, now: cfg.now,
+	})
 	if err != nil {
 		return none, err
 	}
 
-	// The namespace service rule decides the principals that the server
-	// builds before the self actions and the configured authorizer, so no
-	// authorizer of an embedder can widen them. Every authenticated person
-	// lists and revokes its own personal tokens with no grant.
-	authz := allowlistGate(identity.NamespaceServiceRule{Next: identity.SelfAllowed{
+	// The job token rule limits a job token to the unit of its job before the
+	// namespace service rule, the self actions and the configured authorizer,
+	// so no authorizer of an embedder can widen it. The namespace service
+	// rule decides the principals that the server builds before the self
+	// actions and the configured authorizer, so no authorizer of an embedder
+	// can widen them. Every authenticated person lists and revokes its own
+	// personal tokens with no grant.
+	authz := allowlistGate(identity.JobTokenRule{Next: identity.NamespaceServiceRule{Next: identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{
 			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences, identity.ActionCallerManageSignIn,
 			identity.ActionCallerManageGitHostLinks,
 		},
-	}}, cfg.ipAllowlists)
+	}}}, cfg.ipAllowlists)
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
 	if err != nil {

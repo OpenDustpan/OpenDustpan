@@ -98,6 +98,7 @@ func lockAdmin() identity.Principal {
 		Subject: "admin", DisplayName: "admin", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: identity.CredentialAccessToken, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

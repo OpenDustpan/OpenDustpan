@@ -67,7 +67,7 @@ func ChangeRequestFor(
 	unit identity.Object,
 	op agent.Operation,
 	mode agent.ChangeMode,
-) agent.ChangeRequest {
+) *agent.ChangeRequest {
 	var edits []agent.FileEdit
 	if op == agent.OperationApply && unit.String() == h.Unit.String() {
 		edits = []agent.FileEdit{
@@ -75,7 +75,7 @@ func ChangeRequestFor(
 		}
 	}
 
-	return agent.ChangeRequest{
+	return &agent.ChangeRequest{
 		Key:       key,
 		Actor:     h.Actor,
 		Unit:      unit,
@@ -154,7 +154,7 @@ func caseStartActions(t *testing.T, h *ChangesHarness) {
 	}
 }
 
-func mustStart(t *testing.T, h *ChangesHarness, req agent.ChangeRequest) agent.Change {
+func mustStart(t *testing.T, h *ChangesHarness, req *agent.ChangeRequest) agent.Change {
 	t.Helper()
 
 	c, err := h.Changes.Start(t.Context(), req)
@@ -307,10 +307,10 @@ func caseInvalid(t *testing.T, h *ChangesHarness) {
 	badAgent.Actor.Agent.Channel = "console"
 
 	reqs := map[string]*agent.ChangeRequest{
-		"no key": &noKey, "unknown operation": &badOp, "no reason": &noReason, "no agent": &badAgent,
+		"no key": noKey, "unknown operation": badOp, "no reason": noReason, "no agent": badAgent,
 	}
 	for name, req := range reqs {
-		c, err := h.Changes.Start(t.Context(), *req)
+		c, err := h.Changes.Start(t.Context(), req)
 		wantChangeErr(t, "Start() with "+name, c, err, agent.ErrInvalid)
 	}
 }

@@ -177,7 +177,8 @@ func person(subject string) identity.Principal {
 	return identity.Principal{
 		Subject: subject, DisplayName: "", Admin: false, TokenID: "tok-1", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson, Credential: "",
-		JobID: "",
+		JobID:   "",
+		JobUnit: identity.Object{},
 	}
 }
 

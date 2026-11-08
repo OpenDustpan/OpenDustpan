@@ -177,7 +177,7 @@ type ChangePlan struct {
 // A direct change is never a default, and a destroy is never direct. It
 // returns ErrInvalid for an unknown operation, executor or mode,
 // ErrModeNotSupported and ErrDirectNotAllowed.
-func (p ChangePolicy) Plan(support UnitSupport, req ChangeRequest) (ChangePlan, error) {
+func (p ChangePolicy) Plan(support UnitSupport, req *ChangeRequest) (ChangePlan, error) {
 	var zero ChangePlan
 
 	if !req.Operation.Valid() {
@@ -213,7 +213,7 @@ func (p ChangePolicy) Plan(support UnitSupport, req ChangeRequest) (ChangePlan, 
 
 // executorFor returns the executor of req: the requested one, or the
 // default for the unit.
-func executorFor(support UnitSupport, req ChangeRequest) (Executor, error) {
+func executorFor(support UnitSupport, req *ChangeRequest) (Executor, error) {
 	exec := req.Executor
 	if exec == "" {
 		exec = ExecutorRunner
@@ -240,7 +240,7 @@ func executorFor(support UnitSupport, req ChangeRequest) (Executor, error) {
 
 // modeFor returns the mode of req on exec: the requested one, or the
 // default of the executor.
-func (p ChangePolicy) modeFor(exec Executor, req ChangeRequest) (ChangeMode, error) {
+func (p ChangePolicy) modeFor(exec Executor, req *ChangeRequest) (ChangeMode, error) {
 	switch req.Mode {
 	case "":
 		if exec == ExecutorWriteBack {
@@ -343,22 +343,24 @@ type Changes interface {
 	Support(ctx context.Context, actor Actor, unit identity.Object) (UnitSupport, error)
 	// StartActions returns the actions that the start of plan for req
 	// needs on req.Unit, as the start requirements of the job model give
-	// them, with no break-glass. The Toolset checks each one for the person
-	// before Start, and the audit entry of the call names them. It returns
-	// ErrInvalid and ErrModeNotSupported.
-	StartActions(req ChangeRequest, plan ChangePlan) ([]identity.Action, error)
+	// them, with no break-glass. req must not be nil. The method does not
+	// change req and does not keep it after it returns. The Toolset checks
+	// each one for the person before Start, and the audit entry of the call
+	// names them. It returns ErrInvalid and ErrModeNotSupported.
+	StartActions(req *ChangeRequest, plan ChangePlan) ([]identity.Action, error)
 	// Start resolves req with ChangePolicy.Plan, checks the actions of the
 	// start for the person, puts the confirmation gate in front of each
-	// phase of the plan, and starts the job. It returns the change that
-	// req.Key already names when the request is the same. The confirmation
-	// gate holds even when no policy is installed, and only the person who
-	// asked passes it, in the console, with a fresh MFA step. It returns
-	// ErrInvalid, ErrServicePrincipal for an actor with ServicePrincipal
-	// (nobody could pass its confirmation gate), ErrModeNotSupported,
-	// ErrDirectNotAllowed, ErrChangeFrozen, ErrChangePolicyDenied,
-	// ErrChangeKeyConflict, and an error that wraps identity.ErrDenied when
-	// the person does not hold an action of the start.
-	Start(ctx context.Context, req ChangeRequest) (Change, error)
+	// phase of the plan, and starts the job. req must not be nil. The method
+	// does not change req and does not keep it after it returns. It returns
+	// the change that req.Key already names when the request is the same.
+	// The confirmation gate holds even when no policy is installed, and only
+	// the person who asked passes it, in the console, with a fresh MFA step.
+	// It returns ErrInvalid, ErrServicePrincipal for an actor with
+	// ServicePrincipal (nobody could pass its confirmation gate),
+	// ErrModeNotSupported, ErrDirectNotAllowed, ErrChangeFrozen,
+	// ErrChangePolicyDenied, ErrChangeKeyConflict, and an error that wraps
+	// identity.ErrDenied when the person does not hold an action of the start.
+	Start(ctx context.Context, req *ChangeRequest) (Change, error)
 	// Get returns the change id. It returns ErrChangeNotFound, also for a
 	// change that the person of the actor cannot read.
 	Get(ctx context.Context, actor Actor, id ChangeID) (Change, error)

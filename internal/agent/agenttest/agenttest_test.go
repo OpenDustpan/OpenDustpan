@@ -73,6 +73,7 @@ func principal(subject string) identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 

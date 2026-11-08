@@ -346,6 +346,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	_, issued, err := tokens.Create(

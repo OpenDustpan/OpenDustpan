@@ -1164,6 +1164,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog
 	opts = append(opts, sourceFilterStoreOption(st)...)
 	opts = append(opts, trustRuleStoreOption(st)...)
 	opts = append(opts, jobStoreOption(st, logger)...)
+	opts = append(opts, jobTokenStoreOption(st)...)
 	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, unitSettingsStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
@@ -1293,6 +1294,19 @@ func jobStoreOption(st store, logger *slog.Logger) []dustpan.Option {
 				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
 			}),
 		}
+	default:
+		return nil
+	}
+}
+
+// jobTokenStoreOption returns the option of the job token store for st, or
+// nil when st keeps no job tokens.
+func jobTokenStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithJobTokenStore(s.JobTokens())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithJobTokenStore(s.JobTokens())}
 	default:
 		return nil
 	}

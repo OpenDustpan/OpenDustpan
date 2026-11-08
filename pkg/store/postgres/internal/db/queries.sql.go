@@ -7217,6 +7217,89 @@ func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobP
 	return i, err
 }
 
+const getJobToken = `-- name: GetJobToken :one
+SELECT t.digest, n.name AS namespace, t.unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       t.unit_name,
+       t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
+       o.state AS operation_state, o.claim_token AS operation_claim_token,
+       o.claim_expires_at_ms AS operation_claim_expires_at_ms,
+       j.id AS job_record_id, j.state AS job_state, j.current_operation AS job_operation,
+       j.unit_id AS job_unit_id, jn.name AS job_namespace, js.id AS job_starter_id,
+       s.id AS starter_record_id, s.subject AS starter_subject, s.display_name AS starter_display_name,
+       s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
+FROM job_tokens AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN durable_operations AS o ON o.id = t.claim_operation
+JOIN jobs AS j ON j.id = t.job_id
+JOIN namespaces AS jn ON jn.id = j.namespace_id
+JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
+JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
+WHERE t.digest = $1
+`
+
+type GetJobTokenRow struct {
+	Digest                    string
+	Namespace                 string
+	UnitNamespace             string
+	StarterID                 string
+	JobID                     string
+	UnitTool                  string
+	UnitID                    string
+	UnitName                  string
+	ClaimOperation            string
+	ClaimToken                int64
+	ExpiresAtMs               int64
+	CreatedAtMs               int64
+	OperationState            string
+	OperationClaimToken       int64
+	OperationClaimExpiresAtMs pgtype.Int8
+	JobRecordID               string
+	JobState                  string
+	JobOperation              string
+	JobUnitID                 string
+	JobNamespace              string
+	JobStarterID              string
+	StarterRecordID           string
+	StarterSubject            string
+	StarterDisplayName        string
+	StarterKind               string
+	StarterDisabledAtMs       pgtype.Int8
+}
+
+func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRow, error) {
+	row := q.db.QueryRow(ctx, getJobToken, digest)
+	var i GetJobTokenRow
+	err := row.Scan(
+		&i.Digest,
+		&i.Namespace,
+		&i.UnitNamespace,
+		&i.StarterID,
+		&i.JobID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.UnitName,
+		&i.ClaimOperation,
+		&i.ClaimToken,
+		&i.ExpiresAtMs,
+		&i.CreatedAtMs,
+		&i.OperationState,
+		&i.OperationClaimToken,
+		&i.OperationClaimExpiresAtMs,
+		&i.JobRecordID,
+		&i.JobState,
+		&i.JobOperation,
+		&i.JobUnitID,
+		&i.JobNamespace,
+		&i.JobStarterID,
+		&i.StarterRecordID,
+		&i.StarterSubject,
+		&i.StarterDisplayName,
+		&i.StarterKind,
+		&i.StarterDisabledAtMs,
+	)
+	return i, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
@@ -11171,6 +11254,51 @@ func (q *Queries) InsertJobPlan(ctx context.Context, arg InsertJobPlanParams) er
 		arg.Namespace,
 		arg.JobID,
 		arg.Body,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertJobToken = `-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, unit_namespace, starter_id, job_id, unit_tool, unit_id, unit_name, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7,
+    $8, $9, $10, $11,
+    $12
+)
+`
+
+type InsertJobTokenParams struct {
+	Digest         string
+	Namespace      string
+	UnitNamespace  string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	UnitName       string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
+func (q *Queries) InsertJobToken(ctx context.Context, arg InsertJobTokenParams) error {
+	_, err := q.db.Exec(ctx, insertJobToken,
+		arg.Digest,
+		arg.Namespace,
+		arg.UnitNamespace,
+		arg.StarterID,
+		arg.JobID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.UnitName,
+		arg.ClaimOperation,
+		arg.ClaimToken,
+		arg.ExpiresAtMs,
 		arg.CreatedAtMs,
 	)
 	return err

@@ -40,6 +40,7 @@ func BenchCallerGrants(b *testing.B, s BenchStore) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	seeded := 0

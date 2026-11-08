@@ -601,6 +601,30 @@ CREATE TABLE job_plans (
     created_at_ms bigint NOT NULL
 );
 
+CREATE TABLE job_tokens (
+    digest text NOT NULL,
+    namespace_id text NOT NULL,
+    unit_namespace text NOT NULL,
+    starter_id text NOT NULL,
+    job_id text NOT NULL,
+    unit_tool text NOT NULL,
+    unit_id text NOT NULL,
+    unit_name text NOT NULL,
+    claim_operation text NOT NULL,
+    claim_token bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
+    CONSTRAINT job_tokens_claim_operation_check CHECK ((claim_operation <> ''::text)),
+    CONSTRAINT job_tokens_claim_token_check CHECK ((claim_token > 0)),
+    CONSTRAINT job_tokens_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT job_tokens_job_id_check CHECK ((job_id <> ''::text)),
+    CONSTRAINT job_tokens_starter_id_check CHECK ((starter_id <> ''::text)),
+    CONSTRAINT job_tokens_unit_id_check CHECK ((unit_id <> ''::text)),
+    CONSTRAINT job_tokens_unit_name_check CHECK ((unit_name <> ''::text)),
+    CONSTRAINT job_tokens_unit_namespace_check CHECK ((unit_namespace <> ''::text)),
+    CONSTRAINT job_tokens_unit_tool_check CHECK ((unit_tool <> ''::text))
+);
+
 CREATE TABLE jobs (
     id text NOT NULL,
     namespace_id text NOT NULL,
@@ -1602,6 +1626,9 @@ ALTER TABLE ONLY job_logs
 ALTER TABLE ONLY job_plans
     ADD CONSTRAINT job_plans_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_pkey PRIMARY KEY (digest);
+
 ALTER TABLE ONLY jobs
     ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
 
@@ -2112,6 +2139,12 @@ ALTER TABLE ONLY job_logs
 
 ALTER TABLE ONLY job_plans
     ADD CONSTRAINT job_plans_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_starter_id_fkey FOREIGN KEY (starter_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY jobs
     ADD CONSTRAINT jobs_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

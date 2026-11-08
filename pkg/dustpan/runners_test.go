@@ -71,6 +71,7 @@ func runnerServer(
 		runnerAdminToken: {
 			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 	}}
 

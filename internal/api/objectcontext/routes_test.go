@@ -202,6 +202,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}, nil
 }
 

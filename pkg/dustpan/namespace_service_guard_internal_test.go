@@ -20,6 +20,7 @@ func (namespaceServiceAuthenticator) AuthenticateToken(context.Context, string) 
 		Subject:     identity.NamespaceServicePrefix + "acme",
 		DisplayName: "", Admin: true, TokenID: "tok", TokenExpiresAt: time.Time{},
 		Kind: identity.KindService, Credential: identity.CredentialAccessToken, JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

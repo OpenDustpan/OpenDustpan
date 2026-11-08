@@ -148,7 +148,7 @@ func TestChangePolicyPlan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := tt.policy.Plan(tt.support, tt.req)
+			got, err := tt.policy.Plan(tt.support, &tt.req)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Plan() error = %v, want %v", err, tt.wantErr)
 			}

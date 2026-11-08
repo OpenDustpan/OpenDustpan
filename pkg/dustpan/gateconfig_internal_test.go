@@ -169,6 +169,7 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 	entry := func(action identity.Action) audit.Entry {
 		e := storetest.ServerChange(time.Time{}, "")

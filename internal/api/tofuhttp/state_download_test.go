@@ -89,6 +89,7 @@ func downloadPrincipal(kind identity.Kind, credential identity.Credential, jobID
 		Kind:           kind,
 		Credential:     credential,
 		JobID:          jobID,
+		JobUnit:        identity.Object{},
 	}
 }
 
