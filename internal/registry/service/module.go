@@ -117,7 +117,12 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, moveErr)
 	}
 
-	return s.record(ctx, c, p, rel)
+	rel, err = s.record(ctx, c, p, rel)
+	if err != nil {
+		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, err)
+	}
+
+	return rel, nil
 }
 
 // modulePublishing returns what the publish of a module needs after its checks:
