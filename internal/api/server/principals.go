@@ -50,9 +50,11 @@ var (
 	)
 	errPrincipalChangeBody = errors.New(`invalid principal change body: provide {"displayName":"..."}`)
 	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
-	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
-	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
-	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
+	errGroupChangeBody     = errors.New(
+		`invalid group change body: provide {"name":"..."}, {"description":"..."} or {"closedToIdentityProvider":true}`,
+	)
+	errMemberBody = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errPageQuery  = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
 // errNoPrincipalStore reports a server whose store keeps no principals.
@@ -109,7 +111,10 @@ type groupResponse struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	MemberCount int64  `json:"memberCount"`
-	Protected   bool   `json:"protected"`
+	// ClosedToIdentityProvider is true when the identity provider may not
+	// add members to the group.
+	ClosedToIdentityProvider bool `json:"closedToIdentityProvider"`
+	Protected                bool `json:"protected"`
 }
 
 // memberResponse is one member of a group on the wire.
@@ -161,10 +166,12 @@ type createGroupRequest struct {
 }
 
 // changeGroupRequest is the body of a group change. A missing field keeps
-// its value.
+// its value. ClosedToIdentityProvider sets the switch of the group: true
+// closes the group to the identity provider.
 type changeGroupRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
+	Name                     *string `json:"name"`
+	Description              *string `json:"description"`
+	ClosedToIdentityProvider *bool   `json:"closedToIdentityProvider"`
 }
 
 // addMemberRequest is the body of a member add.
@@ -290,14 +297,15 @@ func markTempAdminMembers(
 // groupOf returns one group on the wire with its protected flag.
 func groupOf(g principal.Group, protected bool) groupResponse {
 	return groupResponse{
-		ID:          g.ID,
-		Name:        g.Name,
-		Description: g.Description,
-		Source:      string(g.Source),
-		CreatedAt:   wireTime(g.CreatedAt),
-		UpdatedAt:   wireTime(g.UpdatedAt),
-		MemberCount: g.MemberCount,
-		Protected:   protected,
+		ID:                       g.ID,
+		Name:                     g.Name,
+		Description:              g.Description,
+		Source:                   string(g.Source),
+		CreatedAt:                wireTime(g.CreatedAt),
+		UpdatedAt:                wireTime(g.UpdatedAt),
+		MemberCount:              g.MemberCount,
+		ClosedToIdentityProvider: g.ClosedToIdentityProvider,
+		Protected:                protected,
 	}
 }
 
@@ -322,8 +330,8 @@ func (h *Handler) protectedGroupsOf(
 		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 
-	for _, g := range page.Items {
-		res, err := h.protectedGroupOf(ctx, g)
+	for i := range page.Items {
+		res, err := h.protectedGroupOf(ctx, page.Items[i])
 		if err != nil {
 			return groupListResponse{}, err
 		}
@@ -944,15 +952,18 @@ func (h *Handler) getGroup(
 }
 
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
-// changes its description or both, and answers 200 with the stored group
-// and its protected flag.
+// changes its description, closes or opens it to the identity provider, or
+// combines those, and answers 200 with the stored group and its protected
+// flag.
 func (h *Handler) changeGroup(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
 	object := principal.GroupRef(r.PathValue("id"))
-	empty := func() bool { return req.Name == nil && req.Description == nil }
+	empty := func() bool {
+		return req.Name == nil && req.Description == nil && req.ClosedToIdentityProvider == nil
+	}
 
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
 	if err != nil {
@@ -960,8 +971,9 @@ func (h *Handler) changeGroup(
 	}
 
 	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:                     req.Name,
+		Description:              req.Description,
+		ClosedToIdentityProvider: req.ClosedToIdentityProvider,
 	})
 	if err != nil {
 		return failed(object), err

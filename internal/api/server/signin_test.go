@@ -1665,7 +1665,7 @@ func TestSignInJoinsNoGroup(t *testing.T) {
 	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
 		g := principal.Group{
 			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
 			t.Fatalf("create group %s: %v", name, err)

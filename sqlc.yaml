@@ -53,6 +53,8 @@ sql:
             go_type: bool
           - column: group_members.pinned
             go_type: bool
+          - column: principal_groups.closed_to_identity_provider
+            go_type: bool
           - column: principals.break_glass
             go_type: bool
           - column: runners.draining

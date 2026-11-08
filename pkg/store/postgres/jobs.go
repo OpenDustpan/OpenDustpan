@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,9 @@ type jobRunner struct {
 }
 
 var _ jobstore.Runner = jobRunner{s: nil}
+
+// Logger implements jobstore.Runner.
+func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 
 // Write implements jobstore.Runner. It takes the shared write lock, reads the
 // installation state, and holds the namespace row FOR UPDATE before fn reads

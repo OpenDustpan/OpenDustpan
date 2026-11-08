@@ -141,7 +141,7 @@ func (e *devExport) stage(t *testing.T, dst DevDataStore, opts backup.StageOptio
 func (e *devExport) mustStage(t *testing.T, dst DevDataStore) {
 	t.Helper()
 
-	opts := backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}
+	opts := backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false, RestoreAt: restoreAt()}
 	if _, err := e.stage(t, dst, opts); err != nil {
 		t.Fatalf("stage the backup: %v", err)
 	}
@@ -258,40 +258,82 @@ func testDevStageKind(t *testing.T, env *devEnv) {
 	}{
 		{
 			name: "dev backup into production, flag off", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false},
+			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false, RestoreAt: restoreAt()},
 			want: backup.ErrDevBackupRefused,
 		},
 		{
-			name: "dev backup into production, flag on", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: true}, stage: true,
+			name: "dev backup into production, flag on",
+			live: installation.KindProduction,
+			opts: backup.StageOptions{
+				BackupKind: installation.KindDev,
+				AllowDev:   true,
+				RestoreAt:  restoreAt(),
+			},
+			stage: true,
 		},
 		{
-			name: "production backup into production", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}, stage: true,
+			name: "production backup into production",
+			live: installation.KindProduction,
+			opts: backup.StageOptions{
+				BackupKind: installation.KindProduction,
+				AllowDev:   false,
+				RestoreAt:  restoreAt(),
+			},
+			stage: true,
 		},
 		{
-			name: "dev backup into dev", live: installation.KindDev,
-			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}, stage: true,
+			name: "dev backup into dev",
+			live: installation.KindDev,
+			opts: backup.StageOptions{
+				BackupKind: installation.KindDev,
+				AllowDev:   false,
+				RestoreAt:  restoreAt(),
+			},
+			stage: true,
 		},
 		{
-			name: "production backup into dev", live: installation.KindDev,
-			opts: backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}, stage: true,
+			name: "production backup into dev",
+			live: installation.KindDev,
+			opts: backup.StageOptions{
+				BackupKind: installation.KindProduction,
+				AllowDev:   false,
+				RestoreAt:  restoreAt(),
+			},
+			stage: true,
 		},
 		{
-			name: "empty backup kind", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: "", AllowDev: true}, want: backup.ErrManifestKindInvalid,
+			name: "empty backup kind",
+			live: installation.KindProduction,
+			opts: backup.StageOptions{
+				BackupKind: "",
+				AllowDev:   true,
+				RestoreAt:  restoreAt(),
+			},
+			want: backup.ErrManifestKindInvalid,
 		},
 		{
-			name: "unknown backup kind", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: "staging", AllowDev: true}, want: backup.ErrManifestKindInvalid,
+			name: "unknown backup kind",
+			live: installation.KindProduction,
+			opts: backup.StageOptions{
+				BackupKind: "staging",
+				AllowDev:   true,
+				RestoreAt:  restoreAt(),
+			},
+			want: backup.ErrManifestKindInvalid,
 		},
 		{
-			name: "upper case backup kind", live: installation.KindDev,
-			opts: backup.StageOptions{BackupKind: "DEV", AllowDev: true}, want: backup.ErrManifestKindInvalid,
+			name: "upper case backup kind",
+			live: installation.KindDev,
+			opts: backup.StageOptions{
+				BackupKind: "DEV",
+				AllowDev:   true,
+				RestoreAt:  restoreAt(),
+			},
+			want: backup.ErrManifestKindInvalid,
 		},
 		{
 			name: "live kind not claimed", live: "",
-			opts: backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: true},
+			opts: backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: true, RestoreAt: restoreAt()},
 			want: installation.ErrUnavailable,
 		},
 	}
@@ -1198,7 +1240,7 @@ func testDevSwapDevInstallation(t *testing.T, env *devEnv) {
 	export := env.export(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 	dst := env.newStore(t, installation.KindDev)
 
-	opts := backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}
+	opts := backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false, RestoreAt: restoreAt()}
 	if _, err := export.stage(t, dst, opts); err != nil {
 		t.Fatalf("stage into a dev installation: %v", err)
 	}

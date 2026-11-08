@@ -25,9 +25,10 @@ type e2ePrincipal struct {
 }
 
 type e2eGroup struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	Description              string `json:"description"`
+	ClosedToIdentityProvider bool   `json:"closedToIdentityProvider"`
 	// Protected is a pointer, so that a missing field is not a false flag.
 	Protected *bool `json:"protected"`
 }
@@ -344,7 +345,9 @@ func checkPrincipalMembers(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 	}
 }
 
-// checkPrincipalChanges renames a principal and a group.
+// checkPrincipalChanges renames a principal and a group, then closes the
+// group to the identity provider, reads it back closed, opens it and reads
+// it back open.
 func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
 	t.Helper()
 
@@ -366,6 +369,39 @@ func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 
 	if renamed.Name != "operations" {
 		t.Fatalf("renamed group = %+v, want operations", renamed)
+	}
+
+	group := "/api/server/groups/" + fx.group.ID
+
+	var closed e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPatch, group, `{"closedToIdentityProvider":true}`, http.StatusOK,
+	}, &closed)
+
+	if !closed.ClosedToIdentityProvider {
+		t.Fatalf("closed group = %+v, want the identity-provider switch on", closed)
+	}
+
+	var read e2eGroup
+	principalCall(ctx, t, env, principalStep{http.MethodGet, group, "", http.StatusOK}, &read)
+
+	if !read.ClosedToIdentityProvider {
+		t.Fatalf("read of the closed group = %+v, want the identity-provider switch on", read)
+	}
+
+	var open e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPatch, group, `{"closedToIdentityProvider":false}`, http.StatusOK,
+	}, &open)
+
+	if open.ClosedToIdentityProvider {
+		t.Fatalf("open group = %+v, want the identity-provider switch off", open)
+	}
+
+	principalCall(ctx, t, env, principalStep{http.MethodGet, group, "", http.StatusOK}, &open)
+
+	if open.ClosedToIdentityProvider {
+		t.Fatalf("read of the open group = %+v, want the identity-provider switch off", open)
 	}
 }
 

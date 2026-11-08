@@ -196,7 +196,7 @@ CREATE TABLE principal_groups (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     deleted_at_ms INTEGER
-) STRICT;
+, closed_to_identity_provider INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE group_members (
     group_id      TEXT    NOT NULL REFERENCES principal_groups (id),
@@ -214,6 +214,24 @@ CREATE TABLE group_mappings (
     created_by    TEXT    NOT NULL,
     created_at_ms INTEGER NOT NULL,
     PRIMARY KEY (source, source_id, claim_value, group_id)
+) STRICT;
+
+CREATE TABLE member_removal_alerts (
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    alerted_at_ms  INTEGER NOT NULL CHECK (alerted_at_ms > 0),
+    PRIMARY KEY (source_kind, source_id)
+) STRICT;
+
+CREATE TABLE member_removals (
+    id             TEXT    NOT NULL PRIMARY KEY,
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    group_id       TEXT    NOT NULL CHECK (group_id <> ''),
+    removed        INTEGER NOT NULL CHECK (removed >= 1),
+    members_before INTEGER NOT NULL,
+    at_ms          INTEGER NOT NULL CHECK (at_ms > 0),
+    CHECK (members_before >= removed)
 ) STRICT;
 
 CREATE TABLE "audit_entries" (
@@ -1467,6 +1485,8 @@ CREATE UNIQUE INDEX principal_groups_name_key ON principal_groups (name_key) WHE
 CREATE UNIQUE INDEX group_members_current ON group_members (group_id, principal_id) WHERE removed_at_ms IS NULL;
 
 CREATE INDEX group_members_principal ON group_members (principal_id) WHERE removed_at_ms IS NULL;
+
+CREATE INDEX member_removals_source ON member_removals (source_kind, source_id, at_ms);
 
 CREATE INDEX audit_entries_ns_time ON audit_entries (namespace, at_ms DESC, sequence DESC);
 

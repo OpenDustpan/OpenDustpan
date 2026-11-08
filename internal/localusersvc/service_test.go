@@ -74,7 +74,8 @@ func (f *fakeSettings) Effective(_ context.Context, _ setting.Scope, key string)
 
 	return setting.Effective(setting.Declaration{
 		Key: key, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "", Secret: false,
-		Database: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil, Doc: "unknown",
+		Database: false, StaticCredentialHost: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil,
+		Doc: "unknown",
 	}, nil, nil), setting.ErrUnknownKey
 }
 
