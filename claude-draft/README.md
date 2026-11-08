@@ -67,8 +67,12 @@ Then delete the directory `claude-draft/`.
   `remote.origin.url`, `user.name` and `user.email`.
 - `psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc ...` only.
 - `sha256sum`, `npx ctx7@0.8.2` (a pinned release at least two weeks old),
-  `python3 -I scripts/...` (not with `..` in the path), `rg` (not with
-  `--pre` or `--hostname-bin`, which run a program), `head` and `tail`.
+  `python3 -I scripts/...` (not with `..` in the path).
+- `rg`, `head` and `tail` are not allowed. A path can name a secret file in
+  forms that no `Bash` pattern catches (`~/.config//gh`, `~/.config/./gh`,
+  a glob, `rg -uuu` over a parent directory). Use the Read and Grep tools:
+  they apply the `Read()` deny rules to the resolved path. `rg` with `--pre`
+  or `--hostname-bin`, which run a program, stays denied.
 - The MCP tools `register_repo_root` and `get_session`. `add_repo` is not
   allowed, so the owner sees each repository that an agent attaches.
 
@@ -85,6 +89,8 @@ Then delete the directory `claude-draft/`.
   refs and tags, forks, reviews (reviews go through the MCP tool), and new
   repositories (`user/repos`, `orgs/.../repos`). A field flag (`-f`, `-F`)
   makes `gh api` send a POST, so these paths are denied for every method.
+- `gh api` with a `%` in the command. GitHub decodes a percent-encoded path
+  (`re%6Ceases` is `releases`), so an encoded path passes the path denies.
 - `git push` of any command text that contains `main`, a push with an empty
   source (a delete), `-d`, `--delete`, `--mirror`, `+`, and force flags, also
   bundled (`-uf`, `-fu`).

@@ -77,9 +77,6 @@
       "Bash(sha256sum *)",
       "Bash(npx ctx7@0.8.2 *)",
       "Bash(python3 -I scripts/*)",
-      "Bash(rg *)",
-      "Bash(head *)",
-      "Bash(tail *)",
       "mcp__claude-code-remote__register_repo_root",
       "mcp__claude-code-remote__get_session"
     ],
@@ -129,6 +126,7 @@
       "Bash(gh api orgs/*/repos*)",
       "Bash(gh api */reviews*)",
       "Bash(gh api *--input*)",
+      "Bash(gh api *%*)",
       "Bash(git push *main*)",
       "Bash(git push *:main)",
       "Bash(git push *:main *)",
