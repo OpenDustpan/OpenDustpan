@@ -25,9 +25,9 @@ const directorySignInPath = "/api/dustpan/v1/sign-in/providers/{provider}/passwo
 // tagSignIn is the tag of the sign-in routes in the description.
 const tagSignIn = "sign-in"
 
-// passwordProviderOperationLabels names the password sign-in of a provider in
+// directorySignInOperationLabels names the password sign-in of a provider in
 // the description.
-func passwordProviderOperationLabels() map[string]apidesc.Label {
+func directorySignInOperationLabels() map[string]apidesc.Label {
 	return map[string]apidesc.Label{
 		apidesc.Pattern(http.MethodPost, directorySignInPath): apidesc.Name("signInWithProviderPassword", tagSignIn).
 			WithBodies(apidesc.Typed[passwordSignInRequest]("PasswordSignInRequest"), apidesc.NoBody),
@@ -169,17 +169,17 @@ func providerIDIn(providers []SignInProvider, id string) (SignInProvider, bool) 
 	return SignInProvider{Method: nil, ID: "", DisplayName: "", AutoCreate: false, Stored: false}, false
 }
 
-// passwordProviderRoutes returns the route of the password sign-in of the
+// directorySignInRoutes returns the route of the password sign-in of the
 // providers, or none when the handler has no password provider or no password
 // budget.
-func (h *Handler) passwordProviderRoutes() []Route {
+func (h *Handler) directorySignInRoutes() []Route {
 	if h.signIn == nil || len(h.signIn.passwordProviders) == 0 || h.signIn.passwords == nil {
 		return nil
 	}
 
 	return []Route{{
 		Method: http.MethodPost, Path: directorySignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-		ActionsFor: nil, Serve: h.providerPasswordSignIn,
+		ActionsFor: nil, OpaqueDenial: false, Serve: h.providerPasswordSignIn,
 	}}
 }
 
@@ -196,7 +196,7 @@ func (h *Handler) providerPasswordSignIn(
 
 	noReferrer(w)
 
-	// Defense in depth: passwordProviderRoutes mounts this route only with a
+	// Defense in depth: directorySignInRoutes mounts this route only with a
 	// password provider and the password budget. This check stays so that a
 	// change to the route table never serves a password check with no limit.
 	if h.signIn == nil || len(h.signIn.passwordProviders) == 0 || h.signIn.service == nil {
