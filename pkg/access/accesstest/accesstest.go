@@ -67,6 +67,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a suspended membership gives no group", test: testSuspendedMembershipGivesNoRights},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
+		{name: "grants of many subjects are the current grants of each, in one read", test: testGrantsOfSubjects},
 		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
 		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
@@ -1078,6 +1079,59 @@ func testGrantsOf(t *testing.T, s access.Store) {
 		if got[i].ID == "grt-2" && got[i].Object.UnitID() == "" {
 			t.Fatalf("unit grant %+v lost its stable ID", got[i])
 		}
+	}
+}
+
+// testGrantsOfSubjects reads the grants of two groups and a principal with
+// one call. A revoked grant and a grant of a subject that the call does not
+// name are not in the result, and each grant keeps its subject.
+func testGrantsOfSubjects(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	acme := identity.NamespaceObject("acme")
+	devs := access.Subject{Kind: access.SubjectGroup, ID: "grp-devs"}
+	other := access.Subject{Kind: access.SubjectGroup, ID: "grp-other"}
+
+	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), access.RoleWriter, unit(t, "acme", "web/prod")))
+	mustCreateGrant(t, s, newGrant("grt-3", devs, access.RoleViewer, identity.ServerObject()))
+	mustCreateGrant(t, s, newGrant("grt-4", devs, access.RoleAdmin, identity.NamespaceObject("beta")))
+	mustCreateGrant(t, s, newGrant("grt-5", principalSubject("prn-a"), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-6", other, access.RoleViewer, acme))
+
+	if err := revokeGrant(t, s, "grt-4", "beta", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	got, err := s.GrantsOfSubjects(ctx, []access.Subject{opsGroup(), devs, principalSubject("prn-a")})
+	if err != nil {
+		t.Fatalf("grants of subjects: %v", err)
+	}
+
+	want := map[string]access.Subject{
+		"grt-1": opsGroup(), "grt-2": opsGroup(), "grt-3": devs, "grt-5": principalSubject("prn-a"),
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("grants of the subjects = %v, want grt-1 grt-2 grt-3 grt-5", grantIDs(got))
+	}
+
+	for i := range got {
+		subject, ok := want[got[i].ID]
+		if !ok || got[i].Subject != subject {
+			t.Fatalf("grant %s of %s: want only grt-1 grt-2 grt-3 grt-5, each of its own subject",
+				got[i].ID, got[i].Subject.String())
+		}
+
+		if got[i].ID == "grt-2" && got[i].Object.UnitID() == "" {
+			t.Fatalf("unit grant %+v lost its stable ID", got[i])
+		}
+	}
+
+	none, err := s.GrantsOfSubjects(ctx, nil)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("grants of no subject = %v, %v; want none", grantIDs(none), err)
 	}
 }
 
