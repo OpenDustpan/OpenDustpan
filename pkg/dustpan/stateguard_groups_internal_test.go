@@ -43,17 +43,21 @@ func newGroupsGuard(t *testing.T, limit gate.AccessLimit) groupsGuard {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	for _, g := range []principal.Group{
+	groups := []principal.Group{
 		{
 			CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "grp-ops", Name: "ops",
 			Description: "", Source: principal.SourceLocal, MemberCount: 0,
+			ClosedToIdentityProvider: false,
 		},
 		{
 			CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "grp-sre", Name: "sre",
 			Description: "", Source: principal.SourceLocal, MemberCount: 0,
+			ClosedToIdentityProvider: false,
 		},
-	} {
-		if err = st.CreateGroup(ctx, g, storetest.ServerChange(time.Unix(0, 0), "group:"+g.ID)); err != nil {
+	}
+	for i := range groups {
+		g := &groups[i]
+		if err = st.CreateGroup(ctx, *g, storetest.ServerChange(time.Unix(0, 0), "group:"+g.ID)); err != nil {
 			t.Fatalf("create group %q: %v", g.Name, err)
 		}
 	}
