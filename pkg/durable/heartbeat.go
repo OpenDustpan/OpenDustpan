@@ -40,10 +40,10 @@ type HeartbeatStore interface {
 	// an empty owner and for a lease that is zero or negative.
 	Beat(ctx context.Context, owner string, lease time.Duration) error
 
-	// LastBeat returns the beat of the owner whose time plus its lease is the
-	// latest, and of those the latest time, then the greatest owner. With one
-	// lease period for all owners, this is the latest beat. When there is no
-	// beat, At is zero and Owner is empty, and the error is nil. Now is
-	// always set.
+	// LastBeat returns the beat of the owner whose time plus 2 lease periods
+	// is the latest, and of those the latest time, then the greatest owner.
+	// With one lease period for all owners, this is the latest beat. When
+	// there is no beat, At is zero and Owner is empty, and the error is nil.
+	// Now is always set.
 	LastBeat(ctx context.Context) (Beat, error)
 }

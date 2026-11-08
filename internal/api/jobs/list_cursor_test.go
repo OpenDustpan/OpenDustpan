@@ -101,8 +101,9 @@ func checkRefusedTokens(t *testing.T, h http.Handler, raw []byte, token string) 
 	t.Helper()
 
 	for name, query := range map[string]string{
-		"changed cursor":        "?pageToken=" + url.QueryEscape(changeCursor(t, raw)),
-		"cursor of other query": "?unit=unt-a&pageToken=" + url.QueryEscape(token),
+		"changed cursor":         "?pageToken=" + url.QueryEscape(changeCursor(t, raw)),
+		"non-canonical encoding": "?pageToken=" + url.QueryEscape(respellCursor(t, raw)),
+		"cursor of other query":  "?unit=unt-a&pageToken=" + url.QueryEscape(token),
 	} {
 		code, got := getList(t, h, query)
 		if code != http.StatusBadRequest || got.ErrorCode != errcode.RequestPageTokenInvalid {
@@ -140,8 +141,62 @@ func rawCursor(t *testing.T, tokenJSON []byte) []byte {
 	return cursor
 }
 
-// changeCursor returns a token whose cursor has two characters changed.
+// changeCursor returns a token whose sealed cursor has one bit changed. It
+// changes the decoded bytes, not the text: a change of the last characters of
+// the text can leave the bytes the same, because the decoder ignores the
+// unused bits of the last character.
 func changeCursor(t *testing.T, tokenJSON []byte) string {
+	t.Helper()
+
+	sealed := rawCursor(t, tokenJSON)
+	if len(sealed) == 0 {
+		t.Fatal("the token has an empty cursor")
+	}
+
+	sealed[len(sealed)/2] ^= 0x01
+
+	return withCursor(t, tokenJSON, base64.RawURLEncoding.EncodeToString(sealed))
+}
+
+// respellCursor returns a token whose cursor holds the same sealed bytes in a
+// text that is not the canonical encoding: the unused bits of the last
+// character are set.
+func respellCursor(t *testing.T, tokenJSON []byte) string {
+	t.Helper()
+
+	sealed := rawCursor(t, tokenJSON)
+	if len(sealed)%3 == 0 {
+		// Defense against a vacuous case: with no unused bits, every text is
+		// canonical. Add a byte so that the last character has unused bits.
+		t.Fatalf("the sealed cursor has %d bytes, a multiple of 3, so it has no unused bits", len(sealed))
+	}
+
+	text := []byte(base64.RawURLEncoding.EncodeToString(sealed))
+	last := strings.IndexByte(alphabet, text[len(text)-1])
+	text[len(text)-1] = alphabet[last|unusedBits(len(sealed))]
+
+	if string(text) == base64.RawURLEncoding.EncodeToString(sealed) {
+		t.Fatal("the respelled cursor equals the canonical text")
+	}
+
+	return withCursor(t, tokenJSON, string(text))
+}
+
+// alphabet is the alphabet of base64.RawURLEncoding, in value order.
+const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+// unusedBits returns the mask of the bits of the last character of the
+// unpadded encoding of n bytes that hold no data.
+func unusedBits(n int) int {
+	if n%3 == 1 {
+		return 0x0f
+	}
+
+	return 0x03
+}
+
+// withCursor returns the page token of tokenJSON with the cursor text cursor.
+func withCursor(t *testing.T, tokenJSON []byte, cursor string) string {
 	t.Helper()
 
 	var wire map[string]string
@@ -149,7 +204,7 @@ func changeCursor(t *testing.T, tokenJSON []byte) string {
 		t.Fatal(err)
 	}
 
-	wire["j"] = wire["j"][:len(wire["j"])-2] + "AA"
+	wire["j"] = cursor
 
 	changed, err := json.Marshal(wire)
 	if err != nil {

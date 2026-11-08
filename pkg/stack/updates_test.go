@@ -2134,6 +2134,76 @@ func TestHistoryOfMissingStack(t *testing.T) {
 	}
 }
 
+// deleteAfterGetStacks deletes the stack after its first successful read, as a
+// delete that lands between the reads of History.
+type deleteAfterGetStacks struct {
+	stack.CheckpointStacks
+
+	drop func()
+	read atomic.Bool
+}
+
+func (s *deleteAfterGetStacks) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
+	st, err := s.CheckpointStacks.GetStack(ctx, ref)
+	if err != nil {
+		return stack.Stack{}, err
+	}
+
+	if s.read.CompareAndSwap(false, true) {
+		s.drop()
+	}
+
+	return st, nil
+}
+
+// withStacks returns the fixture's service with other stack reads.
+func (f updatesFixture) withStacks(t *testing.T, stacks stack.CheckpointStacks) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             f.sealer,
+		BlobGuard:          blobguardtest.None{},
+		ManualLocks:        nil,
+		Updates:            f.store,
+		Tokens:             nil,
+		Checkpoints:        f.store,
+		Events:             f.store,
+		Namespaces:         f.namespaces,
+		Stacks:             stacks,
+		Blobs:              f.blobs,
+		Now:                f.clock.Now,
+		Logger:             nil,
+		MaxCheckpointBytes: 1024,
+		Journal:            nil,
+		Replayer:           nil,
+		Refusals:           f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// TestHistoryOfStackDeletedBetweenReads proves that a stack deleted between
+// the existence check and the listing answers ErrNotFound, not an empty
+// history.
+func TestHistoryOfStackDeletedBetweenReads(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	stacks := &deleteAfterGetStacks{
+		CheckpointStacks: f.store,
+		drop:             func() { f.store.dropStack(f.ref) },
+		read:             atomic.Bool{},
+	}
+
+	_, err := f.withStacks(t, stacks).History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
+	if !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("history of a stack deleted between the reads = %v, want stack.ErrNotFound", err)
+	}
+}
+
 // hookedKeepSet runs before the keep-set read of a sweep, so a test changes
 // the stack between the listing of the blobs and that read.
 type hookedKeepSet struct {
