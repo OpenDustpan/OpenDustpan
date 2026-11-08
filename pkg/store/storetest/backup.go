@@ -367,6 +367,21 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 	}
 }
 
+// BreakGlassPorts holds the break-glass store of one store.
+type BreakGlassPorts struct {
+	// Store is the store of break-glass reviews, or nil when the store keeps
+	// none.
+	Store breakglass.Store
+}
+
+// BreakGlassSeeder is an optional BackupStore capability: a store that keeps
+// break-glass reviews gives its store, so the round trip fills and compares
+// the break-glass table. A store with no break-glass port skips it: the fake
+// of this package's own tests is one.
+type BreakGlassSeeder interface {
+	BreakGlassPorts() BreakGlassPorts
+}
+
 // seedBackupBreakGlass writes two break-glass reviews, one pending in the
 // namespace acme and one accepted in audit.ServerScope, when s keeps a
 // break-glass store. A store with no break-glass port skips it: the fake of
@@ -374,12 +389,16 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace) {
 	t.Helper()
 
-	keeper, ok := s.(interface{ BreakGlass() breakglass.Store })
+	seeder, ok := s.(BreakGlassSeeder)
 	if !ok {
 		return
 	}
 
-	store := keeper.BreakGlass()
+	store := seeder.BreakGlassPorts().Store
+	if store == nil {
+		return
+	}
+
 	at := now().Add(-3 * time.Hour)
 	entry := audit.Entry{
 		At:            now(),
@@ -488,7 +507,8 @@ func zeroFence() namespace.Fence { return namespace.Fence{Namespace: "", Failove
 func checkBreakGlassRowCounts(t *testing.T, s BackupStore, sum backup.Summary) {
 	t.Helper()
 
-	if _, ok := s.(interface{ BreakGlass() breakglass.Store }); !ok {
+	seeder, ok := s.(BreakGlassSeeder)
+	if !ok || seeder.BreakGlassPorts().Store == nil {
 		return
 	}
 

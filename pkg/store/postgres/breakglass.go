@@ -23,18 +23,16 @@ import (
 // fence of the scope of its review in its transaction, and a review of
 // audit.ServerScope carries the zero fence. Open and Record append their audit
 // entry in the same transaction, so a failed write changes nothing.
-//
-//nolint:ireturn // Store-agnostic wiring takes the port.
-func (s *Store) BreakGlass() breakglass.Store {
-	return breakGlassStore{s: s}
+func (s *Store) BreakGlass() BreakGlassStore {
+	return BreakGlassStore{s: s}
 }
 
-// breakGlassStore is breakglass.Store over the database of a Store.
-type breakGlassStore struct {
+// BreakGlassStore is breakglass.Store over the database of a Store.
+type BreakGlassStore struct {
 	s *Store
 }
 
-var _ breakglass.Store = breakGlassStore{s: nil}
+var _ breakglass.Store = BreakGlassStore{s: nil}
 
 // breakGlassColumns lists the columns of a review row, in schema order, for
 // the list query that the adapter writes by hand.
@@ -45,7 +43,7 @@ const breakGlassColumns = `id, use_kind, use_ref, use_scope, use_object, use_sub
 
 // Open implements breakglass.Store. An open that runs again for the same kind
 // and reference returns the stored review and appends no second audit entry.
-func (g breakGlassStore) Open(
+func (g BreakGlassStore) Open(
 	ctx context.Context, r breakglass.Review, fence namespace.Fence, e audit.Entry,
 ) (breakglass.Review, error) {
 	// An error returns the zero review, so that no caller reads a review from
@@ -197,7 +195,7 @@ func breakGlassIDFree(ctx context.Context, q *db.Queries, id string) error {
 }
 
 // Get implements breakglass.Store.
-func (g breakGlassStore) Get(ctx context.Context, scope namespace.Name, id string) (breakglass.Review, error) {
+func (g BreakGlassStore) Get(ctx context.Context, scope namespace.Name, id string) (breakglass.Review, error) {
 	// An error returns the zero review, so that no caller reads a review from
 	// it.
 	var none breakglass.Review
@@ -227,7 +225,7 @@ func (g breakGlassStore) Get(ctx context.Context, scope namespace.Name, id strin
 }
 
 // List implements breakglass.Store.
-func (g breakGlassStore) List(ctx context.Context, f breakglass.Filter) ([]breakglass.Review, error) {
+func (g BreakGlassStore) List(ctx context.Context, f breakglass.Filter) ([]breakglass.Review, error) {
 	query, args := breakGlassListQuery(f)
 
 	rows, err := g.s.reads.Query(ctx, query, args...)
@@ -263,7 +261,7 @@ func (g breakGlassStore) List(ctx context.Context, f breakglass.Filter) ([]break
 // Record implements breakglass.Store. It checks the verdict against the stored
 // review, not against the review of the caller, and appends the entry e in the
 // transaction of the write.
-func (g breakGlassStore) Record(
+func (g BreakGlassStore) Record(
 	ctx context.Context, r breakglass.Review, fence namespace.Fence, e audit.Entry,
 ) error {
 	if err := e.Validate(); err != nil {
@@ -351,7 +349,7 @@ func breakGlassCheckReviewedAt(ctx context.Context, q *db.Queries, r breakglass.
 
 // Advance implements breakglass.Store. It writes no audit entry: a notice is
 // not an action of a person.
-func (g breakGlassStore) Advance(ctx context.Context, r breakglass.Review, fence namespace.Fence) error {
+func (g BreakGlassStore) Advance(ctx context.Context, r breakglass.Review, fence namespace.Fence) error {
 	return g.breakGlassTx(ctx, fence, func(q *db.Queries) error {
 		stored, err := breakGlassCurrent(ctx, q, r, fence)
 		if err != nil {
@@ -379,7 +377,7 @@ func (g breakGlassStore) Advance(ctx context.Context, r breakglass.Review, fence
 
 // Due implements breakglass.Store: the pending reviews whose next notice is at
 // or before now, oldest first, at most limit of them.
-func (g breakGlassStore) Due(ctx context.Context, now time.Time, limit int) ([]breakglass.Review, error) {
+func (g BreakGlassStore) Due(ctx context.Context, now time.Time, limit int) ([]breakglass.Review, error) {
 	// A limit below one selects no review: the port answers "at most limit".
 	if limit < 0 {
 		limit = 0
@@ -412,7 +410,7 @@ func (g breakGlassStore) Due(ctx context.Context, now time.Time, limit int) ([]b
 // audit.ServerScope, which carries the zero fence. Open and Record append an
 // audit entry in the transaction, so the transaction holds the row or the lock
 // that orders the appends of the scope.
-func (g breakGlassStore) breakGlassTx(
+func (g BreakGlassStore) breakGlassTx(
 	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
 ) error {
 	if fence.Namespace == "" {

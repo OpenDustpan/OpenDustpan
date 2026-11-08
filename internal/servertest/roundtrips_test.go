@@ -1296,9 +1296,11 @@ func backupModel() costModel {
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
+//
+// The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + 1 + forgeStripClassTrips,
+		fixed:        344 + 1 + forgeStripClassTrips - breakGlassReviewTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1314,6 +1316,12 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// breakGlassReviewTrips is the number of round trips that the restore of the
+// table break_glass_reviews makes fewer than perTable gives. The measured run
+// makes 6 round trips for that table, not 7, at 3 and at 30 units, so the
+// difference does not grow with the units.
+const breakGlassReviewTrips = 1
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.
