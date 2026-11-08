@@ -62,13 +62,13 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 // Put implements unitsettings.Store.
 func (m *memStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
-) (unitsettings.Settings, error) {
+) (unitsettings.PutResult, error) {
 	if err := s.Validate(); err != nil {
-		return zeroSettings(), err
+		return unitsettings.PutResult{}, err
 	}
 
 	if err := checkEntry(fence, e); err != nil {
-		return zeroSettings(), err
+		return unitsettings.PutResult{}, err
 	}
 
 	m.mu.Lock()
@@ -76,24 +76,31 @@ func (m *memStore) Put(
 
 	sp, err := m.space(s.Unit.Namespace(), fence)
 	if err != nil {
-		return zeroSettings(), err
+		return unitsettings.PutResult{}, err
 	}
 
 	if sp.units[s.Unit.UnitID()] != s.Unit.String() {
-		return zeroSettings(), unitsettings.ErrUnknownUnit
+		return unitsettings.PutResult{}, unitsettings.ErrUnknownUnit
 	}
+
+	// The defaults come from the same critical section as the write, as the
+	// SQL adapters read them in the transaction of the write.
+	defaults := sp.defaults
+	defaults.Namespace = s.Unit.Namespace()
 
 	old, has := sp.records[s.Unit.UnitID()]
 	if old.Version != expected {
-		return zeroSettings(), unitsettings.ErrConflict
+		return unitsettings.PutResult{}, unitsettings.ErrConflict
 	}
 
 	if has && unitsettings.Equal(&old, s) {
-		if err := m.finish(ctx, old); err != nil {
-			return zeroSettings(), err
+		result := unitsettings.PutResult{Settings: old, Defaults: defaults}
+
+		if err := m.finish(ctx, result); err != nil {
+			return unitsettings.PutResult{}, err
 		}
 
-		return old, nil
+		return result, nil
 	}
 
 	var prev *unitsettings.Settings
@@ -105,15 +112,17 @@ func (m *memStore) Put(
 	next.Version = expected + 1
 	next.UpdatedAt = e.At
 
+	result := unitsettings.PutResult{Settings: next, Defaults: defaults}
+
 	// The answer is the last step. A lost record changes nothing.
-	if err := m.finish(ctx, next); err != nil {
-		return zeroSettings(), err
+	if err := m.finish(ctx, result); err != nil {
+		return unitsettings.PutResult{}, err
 	}
 
 	sp.records[s.Unit.UnitID()] = next
 	sp.audit = append(sp.audit, unitsettings.ChangeEntry(e, prev, &next))
 
-	return next, nil
+	return result, nil
 }
 
 // Delete implements unitsettings.Store.

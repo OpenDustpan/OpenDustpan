@@ -295,6 +295,36 @@ func TestAuditEntryReaderConformance(t *testing.T) {
 	})
 }
 
+// TestAuditCheckpointEpochChange runs the case of a checkpoint write after
+// an epoch change on SQLite entries.
+func TestAuditCheckpointEpochChange(t *testing.T) {
+	t.Parallel()
+
+	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	blobs, err := blobfs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	audittest.CheckEpochChangeStopsWrite(t, s, blobs)
+}
+
 // chainApprovalStore wraps a Store with its path, so the approval cases can
 // break audit appends with direct SQL. It embeds the store, so the suite
 // also reads its chain state, list and durable operations.
@@ -756,7 +786,7 @@ func TestNamespacePagingConformance(t *testing.T) {
 func TestUnitQueryConformance(t *testing.T) {
 	t.Parallel()
 
-	storetest.RunUnitQuery(t, func(t *testing.T) storetest.Store {
+	storetest.RunUnitQuery(t, func(t *testing.T) storetest.UnitQueryStore {
 		t.Helper()
 
 		return open(t)

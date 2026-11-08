@@ -157,7 +157,8 @@ when they are in the catalog.
 ## Values that can grow
 
 A list of values that can get a new value, such as a kind or a state, is open
-in the description. The list is a schema of its own in `components.schemas`,
+in the description only when the description declares an enum for the list. The
+list is a schema of its own in `components.schemas`,
 for example `ContextStatus`, with `type: string` and `enum`. A member that holds
 one of these values is `anyOf: [{$ref: the schema}, {type: string}]`. A member
 that can also be null has a third branch, `{type: "null"}`. A client keeps a

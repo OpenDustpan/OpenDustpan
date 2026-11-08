@@ -78,12 +78,12 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 	err = h.idem.Handle(w, r, idempotent.Call{
 		Principal: p.Subject,
 		Build: func(result any) (idempotency.Answer, error) {
-			stored, ok := result.(unitsettings.Settings)
+			out, ok := result.(unitsettings.PutResult)
 			if !ok {
 				return idempotency.Answer{}, errWritten
 			}
 
-			view := cur.Updated(&stored)
+			view := cur.Updated(&out.Settings, out.Defaults)
 
 			return settingsAnswer(&view)
 		},

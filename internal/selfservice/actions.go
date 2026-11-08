@@ -104,6 +104,7 @@ const (
 	OpListBlueprints Op = "list-blueprints"
 	OpReadBlueprint  Op = "read-blueprint"
 	OpWriteDraft     Op = "write-draft"
+	OpPublish        Op = "publish"
 	OpRetire         Op = "retire"
 	OpOptions        Op = "options"
 	OpCheck          Op = "check"
@@ -205,6 +206,7 @@ func simpleRequirements() map[Op]simpleRequirement {
 		OpListBlueprints: {action: ActionBlueprintRead, on: ObjectNamespace},
 		OpReadBlueprint:  {action: ActionBlueprintRead, on: ObjectBlueprint},
 		OpWriteDraft:     {action: ActionBlueprintPublish, on: ObjectBlueprint},
+		OpPublish:        {action: ActionBlueprintPublish, on: ObjectBlueprint},
 		OpRetire:         {action: ActionBlueprintRetire, on: ObjectBlueprint},
 		OpListRequests:   {action: ActionSelfServiceRead, on: ObjectNamespace},
 		OpReadRequest:    {action: ActionSelfServiceRead, on: ObjectUnit},
