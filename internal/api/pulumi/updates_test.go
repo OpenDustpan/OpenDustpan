@@ -2709,6 +2709,62 @@ func TestStartUpdateAnswersJournalVersionZero(t *testing.T) {
 	}
 }
 
+// TestJobTokenMayNotStartAnUpdateOfAPerson proves that a job token of the
+// unit cannot start an update that a person created: the answer is 403 with
+// the code of the job token refusals, one refusal is recorded, and the update
+// stays not started.
+func TestJobTokenMayNotStartAnUpdateOfAPerson(t *testing.T) {
+	t.Parallel()
+
+	unit := guardUnit(t)
+	facts := &guardFacts{fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"}, err: nil, reads: 0}
+	refusals := &guardRefusals{recorded: nil}
+	f := newGuardFixture(
+		t, facts, refusals, guardPrincipal(identity.CredentialJobToken, "job-1", unit),
+	)
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice", RestoredFrom: 0, JobID: "",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	target := "/api/stacks/acme/web/prod/update/" + u.ID.String()
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, target, ""))
+
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", status, body)
+	}
+
+	answer := updateGuardError(t, body)
+	if answer.Code != http.StatusForbidden || answer.ErrorCode != "access.job-token-action" {
+		t.Errorf(
+			"error = code %d, errorCode %q, want 403 access.job-token-action",
+			answer.Code, answer.ErrorCode,
+		)
+	}
+
+	if !strings.Contains(answer.Message, "start the update of another job") {
+		t.Errorf("message %q does not name the start refusal", answer.Message)
+	}
+
+	if len(refusals.recorded) != 1 {
+		t.Fatalf("the guard recorded %d refusals, want 1", len(refusals.recorded))
+	}
+
+	checkGuardRefusal(t, refusals.recorded[0], unit)
+
+	got, err := f.updates.Get(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("read update: %v", err)
+	}
+
+	if got.Status != stack.StatusNotStarted {
+		t.Errorf("update status = %q, want %q", got.Status, stack.StatusNotStarted)
+	}
+}
+
 // verbatimPaths starts a mutating update and returns its verbatim and
 // delta paths with its lease token.
 func verbatimPaths(t *testing.T, f updateFixture) (updatePaths, string) {

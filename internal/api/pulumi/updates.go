@@ -478,6 +478,14 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 
 			return
 		}
+
+		// Defense in depth: the stack domain refuses the start too. This
+		// guard does not rely on it.
+		if startErr := identity.CheckJobTokenStart(ctx, h.jobRefusals, p, current.JobID); startErr != nil {
+			h.writeError(ctx, w, startErr)
+
+			return
+		}
 	}
 
 	journal := h.journalVersionFor(r.UserAgent(), offer)
@@ -699,10 +707,9 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 			return
 		}
 
-		// Defense in depth: the update records the job that created or
-		// started it, and StartBy refuses a start by another job. The
-		// state.write gates refuse a cancel too. This guard does not rely on
-		// them.
+		// Defense in depth: the update records the job that created it, and
+		// StartBy refuses a start by another job. The state.write gates
+		// refuse a cancel too. This guard does not rely on them.
 		if err := identity.CheckJobTokenCancel(ctx, h.jobRefusals, p, current.JobID); err != nil {
 			h.writeError(ctx, w, err)
 

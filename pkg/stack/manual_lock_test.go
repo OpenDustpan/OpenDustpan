@@ -282,7 +282,9 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 			locks.passJob = "job-1"
 			svc := withManualLocks(t, f, locks)
 
-			u, err := svc.Create(t.Context(), f.ref, planOf(stack.KindUpdate, false))
+			u, err := svc.Create(t.Context(), f.ref, stack.Plan{
+				Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: tc.jobID,
+			})
 			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}

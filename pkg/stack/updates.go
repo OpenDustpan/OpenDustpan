@@ -437,17 +437,17 @@ func (s *Updates) StartBy(
 	}
 
 	// Defense in depth: the route refuses a job token that belongs to another
-	// job before it starts the update, and cancel refuses the update of
-	// another job. This check stays so that the update record alone keeps a
-	// job token to the job that created or started it.
-	if by.JobID != "" {
-		if u.JobID == "" {
-			u.JobID = by.JobID
-		} else if u.JobID != by.JobID {
-			return Started{}, fmt.Errorf(
-				"%w: the update of job %s cannot be started by job %s", ErrInvalidUpdate, u.JobID, by.JobID,
-			)
+	// job before it starts the update. This check stays so that the update
+	// record alone keeps a job token to its own job.
+	if by.JobID != "" && u.JobID != by.JobID {
+		owner := "no job"
+		if u.JobID != "" {
+			owner = "job " + u.JobID
 		}
+
+		return Started{}, fmt.Errorf(
+			"%w: the update of %s cannot be started by job %s", ErrInvalidUpdate, owner, by.JobID,
+		)
 	}
 
 	tok, err := token.New()

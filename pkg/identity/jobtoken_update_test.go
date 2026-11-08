@@ -262,12 +262,22 @@ func TestJobTokenRefusalText(t *testing.T) {
 
 	other := func(*testing.T) error { return errPrivateRecord }
 
+	start := func(t *testing.T) error {
+		t.Helper()
+
+		return identity.CheckJobTokenStart(
+			t.Context(), &fakeRefusals{recorded: nil, err: errPrivateRecord},
+			jobToken(unit, "job-a"), "job-b",
+		)
+	}
+
 	cases := []struct {
 		name string
 		err  func(*testing.T) error
 		want string
 	}{
 		{name: "an update that saves state", err: update, want: "a job token may not start an update that saves state"},
+		{name: "the update of another job", err: start, want: "a job token may not start the update of another job"},
 		{name: "a refused action", err: action, want: "a job token may not " + string(identity.ActionUnitManage)},
 		{name: "another error", err: other, want: "a job token may not ask for this action"},
 	}
@@ -394,6 +404,105 @@ func runCancelGuardCase(t *testing.T, tc cancelGuardCase) {
 
 	if got := identity.JobTokenRefusalText(err); got != "a job token may not cancel the update of another job" {
 		t.Errorf("JobTokenRefusalText = %q, want the cancel refusal text", got)
+	}
+
+	if tc.refusals == nil {
+		return
+	}
+
+	assertOneRefusal(t, tc.refusals, identity.JobTokenRefusal{
+		Subject: tc.p.Subject, JobID: tc.p.JobID, Unit: tc.p.JobUnit, Action: identity.ActionUnitWrite,
+		Reason: "access.job-token-action",
+	})
+}
+
+// startGuardCase is one row of the start guard table.
+type startGuardCase struct {
+	name        string
+	p           identity.Principal
+	refusals    *fakeRefusals
+	noRefusals  bool
+	updateJobID string
+	wantRefused bool
+}
+
+// TestCheckJobTokenStart proves that a job token may start only the update of
+// its own job, and that a principal without any part of a job token passes.
+func TestCheckJobTokenStart(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	inconsistent := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "",
+		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind: identity.KindPerson, Credential: identity.CredentialJobToken, JobID: "", JobUnit: identity.Object{},
+	}
+
+	cases := []startGuardCase{
+		{
+			name: "a job token may start the update of its own job", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-a",
+			wantRefused: false,
+		},
+		{
+			name: "a job token may not start the update of another job", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-b",
+			wantRefused: true,
+		},
+		{
+			name: "a job token may not start an update that no job created", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "",
+			wantRefused: true,
+		},
+		{
+			name: "no job token may start any update", p: plainPrincipal(identity.CredentialAccessToken),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-b",
+			wantRefused: false,
+		},
+		{
+			name: "a partial job token refuses", p: inconsistent,
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-a",
+			wantRefused: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runStartGuardCase(t, tc)
+		})
+	}
+}
+
+// runStartGuardCase runs one row of the start guard table.
+func runStartGuardCase(t *testing.T, tc startGuardCase) {
+	t.Helper()
+
+	var refusals identity.JobTokenRefusals
+	if !tc.noRefusals {
+		refusals = tc.refusals
+	}
+
+	err := identity.CheckJobTokenStart(t.Context(), refusals, tc.p, tc.updateJobID)
+
+	if !tc.wantRefused {
+		if err != nil {
+			t.Fatalf("CheckJobTokenStart = %v, want allowed", err)
+		}
+
+		if tc.refusals != nil && len(tc.refusals.recorded) != 0 {
+			t.Errorf("the guard recorded %d refusals, want 0", len(tc.refusals.recorded))
+		}
+
+		return
+	}
+
+	if err == nil || !errors.Is(err, identity.ErrJobTokenAction) || !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("CheckJobTokenStart = %v, want ErrJobTokenAction and ErrDenied", err)
+	}
+
+	if got := identity.JobTokenRefusalText(err); got != "a job token may not start the update of another job" {
+		t.Errorf("JobTokenRefusalText = %q, want the start refusal text", got)
 	}
 
 	if tc.refusals == nil {

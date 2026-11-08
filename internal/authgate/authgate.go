@@ -314,11 +314,10 @@ func positiveOr[T int | time.Duration](v, fallback T) T {
 }
 
 // request is the state of one request: its source and the answer that each
-// gate gave, by the scope of the gate. Gates of different scopes look up
-// different kinds of token, so the miss of one gate is not the answer of
-// another.
+// gate gave, by the identity of the gate. Gates differ by identity, not only
+// by scope, so the miss of one gate is not the answer of another.
 type request struct {
-	memos  map[string]*memo
+	memos  map[*Gate]*memo
 	source string
 	mu     sync.Mutex
 }
@@ -337,7 +336,7 @@ type key struct{}
 // source. Call it once for each request, before any authentication.
 func WithRequest(ctx context.Context, source string) context.Context {
 	return context.WithValue(ctx, key{}, &request{
-		memos: map[string]*memo{}, source: SourceKey(source), mu: sync.Mutex{},
+		memos: map[*Gate]*memo{}, source: SourceKey(source), mu: sync.Mutex{},
 	})
 }
 
@@ -413,12 +412,12 @@ func (g *Gate) AuthenticateToken(ctx context.Context, token string) (identity.Pr
 
 	digest := sha256.Sum256([]byte(token))
 
-	if m := req.recall(g.scope, digest); m != nil {
+	if m := req.recall(g, digest); m != nil {
 		return m.principal, m.err
 	}
 
 	p, err := g.lookup(ctx, req.source, token)
-	req.remember(g.scope, digest, p, err)
+	req.remember(g, digest, p, err)
 
 	return p, err
 }
@@ -452,13 +451,13 @@ func (g *Gate) Fail(ctx context.Context) {
 	g.spend(ctx, req.source)
 }
 
-// recall returns the answer that the request kept for digest in the gate
-// scope scope, or nil.
-func (r *request) recall(scope string, digest [sha256.Size]byte) *memo {
+// recall returns the answer that the request kept for digest from the gate
+// g, or nil.
+func (r *request) recall(g *Gate, digest [sha256.Size]byte) *memo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	m := r.memos[scope]
+	m := r.memos[g]
 	if m == nil || subtle.ConstantTimeCompare(m.digest[:], digest[:]) != 1 {
 		return nil
 	}
@@ -466,12 +465,12 @@ func (r *request) recall(scope string, digest [sha256.Size]byte) *memo {
 	return m
 }
 
-// remember keeps the answer for digest in the gate scope scope.
-func (r *request) remember(scope string, digest [sha256.Size]byte, p identity.Principal, err error) {
+// remember keeps the answer of the gate g for digest.
+func (r *request) remember(g *Gate, digest [sha256.Size]byte, p identity.Principal, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.memos[scope] = &memo{err: err, principal: p, digest: digest}
+	r.memos[g] = &memo{err: err, principal: p, digest: digest}
 }
 
 // lookup resolves token for the source within its budget. A lookup within

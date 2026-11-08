@@ -1008,9 +1008,10 @@ func TestCancelTwiceWritesOnce(t *testing.T) {
 	}
 }
 
-// TestStartByKeepsTheJobOfTheUpdate proves that the update records the job
-// that created or started it, and that a start by another job is refused.
-func TestStartByKeepsTheJobOfTheUpdate(t *testing.T) {
+// TestStartByKeepsAJobTokenToItsOwnJob proves that the update keeps the job
+// that created it, that a job token may start only the update of its own job,
+// and that a start of an update that no job created is refused.
+func TestStartByKeepsAJobTokenToItsOwnJob(t *testing.T) {
 	t.Parallel()
 
 	f := newUpdates(t)
@@ -1023,9 +1024,9 @@ func TestStartByKeepsTheJobOfTheUpdate(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	started, err := f.svc.StartBy(ctx, f.ref, created.ID, stack.StartedBy{TokenID: "", JobID: ""}, 0)
+	started, err := f.svc.StartBy(ctx, f.ref, created.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
 	if err != nil {
-		t.Fatalf("start: %v", err)
+		t.Fatalf("start by the job of the update: %v", err)
 	}
 
 	if started.Update.JobID != "job-1" {
@@ -1043,17 +1044,22 @@ func TestStartByKeepsTheJobOfTheUpdate(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	started, err = f.svc.StartBy(ctx, f.ref, other.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
+	_, startErr := f.svc.StartBy(ctx, f.ref, other.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
+	if !errors.Is(startErr, stack.ErrInvalidUpdate) {
+		t.Fatalf("start of an update that no job created: err = %v, want ErrInvalidUpdate", startErr)
+	}
+
+	notStarted, err := f.svc.Get(ctx, f.ref, other.ID)
 	if err != nil {
-		t.Fatalf("start by the creating job: %v", err)
+		t.Fatalf("read update: %v", err)
 	}
 
-	if started.Update.JobID != "job-1" {
-		t.Errorf("started update job = %q, want %q", started.Update.JobID, "job-1")
+	if notStarted.Status != stack.StatusNotStarted {
+		t.Errorf("update status = %q, want %q", notStarted.Status, stack.StatusNotStarted)
 	}
 
-	if _, cancelErr := f.svc.Cancel(ctx, f.ref, other.ID); cancelErr != nil {
-		t.Fatalf("cancel: %v", cancelErr)
+	if notStarted.JobID != "" {
+		t.Errorf("update job = %q, want no job", notStarted.JobID)
 	}
 
 	held, err := f.svc.Create(ctx, f.ref, stack.Plan{
@@ -1063,9 +1069,7 @@ func TestStartByKeepsTheJobOfTheUpdate(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, startErr := f.svc.StartBy(
-		ctx, f.ref, held.ID, stack.StartedBy{TokenID: "", JobID: "job-2"}, 0,
-	)
+	_, startErr = f.svc.StartBy(ctx, f.ref, held.ID, stack.StartedBy{TokenID: "", JobID: "job-2"}, 0)
 	if !errors.Is(startErr, stack.ErrInvalidUpdate) {
 		t.Fatalf("start by another job: err = %v, want ErrInvalidUpdate", startErr)
 	}

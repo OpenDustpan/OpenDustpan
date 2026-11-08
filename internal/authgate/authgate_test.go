@@ -334,11 +334,11 @@ func (r *refusingAuthenticator) AuthenticateToken(context.Context, string) (iden
 	return identity.Principal{}, identity.ErrUnauthenticated
 }
 
-// TestMemoKeepsTheAnswerOfEachScope chains a gate that refuses each token
-// before a gate of another scope that knows the token, in one request. The
-// miss of the first gate must not answer for the second gate, and each gate
-// looks up the token once in the request.
-func TestMemoKeepsTheAnswerOfEachScope(t *testing.T) {
+// TestMemoKeepsTheAnswerOfEachGate chains a gate that refuses each token
+// before another gate that knows the token, in one request. The gates have
+// other scopes, or one scope, and the miss of the first gate must not answer
+// for the second gate. Each gate looks up the token once in the request.
+func TestMemoKeepsTheAnswerOfEachGate(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -349,6 +349,7 @@ func TestMemoKeepsTheAnswerOfEachScope(t *testing.T) {
 		{name: "token lookups then another scope", first: "", second: "job"},
 		{name: "two named scopes", first: "signin", second: "job"},
 		{name: "another scope then token lookups", first: "job", second: ""},
+		{name: "two gates of one scope", first: "job", second: "job"},
 	}
 
 	for _, tt := range tests {

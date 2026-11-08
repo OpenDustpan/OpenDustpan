@@ -281,20 +281,26 @@ func TestJobTokenUpdateGuardRefusesAStart(t *testing.T) {
 
 	cases := []guardStartCase{
 		{
-			name:       "a plan-only job may not start a mutating update",
-			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+			name: "a plan-only job may not start a mutating update",
+			plan: stack.Plan{
+				Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+			},
 			fact:       identity.JobFact{Unit: unit, Changes: false, Source: "api"},
 			wantStatus: http.StatusForbidden, wantRefusals: 1,
 		},
 		{
-			name:       "a plan-only job may start a preview",
-			plan:       stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+			name: "a plan-only job may start a preview",
+			plan: stack.Plan{
+				Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+			},
 			fact:       identity.JobFact{Unit: unit, Changes: false, Source: "api"},
 			wantStatus: http.StatusOK, wantRefusals: 0,
 		},
 		{
-			name:       "a changing job may start a mutating update",
-			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
+			name: "a changing job may start a mutating update",
+			plan: stack.Plan{
+				Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+			},
 			fact:       identity.JobFact{Unit: unit, Changes: true, Source: "api"},
 			wantStatus: http.StatusOK, wantRefusals: 0,
 		},

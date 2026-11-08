@@ -56,6 +56,10 @@ var errJobTokenUpdate = fmt.Errorf("%w: a job token may not start an update that
 // job token may not do. It wraps ErrJobTokenAction.
 var errJobTokenCancel = fmt.Errorf("%w: a job token may not cancel the update of another job", ErrJobTokenAction)
 
+// errJobTokenStart reports the start of the update of another job, which a
+// job token may not do. It wraps ErrJobTokenAction.
+var errJobTokenStart = fmt.Errorf("%w: a job token may not start the update of another job", ErrJobTokenAction)
+
 // errJobTokenTags reports an edit of the tags of a unit, which a job token may
 // not do. It wraps ErrJobTokenAction.
 var errJobTokenTags = fmt.Errorf("%w: a job token may not edit the tags of a unit", ErrJobTokenAction)
@@ -418,6 +422,8 @@ func JobTokenRefusalText(err error) string {
 		return "a job token may not start an update that saves state"
 	case errors.Is(err, errJobTokenCancel):
 		return "a job token may not cancel the update of another job"
+	case errors.Is(err, errJobTokenStart):
+		return "a job token may not start the update of another job"
 	case errors.Is(err, errJobTokenTags):
 		return "a job token may not edit the tags of a unit"
 	}
@@ -450,6 +456,28 @@ func CheckJobTokenCancel(
 	}
 
 	return refuseJobTokenAction(ctx, refusals, p, errJobTokenCancel)
+}
+
+// CheckJobTokenStart refuses a principal that carries any part of a job token
+// when updateJobID is not the job of the token. A principal that carries no
+// part of a job token passes. A consistent job token passes when the update
+// records its own job ID, which must not be empty. Every other answer refuses
+// and records one entry through refusals; a failed record still refuses.
+func CheckJobTokenStart(
+	ctx context.Context, refusals JobTokenRefusals, p Principal, updateJobID string,
+) error {
+	if !p.CarriesJobToken() {
+		return nil
+	}
+
+	// Defense in depth: IsJobToken already needs a job ID, so an empty
+	// updateJobID never matches. The empty check stays so that a change to
+	// IsJobToken cannot let a job token start an update that no job created.
+	if p.IsJobToken() && updateJobID != "" && updateJobID == p.JobID {
+		return nil
+	}
+
+	return refuseJobTokenAction(ctx, refusals, p, errJobTokenStart)
 }
 
 // CheckJobTokenTagEdit refuses a principal that carries any part of a job
