@@ -1039,6 +1039,20 @@ func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, er
 		return nil, fmt.Errorf("history of %s: %w", ref, err)
 	}
 
+	if len(list) == 0 {
+		// The stack can be deleted between the two reads above. The store
+		// answers an empty list for a stack that does not exist, so an empty
+		// list reads the stack again.
+		//
+		// Defense in depth: the route reads the stack before it calls History,
+		// so it answers with the error of the stack route. This check stays
+		// for the same reason as the read above: a new caller cannot read an
+		// empty history for a stack that is missing.
+		if _, stackErr := s.stacks.GetStack(ctx, ref); stackErr != nil {
+			return nil, fmt.Errorf("history of %s: %w", ref, stackErr)
+		}
+	}
+
 	return list, nil
 }
 

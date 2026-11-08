@@ -42,6 +42,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -682,7 +683,7 @@ func defaultSettings() *settings {
 		eventStore:              nil,
 		secretKeys:              nil,
 		secretWrapper:           nil,
-		streamStop:              nil,
+		streamStop:              &streamStop{stopped: atomic.Bool{}},
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
@@ -1479,6 +1480,7 @@ func newTofuHTTPHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1583,6 +1585,7 @@ func newTFEHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)

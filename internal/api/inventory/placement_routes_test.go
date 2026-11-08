@@ -478,7 +478,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"tool without rules",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"opentofu","project":"a","stack":"*","collection":"payments"}`,
+			`{"tool":"terraform","project":"a","stack":"*","collection":"payments"}`,
 			400,
 			errcode.PlacementInvalidTool,
 		},

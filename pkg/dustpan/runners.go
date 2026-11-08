@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -139,7 +140,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	if recorder == nil {
 		built, ok, buildErr := newDurableRecorder(&jobRecorderInputs{
 			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
-			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces,
+			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces, logger: cfg.logger,
 			retention: cfg.jobRetention,
 		})
 		if buildErr != nil {
@@ -175,6 +176,7 @@ type jobRecorderInputs struct {
 	namespaceStore namespace.Store
 	wrapper        secret.Wrapper
 	now            func() time.Time
+	logger         *slog.Logger
 	namespaces     *namespace.Service
 	// retention is the period of each new plan and each new job log version.
 	retention jobRetention
@@ -213,7 +215,7 @@ func newDurableRecorder(in *jobRecorderInputs) (*job.DurableRecorder, bool, erro
 	recorder, err := job.NewRecorder(job.RecorderConfig{
 		Store: records, Jobs: in.jobs, Blobs: blobs, Sealer: sealer,
 		Namespaces: jobNamespaces{namespaces: in.namespaces}, Retention: in.retention,
-		Now: in.now,
+		Now: in.now, Log: in.logger,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("job recorder: %w", err)

@@ -62,9 +62,37 @@ func TestUncodedPathsElidedElements(t *testing.T) {
 			want: []string{"writeNested: errorResponse{}"},
 		},
 		{
+			name: "an element of a slice of pointers in a map",
+			src: `func writeMapSlicePointer() any {
+	return map[string][]*errorResponse{"x": {{Message: "bad", Code: 400}}}
+}`,
+			want: []string{"writeMapSlicePointer: errorResponse{}"},
+		},
+		{
+			name: "an element of a map of pointers in a slice",
+			src: `func writeSliceMapPointer() any {
+	return []map[string]*errorResponse{{"x": {Message: "bad", Code: 400}}}
+}`,
+			want: []string{"writeSliceMapPointer: errorResponse{}"},
+		},
+		{
 			name: "an element with a code",
 			src: `func writeCodedElement() any {
 	return []errorResponse{{Message: "bad", Code: 400, ErrorCode: errcode.RequestInvalid}}
+}`,
+			want: nil,
+		},
+		{
+			name: "an element of a slice of pointers in a map with a code",
+			src: `func writeCodedMapSlicePointer() any {
+	return map[string][]*errorResponse{"x": {{Message: "bad", Code: 400, ErrorCode: errcode.RequestInvalid}}}
+}`,
+			want: nil,
+		},
+		{
+			name: "an element of a map of pointers in a slice with a code",
+			src: `func writeCodedSliceMapPointer() any {
+	return []map[string]*errorResponse{{"x": {Message: "bad", Code: 400, ErrorCode: errcode.RequestInvalid}}}
 }`,
 			want: nil,
 		},

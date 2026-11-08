@@ -22,10 +22,12 @@ type Sealer interface {
 		ctx context.Context, ns namespace.Name, workspaceID, versionID string, r io.Reader,
 	) (io.Reader, error)
 	// OpenState opens a stream sealed by SealState for the same scope and
-	// state version.
+	// state version. The caller closes the reader: Close clears the key that
+	// the reader holds, also when the reader was never read. Close does not
+	// close r.
 	OpenState(
 		ctx context.Context, ns namespace.Name, workspaceID, versionID string, r io.Reader,
-	) (io.Reader, error)
+	) (io.ReadCloser, error)
 	// SealOutputs seals one outputs document with the data key of the scope,
 	// bound to versionID.
 	SealOutputs(
