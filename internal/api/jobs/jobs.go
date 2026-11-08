@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -46,6 +47,10 @@ const (
 type Config struct {
 	Namespaces *namespace.Service
 	Jobs       job.Store
+	// Units finds a live unit by its stable ID. The list reads it to check
+	// whether the caller may list the unit of a damaged row. Nil counts no
+	// damaged row: a row whose unit cannot be resolved is never counted.
+	Units coreinventory.Reader
 	// Artifacts opens the logs of jobs. Nil serves no log route: a server
 	// that lacks a port of the artifact reader has no log to read.
 	Artifacts job.ArtifactReader
@@ -84,6 +89,7 @@ type Config struct {
 type Handler struct {
 	namespaces *namespace.Service
 	jobs       job.Store
+	units      coreinventory.Reader
 	artifacts  job.ArtifactReader
 	authz      identity.Authorizer
 	logs       LogOptions
@@ -126,6 +132,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		jobs:       cfg.Jobs,
+		units:      cfg.Units,
 		artifacts:  cfg.Artifacts,
 		authz:      cfg.Authorizer,
 		logs:       logLimits(cfg.Logs),

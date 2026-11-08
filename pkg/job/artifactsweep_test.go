@@ -229,22 +229,26 @@ type listedJobs struct {
 	full    bool
 }
 
-func (l *listedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+func (l *listedJobs) List(_ context.Context, f job.Filter) (job.Page, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.filters = append(l.filters, f)
 
 	if l.full {
-		page := make([]job.Job, f.Limit)
-		for i := range page {
-			page[i] = l.j
+		out := job.Page{Jobs: make([]job.Job, f.Limit), Damaged: nil, After: ""}
+		for i := range out.Jobs {
+			out.Jobs[i] = l.j
 		}
 
-		return page, nil
+		if len(out.Jobs) > 0 {
+			out.After = out.Jobs[len(out.Jobs)-1].ID
+		}
+
+		return out, nil
 	}
 
-	return []job.Job{l.j}, nil
+	return job.Page{Jobs: []job.Job{l.j}, Damaged: nil, After: ""}, nil
 }
 
 // noWatch answers that nothing runs.
@@ -282,28 +286,30 @@ type pagedJobs struct {
 	mu  sync.Mutex
 }
 
-func (p *pagedJobs) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+func (p *pagedJobs) List(_ context.Context, f job.Filter) (job.Page, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if !f.StateChangedAfter.IsZero() {
-		return nil, nil
+		return job.Page{Jobs: nil, Damaged: nil, After: ""}, nil
 	}
 
-	var out []job.Job
+	var out job.Page
 
 	for _, id := range p.ids {
 		if id <= f.After {
 			continue
 		}
 
-		if len(out) == f.Limit {
+		if f.Limit > 0 && len(out.Jobs) == f.Limit {
+			out.After = out.Jobs[len(out.Jobs)-1].ID
+
 			break
 		}
 
 		one := p.j
 		one.ID = id
-		out = append(out, one)
+		out.Jobs = append(out.Jobs, one)
 	}
 
 	return out, nil

@@ -246,6 +246,12 @@ func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audi
 	return out, nil
 }
 
+// DamageJobBody implements jobtest.Domain. It writes a body that no decoder
+// reads, as a restore or another version of the server leaves one.
+func (d *jobDomain) DamageJobBody(ctx context.Context, id job.ID) error {
+	return d.s.ExecForTest(ctx, `UPDATE jobs SET body = '{' WHERE id = $1`, string(id))
+}
+
 func TestJobConformance(t *testing.T) {
 	t.Parallel()
 
