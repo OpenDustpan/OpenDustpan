@@ -428,9 +428,10 @@ func TestCredentialAnswersTheSentinel(t *testing.T) {
 	}
 }
 
-// TestCredentialRefusalLogsTheWrap checks that the log holds the wrap text of
-// a refusal of the session cookie at Debug, and that the answer does not.
-func TestCredentialRefusalLogsTheWrap(t *testing.T) {
+// TestCredentialRefusalLogsNoWrap checks that the log holds the status and the
+// code of a refusal of the session cookie at Debug, and not the wrap text, and
+// that the answer does not hold the wrap text.
+func TestCredentialRefusalLogsNoWrap(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -445,10 +446,14 @@ func TestCredentialRefusalLogsTheWrap(t *testing.T) {
 	wr.Write(t.Context(), rec, fmt.Errorf("save trigger: %w", sessionauth.ErrCSRF))
 
 	logs := buf.String()
-	for _, want := range []string{"level=DEBUG", `msg="request refused"`, "save trigger"} {
+	for _, want := range []string{"level=DEBUG", `msg="request refused"`} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log %q does not hold %q", logs, want)
 		}
+	}
+
+	if strings.Contains(logs, "save trigger") {
+		t.Errorf("log %q holds the wrap text", logs)
 	}
 
 	if strings.Contains(rec.Body.String(), "save trigger") {
@@ -475,9 +480,9 @@ func TestCredentialBeatsAHostileClassifier(t *testing.T) {
 }
 
 // TestWriteLogsRefusalsAtDebug pins the log rule of Write for each class. A
-// refusal whose answer is not its error text logs that text at Debug. An answer
-// that holds the error text logs nothing more. A 5xx logs no error text, and the
-// body never holds the value that a refusal wraps.
+// refusal whose answer is not its error text logs its status and code at Debug,
+// never the error text. An answer that holds the error text logs nothing more.
+// No log line holds the value that an error wraps, and the body never holds it.
 func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 	t.Parallel()
 
@@ -487,7 +492,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			err:         fmt.Errorf("save trigger: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
-			wantLog:     "save trigger",
+			wantLog:     "status=403",
 			hidden:      "save trigger",
 		},
 		{
@@ -507,8 +512,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			hidden:      "hunter2",
 		},
 		{
-			// The log is not checked for the secret: a test never pins a secret into a log.
-			name:        "wrapped secret never reaches the body",
+			name:        "wrapped secret never reaches the body or the log",
 			err:         fmt.Errorf("pq: password=hunter2: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
@@ -585,7 +589,9 @@ func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
 		t.Errorf("body %q holds %q", body, tc.hidden)
 	}
 
-	if tc.status >= http.StatusInternalServerError && tc.hidden != "" && strings.Contains(logs, tc.hidden) {
-		t.Errorf("5xx log %q holds %q", logs, tc.hidden)
+	// Defense in depth: the refusal line names the status and the code only, and
+	// this check stays so that a new log field cannot leak the wrapped value.
+	if tc.hidden != "" && strings.Contains(logs, tc.hidden) {
+		t.Errorf("log %q holds %q", logs, tc.hidden)
 	}
 }

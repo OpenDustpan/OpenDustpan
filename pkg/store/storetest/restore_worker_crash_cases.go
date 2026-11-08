@@ -260,7 +260,7 @@ func (c *crashRig) canceledEntries(t *testing.T, token int64, unit string) int {
 	t.Helper()
 
 	return c.r.restoreEntries(t, "restore "+c.id.String()+" claim token "+strconv.FormatInt(token, 10)+
-		" canceled the active work: "+unit)
+		" attempted to cancel the active work: "+unit)
 }
 
 func testCrashAfterEnterWrite(t *testing.T, newStore RestoreFactory) {

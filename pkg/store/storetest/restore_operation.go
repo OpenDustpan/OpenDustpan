@@ -382,8 +382,11 @@ func testRestoreOpEventsPastLimit(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("read the events: %v", err)
 	}
 
-	if len(events) != backup.MaxRestoreEvents || !strings.Contains(events[len(events)-1], ": 3 more") {
-		t.Fatalf("events = %d with the last %q, want the limit with a summary of 3", len(events), events[len(events)-1])
+	if len(events) != backup.MaxRestoreEvents || !strings.Contains(events[len(events)-1], ": up to 3 more") {
+		t.Fatalf(
+			"events = %d with the last %q, want the limit with a summary of up to 3",
+			len(events), events[len(events)-1],
+		)
 	}
 }
 

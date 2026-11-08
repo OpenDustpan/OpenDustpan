@@ -512,8 +512,9 @@ func (m *restoreServiceMaintenance) Get(context.Context) (maintenance.State, err
 	return m.current(), nil
 }
 
-// EnterWith implements backup.RestoreMaintenance: it counts the enter, and
-// writes maintenance through the writer.
+// EnterWith implements backup.RestoreMaintenance: it counts the enter, runs
+// the cancel sequence of cancelScript when the test set one, and writes
+// maintenance through the writer.
 func (m *restoreServiceMaintenance) EnterWith(
 	ctx context.Context, opts maintenance.EnterOptions,
 ) (maintenance.EnterResult, error) {
@@ -524,7 +525,7 @@ func (m *restoreServiceMaintenance) EnterWith(
 		m.order.add("enter")
 	}
 
-	enterErr, state := m.enterErr, m.state
+	enterErr, state, script := m.enterErr, m.state, m.cancelScript
 	m.mu.Unlock()
 
 	if enterErr != nil {
@@ -535,11 +536,22 @@ func (m *restoreServiceMaintenance) EnterWith(
 		return maintenance.EnterResult{Canceled: nil}, nil
 	}
 
+	var canceled []string
+
+	if script != nil {
+		var err error
+
+		canceled, err = script.run(ctx, opts.Writer)
+		if err != nil {
+			return maintenance.EnterResult{Canceled: nil}, err
+		}
+	}
+
 	if err := opts.Writer.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance); err != nil {
 		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("enter: %w", err)
 	}
 
-	return maintenance.EnterResult{Canceled: nil}, nil
+	return maintenance.EnterResult{Canceled: canceled}, nil
 }
 
 // RecheckWith implements backup.RestoreMaintenance: no work is active.

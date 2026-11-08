@@ -500,8 +500,10 @@ func (p settingsPlanner) poolName(ctx context.Context, ns namespace.Name, id str
 	return pools[i].Name, nil
 }
 
-// jobPlanner is the job.Planner of this version. It starts a plan on a
-// runner, with the default steps of the tool of the unit.
+// jobPlanner is the job.Planner of this version. It starts a plan, or a drift
+// check, on a runner, with the default steps of the tool of the unit. It
+// refuses an apply and a destroy until the runner protocol stores the plan of
+// the plan phase and gives it to the apply phase.
 //
 // The pool comes from the request, and then the service has checked
 // namespace:manage-runners, or it is the only job pool of the namespace. The
@@ -523,7 +525,7 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 		return job.Spec{}, err
 	}
 
-	steps, err := stepsOf(unit, req.Purpose)
+	steps, err := stepsOf(unit, req.Operation, req.Purpose)
 	if err != nil {
 		return job.Spec{}, err
 	}
@@ -546,8 +548,9 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 }
 
 // checkPlanRequest returns the refusal of a request that this planner cannot
-// start: another operation than a plan, or a refresh for a drift check, another
-// executor than runners, and the fields of a write-back job.
+// start: an operation other than a plan (an apply and a destroy included), or
+// a refresh for a drift check, another executor than runners, and the fields
+// of a write-back job.
 func checkPlanRequest(req *job.StartRequest) error {
 	driftCheck := req.Purpose == job.PurposeDriftCheck
 
@@ -555,7 +558,7 @@ func checkPlanRequest(req *job.StartRequest) error {
 	case driftCheck && req.Operation != job.OperationRefresh:
 		return fmt.Errorf("%w: a %s has the operation %s, not %s", job.ErrInvalid, req.Purpose,
 			job.OperationRefresh, req.Operation)
-	case !driftCheck && req.Operation != job.OperationPlan:
+	case !driftCheck && !startsOnRunner(req.Operation):
 		return fmt.Errorf("%w: this server starts plan jobs only, not %s", job.ErrUnsupported, req.Operation)
 	case req.Executor != "" && req.Executor != job.ExecutorRunner:
 		return fmt.Errorf("%w: this server starts jobs on runners only, not through %s", job.ErrUnsupported,
@@ -567,13 +570,37 @@ func checkPlanRequest(req *job.StartRequest) error {
 	}
 }
 
-// stepsOf returns the fixed steps for the unit and the purpose.
-func stepsOf(unit identity.Object, purpose job.Purpose) ([]job.Step, error) {
-	if purpose != job.PurposeDriftCheck {
-		return planSteps(unit)
+// startsOnRunner reports whether this server starts a job of op on a runner,
+// apart from a drift check. An apply and a destroy are not started yet: the
+// runner protocol does not store the plan of the plan phase or give it to the
+// apply phase, so such a job would plan again with no end. The steps of both
+// operations (applySteps, destroySteps) stay for the change that lifts this
+// refusal.
+func startsOnRunner(op job.Operation) bool {
+	return op == job.OperationPlan
+}
+
+// stepsOf returns the fixed steps for the unit, the operation and the purpose.
+func stepsOf(unit identity.Object, op job.Operation, purpose job.Purpose) ([]job.Step, error) {
+	if purpose == job.PurposeDriftCheck {
+		return driftSteps(unit.Tool())
 	}
 
-	return driftSteps(unit.Tool())
+	switch op {
+	case job.OperationApply:
+		return applySteps(unit)
+	case job.OperationDestroy:
+		return destroySteps(unit)
+	case job.OperationPlan:
+		return planSteps(unit)
+	case job.OperationRefresh:
+		// Defense in depth: checkPlanRequest refuses a refresh that is no drift
+		// check. This case stays so that a new caller of stepsOf gets no steps
+		// for it, and it does not rely on that check.
+		return nil, fmt.Errorf("%w: this server has no default steps for the operation %s", job.ErrUnsupported, op)
+	default:
+		return nil, fmt.Errorf("%w: unknown operation %q", job.ErrInvalid, op)
+	}
 }
 
 // checkLocation checks the code location of a start in the namespace ns.
@@ -661,8 +688,13 @@ const tofuProgram = "tofu"
 const (
 	tofuInit       = "init"
 	tofuPlan       = "plan"
+	tofuApply      = "apply"
 	tofuNoInput    = "-input=false"
+	tofuDestroy    = "-destroy"
 	tofuAutomation = "TF_IN_AUTOMATION"
+	// tofuPlanFile is the plan file that the plan phase writes and the apply
+	// phase reads, relative to the code directory.
+	tofuPlanFile = "tfplan"
 )
 
 // pulumiProgram is the program of the plan steps of a Pulumi stack. The runner
@@ -675,6 +707,18 @@ const (
 	pulumiNonInteractive = "--non-interactive"
 	pulumiStackFlag      = "--stack="
 	pulumiSkipUpdate     = "PULUMI_SKIP_UPDATE_CHECK"
+	envTrue              = "true"
+	pulumiUp             = "up"
+	pulumiDestroy        = "destroy"
+	pulumiYes            = "--yes"
+	pulumiSkipPreview    = "--skip-preview"
+	pulumiPreviewOnly    = "--preview-only"
+	// The Pulumi CLI saves and reads an update plan only with this variable
+	// set.
+	pulumiExperimental = "PULUMI_EXPERIMENTAL"
+	// pulumiPlanFile is the update plan that the preview saves and the update
+	// reads, relative to the code directory.
+	pulumiPlanFile = "pulumi-plan.json"
 )
 
 // maxPulumiName is the most bytes of the organization, the project or the
@@ -710,20 +754,116 @@ func isPulumiNameStart(c byte) bool {
 func planSteps(unit identity.Object) ([]job.Step, error) {
 	switch tool := unit.Tool(); tool {
 	case pulumiTool:
-		step, err := pulumiPreviewStep(unit)
+		stack, err := pulumiStackArg(unit)
 		if err != nil {
 			return nil, err
 		}
 
-		return []job.Step{step}, nil
+		return []job.Step{pulumiPreviewStep(stack, pulumiPreview)}, nil
 	case opentofuTool:
-		initStep := tofuStep(tofuInit, tofuInit, tofuNoInput)
-		planStep := tofuStep(tofuPlan, tofuPlan, tofuNoInput, "-out=tfplan")
-		planStep.Outputs = []job.Output{{Kind: job.OutputPlanApply, Path: "tfplan"}}
-
-		return []job.Step{initStep, planStep}, nil
+		return tofuPlanSteps(), nil
 	default:
 		return nil, fmt.Errorf("%w: this server has no default plan steps for the tool %q", job.ErrUnsupported, tool)
+	}
+}
+
+// applySteps returns the default steps of an apply for the tool of the unit:
+// the steps of the plan, then the steps that apply the plan of the plan phase.
+//
+// OpenTofu applies the plan file with no -auto-approve: a plan file needs no
+// approval, and the apply fails when the state changed after the plan. Pulumi
+// saves the plan in the preview and applies it with --plan.
+func applySteps(unit identity.Object) ([]job.Step, error) {
+	switch tool := unit.Tool(); tool {
+	case pulumiTool:
+		stack, err := pulumiStackArg(unit)
+		if err != nil {
+			return nil, err
+		}
+
+		// The preview of an apply saves the plan that the apply phase reads.
+		preview := pulumiPreviewStep(stack, pulumiPreview)
+		preview.Args = append(preview.Args, "--save-plan="+pulumiPlanFile)
+		preview.Env[pulumiExperimental] = envTrue
+		preview.Outputs = []job.Output{{Kind: job.OutputPlanApply, Path: pulumiPlanFile}}
+
+		update := pulumiApplyStep(pulumiUp, pulumiProgram, pulumiUp, pulumiNonInteractive, stack,
+			"--plan="+pulumiPlanFile, pulumiYes, pulumiSkipPreview)
+		update.Env[pulumiExperimental] = envTrue
+
+		return []job.Step{preview, update}, nil
+	case opentofuTool:
+		return tofuApplySteps(), nil
+	default:
+		return nil, fmt.Errorf("%w: this server has no default apply steps for the tool %q", job.ErrUnsupported, tool)
+	}
+}
+
+// destroySteps returns the default steps of a destroy for the tool of the unit.
+//
+// OpenTofu saves a destroy plan (plan -destroy) and applies it. The Pulumi CLI
+// cannot save a destroy plan, so the plan phase previews the destroy
+// (destroy --preview-only) and stores no plan file, and the apply phase runs
+// destroy --yes. The destroy then acts on the state at the time of the apply,
+// not on the previewed plan.
+func destroySteps(unit identity.Object) ([]job.Step, error) {
+	switch tool := unit.Tool(); tool {
+	case pulumiTool:
+		stack, err := pulumiStackArg(unit)
+		if err != nil {
+			return nil, err
+		}
+
+		preview := pulumiPreviewStep(stack, pulumiDestroy, pulumiPreviewOnly)
+		destroy := pulumiApplyStep(pulumiDestroy, pulumiProgram, pulumiDestroy, pulumiNonInteractive, stack,
+			pulumiYes, pulumiSkipPreview)
+
+		return []job.Step{preview, destroy}, nil
+	case opentofuTool:
+		return tofuApplySteps(tofuDestroy), nil
+	default:
+		return nil, fmt.Errorf("%w: this server has no default destroy steps for the tool %q", job.ErrUnsupported, tool)
+	}
+}
+
+// tofuPlanSteps returns the plan-phase steps of OpenTofu: init, then a plan
+// that writes the plan file. flags go after the word plan: tofuDestroy makes
+// a destroy plan.
+func tofuPlanSteps(flags ...string) []job.Step {
+	initStep := tofuStep(tofuInit, tofuInit, tofuNoInput)
+
+	args := append([]string{tofuPlan}, flags...)
+	args = append(args, tofuNoInput, "-out="+tofuPlanFile)
+
+	planStep := tofuStep(tofuPlan, args...)
+	planStep.Outputs = []job.Output{{Kind: job.OutputPlanApply, Path: tofuPlanFile}}
+
+	return []job.Step{initStep, planStep}
+}
+
+// tofuApplySteps returns the steps of an OpenTofu apply or destroy: the plan
+// phase, then an init and an apply of the plan file in the apply phase. The
+// apply phase runs on a fresh checkout, so it runs init again.
+func tofuApplySteps(flags ...string) []job.Step {
+	steps := tofuPlanSteps(flags...)
+
+	initStep := tofuStep("apply-init", tofuInit, tofuNoInput)
+	initStep.Phase = job.PhaseApply
+
+	applyStep := tofuStep(tofuApply, tofuApply, tofuNoInput, tofuPlanFile)
+	applyStep.Phase = job.PhaseApply
+	applyStep.ChangesResources = true
+
+	return append(steps, initStep, applyStep)
+}
+
+// pulumiApplyStep returns an apply-phase step that runs the Pulumi program
+// with args. It marks the step as one that changes resources.
+func pulumiApplyStep(name string, args ...string) job.Step {
+	return job.Step{
+		Name: name, Role: job.RoleTool, Phase: job.PhaseApply, Args: args,
+		Env: map[string]string{pulumiSkipUpdate: envTrue}, Dir: "", Timeout: 0, AllowFailure: false,
+		ChangesResources: true, Outputs: nil,
 	}
 }
 
@@ -754,13 +894,26 @@ func tofuStep(name string, args ...string) job.Step {
 	}
 }
 
-// pulumiPreviewStep returns the plan-phase step that previews the stack of
-// unit. The stack goes in one argument with its flag (--stack=value), so a
-// name never reads as a flag of its own, and in its full form (namespace,
-// project, stack), so the Pulumi CLI never picks a stack from the checkout.
-// The step changes no resource and leaves no output: the log of the step
-// holds the preview.
-func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
+// pulumiPreviewStep returns the plan-phase step that previews the stack
+// argument stack (see pulumiStackArg). command is the command and its flags:
+// preview, or destroy with --preview-only. The step changes no resource and
+// leaves no output: the log of the step holds the preview.
+func pulumiPreviewStep(stack string, command ...string) job.Step {
+	args := append([]string{pulumiProgram}, command...)
+	args = append(args, pulumiNonInteractive, stack)
+
+	return job.Step{
+		Name: pulumiPreview, Role: job.RoleTool, Phase: job.PhasePlan, Args: args,
+		Env: map[string]string{pulumiSkipUpdate: envTrue}, Dir: "", Timeout: 0, AllowFailure: false,
+		ChangesResources: false, Outputs: nil,
+	}
+}
+
+// pulumiStackArg returns the argument that names the stack of unit. The stack
+// goes in one argument with its flag (--stack=value), so a name never reads as
+// a flag of its own, and in its full form (namespace, project, stack), so the
+// Pulumi CLI never picks a stack from the checkout.
+func pulumiStackArg(unit identity.Object) (string, error) {
 	project, name, _ := strings.Cut(unit.UnitName(), "/")
 
 	// Defense in depth: this allowlist stays so that a new caller of the
@@ -771,20 +924,13 @@ func pulumiPreviewStep(unit identity.Object) (job.Step, error) {
 	// checks the name too.
 	for _, part := range []string{string(unit.Namespace()), project, name} {
 		if !validPulumiName(part) {
-			return job.Step{}, fmt.Errorf("%w: the Pulumi stack %s in the namespace %s is not of the form "+
+			return "", fmt.Errorf("%w: the Pulumi stack %s in the namespace %s is not of the form "+
 				"project/stack with letters, digits, '_', '.' and '-'", job.ErrInvalid, ident.Echo(unit.UnitName()),
 				ident.Echo(string(unit.Namespace())))
 		}
 	}
 
-	stack := pulumiStackFlag + string(unit.Namespace()) + "/" + project + "/" + name
-
-	return job.Step{
-		Name: pulumiPreview, Role: job.RoleTool, Phase: job.PhasePlan,
-		Args: []string{pulumiProgram, pulumiPreview, pulumiNonInteractive, stack},
-		Env:  map[string]string{pulumiSkipUpdate: "true"}, Dir: "", Timeout: 0, AllowFailure: false,
-		ChangesResources: false, Outputs: nil,
-	}, nil
+	return pulumiStackFlag + string(unit.Namespace()) + "/" + project + "/" + name, nil
 }
 
 // newJobWorkers builds the periodic work of the job model: the reconcile and

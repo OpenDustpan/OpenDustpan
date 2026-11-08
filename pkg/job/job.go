@@ -96,6 +96,11 @@ var (
 	// maximum plan age. The job then plans again and asks for approval
 	// again.
 	ErrPlanStale = errors.New("plan is stale")
+	// ErrNoPlan reports the dispatch of an apply phase whose plan phase
+	// stored no plan. A new plan phase would store none either, so the job
+	// fails and does not plan again. An error with ErrNoPlan also wraps
+	// ErrPlanStale.
+	ErrNoPlan = errors.New("the plan phase stored no plan")
 	// ErrDelivered reports a cancel of a write-back job whose change is in
 	// git for good: a direct push, or a review request that merged. The job
 	// stays and waits for its state version.
