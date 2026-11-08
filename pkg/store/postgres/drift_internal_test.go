@@ -211,6 +211,10 @@ func TestDriftPutSameJobIsAtomic(t *testing.T) {
 			name: "a newer result of another job is admissible", first: driftRow(jobOne, t1),
 			second: driftRow(jobTwo, t2), stale: false, wantJob: jobTwo, wantMs: t2,
 		},
+		{
+			name: "an older result of another job is not admissible", first: driftRow(jobTwo, t2),
+			second: driftRow(jobOne, t1), stale: true, wantJob: jobTwo, wantMs: t2,
+		},
 	}
 
 	for _, tc := range cases {
