@@ -490,8 +490,8 @@ func testSweepStalledChunk(t *testing.T, h ArtifactSweepHarness) {
 
 	// The stalled confirm arrives. Its attempt started before the grace
 	// period, so the store refuses it and no row names the deleted blob. The
-	// case clock starts at the clock of the database, with which the store
-	// compares the start time.
+	// start time comes from the clock of the database, the clock with which
+	// the store compares it.
 	late := chunkAttempt{
 		at: chunkAt{version: fx.version, seq: 1}, key: rel, started: clk.Now().Add(-sweepAfter),
 	}
