@@ -33,16 +33,16 @@ func TestBothToolsSameServer(t *testing.T) {
 	}
 
 	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if len(pulumiVersions) == 0 || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runBothOnStore(t, fetcher, pulumiVersions, tofuVersions[0], db)
+			runBothOnStore(t, fetcher, pulumiVersions, tofuVersion, db)
 		})
 	}
 }

@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -28,10 +30,16 @@ const (
 	// The wait before attempt n+1 is n times downloadRetryWait.
 	downloadAttempts  = 3
 	downloadRetryWait = 2 * time.Second
+	// localhostName is the host name that always means the loopback address.
+	localhostName = "localhost"
 )
 
 // Errors returned while downloading and unpacking a CLI.
 var (
+	// ErrUnpinnedFetch is returned when Install would ask a release host for the
+	// newest version or for a published checksum file while the matrix of the tool
+	// is the default. Set E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS to allow it.
+	ErrUnpinnedFetch    = errors.New("unpinned CLI version needs a network request")
 	ErrChecksumMismatch = errors.New("archive checksum mismatch")
 	ErrUnsafeArchive    = errors.New("unsafe archive entry")
 	ErrMissingBinary    = errors.New("archive has no CLI binary")
@@ -76,6 +84,10 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	version := strings.TrimPrefix(label, "v")
 
 	if label == Latest {
+		if err := checkUnpinnedFetch(tool, label, tool.LatestURL); err != nil {
+			return Install{}, err
+		}
+
 		resolved, err := f.latest(ctx, tool)
 		if err != nil {
 			return Install{}, err
@@ -87,6 +99,15 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	archive, err := tool.ArchiveName(version)
 	if err != nil {
 		return Install{}, err
+	}
+
+	if _, ok := tool.pinned[archive]; !ok {
+		checksumURL := tool.releaseFile(version, tool.checksums(version))
+
+		unpinnedErr := checkUnpinnedFetch(tool, label, checksumURL)
+		if unpinnedErr != nil {
+			return Install{}, unpinnedErr
+		}
 	}
 
 	want, err := f.checksum(ctx, tool, version, archive)
@@ -122,6 +143,29 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	}
 
 	return inst, nil
+}
+
+// checkUnpinnedFetch returns ErrUnpinnedFetch when a request to rawURL would
+// resolve the newest version or a published checksum while the matrix of tool is
+// the default. Set the tool's versions variable to allow it. A loopback host is
+// allowed, so a test can serve a fake release. A URL that does not parse is not
+// loopback.
+func checkUnpinnedFetch(tool Tool, label, rawURL string) error {
+	if os.Getenv(tool.versionsEnv) != "" {
+		return nil
+	}
+
+	parsed, err := neturl.Parse(rawURL)
+	if err == nil {
+		host := parsed.Hostname()
+		ip := net.ParseIP(host)
+
+		if host == localhostName || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: %s %q: set %s to allow it", ErrUnpinnedFetch, tool.Name, label, tool.versionsEnv)
 }
 
 func (f *Fetcher) latest(ctx context.Context, tool Tool) (string, error) {

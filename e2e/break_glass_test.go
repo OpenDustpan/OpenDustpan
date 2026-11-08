@@ -26,17 +26,17 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
