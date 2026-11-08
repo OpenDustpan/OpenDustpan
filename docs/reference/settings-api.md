@@ -217,6 +217,8 @@ The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the
 key `branding.preset` of the configuration file set it from the static layer
 and lock it.
 
+A namespace has no declared setting yet.
+
 ### Bounds of a PostgreSQL store
 
 A server over a PostgreSQL store declares each bound of its code as a
@@ -234,5 +236,3 @@ SQLite store declares none of these settings.
 | `database.postgres.schemaChange.statementTimeout` | `string` | `10m0s` | `restart` | The statement timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
 | `database.postgres.schemaChange.idleInTransactionTimeout` | `string` | `1m0s` | `restart` | The idle-in-transaction timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
 | `database.postgres.migration.timeout` | `string` | `15m0s` | `restart` | The statement timeout and the idle-in-transaction timeout of the migration transaction of the PostgreSQL store. |
-
-A namespace has no declared setting yet.

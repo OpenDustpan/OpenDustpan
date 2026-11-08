@@ -34,11 +34,25 @@ func (f *serveFlags) staticLayer() *cli.StaticLayer {
 func (f *serveFlags) settingsWiring(st store) (settingsWiring, error) {
 	switch s := st.(type) {
 	case sqliteStore:
-		return f.wireSettings(s.SettingStore())
+		return f.wireSettings(s.SettingStore(), storeSettingDeclarations(st)...)
 	case postgresStore:
-		return f.wireSettings(s.SettingStore(), postgres.SettingDeclarations()...)
+		return f.wireSettings(s.SettingStore(), storeSettingDeclarations(st)...)
 	default:
 		return settingsWiring{options: nil, sync: nil}, nil
+	}
+}
+
+// storeSettingDeclarations returns the declarations of the settings of the
+// store itself: the bounds of a PostgreSQL store, and none for a SQLite
+// store or any other store that keeps no settings of its own.
+func storeSettingDeclarations(st store) []setting.Declaration {
+	switch st.(type) {
+	case sqliteStore:
+		return nil
+	case postgresStore:
+		return postgres.SettingDeclarations()
+	default:
+		return nil
 	}
 }
 
