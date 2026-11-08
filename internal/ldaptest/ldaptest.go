@@ -120,6 +120,11 @@ type Group struct {
 	Link Link
 }
 
+// BindHook is a function that the directory calls before it answers a
+// bind. It receives the DN of the bind. A test uses it to hold the answer
+// of a bind until the test releases it.
+type BindHook func(dn string)
+
 // Server is a running directory. Its methods are safe for concurrent use.
 type Server struct {
 	pool            *x509.CertPool
@@ -139,6 +144,7 @@ type Server struct {
 	once            sync.Once
 	mu              sync.Mutex
 	fault           Fault
+	bindHook        BindHook
 	accepts         int
 	stopped         bool
 }
@@ -184,6 +190,7 @@ func Start(t *testing.T) *Server {
 		once:            sync.Once{},
 		mu:              sync.Mutex{},
 		fault:           FaultNone,
+		bindHook:        nil,
 		accepts:         0,
 		stopped:         false,
 	}
@@ -320,6 +327,16 @@ func (s *Server) SetFault(f Fault) {
 	s.fault = f
 }
 
+// SetBindHook sets the function that the directory calls before it answers
+// each bind. A nil function answers each bind at once. A hook that waits
+// holds the answer of the bind.
+func (s *Server) SetBindHook(f BindHook) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.bindHook = f
+}
+
 // Binds returns the DN of each bind that the directory received, in order.
 // It never holds a password.
 func (s *Server) Binds() []string {
@@ -448,6 +465,15 @@ func (s *Server) currentFault() Fault {
 	defer s.mu.Unlock()
 
 	return s.fault
+}
+
+// currentBindHook returns the function that the directory calls before it
+// answers a bind.
+func (s *Server) currentBindHook() BindHook {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.bindHook
 }
 
 // recordBind records the DN of a bind.
