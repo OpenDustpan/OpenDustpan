@@ -53,6 +53,15 @@ type Principals interface {
 	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
 }
 
+// Reach compares the reach of a caller with the reach of the principal of a
+// new rule, as the create and the rotate paths of a token do. It returns an
+// error that wraps identity.ErrDenied when the caller holds
+// principal:manage-tokens on the installation only and does not hold every
+// action of the reach of the principal. *accesstoken.Service meets it.
+type Reach interface {
+	CheckReach(ctx context.Context, caller identity.Principal, principalID string) error
+}
+
 // Config holds the dependencies of a Service. Store, Namespaces, Principals
 // and Authorizer are required.
 type Config struct {
@@ -62,6 +71,12 @@ type Config struct {
 	// Authorizer decides principal:manage-tokens on the principal of a new
 	// rule.
 	Authorizer identity.Authorizer
+	// Reach compares the reach of the caller with the reach of the
+	// principal of a new rule. A rule lets a workload get the tokens of
+	// its principal, so the right to make a rule is the right to make its
+	// tokens. Nil refuses every create: without the port the Service
+	// cannot compare the reaches.
+	Reach Reach
 	// InstallationURLs are the base URLs of the issuers of this
 	// installation, for example its public URL. A rule refuses an issuer at
 	// or under each of them.
@@ -92,6 +107,7 @@ type Service struct {
 	namespaces Namespaces
 	principals Principals
 	authz      identity.Authorizer
+	reach      Reach
 	ownIssuer  OwnIssuer
 	ownURLs    []*url.URL
 	checkURL   func(raw string) error
@@ -140,7 +156,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, principals: cfg.Principals, authz: cfg.Authorizer,
-		ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
+		reach: cfg.Reach, ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
 	}, nil
 }
 
@@ -168,7 +184,8 @@ type Input struct {
 //   - trustrule.ErrPrincipal for a principal that is unknown, deleted,
 //     disabled, a person, or not a principal of ns.
 //   - identity.ErrDenied when the caller does not hold principal:manage-tokens
-//     on the principal.
+//     on the principal, and when the caller holds it on the installation only
+//     and the reach of the principal is not inside the reach of the caller.
 //   - the errors of the namespace read and of Store.Create.
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, in Input,
@@ -199,17 +216,8 @@ func (s *Service) Create(
 		}
 	}
 
-	// The right to make a rule for a principal is the right to act as it, as
-	// the right to make its tokens is. So a create needs the same action. The
-	// check comes before the read of the principal, so a caller without the
-	// action never learns whether the ID names a principal, or its kind.
-	obj, err := identity.ParsePrincipalObject(r.PrincipalID)
-	if err != nil {
-		return trustrule.Rule{}, fmt.Errorf("%w: %w", trustrule.ErrPrincipal, err)
-	}
-
-	if authzErr := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); authzErr != nil {
-		return trustrule.Rule{}, fmt.Errorf("make a trust rule for principal %q: %w", r.PrincipalID, authzErr)
+	if err := s.authorizeCreate(ctx, caller, r.PrincipalID); err != nil {
+		return trustrule.Rule{}, err
 	}
 
 	if principalErr := s.checkPrincipal(ctx, r.PrincipalID, ns); principalErr != nil {
@@ -351,6 +359,54 @@ func (s *Service) checkPrincipal(ctx context.Context, id string, ns namespace.Na
 	default:
 		return nil
 	}
+}
+
+// authorizeCreate checks that caller may make a rule for the principal
+// principalID: it holds principal:manage-tokens on the principal, and, when
+// it holds that action on the installation only, the reach of the principal
+// is inside its own reach. The right to make a rule is the right to make its
+// tokens, so a create runs the same checks as a create of a token. The checks
+// come before the read of the principal, so a caller that fails one never
+// learns whether the ID names a principal, or its kind.
+//
+// The refusal of the reach check returns unwrapped, so that the adapter
+// answers its text, as the token route does.
+func (s *Service) authorizeCreate(ctx context.Context, caller identity.Principal, principalID string) error {
+	obj, err := identity.ParsePrincipalObject(principalID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", trustrule.ErrPrincipal, err)
+	}
+
+	if authzErr := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); authzErr != nil {
+		return fmt.Errorf("make a trust rule for principal %q: %w", principalID, authzErr)
+	}
+
+	return s.checkReach(ctx, caller, principalID)
+}
+
+// checkReach asks the reach port whether the reach of the caller holds every
+// action of the reach of the principal of a new rule. Without it, a caller
+// that holds principal:manage-tokens on the installation only makes a rule
+// for a principal that reaches past it, and gets its tokens through the
+// exchange, while the token route refuses them.
+//
+// Defense in depth: the create and the rotate paths of a token run the same
+// compare, in package accesstoken. This check stays so that the rule path
+// cannot get the tokens of a principal that the token path refuses, and so
+// that a new caller of the store cannot skip the compare.
+func (s *Service) checkReach(ctx context.Context, caller identity.Principal, principalID string) error {
+	// Defense in depth: NewService allows a missing Reach, for an
+	// installation that keeps no token service. This check stays so that a
+	// Service built any other way fails closed: without the port it
+	// refuses every create.
+	if s.reach == nil {
+		return fmt.Errorf(
+			"%w: the server cannot check the reach of the principal of a trust rule",
+			identity.ErrDenied,
+		)
+	}
+
+	return s.reach.CheckReach(ctx, caller, principalID)
 }
 
 // ownsURL reports whether u is at or under one of the installation URLs.

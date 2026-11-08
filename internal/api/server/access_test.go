@@ -1072,7 +1072,8 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		t.Fatalf("denied entries of ann = %+v, want one", denied)
 	}
 
-	if !strings.HasPrefix(denied[0].Reason, "grant gives more than the granter holds") {
-		t.Fatalf("reason = %q, want the reason of the escalation", denied[0].Reason)
+	if !strings.Contains(denied[0].Reason, "outside the reach of the caller: ") ||
+		!strings.Contains(denied[0].Reason, "server:backup on the installation") {
+		t.Fatalf("reason = %q, want the missing actions of the escalation", denied[0].Reason)
 	}
 }

@@ -51,6 +51,14 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "a membership that gives manage-tokens needs server:manage-access", test: testMembershipNeedsAccess},
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
 		{name: "an account administrator cannot act as a site administrator", test: testNoPersonalEscalation},
+		{
+			name: "a grant of the token role on a principal needs the reach of the granter",
+			test: testGrantOnAPrincipalNeedsTheReach,
+		},
+		{
+			name: "a membership in a group that holds the token role needs the reach of the caller",
+			test: testMembershipNeedsTheReach,
+		},
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
 		{
 			name: "the audit entry of a group grant names the token managers of its service principals",
@@ -510,6 +518,62 @@ func testNoPersonalEscalation(t *testing.T, d *delegation) {
 
 	if _, _, viewerErr := d.serviceToken(t, signedIn(account), viewer); viewerErr != nil {
 		t.Fatalf("service token for a viewer service principal: %v", viewerErr)
+	}
+}
+
+// testGrantOnAPrincipalNeedsTheReach proves the reach rule of a grant of
+// the token role on a service principal: an account administrator holds no
+// operator action, so it does not hold the reach of an operator principal,
+// and the grant is refused.
+func testGrantOnAPrincipalNeedsTheReach(t *testing.T, d *delegation) {
+	t.Helper()
+
+	account := d.principalOf(t, "account@example.com", principal.KindPerson)
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+
+	d.mustGrant(t, bootstrap(), account, access.RoleAccountAdministrator, identity.ServerObject())
+	d.mustGrant(t, bootstrap(), deploy, access.RoleInstallationOperator, identity.ServerObject())
+
+	_, err := d.grant(t, signedIn(account), alice, access.RoleTokenManager, identity.PrincipalObject(deploy.ID))
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("grant of the token role on an operator principal: err = %v, want ErrEscalation", err)
+	}
+}
+
+// testMembershipNeedsTheReach proves the reach rule of a membership add: a
+// group that holds the token role on a service principal gives each member
+// the right to act as it, so an account administrator does not hold the
+// reach of an operator principal and the add is refused.
+func testMembershipNeedsTheReach(t *testing.T, d *delegation) {
+	t.Helper()
+
+	account := d.principalOf(t, "account@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+
+	d.mustGrant(t, bootstrap(), account, access.RoleAccountAdministrator, identity.ServerObject())
+	d.mustGrant(t, bootstrap(), deploy, access.RoleInstallationOperator, identity.ServerObject())
+
+	group, err := d.principals.CreateGroup(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
+		principal.GroupInput{Name: "deployers", Description: ""})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	_, err = d.access.Grant(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageAccess), bootstrap(),
+		access.GrantInput{
+			Object: identity.PrincipalObject(deploy.ID), Role: access.RoleTokenManager,
+			Subject: access.Subject{Kind: access.SubjectGroup, ID: group.ID},
+		})
+	if err != nil {
+		t.Fatalf("grant to the group: %v", err)
+	}
+
+	_, err = d.principals.AddMember(t.Context(), changeEntry(signedIn(account), identity.ActionServerManageGroups),
+		signedIn(account), group.ID, account.ID)
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("membership in a group that holds the token role on an operator principal: err = %v, "+
+			"want ErrEscalation", err)
 	}
 }
 

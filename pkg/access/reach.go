@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -131,6 +132,81 @@ func (r Reach) Covers(ctx context.Context, other Reach) (bool, error) {
 type HeldAction struct {
 	Action identity.Action
 	Object identity.Object
+}
+
+// ReachRefusal is a refusal of a reach check that carries the actions of the
+// reach of a principal that the caller does not hold. The audit entry of the
+// refusal reads them with errors.As, so its reason needs no parsing of text.
+type ReachRefusal interface {
+	error
+	MissingActions() []HeldAction
+}
+
+// MaxReachReasonItems bounds the actions that a reach reason names. A longer
+// list ends with the count of the actions that it leaves out.
+const MaxReachReasonItems = 20
+
+// MissingActionsReason returns the audit reason of a reach refusal: the
+// missing actions with their objects, sorted as Missing returns them, after
+// "outside the reach of the caller: ". It names at most MaxReachReasonItems
+// actions and then the count of the rest, and it stays inside the limit of
+// an audit reason.
+func MissingActionsReason(missing []HeldAction) string {
+	const prefix = "outside the reach of the caller: "
+
+	parts := make([]string, 0, min(len(missing), MaxReachReasonItems))
+	total := len(prefix)
+
+	for i := range missing {
+		if i == MaxReachReasonItems {
+			break
+		}
+
+		part := string(missing[i].Action) + " on " + reasonObjectText(missing[i].Object)
+
+		sep := ""
+		if i > 0 {
+			sep = ", "
+		}
+
+		rest := len(missing) - i - 1
+		suffix := ""
+		if rest > 0 {
+			suffix = fmt.Sprintf(", and %d more", rest)
+		}
+
+		if total+len(sep)+len(part)+len(suffix) > audit.MaxReasonLen {
+			break
+		}
+
+		parts = append(parts, part)
+		total += len(sep) + len(part)
+	}
+
+	if len(parts) == len(missing) {
+		return prefix + strings.Join(parts, ", ")
+	}
+
+	return prefix + strings.Join(parts, ", ") + fmt.Sprintf(", and %d more", len(missing)-len(parts))
+}
+
+// reasonObjectText names the object of an action in a reach reason, for
+// example "namespace:team", "unit:team/web" and "principal:prn-x".
+func reasonObjectText(obj identity.Object) string {
+	switch {
+	case obj.IsServer():
+		return "the installation"
+	case obj.IsCaller():
+		return "the caller"
+	case obj.IsPrincipal():
+		return obj.String()
+	case obj.IsCollection():
+		return "collection:" + obj.String()
+	case obj.IsUnit():
+		return "unit:" + obj.Namespace().String() + "/" + obj.UnitName()
+	default:
+		return "namespace:" + obj.String()
+	}
 }
 
 // Missing returns the actions of other that r does not hold, with the

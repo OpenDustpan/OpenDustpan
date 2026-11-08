@@ -103,8 +103,12 @@ type Denial struct {
 	Window time.Duration
 }
 
-// maxReasonPartBytes bounds the reason text that a caller gives.
-const maxReasonPartBytes = 100
+// maxReasonPartBytes bounds the reason text that a caller gives. It is the
+// limit of an audit reason, so that the reason of a reach refusal keeps each
+// missing action that it names. The route and the count of suppressed
+// refusals come after it. The last cut in reasonOf keeps the whole reason
+// inside the limit, so a long reason can cut them.
+const maxReasonPartBytes = audit.MaxReasonLen
 
 // WithLimiter sets the limiter and returns r. The default is a limiter with
 // the default bounds of package denylimit. A nil limiter keeps the default.

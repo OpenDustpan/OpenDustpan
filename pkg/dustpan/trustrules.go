@@ -67,10 +67,19 @@ func newTrustRuleService(svc services, cfg *settings) (*trustrulesvc.Service, er
 		own = svc.issuer
 	}
 
+	// The reach compare of a rule is the one of a token: the service of the
+	// access tokens. A nil *accesstoken.Service must not become a non-nil
+	// interface, and a store that keeps no tokens refuses every create.
+	var reach trustrulesvc.Reach
+	if svc.tokens != nil {
+		reach = svc.tokens
+	}
+
 	rules := trustRuleEgress(cfg)
 
 	ruleSvc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: cfg.trustRules.store, Namespaces: svc.namespaces, Principals: principals, Authorizer: cfg.authorizer,
+		Reach:            reach,
 		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own,
 		CheckURL: func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) },
 		Now:      cfg.now,

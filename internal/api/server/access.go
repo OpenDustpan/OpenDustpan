@@ -244,7 +244,8 @@ const reasonEscalation = "grant gives more than the granter holds"
 // recordEscalation writes the audit entry of a change that the access service
 // refused with access.ErrEscalation. The 403 alone leaves no trace, and the
 // check of the manage action above passed, so no other layer writes an entry.
-// It does nothing for any other error.
+// A reach refusal names the missing actions with their objects; any other
+// escalation keeps the fixed reason. It does nothing for any other error.
 func (h *Handler) recordEscalation(
 	ctx context.Context, r *http.Request, p identity.Principal, d denials.Denial, err error,
 ) {
@@ -253,6 +254,11 @@ func (h *Handler) recordEscalation(
 	}
 
 	d.Reason = reasonEscalation
+
+	if reason := reachReason(err); reason != "" {
+		d.Reason = reason
+	}
+
 	h.guard.Record(ctx, r, p, d)
 }
 

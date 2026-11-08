@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -100,11 +102,24 @@ func (g *grants) ListObjects(context.Context, identity.Principal, identity.Actio
 	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
 }
 
+// fakeReach records the reach checks of a create and answers err.
+type fakeReach struct {
+	checked []string
+	err     error
+}
+
+func (f *fakeReach) CheckReach(_ context.Context, caller identity.Principal, principalID string) error {
+	f.checked = append(f.checked, caller.Subject+" "+principalID)
+
+	return f.err
+}
+
 // fixture is a service over fakes, with the principals of the cases.
 type fixture struct {
 	svc   *trustrulesvc.Service
 	store *fakeStore
 	authz *grants
+	reach *fakeReach
 }
 
 func newFixture(t *testing.T) fixture {
@@ -112,6 +127,7 @@ func newFixture(t *testing.T) fixture {
 
 	store := &fakeStore{created: nil, entries: nil, deleted: nil}
 	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	reach := &fakeReach{checked: nil, err: nil}
 
 	disabled := principalOf("prn-disabled", principal.KindService, "acme")
 	disabled.DisabledAt = time.Unix(1, 0)
@@ -128,7 +144,7 @@ func newFixture(t *testing.T) fixture {
 	}
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
-		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
+		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: reach,
 		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, OwnIssuer: nil,
 		CheckURL: nil,
 		Now:      nil,
@@ -137,7 +153,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("service: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, authz: authz}
+	return fixture{svc: svc, store: store, authz: authz, reach: reach}
 }
 
 // principalOf returns a principal record with the given ID, kind and
@@ -360,6 +376,96 @@ func TestCreateNeedsManageTokensOnThePrincipal(t *testing.T) {
 	}
 }
 
+// TestCreateNeedsTheReachOfThePrincipal checks that a create runs the reach
+// check of a token change for the principal of the rule: a refusal stores
+// nothing, and it wraps the refusal of the reach check.
+func TestCreateNeedsTheReachOfThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.reach.err = fmt.Errorf("%w: %w", identity.ErrDenied, accesstoken.ErrReachExceeded)
+
+	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrReachExceeded) {
+		t.Fatalf("Create = %v, want ErrDenied and ErrReachExceeded", err)
+	}
+
+	if len(f.store.created) != 0 {
+		t.Fatal("the refused create reached the store")
+	}
+
+	if want := "ada prn-worker"; len(f.reach.checked) != 1 || f.reach.checked[0] != want {
+		t.Errorf("reach checks = %v, want %q", f.reach.checked, want)
+	}
+}
+
+// TestCreatePassesWhenTheReachCoversThePrincipal checks the pass path: a
+// reach check that answers nil stores the rule, and it sees the caller and
+// the principal of the rule.
+func TestCreatePassesWhenTheReachCoversThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	r, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	if err != nil {
+		t.Fatalf("Create = %v", err)
+	}
+
+	if len(f.store.created) != 1 || f.store.created[0].ID != r.ID {
+		t.Fatalf("store got %+v, want the rule %s", f.store.created, r.ID)
+	}
+
+	if want := "ada prn-worker"; len(f.reach.checked) != 1 || f.reach.checked[0] != want {
+		t.Errorf("reach checks = %v, want %q", f.reach.checked, want)
+	}
+}
+
+// TestCreateChecksTheReachBeforeItReadsThePrincipal checks the order: the
+// reach check runs after the action check and before the checks of the
+// principal, so a caller whose reach is refused never learns whether the ID
+// names a principal, or its kind.
+func TestCreateChecksTheReachBeforeItReadsThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.reach.err = fmt.Errorf("%w: %w", identity.ErrDenied, accesstoken.ErrReachExceeded)
+
+	in := input()
+	in.PrincipalID = "prn-person"
+
+	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	if !errors.Is(err, accesstoken.ErrReachExceeded) || errors.Is(err, trustrule.ErrPrincipal) {
+		t.Fatalf("Create = %v, want the reach refusal alone", err)
+	}
+}
+
+// TestCreateRefusesWithNoReachChecker checks the fail-closed rule: a
+// service built without a reach checker refuses every create.
+func TestCreateRefusesWithNoReachChecker(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{created: nil, entries: nil, deleted: nil}
+	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	people := fakePrincipals{"prn-worker": principalOf("prn-worker", principal.KindService, "acme")}
+
+	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if _, err := svc.Create(t.Context(), person(), emptyEntry(), "acme", input()); !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Create with no reach checker = %v, want ErrDenied", err)
+	}
+
+	if len(store.created) != 0 {
+		t.Fatal("the refused create reached the store")
+	}
+}
+
 func TestCreateRefusesAnInvalidRule(t *testing.T) {
 	t.Parallel()
 
@@ -406,6 +512,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 			Namespaces:       fakeNamespaces{},
 			Principals:       fakePrincipals{},
 			Authorizer:       &grants{allow: nil, checked: nil},
+			Reach:            &fakeReach{checked: nil, err: nil},
 			InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil,
 			Now: nil,
 		}

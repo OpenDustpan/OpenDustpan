@@ -233,7 +233,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runTokenOp(w, r, op, p, none); ok {
+		if res, err := h.runTokenOp(w, r, op, p, none); err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -241,47 +241,47 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 
 // serveTokenChange adapts a change to a route handler. The Service writes
 // the success entry in the transaction of the change. A refused change
-// writes one failure entry here, best effort. An answer with a secret
-// carries Cache-Control: no-store.
+// writes one failure entry here, best effort, with the missing actions of a
+// reach refusal. An answer with a secret carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		r = r.WithContext(context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness))
-		res, ok := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
+		res, err := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
-		if !ok && res.object != "" && h.tokens != nil {
-			h.appendServerChange(r, p, serverChange{
+		if err != nil && res.object != "" && h.tokens != nil {
+			h.appendServerChangeReason(r, p, serverChange{
 				at: h.tokens.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			}, reachReason(err))
 		}
 
-		if ok {
+		if err == nil {
 			w.Header().Set("Cache-Control", "no-store")
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// runTokenOp runs op and writes its error. It reports whether op succeeded,
-// with the result in both cases.
+// runTokenOp runs op and writes its error. It answers the result in both
+// cases, and the error of the operation.
 func (h *Handler) runTokenOp(
 	w http.ResponseWriter, r *http.Request, op tokenOp, p identity.Principal, e audit.Entry,
-) (principalResult, bool) {
+) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.tokens == nil {
 		h.writeError(ctx, w, errNoTokenStore)
 
-		return principalResult{body: nil, object: "", status: 0}, false
+		return principalResult{body: nil, object: "", status: 0}, errNoTokenStore
 	}
 
 	res, err := op(w, r, h.tokens, p, e)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // resolveCaller resolves the object of the own-token routes: the caller.

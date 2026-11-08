@@ -1262,13 +1262,55 @@ func (s *Service) checkEscalation(
 		return err
 	}
 
+	var missing []HeldAction
+
 	for _, a := range role.Actions {
 		if !held.has(a) {
-			return fmt.Errorf("%w: %s does not hold %s on %q", ErrEscalation, granter.Subject, a, obj.String())
+			missing = append(missing, HeldAction{Action: a, Object: obj})
 		}
 	}
 
-	return nil
+	if len(missing) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(missing, func(a, b HeldAction) int {
+		if c := strings.Compare(string(a.Action), string(b.Action)); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.Object.String(), b.Object.String())
+	})
+
+	return &escalationError{
+		text: fmt.Sprintf("%s: %s does not hold %s on %q",
+			ErrEscalation, granter.Subject, missing[0].Action, obj.String()),
+		missing: missing,
+	}
+}
+
+// escalationError reports a role with actions that the granter does not hold
+// on the object. It wraps ErrEscalation, and it carries the missing actions
+// for the audit entry. Its text names the first action, as before.
+type escalationError struct {
+	text    string
+	missing []HeldAction
+}
+
+// Error implements error.
+func (e *escalationError) Error() string {
+	return e.text
+}
+
+// Unwrap lets errors.Is match ErrEscalation.
+func (e *escalationError) Unwrap() error {
+	return ErrEscalation
+}
+
+// MissingActions returns the actions of the role that the granter does not
+// hold, with the object of each, sorted.
+func (e *escalationError) MissingActions() []HeldAction {
+	return slices.Clone(e.missing)
 }
 
 // checkPrincipalReach refuses a grant of a role with a delegation action on
@@ -1302,11 +1344,11 @@ func (s *Service) checkPrincipalReach(
 
 	holder, missing, err := s.missingReachActions(ctx, granter, principalID)
 	if err != nil {
-		return principalReachRefusal(ctx, holder, principalID, err)
+		return principalReachRefusal(ctx, holder, principalID, missing, err)
 	}
 
 	if len(missing) > 0 {
-		return principalReachRefusal(ctx, holder, principalID, nil)
+		return principalReachRefusal(ctx, holder, principalID, missing, nil)
 	}
 
 	return nil
@@ -1363,8 +1405,12 @@ func (s *Service) reachReady() error {
 // and of a grant whose reaches the server cannot compare. Its text names
 // the principal only when holder reads the principals of the installation,
 // so the refusal never names an object that the caller cannot read. The
-// text never holds cause, which may hold driver detail.
-func principalReachRefusal(ctx context.Context, holder Reach, principalID string, cause error) error {
+// text never holds cause, which may hold driver detail. missing holds the
+// actions of the reach of the principal that the granter does not hold, for
+// the audit entry.
+func principalReachRefusal(
+	ctx context.Context, holder Reach, principalID string, missing []HeldAction, cause error,
+) error {
 	text := "the reach of an object that you cannot read is not inside the reach of the caller"
 
 	readable, err := holder.Has(ctx, identity.ActionServerReadPrincipals, identity.PrincipalObject(principalID))
@@ -1372,20 +1418,27 @@ func principalReachRefusal(ctx context.Context, holder Reach, principalID string
 		text = fmt.Sprintf("the reach of principal %q is not inside the reach of the caller", principalID)
 	}
 
-	return &principalReachError{text: text, cause: cause}
+	return &principalReachError{text: text, missing: slices.Clone(missing), cause: cause}
 }
 
 // principalReachError reports a grant that the reach compare refused. It
 // wraps ErrEscalation and the cause, which may hold driver detail. Its text
 // names the principal and not the cause.
 type principalReachError struct {
-	text  string
-	cause error
+	text    string
+	missing []HeldAction
+	cause   error
 }
 
 // Error implements error.
 func (r *principalReachError) Error() string {
 	return ErrEscalation.Error() + ": " + r.text
+}
+
+// MissingActions returns the actions of the reach of the principal that the
+// granter does not hold, with the object of each, sorted.
+func (r *principalReachError) MissingActions() []HeldAction {
+	return slices.Clone(r.missing)
 }
 
 // Unwrap lets errors.Is match ErrEscalation and the cause.

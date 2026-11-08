@@ -305,6 +305,19 @@ func (s *Service) requireReach(ctx context.Context, caller identity.Principal, p
 	return nil
 }
 
+// CheckReach answers the reach check of a token change for the service
+// principal principalID: it refuses a caller that holds
+// principal:manage-tokens on the installation only and does not hold each
+// action of the reach of the principal, with the same error as the create
+// and the rotate paths of a token. A holder of the action on the principal
+// itself is not compared, as for a token.
+//
+// The check of the hold on the action stays with the caller: this method
+// compares the reaches alone.
+func (s *Service) CheckReach(ctx context.Context, caller identity.Principal, principalID string) error {
+	return s.requireReach(ctx, caller, principalID)
+}
+
 // missingActions returns the reach of the caller and the actions of the
 // reach of the principal principalID that it does not hold.
 func (s *Service) missingActions(
@@ -523,6 +536,14 @@ func (r *reachExceededError) Error() string {
 
 // Unwrap lets errors.Is match the two sentinels.
 func (r *reachExceededError) Unwrap() []error { return []error{identity.ErrDenied, ErrReachExceeded} }
+
+// MissingActions returns the actions of the reach of the principal that the
+// caller does not hold, with the object of each, sorted. The text of the
+// refusal hides an object that the caller cannot read; the audit entry of
+// the refusal names it.
+func (r *reachExceededError) MissingActions() []access.HeldAction {
+	return slices.Clone(r.missing)
+}
 
 // refuseReach returns the fail-closed refusal of the reach check: the
 // server cannot compare the reaches, so it refuses the request.

@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/trustrule"
@@ -225,7 +226,23 @@ func documentOf(rule *trustrule.Rule) ruleDocument {
 // writeError answers err through the shared error module of the tool-neutral
 // APIs, with the classes of the trust rules.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}.Write(ctx, w, err)
+}
+
+// keepDenied maps the classes of a denial that keep their own text, as
+// problem.Writer.KeepDenied does. A create of a rule runs the reach compare of
+// a token, so a refusal of that compare answers the same coded 403 with the
+// same text as the token route.
+func keepDenied(err error) (problem.Problem, bool) {
+	if errors.Is(err, accesstoken.ErrReachExceeded) {
+		// The trust rule service returns the refusal of the reach compare
+		// unwrapped, so this text is the text of the token route. It names
+		// the principal and the actions of the principal that the caller
+		// does not hold, and no object that the caller cannot read.
+		return problem.Built(http.StatusForbidden, err.Error(), errcode.Forbidden(err), errcode.Answer{}, nil), true
+	}
+
+	return problem.Internal(), false
 }
 
 // classify maps the errors of the trust rule routes to an answer that is safe

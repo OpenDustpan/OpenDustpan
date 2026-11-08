@@ -29,7 +29,11 @@ import (
 const (
 	adminToken = "admin-token"
 	// storedToken signs in ada as with a stored access token.
-	storedToken      = "stored-token"
+	storedToken = "stored-token"
+	// personToken signs in tm, and directToken signs in direct: two
+	// persons with no administrator flag, for the reach cases.
+	personToken      = "person-token"
+	directToken      = "direct-token"
 	installationName = "eu-west"
 	publicURL        = "https://dustpan.example.com"
 	// rulesURL is the path of the trust rules of the namespace acme.
@@ -38,7 +42,8 @@ const (
 
 // tokenAuthenticator signs in the administrator ada: with no token ID for
 // adminToken, as a bootstrap token does, and with a token ID for
-// storedToken, as a stored access token does.
+// storedToken, as a stored access token does. It signs in the persons tm
+// and direct for the reach cases.
 type tokenAuthenticator struct{}
 
 func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
@@ -54,6 +59,18 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		p.TokenID = "tok-ada"
 
 		return p, nil
+	case personToken:
+		return identity.Principal{
+			Subject: "tm", DisplayName: "tm", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+			Credential: identity.CredentialSession, JobID: "",
+		}, nil
+	case directToken:
+		return identity.Principal{
+			Subject: "direct", DisplayName: "direct", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+			Credential: identity.CredentialSession, JobID: "",
+		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
@@ -146,16 +163,13 @@ func (e *env) serve(authz identity.Authorizer) {
 		e.t.Fatalf("namespace service: %v", err)
 	}
 
-	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
-		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil,
-	})
-	if err != nil {
-		e.t.Fatalf("trust rule service: %v", err)
-	}
-
+	// The token service reads the reach from the store, so the trust rule
+	// service compares reaches as the server does.
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
+		Reach: access.ReachConfig{
+			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
+			Collections: nil, Units: e.store,
+		},
 		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil, Now: nil,
 		NewID: nil,
 	})
@@ -164,6 +178,15 @@ func (e *env) serve(authz identity.Authorizer) {
 	}
 
 	e.tokens = tokens
+
+	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
+		Reach:            tokens,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil,
+	})
+	if err != nil {
+		e.t.Fatalf("trust rule service: %v", err)
+	}
 
 	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: e.store.TrustRules(), Exchanges: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store,
@@ -195,11 +218,30 @@ func (e *env) serve(authz identity.Authorizer) {
 func (e *env) principal(ns namespace.Name, kind principal.Kind) string {
 	e.t.Helper()
 
-	at := time.UnixMilli(1_700_000_000_000).UTC()
 	id := ident.NewID(principal.IDPrefix)
+
+	return e.storePrincipal(id, "subject-"+id, ns, kind)
+}
+
+// principalWithSubject makes a principal of the given kind in ns, or of the
+// installation when ns is empty, with the subject subject, and returns its
+// ID.
+func (e *env) principalWithSubject(subject string, ns namespace.Name, kind principal.Kind) string {
+	e.t.Helper()
+
+	return e.storePrincipal(ident.NewID(principal.IDPrefix), subject, ns, kind)
+}
+
+// storePrincipal stores a principal with the ID id and the subject given,
+// of the given kind, in ns, or of the installation when ns is empty, and
+// returns id.
+func (e *env) storePrincipal(id, subject string, ns namespace.Name, kind principal.Kind) string {
+	e.t.Helper()
+
+	at := time.UnixMilli(1_700_000_000_000).UTC()
 	p := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: "subject-" + id,
-		DisplayName: id, Kind: kind, Source: principal.SourceLocal, Namespace: ns, GroupCount: 0,
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: kind, Source: principal.SourceLocal, Namespace: ns, GroupCount: 0,
 		BreakGlass: false,
 	}
 

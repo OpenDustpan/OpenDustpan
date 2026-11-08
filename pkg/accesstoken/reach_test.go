@@ -848,3 +848,49 @@ func TestBootstrapAdministratorPassesTheReachCheck(t *testing.T) {
 		t.Fatalf("create by a bootstrap administrator = %v, want it to pass", err)
 	}
 }
+
+// TestCheckReachFollowsTheTokenRule proves that CheckReach answers the
+// reach rule of a create or a rotation of a service token for a caller that
+// holds principal:manage-tokens on the installation: the refusal wraps
+// identity.ErrDenied and accesstoken.ErrReachExceeded and names the actions
+// of the principal that the caller does not hold, and a holder of the
+// action on the principal itself passes.
+func TestCheckReachFollowsTheTokenRule(t *testing.T) {
+	t.Parallel()
+
+	f := newReachFixture(t)
+	ctx := t.Context()
+
+	tests := []struct {
+		name   string
+		caller principal.Principal
+		target principal.Principal
+		want   refusal
+	}{
+		{
+			name:   "an account administrator checks an operator service principal",
+			caller: f.account, target: f.ops, want: exceeds("server:backup on the installation"),
+		},
+		{
+			name:   "an account administrator checks a service principal that holds less",
+			caller: f.account, target: f.plain, want: passes(),
+		},
+		{
+			name:   "a holder on the principal checks the operator service principal",
+			caller: f.holder, target: f.ops, want: passes(),
+		},
+		{
+			name:   "a holder on the installation checks a service principal that holds nothing",
+			caller: f.tm, target: f.bare, want: passes(),
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkChange(t, f.tokens.CheckReach(ctx, as(tc.caller), tc.target.ID), tc.target.ID, tc.want)
+		})
+	}
+}
