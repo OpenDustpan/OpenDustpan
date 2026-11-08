@@ -8,26 +8,30 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// readOnlyAdministration are the read-only actions of the administration
-// family. A read-only action cannot raise a privilege, so it is not
+// readOnlyServer are the read-only server actions: each server:read-*
+// action. A read-only action cannot raise a privilege, so it is not
 // sensitive.
-func readOnlyAdministration() []identity.Action {
+func readOnlyServer() []identity.Action {
 	return []identity.Action{
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerReadAccess,
 		identity.ActionServerReadTokens,
+		identity.ActionServerReadAudit,
+		identity.ActionServerReadSettings,
+		identity.ActionServerReadInstances,
+		identity.ActionServerReadGitHost,
 	}
 }
 
 // TestSensitiveActionsHoldsTheThreeFamilies proves that each action of the
 // operator family, the administration family and the delegation family is
-// sensitive, except the read-only actions of the administration family, and
-// that no action of the data family and the self family is.
+// sensitive, except the read-only server actions, and that no action of the
+// data family and the self family is.
 func TestSensitiveActionsHoldsTheThreeFamilies(t *testing.T) {
 	t.Parallel()
 
 	sensitive := access.SensitiveActions()
-	readOnly := readOnlyAdministration()
+	readOnly := readOnlyServer()
 
 	cases := []struct {
 		family access.Family
@@ -58,21 +62,21 @@ func TestSensitiveActionsHoldsTheThreeFamilies(t *testing.T) {
 	}
 }
 
-// TestSensitiveActionsExcludesReadOnlyAdministration proves that the
-// read-only actions of the administration family are not sensitive, and
-// that the actions of that family that write stay sensitive.
-func TestSensitiveActionsExcludesReadOnlyAdministration(t *testing.T) {
+// TestSensitiveActionsExcludesReadOnlyServer proves that the read-only
+// server actions are not sensitive, and that the actions that write stay
+// sensitive.
+func TestSensitiveActionsExcludesReadOnlyServer(t *testing.T) {
 	t.Parallel()
 
 	sensitive := access.SensitiveActions()
 
-	for _, action := range readOnlyAdministration() {
+	for _, action := range readOnlyServer() {
 		if access.IsSensitive(action) {
 			t.Errorf("IsSensitive(%q) = true, want false: a read-only action cannot raise a privilege", action)
 		}
 
 		if slices.Contains(sensitive, action) {
-			t.Errorf("SensitiveActions() holds %q, want no read-only administration action", action)
+			t.Errorf("SensitiveActions() holds %q, want no read-only server action", action)
 		}
 	}
 

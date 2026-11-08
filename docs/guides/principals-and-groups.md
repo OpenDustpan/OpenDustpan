@@ -198,11 +198,11 @@ A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
 installation or on a principal of the installation through its own grants. A
 sensitive action manages the installation or its access: each operator
 action, each administration action and each delegation action, except the
-read-only administration actions below. A grant inside one namespace, and a
-grant that a member holds as a person, do not make the group protected. A
-disabled principal of the installation counts: the group holds a grant on a
-principal of the installation, and the server can enable the principal
-again.
+read-only server actions: each `server:read-*` action. A grant inside one
+namespace, and a grant that a member holds as a person, do not make the
+group protected. A disabled principal of the installation counts: the group
+holds a grant on a principal of the installation, and the server can enable
+the principal again.
 
 The server stores a new group before it checks whether the group is
 protected. A new group holds no grant, so it is not protected.
@@ -218,10 +218,6 @@ These actions are sensitive:
 | `server:manage-git-host` | Registers the Git host app of the installation, and maps its installations to namespaces. |
 | `server:manage-settings` | Changes the settings of the installation. |
 | `server:observe` | Reads the metrics of the installation. |
-| `server:read-audit` | Reads the audit log of the installation. |
-| `server:read-git-host` | Reads the Git host app of the installation. |
-| `server:read-instances` | Reads the server processes of the installation. |
-| `server:read-settings` | Reads the settings of the installation. |
 | `server:restore` | Starts a restore, and replaces the data of the installation. |
 | `server:set-audit-chain` | Approves a change of the audit chain, on or off. |
 | `namespace:manage-ip-allowlist` | Changes the addresses that can reach a namespace. |
@@ -238,10 +234,18 @@ These actions are sensitive:
 | `server:restore-access` | Lets a restore replace the access tables, and so who has access. |
 | `principal:manage-tokens` | Makes the tokens of a service principal, and so acts as that principal with its grants. |
 
-The read-only administration actions `server:read-principals`,
-`server:read-access` and `server:read-tokens` are not in the table. A
-read-only action cannot raise a privilege, so a group that holds one is not
-protected, and the identity provider can still manage its members.
+Each `server:read-*` action is not in the table:
+`server:read-principals`, `server:read-access`, `server:read-tokens`,
+`server:read-audit`, `server:read-settings`, `server:read-instances` and
+`server:read-git-host`. A read-only action cannot raise a privilege, so a
+group that holds one is not protected, and the identity provider can still
+manage its members.
+
+A read that can return secret material stays sensitive. The settings read
+does not return the hidden values of the secret settings: each setting that
+can hold a credential carries the `Sensitive` mark, and the
+`TestSensitiveSettingsAreMarked` test keeps the mark on each such setting. A
+secret setting shows only whether it holds a value, never the value.
 
 An action that no family classifies fails the check closed. A read that
 cannot check the group answers `500` with the code `server.internal`. It

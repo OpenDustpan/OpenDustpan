@@ -155,7 +155,8 @@ func groupProtected(t *testing.T, g e2eGroup) bool {
 // checkGroupBecomesProtected gives the group a custom role with a sensitive
 // action on the installation, reads the group again, and checks that the
 // group is protected. The grant goes back at the end, so that the later
-// grant steps read the installation grants alone.
+// grant steps read the installation grants alone, and the group is not
+// protected again.
 func checkGroupBecomesProtected(ctx context.Context, t *testing.T, env *e2e.Env, g e2eGroup) {
 	t.Helper()
 
@@ -183,6 +184,15 @@ func checkGroupBecomesProtected(ctx context.Context, t *testing.T, env *e2e.Env,
 	principalCall(ctx, t, env, principalStep{
 		http.MethodDelete, "/api/server/grants/" + grant.ID, "", http.StatusNoContent,
 	}, nil)
+
+	var revoked e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + g.ID, "", http.StatusOK,
+	}, &revoked)
+
+	if groupProtected(t, revoked) {
+		t.Fatal("the group after the revoke of its sensitive grant is protected, want false")
+	}
 }
 
 // TestRevokeGrantByID revokes a namespace grant and a unit grant through

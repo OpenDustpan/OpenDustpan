@@ -1104,17 +1104,21 @@ func sensitiveGroupCases(t *testing.T, s reachStore, server identity.Object) []p
 	return out
 }
 
-// readOnlyAdministrationGroupCases stores one group per read-only action of
-// the administration family, with a custom role that holds only that action
-// on the installation, and returns the rows of the protected check. A
-// read-only action cannot raise a privilege, so the group is not protected.
-func readOnlyAdministrationGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
+// readOnlyServerGroupCases stores one group per read-only server action,
+// with a custom role that holds only that action on the installation, and
+// returns the rows of the protected check. A read-only action cannot raise
+// a privilege, so the group is not protected.
+func readOnlyServerGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
 	t.Helper()
 
 	actions := []identity.Action{
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerReadAccess,
 		identity.ActionServerReadTokens,
+		identity.ActionServerReadAudit,
+		identity.ActionServerReadSettings,
+		identity.ActionServerReadInstances,
+		identity.ActionServerReadGitHost,
 	}
 
 	out := make([]protectedCase, 0, len(actions))
@@ -1346,6 +1350,23 @@ func testGroupProtected(t *testing.T, s access.Store) {
 	mustCreateSensitiveGrantOn(t, rs, inNamespace, acme)
 	mustCreateSensitiveGrantOn(t, rs, collection, payments)
 
+	// A namespace-wide act-as edge reaches each service principal of the
+	// namespace. One of them holds a sensitive action on the installation,
+	// so the group is protected through the edge alone. A restored backup
+	// can hold such a grant: the suite writes the grant before the
+	// principal, so that the store does not refuse it for the namespace of
+	// the principal.
+	namespaceWide := mustCreateMemberGroup(t, rs, "grp-namespace-wide", "grp-namespace-wide", "prn-outsider")
+	nsTokens := newRole("rol-namespace-wide", "rol-namespace-wide", identity.ActionNamespaceManagePrincipalTokens)
+	mustCreateRole(t, rs, nsTokens)
+	mustCreateGrant(t, rs, newGrant("grt-namespace-wide", namespaceWide, nsTokens.ID, acme))
+
+	botRole := newRole("rol-bot-acme", "rol-bot-acme", identity.ActionServerManagePrincipals)
+	mustCreateRole(t, rs, botRole)
+	mustCreateGrant(t, rs, newGrant("grt-bot-acme", principalSubject("prn-bot-acme"), botRole.ID, server))
+
+	mustCreateBot(t, rs, "prn-bot-acme", "ci-acme", "acme")
+
 	named := []protectedCase{
 		{name: "a group with no grant is not protected", group: none.ID, want: false},
 		{name: "an operator grant of a member as a person does not protect its group", group: member.ID, want: false},
@@ -1359,13 +1380,17 @@ func testGroupProtected(t *testing.T, s access.Store) {
 			want:  false,
 		},
 		{name: "an act-as edge reaches the operator action of the service principal", group: actAs.ID, want: true},
+		{
+			name:  "a namespace-wide act-as edge reaches a service principal that holds a sensitive action",
+			group: namespaceWide.ID, want: true,
+		},
 		{name: "an unknown group is not protected", group: "grp-missing", want: false},
 	}
 
-	// One row per sensitive action, and one row per read-only
-	// administration action: a read-only action cannot raise a privilege.
+	// One row per sensitive action, and one row per read-only server
+	// action: a read-only action cannot raise a privilege.
 	actions := sensitiveGroupCases(t, rs, server)
-	readOnly := readOnlyAdministrationGroupCases(t, rs, server)
+	readOnly := readOnlyServerGroupCases(t, rs, server)
 
 	cases := make([]protectedCase, 0, len(named)+len(actions)+len(readOnly))
 	cases = append(cases, named...)

@@ -180,7 +180,7 @@ func (r Reach) protected(ctx context.Context) (bool, error) {
 				return false, fmt.Errorf("%w: %q", ErrUnknownAction, action)
 			}
 
-			if installWide && sensitiveFamily(family) && !readOnlyAdministration(action) {
+			if installWide && sensitiveFamily(family) && !readOnlyServer(action) {
 				protected = true
 			}
 		}
@@ -332,6 +332,10 @@ func GroupReachOf(ctx context.Context, cfg ReachConfig, groupID string) (Reach, 
 		return Reach{}, err
 	}
 
+	if err := w.expand(ctx); err != nil {
+		return Reach{}, err
+	}
+
 	if err := w.close(ctx); err != nil {
 		return Reach{}, err
 	}
@@ -360,10 +364,10 @@ func checkReachConfig(cfg ReachConfig) error {
 // group: the reach of the group alone holds a sensitive action on the
 // installation or on a principal of the installation. A sensitive action
 // is each action of the operator, the administration and the delegation
-// families, except the read-only actions of the administration family. A
-// namespace, a collection, a unit and a principal of a namespace are
-// confined to one namespace, so a sensitive action on them does not make
-// the group protected.
+// families, except the read-only server actions: each server:read-*
+// action. A namespace, a collection, a unit and a principal of a namespace
+// are confined to one namespace, so a sensitive action on them does not
+// make the group protected.
 //
 // A grant whose action no family classifies makes the check return an
 // error: a new action fails closed until it is classified. On an error the

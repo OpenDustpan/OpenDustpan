@@ -249,19 +249,23 @@ func Actions(f Family) []identity.Action {
 
 // SensitiveActions returns every sensitive action, sorted: each action of
 // the operator, the administration and the delegation families, except the
-// read-only actions of the administration family. The list comes from the
-// families, so a new action of one of them is in the list with no other
-// change.
+// read-only server actions: each server:read-* action. A read-only action
+// cannot raise a privilege, so it is not sensitive. server:observe and each
+// manage, backup, restore and maintenance action stay sensitive. The list
+// comes from the families, so a new action of one of them is in the list
+// with no other change.
 func SensitiveActions() []identity.Action {
-	out := Actions(FamilyOperator)
+	var out []identity.Action
 
-	for _, action := range Actions(FamilyAdministration) {
-		if !readOnlyAdministration(action) {
+	for _, family := range []Family{FamilyOperator, FamilyAdministration, FamilyDelegation} {
+		for _, action := range Actions(family) {
+			if readOnlyServer(action) {
+				continue
+			}
+
 			out = append(out, action)
 		}
 	}
-
-	out = append(out, Actions(FamilyDelegation)...)
 
 	sortActions(out)
 
@@ -270,14 +274,15 @@ func SensitiveActions() []identity.Action {
 
 // IsSensitive reports whether action is a sensitive action: its family is
 // the operator family, the administration family or the delegation family,
-// and it is not a read-only action of the administration family. It returns
-// false for an action that no family classifies: an unknown action is not
-// sensitive. A caller that must fail closed on an unknown action reads
-// FamilyOf itself, as the protected check of a group does.
+// and it is not a read-only server action: each server:read-* action. A
+// read-only action cannot raise a privilege, so it is not sensitive. It
+// returns false for an action that no family classifies: an unknown action
+// is not sensitive. A caller that must fail closed on an unknown action
+// reads FamilyOf itself, as the protected check of a group does.
 func IsSensitive(action identity.Action) bool {
 	family, ok := FamilyOf(action)
 
-	return ok && sensitiveFamily(family) && !readOnlyAdministration(action)
+	return ok && sensitiveFamily(family) && !readOnlyServer(action)
 }
 
 // sensitiveFamily reports whether a family holds sensitive actions: the
@@ -287,16 +292,22 @@ func sensitiveFamily(family Family) bool {
 		family == FamilyDelegation
 }
 
-// readOnlyAdministration reports whether action is a read-only action of
-// the administration family: it reads the principals, the access review or
-// the access tokens of the installation. A read-only action cannot raise a
-// privilege, so it is not sensitive: a group that holds one is not
-// protected, and the identity provider can still manage the group.
-func readOnlyAdministration(action identity.Action) bool {
+// readOnlyServer reports whether action is a read-only server action: it
+// reads the principals, the access review, the access tokens, the audit
+// log, the settings, the server instances or the Git host registration of
+// the installation. A read-only action cannot raise a privilege, so it is
+// not sensitive: a group that holds one is not protected, and the identity
+// provider can still manage the group. server:observe and each manage,
+// backup, restore and maintenance action stay sensitive.
+func readOnlyServer(action identity.Action) bool {
 	return slices.Contains([]identity.Action{
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerReadAccess,
 		identity.ActionServerReadTokens,
+		identity.ActionServerReadAudit,
+		identity.ActionServerReadSettings,
+		identity.ActionServerReadInstances,
+		identity.ActionServerReadGitHost,
 	}, action)
 }
 
