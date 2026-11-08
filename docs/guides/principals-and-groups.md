@@ -192,7 +192,62 @@ the same name, without regard to case, gets `409` with the code
 | `GET /api/server/principals/{id}/groups` | `server:read-principals` | `200`, the groups of a principal |
 
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
-`createdAt`, `updatedAt` and `memberCount`.
+`createdAt`, `updatedAt`, `memberCount` and `protected`.
+
+`protected` is `true` when the group holds a sensitive action on the
+installation or on a principal of the installation through its own grants. A
+sensitive action manages the installation or its access: each operator
+action, each administration action and each delegation action, except the
+read-only server actions: each `server:read-*` action. A grant inside one
+namespace, and a grant that a member holds as a person, do not make the
+group protected. A disabled principal of the installation counts: the group
+holds a grant on a principal of the installation, and the server can enable
+the principal again.
+
+The server stores a new group before it checks whether the group is
+protected. A new group holds no grant, so it is not protected.
+
+These actions are sensitive:
+
+| Action | Why it is sensitive |
+| --- | --- |
+| `installation:store-check` | Runs the deep check of the blob store, and writes throwaway objects in it. |
+| `server:backup` | Starts a backup, and reads the data of the installation. |
+| `server:delete-instance` | Deletes the version row of a server process. |
+| `server:maintenance` | Changes the installation between normal operation and maintenance mode. |
+| `server:manage-git-host` | Registers the Git host app of the installation, and maps its installations to namespaces. |
+| `server:manage-settings` | Changes the settings of the installation. |
+| `server:observe` | Reads the metrics of the installation. |
+| `server:restore` | Starts a restore, and replaces the data of the installation. |
+| `server:set-audit-chain` | Approves a change of the audit chain, on or off. |
+| `namespace:manage-ip-allowlist` | Changes the addresses that can reach a namespace. |
+| `server:create-namespace` | Creates a namespace, and gives its creator the admin role on it. |
+| `server:disable-audit-chain` | Turns the audit chain off. |
+| `server:manage-access` | Gives roles on the installation. |
+| `server:manage-groups` | Creates groups, changes their members, and so changes who holds the grants of each group. |
+| `server:manage-principals` | Creates, changes and deletes principals. |
+| `server:manage-roles` | Defines the actions that a custom role gives. |
+| `server:manage-service-tokens` | Makes the tokens of a service principal, and so acts as that principal with its grants. No route declares it, and a stored role can hold it. |
+| `server:manage-sign-in` | Changes the sign-in settings, and so who can sign in to the installation. |
+| `server:manage-token-policy` | Changes the token policy, and so how long a token works. |
+| `server:manage-tokens` | Revokes the personal tokens of other persons. |
+| `server:restore-access` | Lets a restore replace the access tables, and so who has access. |
+| `principal:manage-tokens` | Makes the tokens of a service principal, and so acts as that principal with its grants. |
+
+Each `server:read-*` action is not in the table:
+`server:read-principals`, `server:read-access`, `server:read-tokens`,
+`server:read-audit`, `server:read-settings`, `server:read-instances` and
+`server:read-git-host`. A read-only action cannot raise a privilege, so a
+group that holds one is not protected, and the identity provider can still
+manage its members.
+
+A read that can return secret material stays sensitive. A secret setting, for
+example the database URL or a credential, shows only whether it holds a value,
+never the value.
+
+An action that no family classifies fails the check closed. A read that
+cannot check the group answers `500` with the code `server.internal`. It
+never answers `protected: false`.
 
 A rename moves the members from the old name to the new name, so it can lift
 an access limit that names either name. Such a rename needs a site

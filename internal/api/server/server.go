@@ -94,6 +94,10 @@ type Config struct {
 	// the store keeps none: the token routes answer 501. Both SQL adapters
 	// keep them.
 	Tokens *accesstoken.Service
+	// Reach reads the reach of a group for the protected flag of the group
+	// routes. A zero config makes each of those routes fail closed: the
+	// check answers an error, never a false flag.
+	Reach access.ReachConfig
 	// Audit appends the entries of the scope @server: each change of a
 	// principal or a group writes one (ADR 60, decision 7). With Access set,
 	// it is required and must also keep the entries of each namespace
@@ -221,6 +225,7 @@ type Handler struct {
 	journal        JournalReporter
 	principals     *principal.Service
 	access         *access.Service
+	reach          access.ReachConfig
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
@@ -305,6 +310,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		journal:        cfg.Journal,
 		principals:     cfg.Principals,
 		access:         cfg.Access,
+		reach:          cfg.Reach,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
 		tempAdmins:     cfg.TempAdmins,
