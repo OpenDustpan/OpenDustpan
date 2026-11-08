@@ -11,12 +11,12 @@ import (
 func (s *backupStore) RunnerPorts() storetest.RunnerPorts {
 	r := s.Runners()
 
-	return storetest.RunnerPorts{Pools: r, Members: r}
+	return storetest.RunnerPorts{Pools: r, Members: r, Sessions: r}
 }
 
 // SeedRunnerControlRows implements storetest.RunnerSeeder.
-func (s *backupStore) SeedRunnerControlRows(ctx context.Context) error {
-	return sqlite.SeedRunnerControlRows(ctx, s.Store)
+func (s *backupStore) SeedRunnerControlRows(ctx context.Context, runnerID string) error {
+	return sqlite.SeedRunnerControlRows(ctx, s.Store, runnerID)
 }
 
 // CountRunnerControlRows implements storetest.RunnerSeeder.

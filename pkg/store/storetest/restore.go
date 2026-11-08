@@ -92,6 +92,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
 		{name: "a restore keeps the live durable operations", test: testRestoreKeepsDurableOperations},
 		{name: "a restore keeps the live runner control rows", test: testRestoreKeepsRunnerControlRows},
+		{
+			name: "a restore drops the runner credentials of a runner that the backup predates",
+			test: testRestoreDropsRunnerCredentials,
+		},
 		{name: "a restore leaves no replay record", test: testRestoreEmptiesIdempotencyRecords},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},

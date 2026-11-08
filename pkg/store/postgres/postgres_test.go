@@ -2275,7 +2275,7 @@ func (s *revocationStore) RunnerPools() runner.PoolStore {
 
 // RunnerPorts implements storetest.RevocationStore.
 func (s *revocationStore) RunnerPorts() storetest.RunnerPorts {
-	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners()}
+	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners(), Sessions: s.Runners()}
 }
 
 // KeepsUnknownKinds implements storetest.RevocationStore. The journal lives in

@@ -506,10 +506,18 @@ var keepControlStatements = []string{
 	`INSERT INTO main.installation (id, state, kind) SELECT id, state, kind FROM live.installation`,
 	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
 		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
+	// A handoff token and a job session name the runner of the claim of a
+	// live durable operation. The restored data can predate that runner, so
+	// the copy keeps the credential only while the staged file holds its
+	// runner: a credential of a runner that the restored data does not hold
+	// names no runner, and a later use must fail as unknown, never with a
+	// store error.
 	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +
-		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens`,
+		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
 	`INSERT INTO main.runner_sessions (` + runnerSessionColumns + `) ` +
-		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions`,
+		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
 	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
 		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
 	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
@@ -531,7 +539,8 @@ const nameLockColumns = `scope, name, sub, failures, locked_until_ms, level, las
 
 // The columns of the control tables of the runner protocol, for the copy of
 // the control tables. A restore keeps the live handoff tokens and job
-// sessions, because they name the claims of the live durable operations.
+// sessions, because they name the claims of the live durable operations, and
+// drops the ones whose runner the restored data does not hold.
 const (
 	runnerClaimColumns   = `operation_id, token, claimed_at_ms, job_id, phase`
 	runnerHandoffColumns = `sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms`
@@ -556,12 +565,112 @@ const auditChainCheckColumns = `id, checked_at_ms, invalid`
 const auditChainMarkColumns = `scope, epoch, sequence, marked_at_ms`
 
 // copyControlTables runs keepControlStatements in tx, which holds the live
-// database attached as live.
+// database attached as live, and records the runner credentials that the
+// copy does not keep. It reads them before the copy: the copy drops them, so
+// this read is the only record of them.
 func copyControlTables(ctx context.Context, tx *sql.Tx) error {
+	dropped, err := droppedRunnerCredentials(ctx, tx)
+	if err != nil {
+		return err
+	}
+
 	for _, stmt := range keepControlStatements {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("keep control tables: %w", err)
 		}
+	}
+
+	return appendDroppedRunnerCredentials(ctx, tx, dropped)
+}
+
+// droppedRunnerCredentials returns the live handoff tokens and job sessions
+// whose runner the staged file does not hold. It reads them in tx, which
+// holds the live database attached as live, before the copy replaces the
+// tables. The runner IDs come back sorted and with no repetition.
+func droppedRunnerCredentials(ctx context.Context, tx *sql.Tx) (backup.DroppedRunnerCredentials, error) {
+	const tokens = `SELECT t.runner_id FROM live.runner_handoff_tokens t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	const sessions = `SELECT t.runner_id FROM live.runner_sessions t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	tokenRunners, err := runnerIDsOf(ctx, tx, tokens)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	sessionRunners, err := runnerIDsOf(ctx, tx, sessions)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	return backup.NewDroppedRunnerCredentials(
+		int64(len(tokenRunners)), int64(len(sessionRunners)), append(tokenRunners, sessionRunners...),
+	), nil
+}
+
+// runnerIDsOf runs query in tx and returns the runner_id of every row.
+func runnerIDsOf(ctx context.Context, tx *sql.Tx, query string) ([]string, error) {
+	var out []string
+
+	if err := readRunnerIDs(ctx, tx, query, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// readRunnerIDs runs query in tx and appends the runner_id of every row to
+// out. It returns the close error of the rows too.
+func readRunnerIDs(ctx context.Context, tx *sql.Tx, query string, out *[]string) (err error) {
+	rows, queryErr := tx.QueryContext(ctx, query)
+	if queryErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", queryErr)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close dropped runner credentials: %w", closeErr))
+		}
+	}()
+
+	for rows.Next() {
+		var id string
+
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("read dropped runner credentials: %w", scanErr)
+		}
+
+		*out = append(*out, id)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", rowsErr)
+	}
+
+	return nil
+}
+
+// appendDroppedRunnerCredentials appends the audit entry of the dropped
+// runner credentials in tx, which holds the staged file, after the copy
+// replaced the rows of the staged file. It writes no entry when the copy
+// dropped nothing. The entry follows the chain state that the swap kept.
+func appendDroppedRunnerCredentials(
+	ctx context.Context, tx *sql.Tx, dropped backup.DroppedRunnerCredentials,
+) error {
+	if dropped.Empty() {
+		return nil
+	}
+
+	q := db.New(tx)
+
+	nowMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
+		return fmt.Errorf("append dropped runner credentials entry: %w", err)
 	}
 
 	return nil

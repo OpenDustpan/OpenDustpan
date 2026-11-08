@@ -392,6 +392,14 @@ account. It keeps that account enabled and writes an entry with the outcome
 `denied` and the reason `principal.last-break-glass` (see
 [Keep a break-glass account](break-glass-accounts.md)).
 
+A restore keeps the live runner handoff tokens and job sessions. It drops a
+handoff token or a job session whose runner the backup does not hold, for
+example a runner that joined after the backup. When it drops one or more, the
+restore writes one entry in `@server` with the action
+`restore:drop-runner-credentials`. The entry names the count of the dropped
+handoff tokens, the count of the dropped job sessions and the ID of each
+runner. It never names a token value or a session secret.
+
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal
 operation, or in an earlier stay, belongs to the data that the restore

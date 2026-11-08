@@ -1,14 +1,28 @@
 package storetest
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // testRestoreKeepsRunnerControlRows proves that a restore keeps the live
 // control rows of the runner protocol in the destination: a live claim,
 // handoff token, job session and nonce are still there after the swap. The
 // rows describe claims of the live durable operations, so a restore that drops
-// them leaves a runner with a claim that the server no longer knows.
+// them leaves a runner with a claim that the server no longer knows. The
+// control rows name the runner of the restored data, so the copy keeps them.
 func testRestoreKeepsRunnerControlRows(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -23,11 +37,15 @@ func testRestoreKeepsRunnerControlRows(t *testing.T, newStore RestoreFactory) {
 	ps := portableRestoreStores(t, src, dst)
 	ctx := t.Context()
 
-	if err := seeder.SeedRunnerControlRows(ctx); err != nil {
+	seed := seedBackupStore(t, ps.src)
+	if seed.runners == nil {
+		t.Skip("the source store keeps no runner rows")
+	}
+
+	if err := seeder.SeedRunnerControlRows(ctx, seed.runners.runner.ID); err != nil {
 		t.Fatalf("seed the live runner control rows: %v", err)
 	}
 
-	seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 
 	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
@@ -48,4 +66,181 @@ func testRestoreKeepsRunnerControlRows(t *testing.T, newStore RestoreFactory) {
 			t.Errorf("rows of control table %q after the restore = %d, want the 1 live row", table, counts[table])
 		}
 	}
+
+	// The restore kept every row, so it records no drop.
+	if entries := runnerDropEntries(t, ps.dst); len(entries) != 0 {
+		t.Errorf("audit entries of the dropped runner credentials = %d, want none: the restore kept every row",
+			len(entries))
+	}
 }
+
+// testRestoreDropsRunnerCredentials proves that a restore drops a live
+// handoff token and a live job session whose runner the restored data does
+// not hold: the backup predates the runner, so a later use of either
+// credential fails as unknown, never with a store error.
+func testRestoreDropsRunnerCredentials(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	dst := newStore(t)
+
+	seeder, ok := dst.(RunnerSeeder)
+	if !ok {
+		t.Skip("the store keeps no runner credentials")
+	}
+
+	ps := portableRestoreStores(t, src, dst)
+	ctx := t.Context()
+
+	// The backup predates the runner.
+	seedBackupStore(t, ps.src)
+	sink, sum, files := exportPortable(t, ps.src)
+
+	// The live installation registers a runner after the backup and issues
+	// a handoff token and a job session for it.
+	acme := newNamespace(t, ps.dst, "acme")
+	ports := seeder.RunnerPorts()
+	seeded := joinBackupRunner(t, ports, acme, "linux-1")
+	credentials := issueRunnerCredentials(t, ps.dst, ports, seeded.pool, seeded.runner)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	if _, err := ports.Sessions.OpenSession(ctx, credentials.token.SHA256, newRunnerKey(t), now()); !errors.Is(
+		err, runner.ErrNotFound,
+	) {
+		t.Errorf("OpenSession with the handoff token of a runner that the restored data does not hold = %v, "+
+			"want runner.ErrNotFound", err)
+	}
+
+	if _, err := ports.Sessions.Session(ctx, credentials.session.ID); !errors.Is(err, runner.ErrNotFound) {
+		t.Errorf("Session of a runner that the restored data does not hold = %v, want runner.ErrNotFound", err)
+	}
+
+	// The swap drops the two credentials and records the drop, in the
+	// transaction of the copy.
+	entries := runnerDropEntries(t, ps.dst)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries of the dropped runner credentials = %d, want 1", len(entries))
+	}
+
+	entry := entries[0]
+
+	for _, want := range []string{"1 handoff token", "1 job session", seeded.runner.ID} {
+		if !strings.Contains(entry.Object, want) {
+			t.Errorf("audit object = %q, want it to hold %q", entry.Object, want)
+		}
+	}
+
+	// The entry names the counts and the runner, never the credential.
+	text := fmt.Sprintf("%+v", entry)
+
+	if strings.Contains(text, credentials.token.SHA256) {
+		t.Errorf("audit entry = %s, want it to hold no token hash", text)
+	}
+
+	if strings.Contains(text, runnerHandoffSecret) {
+		t.Errorf("audit entry = %s, want it to hold no token value", text)
+	}
+}
+
+// runnerDropEntries returns the audit entries in the scope @server whose
+// action is the drop of the runner credentials, newest first. A store
+// without the audit port fails the test.
+func runnerDropEntries(t *testing.T, s RestoreStore) []audit.Entry {
+	t.Helper()
+
+	store, ok := any(s).(audit.Store)
+	if !ok {
+		t.Fatal("the store keeps no audit log")
+	}
+
+	var out []audit.Entry
+
+	for page := 1; ; page++ {
+		listing, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			t.Fatalf("list the audit log: %v", err)
+		}
+
+		for i := range listing.Entries {
+			if listing.Entries[i].Action == backup.ActionDroppedRunnerCredentials {
+				out = append(out, listing.Entries[i])
+			}
+		}
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			return out
+		}
+	}
+}
+
+// runnerCredentials is the handoff token and the job session that the token
+// opened for one live claim of a runner.
+type runnerCredentials struct {
+	token   runner.HandoffToken
+	session runner.Session
+}
+
+// issueRunnerCredentials claims one operation of pool for the runner r,
+// issues a handoff token for the claim and opens the job session of the
+// token, through the ports.
+func issueRunnerCredentials(
+	t *testing.T, s RestoreStore, ports RunnerPorts, pool runner.Pool, r runner.Runner,
+) runnerCredentials {
+	t.Helper()
+
+	ctx := t.Context()
+	ops := s.DurableOperationsPort()
+	kind := job.RunnerKind(pool.ID)
+
+	start := durable.StartRequest{Key: "restore-runner-credentials", Kind: kind, Version: 0, Input: nil}
+	if _, _, err := ops.Start(ctx, start); err != nil {
+		t.Fatalf("start the durable operation of the runner credentials: %v", err)
+	}
+
+	claimed, err := ops.Claim(ctx, durable.ClaimRequest{
+		Owner: r.ID, Kinds: []durable.Kind{kind}, MaxVersions: nil, Lease: time.Hour, TakeCanceled: false,
+	})
+	if err != nil {
+		t.Fatalf("claim the durable operation of the runner credentials: %v", err)
+	}
+
+	digest := sha256.Sum256([]byte(runnerHandoffSecret))
+	token := runner.HandoffToken{
+		SHA256: hex.EncodeToString(digest[:]), Operation: string(claimed.ID), Token: claimed.Claim.Token,
+		Runner: r.ID, IssuedAt: now(), ExpiresAt: now().Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+	}
+
+	if issueErr := ports.Sessions.IssueHandoffToken(ctx, token, claimed.Claim); issueErr != nil {
+		t.Fatalf("issue the handoff token of the runner credentials: %v", issueErr)
+	}
+
+	session, err := ports.Sessions.OpenSession(ctx, token.SHA256, newRunnerKey(t), now())
+	if err != nil {
+		t.Fatalf("open the job session of the runner credentials: %v", err)
+	}
+
+	return runnerCredentials{token: token, session: session}
+}
+
+// newRunnerKey makes a new Ed25519 public key for a job session.
+func newRunnerKey(t *testing.T) runner.Key {
+	t.Helper()
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate a runner key: %v", err)
+	}
+
+	return runner.Key{Public: pub, CreatedAt: time.Time{}}
+}
+
+// runnerHandoffSecret is the secret of the handoff token of the restore
+// cases. The store keeps only its hash.
+const runnerHandoffSecret = runner.HandoffTokenPrefix + "restore-secret-0123456789"
