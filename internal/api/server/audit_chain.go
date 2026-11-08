@@ -3,10 +3,10 @@ package server
 // Audit chain routes of the installation API: read the state of the audit
 // chain, and approve a change to the setting of the instance.
 //
-// GET /api/server/audit/chain answers the stored state, the setting of the
+// GET /api/dustpan/v1/audit/chain answers the stored state, the setting of the
 // instance that answers, whether a change waits and whether its migration
 // runs. It needs server:read-audit.
-// POST /api/server/audit/chain approves the change to the setting of the
+// POST /api/dustpan/v1/audit/chain approves the change to the setting of the
 // instance that receives it, and starts the migration: it answers 202. It
 // needs server:set-audit-chain. On an instance with the setting off it also
 // needs server:disable-audit-chain, and a fresh MFA step.
@@ -64,12 +64,15 @@ type auditChainResponse struct {
 	Migrating bool   `json:"migrating"`
 }
 
+// auditChainPath is the route of the audit chain state and of its approval.
+const auditChainPath = "/api/dustpan/v1/audit/chain"
+
 // auditChainRoutes returns the audit chain rows of the route table.
 func (h *Handler) auditChainRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/audit/chain",
+			Path:    auditChainPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerReadAudit},
 			Resolve: resolveServer, ActionsFor: nil,
@@ -77,7 +80,7 @@ func (h *Handler) auditChainRoutes() []Route {
 		},
 		{
 			Method: http.MethodPost,
-			Path:   "/api/server/audit/chain",
+			Path:   auditChainPath,
 			Scope:  ScopeAuthorized,
 			Actions: []identity.Action{
 				identity.ActionServerSetAuditChain,

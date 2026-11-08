@@ -165,7 +165,7 @@ func serveBenchNamespaceRead(b *testing.B, srv *dustpan.Server) int {
 	req := httptest.NewRequestWithContext(
 		b.Context(),
 		http.MethodGet,
-		"/api/server/namespaces/acme/override-switches",
+		"/api/dustpan/v1/namespaces/acme/override-switches",
 		nil,
 	)
 	req.RemoteAddr = "198.51.100.7:1234"

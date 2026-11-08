@@ -17,7 +17,7 @@ import (
 // limits of maintenance mode, 8 seconds.
 const auditChainWait = 60 * time.Second
 
-// auditChainState is the answer of GET /api/server/audit/chain.
+// auditChainState is the answer of GET /api/dustpan/v1/audit/chain.
 type auditChainState struct {
 	State     string `json:"state"`
 	Setting   string `json:"setting"`
@@ -104,9 +104,9 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 
 	checkAuditChainTokenRefused(ctx, t, env)
 
-	status, body := console(e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""})
+	status, body := console(e2e.SessionRequest{Method: http.MethodPost, Path: "/api/dustpan/v1/audit/chain", Body: ""})
 	if status != http.StatusAccepted {
-		t.Fatalf("POST /api/server/audit/chain answers %d, want %d (%s)", status, http.StatusAccepted, body)
+		t.Fatalf("POST /api/dustpan/v1/audit/chain answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
 
 	deadline := time.Now().Add(auditChainWait)
@@ -133,13 +133,13 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 func checkAuditChainTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/audit/chain", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/audit/chain", "")
 	if err != nil {
 		t.Fatalf("approve the audit chain change with an access token: %v", err)
 	}
 
 	if status != http.StatusForbidden || !strings.Contains(body, "mfa.fresh-step-required") {
-		t.Fatalf("POST /api/server/audit/chain with an access token answers %d %s, want 403 with "+
+		t.Fatalf("POST /api/dustpan/v1/audit/chain with an access token answers %d %s, want 403 with "+
 			"mfa.fresh-step-required", status, body)
 	}
 }
@@ -148,13 +148,13 @@ func checkAuditChainTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env
 func readAuditChain(ctx context.Context, t *testing.T, env *e2e.Env) auditChainState {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/audit/chain", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/audit/chain", "")
 	if err != nil {
 		t.Fatalf("read the audit chain: %v", err)
 	}
 
 	if status != http.StatusOK {
-		t.Fatalf("GET /api/server/audit/chain answers %d, want %d (%s)", status, http.StatusOK, body)
+		t.Fatalf("GET /api/dustpan/v1/audit/chain answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
 
 	var got auditChainState

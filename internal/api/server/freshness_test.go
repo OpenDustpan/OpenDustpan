@@ -245,7 +245,7 @@ func freshOtherRoutes(seedAllowlist func(*testing.T, providerEnv) string) []fres
 			`{"inactivitySeconds":0}`,
 			http.StatusOK,
 		},
-		{nil, "approve audit chain", http.MethodPost, "/api/server/audit/chain", "", http.StatusAccepted},
+		{nil, "approve audit chain", http.MethodPost, "/api/dustpan/v1/audit/chain", "", http.StatusAccepted},
 		{nil, "set IP allowlist", http.MethodPut, ipAllowlistTarget, ipAllowlistBody, http.StatusOK},
 		{seedAllowlist, "remove IP allowlist", http.MethodDelete, ipAllowlistTarget, "", http.StatusNoContent},
 	}

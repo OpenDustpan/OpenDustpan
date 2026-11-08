@@ -385,9 +385,9 @@ func TestNoWorkerRefusesTheStartOfAnOperation(t *testing.T) {
 	srv := startWorkerlessServer(t, "api")
 	pause(t, stuckWait)
 
-	status, body := sendRequest(t, http.MethodPost, srv.base+"/api/server/audit/chain")
+	status, body := sendRequest(t, http.MethodPost, srv.base+"/api/dustpan/v1/audit/chain")
 	if status != http.StatusServiceUnavailable {
-		t.Fatalf("POST /api/server/audit/chain: status %d, want 503 (body %q)", status, body)
+		t.Fatalf("POST /api/dustpan/v1/audit/chain: status %d, want 503 (body %q)", status, body)
 	}
 
 	if !strings.Contains(body, "opendustpan serve --components worker") {
@@ -429,9 +429,9 @@ func TestStartIsAdmittedWhenAWorkerMayRun(t *testing.T) {
 			srv := startWorkerlessServer(t, tc.raw)
 			pause(t, tc.wait)
 
-			status, body := sendRequest(t, http.MethodPost, srv.base+"/api/server/audit/chain")
+			status, body := sendRequest(t, http.MethodPost, srv.base+"/api/dustpan/v1/audit/chain")
 			if status == http.StatusServiceUnavailable {
-				t.Fatalf("POST /api/server/audit/chain: status %d, want any other status (body %q)", status, body)
+				t.Fatalf("POST /api/dustpan/v1/audit/chain: status %d, want any other status (body %q)", status, body)
 			}
 		})
 	}

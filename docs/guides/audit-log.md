@@ -421,7 +421,7 @@ When they agree, the server starts normally.
 
 When they differ, the server enters maintenance mode and changes nothing yet.
 A person approves the change in the console.
-The console calls `POST /api/server/audit/chain`.
+The console calls `POST /api/dustpan/v1/audit/chain`.
 The approval sets the chain to the setting of the server that receives it.
 
 Sign in to the console before maintenance mode starts.

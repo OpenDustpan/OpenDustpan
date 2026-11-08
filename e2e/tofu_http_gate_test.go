@@ -233,7 +233,7 @@ func (g *httpGateRun) denyUnlockedWrite() {
 	lineage, serial := overrideCurrent(g.t, g.env, "http gate: current state for the unlocked push", g.current)
 	push := overridePushDocument(g.t, pulled, lineage, serial+1)
 
-	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	nsSwitches := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/override-switches"
 	unitSwitches := g.workspace + "/override-switches"
 
 	overrideSwitches(g.t, g.env, "http gate: turn on the namespace switches", nsSwitches,

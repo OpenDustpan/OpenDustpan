@@ -395,7 +395,7 @@ func deletedUnitAllowEntries() []AllowEntry {
 				"steps purge one after the CLI deletes it.",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/server/deleted-units/sweep",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/deleted-units/sweep",
 			CoveringTest: deletedUnitCoveringTest,
 			Reason: "Operator route: no CLI runs the retention sweep. The harness " +
 				"steps run it while a unit is in retention and after a purge.",

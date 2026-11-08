@@ -392,7 +392,7 @@ var freshAuthRules = []freshAuthRule{
 		[]string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete},
 	},
 	{regexp.MustCompile(`^/api/server/roles(?:/[^/]+)?$`), []string{http.MethodPost, http.MethodPatch}},
-	{regexp.MustCompile(`^/api/server/audit/chain$`), []string{http.MethodPost}},
+	{regexp.MustCompile(`^/api/dustpan/v1/audit/chain$`), []string{http.MethodPost}},
 	{
 		regexp.MustCompile(`^/api/server/(?:namespaces/[^/]+(?:/collections/[^/]+)?/|principals/[^/]+/)?grants$`),
 		[]string{http.MethodPost},
