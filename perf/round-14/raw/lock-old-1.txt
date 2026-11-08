@@ -1,0 +1,21 @@
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.333 p95=0.613 p99=1.302
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.331 p95=0.588 p99=1.110
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40285
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.820 p95=1.139 p99=3.071
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.757 p95=1.021 p99=1.776
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=67028
+ok  	opendustpan.org/opendustpan/pkg/dustpan	2.853s
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.360 p95=0.625 p99=1.236
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.365 p95=0.621 p99=1.131
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40271
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.877 p95=1.075 p99=2.134
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.820 p95=1.070 p99=2.042
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66894
+ok  	opendustpan.org/opendustpan/pkg/dustpan	2.954s
+    perf12_manuallock_svc_test.go:55: PERF12 manuallock-svc-lock n=2000 p50=0.360 p95=0.626 p99=1.752
+    perf12_manuallock_svc_test.go:56: PERF12 manuallock-svc-unlock n=2000 p50=0.356 p95=0.619 p99=1.298
+    perf12_manuallock_svc_test.go:57: PERF12 manuallock-svc-pair allocs/pair=895 bytes/pair=40265
+    perf12_manuallock_test.go:50: PERF12 manuallock-put n=500 p50=0.868 p95=1.224 p99=2.230
+    perf12_manuallock_test.go:51: PERF12 manuallock-delete n=500 p50=0.826 p95=1.114 p99=1.700
+    perf12_manuallock_test.go:52: PERF12 manuallock-pair allocs/pair=1218 bytes/pair=66925
+ok  	opendustpan.org/opendustpan/pkg/dustpan	2.998s

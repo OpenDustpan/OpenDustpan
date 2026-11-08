@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/ipallow
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkGateAuthorize/inside-last-4         	 2734807	       420.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2703278	       462.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2053122	       530.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2610373	       453.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2625045	       433.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/inside-last-4         	 2970166	       446.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1426287	       851.5 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1213726	       986.9 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1462429	       832.3 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1302108	       915.2 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1357069	       874.0 ns/op	     144 B/op	       4 allocs/op
+BenchmarkGateAuthorize/outside-all-4         	 1313706	       932.6 ns/op	     144 B/op	       4 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/ipallow	14.388s

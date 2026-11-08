@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/workspace
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkScanPointersManyPointersManyMembers-4   	      10	 105725204 ns/op	46055172 B/op	  501251 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	      10	 112447124 ns/op	46054577 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	      10	 103663036 ns/op	46054582 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	      10	 111436259 ns/op	46054587 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	      12	 103819852 ns/op	46054602 B/op	  501250 allocs/op
+BenchmarkScanPointersManyPointersManyMembers-4   	      10	 100301867 ns/op	46054582 B/op	  501250 allocs/op
+BenchmarkUpload32MiB-4                           	       4	 344738957 ns/op	 6743070 B/op	  226080 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 347598010 ns/op	 6739848 B/op	  226061 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 342831910 ns/op	 6736306 B/op	  226059 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 366360062 ns/op	 6737890 B/op	  226059 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 352789075 ns/op	 6739586 B/op	  226058 allocs/op
+BenchmarkUpload32MiB-4                           	       3	 337750451 ns/op	 6736205 B/op	  226058 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/workspace	21.595s

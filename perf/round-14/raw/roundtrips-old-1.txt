@@ -1,0 +1,19 @@
+    roundtrips_test.go:892: opentofu upload: 41 round trips, budget 41
+    roundtrips_test.go:892: pulumi stack rm: 38 round trips, budget 38
+    roundtrips_test.go:892: pulumi cancel: 31 round trips, budget 31
+    roundtrips_test.go:892: pulumi stack rename: 35 round trips, budget 35
+    roundtrips_test.go:892: pulumi stack restore: 66 round trips, budget 66
+    roundtrips_test.go:892: pulumi stack import: 65 round trips, budget 65
+    roundtrips_test.go:892: pulumi checkpoint save: 13 round trips, budget 13
+    roundtrips_test.go:892: pulumi update cycle: 62 round trips, budget 62
+    roundtrips_conflict_test.go:61: restore of 3 stacks and 3 workspaces without the failed swap: 1083 round trips, as the model gives
+    roundtrips_conflict_test.go:62: restore of 3 stacks and 3 workspaces with one failed swap: 1132 round trips, as the model gives
+    roundtrips_test.go:892: pulumi event batch of 1000 events: 1010 round trips, budget 1010
+    roundtrips_test.go:892: unlock: 11 round trips, budget 11
+    roundtrips_test.go:892: lock, upload and unlock: 87 round trips, budget 87
+    roundtrips_test.go:1090: backup of 3 stacks and 3 workspaces: 367 round trips, as the model gives
+    roundtrips_test.go:1090: restore of 3 stacks and 3 workspaces: 1083 round trips, as the model gives
+    roundtrips_test.go:1090: backup of 30 stacks and 30 workspaces: 448 round trips, as the model gives
+    roundtrips_test.go:1090: restore of 30 stacks and 30 workspaces: 1218 round trips, as the model gives
+    roundtrips_test.go:892: lock: 31 round trips, budget 31
+ok  	opendustpan.org/opendustpan/internal/servertest	7.134s

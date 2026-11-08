@@ -1,0 +1,48 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/stack
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDeltaApply256K-4               	   10000	    103440 ns/op	2538.06 MB/s	  271704 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    9273	    118056 ns/op	2223.84 MB/s	  271730 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	    6978	    145336 ns/op	1806.42 MB/s	  271737 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	   10125	    119786 ns/op	2191.73 MB/s	  271717 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	   12163	     96849 ns/op	2710.80 MB/s	  271705 B/op	      11 allocs/op
+BenchmarkDeltaApply256K-4               	   12854	     92606 ns/op	2835.00 MB/s	  271715 B/op	      11 allocs/op
+BenchmarkDeltaApply1M-4                 	    1884	    698155 ns/op	1502.11 MB/s	 1059510 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1610	    736355 ns/op	1424.18 MB/s	 1059493 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1488	    709671 ns/op	1477.73 MB/s	 1059548 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1347	    807215 ns/op	1299.16 MB/s	 1059471 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1672	    738331 ns/op	1420.37 MB/s	 1059542 B/op	      14 allocs/op
+BenchmarkDeltaApply1M-4                 	    1578	    795284 ns/op	1318.65 MB/s	 1059460 B/op	      14 allocs/op
+BenchmarkDeploymentShape1M-4            	     796	   1491035 ns/op	 703.34 MB/s	   51871 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     658	   1561203 ns/op	 671.73 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     776	   1513938 ns/op	 692.70 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     714	   1590421 ns/op	 659.39 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     654	   1648152 ns/op	 636.29 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShape1M-4            	     760	   1601549 ns/op	 654.80 MB/s	   51872 B/op	    8038 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     895	   1490177 ns/op	 703.76 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     734	   1542667 ns/op	 679.82 MB/s	   51967 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     878	   1480342 ns/op	 708.44 MB/s	   51967 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     769	   1525880 ns/op	 687.29 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     825	   1615540 ns/op	 649.15 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced1M-4   	     814	   1503355 ns/op	 697.59 MB/s	   51968 B/op	    8041 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     208	   5548924 ns/op	 755.91 MB/s	  205887 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     195	   5795036 ns/op	 723.80 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     211	   6136921 ns/op	 683.48 MB/s	  205887 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     190	   5894774 ns/op	 711.56 MB/s	  205887 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     192	   5955669 ns/op	 704.28 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkDeploymentShapeSequenced4M-4   	     212	   5711228 ns/op	 734.43 MB/s	  205888 B/op	   32091 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2671	    445835 ns/op	 588.87 MB/s	  821910 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2150	    550478 ns/op	 476.93 MB/s	  821906 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2901	    406685 ns/op	 645.56 MB/s	  821905 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2832	    533156 ns/op	 492.42 MB/s	  821907 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2164	    542445 ns/op	 483.99 MB/s	  821907 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedCompress-4        	    2341	    545137 ns/op	 481.60 MB/s	  821906 B/op	      21 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13995	     91409 ns/op	  34.37 MB/s	   41299 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13170	     93962 ns/op	  33.44 MB/s	   41301 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   12187	     96918 ns/op	  32.42 MB/s	   41300 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   12255	     95884 ns/op	  32.77 MB/s	   41299 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   12753	     94765 ns/op	  33.16 MB/s	   41297 B/op	       8 allocs/op
+BenchmarkGzipBestSpeedDecompress-4      	   13286	     92476 ns/op	  33.98 MB/s	   41300 B/op	       8 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/stack	50.573s

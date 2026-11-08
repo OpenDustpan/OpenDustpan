@@ -1,0 +1,16 @@
+    --- FAIL: TestRoundTripsOfRequests/lock (0.87s)
+    --- FAIL: TestRoundTripsOfRequests/lock,_upload_and_unlock (0.99s)
+    --- FAIL: TestRoundTripsOfRequests/opentofu_upload (0.95s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_cancel (0.87s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_checkpoint_save (0.97s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_event_batch_of_1000_events (1.25s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_stack_import (0.69s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_stack_rename (0.90s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_stack_restore (0.43s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_stack_rm (0.92s)
+    --- FAIL: TestRoundTripsOfRequests/pulumi_update_cycle (1.00s)
+    --- FAIL: TestRoundTripsOfRequests/unlock (0.97s)
+--- FAIL: TestRoundTripsOfRequests (0.00s)
+FAIL
+FAIL
+FAIL	opendustpan.org/opendustpan/internal/servertest	3.059s

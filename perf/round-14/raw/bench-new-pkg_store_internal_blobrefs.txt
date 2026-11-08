@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/store/internal/blobrefs
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkCollectorChunks-4   	       2	 886718678 ns/op	215006236 B/op	 3397121 allocs/op
+BenchmarkCollectorChunks-4   	       2	 846226382 ns/op	215002012 B/op	 3397100 allocs/op
+BenchmarkCollectorChunks-4   	       2	 819906130 ns/op	215009172 B/op	 3397151 allocs/op
+BenchmarkCollectorChunks-4   	       2	 914966776 ns/op	215003228 B/op	 3397115 allocs/op
+BenchmarkCollectorChunks-4   	       2	 867445491 ns/op	215007180 B/op	 3397127 allocs/op
+BenchmarkCollectorChunks-4   	       2	 975300472 ns/op	215007404 B/op	 3397130 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/store/internal/blobrefs	16.281s

@@ -1,0 +1,48 @@
+goos: linux
+goarch: amd64
+pkg: opendustpan.org/opendustpan/pkg/dustpan
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIPAllowlistServeNamespaceRead-4      	   19801	     62833 ns/op	   13424 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   20419	     60941 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   18928	     64478 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   17149	     69117 ns/op	   13419 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   20556	     59072 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceRead-4      	   18626	     62700 ns/op	   13417 B/op	     161 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   26336	     43262 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   25239	     46363 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   28828	     43284 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   28276	     42501 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   28585	     40475 ns/op	   12263 B/op	     128 allocs/op
+BenchmarkIPAllowlistServeNamespaceReadOff-4   	   28957	     44134 ns/op	   12262 B/op	     128 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      93	  13634092 ns/op	 1153652 B/op	   33012 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      79	  15264908 ns/op	 1153558 B/op	   33013 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      76	  16072523 ns/op	 1153484 B/op	   33013 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      78	  15091431 ns/op	 1153320 B/op	   33012 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      73	  17320375 ns/op	 1153846 B/op	   33014 allocs/op
+BenchmarkIPAllowlistAuthorize1000Stacks-4     	      73	  15713644 ns/op	 1154164 B/op	   33014 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2229	    487192 ns/op	   31326 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    3006	    537293 ns/op	   31339 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2097	    557477 ns/op	   31354 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    1833	    558753 ns/op	   31362 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2073	    572126 ns/op	   31344 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/with-check-4       	    2818	    442678 ns/op	   31321 B/op	     619 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    3517	    367486 ns/op	   27252 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    3219	    360631 ns/op	   27276 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    3843	    375524 ns/op	   27261 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    4132	    399387 ns/op	   27274 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    4124	    344956 ns/op	   27235 B/op	     498 allocs/op
+BenchmarkLeaseCheck/sqlite/without-check-4    	    2900	    363557 ns/op	   27279 B/op	     498 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1210	    881498 ns/op	   29683 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1479	    830007 ns/op	   29651 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1149	    934553 ns/op	   29488 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1458	    863286 ns/op	   29521 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1380	    898760 ns/op	   29598 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/with-check-4     	    1274	    864517 ns/op	   29522 B/op	     329 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    2067	    598795 ns/op	   25123 B/op	     272 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    2044	    640904 ns/op	   25088 B/op	     272 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    1924	    608628 ns/op	   25104 B/op	     272 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    1725	    608330 ns/op	   25067 B/op	     272 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    1935	    548930 ns/op	   25084 B/op	     272 allocs/op
+BenchmarkLeaseCheck/postgres/without-check-4  	    2041	    632774 ns/op	   25109 B/op	     272 allocs/op
+PASS
+ok  	opendustpan.org/opendustpan/pkg/dustpan	55.034s
