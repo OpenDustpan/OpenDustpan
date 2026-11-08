@@ -574,7 +574,9 @@ func suspendSubscriptionsOf(ctx context.Context, q *db.Queries, c sinkChange, e 
 
 		skipErr := q.SkipPendingNotificationDeliveriesOfSubscription(
 			ctx,
-			db.SkipPendingNotificationDeliveriesOfSubscriptionParams{Scope: scope.String(), SubscriptionID: subs[i].ID},
+			db.SkipPendingNotificationDeliveriesOfSubscriptionParams{
+				Scope: scope.String(), SubscriptionID: subs[i].ID, DeliveredAtMs: e.AtMs(),
+			},
 		)
 		if skipErr != nil {
 			return fmt.Errorf("skip pending deliveries: %w", skipErr)
@@ -1236,7 +1238,9 @@ func (k NotificationStore) CountBefore(
 }
 
 // Redeliver implements notify.Deliveries.
-func (k NotificationStore) Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+func (k NotificationStore) Redeliver(
+	ctx context.Context, id string, now time.Time, fence namespace.Fence, e audit.Entry,
+) error {
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
 
@@ -1255,6 +1259,10 @@ func (k NotificationStore) Redeliver(ctx context.Context, id string, fence names
 
 		if d.State == notify.DeliveryPending {
 			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
+		}
+
+		if at := notify.RedeliverableAt(d); now.Before(at) {
+			return fmt.Errorf("redeliver %s: %w", id, &notify.TooSoonError{Wait: at.Sub(now)})
 		}
 
 		if sendErr := checkSubscriptionSends(ctx, q, d); sendErr != nil {

@@ -477,6 +477,66 @@ func TestRetryAt(t *testing.T) {
 	}
 }
 
+func TestRedeliverableAt(t *testing.T) {
+	t.Parallel()
+
+	stop := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	base := notify.Delivery{
+		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
+		Contact: "", Principal: "alice", State: notify.DeliveryDone, Attempts: 1, NextAt: time.Time{},
+		LastError: "", DeliveredAt: stop, Owner: "", LeaseUntil: time.Time{}, Version: 1,
+	}
+	cases := []struct {
+		name  string
+		state notify.DeliveryState
+	}{
+		{"a delivered delivery", notify.DeliveryDone},
+		{"an abandoned delivery", notify.DeliveryAbandoned},
+		{"a skipped delivery", notify.DeliverySkipped},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := base
+			d.State = tc.state
+
+			want := stop.Add(notify.RedeliverAfter)
+			if got := notify.RedeliverableAt(d); !got.Equal(want) {
+				t.Fatalf("RedeliverableAt = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestTooSoonError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		wait time.Duration
+		text string
+	}{
+		{time.Millisecond, "the delivery stopped too recently: wait 1ms"},
+		{30 * time.Second, "the delivery stopped too recently: wait 30s"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.wait.String(), func(t *testing.T) {
+			t.Parallel()
+
+			err := error(&notify.TooSoonError{Wait: tc.wait})
+			if !errors.Is(err, notify.ErrTooSoon) {
+				t.Fatalf("TooSoonError = %v, want ErrTooSoon", err)
+			}
+
+			if got := err.Error(); got != tc.text {
+				t.Fatalf("Error = %q, want %q", got, tc.text)
+			}
+		})
+	}
+}
+
 func TestClass(t *testing.T) {
 	t.Parallel()
 

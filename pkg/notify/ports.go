@@ -406,16 +406,19 @@ type Deliveries interface {
 	CountBefore(ctx context.Context, scope namespace.Name, id string, after *DeliveryCursor, maxCount int) (int, error)
 	// Redeliver makes the delivery id pending again with no attempts and
 	// no claim, and appends e. Only a stopped delivery (delivered,
-	// abandoned or skipped) can be sent again. A delivery of a
-	// subscription can be sent again only while the subscription exists,
-	// is active, sends to the sink of the delivery, and has the principal
-	// of the delivery as its CreatedBy. So a delivery from before a change
-	// of the sink or of the subscription never goes to the new place. It
+	// abandoned or skipped) can be sent again. now is the time of the
+	// call. A delivery of a subscription can be sent again only while the
+	// subscription exists, is active, sends to the sink of the delivery,
+	// and has the principal of the delivery as its CreatedBy. So a
+	// delivery from before a change of the sink or of the subscription
+	// never goes to the new place. It returns ErrTooSoon, as a
+	// *TooSoonError with the wait, when now is before RedeliverableAt of
+	// the stored delivery; it then appends no entry and changes no row. It
 	// returns ErrNotFound for an unknown delivery or a delivery of another
 	// scope than fence; ErrConflict for a pending delivery, which a claim
 	// can hold, and for a delivery whose subscription fails these
 	// conditions; namespace.ErrFenced and namespace.ErrNotFound.
-	Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	Redeliver(ctx context.Context, id string, now time.Time, fence namespace.Fence, e audit.Entry) error
 }
 
 // DeliveryCursor names one delivery of the history of a subscription: the

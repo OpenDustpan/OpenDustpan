@@ -67,18 +67,19 @@ type subscriptionListResponse struct {
 //
 // Contract: never remove or rename these fields.
 type deliveryDocument struct {
-	ID           string    `json:"id"`
-	Notification string    `json:"notification"`
-	Subscription string    `json:"subscription"`
-	Sink         string    `json:"sink"`
-	Contact      string    `json:"contact,omitempty"`
-	Principal    string    `json:"principal"`
-	State        string    `json:"state"`
-	Attempts     int       `json:"attempts"`
-	NextAt       time.Time `json:"nextAt"`
-	LastError    string    `json:"lastError,omitempty"`
-	DeliveredAt  time.Time `json:"deliveredAt,omitzero"`
-	Version      int64     `json:"version"`
+	ID              string     `json:"id"`
+	Notification    string     `json:"notification"`
+	Subscription    string     `json:"subscription"`
+	Sink            string     `json:"sink"`
+	Contact         string     `json:"contact,omitempty"`
+	Principal       string     `json:"principal"`
+	State           string     `json:"state"`
+	Attempts        int        `json:"attempts"`
+	NextAt          time.Time  `json:"nextAt"`
+	LastError       string     `json:"lastError,omitempty"`
+	DeliveredAt     time.Time  `json:"deliveredAt,omitzero"`
+	RedeliverableAt *time.Time `json:"redeliverableAt,omitempty"`
+	Version         int64      `json:"version"`
 }
 
 // historyResponse is one page of the delivery history, newest first.
@@ -121,11 +122,18 @@ func nonNil(list []string) []string {
 }
 
 func toDeliveryDocument(d *notify.Delivery) deliveryDocument {
-	return deliveryDocument{
+	doc := deliveryDocument{
 		ID: d.ID, Notification: d.Notification, Subscription: d.Subscription, Sink: d.Sink, Contact: d.Contact,
 		Principal: d.Principal, State: string(d.State), Attempts: d.Attempts, NextAt: d.NextAt.UTC(),
-		LastError: d.LastError, DeliveredAt: d.DeliveredAt.UTC(), Version: d.Version,
+		LastError: d.LastError, DeliveredAt: d.DeliveredAt.UTC(), RedeliverableAt: nil, Version: d.Version,
 	}
+
+	if d.State != notify.DeliveryPending {
+		at := notify.RedeliverableAt(*d).UTC()
+		doc.RedeliverableAt = &at
+	}
+
+	return doc
 }
 
 // filterBody is the filter of a write. A missing field selects everything.
@@ -247,6 +255,17 @@ func subscriptionErrors(err error) (problem.Problem, bool) {
 // of the sink service.
 func deliveryErrors(err error) (problem.Problem, bool) {
 	switch {
+	case errors.Is(err, subscriptionsvc.ErrRedeliverTooSoon):
+		wait := notify.RedeliverAfter
+		if tooSoon, ok := errors.AsType[*notify.TooSoonError](err); ok {
+			wait = tooSoon.Wait
+		}
+
+		p := problem.New(http.StatusTooManyRequests, errcode.SinkDeliveryTooSoon,
+			"the delivery stopped too recently: send it again after the Retry-After time")
+		p.RetryAfter = wait
+
+		return p, true
 	case errors.Is(err, subscriptionsvc.ErrNotRedeliverable):
 		return problem.New(http.StatusConflict, errcode.SinkDeliveryNotRedeliverable,
 			"the delivery cannot be sent again: only a delivered, abandoned or skipped delivery of an active "+

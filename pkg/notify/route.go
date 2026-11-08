@@ -872,7 +872,30 @@ const (
 	// with no success before the dispatcher suspends it. It also caps the
 	// wait that a receiver asks for.
 	SuspendAfter = 24 * time.Hour
+	// RedeliverAfter is the wait after a delivery stops before a person
+	// can send it again.
+	RedeliverAfter = FirstRetry
 )
+
+// RedeliverableAt returns the time from which a person can send the stopped
+// delivery d again: the time it stopped plus RedeliverAfter.
+func RedeliverableAt(d Delivery) time.Time {
+	return d.DeliveredAt.Add(RedeliverAfter)
+}
+
+// TooSoonError is an ErrTooSoon with the wait until a stopped delivery can
+// be sent again. Deliveries.Redeliver returns it.
+type TooSoonError struct {
+	Wait time.Duration
+}
+
+// Error returns the text of the error.
+func (e *TooSoonError) Error() string {
+	return fmt.Sprintf("%s: wait %s", ErrTooSoon, e.Wait)
+}
+
+// Unwrap returns ErrTooSoon.
+func (e *TooSoonError) Unwrap() error { return ErrTooSoon }
 
 // RetryAfterError is an ErrTemporary with the wait that the receiver asked
 // for, for example in a Retry-After header. A Sender returns it, and

@@ -1,6 +1,7 @@
 sink.access-token
 sink.delivery-not-found
 sink.delivery-not-redeliverable
+sink.delivery-too-soon
 sink.subscription-conflict
 sink.subscription-invalid
 sink.subscription-not-found

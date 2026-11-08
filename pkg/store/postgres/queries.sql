@@ -4741,7 +4741,8 @@ WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AN
 
 -- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one

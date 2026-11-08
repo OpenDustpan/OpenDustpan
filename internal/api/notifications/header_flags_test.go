@@ -109,6 +109,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			sub := f.makeSubscription(t)
 			d := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+			f.clock.Set(f.clock.Now().Add(notify.RedeliverAfter))
 
 			return probe(http.MethodPost, deliveriesBase+"/"+d.ID+"/redeliver", "")
 		},

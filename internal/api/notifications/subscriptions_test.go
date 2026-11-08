@@ -39,13 +39,14 @@ type filterWire struct {
 }
 
 type deliveryWire struct {
-	ID           string `json:"id"`
-	Subscription string `json:"subscription"`
-	Sink         string `json:"sink"`
-	Principal    string `json:"principal"`
-	State        string `json:"state"`
-	Attempts     int    `json:"attempts"`
-	Version      int64  `json:"version"`
+	ID              string     `json:"id"`
+	Subscription    string     `json:"subscription"`
+	Sink            string     `json:"sink"`
+	Principal       string     `json:"principal"`
+	State           string     `json:"state"`
+	Attempts        int        `json:"attempts"`
+	RedeliverableAt *time.Time `json:"redeliverableAt"`
+	Version         int64      `json:"version"`
 }
 
 type historyWire struct {
@@ -623,6 +624,10 @@ func TestRedeliver(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f.clock.Set(base)
+
 	sub := f.makeSubscription(t)
 	pending := f.seedDelivery(t, "acme", sub, notify.DeliveryPending)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
@@ -638,6 +643,8 @@ func TestRedeliver(t *testing.T) {
 		CreatedBy: "admin",
 		Version:   1,
 	}, notify.DeliveryDone)
+
+	f.clock.Set(base.Add(notify.RedeliverAfter))
 
 	tests := []struct {
 		name   string
@@ -689,6 +696,85 @@ func TestRedeliver(t *testing.T) {
 	}
 }
 
+func TestRedeliverTooSoon(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		wait       time.Duration
+		retryAfter string
+	}{
+		{"the full wait", notify.RedeliverAfter, "30"},
+		{"one millisecond left", time.Millisecond, "1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			f.clock.Set(base)
+
+			done := f.seedDelivery(t, "acme", f.makeSubscription(t), notify.DeliveryDone)
+			f.clock.Set(base.Add(notify.RedeliverAfter - tc.wait))
+
+			got := f.do(t, send("admin", http.MethodPost, deliveriesBase+"/"+done.ID+"/redeliver", ""))
+			wantCode(t, tc.name, got, http.StatusTooManyRequests)
+
+			if header := got.header.Get("Retry-After"); header != tc.retryAfter {
+				t.Fatalf("Retry-After = %q, want %q", header, tc.retryAfter)
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
+				errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
+		})
+	}
+}
+
+func TestDeliveryRedeliverableAt(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.clock.Set(base)
+
+	sub := f.makeSubscription(t)
+	pending := f.seedDelivery(t, "acme", sub, notify.DeliveryPending)
+	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+
+	got := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+sub.ID+"/deliveries")))
+
+	seen := map[string]bool{}
+
+	for _, d := range got.Deliveries {
+		switch d.ID {
+		case pending.ID:
+			seen[d.ID] = true
+
+			if d.RedeliverableAt != nil {
+				t.Errorf("a pending delivery answers redeliverableAt = %s, want none", d.RedeliverableAt)
+			}
+		case done.ID:
+			seen[d.ID] = true
+
+			if d.RedeliverableAt == nil {
+				t.Fatal("a stopped delivery answers no redeliverableAt")
+			}
+
+			want := base.Add(notify.RedeliverAfter)
+			if !d.RedeliverableAt.Equal(want) {
+				t.Errorf("redeliverableAt = %s, want %s", d.RedeliverableAt, want)
+			}
+		default:
+		}
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("history holds %d of the two deliveries", len(seen))
+	}
+}
+
 func TestSubscriptionWritesAreIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -712,6 +798,7 @@ func TestSubscriptionWritesAreIdempotent(t *testing.T) {
 
 	sub := decode[subscriptionWire](t, first)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(f.clock.Now().Add(notify.RedeliverAfter))
 	target := deliveriesBase + "/" + done.ID + "/redeliver"
 
 	for range 2 {
@@ -737,6 +824,7 @@ func TestSubscriptionWritesAreAudited(t *testing.T) {
 	f := newFixture(t)
 	sub := f.makeSubscription(t)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(f.clock.Now().Add(notify.RedeliverAfter))
 
 	wantCode(t, "replace", f.do(t, send("admin", http.MethodPut, subscriptionsBase+"/"+sub.ID,
 		`{"version":1,"sink":"`+sub.Sink+`","state":"active","filter":{"types":["lock.*"]}}`)), http.StatusOK)

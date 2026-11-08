@@ -1526,6 +1526,7 @@
           "sink.conflict",
           "sink.delivery-not-found",
           "sink.delivery-not-redeliverable",
+          "sink.delivery-too-soon",
           "sink.invalid",
           "sink.no-sender",
           "sink.no-url",
@@ -3716,6 +3717,10 @@
             "type": "string"
           },
           "principal": {
+            "type": "string"
+          },
+          "redeliverableAt": {
+            "format": "date-time",
             "type": "string"
           },
           "sink": {

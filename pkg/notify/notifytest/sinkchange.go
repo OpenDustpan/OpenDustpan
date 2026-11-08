@@ -112,6 +112,13 @@ func testSinkChangeSkipsPending(t *testing.T, h Harness) {
 		t.Fatalf("deliveries of sub-1 after the sink change = %s, want the pending ones skipped", got)
 	}
 
+	ds := history(t, h, shop)
+	for i := range ds {
+		if ds[i].State == notify.DeliverySkipped && !ds[i].DeliveredAt.Equal(now()) {
+			t.Fatalf("skipped %s stopped at %s, want %s", ds[i].ID, ds[i].DeliveredAt, now())
+		}
+	}
+
 	err = h.Deliveries.Record(t.Context(), fence, attempt(held[0], now().Add(time.Minute)))
 	if !errors.Is(err, notify.ErrConflict) {
 		t.Fatalf("Record of a claim from before the sink change: err = %v, want ErrConflict", err)
@@ -138,7 +145,9 @@ func testRedeliverAfterSinkChange(t *testing.T, h Harness) {
 	redeliver := func(when string, want error) {
 		t.Helper()
 
-		err := h.Deliveries.Redeliver(t.Context(), "dlv-1", fence, manage())
+		err := h.Deliveries.Redeliver(
+			t.Context(), "dlv-1", now().Add(notify.RedeliverAfter), fence, manage(),
+		)
 		if !errors.Is(err, want) || (want == nil && err != nil) {
 			t.Fatalf("Redeliver %s: err = %v, want %v", when, err, want)
 		}

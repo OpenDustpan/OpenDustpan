@@ -183,6 +183,12 @@ func TestSubscriptionErrorsHaveCodes(t *testing.T) {
 			fmt.Errorf("redeliver: %w", errors.Join(subscriptionsvc.ErrNotRedeliverable, notify.ErrConflict)),
 			http.StatusConflict, errcode.SinkDeliveryNotRedeliverable,
 		},
+		{
+			"delivery that stopped too recently", notifications.WriteDeliveryError,
+			fmt.Errorf("redeliver: %w", errors.Join(subscriptionsvc.ErrRedeliverTooSoon,
+				&notify.TooSoonError{Wait: time.Millisecond})),
+			http.StatusTooManyRequests, errcode.SinkDeliveryTooSoon,
+		},
 	}
 
 	for _, tc := range tests {

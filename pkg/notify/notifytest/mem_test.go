@@ -600,11 +600,15 @@ func (m *memStore) CountBefore(
 	return min(count, maxCount), nil
 }
 
-func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+func (m *memStore) Redeliver(_ context.Context, id string, now time.Time, fence namespace.Fence, e audit.Entry) error {
 	return scopedID(m.writeEntry(fence, m.deliveryScope(id), e, func() error {
 		d := m.deliveries[id]
 		if d.State == notify.DeliveryPending {
 			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
+		}
+
+		if at := notify.RedeliverableAt(d); now.Before(at) {
+			return fmt.Errorf("redeliver %s: %w", id, &notify.TooSoonError{Wait: at.Sub(now)})
 		}
 
 		if d.Subscription != "" && !notify.SendsFor(m.subs[d.Subscription], d) {
@@ -828,7 +832,7 @@ func (m *memStore) suspendSubscriptionsOf(id string, version int64, e audit.Entr
 			m.subs[sid] = sub
 		}
 
-		m.skipPending(sub)
+		m.skipPending(sub, e.At)
 	}
 
 	m.commitAppend(add)
@@ -837,16 +841,16 @@ func (m *memStore) suspendSubscriptionsOf(id string, version int64, e audit.Entr
 }
 
 // skipPending sets each pending delivery of the subscription sub to
-// skipped, clears its claim, and increments its version. The caller holds
-// the mutex of the domain.
-func (m *memStore) skipPending(sub notify.Subscription) {
+// skipped at the time at, clears its claim, and increments its version. The
+// caller holds the mutex of the domain.
+func (m *memStore) skipPending(sub notify.Subscription, at time.Time) {
 	for did := range m.deliveries {
 		d := m.deliveries[did]
 		if d.Subscription != sub.ID || d.Scope != sub.Scope || d.State != notify.DeliveryPending {
 			continue
 		}
 
-		d.State, d.Owner, d.LeaseUntil = notify.DeliverySkipped, "", time.Time{}
+		d.State, d.Owner, d.LeaseUntil, d.DeliveredAt = notify.DeliverySkipped, "", time.Time{}, at
 		d.Version++
 		m.deliveries[did] = d
 	}

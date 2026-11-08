@@ -57,6 +57,9 @@ var (
 	// ErrNoAccess reports a delivery whose principal can no longer read
 	// the notification, or whose contact is gone. The dispatcher skips it.
 	ErrNoAccess = errors.New("the principal of the delivery can no longer read the notification")
+	// ErrTooSoon reports a redeliver of a delivery that stopped less than
+	// RedeliverAfter ago.
+	ErrTooSoon = errors.New("the delivery stopped too recently")
 )
 
 // Bounds of a notification.

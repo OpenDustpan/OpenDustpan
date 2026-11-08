@@ -21407,17 +21407,19 @@ func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int
 
 const skipPendingNotificationDeliveriesOfSubscription = `-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
-WHERE scope = $1 AND subscription_id = $2 AND state = 'pending'
+SET state = 'skipped', delivered_at_ms = $1, owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE scope = $2 AND subscription_id = $3 AND state = 'pending'
 `
 
 type SkipPendingNotificationDeliveriesOfSubscriptionParams struct {
+	DeliveredAtMs  int64
 	Scope          string
 	SubscriptionID string
 }
 
 func (q *Queries) SkipPendingNotificationDeliveriesOfSubscription(ctx context.Context, arg SkipPendingNotificationDeliveriesOfSubscriptionParams) error {
-	_, err := q.db.Exec(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID)
+	_, err := q.db.Exec(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.DeliveredAtMs, arg.Scope, arg.SubscriptionID)
 	return err
 }
 

@@ -30,6 +30,11 @@ var ErrSinkNotInNamespace = errors.New("the namespace holds no notification dest
 // pending, or its subscription no longer sends it.
 var ErrNotRedeliverable = errors.New("the delivery cannot be sent again")
 
+// ErrRedeliverTooSoon reports a delivery that stopped less than the retry
+// policy waits, so a person cannot send it again yet. The error keeps the
+// wait of the store in its chain.
+var ErrRedeliverTooSoon = errors.New("the delivery stopped too recently")
+
 // MaxHistory is the most deliveries that one read of the history reaches. A
 // page that would end after this count has no next page.
 const MaxHistory = 1000
@@ -308,18 +313,20 @@ func (s *Service) History(
 }
 
 // Redeliver makes the stopped delivery id pending again. It returns
-// notify.ErrNotFound, ErrNotRedeliverable, namespace.ErrNotFound or
-// namespace.ErrFenced.
+// notify.ErrNotFound, ErrNotRedeliverable, ErrRedeliverTooSoon,
+// namespace.ErrNotFound or namespace.ErrFenced.
 func (s *Service) Redeliver(ctx context.Context, c *Caller, ns namespace.Name, id string) error {
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
 		return err
 	}
 
-	err = s.deliveries.Redeliver(ctx, id, fence, s.entry(c, ns, actionRedeliver, id))
+	err = s.deliveries.Redeliver(ctx, id, s.now().UTC(), fence, s.entry(c, ns, actionRedeliver, id))
 	switch {
 	case errors.Is(err, notify.ErrConflict):
 		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrNotRedeliverable, err))
+	case errors.Is(err, notify.ErrTooSoon):
+		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrRedeliverTooSoon, err))
 	case err != nil:
 		return fmt.Errorf("redeliver %s: %w", id, err)
 	default:
