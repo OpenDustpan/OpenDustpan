@@ -136,6 +136,14 @@ type Checkpoint struct {
 	BlobMd5       []byte
 }
 
+type CheckpointSupersede struct {
+	BlobKey        string
+	StackID        string
+	UpdateID       string
+	Size           int64
+	SupersededAtMs int64
+}
+
 type Collection struct {
 	ID          string
 	Namespace   string

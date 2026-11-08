@@ -27,13 +27,13 @@ func unitForeignKeys() []foreignKey {
 	return foreignKeys()
 }
 
-// TestSupersedeDeleteStaysInTheUpdate is the hostile test of the delete after
+// TestSupersedeMarkNamesTheBlobOfTheRow is the hostile test of the mark after
 // a save. The checkpoint row of the running update names a blob outside the
 // directory of the update: in another namespace, or in the same namespace in
-// another stack, in another update, or of another kind. The next save would
-// delete the blob that the row names as superseded. It must delete nothing,
-// still store its own checkpoint, and write one security refusal.
-func TestSupersedeDeleteStaysInTheUpdate(t *testing.T) {
+// another stack, in another update, or of another kind. The next save marks
+// the blob of that row as superseded. It must delete nothing, still store its
+// own checkpoint, and keep the mark for the key of the row.
+func TestSupersedeMarkNamesTheBlobOfTheRow(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range unitForeignKeys() {
@@ -58,15 +58,34 @@ func TestSupersedeDeleteStaysInTheUpdate(t *testing.T) {
 				t.Fatalf("save: %v", saveErr)
 			}
 
-			if !blobExists(t, f.blobs, victim) {
-				t.Fatalf("the save deleted the blob %q that the row named", victim)
-			}
-
-			recs := f.refusals.Records()
-			if len(recs) != 1 || recs[0].Op != "delete" || recs[0].Where != tc.where || recs[0].Namespace != f.nsID {
-				t.Fatalf("refusals = %+v, want one delete in %s with the place %q", recs, f.nsID, tc.where)
-			}
+			assertSupersedeMark(t, f, victim)
 		})
+	}
+}
+
+// assertSupersedeMark checks that a save of the fixture's update kept the blob
+// that the row of the update named, deleted nothing, and left one mark of that
+// blob with its size and the time of the clock.
+func assertSupersedeMark(t *testing.T, f updatesFixture, victim string) {
+	t.Helper()
+
+	if !blobExists(t, f.blobs, victim) {
+		t.Fatalf("the save deleted the blob %q that the row named", victim)
+	}
+
+	// The save deletes no blob, so no delete reaches the scope.
+	if recs := f.refusals.Records(); len(recs) != 0 {
+		t.Fatalf("refusals = %+v, want none", recs)
+	}
+
+	marks, markErr := f.store.SupersededBlobs(t.Context(), "stk-test")
+	if markErr != nil {
+		t.Fatalf("superseded blobs: %v", markErr)
+	}
+
+	if len(marks) != 1 || marks[0].Key != blob.Key(victim) ||
+		marks[0].Size != 1 || !marks[0].At.Equal(f.clock.Now()) {
+		t.Fatalf("marks = %+v, want the mark of %q with size 1 at %s", marks, victim, f.clock.Now())
 	}
 }
 

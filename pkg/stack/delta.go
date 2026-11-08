@@ -73,7 +73,6 @@ func (s *Updates) SaveCheckpointDelta(
 			Invalid:       false,
 		},
 		digest: save.digest,
-		prev:   save.prev,
 		key:    save.key,
 		blobs:  save.blobs,
 	})

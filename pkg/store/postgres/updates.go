@@ -367,7 +367,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 
 		var writeErr error
 
-		known, writeErr = writeCheckpoint(ctx, q, cp, stackID, row)
+		known, writeErr = s.writeCheckpoint(ctx, q, cp, stackID, row)
 
 		return writeErr
 	})
@@ -394,18 +394,119 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 	return stack.CheckCheckpointBlobKey(namespace.ID(nsID), stack.ID(stackID), cp.Update, cp.BlobKey)
 }
 
-// writeCheckpoint runs writeCheckpointRows and makes sure that the attempt
-// window of cp was checked against the clock of the database after every lock
-// wait of the transaction. The upsert returns the time of that clock after its
-// own lock wait, so the common save pays no round trip for the check. A write
-// that did not reach the upsert (a replay) or that lost it reads the clock
-// here, after the last lock wait. A refusal returns the error, and the caller
-// rolls the transaction back: the attempt writes nothing, also when it repeats
-// a committed checkpoint.
-func writeCheckpoint(
+// writeCheckpoint writes the checkpoint row of a save. It checks the key, the
+// lease and the kind of the update, compares the sequence of cp with the row
+// of its update when the input carries one, marks the blob of the row that the
+// write replaces, and upserts the row. It returns whether the write is a
+// replay of the stored checkpoint.
+//
+// It also makes sure that the attempt window of cp was checked against the
+// clock of the database after every lock wait of the transaction. The upsert
+// returns the time of that clock after its own lock wait, so the common save
+// pays no round trip for the check. A write that did not reach the upsert (a
+// replay) or that lost it reads the clock here, after the last lock wait. A
+// refusal returns the error, and the caller rolls the transaction back: the
+// attempt writes nothing, also when it repeats a committed checkpoint.
+func (s *Store) writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (bool, error) {
-	write, err := writeCheckpointRows(ctx, q, cp, stackID, row)
+	if err := checkCheckpointWrite(ctx, q, cp, stackID, row); err != nil {
+		return false, err
+	}
+
+	// A save without a sequence number replaces the row of its update without
+	// a comparison, and it marks nothing.
+	if cp.Sequence > 0 {
+		known, err := sequenceWrite(ctx, q, cp, stackID, s.afterSequenceCheck)
+		if err != nil {
+			return false, err
+		}
+
+		if known {
+			return finishCheckpointWrite(ctx, q, cp, true)
+		}
+	}
+
+	return upsertCheckpoint(ctx, q, cp, stackID, row)
+}
+
+// writeBuiltCheckpoint writes the checkpoint row of the built checkpoint of a
+// journaled update. The row of a built checkpoint carries no sequence number,
+// so the write replaces the row of its update without a comparison, and it
+// reads that row for the blob that it marks. It returns whether the write is a
+// replay of the stored checkpoint, and it checks the attempt window like the
+// write of a save.
+func (s *Store) writeBuiltCheckpoint(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) (bool, error) {
+	if err := checkCheckpointWrite(ctx, q, cp, stackID, row); err != nil {
+		return false, err
+	}
+
+	known, err := sequenceWrite(ctx, q, cp, stackID, s.afterSequenceCheck)
+	if err != nil {
+		return false, err
+	}
+
+	if known {
+		return finishCheckpointWrite(ctx, q, cp, true)
+	}
+
+	return upsertCheckpoint(ctx, q, cp, stackID, row)
+}
+
+// checkCheckpointWrite checks the key, the lease and the kind of the update of
+// a checkpoint write.
+func checkCheckpointWrite(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) error {
+	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
+		return keyErr
+	}
+
+	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
+		return leaseErr
+	}
+
+	return checkMutates(ctx, q, stackID, cp.Update)
+}
+
+// sequenceWrite compares the sequence of cp with the row of its update and
+// marks the blob of the row that the write replaces. It returns known = true
+// when cp repeats the stored checkpoint: the caller returns without an upsert,
+// and the row keeps the blob of the replay. afterCheck, when set, runs after
+// the read of the row and before the mark. It is a test seam.
+func sequenceWrite(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, afterCheck func(stackID string),
+) (bool, error) {
+	check, err := checkSequence(ctx, q, cp, stackID)
+	if err != nil || check.known {
+		return check.known, err
+	}
+
+	if afterCheck != nil {
+		afterCheck(stackID)
+	}
+
+	// checkSequence answered from the row read of this transaction, and a
+	// replay and a refusal returned above. A write that proceeds replaces the
+	// row, so its blob is superseded. The row is not locked, so a concurrent
+	// attempt can replace it between the read and the mark. The mark names the
+	// key that the read returned, so it marks no row that changed.
+	if check.replaced {
+		return false, markSuperseded(ctx, q, cp, stackID, check.readKey)
+	}
+
+	return false, nil
+}
+
+// upsertCheckpoint upserts the row of the write and checks the attempt window
+// of cp against the clock of the database. A write that lost the race reads
+// the row of the update for its answer.
+func upsertCheckpoint(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) (bool, error) {
+	write, err := putCheckpointRow(ctx, q, cp, stackID, row)
 	if err != nil {
 		return false, err
 	}
@@ -414,14 +515,24 @@ func writeCheckpoint(
 		return write.known, nil
 	}
 
+	return finishCheckpointWrite(ctx, q, cp, write.known)
+}
+
+// finishCheckpointWrite checks the attempt window of cp against the clock of
+// the database, after the last lock wait of the transaction, and returns
+// whether the write is a replay. It serves the writes that did not reach the
+// upsert, and the writes that lost the race to another write.
+func finishCheckpointWrite(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, known bool,
+) (bool, error) {
 	if attemptErr := checkAttempt(ctx, q, cp.AttemptStartedAt); attemptErr != nil {
 		return false, attemptErr
 	}
 
-	return write.known, nil
+	return known, nil
 }
 
-// checkpointWrite is the result of writeCheckpointRows. known is true for a
+// checkpointWrite is the result of putCheckpointRow. known is true for a
 // replay. checked is true when the upsert wrote the row and the attempt window
 // was checked with the clock that the upsert returned.
 type checkpointWrite struct {
@@ -429,33 +540,13 @@ type checkpointWrite struct {
 	checked bool
 }
 
-// writeCheckpointRows checks the key, the lease, rejects previews, checks the sequence,
-// then upserts the checkpoint of its update. It returns true when the last checkpoint of the
-// update has the same sequence and digest: the write is a replay and the row keeps its blob key.
-// The result says whether the upsert wrote the row, and so whether the attempt window was checked
-// with the clock that the upsert returned.
-func writeCheckpointRows(
+// putCheckpointRow upserts the row of the write, and it answers an upsert that
+// wrote no row. The result says whether the upsert wrote the row, and so
+// whether the attempt window was checked with the clock that the upsert
+// returned.
+func putCheckpointRow(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (checkpointWrite, error) {
-	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
-		return checkpointWrite{known: false, checked: false}, keyErr
-	}
-
-	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
-		return checkpointWrite{known: false, checked: false}, leaseErr
-	}
-
-	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
-		return checkpointWrite{known: false, checked: false}, previewErr
-	}
-
-	if cp.Sequence > 0 {
-		retried, seqErr := checkSequence(ctx, q, cp, stackID)
-		if seqErr != nil || retried {
-			return checkpointWrite{known: retried, checked: false}, seqErr
-		}
-	}
-
 	nowMs, putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
@@ -500,9 +591,9 @@ func writeCheckpointRows(
 // that earlier read. It fails closed with ErrCheckpointConflict for a row that
 // does not explain the lost write.
 func lostCheckpointRace(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
-	retried, err := checkSequence(ctx, q, cp, stackID)
-	if err != nil || retried {
-		return retried, err
+	check, err := checkSequence(ctx, q, cp, stackID)
+	if err != nil || check.known {
+		return check.known, err
 	}
 
 	return false, stack.ErrCheckpointConflict
@@ -646,6 +737,46 @@ func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blo
 		}
 
 		out = append(out, key)
+	}
+
+	return out, nil
+}
+
+// SupersededBlobs implements stack.CheckpointStore. One statement finds the
+// stack and reads the marks, so the read needs no transaction. A stack that
+// does not exist, or that is soft-deleted, returns ErrNotFound: an empty mark
+// set would let a sweep delete the marked blobs of the stack without the
+// grace period of a mark.
+func (s *Store) SupersededBlobs(ctx context.Context, stackID stack.ID) ([]stack.SupersededBlob, error) {
+	rows, err := s.queries.ListSupersededBlobs(ctx, stackID.String())
+	if err != nil {
+		return nil, fmt.Errorf("select superseded blobs: %w", readConflict(err))
+	}
+
+	// No row means no live stack with this ID: fail closed, so a sweep
+	// deletes nothing.
+	if len(rows) == 0 {
+		return nil, stack.ErrNotFound
+	}
+
+	out := make([]stack.SupersededBlob, 0, len(rows))
+
+	for _, row := range rows {
+		// A live stack without marks gives one row with an empty key.
+		if row.BlobKey == "" {
+			continue
+		}
+
+		key, err := blob.ParseKey(row.BlobKey)
+		if err != nil {
+			return nil, fmt.Errorf("%w: blob key %q: %w", codec.ErrCorruptRow, row.BlobKey, err)
+		}
+
+		out = append(out, stack.SupersededBlob{
+			Key:  key,
+			Size: row.Size,
+			At:   codec.FromMillis(row.SupersededAtMs),
+		})
 	}
 
 	return out, nil
@@ -885,32 +1016,82 @@ func checkMutates(ctx context.Context, q *db.Queries, stackID string, id stack.U
 }
 
 // checkSequence compares cp with the last checkpoint of its update and
-// reports whether cp repeats it. The caller holds the update FOR SHARE and
-// the update runs, so no other checkpoint of the stack can be written
-// concurrently: one mutating update runs per stack.
-func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
+// reports whether cp repeats it. It also reports whether the row of the
+// update names another blob key: the write replaces the blob of that row, and
+// the caller marks it. The caller marks only a write that proceeds, because a
+// replay and a refusal return before the mark: the row still names the blob
+// of a replay. It returns the blob key of the row that it read, so the caller
+// marks only that row. A write without a sequence number is the built
+// checkpoint of a journaled update: it replaces the row of its update without
+// a comparison, and the caller reads the row here for the blob that it
+// replaces. The caller holds the update FOR SHARE and the update runs, so no
+// other checkpoint of the stack can be written concurrently: one mutating
+// update runs per stack. The checkpoint row itself is not locked.
+func checkSequence(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string,
+) (sequenceCheck, error) {
 	last, err := q.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
 		StackID:  stackID,
 		UpdateID: cp.Update.String(),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return sequenceCheck{known: false, replaced: false, readKey: ""}, nil
 	}
 
 	if err != nil {
-		return false, fmt.Errorf("read last checkpoint: %w", err)
+		return sequenceCheck{known: false, replaced: false, readKey: ""}, fmt.Errorf("read last checkpoint: %w", err)
+	}
+
+	read := sequenceCheck{known: false, replaced: last.BlobKey != string(cp.BlobKey), readKey: blob.Key(last.BlobKey)}
+
+	if cp.Sequence == 0 {
+		return read, nil
 	}
 
 	switch {
 	case cp.Sequence < last.Sequence:
-		return false, stack.ErrStaleCheckpoint
+		return read, stack.ErrStaleCheckpoint
 	case cp.Sequence > last.Sequence:
-		return false, nil
+		return read, nil
 	case bytes.Equal(last.Digest, cp.Digest[:]):
-		return true, nil
+		read.known = true
+
+		return read, nil
 	default:
-		return false, stack.ErrCheckpointConflict
+		return read, stack.ErrCheckpointConflict
 	}
+}
+
+// sequenceCheck is the answer of checkSequence: known is true for a replay,
+// and replaced is true when the row of the update names another blob key than
+// the write, so the caller marks the blob of that row. readKey is the blob key
+// of the row that the read returned.
+type sequenceCheck struct {
+	readKey  blob.Key
+	known    bool
+	replaced bool
+}
+
+// markSuperseded marks the blob of the checkpoint row that the write
+// replaces, so that a sweep can delete it after the grace period of a mark. It
+// marks only the row that still names readKey: the row is not locked, and a
+// concurrent attempt can replace it between the read of checkSequence and the
+// mark. A mark of an earlier save stays as it is.
+func markSuperseded(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, readKey blob.Key,
+) error {
+	params := db.MarkSupersededCheckpointParams{
+		StackID:  stackID,
+		UpdateID: cp.Update.String(),
+		BlobKey:  string(cp.BlobKey),
+		ReadKey:  string(readKey),
+	}
+
+	if err := q.MarkSupersededCheckpoint(ctx, params); err != nil {
+		return fmt.Errorf("mark superseded checkpoint: %w", err)
+	}
+
+	return nil
 }
 
 // clampInt32 bounds n to the range of a PostgreSQL integer parameter.

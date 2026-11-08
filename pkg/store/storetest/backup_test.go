@@ -63,16 +63,19 @@ type fakeData struct {
 	stackIDs         map[string]string
 	updates          map[string]map[string]stack.Update
 	checkpoints      map[string]map[string]stack.Checkpoint
-	events           map[string]map[string][]stack.Event
-	keys             map[string]secret.WrappedKey
-	entries          map[string]inventory.Entry
-	audit            map[string][]audit.Entry
-	workspaces       map[string]workspace.Workspace
-	workspaceIDs     map[string]string
-	states           map[string]workspace.StateVersion
-	current          map[string]string
-	backups          map[string]backup.Record
-	restores         map[string]backup.RestoreRecord
+	// marks holds the mark of each checkpoint blob that a later sequenced
+	// save of the same update replaced, by stack ID.
+	marks        map[string][]stack.SupersededBlob
+	events       map[string]map[string][]stack.Event
+	keys         map[string]secret.WrappedKey
+	entries      map[string]inventory.Entry
+	audit        map[string][]audit.Entry
+	workspaces   map[string]workspace.Workspace
+	workspaceIDs map[string]string
+	states       map[string]workspace.StateVersion
+	current      map[string]string
+	backups      map[string]backup.Record
+	restores     map[string]backup.RestoreRecord
 	// leases holds one row for each blob deleter that holds a lease, with the
 	// time it ends.
 	leases map[string]time.Time
@@ -91,6 +94,7 @@ func newFakeData() *fakeData {
 		stackIDs:         map[string]string{},
 		updates:          map[string]map[string]stack.Update{},
 		checkpoints:      map[string]map[string]stack.Checkpoint{},
+		marks:            map[string][]stack.SupersededBlob{},
 		events:           map[string]map[string][]stack.Event{},
 		keys:             map[string]secret.WrappedKey{},
 		entries:          map[string]inventory.Entry{},
@@ -768,6 +772,10 @@ func (s *fakeBackupStore) PutCheckpoint(
 		return true, nil
 	}
 
+	// A sequenced write above the stored one replaces the row of the update:
+	// the blob of the row is superseded when the key differs.
+	markSuperseded(s.data, stackID, byStack, cp)
+
 	if cp.BlobKey != "" {
 		// Rows with a blob key keep the metadata only, as the SQL adapters
 		// do: the content lives in blobs.
@@ -777,6 +785,22 @@ func (s *fakeBackupStore) PutCheckpoint(
 	byStack[cp.Update.String()] = cp
 
 	return false, nil
+}
+
+// markSuperseded records the mark of the checkpoint row that cp replaces: the
+// blob of the row is superseded when the key differs. Only a sequenced write
+// marks, and a write that names no blob marks nothing.
+func markSuperseded(
+	data *fakeData, stackID string, byStack map[string]stack.Checkpoint, cp stack.Checkpoint,
+) {
+	stored, ok := byStack[cp.Update.String()]
+	if !ok || cp.Sequence == 0 || stored.BlobKey == "" || stored.BlobKey == cp.BlobKey {
+		return
+	}
+
+	data.marks[stackID] = append(data.marks[stackID], stack.SupersededBlob{
+		Key: stored.BlobKey, Size: stored.BlobSize, At: fakeTime(),
+	})
 }
 
 // checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp
@@ -921,6 +945,36 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 	}
 
 	slices.Sort(out)
+
+	return out, nil
+}
+
+// SupersededBlobs implements stack.CheckpointStore.
+func (s *fakeBackupStore) SupersededBlobs(
+	_ context.Context, id stack.ID,
+) ([]stack.SupersededBlob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	found := false
+
+	for key := range s.data.stacks {
+		found = found || s.data.stacks[key].ID == id
+	}
+
+	if !found {
+		return nil, stack.ErrNotFound
+	}
+
+	out := slices.Clone(s.data.marks[id.String()])
+
+	slices.SortFunc(out, func(a, b stack.SupersededBlob) int {
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
 
 	return out, nil
 }
@@ -3052,6 +3106,7 @@ func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
 	delete(s.data.stackIDs, st.ID.String())
 	delete(s.data.updates, st.ID.String())
 	delete(s.data.checkpoints, st.ID.String())
+	delete(s.data.marks, st.ID.String())
 	delete(s.data.events, st.ID.String())
 	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
 

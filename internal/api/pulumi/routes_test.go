@@ -1616,6 +1616,13 @@ func (exportPanicsStore) ReferencedBlobKeys(
 	panic("delete must not read checkpoint keys")
 }
 
+// SupersededBlobs panics: the delete route must not read state.
+func (exportPanicsStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	panic("delete must not read checkpoint marks")
+}
+
 // unusedStackResolver panics: routes that never save checkpoints never
 // resolve stacks.
 type unusedStackResolver struct{}
@@ -2109,6 +2116,12 @@ func (emptyCheckpointStore) CheckpointByUpdate(
 func (emptyCheckpointStore) ReferencedBlobKeys(
 	_ context.Context, _ stack.ID,
 ) ([]blob.Key, error) {
+	return nil, nil
+}
+
+func (emptyCheckpointStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
 	return nil, nil
 }
 

@@ -115,6 +115,7 @@ var Tables = []string{
 	"stack_tags",
 	"updates",
 	"checkpoints",
+	"checkpoint_supersedes",
 	"update_events",
 	"update_journal",
 	"update_journal_sequences",

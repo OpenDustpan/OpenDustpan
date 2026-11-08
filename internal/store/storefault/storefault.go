@@ -417,6 +417,16 @@ func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blo
 	return s.inner.ReferencedBlobKeys(ctx, stackID)
 }
 
+// SupersededBlobs returns the marks of the superseded checkpoint blobs of the
+// stack ID, unless a fault fires first.
+func (s *Store) SupersededBlobs(ctx context.Context, stackID stack.ID) ([]stack.SupersededBlob, error) {
+	if err := s.before(ctx, "SupersededBlobs"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.SupersededBlobs(ctx, stackID)
+}
+
 // StateAt returns the update that held the state of the stack at a time,
 // unless a fault fires first.
 func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {
