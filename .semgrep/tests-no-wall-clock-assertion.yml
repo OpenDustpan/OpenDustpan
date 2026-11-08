@@ -1,0 +1,101 @@
+rules:
+  - id: tests-no-wall-clock-assertion
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Do not assert a time bound on the wall clock in a test. A loaded CI
+      runner makes the bound fail, and one failure drops every pull request in
+      the merge group. Inject the clock (a func() time.Time or the clock port
+      of the domain) and assert on the injected time, or wait for the event
+      itself. A benchmark or a step against a real network can go on the
+      exemption list of this rule, with the function name and the reason.
+    # The rule matches an if statement that fails the test and whose
+    # condition reads the wall clock: time.Since, time.Until,
+    # time.Now().After, time.Now().Before, or a duration that time.Since or
+    # time.Now().Sub measured before the if. A check of a timestamp against
+    # time.Now().Add(...) is not a time bound on the test, so it passes.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              if <... time.Since(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if $INIT; <... time.Since(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if $ELAPSED := time.Since(...); <... $ELAPSED ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if <... time.Until(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if <... time.Now().After(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if <... time.Now().Before(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if $INIT; <... time.Now().After(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              if $INIT; <... time.Now().Before(...) ...> {
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $ELAPSED := time.Since(...)
+                      ...
+                  - pattern-inside: |
+                      $ELAPSED = time.Since(...)
+                      ...
+                  - pattern-inside: |
+                      $ELAPSED := time.Now().Sub(...)
+                      ...
+                  - pattern-inside: |
+                      $ELAPSED = time.Now().Sub(...)
+                      ...
+              - pattern: |
+                  if <... $ELAPSED ...> {
+                    ...
+                    $T.$FAIL(...)
+                    ...
+                  }
+      - metavariable-regex:
+          metavariable: $FAIL
+          regex: ^(Fatal|Fatalf|Error|Errorf|Fail|FailNow)$
+      # $T is the *testing.T, *testing.B or testing.TB of the test, not a
+      # package such as fmt.
+      - metavariable-regex:
+          metavariable: $T
+          regex: ^(?!(fmt|errors|log|slog)$)
+      # Exemptions. Each entry names the function that holds the assertion
+      # and the reason. Remove the entry when a fix lands. Add an entry only
+      # for a benchmark or a step against a real network, or for an offender
+      # that the sweep lists and that is not fixed yet.
+    paths:
+      include:
+        - "*_test.go"
