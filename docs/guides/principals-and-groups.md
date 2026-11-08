@@ -241,11 +241,9 @@ Each `server:read-*` action is not in the table:
 group that holds one is not protected, and the identity provider can still
 manage its members.
 
-A read that can return secret material stays sensitive. The settings read
-does not return the hidden values of the secret settings: each setting that
-can hold a credential carries the `Sensitive` mark, and the
-`TestSensitiveSettingsAreMarked` test keeps the mark on each such setting. A
-secret setting shows only whether it holds a value, never the value.
+A read that can return secret material stays sensitive. A secret setting, for
+example the database URL or a credential, shows only whether it holds a value,
+never the value.
 
 An action that no family classifies fails the check closed. A read that
 cannot check the group answers `500` with the code `server.internal`. It
