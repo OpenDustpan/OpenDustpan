@@ -129,6 +129,9 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -141,6 +144,7 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 			Guard:      grants,
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: allowAllReach{},
 			Now:        nil,
 			NewID:      nil,
 		},

@@ -72,6 +72,9 @@ func serviceWithLimits(tb testing.TB, f *fixture, limits access.LimitGroups) *ac
 		Store: f.store, Directory: f.store, Namespaces: f.store, Authorizer: f.authz,
 		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) }, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: limits,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
@@ -368,6 +371,9 @@ func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
 		Store: f.store, Directory: f.store, Namespaces: f.store, Authorizer: authz,
 		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) }, NewID: nil,
 		BootstrapAdmins: []string{"admin"},
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 		LimitGroups: fakeLimits{
 			lifted: map[limitKey]bool{
 				{group: ops.ID, newName: "", change: principal.GroupChangeAddMember}: true,

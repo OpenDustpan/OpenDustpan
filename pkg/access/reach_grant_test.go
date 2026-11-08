@@ -25,6 +25,10 @@ func (failingGrants) GrantsOf(context.Context, access.Subject) ([]access.Grant, 
 	return nil, errGrantsUnavailable
 }
 
+func (failingGrants) GrantsOfSubjects(context.Context, []access.Subject) ([]access.Grant, error) {
+	return nil, errGrantsUnavailable
+}
+
 func (failingGrants) RoleGrantedBelowInstallation(context.Context, string) (bool, error) {
 	return false, errGrantsUnavailable
 }
@@ -50,7 +54,7 @@ func (f *fixture) serviceOver(
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: f.store, Directory: dir, Namespaces: f.store, Authorizer: f.authz, Reach: reach,
-		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"},
+		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("access service: %v", err)
@@ -76,7 +80,7 @@ func (f *fixture) serviceOverStore(
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: store, Directory: f.store, Namespaces: f.store, Authorizer: authz, Reach: reach,
-		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"},
+		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("access service: %v", err)

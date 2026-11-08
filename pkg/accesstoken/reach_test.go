@@ -226,7 +226,7 @@ func (f *reachFixture) grantTokenRoleAs(
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: f.store, Directory: f.store, Namespaces: f.store, Authorizer: f.authorizerOf(t),
-		Reach: f.reach, Now: f.clock.Now, NewID: nil, BootstrapAdmins: []string{"admin"},
+		Reach: f.reach, Now: f.clock.Now, NewID: nil, BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

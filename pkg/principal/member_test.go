@@ -287,10 +287,12 @@ func newMemberFixture(t *testing.T) memberFixture {
 
 	checks := 0
 
+	var changes []groupCheck
+
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      openStore(t),
-		Guard:      fakeGuard{refuse: map[string]bool{}, checks: &checks},
+		Guard:      fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes},
 		Namespaces: nil,
 		Tokens:     nil,
 		GroupReach: nil,
