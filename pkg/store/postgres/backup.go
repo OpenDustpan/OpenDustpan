@@ -608,7 +608,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "closed_to_identity_provider",
 			},
 			orderBy: []string{"id"},
 		},

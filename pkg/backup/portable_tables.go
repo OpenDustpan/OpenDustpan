@@ -534,6 +534,7 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: "closed_to_identity_provider", Kind: KindBool},
 			},
 		},
 		{

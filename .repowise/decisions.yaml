@@ -3937,6 +3937,18 @@ decisions:
   accepted_artifact: "docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md"
   evidence:
   - "docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md"
+- id: "adr-0356"
+  title: "ADR 356: Remove the unreachable trial message for a missing database"
+  decision: "1. **The trial variant of the database message goes (owner, 2026-11-07).** `serve` gives one message for a missing database. The message reads: \"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db\". The code removes `errNoDatabaseTrial`.\n2. **What stays (owner, 2026-11-07).** `serve` still checks the key first, then the database, and reports only the first missing one. The trial variant of the key message stays. The full key message and the full database message stay. The rule for which settings count as a setting of `serve` stays for the key message.\n\nLater changes, from the status line of ADR 356: Decided by the project owner on 7 November 2026."
+  reason: "ADR 238 decision 3 says that `serve` checks the key first, then the database. The trial hint is \"For a trial, run: opendustpan dev\". The hint can go in the message for a missing key and in the message for a missing database. It goes in the hint only when the operator set no setting of `serve` and stderr is a terminal."
+  scope:
+  - "cmd/opendustpan/key_test.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0356-remove-the-unreachable-trial-message-for-a-missing-database.md"
+  evidence:
+  - "docs/adr/0356-remove-the-unreachable-trial-message-for-a-missing-database.md"
 - id: "adr-0358"
   title: "ADR 358: Automatic drift remediation is opt-in, and a namespace can always opt out"
   decision: "1. **Auto-dedrift is available and opt-in (owner, 2026-10-21).** The server has the feature. It is off by default. With no setting that turns it on, a drift result starts no remediation job. A drift check still only plans (ADR 263 decision 1).\n2. **An auto-dedrift job is a separate job that a drift result starts.** It is not the drift check and it does not turn the drift check into an apply. The drift check keeps `Changes()` false and its plan phase only. The remediation job is a job of its own with its own plan phase and its own stored plan, as ADR 258 decision 2 says.\n3. **A setting turns the feature on.** The setting has a value at an object that can give a default. The same objects that give a default for the drift schedule (ADR 263 decision 5) are the candidates. Until a principal with the settings action of that object turns the setting on, the feature is off for that object.\n4. **A namespace can turn the feature off, and its opt-out always wins.** When a namespace has auto-dedrift off, no opt-in above it or below it starts a remediation job in that namespace. An opt-in at the installation, at a collection or at a unit does not override the opt-out of the namespace. To use the feature again, a principal with the settings action of the namespace removes the opt-out.\n5. **The API shows the effective value.** For each unit, the API shows if auto-dedrift is on or off, and which setting decided it: the object, the value and the principal and time that set it. This follows the rule that each default shows its effective value. A user can ask why a unit was remediated or was not, and the answer names the setting.\n6. **An auto-dedrift job goes through the same controls as a job that a person starts.** It is a job that changes state, so `Changes()` is true. It meets the same gates, approval rules, change freezes, access limits and manual locks as a job that a person starts. The opt-in does not skip a gate. A rule of ADR 258 decision 3 that holds a remediation job for the approval of a person still applies to it. An installation or a namespace cannot use this feature to bypass a control that it has.\n7. **The audit log records the job as automatic.** The record of the job names that the server started it, which setting allowed it, and the drift result that caused it. A user can list these records and filter them from the jobs that a person started. A job that the server decides not to start because of an opt-out writes no job, and the API answers the question in decision 5.\n8. **ADR 258 decision 4 stays true.** A team can still start a remediation job from its own automation through the API. This decision adds the server-side path. It does not remove that one."
@@ -3973,3 +3985,19 @@ decisions:
   accepted_artifact: "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"
   evidence:
   - "docs/adr/0360-catalog-upgrade-paths-and-time-to-live-of-units.md"
+- id: "adr-0361"
+  title: "ADR 361: A scope that covers every object names the namespaces that it leaves out"
+  decision: "1. **A scope that covers every object can name the namespaces that it leaves out (owner, 2026-11-08).** `identity.Scope` gets a list of excluded namespaces next to `All`. The list has a meaning only when `All` is set.\n2. **The IP allowlist gate fills the list (owner, option A of #698).** For a scope with `All` set, the gate puts in the list each namespace whose allowlist refuses the client address. It reads the namespaces that have an allowlist through a new method of the `ipallow` store port. Both SQL adapters implement the method. The method gets conformance tests before any adapter implements it.\n3. **Every consumer of the scope applies the list (owner, option A of\n#698).** The consumers are the namespace filter of both SQL dialects (a\n`NOT IN` clause), the deleted-units read scope, the namespace list and the caller-access API. The caller-access API shows the list next to `all`, so that a user can see why a namespace is not in a list."
+  reason: "The IP allowlist gate filters the scope that `Authorizer.ListObjects` returns. The gate is in `pkg/ipallow/gate.go`. It leaves out each namespace, collection and unit in a namespace whose allowlist does not contain the client address. A scope with `All` set stays unchanged, because the scope cannot say \"every object except the objects of namespace X\". `identity.Scope` in `pkg/identity/identity.go` has `All` and the explicit lists only."
+  scope:
+  - "internal/api/server/namespaces.go"
+  - "internal/api/server/review.go"
+  - "pkg/access/caller_access.go"
+  - "pkg/identity/identity.go"
+  - "pkg/ipallow/gate.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-08"
+  accepted_artifact: "docs/adr/0361-a-scope-that-covers-every-object-names-the-namespaces-that-it-leaves-out.md"
+  evidence:
+  - "docs/adr/0361-a-scope-that-covers-every-object-names-the-namespaces-that-it-leaves-out.md"

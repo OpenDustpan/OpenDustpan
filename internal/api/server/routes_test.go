@@ -709,7 +709,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := st.CreateGroup(ctx, group, storetest.ServerChange(at, "group:"+testGroupID)); err != nil {
 		t.Fatalf("seed group: %v", err)
