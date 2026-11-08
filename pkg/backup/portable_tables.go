@@ -775,5 +775,6 @@ func portableSpec() []PortableTable {
 		portableSettingTables(),
 		portableSelfServiceTables(),
 		portableTrustRuleTables(),
+		portableBreakGlassReviewTables(),
 	)
 }
