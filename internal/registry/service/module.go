@@ -114,7 +114,7 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 	f.bytes = nil
 
 	if moveErr := s.move(ctx, view, rec.ID, []measured{f}); moveErr != nil {
-		return registry.Release{}, moveErr
+		return registry.Release{}, s.refusal(ctx, c, rec, req.Version, moveErr)
 	}
 
 	return s.record(ctx, c, p, rel)
