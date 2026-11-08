@@ -1,0 +1,190 @@
+name: auto-regen-push
+
+# Runs after auto-regen-resolve, in the context of main. GitHub always takes
+# this file from main, so the file of the pull request branch cannot change
+# these steps. The result of the resolve run comes from a branch that ran pull
+# request code, so the steps here check the pull request and the patch again.
+#
+# This is the only file of the three that has the token of the GitHub App. No
+# step after the checkout of the pull request branch runs pull request code:
+# only git, the script of main and the GitHub API.
+on:
+  workflow_run:
+    workflows: [ auto-regen-resolve ]
+    types: [ completed ]
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    # Only a successful run of auto-regen-resolve.yml of this repository that
+    # the dispatch job started. The name in `workflows:` above is not enough:
+    # a branch can add another workflow with the same name.
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'workflow_dispatch' &&
+        github.event.workflow_run.path == '.github/workflows/auto-regen-resolve.yml' &&
+        github.event.workflow_run.repository.full_name == github.repository &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    # Never cancel a push in progress.
+    concurrency:
+      group: auto-regen-push-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Read the main SHA
+        id: main
+        working-directory: trusted
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Match the run to a pull request
+        id: match
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ./scripts/auto-regen.sh match-run "$BRANCH" "$HEAD_SHA" "$RUNNER_TEMP/run.env"
+          if [ -f "$RUNNER_TEMP/run.env" ]; then
+            cat "$RUNNER_TEMP/run.env" >> "$GITHUB_OUTPUT"
+            cat "$RUNNER_TEMP/run.env" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Download the result of the resolve run
+        id: download
+        if: ${{ steps.match.outputs.number != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: auto-regen-result
+          path: ${{ runner.temp }}/in
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # The result file comes from a run that ran pull request code. Only its
+      # status and its main SHA are read here. The number, branch and head
+      # come from match-run, and main comes from the checkout above.
+      - name: Read the result
+        id: result
+        if: ${{ steps.match.outputs.number != '' }}
+        env:
+          DOWNLOAD: ${{ steps.download.outcome }}
+          MAIN_SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          status=missing
+          if [ "$DOWNLOAD" = success ] && [ -f "$RUNNER_TEMP/in/result.env" ]; then
+            status="$(sed -n 's/^status=\([a-z-]*\)$/\1/p' "$RUNNER_TEMP/in/result.env" | head -n 1)"
+            result_main="$(sed -n 's/^main=//p' "$RUNNER_TEMP/in/result.env" | head -n 1)"
+            if [ "$result_main" != "$MAIN_SHA" ]; then
+              echo "auto-regen: #${{ steps.match.outputs.number }}: main moved since the resolve run; skip"
+              status=stale
+            fi
+          fi
+          echo "auto-regen: #${{ steps.match.outputs.number }}: resolve status: ${status:-unknown}"
+          echo "status=${status:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Check the patch
+        if: ${{ steps.result.outputs.status == 'ready' }}
+        working-directory: trusted
+        run: ./scripts/auto-regen.sh check-patch "$RUNNER_TEMP/in/regen.patch"
+      - name: Create the token of the GitHub App
+        id: app
+        if: ${{ steps.result.outputs.status == 'ready' || steps.result.outputs.status == 'other-conflicts' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.REGEN_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REGEN_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      # The token is kept for the push. No step after this one runs pull
+      # request code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ steps.result.outputs.status == 'ready' || steps.result.outputs.status == 'other-conflicts' }}
+        with:
+          ref: refs/heads/${{ steps.match.outputs.branch }}
+          path: pr
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      # The list of files comes from git here, not from the result file of
+      # the resolve run. The marker keeps it to one comment for each head.
+      - name: Comment on conflicts in files that are not generated
+        if: ${{ steps.result.outputs.status == 'other-conflicts' }}
+        working-directory: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ steps.match.outputs.number }}
+          MAIN_SHA: ${{ steps.main.outputs.sha }}
+          HEAD_SHA: ${{ steps.match.outputs.head }}
+        run: |
+          files="$(../trusted/scripts/auto-regen.sh other-conflicts "$MAIN_SHA" "$HEAD_SHA")"
+          if [ -z "$files" ]; then
+            echo "auto-regen: #$PR: git finds no conflict outside the generated files; no comment"
+            exit 0
+          fi
+          marker="<!-- auto-regen: head=$HEAD_SHA -->"
+          if gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --jq '.[].body' | grep -qF "$marker"; then
+            echo "auto-regen: #$PR: a comment for head $HEAD_SHA exists; no new comment"
+            exit 0
+          fi
+          {
+            echo "$marker"
+            echo "Main moved, and this pull request conflicts with main in files that are not generated. The auto-regen workflow resolves only generated files. Merge main and resolve these files by hand:"
+            echo
+            while IFS= read -r f; do printf -- "- \`%s\`\n" "$f"; done <<< "$files"
+            echo
+            echo "Head: $HEAD_SHA. Main: $MAIN_SHA."
+          } > "$RUNNER_TEMP/comment.md"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+          echo "auto-regen: #$PR: commented on the conflicts in files that are not generated"
+      - name: Merge main, apply the patch and commit
+        if: ${{ steps.result.outputs.status == 'ready' }}
+        working-directory: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          MAIN_SHA: ${{ steps.main.outputs.sha }}
+          HEAD_SHA: ${{ steps.match.outputs.head }}
+        run: |
+          bot_id="$(gh api "users/${APP_SLUG}[bot]" --jq .id)"
+          export BOT_NAME="${APP_SLUG}[bot]"
+          export BOT_EMAIL="${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          ../trusted/scripts/auto-regen.sh apply "$MAIN_SHA" "$HEAD_SHA" "$RUNNER_TEMP/in/regen.patch"
+      # A plain push: it fails when the branch moved. Never main, never force.
+      - name: Push to the pull request branch
+        if: ${{ steps.result.outputs.status == 'ready' }}
+        working-directory: pr
+        env:
+          BRANCH: ${{ steps.match.outputs.branch }}
+        run: |
+          case "$BRANCH" in
+            main|gh-readonly-queue/*) echo "auto-regen: refuse to push to $BRANCH"; exit 1 ;;
+          esac
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "auto-regen: #${{ steps.match.outputs.number }}: pushed $(git rev-parse HEAD) to $BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"
+      # Auto-merge puts the pull request back in the merge queue after CI
+      # passes. If auto-merge cannot be turned on, enqueue the pull request.
+      - name: Turn auto-merge on again
+        if: ${{ steps.result.outputs.status == 'ready' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ steps.match.outputs.number }}
+        run: |
+          id="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .node_id)"
+          if gh api graphql -f id="$id" -f query="mutation(\$id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: \$id, mergeMethod: SQUASH}) { clientMutationId } }" > /dev/null; then
+            echo "auto-regen: #$PR: auto-merge is on"
+          else
+            echo "auto-regen: #$PR: auto-merge failed; enqueue the pull request"
+            gh api graphql -f id="$id" -f query="mutation(\$id: ID!) { enqueuePullRequest(input: {pullRequestId: \$id}) { clientMutationId } }" > /dev/null
+            echo "auto-regen: #$PR: enqueued"
+          fi

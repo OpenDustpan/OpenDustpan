@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
-# The steps of the auto-regen workflow (.github/workflows/auto-regen.yml).
-# The workflow finds pull requests that the merge queue removed because main
-# moved and the pull request conflicts only in generated files. It merges
-# main, takes the side of main for each conflicted generated file, runs the
-# generators again and pushes the merge commit to the pull request branch.
+# The steps of the auto-regen workflows (.github/workflows/auto-regen*.yml).
+# The find job selects pull requests that the merge queue removed because main
+# moved and the pull request conflicts only in generated files. A resolve run
+# on the pull request branch merges main, takes the side of main for each
+# conflicted generated file, runs the generators again and writes a patch. A
+# push run on main puts the patch on the pull request branch.
 #
 # Subcommands:
 #   find OUT_FILE
 #       Write a JSON list of candidate pull requests to OUT_FILE. Reads
 #       GITHUB_REPOSITORY, EVENT_PR and INPUT_PR. Needs gh and jq
 #       with a read token. Runs no pull request code.
+#   dispatch PRS_JSON MAIN_SHA
+#       Dispatch auto-regen-resolve.yml on the branch of each pull request in
+#       PRS_JSON, with MAIN_SHA. Reads GITHUB_REPOSITORY. Needs gh with a
+#       token that can dispatch workflows. A failed dispatch logs one line and
+#       continues with the next pull request.
 #   resolve MAIN_SHA OUT_DIR
 #       Run in a checkout of the pull request head. Merge MAIN_SHA, check the
 #       conflicts, run the generators and write OUT_DIR/result.env and
 #       OUT_DIR/regen.patch. This step runs the code of the pull request.
 #       Give it no secret and no write token.
+#   match-run BRANCH HEAD_SHA OUT_FILE
+#       Find the one open pull request from BRANCH at HEAD_SHA to main. Write
+#       number, branch and head to OUT_FILE as key=value lines. On a mismatch,
+#       log one line and write nothing.
 #   apply MAIN_SHA HEAD_SHA PATCH
 #       Run in a checkout of the pull request branch. Check the patch, merge
 #       MAIN_SHA again, apply the patch to the generated paths and commit.
@@ -417,17 +427,87 @@ cmd_find() {
 	log "candidates: $list"
 }
 
+# cmd_dispatch PRS_JSON MAIN_SHA: dispatch the resolve workflow on the branch
+# of each candidate. A failed dispatch logs one line and does not stop the
+# others.
+cmd_dispatch() {
+	local prs_json="$1" main_sha="$2" repo="${GITHUB_REPOSITORY:?}"
+	local number branch head_sha
+	[ -f "$prs_json" ] || die "no pull request list: $prs_json"
+	[[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || die "main is not a full commit SHA: $main_sha"
+	while IFS=$'\t' read -r number branch head_sha; do
+		[[ "$number" =~ ^[0-9]{1,7}$ ]] || die "a pull request number is not a number: $number"
+		[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || die "the head of #$number is not a full commit SHA: $head_sha"
+		case "$branch" in
+		main | gh-readonly-queue/*)
+			die "refuse to dispatch on $branch"
+			;;
+		esac
+		if gh api -X POST "repos/$repo/actions/workflows/auto-regen-resolve.yml/dispatches" \
+			-f ref="$branch" \
+			-f "inputs[main]=$main_sha" \
+			-f "inputs[head]=$head_sha" \
+			-f "inputs[pr]=$number" >/dev/null; then
+			log "#$number: dispatched the resolve run on $branch"
+		else
+			log "#$number: dispatch failed; continue with the next candidate"
+		fi
+	done < <(jq -r '.[] | [.number, .branch, .head] | @tsv' "$prs_json")
+}
+
+# cmd_match_run BRANCH HEAD_SHA OUT_FILE: find the one open pull request from
+# BRANCH at HEAD_SHA to main. Write number, branch and head to OUT_FILE. On a
+# mismatch, log one line and write nothing.
+cmd_match_run() {
+	local branch="$1" head_sha="$2" out="$3" repo="${GITHUB_REPOSITORY:?}"
+	local owner="${repo%%/*}" prs count number state draft head_repo actual_head actual_branch base
+	[[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || { log "the branch is not valid for this workflow: $branch"; return 0; }
+	case "$branch" in
+	main | gh-readonly-queue/*)
+		log "the branch is protected from this workflow: $branch"
+		return 0
+		;;
+	esac
+	case "$branch" in
+	*..*)
+		log "the branch has a dot dot: $branch"
+		return 0
+		;;
+	esac
+	[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { log "the head is not a full commit SHA: $head_sha"; return 0; }
+	prs="$(gh api --paginate "repos/$repo/pulls?state=open&base=main&head=$owner:$branch" \
+		--jq '.[] | [.number, .state, (.draft | tostring), .head.repo.full_name, .head.sha, .head.ref, .base.ref] | @tsv')"
+	[ -n "$prs" ] || { log "no open pull request from $branch to main"; return 0; }
+	count="$(printf '%s\n' "$prs" | wc -l)"
+	[ "$count" -eq 1 ] || { log "$count open pull requests from $branch to main; expected one"; return 0; }
+	IFS=$'\t' read -r number state draft head_repo actual_head actual_branch base <<<"$prs"
+	if [ "$state" != open ] || [ "$draft" != false ] || [ "$head_repo" != "$repo" ] ||
+		[ "$actual_head" != "$head_sha" ] || [ "$actual_branch" != "$branch" ] || [ "$base" != main ]; then
+		log "the pull request from $branch does not match the run"
+		return 0
+	fi
+	[[ "$number" =~ ^[0-9]{1,7}$ ]] || { log "the pull request number is not valid: $number"; return 0; }
+	{
+		printf 'number=%s\n' "$number"
+		printf 'branch=%s\n' "$branch"
+		printf 'head=%s\n' "$head_sha"
+	} >"$out"
+	log "#$number: matched the current head of $branch"
+}
+
 main() {
 	local sub="${1:-}"
 	shift || true
 	case "$sub" in
 	find) [ "$#" -eq 1 ] || die "usage: auto-regen.sh find OUT_FILE"; cmd_find "$@" ;;
+	dispatch) [ "$#" -eq 2 ] || die "usage: auto-regen.sh dispatch PRS_JSON MAIN_SHA"; cmd_dispatch "$@" ;;
 	resolve) [ "$#" -eq 2 ] || die "usage: auto-regen.sh resolve MAIN_SHA OUT_DIR"; cmd_resolve "$@" ;;
+	match-run) [ "$#" -eq 3 ] || die "usage: auto-regen.sh match-run BRANCH HEAD_SHA OUT_FILE"; cmd_match_run "$@" ;;
 	apply) [ "$#" -eq 3 ] || die "usage: auto-regen.sh apply MAIN_SHA HEAD_SHA PATCH"; cmd_apply "$@" ;;
 	other-conflicts) [ "$#" -eq 2 ] || die "usage: auto-regen.sh other-conflicts MAIN_SHA HEAD_SHA"; cmd_other_conflicts "$@" ;;
 	check-patch) [ "$#" -eq 1 ] || die "usage: auto-regen.sh check-patch PATCH"; cmd_check_patch "$@" ;;
 	paths) cmd_paths ;;
-	*) die "usage: auto-regen.sh find|resolve|apply|other-conflicts|check-patch|paths ..." ;;
+	*) die "usage: auto-regen.sh find|dispatch|resolve|match-run|apply|other-conflicts|check-patch|paths ..." ;;
 	esac
 }
 
