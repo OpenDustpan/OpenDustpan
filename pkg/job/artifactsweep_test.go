@@ -478,13 +478,13 @@ func TestSweepCountsRefusedTakes(t *testing.T) {
 		guard  func() blobguard.Leases
 	}{
 		{name: "a backup", reason: blobguard.WaitBackup, guard: func() blobguard.Leases {
-			g := blobguardtest.NewLeases(time.Now)
+			g := blobguardtest.NewLeases(leaseNow)
 			g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
 
 			return g
 		}},
 		{name: "a restore", reason: blobguard.WaitRestore, guard: func() blobguard.Leases {
-			g := blobguardtest.NewLeases(time.Now)
+			g := blobguardtest.NewLeases(leaseNow)
 			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
 
 			return g
@@ -492,13 +492,13 @@ func TestSweepCountsRefusedTakes(t *testing.T) {
 		// The sweep refuses a nil guard, so the fake answers the error of a
 		// deleter that has no guard.
 		{name: "no guard", reason: blobguard.WaitNoGuard, guard: func() blobguard.Leases {
-			g := blobguardtest.NewLeases(time.Now)
+			g := blobguardtest.NewLeases(leaseNow)
 			g.Fail(blobguard.ErrNoWatch)
 
 			return g
 		}},
 		{name: "a failed take", reason: blobguard.WaitGuardError, guard: func() blobguard.Leases {
-			g := blobguardtest.NewLeases(time.Now)
+			g := blobguardtest.NewLeases(leaseNow)
 			g.Fail(errNamesRead)
 
 			return g
