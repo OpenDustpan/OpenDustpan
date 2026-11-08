@@ -98,7 +98,7 @@ previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.
 
-**Status.** Met on 2026-10-12 on main 60f8163, with the upgrade exception
+**Status.** Met on 2026-10-12 on main 7fcc35b, with the upgrade exception
 below. The e2e suite passes the exit-test steps for both tools, on each
 version in the matrix, on SQLite and on PostgreSQL, through the real binary over TLS. The backup and
 restore steps also pass with the blobs on an S3-compatible server, and
@@ -431,7 +431,7 @@ Out of scope: replication between installations, promotion and forwarding
 (ADR 248); active-active across sites; SQLite with more than one instance; the
 shared cache (ADR 72 decision 9); a flag for the lease period.
 
-**Minimum supported topology.** Two or more instances; PostgreSQL 16 or
+**Minimum supported topology.** Two or more instances; PostgreSQL 18 or
 later; an S3-compatible object store, with no requirement for conditional
 writes; a backup target on an S3-compatible store. The Helm chart refuses the
 `fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
@@ -824,6 +824,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |
 | [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification                        | runs (milestone 5)                                              |
+| [RFC 124](rfc/0124-codegen-for-discovered-resources.md) Code for unmanaged resources               | the sweep plugin milestone (RFC 123) for slices 0 to 6; the agents milestone (milestone 10) for slices 7 and 8 |
 | [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code                              | a stable REST API for groups and roles (milestone 4)            |
 | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
 | [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git                                    | runs (milestone 5)                                              |

@@ -38,7 +38,7 @@ owner accepted it. The owner also approved the modules
 and `github.com/beevik/etree`. OpenDustpan has no users and no data yet, so
 this decision needs no migration of data and no compatibility path.
 
-Facts on `main` at a50ab96:
+Facts on `main` at 906805a:
 
 - No code stores a password. `pkg/session` has the providers `oidc` and
   `oauth` only.

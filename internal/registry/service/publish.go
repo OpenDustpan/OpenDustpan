@@ -223,8 +223,8 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 		return registry.Release{}, refuseErr
 	}
 
-	if promoteErr := s.promote(ctx, p.view, p.rec.ID, p.files); promoteErr != nil {
-		return registry.Release{}, promoteErr
+	if moveErr := s.move(ctx, p.view, p.rec.ID, p.files); moveErr != nil {
+		return registry.Release{}, moveErr
 	}
 
 	return s.record(ctx, c, p, rel)
@@ -286,7 +286,7 @@ func (s *Service) verify(ctx context.Context, c *Caller, p publishing) (registry
 }
 
 // refuseOtherContent returns registry.ErrVersionExists when the version of
-// rel is published with other content. It runs before promote, so a
+// rel is published with other content. It runs before move, so a
 // refused publish writes no content key. A repeat with the same content
 // passes, and the store answers it.
 func (s *Service) refuseOtherContent(ctx context.Context, p publishing, rel registry.Release) error {
@@ -311,7 +311,7 @@ func (s *Service) refuseOtherContent(ctx context.Context, p publishing, rel regi
 // answer is the first release, with the first publisher and time.
 func (s *Service) record(ctx context.Context, c *Caller, p publishing, rel registry.Release) (registry.Release, error) {
 	// Defense in depth: refuseOtherContent refuses a known version with other
-	// content before promote. The store checks it again in the transaction of
+	// content before move. The store checks it again in the transaction of
 	// the write, so a publish that races with another one is still refused.
 	err := s.store.Publish(ctx, rel, p.rec.Fence(), s.releaseEntry(c, rel))
 	if errors.Is(err, registry.ErrKeyNotFound) {
@@ -566,10 +566,10 @@ func (s *Service) check(
 	return rel, nil
 }
 
-// promote copies each staged file to its content key. The reader that feeds the
+// move copies each staged file to its content key. The reader that feeds the
 // copy checks the SHA-256 and the size again, and fails at the end when they
 // differ, so a content key never holds bytes that were not checked.
-func (s *Service) promote(ctx context.Context, view *blob.Scoped, id namespace.ID, files []measured) error {
+func (s *Service) move(ctx context.Context, view *blob.Scoped, id namespace.ID, files []measured) error {
 	for i := range files {
 		f := &files[i]
 

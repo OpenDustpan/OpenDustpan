@@ -330,13 +330,23 @@ func TestCheck(t *testing.T) {
 }
 
 // plainHostile returns strings that Slack acts on in a plain text: they have
-// no markup that the renderer can encode, so only verbatim stops them.
+// no markup that the renderer can encode, so only verbatim stops them. The
+// fallback text has no verbatim, so it breaks their separators instead.
 func plainHostile() []string {
 	return []string{
 		"@here", "@channel", "#general", "https://evil.example", "evil.example",
 		"<!channel>", "<@U123>", "<https://evil|x>", "@everyone", "ops@evil.example",
+		"example。com", "example．com", "example｡com", "example＠com", "example＃com",
+		"user。example.com", "user．example.com", "user｡example.com", "user＠example.com",
+		"user＃example.com",
+		"。general", "．general", "｡general", "＠here", "＃general",
 	}
 }
+
+// fallbackSeparators are the characters that the fallback text must break:
+// @, #, a dot and a colon, their ideographic, fullwidth, halfwidth and small
+// forms, the one dot leader and the fullwidth solidus.
+const fallbackSeparators = "@#.:\u3002\uFF0E\uFF61\uFF20\uFF03\uFE52\u2024\uFE6B\uFE5F\uFF1A\uFF0F"
 
 func TestRenderShowsHostileAsPlainText(t *testing.T) {
 	t.Parallel()
@@ -369,6 +379,55 @@ func TestRenderShowsHostileAsPlainText(t *testing.T) {
 			}
 
 			checkFallback(t, msg.Text, hostile, want)
+		})
+	}
+}
+
+// TestFallbackBreaksEachSeparator checks each ideographic, fullwidth,
+// halfwidth and small separator alone, so a change that drops one rune names
+// it.
+func TestFallbackBreaksEachSeparator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		sep  rune
+	}{
+		{"ideographic full stop", '。'},
+		{"fullwidth full stop", '．'},
+		{"halfwidth ideographic full stop", '｡'},
+		{"fullwidth commercial at", '＠'},
+		{"fullwidth number sign", '＃'},
+		{"small full stop", '﹒'},
+		{"one dot leader", '․'},
+		{"small commercial at", '﹫'},
+		{"small number sign", '﹟'},
+		{"fullwidth colon", '：'},
+		{"fullwidth solidus", '／'},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hostile := "x" + string(tt.sep) + "y"
+
+			req, err := slack.New().Render(content(func(c *chat.Content) {
+				c.Product, c.Title, c.Summary = hostile, hostile, hostile
+			}))
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+
+			var msg wireMessage
+			if err := json.Unmarshal(req.Body, &msg); err != nil {
+				t.Fatal(err)
+			}
+
+			want := "x" + string(tt.sep) + "\u200by"
+			if !strings.Contains(msg.Text, want) {
+				t.Errorf("fallback %q: %U is not followed by a zero-width space", msg.Text, tt.sep)
+			}
 		})
 	}
 }
@@ -435,6 +494,17 @@ func checkFallback(t *testing.T, fallback, hostile, want string) {
 	for _, trigger := range []string{"@here", "@channel", "@everyone", "@U123", "#general", "://", "evil.example", hostile} {
 		if strings.Contains(fallback, trigger) {
 			t.Errorf("fallback %q holds the trigger %q", fallback, trigger)
+		}
+	}
+
+	rs := []rune(fallback)
+	for i, r := range rs {
+		if !strings.ContainsRune(fallbackSeparators, r) {
+			continue
+		}
+
+		if i+1 >= len(rs) || rs[i+1] != '\u200b' {
+			t.Errorf("fallback %q: %q is not followed by a zero-width space", fallback, r)
 		}
 	}
 
