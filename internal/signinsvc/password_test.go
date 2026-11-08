@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -52,6 +53,8 @@ type fakeDirectory struct {
 	// gateTwice makes the method call the gate a second time with another
 	// subject.
 	gateTwice bool
+	// ignoreGate makes the method bind also when the gate refuses the bind.
+	ignoreGate bool
 
 	verifies int
 	binds    []string
@@ -60,7 +63,7 @@ type fakeDirectory struct {
 func newDirectory() *fakeDirectory {
 	return &fakeDirectory{
 		mu: sync.Mutex{}, kind: session.MethodLDAP, down: false, skipGate: false, gateSubject: "",
-		gateTwice: false, verifies: 0, binds: nil,
+		gateTwice: false, ignoreGate: false, verifies: 0, binds: nil,
 		users: map[string]fakeUser{
 			"alice":       {subject: "sub-alice", password: "right"},
 			"ALICE@corp":  {subject: "sub-alice", password: "right"},
@@ -87,7 +90,7 @@ func (d *fakeDirectory) Verify(
 		return none, fmt.Errorf("%w: no entry", session.ErrMethodRejected)
 	}
 
-	if err := d.callGate(ctx, gate, u.subject); err != nil {
+	if err := d.callGate(ctx, gate, u.subject); err != nil && !d.ignoresGate() {
 		return none, fmt.Errorf("bind gate: %w", err)
 	}
 
@@ -104,6 +107,39 @@ func (d *fakeDirectory) Verify(
 	default:
 		return ldapAssertion(u.subject, c.UserName), nil
 	}
+}
+
+// ignoresGate reports whether d binds also when the gate refuses.
+func (d *fakeDirectory) ignoresGate() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.ignoreGate
+}
+
+// countingLocks is a lock store that counts the failures that the service
+// adds.
+type countingLocks struct {
+	authgate.NameLockCounter
+
+	mu   sync.Mutex
+	adds int
+}
+
+func (c *countingLocks) AddNameFailure(ctx context.Context, f authgate.NameFailure) (authgate.NameLock, error) {
+	c.mu.Lock()
+	c.adds++
+	c.mu.Unlock()
+
+	return c.NameLockCounter.AddNameFailure(ctx, f)
+}
+
+// added returns the count of the failures that the service added so far.
+func (c *countingLocks) added() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.adds
 }
 
 // callGate calls the gate as the options of d say.
@@ -171,9 +207,10 @@ func (k keyReader) NameLockKey(context.Context) ([]byte, error) { return k.key, 
 // passwordHarness is a service with the counts of a SQLite store, the fake
 // ports of w, and a fake directory.
 type passwordHarness struct {
-	w   *world
-	svc *signinsvc.Service
-	dir *fakeDirectory
+	w     *world
+	svc   *signinsvc.Service
+	dir   *fakeDirectory
+	locks *countingLocks
 }
 
 // newPasswordHarness returns a harness. keys replaces the key reader of the
@@ -196,19 +233,21 @@ func newPasswordHarness(t *testing.T, keys signinsvc.NameKeys) passwordHarness {
 		keys = st
 	}
 
+	locks := &countingLocks{NameLockCounter: st, mu: sync.Mutex{}, adds: 0}
+
 	w := newWorld()
 	w.principal.Subject = ldapID + ":sub-alice"
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: nil,
-		Removals: nil, States: nil, Locks: st, NameKeys: keys, Logger: slog.New(w.logs),
+		Removals: nil, States: nil, Locks: locks, NameKeys: keys, Logger: slog.New(w.logs),
 		OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)
 	}
 
-	return passwordHarness{w: w, svc: svc, dir: newDirectory()}
+	return passwordHarness{w: w, svc: svc, dir: newDirectory(), locks: locks}
 }
 
 // signIn signs in with the typed name and the password.
@@ -433,6 +472,70 @@ func TestPasswordMethodThatBreaksTheGateIsRefused(t *testing.T) {
 				t.Fatalf("a session started: %+v", h.w.starts)
 			}
 		})
+	}
+}
+
+// TestPasswordLockedPersonWithAMethodThatIgnoresTheGate locks a person, and
+// then signs in with the right password through a method that binds also when
+// the gate refuses, and returns an Assertion. The service refuses the sign-in
+// because the gate refused, whatever the method returned.
+func TestPasswordLockedPersonWithAMethodThatIgnoresTheGate(t *testing.T) {
+	t.Parallel()
+
+	h := newPasswordHarness(t, nil)
+
+	h.failTimes(t, "alice", 4)
+	h.failTimes(t, "ALICE@corp", 3)
+	h.failTimes(t, `corp\alice`, 3)
+
+	h.dir.mu.Lock()
+	h.dir.ignoreGate = true
+	h.dir.mu.Unlock()
+
+	_, err := h.signIn(t, "alice.smith", "right")
+	if got := refusalReason(t, err); got != signinsvc.ReasonSubjectLocked {
+		t.Fatalf("sign-in of a locked person = %q, want %q", got, signinsvc.ReasonSubjectLocked)
+	}
+
+	if !errors.Is(err, session.ErrMethodRejected) {
+		t.Fatalf("err = %v, want the class of a wrong password", err)
+	}
+
+	if len(h.w.starts) != 0 {
+		t.Fatalf("a session started for a locked person: %+v", h.w.starts)
+	}
+}
+
+// TestPasswordUnknownUserWritesTheCountsOfAKnownPerson proves that a sign-in
+// whose search finds no person adds as many failures to the store as a wrong
+// password of a known person, so the cost in the store does not tell that a
+// user exists. The count of the unknown person never locks: many attempts of
+// unknown users never refuse a known person.
+func TestPasswordUnknownUserWritesTheCountsOfAKnownPerson(t *testing.T) {
+	t.Parallel()
+
+	h := newPasswordHarness(t, nil)
+
+	before := h.locks.added()
+	h.failTimes(t, "bob", 1)
+	known := h.locks.added() - before
+
+	before = h.locks.added()
+	h.failTimes(t, "nobody", 1)
+	unknown := h.locks.added() - before
+
+	if known != 4 || unknown != known {
+		t.Fatalf("failures added: known person %d, unknown user %d; want 4 each", known, unknown)
+	}
+
+	for i := range 2 * lockLimit {
+		if _, err := h.signIn(t, fmt.Sprintf("nobody-%d", i), "wrong"); err == nil {
+			t.Fatalf("unknown user %d signed in", i)
+		}
+	}
+
+	if _, err := h.signIn(t, "alice", "right"); err != nil {
+		t.Fatalf("sign-in of alice after the attempts of unknown users = %v, want a session", err)
 	}
 }
 

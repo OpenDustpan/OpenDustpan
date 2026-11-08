@@ -3,6 +3,7 @@ package signinsvc
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -50,6 +51,9 @@ var errGateTwice = errors.New("bind gate called again with another subject")
 const (
 	keyKindName    = "name"
 	keyKindSubject = "subject"
+	// keyKindUnknown is the kind of the count of a sign-in whose search found
+	// no person.
+	keyKindUnknown = "unknown-subject"
 )
 
 // lockKeyLength is the length of the key of the digests of the counts.
@@ -137,18 +141,12 @@ func (s *Service) CompletePassword(ctx context.Context, req *PasswordRequest) (R
 		ProviderID: req.Provider.ID, UserName: req.UserName, Password: req.Password,
 	}, gate)
 
-	if errors.Is(methodErr, ErrSubjectLocked) || errors.Is(methodErr, authgate.ErrNameLocked) {
-		return none, s.refuse(ctx, ref, &refusal{
-			reason: ReasonSubjectLocked, answer: AnswerFailed, idpSubject: "", cause: session.ErrMethodRejected,
-		})
+	if gateErr := s.checkGate(ctx, ref, gate, methodErr); gateErr != nil {
+		return none, gateErr
 	}
 
-	if gateErr := gate.failed(); errors.Is(gateErr, errGateTwice) {
-		return none, s.refuse(ctx, ref, &refusal{
-			reason: ReasonGateSubject, answer: AnswerFailed, idpSubject: "", cause: nil,
-		})
-	} else if gateErr != nil {
-		return none, s.countRefusal(ctx, ref, ReasonSubjectLocked, gateErr)
+	if countErr := s.countUnknownPerson(ctx, req, gate, methodErr); countErr != nil {
+		return none, s.countRefusal(ctx, ref, ReasonSubjectLocked, countErr)
 	}
 
 	if methodErr == nil {
@@ -165,6 +163,53 @@ func (s *Service) CompletePassword(ctx context.Context, req *PasswordRequest) (R
 	s.clearCounts(ctx, req.Provider.ID, name, gate.lockKeys())
 
 	return res, nil
+}
+
+// checkGate refuses the sign-in when the bind gate refused the bind, whatever
+// the method returned. A locked person gets the answer of a wrong password.
+// Defense in depth: a method stops at the refusal of the gate and returns its
+// error, and the service also checks that error. The check of the gate stays
+// so that a method that ignores the refusal and binds anyway never signs a
+// locked person in.
+func (s *Service) checkGate(ctx context.Context, ref *Request, gate *bindGate, methodErr error) error {
+	gateErr := gate.failed()
+
+	switch {
+	case errors.Is(gateErr, ErrSubjectLocked), errors.Is(methodErr, ErrSubjectLocked),
+		errors.Is(methodErr, authgate.ErrNameLocked):
+		return s.refuse(ctx, ref, &refusal{
+			reason: ReasonSubjectLocked, answer: AnswerFailed, idpSubject: "", cause: session.ErrMethodRejected,
+		})
+	case errors.Is(gateErr, errGateTwice):
+		return s.refuse(ctx, ref, &refusal{reason: ReasonGateSubject, answer: AnswerFailed, idpSubject: "", cause: nil})
+	case gateErr != nil:
+		return s.countRefusal(ctx, ref, ReasonSubjectLocked, gateErr)
+	default:
+		return nil
+	}
+}
+
+// countUnknownPerson adds one failure to the counts of a random value when the
+// method rejected the sign-in and never called the gate: the search found no
+// person. So a sign-in of an unknown user writes the counts that a sign-in of
+// a known person writes in the gate, and the cost in the store does not tell
+// that a user exists. The value is random, so the count never locks and
+// never writes the records of a lock. The scheduled prune of the counts
+// deletes it after the prune age. It returns the error of a count that cannot
+// be written.
+func (s *Service) countUnknownPerson(
+	ctx context.Context, req *PasswordRequest, gate *bindGate, methodErr error,
+) error {
+	if gate.wasCalled() || !errors.Is(methodErr, session.ErrMethodRejected) {
+		return nil
+	}
+
+	_, err := s.countKey(ctx, req, keyKindUnknown, rand.Text())
+	if err != nil && !errors.Is(err, authgate.ErrNameLocked) {
+		return err
+	}
+
+	return nil
 }
 
 // checkPasswordRequest returns the reason for which req cannot reach a
@@ -378,7 +423,11 @@ func (g *bindGate) BeforeBind(ctx context.Context, subject string) error {
 	g.keys = keys
 
 	if errors.Is(err, authgate.ErrNameLocked) {
-		return fmt.Errorf("%w: %w", ErrSubjectLocked, err)
+		// Keep the refusal: the service refuses the sign-in also when the
+		// method ignores this error and binds.
+		g.err = fmt.Errorf("%w: %w", ErrSubjectLocked, err)
+
+		return g.err
 	}
 
 	if err != nil {
@@ -390,8 +439,17 @@ func (g *bindGate) BeforeBind(ctx context.Context, subject string) error {
 	return nil
 }
 
-// failed returns the error of a count that the gate could not write, or of a
-// second call with another subject, or nil.
+// wasCalled reports whether the method called the gate.
+func (g *bindGate) wasCalled() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.called
+}
+
+// failed returns the refusal that the gate gave: a locked person, a count
+// that the gate could not write, or a second call with another subject. It
+// returns nil when the gate refused nothing.
 func (g *bindGate) failed() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
