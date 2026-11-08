@@ -310,8 +310,13 @@ The alert writes three records:
 - one warning log line.
 
 Each record names the source, the group, the count of members, the percent and
-the window. The server writes one alert for each limit crossing, not one for
-each membership.
+the window. The server writes at most one alert for each source in each
+window, all groups included. The limits count the removals of each source on
+its own, so removals that are spread across providers do not add up.
+
+When the alert cannot be written, the sign-in goes on, the server writes an
+ERROR log line and an audit entry of the failed alert, and it tries the alert
+again at the next removal of the source.
 
 The server refuses a sign-in when it cannot store the membership changes of
 its group claims. No session starts then.

@@ -54,13 +54,7 @@ type Removal struct {
 // store. The check is an allowlist on the form: it rejects a removal and
 // never changes one.
 func (r Removal) Validate() error {
-	switch r.Source.Kind {
-	case RemovalSourceIdentityProvider, RemovalSourceSCIMToken:
-	default:
-		return fmt.Errorf("%w: the removal source kind %q is unknown", ErrInvalid, r.Source.Kind)
-	}
-
-	if err := validateClaimText("source ID", r.Source.ID, MaxRemovalIDBytes); err != nil {
+	if err := validateRemovalSource(r.Source); err != nil {
 		return err
 	}
 
@@ -78,6 +72,33 @@ func (r Removal) Validate() error {
 
 	if r.At.IsZero() {
 		return fmt.Errorf("%w: the removal has no time", ErrInvalid)
+	}
+
+	return nil
+}
+
+// validateRemovalSource returns ErrInvalid unless source names a record that
+// can remove members or alert.
+func validateRemovalSource(source RemovalSource) error {
+	switch source.Kind {
+	case RemovalSourceIdentityProvider, RemovalSourceSCIMToken:
+	default:
+		return fmt.Errorf("%w: the removal source kind %q is unknown", ErrInvalid, source.Kind)
+	}
+
+	return validateClaimText("source ID", source.ID, MaxRemovalIDBytes)
+}
+
+// ValidateRemovalAlert returns ErrInvalid unless source can mark an alert and
+// at is not the zero time. The check is an allowlist on the form: it rejects
+// a value and never changes one.
+func ValidateRemovalAlert(source RemovalSource, at time.Time) error {
+	if err := validateRemovalSource(source); err != nil {
+		return err
+	}
+
+	if at.IsZero() {
+		return fmt.Errorf("%w: the alert has no time", ErrInvalid)
 	}
 
 	return nil
@@ -109,6 +130,9 @@ type RemovalTotals struct {
 	// GroupMembers is the largest number of members that the group held
 	// before one of those removals.
 	GroupMembers int
+	// AlertedAt is the time of the last alert of the source, or the zero
+	// time when the source has none.
+	AlertedAt time.Time
 }
 
 // RemovalLog is the port of the log of the removals of members from a
@@ -116,13 +140,20 @@ type RemovalTotals struct {
 // writes one row for each removal that a group claim sync makes.
 //
 // AddRemoval returns ErrInvalid when the removal or the window fails its
-// checks. It returns no other sentinel.
+// checks. MarkRemovalAlert returns ErrInvalid when the source or the time
+// fails its checks. Neither returns another sentinel.
 type RemovalLog interface {
 	// AddRemoval stores r and returns the totals of the removals of its
 	// source in the window that ends at r.At: the rows with an at_ms above
-	// r.At - window and at most r.At, the new row included. It deletes the
-	// rows of the same source with an at_ms at most r.At - MaxRemovalWindow,
-	// at most MaxRemovalRowsPruned of them, in the same transaction as the
-	// write. window must be above zero and at most MaxRemovalWindow.
+	// r.At - window and at most r.At, the new row included. It also returns
+	// the time of the last alert of the source. It deletes the rows of the
+	// same source with an at_ms at most r.At - MaxRemovalWindow, at most
+	// MaxRemovalRowsPruned of them, in the same transaction as the write.
+	// window must be above zero and at most MaxRemovalWindow.
 	AddRemoval(ctx context.Context, r Removal, window time.Duration) (RemovalTotals, error)
+	// MarkRemovalAlert stores at as the time of the last alert of source. A
+	// later call replaces the time. It returns ErrInvalid when the source
+	// kind is unknown, the source ID fails the check of Removal.Validate,
+	// or at is zero.
+	MarkRemovalAlert(ctx context.Context, source RemovalSource, at time.Time) error
 }

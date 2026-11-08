@@ -34,6 +34,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -41,6 +42,10 @@ import (
 
 // ErrMissingDependency reports a Config without a required port.
 var ErrMissingDependency = errors.New("sign-in service needs a dependency")
+
+// ErrRemovalAlertUnrecorded reports that the removal alert and the audit
+// entry of its failure could not be written, so the sign-in was refused.
+var ErrRemovalAlertUnrecorded = errors.New("the removal alert and its audit entry could not be written")
 
 // Reasons of a refused sign-in, in the audit entry. No reason holds a
 // password, a ticket, a code, a token, a state or a cookie value.
@@ -219,8 +224,9 @@ type Audit interface {
 // removal alert. Nil records nothing.
 type Removals interface {
 	// Record stores one removal of each group in groupIDs for source, and
-	// alerts the administrators when the removals cross a limit. An error
-	// refuses the sign-in.
+	// alerts the administrators when the removals reach a limit. An error
+	// does not refuse the sign-in: the service records the failed alert and
+	// goes on. It refuses only when that record fails too.
 	Record(ctx context.Context, source principal.RemovalSource, groupIDs []string) error
 }
 
@@ -597,7 +603,9 @@ func (s *Service) applyGroups(
 		source := principal.RemovalSource{Kind: principal.RemovalSourceIdentityProvider, ID: p.ID}
 
 		if err := s.cfg.Removals.Record(ctx, source, removed); err != nil {
-			return "", fmt.Errorf("record the removals of a sign-in: %w", err)
+			if alertErr := s.removalAlertFailed(ctx, e, source, principalID, err); alertErr != nil {
+				return "", alertErr
+			}
 		}
 	}
 
@@ -607,6 +615,55 @@ func (s *Service) applyGroups(
 
 	return fmt.Sprintf("added %d, removed %d, suspended %d, refused %d, unmapped %d",
 		len(res.Added), len(res.Removed), len(res.Suspended), len(res.Refused), len(res.Unmapped)), nil
+}
+
+// removalAlertFailed records an alert of the removals that could not be
+// written. The sign-in goes on when the entry of its failure is written. It
+// returns ErrRemovalAlertUnrecorded when that entry fails too.
+func (s *Service) removalAlertFailed(
+	ctx context.Context, e audit.Entry, source principal.RemovalSource, principalID string, alertErr error,
+) error {
+	s.cfg.Logger.ErrorContext(ctx, "the removal alert was not written",
+		slog.String("code", errcode.PrincipalRemovalAlertFailed),
+		slog.String("source_kind", string(source.Kind)),
+		slog.String("source_id", source.ID),
+		slog.String("error", alertErr.Error()))
+
+	if err := s.recordRemovalAlertFailure(ctx, e, source, principalID); err != nil {
+		s.cfg.Logger.ErrorContext(ctx, "the audit entry of the failed removal alert was not written",
+			slog.String("source_kind", string(source.Kind)), slog.String("source_id", source.ID),
+			slog.String("error", err.Error()))
+
+		if s.cfg.OnAuditFailure != nil {
+			s.cfg.OnAuditFailure()
+		}
+
+		return fmt.Errorf("%w: %w", ErrRemovalAlertUnrecorded, err)
+	}
+
+	return nil
+}
+
+// recordRemovalAlertFailure writes the audit entry of an alert of the
+// removals that could not be written.
+func (s *Service) recordRemovalAlertFailure(
+	ctx context.Context, e audit.Entry, source principal.RemovalSource, principalID string,
+) error {
+	// Only the request context of the sign-in entry carries over. Its
+	// changes and its token do not describe the failed alert.
+	entry := audit.Entry{
+		At: s.cfg.Sessions.Now(), Namespace: audit.ServerScope, Subject: string(source.Kind) + ":" + source.ID,
+		IDPSubject: "", TokenID: "", Action: principal.AuditActionMassRemovalAlert,
+		Object: principal.Ref(principalID), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: e.SourceIP, UserAgent: e.UserAgent, Channel: e.Channel,
+		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: e.RequestID, ObjectID: "",
+		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+		Reason: errcode.PrincipalRemovalAlertFailed,
+	}
+
+	_, err := s.cfg.Audit.AppendServer(ctx, entry)
+
+	return err
 }
 
 // noGroupMapping is the note that an entry holds for an Assertion with

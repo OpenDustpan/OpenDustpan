@@ -1,10 +1,13 @@
 // Package removalalertsvc alerts the administrators when one source removes
-// members from groups at a rate that crosses the limits of the removal
+// members from groups at a rate that reaches the limits of the removal
 // alert: a count of members that one source removed in a rolling window, or
 // a percent of the members of one group that it removed in that window,
-// whichever comes first. The server counts members, not requests. The
-// limits are installation settings, and the service reads them at each
-// record. A reader that fails gives the default limits, never no limit.
+// whichever comes first. The server counts members, not requests. One source
+// gets at most one alert in each window, for all its groups. An alert that
+// fails to write leaves no marker, so the next removal of the source tries
+// the alert again. The limits are installation settings, and the service
+// reads them at each record. A reader that fails gives the default limits,
+// never no limit.
 package removalalertsvc
 
 import (
@@ -93,13 +96,15 @@ func New(cfg Config) (*Service, error) {
 }
 
 // Record stores one removal of one member from each group in groupIDs for
-// source, and alerts the administrators when the totals of the source cross
-// a limit. The caller calls it after the removals were committed. It
-// dedupes the group IDs.
+// source, and alerts the administrators when the totals of the source reach
+// a limit and the source got no alert in the window. The caller calls it
+// after the removals were committed. It dedupes the group IDs.
 //
 // It fails closed: an error of the count read, of the removal log, of the
-// outbox or of the audit log makes it return an error that wraps the error,
-// so the caller can refuse the change that caused the removals.
+// outbox, of the audit log or of the alert marker makes it return an error
+// that wraps the error, so the caller can record the failed alert. An alert
+// that fails to write leaves no marker, so the next removal of the source
+// tries the alert again.
 func (s *Service) Record(ctx context.Context, source principal.RemovalSource, groupIDs []string) error {
 	for _, groupID := range dedupe(groupIDs) {
 		if err := s.recordOne(ctx, source, groupID); err != nil {
@@ -111,7 +116,8 @@ func (s *Service) Record(ctx context.Context, source principal.RemovalSource, gr
 }
 
 // recordOne stores one removal of one member from groupID and alerts the
-// administrators when its totals cross a limit.
+// administrators when its totals reach a limit and the source got no alert
+// in the window.
 func (s *Service) recordOne(ctx context.Context, source principal.RemovalSource, groupID string) error {
 	source.ID = alertText(source.ID)
 	groupID = alertText(groupID)
@@ -131,8 +137,12 @@ func (s *Service) recordOne(ctx context.Context, source principal.RemovalSource,
 		return fmt.Errorf("store the removal of group %q: %w", groupID, err)
 	}
 
-	limit, percent, crossed := crossed(totals, limits)
-	if !crossed {
+	limit, percent, reached := atOrAbove(totals, limits)
+	if !reached {
+		return nil
+	}
+
+	if !totals.AlertedAt.IsZero() && totals.AlertedAt.After(at.Add(-limits.Window)) {
 		return nil
 	}
 
@@ -153,9 +163,11 @@ type alertInput struct {
 	at      time.Time
 }
 
-// alert writes the notification, the audit entry and the log line of one
-// crossing. It fails closed: an error of the outbox or of the audit log
-// makes it return an error that wraps the error.
+// alert writes the notification, the audit entry, the alert marker and the
+// log line of one alert, in that order. It fails closed: an error of the
+// outbox, of the audit log or of the marker makes it return an error that
+// wraps the error, and the log line is not written. The next removal of the
+// source then tries the alert again.
 func (s *Service) alert(ctx context.Context, in alertInput) error {
 	source, groupID, totals, limits := in.source, in.groupID, in.totals, in.limits
 
@@ -202,7 +214,11 @@ func (s *Service) alert(ctx context.Context, in alertInput) error {
 		return fmt.Errorf("append the mass removal alert entry of group %q: %w", groupID, err)
 	}
 
-	s.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "removal alert: the removals of one source crossed a limit",
+	if err := s.cfg.Log.MarkRemovalAlert(ctx, source, in.at); err != nil {
+		return fmt.Errorf("mark the mass removal alert of group %q: %w", groupID, err)
+	}
+
+	s.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "removal alert: the removals of one source reached a limit",
 		slog.String("source_kind", string(source.Kind)), slog.String("source_id", source.ID),
 		slog.String("group_id", groupID), slog.Int("removed", totals.SourceRemoved),
 		slog.Int("percent", in.percent), slog.String("window", limits.Window.String()),
@@ -235,21 +251,18 @@ func validLimits(l principal.RemovalAlertLimits) bool {
 		l.Window >= principal.MinRemovalAlertWindow && l.Window <= principal.MaxRemovalAlertWindow
 }
 
-// crossed returns the limit that the totals crossed with the last removal,
-// the percent of the members of the group that the source removed in the
-// window, and true. It returns false when no limit crossed. One add crosses
-// a limit when the totals before the add were below the limit and the totals
-// with it are at or above, so one crossing gives one alert and no later
-// removal of the same window gives a second one.
-func crossed(totals principal.RemovalTotals, limits principal.RemovalAlertLimits) (string, int, bool) {
+// atOrAbove returns the limit that the totals reached, the percent of the
+// members of the group that the source removed in the window, and true. It
+// returns false when no limit is at or above. The count wins when both
+// limits are at or above.
+func atOrAbove(totals principal.RemovalTotals, limits principal.RemovalAlertLimits) (string, int, bool) {
 	percent := percentOf(totals)
 
-	if totals.SourceRemoved-1 < limits.Count && totals.SourceRemoved >= limits.Count {
+	if totals.SourceRemoved >= limits.Count {
 		return limitCount, percent, true
 	}
 
-	if (totals.GroupRemoved-1)*100 < limits.Percent*totals.GroupMembers &&
-		totals.GroupRemoved*100 >= limits.Percent*totals.GroupMembers {
+	if totals.GroupRemoved*100 >= limits.Percent*totals.GroupMembers {
 		return limitPercent, percent, true
 	}
 

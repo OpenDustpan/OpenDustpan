@@ -43,6 +43,7 @@ const (
 	pgColCreatedBy   = "created_by"
 	pgColGroupID     = "group_id"
 	pgColSourceID    = "source_id"
+	pgColSourceKind  = "source_kind"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
@@ -622,9 +623,16 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			orderBy: []string{pgColSource, pgColSourceID, "claim_value", pgColGroupID},
 		},
 		{
+			table: "member_removal_alerts",
+			columns: []string{
+				pgColSourceKind, pgColSourceID, "alerted_at_ms",
+			},
+			orderBy: []string{pgColSourceKind, pgColSourceID},
+		},
+		{
 			table: "member_removals",
 			columns: []string{
-				"id", "source_kind", pgColSourceID, pgColGroupID, "removed", "members_before", pgColAtMs,
+				"id", pgColSourceKind, pgColSourceID, pgColGroupID, "removed", "members_before", pgColAtMs,
 			},
 			orderBy: []string{"id"},
 		},

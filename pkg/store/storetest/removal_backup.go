@@ -19,10 +19,12 @@ type RemovalBackupStore interface {
 type RemovalBackupFactory func(t *testing.T) RemovalBackupStore
 
 // RunRemovalBackup proves that a backup and a restore keep the rows of the
-// removal log. It stores removals of two sources in one store, restores a
+// removal log and the time of the last alert of each source. It stores
+// removals of two sources and their alert markers in one store, restores a
 // backup of it into a second store, then adds a removal at the same time and
 // in the same window to both stores. The restored log must count the
-// restored rows in its totals, as the log of the source store does.
+// restored rows and markers in its totals, as the log of the source store
+// does.
 func RunRemovalBackup(t *testing.T, newStore RemovalBackupFactory) {
 	t.Helper()
 
@@ -48,6 +50,21 @@ func RunRemovalBackup(t *testing.T, newStore RemovalBackupFactory) {
 		}
 	}
 
+	scimAlertedAt := base.Add(30 * time.Minute)
+	idpAlertedAt := base.Add(35 * time.Minute)
+
+	for _, marker := range []struct {
+		source principal.RemovalSource
+		at     time.Time
+	}{
+		{source: scim, at: scimAlertedAt},
+		{source: idp, at: idpAlertedAt},
+	} {
+		if err := src.MarkRemovalAlert(ctx, marker.source, marker.at); err != nil {
+			t.Fatalf("mark the alert of the source at %s: %v", marker.at, err)
+		}
+	}
+
 	applySnapshot(t, portableRestoreStores(t, src, dst))
 
 	at := base.Add(time.Hour)
@@ -60,12 +77,16 @@ func RunRemovalBackup(t *testing.T, newStore RemovalBackupFactory) {
 		{
 			name:    "the SCIM token",
 			removal: principal.Removal{Source: scim, GroupID: "grp-eng", Removed: 4, MembersBefore: 60, At: at},
-			want:    principal.RemovalTotals{SourceRemoved: 11, GroupRemoved: 9, GroupMembers: 60},
+			want: principal.RemovalTotals{
+				SourceRemoved: 11, GroupRemoved: 9, GroupMembers: 60, AlertedAt: scimAlertedAt,
+			},
 		},
 		{
 			name:    "the identity provider",
 			removal: principal.Removal{Source: idp, GroupID: "grp-eng", Removed: 1, MembersBefore: 45, At: at},
-			want:    principal.RemovalTotals{SourceRemoved: 4, GroupRemoved: 4, GroupMembers: 45},
+			want: principal.RemovalTotals{
+				SourceRemoved: 4, GroupRemoved: 4, GroupMembers: 45, AlertedAt: idpAlertedAt,
+			},
 		},
 	}
 
@@ -82,12 +103,17 @@ func RunRemovalBackup(t *testing.T, newStore RemovalBackupFactory) {
 			t.Fatalf("%s: add a removal to the restored store: %v", tt.name, err)
 		}
 
-		if gotSrc != tt.want {
-			t.Fatalf("%s: totals of the source store = %+v, want %+v", tt.name, gotSrc, tt.want)
-		}
+		wantRemovalTotals(t, tt.name+" in the source store", gotSrc, tt.want)
+		wantRemovalTotals(t, tt.name+" in the restored store", gotDst, tt.want)
+	}
+}
 
-		if gotDst != tt.want {
-			t.Fatalf("%s: totals of the restored store = %+v, want %+v", tt.name, gotDst, tt.want)
-		}
+// wantRemovalTotals fails the test unless the totals are the wanted ones.
+func wantRemovalTotals(t *testing.T, what string, got, want principal.RemovalTotals) {
+	t.Helper()
+
+	if got.SourceRemoved != want.SourceRemoved || got.GroupRemoved != want.GroupRemoved ||
+		got.GroupMembers != want.GroupMembers || !got.AlertedAt.Equal(want.AlertedAt) {
+		t.Fatalf("%s: totals = %+v, want %+v", what, got, want)
 	}
 }

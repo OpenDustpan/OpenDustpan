@@ -22,6 +22,7 @@ var (
 	errLog     = errors.New("the removal log does not answer")
 	errOutbox  = errors.New("the outbox does not answer")
 	errAudit   = errors.New("the audit log does not answer")
+	errMark    = errors.New("the removal alert marker does not answer")
 	errLimits  = errors.New("the settings do not answer")
 )
 
@@ -38,9 +39,11 @@ func idpSource() principal.RemovalSource {
 // totals cover the rows of the source in the window that ends at the
 // removal time, the new row included.
 type fakeLog struct {
-	mu   sync.Mutex
-	rows []principal.Removal
-	err  error
+	mu      sync.Mutex
+	rows    []principal.Removal
+	alerts  map[principal.RemovalSource]time.Time
+	err     error
+	markErr error
 }
 
 // AddRemoval implements principal.RemovalLog.
@@ -64,7 +67,9 @@ func (f *fakeLog) AddRemoval(
 
 	f.rows = append(f.rows, r)
 
-	var totals principal.RemovalTotals
+	totals := principal.RemovalTotals{
+		SourceRemoved: 0, GroupRemoved: 0, GroupMembers: 0, AlertedAt: f.alerts[r.Source],
+	}
 
 	for i := range f.rows {
 		row := &f.rows[i]
@@ -81,6 +86,38 @@ func (f *fakeLog) AddRemoval(
 	}
 
 	return totals, nil
+}
+
+// MarkRemovalAlert implements principal.RemovalLog.
+func (f *fakeLog) MarkRemovalAlert(
+	_ context.Context, source principal.RemovalSource, at time.Time,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.markErr != nil {
+		return f.markErr
+	}
+
+	if err := principal.ValidateRemovalAlert(source, at); err != nil {
+		return err
+	}
+
+	if f.alerts == nil {
+		f.alerts = make(map[principal.RemovalSource]time.Time)
+	}
+
+	f.alerts[source] = at
+
+	return nil
+}
+
+// alerted returns the time of the last alert of source.
+func (f *fakeLog) alerted(source principal.RemovalSource) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.alerts[source]
 }
 
 // stored returns the rows of the log.
@@ -260,7 +297,9 @@ type fixture struct {
 // newFixture returns the fakes of a test. The group grp-a holds 100 members.
 func newFixture() *fixture {
 	return &fixture{
-		log: &fakeLog{mu: sync.Mutex{}, rows: nil, err: nil},
+		log: &fakeLog{
+			mu: sync.Mutex{}, rows: nil, alerts: make(map[principal.RemovalSource]time.Time), err: nil, markErr: nil,
+		},
 		members: &fakeMembers{
 			mu: sync.Mutex{}, totals: map[string]int64{"grp-a": 100, "grp-b": 4, "grp-c": 9}, err: nil,
 		},

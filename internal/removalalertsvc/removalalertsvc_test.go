@@ -337,12 +337,14 @@ func TestRecordPortErrors(t *testing.T) {
 		logErr     error
 		outboxErr  error
 		auditErr   error
+		markErr    error
 		want       error
 	}{
-		{"the count read fails", errMembers, nil, nil, nil, errMembers},
-		{"the removal log fails", nil, errLog, nil, nil, errLog},
-		{"the outbox fails", nil, nil, errOutbox, nil, errOutbox},
-		{"the audit log fails", nil, nil, nil, errAudit, errAudit},
+		{"the count read fails", errMembers, nil, nil, nil, nil, errMembers},
+		{"the removal log fails", nil, errLog, nil, nil, nil, errLog},
+		{"the outbox fails", nil, nil, errOutbox, nil, nil, errOutbox},
+		{"the audit log fails", nil, nil, nil, errAudit, nil, errAudit},
+		{"the alert marker fails", nil, nil, nil, nil, errMark, errMark},
 	}
 
 	for _, tc := range cases {
@@ -350,11 +352,12 @@ func TestRecordPortErrors(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture()
-			// The count limit of one makes the first removal cross, so the
-			// outbox and the audit log run.
+			// The count limit of one makes the first removal reach the limit,
+			// so the outbox, the audit log and the marker run.
 			f.limits = principal.RemovalAlertLimits{Count: 1, Percent: 20, Window: 15 * time.Minute}
 			f.members.err, f.log.err = tc.membersErr, tc.logErr
 			f.outbox.err, f.audit.err = tc.outboxErr, tc.auditErr
+			f.log.markErr = tc.markErr
 
 			err := f.service(t).Record(t.Context(), idpSource(), []string{"grp-a"})
 			if !errors.Is(err, tc.want) {
@@ -363,6 +366,10 @@ func TestRecordPortErrors(t *testing.T) {
 
 			if tc.outboxErr != nil && len(f.audit.stored()) != 0 {
 				t.Fatalf("audit entries after an outbox error = %d, want 0", len(f.audit.stored()))
+			}
+
+			if (tc.outboxErr != nil || tc.auditErr != nil) && !f.log.alerted(idpSource()).IsZero() {
+				t.Fatal("an alert that failed to write left a marker")
 			}
 		})
 	}
@@ -443,5 +450,194 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 				t.Fatalf("New() = %v, want ErrMissingDependency", err)
 			}
 		})
+	}
+}
+
+// TestRecordRetriesAFailedAlert proves that an alert that fails to write is
+// tried again on the next removal of the source.
+func TestRecordRetriesAFailedAlert(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+	svc := f.service(t)
+
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	f.outbox.err = errOutbox
+
+	err := svc.Record(t.Context(), idpSource(), []string{"grp-a"})
+	if !errors.Is(err, errOutbox) {
+		t.Fatalf("Record() = %v, want the outbox error", err)
+	}
+
+	if got := f.log.alerted(idpSource()); !got.IsZero() {
+		t.Fatalf("alert marker after a failed alert = %s, want the zero time", got)
+	}
+
+	f.outbox.err = nil
+
+	if recordErr := svc.Record(t.Context(), idpSource(), []string{"grp-a"}); recordErr != nil {
+		t.Fatalf("Record() after the retry = %v", recordErr)
+	}
+
+	if got := len(f.outbox.stored()); got != 1 {
+		t.Fatalf("notifications = %d, want 1", got)
+	}
+
+	if got := len(f.audit.stored()); got != 1 {
+		t.Fatalf("audit entries = %d, want 1", got)
+	}
+
+	if got := f.log.alerted(idpSource()); !got.Equal(testAt()) {
+		t.Fatalf("alert marker = %s, want %s", got, testAt())
+	}
+}
+
+// TestRecordAlertsWhenTheLimitLowers proves that a limit lowered in the
+// middle of a window alerts on the next removal.
+func TestRecordAlertsWhenTheLimitLowers(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 5, Percent: 20, Window: 15 * time.Minute}
+	svc := f.service(t)
+
+	f.record(t, svc, idpSource(), "grp-a", 3)
+
+	if got := len(f.outbox.stored()); got != 0 {
+		t.Fatalf("alerts below the raised limit = %d, want 0", got)
+	}
+
+	f.limits.Count = 2
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	if got := len(f.outbox.stored()); got != 1 {
+		t.Fatalf("alerts after the lowered limit = %d, want 1", got)
+	}
+}
+
+// TestRecordNoSecondAlertInTheWindow proves that a written alert stops more
+// alerts of the same source in its window.
+func TestRecordNoSecondAlertInTheWindow(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+	svc := f.service(t)
+
+	f.record(t, svc, idpSource(), "grp-a", 2)
+
+	if got := len(f.outbox.stored()); got != 1 {
+		t.Fatalf("alerts at the limit = %d, want 1", got)
+	}
+
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	if got := len(f.outbox.stored()); got != 1 {
+		t.Fatalf("alerts above the limit in the same window = %d, want 1", got)
+	}
+}
+
+// TestRecordAlertsInTheNextWindow proves that the source alerts again once
+// the window after its marker has passed.
+func TestRecordAlertsInTheNextWindow(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 1, Percent: 20, Window: 15 * time.Minute}
+	svc := f.service(t)
+
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	f.clock = f.clock.Add(15 * time.Minute)
+
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	if got := len(f.outbox.stored()); got != 2 {
+		t.Fatalf("alerts in two windows = %d, want 2", got)
+	}
+}
+
+// TestRecordAuditFailureLeavesNoMarker proves that an audit failure leaves no
+// marker, so the next removal tries the alert again.
+func TestRecordAuditFailureLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 1, Percent: 20, Window: 15 * time.Minute}
+	svc := f.service(t)
+
+	f.audit.err = errAudit
+
+	err := svc.Record(t.Context(), idpSource(), []string{"grp-a"})
+	if !errors.Is(err, errAudit) {
+		t.Fatalf("Record() = %v, want the audit error", err)
+	}
+
+	if got := f.log.alerted(idpSource()); !got.IsZero() {
+		t.Fatalf("alert marker after an audit failure = %s, want the zero time", got)
+	}
+
+	f.audit.err = nil
+
+	if recordErr := svc.Record(t.Context(), idpSource(), []string{"grp-a"}); recordErr != nil {
+		t.Fatalf("Record() after the retry = %v", recordErr)
+	}
+
+	if got := len(f.outbox.stored()); got != 2 {
+		t.Fatalf("notifications = %d, want 2", got)
+	}
+
+	if got := len(f.audit.stored()); got != 1 {
+		t.Fatalf("audit entries = %d, want 1", got)
+	}
+
+	if got := f.log.alerted(idpSource()); !got.Equal(testAt()) {
+		t.Fatalf("alert marker = %s, want %s", got, testAt())
+	}
+}
+
+// TestRecordMarkerFailureReturnsAnError proves that a failed marker write
+// makes Record return an error and keeps the warning out of the log.
+func TestRecordMarkerFailureReturnsAnError(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 1, Percent: 20, Window: 15 * time.Minute}
+	f.log.markErr = errMark
+
+	err := f.service(t).Record(t.Context(), idpSource(), []string{"grp-a"})
+	if !errors.Is(err, errMark) {
+		t.Fatalf("Record() = %v, want the marker error", err)
+	}
+
+	if got := f.log.alerted(idpSource()); !got.IsZero() {
+		t.Fatalf("alert marker after a failed marker write = %s, want the zero time", got)
+	}
+
+	if strings.Contains(f.logs.text(), "removal alert") {
+		t.Fatalf("log = %q, want no warning of an alert that failed to write", f.logs.text())
+	}
+}
+
+// TestRecordCountWinsWhenBothReach proves that the count names the limit when
+// both limits are at or above.
+func TestRecordCountWinsWhenBothReach(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 1, Percent: 1, Window: 15 * time.Minute}
+	f.members.totals["grp-b"] = 4
+
+	f.record(t, f.service(t), idpSource(), "grp-b", 1)
+
+	notes := f.outbox.stored()
+	if len(notes) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(notes))
+	}
+
+	if notes[0].Attributes["limit"] != "count" {
+		t.Fatalf("limit = %q, want count", notes[0].Attributes["limit"])
 	}
 }

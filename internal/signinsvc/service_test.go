@@ -3,12 +3,13 @@ package signinsvc_test
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -655,9 +656,10 @@ func TestCompleteGroupsNoRemovalRecordsNothing(t *testing.T) {
 	}
 }
 
-// TestCompleteGroupsRecordErrorRefusesTheSignIn checks that a failure to
-// record the removals refuses the sign-in and starts no session.
-func TestCompleteGroupsRecordErrorRefusesTheSignIn(t *testing.T) {
+// TestCompleteGroupsRecordErrorGoesOn checks that a failure to record the
+// removals does not refuse the sign-in: the service writes one ERROR line and
+// one audit entry of the failed alert, then starts the session.
+func TestCompleteGroupsRecordErrorGoesOn(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld()
@@ -667,9 +669,66 @@ func TestCompleteGroupsRecordErrorRefusesTheSignIn(t *testing.T) {
 		Refused: nil, Unmapped: nil, NoMapping: false,
 	}
 
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v, want the sign-in to go on", err)
+	}
+
+	if len(w.starts) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(w.starts))
+	}
+
+	if len(w.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(w.entries))
+	}
+
+	checkRemovalAlertFailureEntry(t, w.entries[0])
+
+	if !strings.Contains(w.logs.text(), errcode.PrincipalRemovalAlertFailed) ||
+		!strings.Contains(w.logs.text(), "identity-provider") {
+		t.Fatalf("log = %q, want the code and the source kind", w.logs.text())
+	}
+
+	if w.auditFailed != 0 {
+		t.Fatalf("audit failures = %d, want 0", w.auditFailed)
+	}
+}
+
+// checkRemovalAlertFailureEntry fails unless e is the audit entry of the
+// failed removal alert of the provider corp.
+func checkRemovalAlertFailureEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Action != principal.AuditActionMassRemovalAlert || e.Outcome != audit.OutcomeFailure ||
+		e.Kind != audit.KindSecurity || e.Namespace != audit.ServerScope ||
+		e.Subject != "identity-provider:corp" || e.Reason != errcode.PrincipalRemovalAlertFailed {
+		t.Fatalf("audit entry = %+v, want the failure of the removal alert", e)
+	}
+}
+
+// TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn checks that the
+// sign-in is refused when the audit entry of the failed alert fails too.
+func TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.auditErr = errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
 	_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil))
-	if !errors.Is(err, errStoreStopped) || len(w.starts) != 0 {
-		t.Fatalf("Complete() = %v with %d sessions, want the error and no session", err, len(w.starts))
+	if !errors.Is(err, signinsvc.ErrRemovalAlertUnrecorded) || !errors.Is(err, errStoreStopped) {
+		t.Fatalf("Complete() = %v, want the unrecorded alert and the audit error", err)
+	}
+
+	if len(w.starts) != 0 {
+		t.Fatalf("sessions = %d, want 0", len(w.starts))
+	}
+
+	if w.auditFailed != 1 {
+		t.Fatalf("audit failures = %d, want 1", w.auditFailed)
 	}
 }
 
@@ -717,7 +776,7 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 			w := newWorld()
 			cfg := signinsvc.Config{
 				Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w,
-				Groups: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+				Groups: nil, Removals: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
 			}
 			tc.clear(&cfg)
 
