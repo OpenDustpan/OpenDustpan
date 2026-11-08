@@ -40,6 +40,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	dbschema "opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 const (
@@ -1267,6 +1268,10 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiMaskedStateScenario(t, env, org)
 
 	pulumiDiffScenario(t, env, org)
+
+	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
+		pulumiUnitWithoutCollectionRefused(t, env)
+	})
 }
 
 // pulumiRenameWithCheckpointScenario proves that a stack with a checkpoint and
@@ -3558,6 +3563,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	// The audit entries of the kind tool-operation for state the CLI reads.
 	tofuAuditScenario(ctx, t, env)
+
+	// The last scenario: it replaces the configuration of the project.
+	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
+		tofuUnitWithoutCollectionRefused(t, env)
+	})
 }
 
 // tofuAuditSecretConfig is the configuration that stores a sensitive output:
@@ -10386,13 +10396,13 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 
 // TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
 // the running binary server: on the migrated database the verdict is
-// `up to date` with exit 0, and on the newer, before-baseline and fresh states the
-// verdicts and the exit codes match, with the command writing nothing to the
-// server database. On SQLite the newer-schema case and the restore edits stop
-// the server before they open the file and start it again after. The old
-// and fresh cases edit the file while the server runs, because the check
-// needs a running server on a schema behind the binary. It runs only with
-// E2E_SERVER=binary, on every store under test.
+// `up to date` with exit 0, and on the newer and fresh states the verdicts and
+// the exit codes match, with the command writing nothing to the server
+// database. On SQLite every edit stops the server before it opens the file and
+// starts it again after. The before-baseline and diverged states are not
+// checked with upgrade check on SQLite: the server refuses to start on them, so
+// the test checks the refusal of the start. The SQLite fresh state is not run.
+// It runs only with E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
@@ -10459,6 +10469,10 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkUpgradeNewerServer(ctx, t, env, store, released)
 	checkUpgradeBeforeBaselineServer(ctx, t, env, store)
 	checkUpgradeFreshServer(ctx, t, env, store)
+
+	if store == e2e.StoreSQLite {
+		checkUpgradeDivergedServerSQLite(ctx, t, env)
+	}
 }
 
 // runUpgradeCheckServer runs `opendustpan upgrade check --server` against the
@@ -10477,6 +10491,10 @@ func runUpgradeCheckServer(ctx context.Context, t *testing.T, env *e2e.Env) e2e.
 type serverMigrationRow struct {
 	version int64
 	name    string
+	// sha256 and minBinaryVersion are read and restored on SQLite only. A row
+	// restored without its SHA-256 makes the next start refuse the database.
+	sha256           string
+	minBinaryVersion string
 }
 
 // serverSchemaSnapshot holds the schema_migrations rows and table list of the
@@ -10518,15 +10536,13 @@ func sqliteServerPath(t *testing.T, env *e2e.Env) string {
 const serverSQLiteBusyMillis = "10000"
 
 // openServerSQLite opens a direct handle on the SQLite file at path. The
-// caller stops the server before it opens the file, except in the old and
-// fresh cases, which edit the file while the server runs.
+// caller stops the server before it opens the file.
 func openServerSQLite(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
 	// The busy timeout makes a statement wait while another connection holds
-	// the file, for example the server that a test just stopped or the
-	// server that still runs in the old and fresh cases, and not fail with
-	// SQLITE_BUSY at once.
+	// the file, for example the server that a test just stopped, and not fail
+	// with SQLITE_BUSY at once.
 	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout("+serverSQLiteBusyMillis+")")
 	if err != nil {
 		t.Fatalf("open server database: %v", err)
@@ -10536,8 +10552,7 @@ func openServerSQLite(t *testing.T, path string) *sql.DB {
 }
 
 // readServerSQLiteRows returns every schema_migrations row ordered by
-// version. The caller stops the server first, except in the before-baseline
-// and fresh cases of the upgrade check, where the server runs during the read.
+// version. The caller stops the server first.
 func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
 	t.Helper()
 
@@ -10549,7 +10564,8 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 		}
 	}()
 
-	rows, err := conn.QueryContext(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	rows, err := conn.QueryContext(ctx,
+		`SELECT version, name, min_binary_version, sha256 FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		t.Fatalf("read schema versions: %v", err)
 	}
@@ -10565,7 +10581,7 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 	for rows.Next() {
 		var row serverMigrationRow
 
-		if scanErr := rows.Scan(&row.version, &row.name); scanErr != nil {
+		if scanErr := rows.Scan(&row.version, &row.name, &row.minBinaryVersion, &row.sha256); scanErr != nil {
 			t.Fatalf("read schema version: %v", scanErr)
 		}
 
@@ -10579,9 +10595,21 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 	return out
 }
 
+// restoreServerSQLiteRows inserts rows back into the SQLite file at path with
+// their SHA-256 and minimum binary version, so the restored rows match the
+// rows the binary wrote. The caller stops the server first.
+func restoreServerSQLiteRows(ctx context.Context, t *testing.T, path string, rows []serverMigrationRow) {
+	t.Helper()
+
+	for _, row := range rows {
+		execServerSQLite(ctx, t, path,
+			`INSERT INTO schema_migrations (version, name, min_binary_version, sha256) VALUES (?, ?, ?, ?)`,
+			row.version, row.name, row.minBinaryVersion, row.sha256)
+	}
+}
+
 // execServerSQLite runs one write on the SQLite file at path. The caller
-// stops the server first, except in the before-baseline and fresh cases of
-// the upgrade check, where the server runs during the write.
+// stops the server first.
 func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
 	t.Helper()
 
@@ -10599,9 +10627,7 @@ func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args
 }
 
 // snapshotServerSQLite returns the schema_migrations rows with the table
-// names of the SQLite file at path. The caller stops the server first, except
-// in the before-baseline and fresh cases of the upgrade check, where the
-// server runs during the read.
+// names of the SQLite file at path. The caller stops the server first.
 func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
 	t.Helper()
 
@@ -10861,8 +10887,7 @@ func trimServerVersions(
 
 // trimServerSQLiteVersions removes every schema_migrations row above keep
 // from the SQLite file the server of env serves and returns the removed
-// rows. The caller stops the server first, except in the old and fresh
-// cases, which edit the file while the server runs.
+// rows. The caller stops the server first.
 func trimServerSQLiteVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
 ) []serverMigrationRow {
@@ -10954,12 +10979,7 @@ func restoreServerVersions(
 		stopServerForSQLiteFile(ctx, t, env, store)
 		defer startServerForSQLiteFile(ctx, t, env, store)
 
-		path := sqliteServerPath(t, env)
-
-		for _, row := range rows {
-			execServerSQLite(ctx, t, path,
-				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
-		}
+		restoreServerSQLiteRows(ctx, t, sqliteServerPath(t, env), rows)
 	case e2e.StorePostgres:
 		conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
 		if err != nil {
@@ -11081,7 +11101,12 @@ func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2
 		t,
 		env,
 		store,
-		[]serverMigrationRow{{version: beforeBaselineVersion, name: beforeBaselineName}},
+		[]serverMigrationRow{{
+			version:          beforeBaselineVersion,
+			name:             beforeBaselineName,
+			sha256:           "",
+			minBinaryVersion: "",
+		}},
 	)
 
 	before := snapshotServerDB(ctx, t, env, store)
@@ -11107,16 +11132,19 @@ func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2
 }
 
 // checkUpgradeBeforeBaselineSQLite is checkUpgradeBeforeBaselineServer on
-// SQLite. The edits run while the server runs, because the check needs a
-// running server on a schema behind the binary.
+// SQLite. The server is stopped for every edit and stays stopped until the
+// start that must refuse the database. A server that runs on a schema before
+// the baseline cannot be reached: the check needs the server to start first,
+// and the start refuses the database. The test checks the refusal of the
+// start instead, and restores the rows before it starts the server again.
 func checkUpgradeBeforeBaselineSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	// The check needs a running server on a schema behind the binary, and a
-	// server start applies the missing migrations, so the edit keeps the
-	// server running.
 	path := sqliteServerPath(t, env)
-	pristine := snapshotServerSQLite(ctx, t, path)
+	pristine := snapshotServerDB(ctx, t, env, e2e.StoreSQLite)
+
+	env.StopServer(ctx, t)
+
 	removed := trimServerSQLiteVersions(ctx, t, env, 0)
 
 	if len(removed) == 0 {
@@ -11127,32 +11155,27 @@ func checkUpgradeBeforeBaselineSQLite(ctx context.Context, t *testing.T, env *e2
 		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, beforeBaselineVersion, beforeBaselineName)
 
 	before := snapshotServerSQLite(ctx, t, path)
-	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
 
-	if out := res.Stdout; !strings.Contains(
-		out,
-		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
-	) {
-		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	exitCode, out := env.StartServerExpectingRefusal(ctx, t, env.DatabaseURL(t))
+	if exitCode == 0 {
+		t.Fatalf("server starts on a database before the baseline, want a refusal:\n%s", out)
 	}
 
-	if !strings.Contains(res.Stderr, "older than baseline schema version") {
-		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
+	if !strings.Contains(out, "older than baseline schema version") {
+		t.Fatalf("server output lacks the baseline refusal:\n%s", out)
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
 
 	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version = ?`, beforeBaselineVersion)
 
-	for _, row := range removed {
-		execServerSQLite(ctx, t, path,
-			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
-	}
+	restoreServerSQLiteRows(ctx, t, path, removed)
 
 	if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
 		t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
 	}
+
+	env.StartServer(ctx, t)
 }
 
 // checkUpgradeFreshServer proves upgrade check with no version row in the
@@ -11162,36 +11185,11 @@ func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 	t.Helper()
 
 	if store == e2e.StoreSQLite {
-		// The check needs a running server on a schema behind the binary, and a
-		// server start applies the missing migrations, so the edit keeps the
-		// server running.
-		path := sqliteServerPath(t, env)
-		pristine := snapshotServerSQLite(ctx, t, path)
-		removed := trimServerSQLiteVersions(ctx, t, env, 0)
-
-		if len(removed) == 0 {
-			t.Fatal("trim above 0 removed nothing, want every migration pending")
-		}
-
-		before := snapshotServerSQLite(ctx, t, path)
-		res := runUpgradeCheckServer(ctx, t, env)
-		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
-
-		if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
-			t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
-		}
-
-		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
-
-		for _, row := range removed {
-			execServerSQLite(ctx, t, path,
-				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
-		}
-
-		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
-			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
-		}
-
+		// The SQLite fresh case is not run. A server start applies the pending
+		// migrations, so a database with no version row cannot stay in that
+		// state while the server restarts, and upgrade check has no offline
+		// mode to read it with the server stopped. The PostgreSQL case keeps
+		// this coverage.
 		return
 	}
 
@@ -11214,6 +11212,81 @@ func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 
 	restoreServerVersions(ctx, t, env, store, removed)
 	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeDivergedServerSQLite proves that the SQLite server refuses to
+// start on a database whose recorded SHA-256 of the baseline differs from the
+// binary. The database is a copy of the migrated file with the changed value,
+// so the server database itself is never edited. The server runs again on the
+// original file after the check.
+func checkUpgradeDivergedServerSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	env.StopServer(ctx, t)
+
+	copyPath := divergedSQLiteCopy(ctx, t, sqliteServerPath(t, env))
+
+	exitCode, out := env.StartServerExpectingRefusal(ctx, t, "sqlite:"+copyPath)
+	if exitCode == 0 {
+		t.Fatalf("server starts on a diverged database, want a refusal:\n%s", out)
+	}
+
+	for _, want := range []string{dbschema.ErrSchemaDiverged.Error(), dbschema.BaselineName} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("server output lacks %q:\n%s", want, out)
+		}
+	}
+
+	env.StartServer(ctx, t)
+}
+
+// divergedSQLiteCopy copies the SQLite file at path into a new file in a
+// temporary directory and sets the recorded SHA-256 of the baseline row in the
+// copy to a value that differs from the binary. It returns the path of the
+// copy. The file at path stays unchanged. The server must be stopped.
+func divergedSQLiteCopy(ctx context.Context, t *testing.T, path string) string {
+	t.Helper()
+
+	copyPath := filepath.Join(t.TempDir(), "diverged.db")
+
+	source := openServerSQLite(t, path)
+
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			t.Errorf("close server database: %v", closeErr)
+		}
+	}()
+
+	// VACUUM INTO writes a complete copy through SQLite, so the copy holds
+	// every committed row of the stopped server.
+	if _, err := source.ExecContext(ctx, `VACUUM INTO ?`, copyPath); err != nil {
+		t.Fatalf("copy server database: %v", err)
+	}
+
+	// 64 zeros is a valid SHA-256 in lowercase hex, and the migrated baseline
+	// records the SHA-256 of its SQL, which is never all zeros.
+	const otherDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	conn := openServerSQLite(t, copyPath)
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database copy: %v", closeErr)
+		}
+	}()
+
+	res, err := conn.ExecContext(ctx,
+		`UPDATE schema_migrations SET sha256 = ? WHERE version = ?`,
+		otherDigest, dbschema.BaselineVersion)
+	if err != nil {
+		t.Fatalf("change baseline digest in copy: %v", err)
+	}
+
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {
+		t.Fatalf("change baseline digest in copy: %d rows, want 1 (err %v)", n, rowsErr)
+	}
+
+	return copyPath
 }
 
 // wantUpgradeResult holds the expected outcome of one upgrade check run:

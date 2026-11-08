@@ -19,6 +19,7 @@ import {
   union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
+import { invalidValue } from "./errors.js";
 import type {
   AccessLimit,
   AddRegistryKeyRequest,
@@ -28,6 +29,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -342,6 +345,28 @@ import {
   TrustRuleKeySourceValues,
 } from "./types.js";
 
+/**
+ * The validator of a value that is one of several types. It tries each
+ * validator in order and gives the first value that one of them accepts.
+ */
+function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {
+  return (value, path) => {
+    for (const decode of decoders) {
+      try {
+        return decode(value, path);
+      } catch {
+        // The value is not of this type. The next validator gets it.
+      }
+    }
+
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
+
+    throw invalidValue(path, `want ${want}, got ${got}`);
+  };
+}
+
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
   id: optional(string),
@@ -394,6 +419,20 @@ export const decodeBackupCorruptError: Decoder<BackupCorruptError> = object<Back
 /** The validator of BackupCorruptErrorArgs. */
 export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = object<BackupCorruptErrorArgs>("BackupCorruptErrorArgs", {
   backup: string,
+});
+
+/** The validator of BackupTooManyUnverifiedError. */
+export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverifiedError> = object<BackupTooManyUnverifiedError>("BackupTooManyUnverifiedError", {
+  code: int64,
+  errorArgs: ref(() => decodeBackupTooManyUnverifiedErrorArgs),
+  errorCode: literal("backup.too-many-unverified"),
+  message: string,
+});
+
+/** The validator of BackupTooManyUnverifiedErrorArgs. */
+export const decodeBackupTooManyUnverifiedErrorArgs: Decoder<BackupTooManyUnverifiedErrorArgs> = object<BackupTooManyUnverifiedErrorArgs>("BackupTooManyUnverifiedErrorArgs", {
+  count: int64,
+  limit: int64,
 });
 
 /** The validator of BulkUnitSettingsError. */
@@ -682,6 +721,7 @@ export const decodeDriftUnit: Decoder<DriftUnit> = object<DriftUnit>("DriftUnit"
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
   "backup.corrupt": ref(() => decodeBackupCorruptError),
+  "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),
   "gate.approvers-count-above": ref(() => decodeGateApproversCountAboveError),
   "lock.locked": ref(() => decodeLockLockedError),
@@ -1879,7 +1919,7 @@ export const decodeSelfServiceModule: Decoder<SelfServiceModule> = object<SelfSe
 /** The validator of SelfServiceOperand. */
 export const decodeSelfServiceOperand: Decoder<SelfServiceOperand> = object<SelfServiceOperand>("SelfServiceOperand", {
   input: optional(string),
-  value: optional(anyValue),
+  value: optional(oneOf<string | number | boolean>("a string, a number or a boolean", string, number, boolean)),
 });
 
 /** The validator of SelfServiceOutputRef. */

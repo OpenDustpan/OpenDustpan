@@ -13,6 +13,10 @@ const blobPurgePendingName = "dustpan_blob_purge_pending"
 // blobPurgeOldestName names the age of the oldest blob purge record.
 const blobPurgeOldestName = "dustpan_blob_purge_oldest_age_seconds"
 
+// blobPurgeReadErrorsName names the count of blob purge backlog reads that
+// failed.
+const blobPurgeReadErrorsName = "dustpan_blob_purge_read_errors_total"
+
 // blobPurgeReadTimeout bounds the store read of one scrape.
 const blobPurgeReadTimeout = 5 * time.Second
 
@@ -34,15 +38,18 @@ type blobPurgeSnapshot struct {
 
 // blobPurgeGauges serves the two blob purge gauges from one read of the store.
 type blobPurgeGauges struct {
-	read BlobPurgeReader
-	now  func() time.Time
-	last atomic.Pointer[blobPurgeSnapshot]
+	read       BlobPurgeReader
+	now        func() time.Time
+	readErrors *Counter
+	last       atomic.Pointer[blobPurgeSnapshot]
 }
 
 // snapshot returns the last read of the backlog, or reads the store again when
-// that read is older than blobPurgeTTL. A failed read gives zero for both
-// gauges, as the worker gauges do. Two scrapes may read at the same time; the
-// last read wins, so the lock is not held across the read.
+// that read is older than blobPurgeTTL. The lifetime of a snapshot starts when
+// its read completes, so a slow read does not expire the snapshot at once. A
+// failed read gives zero for both gauges, as the worker gauges do, and counts
+// in dustpan_blob_purge_read_errors_total. Two scrapes may read at the same
+// time; the last read wins, so the lock is not held across the read.
 func (g *blobPurgeGauges) snapshot() blobPurgeSnapshot {
 	now := g.now()
 	if s := g.last.Load(); s != nil && now.Sub(s.at) < blobPurgeTTL {
@@ -52,13 +59,14 @@ func (g *blobPurgeGauges) snapshot() blobPurgeSnapshot {
 	ctx, cancel := context.WithTimeout(context.Background(), blobPurgeReadTimeout)
 	defer cancel()
 
-	s := blobPurgeSnapshot{at: now, pending: 0, oldest: time.Time{}}
-
 	pending, oldest, err := g.read(ctx)
-	if err == nil {
-		s.pending = pending
-		s.oldest = oldest
+	if err != nil {
+		g.readErrors.Inc()
+
+		pending, oldest = 0, time.Time{}
 	}
+
+	s := blobPurgeSnapshot{at: g.now(), pending: pending, oldest: oldest}
 
 	g.last.Store(&s)
 
@@ -83,12 +91,20 @@ func (g *blobPurgeGauges) oldestAgeValue() float64 {
 	return max(0, g.now().Sub(s.oldest).Seconds())
 }
 
-// RegisterBlobPurgeBacklog adds dustpan_blob_purge_pending and
-// dustpan_blob_purge_oldest_age_seconds to reg. Both gauges have no labels and
+// RegisterBlobPurgeBacklog adds dustpan_blob_purge_pending,
+// dustpan_blob_purge_oldest_age_seconds and
+// dustpan_blob_purge_read_errors_total to reg. The gauges have no labels and
 // count every namespace. A scrape calls read at most once per blobPurgeTTL. now
 // gives the clock of the age.
 func RegisterBlobPurgeBacklog(reg *Registry, read BlobPurgeReader, now func() time.Time) {
-	g := &blobPurgeGauges{read: read, now: now, last: atomic.Pointer[blobPurgeSnapshot]{}}
+	g := &blobPurgeGauges{
+		read: read,
+		now:  now,
+		readErrors: reg.NewCounter(blobPurgeReadErrorsName,
+			"Blob purge backlog reads that failed, which leave both gauges at 0.",
+			nil, 1),
+		last: atomic.Pointer[blobPurgeSnapshot]{},
+	}
 
 	reg.RegisterFunc(blobPurgePendingName,
 		"Blob purge records that still have blobs to delete, 0 when a read fails.",

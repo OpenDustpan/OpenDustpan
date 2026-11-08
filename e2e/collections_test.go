@@ -133,7 +133,7 @@ func collectionsScenario(t *testing.T, env *e2e.Env) {
 		{
 			name: "move the workspace into payments", method: http.MethodPut, path: collectionUnitPath(),
 			body: moveBody(t, "payments"), want: http.StatusOK,
-			check: collectionHolds(`"previousCollection":""`),
+			check: collectionHolds(`"previousCollection":"` + e2e.CatchAllCollection + `"`),
 		},
 		{
 			name: "a collection with a unit cannot be deleted", method: http.MethodDelete,

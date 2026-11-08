@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -163,6 +164,7 @@ func BenchmarkRecorderPutPlan(b *testing.B) {
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: s.Jobs(), Jobs: s.Jobs(), Blobs: artifacts, Sealer: sealer, Namespaces: s,
 		Retention: history.DefaultRetentionSettings(), Now: time.Now,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		b.Fatalf("recorder: %v", err)

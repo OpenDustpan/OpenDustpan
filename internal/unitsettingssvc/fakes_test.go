@@ -21,15 +21,20 @@ type memStore struct {
 	defaults unitsettings.NamespaceDefaults
 	entries  []audit.Entry
 	fences   []namespace.Fence
+	// defaultsAtPut, when set, replaces the defaults at the start of every
+	// Put, as another writer that commits between the read of the service and
+	// the write. The write then returns the new defaults.
+	defaultsAtPut *unitsettings.NamespaceDefaults
 }
 
 func newMemStore() *memStore {
 	return &memStore{
-		mu:       sync.Mutex{},
-		records:  map[string]unitsettings.Settings{},
-		defaults: unitsettings.NamespaceDefaults{Namespace: "", Pool: "", Version: 0, UpdatedAt: time.Time{}},
-		entries:  nil,
-		fences:   nil,
+		mu:            sync.Mutex{},
+		records:       map[string]unitsettings.Settings{},
+		defaults:      unitsettings.NamespaceDefaults{Namespace: "", Pool: "", Version: 0, UpdatedAt: time.Time{}},
+		entries:       nil,
+		fences:        nil,
+		defaultsAtPut: nil,
 	}
 }
 
@@ -47,13 +52,17 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 
 func (m *memStore) Put(
 	_ context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
-) (unitsettings.Settings, error) {
+) (unitsettings.PutResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.defaultsAtPut != nil {
+		m.defaults = *m.defaultsAtPut
+	}
+
 	old := m.records[s.Unit.UnitID()]
 	if old.Version != expected {
-		return unitsettings.Settings{}, unitsettings.ErrConflict
+		return unitsettings.PutResult{}, unitsettings.ErrConflict
 	}
 
 	next := *s
@@ -63,7 +72,10 @@ func (m *memStore) Put(
 	m.entries = append(m.entries, e)
 	m.fences = append(m.fences, fence)
 
-	return next, nil
+	defaults := m.defaults
+	defaults.Namespace = s.Unit.Namespace()
+
+	return unitsettings.PutResult{Settings: next, Defaults: defaults}, nil
 }
 
 func (m *memStore) Delete(

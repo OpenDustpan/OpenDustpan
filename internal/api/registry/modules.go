@@ -1,11 +1,10 @@
 package registry
 
 import (
-	"encoding/base64"
+	"errors"
+	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
 
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/registry/service"
@@ -111,21 +110,32 @@ func moduleReleaseAnswer(identity.Object) answerFunc {
 	}
 }
 
-// moduleQuery is one validated list request: the page size and the module
-// after which the page starts. After is the zero address for the first page.
-type moduleQuery struct {
-	pageSize int
-	after    registry.Address
-	hasAfter bool
+// moduleToken is the opaque page token of the module list: the key of the
+// last module of the page before, as registry.AddressKey returns it.
+type moduleToken struct {
+	After string `json:"a"`
 }
 
-// moduleTokenSeparator joins the name and the system in a page token.
-const moduleTokenSeparator = "/"
+// The causes of the four refusals of a module page token. Each guard wraps
+// its own cause, so the caller and a test can tell which guard refused.
+var (
+	errModuleTokenLength  = errors.New("module page token is over the length limit")
+	errModuleTokenDecode  = errors.New("module page token does not decode")
+	errModuleTokenEmpty   = errors.New("module page token holds no key")
+	errModuleTokenAddress = errors.New("module page token holds no module address")
+)
 
-// parseModuleQuery reads the pageSize and the pageToken. The token is the
-// base64url form of "<name>/<system>". It is untrusted input: it is checked
-// against the same rules as the address of a module, and a value that fails is
-// refused, never repaired.
+// moduleQuery is one validated list request: the page size and the cursor of
+// the module after which the page starts. After is empty for the first page.
+type moduleQuery struct {
+	pageSize int
+	after    string
+}
+
+// parseModuleQuery reads the pageSize and the pageToken. The token is opaque
+// JSON. It is untrusted input: the key that it holds is checked against the
+// same rules as the address of a module, and a value that fails is refused,
+// never repaired.
 func parseModuleQuery(r *http.Request, ns namespace.Name) (moduleQuery, error) {
 	q := queryOf(r)
 
@@ -143,37 +153,44 @@ func parseModuleQuery(r *http.Request, ns namespace.Name) (moduleQuery, error) {
 	}
 
 	if raw := q.Get("pageToken"); raw != "" {
-		// Defense in depth: the address check below refuses a long name too; this
-		// cap stays so that the decode never reads more than a token can hold.
-		if len(raw) > pagetoken.MaxLen {
-			return moduleQuery{}, errProviderPageToken
-		}
-
-		decoded, err := base64.RawURLEncoding.DecodeString(raw)
+		after, err := parseModuleToken(raw, ns)
 		if err != nil {
-			return moduleQuery{}, errProviderPageToken
+			return moduleQuery{}, err
 		}
 
-		name, system, ok := strings.Cut(string(decoded), moduleTokenSeparator)
-		addr := registry.Address{Namespace: ns, Kind: registry.KindModule, Name: name, System: system}
-
-		if !ok || addr.Validate() != nil {
-			return moduleQuery{}, errProviderPageToken
-		}
-
-		out.after, out.hasAfter = addr, true
+		out.after = after
 	}
 
 	return out, nil
 }
 
-// moduleNotAfter reports whether a sorts before or equal to b by name and system.
-func moduleNotAfter(a, b registry.Address) bool {
-	if a.Name != b.Name {
-		return a.Name < b.Name
+// parseModuleToken reads the cursor key of a module page token. The token is
+// untrusted input: it is refused, never repaired.
+func parseModuleToken(raw string, ns namespace.Name) (string, error) {
+	// Defense in depth: pagetoken.Decode checks the length too; this cap
+	// stays so that the handler refuses a long token before the decode.
+	if len(raw) > pagetoken.MaxLen {
+		return "", fmt.Errorf("%w: %w", errModuleTokenLength, errProviderPageToken)
 	}
 
-	return a.System <= b.System
+	var token moduleToken
+	if err := pagetoken.Decode(raw, &token); err != nil {
+		return "", fmt.Errorf("%w: %w", errModuleTokenDecode, errProviderPageToken)
+	}
+
+	// The first page carries no token: a token that holds no key is not a
+	// page token of this list.
+	if token.After == "" {
+		return "", fmt.Errorf("%w: %w", errModuleTokenEmpty, errProviderPageToken)
+	}
+
+	// Defense in depth: the store checks the cursor too; this check stays so
+	// that the handler refuses a bad token before the store call.
+	if _, err := registry.ParseAddressKey(ns, registry.KindModule, token.After); err != nil {
+		return "", fmt.Errorf("%w: %w", errModuleTokenAddress, errProviderPageToken)
+	}
+
+	return token.After, nil
 }
 
 // listModules serves GET .../registry/modules: one page of the modules of the
@@ -188,35 +205,31 @@ func (h *Handler) listModules(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	addrs, err := h.service.Modules(ctx, obj.Namespace())
+	addrs, next, err := h.service.Modules(ctx, obj.Namespace(), query.after, query.pageSize)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	// The addresses are in order, so the page starts at the first address after
-	// the token. A token that names no module still pages from where it would be.
-	start := 0
-	if query.hasAfter {
-		start = sort.Search(len(addrs), func(i int) bool { return !moduleNotAfter(addrs[i], query.after) })
-	}
+	page := listModulesResponse{Modules: make([]moduleDocument, 0, len(addrs)), NextPageToken: ""}
 
-	end := min(start+query.pageSize, len(addrs))
-	page := listModulesResponse{Modules: make([]moduleDocument, 0, end-start), NextPageToken: ""}
-
-	for _, a := range addrs[start:end] {
+	for _, a := range addrs {
 		page.Modules = append(
 			page.Modules,
 			moduleDocument{Namespace: a.Namespace.String(), Name: a.Name, System: a.System},
 		)
 	}
 
-	if end < len(addrs) {
-		last := addrs[end-1]
-		page.NextPageToken = base64.RawURLEncoding.EncodeToString(
-			[]byte(last.Name + moduleTokenSeparator + last.System),
-		)
+	if next != "" {
+		token, encodeErr := pagetoken.Encode(moduleToken{After: next})
+		if encodeErr != nil {
+			h.writeError(ctx, w, encodeErr)
+
+			return
+		}
+
+		page.NextPageToken = token
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, page)

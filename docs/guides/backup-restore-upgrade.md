@@ -66,6 +66,10 @@ The server copies a blob only when the SQL data holds its size and its MD5. It c
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
+The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/server/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
+
+A restore does not apply the bound. A manifest with more unverified keys than the bound restores as before. Such a manifest can come from an earlier version of the server. The restore checks the same rule: the list must name every blob that the data names. The audit log then holds one entry with the count and the limit.
+
 The table files use one encoding for both databases. A backup of SQLite restores into PostgreSQL, and a backup of PostgreSQL restores into SQLite.
 
 ## Check a backup

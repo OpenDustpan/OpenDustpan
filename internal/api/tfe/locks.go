@@ -169,6 +169,13 @@ func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 		return false
 	}
 
+	// A workspace that no collection holds takes no lock.
+	if err := h.placer.Require(ctx, c.obj); err != nil {
+		h.writeError(ctx, c.w, err)
+
+		return false
+	}
+
 	locked, err := h.workspaces.LockForJob(ctx, c.id, c.p.Subject, c.reason, c.p.JobTokenID())
 
 	switch {
