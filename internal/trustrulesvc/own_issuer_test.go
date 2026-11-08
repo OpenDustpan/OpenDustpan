@@ -30,7 +30,7 @@ func ownFixture(t *testing.T, own trustrulesvc.OwnIssuer) fixture {
 	t.Helper()
 
 	store := &fakeStore{created: nil, entries: nil, deleted: nil}
-	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil, err: nil}
 	people := fakePrincipals{"prn-worker": principalOf("prn-worker", principal.KindService, "acme")}
 
 	reach := &fakeReach{checked: nil, err: nil}

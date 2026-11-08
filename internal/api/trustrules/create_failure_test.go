@@ -1,7 +1,9 @@
 package trustrules_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -11,6 +13,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
+
+// errReachRead is a read error of the reach check. It is a denial, as the
+// fail-closed refusal of the token service is.
+var errReachRead = fmt.Errorf("%w: the store is not available", identity.ErrDenied)
+
+// failingReach is a reach port whose read fails.
+type failingReach struct{ err error }
+
+func (f failingReach) CheckReach(context.Context, identity.Principal, string) error { return f.err }
 
 // createFailureEntries returns the failure entries of a create in the audit
 // store of the handler.
@@ -40,6 +51,7 @@ type createFailureCase struct {
 	name       string
 	authz      identity.Authorizer
 	setup      func(e *env)
+	wrapReach  func(trustrulesvc.Reach) trustrulesvc.Reach
 	body       func(e *env) string
 	token      string
 	wantStatus int
@@ -48,15 +60,17 @@ type createFailureCase struct {
 }
 
 // TestRefusedCreateWritesOneFailureEntry checks that a create that a missing
-// action refused writes one failure entry with the action, the principal and
-// the reason of the refusal, and that any other error writes none.
+// action or a check that could not run refused writes one failure entry with
+// the action, the principal and the reason of the refusal, and that any other
+// error writes none.
 func TestRefusedCreateWritesOneFailureEntry(t *testing.T) {
 	t.Parallel()
 
 	tests := []createFailureCase{
 		{
-			name:  "a reach refusal",
-			authz: allActions(),
+			name:      "a reach refusal",
+			authz:     allActions(),
+			wrapReach: nil,
 			setup: func(e *env) {
 				tm := e.principalWithSubject("tm", "", principal.KindPerson)
 				e.grant(access.Subject{Kind: access.SubjectPrincipal, ID: tm},
@@ -71,7 +85,21 @@ func TestRefusedCreateWritesOneFailureEntry(t *testing.T) {
 			wantReason: reachFailureReason,
 		},
 		{
-			name: "a missing hold on the principal",
+			name:  "a reach check that could not run",
+			authz: allActions(),
+			setup: nil,
+			wrapReach: func(trustrulesvc.Reach) trustrulesvc.Reach {
+				return failingReach{err: errReachRead}
+			},
+			body:       func(e *env) string { return ruleBody("deploy", e.worker) },
+			token:      personToken,
+			wantStatus: http.StatusForbidden,
+			wantEntry:  true,
+			wantReason: func(*testing.T, *env) string { return "the reach check could not run" },
+		},
+		{
+			name:      "a missing hold on the principal",
+			wrapReach: nil,
 			authz: holdsOnly{actions: []identity.Action{
 				identity.ActionNamespaceRead, identity.ActionNamespaceReadAccess,
 				identity.ActionNamespaceManageTrustRules,
@@ -87,6 +115,7 @@ func TestRefusedCreateWritesOneFailureEntry(t *testing.T) {
 		},
 		{
 			name:       "a body that is not valid",
+			wrapReach:  nil,
 			authz:      allActions(),
 			setup:      nil,
 			body:       func(*env) string { return `{"name":"deploy"}` },
@@ -112,7 +141,7 @@ func TestRefusedCreateWritesOneFailureEntry(t *testing.T) {
 func runCreateFailureCase(t *testing.T, tc *createFailureCase) {
 	t.Helper()
 
-	e := newEnv(t, tc.authz)
+	e := newEnvWithReach(t, tc.authz, tc.wrapReach)
 	if tc.setup != nil {
 		tc.setup(e)
 	}

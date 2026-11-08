@@ -14,8 +14,8 @@ var errStoreDown = errors.New("the store is not available")
 
 // TestCreateFailureReasonNamesOnlyAMissingHold checks that only the denial of
 // principal:manage-tokens on the principal names that action in the reason. A
-// denial without that mark, for example a reach check that cannot run, names
-// no action.
+// check that could not run names itself, and a denial without a mark names no
+// action.
 func TestCreateFailureReasonNamesOnlyAMissingHold(t *testing.T) {
 	t.Parallel()
 
@@ -31,6 +31,18 @@ func TestCreateFailureReasonNamesOnlyAMissingHold(t *testing.T) {
 			name:       "a denial of principal:manage-tokens",
 			err:        fmt.Errorf("make: %w: %w", trustrulesvc.ErrManageTokensDenied, identity.ErrDenied),
 			wantReason: "outside the reach of the caller: principal:manage-tokens on principal:" + principalID,
+			wantOK:     true,
+		},
+		{
+			name:       "a reach check that could not run",
+			err:        fmt.Errorf("make: %w: %w", trustrulesvc.ErrReachUnchecked, identity.ErrDenied),
+			wantReason: "the reach check could not run",
+			wantOK:     true,
+		},
+		{
+			name:       "an access check that could not run",
+			err:        fmt.Errorf("make: %w: %w", trustrulesvc.ErrAccessUnchecked, errStoreDown),
+			wantReason: "the access check could not run",
 			wantOK:     true,
 		},
 		{

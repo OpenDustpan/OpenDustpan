@@ -121,6 +121,16 @@ type env struct {
 func newEnv(t *testing.T, authz identity.Authorizer) *env {
 	t.Helper()
 
+	return newEnvWithReach(t, authz, nil)
+}
+
+// newEnvWithReach is newEnv with a wrapper around the reach port of the
+// trust rule service. A nil wrap keeps the token service.
+func newEnvWithReach(
+	t *testing.T, authz identity.Authorizer, wrap func(trustrulesvc.Reach) trustrulesvc.Reach,
+) *env {
+	t.Helper()
+
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -149,13 +159,14 @@ func newEnv(t *testing.T, authz identity.Authorizer) *env {
 
 	e.worker = e.principal("acme", principal.KindService)
 	e.stranger = e.principal("other", principal.KindService)
-	e.serve(authz)
+	e.serve(authz, wrap)
 
 	return e
 }
 
-// serve starts the handler on a test server.
-func (e *env) serve(authz identity.Authorizer) {
+// serve starts the handler on a test server, with the reach port of the
+// trust rule service wrapped by wrap when it is not nil.
+func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) trustrulesvc.Reach) {
 	e.t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: e.store, Now: nil, Installation: installationName})
@@ -179,9 +190,14 @@ func (e *env) serve(authz identity.Authorizer) {
 
 	e.tokens = tokens
 
+	var reach trustrulesvc.Reach = tokens
+	if wrap != nil {
+		reach = wrap(reach)
+	}
+
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
-		Reach:            tokens,
+		Reach:            reach,
 		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {

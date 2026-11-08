@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -40,6 +41,18 @@ var ErrSignInRequired = errors.New("sign in to create a trust rule: an access to
 // carries it also wraps identity.ErrDenied. A denial of the reach check does
 // not carry it, so the audit entry of a refused create names the right cause.
 var ErrManageTokensDenied = errors.New("the caller does not hold principal:manage-tokens on the principal")
+
+// ErrAccessUnchecked marks the refusal of a create whose access check could
+// not run. The error that carries it also wraps the error of the authorizer.
+// A denial carries ErrManageTokensDenied instead, so the audit entry names
+// the right cause.
+var ErrAccessUnchecked = errors.New("the access check could not run")
+
+// ErrReachUnchecked marks the refusal of a create whose reach check could
+// not run. The error that carries it also wraps the error of the reach
+// check, or identity.ErrDenied when the server has no reach port. A refusal
+// that names the missing actions of the principal carries no mark.
+var ErrReachUnchecked = errors.New("the reach check could not run")
 
 // Namespaces gives the namespace of a read, and the namespace of a write
 // with its current fence. *namespace.Service meets it.
@@ -375,8 +388,10 @@ func (s *Service) checkPrincipal(ctx context.Context, id string, ns namespace.Na
 // come before the read of the principal, so a caller that fails one never
 // learns whether the ID names a principal, or its kind.
 //
-// The refusal of the reach check returns unwrapped, so that the adapter
-// answers its text, as the token route does.
+// A denial of the action returns ErrManageTokensDenied, and a check that
+// cannot run returns ErrAccessUnchecked. The refusal of the reach check
+// returns unwrapped, so that the adapter answers its text, as the token route
+// does; a reach check that cannot run returns ErrReachUnchecked.
 func (s *Service) authorizeCreate(ctx context.Context, caller identity.Principal, principalID string) error {
 	obj, err := identity.ParsePrincipalObject(principalID)
 	if err != nil {
@@ -393,7 +408,12 @@ func (s *Service) authorizeCreate(ctx context.Context, caller identity.Principal
 			)
 		}
 
-		return fmt.Errorf("make a trust rule for principal %q: %w", principalID, authzErr)
+		return fmt.Errorf(
+			"make a trust rule for principal %q: %w: %w",
+			principalID,
+			ErrAccessUnchecked,
+			authzErr,
+		)
 	}
 
 	return s.checkReach(ctx, caller, principalID)
@@ -404,6 +424,11 @@ func (s *Service) authorizeCreate(ctx context.Context, caller identity.Principal
 // that holds principal:manage-tokens on the installation only makes a rule
 // for a principal that reaches past it, and gets its tokens through the
 // exchange, while the token route refuses them.
+//
+// The refusal of the port returns unwrapped when it names at least one
+// missing action, so that the adapter answers its text. A missing port, and
+// every other error of the port, return ErrReachUnchecked: the check could
+// not run. The missing port also wraps identity.ErrDenied.
 //
 // Defense in depth: the create and the rotate paths of a token run the same
 // compare, in package accesstoken. This check stays so that the rule path
@@ -416,12 +441,22 @@ func (s *Service) checkReach(ctx context.Context, caller identity.Principal, pri
 	// refuses every create.
 	if s.reach == nil {
 		return fmt.Errorf(
-			"%w: the server cannot check the reach of the principal of a trust rule",
+			"%w: %w: the server cannot check the reach of the principal of a trust rule",
+			ErrReachUnchecked,
 			identity.ErrDenied,
 		)
 	}
 
-	return s.reach.CheckReach(ctx, caller, principalID)
+	err := s.reach.CheckReach(ctx, caller, principalID)
+	if err == nil {
+		return nil
+	}
+
+	if refused, ok := errors.AsType[access.ReachRefusal](err); ok && len(refused.MissingActions()) > 0 {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", ErrReachUnchecked, err)
 }
 
 // ownsURL reports whether u is at or under one of the installation URLs.

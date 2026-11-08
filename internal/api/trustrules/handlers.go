@@ -135,9 +135,10 @@ type namespaceAppender interface {
 }
 
 // createFailureReason returns the audit reason of a create that the service
-// refused for a missing action, and false for any other error. A reach
-// refusal names its missing actions. A denial of principal:manage-tokens on
-// the principal names that one action.
+// refused for a missing action or for a check that could not run, and false
+// for any other error. A reach refusal names its missing actions. A denial of
+// principal:manage-tokens on the principal names that one action. An access
+// check or a reach check that could not run names itself.
 func createFailureReason(err error, principalID string) (string, bool) {
 	if refused, ok := errors.AsType[access.ReachRefusal](err); ok {
 		missing := refused.MissingActions()
@@ -148,8 +149,15 @@ func createFailureReason(err error, principalID string) (string, bool) {
 		return access.MissingActionsReason(missing), true
 	}
 
+	switch {
+	case errors.Is(err, trustrulesvc.ErrAccessUnchecked):
+		return trustrulesvc.ErrAccessUnchecked.Error(), true
+	case errors.Is(err, trustrulesvc.ErrReachUnchecked):
+		return trustrulesvc.ErrReachUnchecked.Error(), true
+	}
+
 	// Only the denial of principal:manage-tokens carries this mark. Another
-	// denial, for example a reach check that cannot run, names no action.
+	// denial names no action.
 	if !errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
 		return "", false
 	}

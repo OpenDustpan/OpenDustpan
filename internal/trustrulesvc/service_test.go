@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -82,14 +83,20 @@ func (f fakePrincipals) GetPrincipal(_ context.Context, id string) (principal.Pr
 	return p, nil
 }
 
-// grants allows the actions it lists, and records each check.
+// grants allows the actions it lists, and records each check. A non-nil err
+// answers every check.
 type grants struct {
 	allow   []identity.Action
 	checked []string
+	err     error
 }
 
 func (g *grants) Authorize(_ context.Context, _ identity.Principal, a identity.Action, obj identity.Object) error {
 	g.checked = append(g.checked, string(a)+" "+obj.String())
+
+	if g.err != nil {
+		return g.err
+	}
 
 	if slices.Contains(g.allow, a) {
 		return nil
@@ -114,6 +121,25 @@ func (f *fakeReach) CheckReach(_ context.Context, caller identity.Principal, pri
 	return f.err
 }
 
+// reachRefusalError is a refusal of the reach check that names the actions
+// of the principal that the caller does not hold.
+type reachRefusalError struct {
+	missing []access.HeldAction
+	cause   error
+}
+
+func (r *reachRefusalError) Error() string {
+	return "the reach of the principal is not inside the reach of the caller"
+}
+
+func (r *reachRefusalError) MissingActions() []access.HeldAction { return r.missing }
+
+func (r *reachRefusalError) Unwrap() error { return r.cause }
+
+// errStoreUnavailable is the read error of the cases that cannot run a
+// check.
+var errStoreUnavailable = errors.New("the store is not available")
+
 // fixture is a service over fakes, with the principals of the cases.
 type fixture struct {
 	svc   *trustrulesvc.Service
@@ -126,7 +152,7 @@ func newFixture(t *testing.T) fixture {
 	t.Helper()
 
 	store := &fakeStore{created: nil, entries: nil, deleted: nil}
-	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil, err: nil}
 	reach := &fakeReach{checked: nil, err: nil}
 
 	disabled := principalOf("prn-disabled", principal.KindService, "acme")
@@ -444,13 +470,93 @@ func TestCreateChecksTheReachBeforeItReadsThePrincipal(t *testing.T) {
 	}
 }
 
+// TestCreateMarksACheckThatCouldNotRun checks the mark of a create whose
+// access check or reach check could not run. A reach refusal that names
+// missing actions stays unmarked.
+func TestCreateMarksACheckThatCouldNotRun(t *testing.T) {
+	t.Parallel()
+
+	refused := &reachRefusalError{
+		missing: []access.HeldAction{{
+			Action: identity.ActionPrincipalManageTokens,
+			Object: identity.PrincipalObject("prn-worker"),
+		}},
+		cause: accesstoken.ErrReachExceeded,
+	}
+
+	tests := []struct {
+		name    string
+		prepare func(*fixture)
+		want    []error
+		notWant []error
+	}{
+		{
+			name:    "an access check that could not run",
+			prepare: func(f *fixture) { f.authz.err = errStoreUnavailable },
+			want:    []error{trustrulesvc.ErrAccessUnchecked, errStoreUnavailable},
+			notWant: []error{trustrulesvc.ErrManageTokensDenied},
+		},
+		{
+			name:    "a reach check that could not run",
+			prepare: func(f *fixture) { f.reach.err = errStoreUnavailable },
+			want:    []error{trustrulesvc.ErrReachUnchecked, errStoreUnavailable},
+			notWant: []error{trustrulesvc.ErrManageTokensDenied},
+		},
+		{
+			name:    "a reach refusal with missing actions",
+			prepare: func(f *fixture) { f.reach.err = refused },
+			want:    []error{accesstoken.ErrReachExceeded},
+			notWant: []error{trustrulesvc.ErrReachUnchecked},
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			tc.prepare(&f)
+
+			_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+			checkCreateError(t, err, tc.want, tc.notWant)
+
+			if len(f.store.created) != 0 {
+				t.Error("the refused create reached the store")
+			}
+		})
+	}
+}
+
+// checkCreateError checks that err matches each error of want and none of
+// notWant.
+func checkCreateError(t *testing.T, err error, want, notWant []error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("Create = nil, want an error")
+	}
+
+	for _, target := range want {
+		if !errors.Is(err, target) {
+			t.Errorf("Create = %v, want it to match %v", err, target)
+		}
+	}
+
+	for _, target := range notWant {
+		if errors.Is(err, target) {
+			t.Errorf("Create = %v, want it not to match %v", err, target)
+		}
+	}
+}
+
 // TestCreateRefusesWithNoReachChecker checks the fail-closed rule: a
 // service built without a reach checker refuses every create.
 func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{created: nil, entries: nil, deleted: nil}
-	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil, err: nil}
 	people := fakePrincipals{"prn-worker": principalOf("prn-worker", principal.KindService, "acme")}
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
@@ -462,8 +568,12 @@ func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 	}
 
 	_, err = svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
-	if !errors.Is(err, identity.ErrDenied) || errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
-		t.Fatalf("Create with no reach checker = %v, want ErrDenied without ErrManageTokensDenied", err)
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, trustrulesvc.ErrReachUnchecked) ||
+		errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		t.Fatalf(
+			"Create with no reach checker = %v, want ErrDenied and ErrReachUnchecked without ErrManageTokensDenied",
+			err,
+		)
 	}
 
 	if len(store.created) != 0 {
@@ -516,7 +626,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 			Store:            &fakeStore{created: nil, entries: nil, deleted: nil},
 			Namespaces:       fakeNamespaces{},
 			Principals:       fakePrincipals{},
-			Authorizer:       &grants{allow: nil, checked: nil},
+			Authorizer:       &grants{allow: nil, checked: nil, err: nil},
 			Reach:            &fakeReach{checked: nil, err: nil},
 			InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil,
 			Now: nil,
