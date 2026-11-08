@@ -126,6 +126,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected()
 }
 
+const addMemberRemoval = `-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type AddMemberRemovalParams struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
+func (q *Queries) AddMemberRemoval(ctx context.Context, arg AddMemberRemovalParams) error {
+	_, err := q.db.ExecContext(ctx, addMemberRemoval,
+		arg.ID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.GroupID,
+		arg.Removed,
+		arg.MembersBefore,
+		arg.AtMs,
+	)
+	return err
+}
+
 const addSignInFailure = `-- name: AddSignInFailure :one
 
 INSERT INTO sign_in_failures (source, window_end_ms, count)
@@ -17746,6 +17774,49 @@ func (q *Queries) MarkTempAdminReviewOpened(ctx context.Context, arg MarkTempAdm
 	return result.RowsAffected()
 }
 
+const memberRemovalTotals = `-- name: MemberRemovalTotals :one
+SELECT
+    CAST(COALESCE(SUM(removed), 0) AS INTEGER) AS source_removed,
+    CAST(COALESCE(SUM(CASE WHEN group_id = ?1 THEN removed ELSE 0 END), 0) AS INTEGER)
+        AS group_removed,
+    CAST(COALESCE(MAX(CASE WHEN group_id = ?1 THEN members_before ELSE 0 END), 0) AS INTEGER)
+        AS group_members
+FROM member_removals
+WHERE source_kind = ?2 AND source_id = ?3
+  AND at_ms > ?4 AND at_ms <= ?5
+`
+
+type MemberRemovalTotalsParams struct {
+	GroupID    string
+	SourceKind string
+	SourceID   string
+	LowMs      int64
+	HighMs     int64
+}
+
+type MemberRemovalTotalsRow struct {
+	SourceRemoved int64
+	GroupRemoved  int64
+	GroupMembers  int64
+}
+
+// The totals of the removals of one source in one window: the members that
+// the source removed from any group, the members that it removed from one
+// group, and the largest group that it saw before a removal. The window
+// holds the rows above low_ms and at most high_ms.
+func (q *Queries) MemberRemovalTotals(ctx context.Context, arg MemberRemovalTotalsParams) (MemberRemovalTotalsRow, error) {
+	row := q.db.QueryRowContext(ctx, memberRemovalTotals,
+		arg.GroupID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.LowMs,
+		arg.HighMs,
+	)
+	var i MemberRemovalTotalsRow
+	err := row.Scan(&i.SourceRemoved, &i.GroupRemoved, &i.GroupMembers)
+	return i, err
+}
+
 const minAuditSequence = `-- name: MinAuditSequence :one
 SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE namespace = ?
 `
@@ -18206,6 +18277,39 @@ DELETE FROM local_user_resets WHERE expires_at_ms <= ?
 
 func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, pruneLocalUserResets, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const pruneMemberRemovals = `-- name: PruneMemberRemovals :execrows
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = ?1 AND m.source_id = ?2
+      AND m.at_ms <= ?3
+    ORDER BY m.at_ms, m.id
+    LIMIT ?4
+)
+`
+
+type PruneMemberRemovalsParams struct {
+	SourceKind string
+	SourceID   string
+	CutoffMs   int64
+	MaxRows    int64
+}
+
+// Deletes at most max_rows of the oldest rows of one source at or before
+// cutoff_ms.
+func (q *Queries) PruneMemberRemovals(ctx context.Context, arg PruneMemberRemovalsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneMemberRemovals,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.CutoffMs,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return 0, err
 	}
