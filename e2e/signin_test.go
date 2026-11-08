@@ -73,6 +73,36 @@ func TestSignIn(t *testing.T) {
 	}
 }
 
+// TestSignInSecretInVariable proves that the server takes the client secret
+// of the OpenID Connect provider from DUSTPAN_OIDC_CLIENT_SECRET. The test
+// provider refuses another secret at its token endpoint, so a server that
+// sends the fingerprint of the snapshot in place of the secret fails the
+// sign-in.
+func TestSignInSecretInVariable(t *testing.T) {
+	t.Parallel()
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	if len(databases) == 0 {
+		t.Fatal("no store")
+	}
+
+	store := databases[0]
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	env := e2e.NewEnvWithSignInSecretInVariable(t.Context(), t, e2e.NoCLI(), store)
+
+	checkReady(t.Context(), t, env)
+
+	b := newBrowser(t, env)
+	b.signIn(t)
+}
+
 // browser is the browser of one sign-in test: a client with a cookie jar
 // for the server, and a client for the test provider.
 type browser struct {
