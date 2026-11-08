@@ -74,7 +74,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 
 	backupCheck := newCheckFakeServer(
 		t,
-		"/api/server/backups/"+backupID+"/check",
+		"/api/dustpan/v1/backups/"+backupID+"/check",
 		http.StatusOK,
 		backupCheckBody(t, backupID, true, ""),
 	)

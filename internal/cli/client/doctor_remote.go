@@ -122,7 +122,7 @@ func serverUpgradeCheck(
 func serverBackupCheck(ctx context.Context, client *http.Client, server, token string) checkResult {
 	var doc backupListDocument
 
-	if err := getJSON(ctx, client, backupEndpoint(server, "/api/server/backups"), token, &doc); err != nil {
+	if err := getJSON(ctx, client, backupEndpoint(server, "/api/dustpan/v1/backups"), token, &doc); err != nil {
 		return checkResult{statusWarn, nameServerBackup, err.Error()}
 	}
 

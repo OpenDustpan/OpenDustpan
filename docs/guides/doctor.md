@@ -51,7 +51,7 @@ actions that the routes below need.
 | --- | --- | --- |
 | The capabilities document reports `installationKind` `production`. A missing field fails the check. | `GET /api/dustpan/v1/capabilities` | `fail` |
 | The upgrade check gives no `cannot start` for this binary. | `GET /api/server/upgrade-check` | `warn` |
-| The last successful backup ended less than 25 hours ago. | `GET /api/server/backups` | `warn` |
+| The last successful backup ended less than 25 hours ago. | `GET /api/dustpan/v1/backups` | `warn` |
 
 Without the token, the first check fails, and the other two say that they did
 not run.

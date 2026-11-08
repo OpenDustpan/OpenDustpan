@@ -166,31 +166,18 @@ func (h *Handler) coreRoutes() []Route {
 
 // backupRoutes returns the backup rows of the route table (ADR 30).
 func (h *Handler) backupRoutes() []Route {
+	row := func(method, path string, serve RouteHandler) Route {
+		return Route{
+			Method: method, Path: path, Scope: ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerBackup},
+			Resolve: resolveServer, ActionsFor: nil, Serve: serve,
+		}
+	}
+
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/backups",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.startBackup,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/backups",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.listBackups,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/backups/{id}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getBackup,
-		},
+		row(http.MethodPost, backupsPath, h.startBackup),
+		row(http.MethodGet, backupsPath, h.listBackups),
+		row(http.MethodGet, backupPath, h.getBackup),
 	}
 }
 
@@ -198,39 +185,19 @@ func (h *Handler) backupRoutes() []Route {
 // decision 1): start a restore, list restores, read one restore, and cancel
 // one restore before its swap.
 func (h *Handler) restoreRoutes() []Route {
+	row := func(method, path string, serve RouteHandler) Route {
+		return Route{
+			Method: method, Path: path, Scope: ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerRestore},
+			Resolve: resolveServer, ActionsFor: nil, Serve: serve,
+		}
+	}
+
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/restores",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.startRestore,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/restores",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.listRestores,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/restores/{id}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getRestore,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/restores/{id}/cancel",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.cancelRestore,
-		},
+		row(http.MethodPost, restoresPath, h.startRestore),
+		row(http.MethodGet, restoresPath, h.listRestores),
+		row(http.MethodGet, restorePath, h.getRestore),
+		row(http.MethodPost, restoreCancelPath, h.cancelRestore),
 	}
 }
 
@@ -240,7 +207,7 @@ func (h *Handler) checkRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/backups/{id}/check",
+			Path:    backupCheckPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
 			Resolve: resolveServer, ActionsFor: nil,

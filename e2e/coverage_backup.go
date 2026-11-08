@@ -96,25 +96,25 @@ const backupCoveringTest = "TestBackups"
 func backupAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodPost, Path: "/api/server/backups",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/backups",
 			CoveringTest: backupCoveringTest,
 			Reason: "Operator route: no CLI starts a backup. The harness step " +
 				"starts one and checks the second start conflicts.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/backups",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/backups",
 			CoveringTest: backupCoveringTest,
 			Reason: "Operator route: no CLI lists backups. The harness step " +
 				"lists them newest first.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/backups/{id}",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/backups/{id}",
 			CoveringTest: backupCoveringTest,
 			Reason: "Operator route: no CLI reads a backup. The harness step " +
 				"polls it until it succeeds and checks the manifest.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/backups/{id}/check",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/backups/{id}/check",
 			CoveringTest: "TestBackupCheck",
 			Reason: "Operator route: no CLI in the matrix calls it. The " +
 				"opendustpan backup check binary calls it with Go-http-client, " +
@@ -205,25 +205,25 @@ const restoreCoveringTest = "TestBackupRestore"
 func restoreAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodPost, Path: "/api/server/restores",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/restores",
 			CoveringTest: restoreCoveringTest,
 			Reason: "Operator route: only the restore command starts a restore. " +
 				"The harness step starts one through it and checks the second start conflicts.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/restores",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/restores",
 			CoveringTest: restoreCoveringTest,
 			Reason: "Operator route: only the restore command lists restores. " +
 				"The harness step lists them to find the backup taken before the restore.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/restores/{id}",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/restores/{id}",
 			CoveringTest: restoreCoveringTest,
 			Reason: "Operator route: only the restore command reads a restore. " +
 				"The harness step polls it until it succeeds and checks the manifest.",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/server/restores/{id}/cancel",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/restores/{id}/cancel",
 			CoveringTest: "TestCancelRestoreBeforeTheSwap",
 			Reason: "Operator route: no CLI command cancels a restore. The tests of the installation API " +
 				"cancel a restore before the swap, after the swap and after the end.",

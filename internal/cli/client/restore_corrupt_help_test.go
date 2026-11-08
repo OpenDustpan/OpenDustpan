@@ -28,13 +28,13 @@ func serveCodedRestore(t *testing.T, errText, code string) *httptest.Server {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/server/restores":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/dustpan/v1/restores":
 			w.WriteHeader(http.StatusAccepted)
 
 			if _, err := w.Write([]byte(`{"id":"rst-test"}`)); err != nil {
 				t.Errorf("write the answer: %v", err)
 			}
-		case r.Method == http.MethodGet && r.URL.Path == "/api/server/restores/rst-test":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/dustpan/v1/restores/rst-test":
 			doc := map[string]string{
 				"id": "rst-test", "state": "failed", "backupID": "bkp-aaa", "error": errText, "errorCode": code,
 			}
@@ -155,7 +155,7 @@ func TestRestoreReadFailureSaysTheServerResumes(t *testing.T) {
 	t.Setenv(client.AdminTokenEnvVar, "test-token")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/server/restores" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/dustpan/v1/restores" {
 			w.WriteHeader(http.StatusAccepted)
 
 			if _, err := w.Write([]byte(`{"id":"rst-test"}`)); err != nil {
@@ -182,7 +182,7 @@ func TestRestoreReadFailureSaysTheServerResumes(t *testing.T) {
 	}
 
 	want := "the server resumes restore rst-test on its own and it needs no second run: read its state with GET " +
-		srv.URL + "/api/server/restores/rst-test"
+		srv.URL + "/api/dustpan/v1/restores/rst-test"
 	if got := err.Error(); !strings.Contains(got, want) || strings.Contains(got, " again") {
 		t.Fatalf("restore = %q, want %q and no hint to run it again", got, want)
 	}

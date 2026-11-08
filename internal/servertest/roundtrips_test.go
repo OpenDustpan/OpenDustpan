@@ -1036,8 +1036,8 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/backups", "", http.StatusAccepted), &started)
-	h.settle("/api/server/backups/"+started.ID, string(backup.StateRunning))
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/backups", "", http.StatusAccepted), &started)
+	h.settle("/api/dustpan/v1/backups/"+started.ID, string(backup.StateRunning))
 	h.settleOperations()
 
 	out.backup = h.tracer.end()
@@ -1053,9 +1053,9 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
 		&restore)
-	h.settle("/api/server/restores/"+restore.ID, "running", "checking", "applying")
+	h.settle("/api/dustpan/v1/restores/"+restore.ID, "running", "checking", "applying")
 	h.settleOperations()
 
 	out.restore = h.tracer.end()

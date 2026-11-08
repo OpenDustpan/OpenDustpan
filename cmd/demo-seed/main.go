@@ -517,7 +517,7 @@ func (s *seeder) seedBackup(ctx context.Context) error {
 	call := apiCall{
 		name:   "start backup",
 		method: http.MethodPost,
-		path:   "/api/server/backups",
+		path:   "/api/dustpan/v1/backups",
 		auth:   bearerAuth(s.token),
 		body:   nil,
 		want:   http.StatusAccepted,
@@ -552,7 +552,7 @@ func (s *seeder) pollBackup(ctx context.Context, id string) error {
 		call := apiCall{
 			name:   "read backup",
 			method: http.MethodGet,
-			path:   "/api/server/backups/" + id,
+			path:   "/api/dustpan/v1/backups/" + id,
 			auth:   bearerAuth(s.token),
 			body:   nil,
 			want:   http.StatusOK,

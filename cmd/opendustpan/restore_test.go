@@ -52,8 +52,8 @@ func newRestoreFakeServer(t *testing.T, token string, script restoreScript) *res
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/server/restores", fake.startHandler(t, token))
-	mux.HandleFunc("GET /api/server/restores/{id}", fake.readHandler(t, token))
+	mux.HandleFunc("POST /api/dustpan/v1/restores", fake.startHandler(t, token))
+	mux.HandleFunc("GET /api/dustpan/v1/restores/{id}", fake.readHandler(t, token))
 
 	fake.server = httptest.NewServer(mux)
 	t.Cleanup(fake.server.Close)
@@ -601,7 +601,7 @@ func TestRestoreCommandUsage(t *testing.T) {
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestRestoreCommandReadMissingHasNoRetryHint(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /api/dustpan/v1/restores", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 
@@ -609,7 +609,7 @@ func TestRestoreCommandReadMissingHasNoRetryHint(t *testing.T) {
 			t.Errorf("write start body: %v", err)
 		}
 	})
-	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 
@@ -665,7 +665,7 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 	var reads atomic.Int64
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /api/dustpan/v1/restores", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 
@@ -673,7 +673,7 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 			t.Errorf("write start body: %v", err)
 		}
 	})
-	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		n := reads.Add(1)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -720,14 +720,14 @@ func TestRestoreCommandWarnsAboutADevBackup(t *testing.T) {
 	var order []string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/server/backups/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/backups/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		order = append(order, "manifest")
 
 		writeFake(t, w,
 			`{"id":"`+restoreBackupTestID+`","state":"succeeded","manifest":{"installationKind":"dev"}}`,
 		)
 	})
-	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /api/dustpan/v1/restores", func(w http.ResponseWriter, _ *http.Request) {
 		order = append(order, "start")
 
 		w.WriteHeader(http.StatusAccepted)
@@ -736,7 +736,7 @@ func TestRestoreCommandWarnsAboutADevBackup(t *testing.T) {
 			`{"id":"`+restoreTestID+`","warnings":[{"code":"dev-backup-into-production","text":"first text"}]}`,
 		)
 	})
-	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		writeFake(t, w,
 			`{"id":"`+restoreTestID+`","state":"succeeded","backupID":"`+restoreBackupTestID+`",`+
 				`"warnings":[{"code":"dev-backup-into-production","text":"first text"},{"code":"audit-append-failed","text":"second text"}],`+
