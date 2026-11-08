@@ -84,7 +84,7 @@ func authorizerOver(t *testing.T, s moveStore, port access.UnitCollections) (*ac
 	t.Helper()
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: port, Units: s, Principals: nil,
+		Store: s, Callers: s, Collections: port, Units: s, Principals: s,
 	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)

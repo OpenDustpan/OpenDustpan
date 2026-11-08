@@ -204,3 +204,111 @@ func testRestoreStagingRefusesNamespacePrincipalGrants(t *testing.T, newStore Re
 		})
 	}
 }
+
+// namespaceMembershipCase is one staged membership row with the outcome of its
+// stage.
+type namespaceMembershipCase struct {
+	name   string
+	row    map[string]any
+	refuse bool
+}
+
+// namespaceMembershipStage holds the export of the source, with the principal
+// rows of the memberships, and the live rows of the destination.
+type namespaceMembershipStage struct {
+	ps     portableStores
+	files  map[string][]byte
+	descs  []backup.PortableFile
+	sum    backup.Summary
+	before backup.Summary
+}
+
+// stageNamespaceMembership stages the export with the membership row of tc and
+// checks the outcome: a refused stage reports ErrCorrupt and names the group
+// and the principal, an accepted stage reports no error, and the live rows of
+// the destination stay in both cases.
+func stageNamespaceMembership(t *testing.T, stage namespaceMembershipStage, tc namespaceMembershipCase) {
+	t.Helper()
+
+	edited, editedDescs, editedSum := AddPortableRows(
+		t, stage.files, stage.descs, stage.sum, backup.TableGroupMembers, tc.row,
+	)
+
+	_, stageErr := stage.ps.dst.StagePortable(
+		t.Context(), PortableOpener(edited), editedSum, editedDescs, StageAs(t, stage.ps.dst),
+	)
+
+	switch {
+	case tc.refuse && !errors.Is(stageErr, backup.ErrCorrupt):
+		t.Fatalf("stage a backup with %s: err = %v, want ErrCorrupt", tc.name, stageErr)
+	case tc.refuse && !strings.Contains(stageErr.Error(), "grp-team"):
+		t.Fatalf("stage a backup with %s: err = %q, want the group %q", tc.name, stageErr, "grp-team")
+	case tc.refuse && !strings.Contains(stageErr.Error(), "prn-ci-acme"):
+		t.Fatalf("stage a backup with %s: err = %q, want the principal %q", tc.name, stageErr, "prn-ci-acme")
+	case !tc.refuse && stageErr != nil:
+		t.Fatalf("stage a backup with %s: %v", tc.name, stageErr)
+	default:
+	}
+
+	assertSameSummary(t, portableSummaryOf(t, stage.ps.dst), stage.before)
+	discardStaging(t, stage.ps.dst)
+}
+
+// testRestoreStagingRefusesNamespacePrincipalMemberships stages a portable
+// backup that holds a membership of a principal of a namespace in a group: the
+// stage fails with ErrCorrupt, the error names the group and the principal,
+// and the live rows stay. A removed membership is refused too: no state of the
+// API holds a row of that shape, so the row never enters the database. A
+// membership of a principal that is not in a namespace stages.
+func testRestoreStagingRefusesNamespacePrincipalMemberships(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	seedBackupStore(t, ps.src)
+
+	files, sum, descs := PortableFiles(t, ps.src)
+
+	// The principal of a namespace and the group that the memberships name.
+	// No port writes a principal of a namespace as a member of a group, so
+	// the test writes the rows into the export by hand.
+	files, descs, sum = AddPortableRows(
+		t, files, descs, sum, backup.TablePrincipals, namespacePrincipalRow(),
+	)
+	files, descs, sum = AddPortableRows(
+		t, files, descs, sum, backup.TablePrincipalGroups, DevGroupRow("grp-team"),
+	)
+
+	seedBackupStore(t, ps.dst)
+
+	stage := namespaceMembershipStage{
+		ps: ps, files: files, descs: descs, sum: sum, before: portableSummaryOf(t, ps.dst),
+	}
+
+	removed := DevMemberRow("grp-team", "prn-ci-acme")
+	removed["removed_at_ms"] = 2
+
+	cases := []namespaceMembershipCase{
+		{
+			name:   "a current membership of a namespace principal",
+			row:    DevMemberRow("grp-team", "prn-ci-acme"),
+			refuse: true,
+		},
+		{
+			name:   "a removed membership of a namespace principal",
+			row:    removed,
+			refuse: true,
+		},
+		{
+			name:   "a membership of a principal that is not in a namespace",
+			row:    DevMemberRow("grp-team", "prn-deploy"),
+			refuse: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stageNamespaceMembership(t, stage, tc)
+		})
+	}
+}

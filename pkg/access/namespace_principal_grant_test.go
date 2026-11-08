@@ -152,6 +152,154 @@ func TestNamespacePrincipalGrantEscalation(t *testing.T) {
 	}
 }
 
+// TestNewAuthorizerRequiresPrincipals proves that NewAuthorizer refuses a
+// config with no principals port, so that no grant of a principal of a
+// namespace passes unseen.
+func TestNewAuthorizerRequiresPrincipals(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	for _, tc := range []struct {
+		name string
+		cfg  access.AuthorizerConfig
+	}{
+		{
+			name: "a store",
+			cfg: access.AuthorizerConfig{
+				Store: nil, Callers: f.store, Collections: nil, Units: nil, Principals: f.store,
+			},
+		},
+		{
+			name: "callers",
+			cfg: access.AuthorizerConfig{
+				Store: f.store, Callers: nil, Collections: nil, Units: nil, Principals: f.store,
+			},
+		},
+		{
+			name: "principals",
+			cfg: access.AuthorizerConfig{
+				Store: f.store, Callers: f.store, Collections: nil, Units: nil, Principals: nil,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			authz, err := access.NewAuthorizer(tc.cfg)
+			if !errors.Is(err, access.ErrMissingDependency) {
+				t.Fatalf("new authorizer = %v, want ErrMissingDependency", err)
+			}
+
+			if authz != nil {
+				t.Fatalf("new authorizer = %+v, want no authorizer", authz)
+			}
+		})
+	}
+}
+
+// namespacePrincipalCaller returns the caller of the service principal ci-acme
+// of the namespace acme.
+func namespacePrincipalCaller() identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "ci-acme", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindService,
+		Credential: identity.CredentialAccessToken, JobID: "",
+	}
+}
+
+// groupCallers adds one group to the subjects of one caller, as a membership
+// row from another source does: the store and the principal service refuse
+// the membership on write.
+type groupCallers struct {
+	access.Callers
+
+	subject string
+	group   string
+}
+
+func (c groupCallers) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
+	subjects, err := c.Callers.SubjectsOf(ctx, subject)
+	if err != nil {
+		return nil, err
+	}
+
+	if subject != c.subject {
+		return subjects, nil
+	}
+
+	return append(subjects, access.Subject{Kind: access.SubjectGroup, ID: c.group}), nil
+}
+
+// TestNamespacePrincipalGroupGrants proves that the Authorizer gives no
+// action of a group to a principal of a namespace, though the subjects of the
+// caller name a group: the grants of the group on the installation and on the
+// namespace of the principal give nothing.
+func TestNamespacePrincipalGroupGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	bot := namespacePrincipalCaller()
+
+	f.namespaceBot(t, "prn-ci-acme", "ci-acme", "acme")
+
+	team := f.group(t, "team")
+	f.grant(t, team, access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, team, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: groupCallers{Callers: f.store, subject: "ci-acme", group: team.ID},
+		Collections: f.units, Units: f.store, Principals: f.store,
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	assertChecks(t, authz, bot, []check{
+		{identity.ServerObject(), identity.ActionServerBackup, false},
+		{identity.NamespaceObject("acme"), identity.ActionNamespaceRead, false},
+	})
+
+	for _, action := range []identity.Action{identity.ActionServerBackup, identity.ActionNamespaceRead} {
+		scope, listErr := authz.ListObjects(t.Context(), bot, action)
+		if listErr != nil {
+			t.Fatalf("list objects of %s: %v", action, listErr)
+		}
+
+		if !scope.IsEmpty() {
+			t.Fatalf("scope of %s = %+v, want no object", action, scope)
+		}
+	}
+}
+
+// TestNamespacePrincipalGroupReadFailsClosed proves that the Authorizer gives
+// no subject when the read of the principal fails, also when a group has a
+// grant on the namespace of the principal.
+func TestNamespacePrincipalGroupReadFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	bot := namespacePrincipalCaller()
+
+	f.namespaceBot(t, "prn-ci-acme", "ci-acme", "acme")
+
+	team := f.group(t, "team")
+	f.grant(t, team, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: groupCallers{Callers: f.store, subject: "ci-acme", group: team.ID},
+		Collections: f.units, Units: f.store, Principals: failingPrincipals{},
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	authErr := authz.Authorize(t.Context(), bot, identity.ActionNamespaceRead, identity.NamespaceObject("acme"))
+	if !errors.Is(authErr, errNoPrincipal) {
+		t.Fatalf("authorize with an unreadable principal = %v, want the read error", authErr)
+	}
+}
+
 // TestNamespacePrincipalGrantDenialText proves that the refusal of a grant
 // outside the namespace of its subject names neither the grant nor the
 // namespace of the grant: the caller cannot read either, so the denial

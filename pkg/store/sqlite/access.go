@@ -87,6 +87,21 @@ func (r grantReads) UnitCollectionID(ctx context.Context, unitID string) (string
 	return id, true, nil
 }
 
+// GetPrincipal reads the principal with the ID id in the transaction of a
+// write: a grant check reads the namespace of a subject there.
+func (r grantReads) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	row, err := r.q.GetPrincipal(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return principal.Principal{}, principal.ErrNotFound
+	}
+
+	if err != nil {
+		return principal.Principal{}, fmt.Errorf("select principal: %w", err)
+	}
+
+	return principalOf(principalRow(row)), nil
+}
+
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 	kind, ok := access.KindOf(g.Object)

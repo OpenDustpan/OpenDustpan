@@ -74,6 +74,53 @@ func seedNamespacePrincipalGrant(t *testing.T, s *Store) {
 	}
 }
 
+// seedNamespacePrincipalMembership makes the group grp-team and the person
+// prn-alice, a principal of no namespace. The tests add the membership rows.
+func seedNamespacePrincipalMembership(t *testing.T, s *Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+
+	g := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: "grp-team", Name: "team", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+	err := s.CreateGroup(ctx, g, stagedGrantEntry(audit.ServerScope, "server:manage-groups", "group:"+g.ID))
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-alice", Subject: "alice",
+		DisplayName: "alice", Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+	err = s.CreatePrincipal(
+		ctx, p, stagedGrantEntry(audit.ServerScope, "server:manage-principals", principal.Ref(p.ID)),
+	)
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+}
+
+// stagedMembershipStore returns a store with the namespace principal grant,
+// the group and the person, after the updates ran on it.
+func stagedMembershipStore(t *testing.T, updates []string) *Store {
+	t.Helper()
+
+	s := stagedGrantStore(t, nil)
+	seedNamespacePrincipalMembership(t, s)
+
+	for _, update := range updates {
+		if _, err := s.pool.Exec(t.Context(), update); err != nil {
+			t.Fatalf("change the row: %v", err)
+		}
+	}
+
+	return s
+}
+
 // stagedGrantStore returns a store with the namespace principal grant, after
 // the updates ran on it.
 func stagedGrantStore(t *testing.T, updates []string) *Store {
@@ -205,6 +252,74 @@ func TestCheckStagedNamespacePrincipalGrantsRefuses(t *testing.T) {
 			if !strings.Contains(err.Error(), "grt-inside") {
 				t.Fatalf("check = %v, want the grant ID", err)
 			}
+		})
+	}
+}
+
+// assertMembershipRefused checks that err is a corrupt backup and names the
+// group and the principal of the refused membership.
+func assertMembershipRefused(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+
+	for _, want := range []string{"grp-team", "prn-ci-acme"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("check = %v, want %q", err, want)
+		}
+	}
+}
+
+// TestCheckStagedNamespacePrincipalMemberships proves the restore check
+// refuses a current or removed membership of a principal of a namespace in a
+// group, and accepts a membership of a principal that is not in a namespace.
+func TestCheckStagedNamespacePrincipalMemberships(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		updates []string
+		refuse  bool
+	}{
+		{
+			name: "a current membership",
+			updates: []string{
+				`INSERT INTO group_members (group_id, principal_id, added_at_ms) VALUES ('grp-team', 'prn-ci-acme', 1)`,
+			},
+			refuse: true,
+		},
+		{
+			name: "a removed membership",
+			updates: []string{
+				`INSERT INTO group_members (group_id, principal_id, added_at_ms, removed_at_ms) VALUES ('grp-team', 'prn-ci-acme', 1, 2)`,
+			},
+			refuse: true,
+		},
+		{
+			name: "a membership of a principal that is not in a namespace",
+			updates: []string{
+				`INSERT INTO group_members (group_id, principal_id, added_at_ms) VALUES ('grp-team', 'prn-alice', 1)`,
+			},
+			refuse: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := stagedMembershipStore(t, tc.updates)
+
+			err := checkStagedNamespacePrincipalMemberships(t.Context(), s.pool, currentSchema(t, s))
+			if !tc.refuse {
+				if err != nil {
+					t.Fatalf("check = %v, want nil", err)
+				}
+
+				return
+			}
+
+			assertMembershipRefused(t, err)
 		})
 	}
 }

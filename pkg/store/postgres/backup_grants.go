@@ -10,6 +10,66 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// stagedMembershipRow holds the group and the principal of one staged
+// membership that the check of a principal of a namespace reads.
+type stagedMembershipRow struct {
+	groupID     string
+	principalID string
+}
+
+// checkStagedNamespacePrincipalMemberships checks each staged membership
+// whose principal belongs to a namespace: a membership gives the grants of
+// its group, and a group belongs to the whole installation, so a principal of
+// a namespace may not be a member of one. A row that fails makes the backup
+// corrupt, current or removed, so a restore never admits a membership that
+// the principal service refuses. It returns backup.ErrCorrupt.
+//
+// Defense in depth: the principal service refuses the membership on write,
+// and the Authorizer drops the group subjects of a principal of a namespace.
+// This check stays so that a crafted backup never puts the row in the
+// database at all.
+func checkStagedNamespacePrincipalMemberships(
+	ctx context.Context, pool pgQuerier, staging string,
+) error {
+	query := "SELECT m.group_id, m.principal_id " +
+		"FROM " + stagingTable(staging, backup.TableGroupMembers) + " AS m " +
+		"JOIN " + stagingTable(staging, backup.TablePrincipals) + " AS p ON p.id = m.principal_id " +
+		"WHERE p.namespace <> ''"
+
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("read staged memberships: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var row stagedMembershipRow
+
+		scanErr := rows.Scan(&row.groupID, &row.principalID)
+		if scanErr != nil {
+			return fmt.Errorf("read staged memberships: %w", backup.ErrExportRead)
+		}
+
+		if rowErr := checkStagedNamespacePrincipalMembership(row); rowErr != nil {
+			return rowErr
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged memberships: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedNamespacePrincipalMembership refuses one staged membership whose
+// principal belongs to a namespace.
+func checkStagedNamespacePrincipalMembership(row stagedMembershipRow) error {
+	return fmt.Errorf("staged membership of group %q has namespace principal %q: %w",
+		row.groupID, row.principalID, backup.ErrCorrupt)
+}
+
 // stagedGrantRow holds the columns of one staged grant that the check of a
 // principal of a namespace reads.
 type stagedGrantRow struct {

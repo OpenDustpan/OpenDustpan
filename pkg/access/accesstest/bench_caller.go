@@ -126,7 +126,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 	}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: nil, Units: s, Principals: nil,
+		Store: s, Callers: s, Collections: nil, Units: s, Principals: s,
 	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)

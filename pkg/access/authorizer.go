@@ -56,8 +56,9 @@ type AuthorizerConfig struct {
 	// one: a grant on a unit then matches nothing, and only the grants on
 	// the objects that hold the unit apply.
 	Units Units
-	// Principals reads the principals of namespaces. Nil means no principal
-	// belongs to a namespace for the Authorizer.
+	// Principals reads the principals of namespaces. It is required: the
+	// Authorizer confines the grants and the groups of a principal of a
+	// namespace.
 	Principals PrincipalNamespaces
 }
 
@@ -84,13 +85,16 @@ type Authorizer struct {
 
 var _ identity.Authorizer = (*Authorizer)(nil)
 
-// NewAuthorizer returns an Authorizer. Store and Callers are required.
+// NewAuthorizer returns an Authorizer. Store, Callers and Principals are
+// required.
 func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access store", ErrMissingDependency)
 	case cfg.Callers == nil:
 		return nil, fmt.Errorf("%w: callers", ErrMissingDependency)
+	case cfg.Principals == nil:
+		return nil, fmt.Errorf("%w: principals", ErrMissingDependency)
 	}
 
 	return &Authorizer{
@@ -693,13 +697,15 @@ func givenOn(action identity.Action, obj identity.Object) bool {
 
 // principalNamespaceOf returns the namespace of the principal with the ID
 // id, and true when it belongs to a namespace. An unknown principal has
-// none, with no error. With no principal port, no principal belongs to a
-// namespace.
+// none, with no error. A nil port is an error: the Authorizer requires the
+// port.
 func principalNamespaceOf(
 	ctx context.Context, id string, principals PrincipalNamespaces,
 ) (namespace.Name, bool, error) {
+	// Defense in depth: NewAuthorizer refuses a nil principal port; this
+	// check stays so that a new caller cannot skip it.
 	if principals == nil {
-		return "", false, nil
+		return "", false, fmt.Errorf("%w: principals", ErrMissingDependency)
 	}
 
 	p, err := principals.GetPrincipal(ctx, id)
@@ -719,8 +725,9 @@ func principalNamespaceOf(
 }
 
 // subjectsOf returns the subjects of p: its principal and each of its
-// groups, read once for each request. A principal that is unknown or
-// deleted has none.
+// groups, read once for each request. A principal of a namespace has only
+// the principal subject: a group belongs to the whole installation. A
+// principal that is unknown or deleted has none.
 func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Subject, error) {
 	if p.Subject == "" {
 		return nil, nil
@@ -735,7 +742,7 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 
 	cache := cacheOf(ctx)
 	if subjects, ok := cache.subjectsOf(p.Subject); ok {
-		return subjects, nil
+		return a.confineSubjects(ctx, subjects)
 	}
 
 	subjects, err := a.callers.SubjectsOf(ctx, p.Subject)
@@ -745,7 +752,57 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 
 	cache.keepSubjects(p.Subject, subjects)
 
-	return subjects, nil
+	return a.confineSubjects(ctx, subjects)
+}
+
+// confineSubjects drops every group subject of a principal of a namespace:
+// a group belongs to the whole installation, so its grants may not reach a
+// principal of one namespace. A failed read of the principal returns the
+// error, so the caller holds no subject.
+//
+// Defense in depth: the principal service refuses the membership on write,
+// and the staged check of a restore refuses a backup that holds one; this
+// check stays so that a row from any other source gives no power.
+func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([]Subject, error) {
+	id := ""
+	grouped := false
+
+	for i := range subjects {
+		if subjects[i].Kind == SubjectPrincipal {
+			if id == "" {
+				id = subjects[i].ID
+			}
+
+			continue
+		}
+
+		if subjects[i].Kind == SubjectGroup {
+			grouped = true
+		}
+	}
+
+	if id == "" || !grouped {
+		return subjects, nil
+	}
+
+	_, namespaced, err := principalNamespaceOf(ctx, id, a.principals)
+	if err != nil {
+		return nil, err
+	}
+
+	if !namespaced {
+		return subjects, nil
+	}
+
+	out := make([]Subject, 0, 1)
+
+	for i := range subjects {
+		if subjects[i].Kind == SubjectPrincipal {
+			out = append(out, subjects[i])
+		}
+	}
+
+	return out, nil
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,
@@ -765,8 +822,9 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 // chainObjects returns obj and every object that holds it, innermost first,
 // for the authorizer and the reach. collections answers the collection of a
 // unit, resolveUnit answers the stable ID of a unit, and principals answers
-// the namespace of a principal of a namespace. Each answers nothing when it
-// is nil, as in the configs.
+// the namespace of a principal of a namespace. collections and resolveUnit
+// answer nothing when they are nil, as in the configs; principals is
+// required.
 func chainObjects(
 	ctx context.Context,
 	obj identity.Object,
