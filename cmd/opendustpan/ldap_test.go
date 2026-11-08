@@ -139,6 +139,40 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 			egress.ErrRangeTooWide,
 		},
 		{
+			"a range that is not a CIDR", func(l *ldapFlags) { l.allowedRanges = "not-a-cidr" }, withPassword, 0,
+			egress.ErrRange,
+		},
+		{
+			"a prefix of more than 32 bits", func(l *ldapFlags) { l.allowedRanges = "10.0.0.0/33" }, withPassword, 0,
+			egress.ErrRange,
+		},
+		{
+			"every IPv6 address", func(l *ldapFlags) { l.allowedRanges = "::/0" }, withPassword, 0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"a link-local range", func(l *ldapFlags) { l.allowedRanges = "169.254.0.0/16" }, withPassword, 0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"the cloud metadata address",
+			func(l *ldapFlags) { l.allowedRanges = "169.254.169.254/32" },
+			withPassword,
+			0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"an IPv6 link-local range", func(l *ldapFlags) { l.allowedRanges = "fe80::/64" }, withPassword, 0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"an IPv4-mapped loopback range",
+			func(l *ldapFlags) { l.allowedRanges = "::ffff:127.0.0.0/104" },
+			withPassword,
+			0,
+			egress.ErrRangeTooWide,
+		},
+		{
 			"a private range", func(l *ldapFlags) { l.allowedRanges = "10.20.0.0/16, fd00:20::/48" }, withPassword, 1,
 			nil,
 		},

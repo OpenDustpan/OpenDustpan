@@ -67,6 +67,15 @@ func ldapSetupCases() []ldapSetupCase {
 		{name: "allowed loopback range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
 		}, want: "allowed ranges", withOIDC: false},
+		{name: "allowed range of every IPv6 address", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("::/0")}
+		}, want: "allowed ranges", withOIDC: false},
+		{name: "allowed range of the cloud metadata address", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("169.254.169.254/32")}
+		}, want: "allowed ranges", withOIDC: false},
+		{name: "allowed IPv4-mapped loopback range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("::ffff:127.0.0.0/104")}
+		}, want: "allowed ranges", withOIDC: false},
 		{name: "allowed private range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
 		}, want: "", withOIDC: false},
