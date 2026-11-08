@@ -52,8 +52,8 @@ func (stubSealer) SealState(
 
 func (stubSealer) OpenState(
 	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
-) (io.Reader, error) {
-	return r, nil
+) (io.ReadCloser, error) {
+	return io.NopCloser(r), nil
 }
 
 func (stubSealer) SealOutputs(
@@ -1003,7 +1003,7 @@ type encryptedBlobs struct {
 }
 
 func (encryptedBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader(`{"encrypted_data":"c2VjcmV0"}`)), nil
+	return io.NopCloser(strings.NewReader(`{"meta":{},"encrypted_data":"c2VjcmV0","encryption_version":"v0"}`)), nil
 }
 
 // TestEnterForceLeavesClientEncryptedWorkspaceLocked checks that a force enter
@@ -1031,11 +1031,11 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			// The size and MD5 of the document encryptedBlobs serves,
 			// as a stored row names them.
 			MD5: [16]byte{
-				0x32, 0xdd, 0x0c, 0x61, 0x5e, 0xc2, 0x98, 0xbc,
-				0x44, 0x68, 0xd1, 0xbd, 0xb8, 0x10, 0xd6, 0xc0,
+				0x64, 0x20, 0xd9, 0x71, 0x90, 0x04, 0x23, 0xf8,
+				0x43, 0x33, 0x65, 0x89, 0xb9, 0xb1, 0x95, 0x80,
 			},
 			Serial:         1,
-			Size:           29,
+			Size:           65,
 			Force:          false,
 			Sealed:         false,
 			RestoredFrom:   "",

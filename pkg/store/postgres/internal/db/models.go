@@ -630,6 +630,22 @@ type ManualLock struct {
 	SinceMs   int64
 }
 
+type MemberRemoval struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
+type MemberRemovalAlert struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
+}
+
 type NameLock struct {
 	Scope         string
 	Name          string
@@ -1344,6 +1360,12 @@ type UpdateJournalSequence struct {
 	Sequence int64
 	Arrival  int64
 	Sha256   []byte
+}
+
+type UsedTicket struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
 }
 
 type Workspace struct {

@@ -627,6 +627,59 @@ func TestCheckPlanPartsStoredValues(t *testing.T) {
 	}
 }
 
+// TestCheckPlanPartsSecret proves the secret rule of a plan part: only the
+// part of kind OutputPlanApply is secret.
+func TestCheckPlanPartsSecret(t *testing.T) {
+	t.Parallel()
+
+	hash := strings.Repeat("a", 64)
+
+	part := func(kind job.OutputKind, isSecret bool) job.PlanPart {
+		return job.PlanPart{Kind: kind, Size: 1, SHA256: hash, Secret: isSecret, StoredSize: 0, StoredMD5: ""}
+	}
+
+	tests := []struct {
+		name  string
+		parts []job.PlanPart
+		// bad names the kind of the part that the secret rule refuses, and
+		// is empty when the parts pass.
+		bad job.OutputKind
+	}{
+		{"an apply part", []job.PlanPart{part(job.OutputPlanApply, true)}, ""},
+		{"a display part", []job.PlanPart{part(job.OutputPlanDisplay, false)}, ""},
+		{
+			"a display part and an apply part",
+			[]job.PlanPart{part(job.OutputPlanDisplay, false), part(job.OutputPlanApply, true)},
+			"",
+		},
+		{"an apply part that is not secret", []job.PlanPart{part(job.OutputPlanApply, false)}, job.OutputPlanApply},
+		{"a display part that is secret", []job.PlanPart{part(job.OutputPlanDisplay, true)}, job.OutputPlanDisplay},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := job.CheckPlanParts(tt.parts)
+			if tt.bad == "" {
+				if err != nil {
+					t.Fatalf("CheckPlanParts = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("CheckPlanParts = %v, want ErrInvalid", err)
+			}
+
+			if !strings.Contains(err.Error(), string(tt.bad)) {
+				t.Fatalf("CheckPlanParts = %v, want a message that names the part kind %q", err, tt.bad)
+			}
+		})
+	}
+}
+
 // storedPlan returns a plan that read the state version sv at made, with
 // the hashes display and apply of its two parts.
 func storedPlan(sv string, made time.Time, display, apply string) *job.PlanRef {
@@ -759,6 +812,19 @@ func TestFreeze(t *testing.T) {
 	for name, change := range invalid {
 		if err := change(valid).Validate(); !errors.Is(err, job.ErrInvalid) {
 			t.Errorf("%s: Validate() = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestAgentModeValid(t *testing.T) {
+	t.Parallel()
+
+	for mode, want := range map[job.AgentMode]bool{
+		job.AgentModeApproveFirst: true, job.AgentModeReviewRequest: true, job.AgentModeDirect: true,
+		"": false, "approve": false, "Direct": false,
+	} {
+		if got := mode.Valid(); got != want {
+			t.Errorf("AgentMode(%q).Valid() = %t, want %t", mode, got, want)
 		}
 	}
 }

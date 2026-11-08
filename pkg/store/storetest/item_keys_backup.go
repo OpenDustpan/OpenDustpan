@@ -221,7 +221,15 @@ func checkRestoredItemKeys(t *testing.T, dest *ItemKeyBackupRig, wrapper secret.
 		t.Error("the restore brought back the blob of a shredded key")
 	}
 
-	_, openErr := sealer.OpenContent(t.Context(), seed.shreddedRef, seed.binding, strings.NewReader("x"))
+	rd, openErr := sealer.OpenContent(t.Context(), seed.shreddedRef, seed.binding, strings.NewReader("x"))
+	if rd != nil {
+		// The open should fail. When it does not, close the reader, so that
+		// the failed case does not also keep a key.
+		if closeErr := rd.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}
+
 	if !errors.Is(openErr, secret.ErrShredded) {
 		t.Errorf("open with the shredded key err = %v, want ErrShredded", openErr)
 	}
@@ -333,7 +341,7 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 	}
 
 	out, err := io.ReadAll(rd)
-	if err != nil {
+	if err = errors.Join(err, rd.Close()); err != nil {
 		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 

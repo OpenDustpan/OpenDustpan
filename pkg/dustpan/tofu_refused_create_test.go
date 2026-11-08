@@ -78,6 +78,7 @@ func TestFirstTofuLockCreatesTheWorkspace(t *testing.T) {
 
 	f := newFixture(t)
 	f.createNamespace(t, "acme", installationName)
+	seedTofuPlacement(t, f)
 
 	status, body := tofuDoPath(t, f, "LOCK", "/tofu/state/acme/se1", `{"ID":"z"}`)
 	if status != http.StatusOK {
@@ -92,6 +93,80 @@ func TestFirstTofuLockCreatesTheWorkspace(t *testing.T) {
 	ws, err := f.srv.Workspaces().Get(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
 	if err != nil || ws.Lock.ID != "z" {
 		t.Fatalf("workspace after the LOCK = %+v, %v; want it locked with ID z", ws, err)
+	}
+}
+
+// seedTofuPlacement makes the collection "default" in the namespace acme and a
+// placement rule that puts every OpenTofu workspace in it.
+func seedTofuPlacement(t *testing.T, f fixture) {
+	t.Helper()
+
+	base := "/api/dustpan/v1/namespaces/acme"
+
+	for _, step := range []struct{ path, body string }{
+		{base + "/collections", `{"name":"default"}`},
+		{base + "/placement-rules", `{"tool":"opentofu","project":"*","stack":"*","collection":"default"}`},
+	} {
+		status, body := f.do(t, http.MethodPost, step.path, adminToken, step.body)
+		if status != http.StatusCreated {
+			t.Fatalf("POST %s = %d %s, want 201", step.path, status, body)
+		}
+	}
+}
+
+// TestFirstTofuLockWithNoRuleIsRefused proves that a first LOCK that no
+// placement rule places answers 422, names the fix, and leaves no workspace.
+func TestFirstTofuLockWithNoRuleIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.createNamespace(t, "acme", installationName)
+
+	status, body := tofuDoPath(t, f, "LOCK", "/tofu/state/acme/se1", `{"ID":"z"}`)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("LOCK answers %d (%s), want 422", status, body)
+	}
+
+	if !strings.Contains(body, "placement-rules") {
+		t.Fatalf("LOCK body %q does not name the placement rule route", body)
+	}
+
+	requireNoWorkspace(t, f, "se1")
+}
+
+// TestTFEWorkspaceCreateUsesPlacementRules proves that a workspace create of
+// the TFE-compatible API follows the placement rules: with no rule it answers
+// 422 and names the fix, and with a rule it answers 201.
+func TestTFEWorkspaceCreateUsesPlacementRules(t *testing.T) {
+	t.Parallel()
+
+	const (
+		path = "/api/v2/organizations/acme/workspaces"
+		body = `{"data":{"type":"workspaces","attributes":{"name":"se1"}}}`
+	)
+
+	f := newFixture(t)
+	f.createNamespace(t, "acme", installationName)
+
+	status, text := tofuDoPath(t, f, http.MethodPost, path, body)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(text, "placement.no-match") ||
+		!strings.Contains(text, "placement-rules") {
+		t.Fatalf("create with no rule = %d %s, want 422 placement.no-match naming the rule route", status, text)
+	}
+
+	requireNoWorkspace(t, f, "se1")
+
+	seedTofuPlacement(t, f)
+
+	status, text = tofuDoPath(t, f, http.MethodPost, path, body)
+	if status != http.StatusCreated {
+		t.Fatalf("create with a rule = %d %s, want 201", status, text)
+	}
+
+	// The same name again is a duplicate, whatever the rules say.
+	status, text = tofuDoPath(t, f, http.MethodPost, path, body)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(text, "workspace.already-exists") {
+		t.Fatalf("duplicate create = %d %s, want 422 workspace.already-exists", status, text)
 	}
 }
 

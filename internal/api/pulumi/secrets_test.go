@@ -21,7 +21,9 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -144,6 +146,24 @@ func (m *mapStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespa
 	m.stacks[st.Ref] = st
 
 	return nil
+}
+
+// CreateStackPlaced implements stack.PlacedStore. The map keeps no
+// collections, so it makes the stack and ignores the collection of p.
+func (m *mapStackStore) CreateStackPlaced(
+	ctx context.Context, st stack.Stack, _ stack.Placement, fence namespace.Fence,
+) error {
+	return m.CreateStack(ctx, st, fence)
+}
+
+// acmePlacement is the placement of a new stack in a collection of acme, for a
+// store that keeps no collections.
+func acmePlacement() stack.Placement {
+	return stack.Placement{
+		Collection:   collection.Ref{Namespace: "acme", Name: "placed"},
+		CollectionID: "col-test",
+		Entry:        placementtest.Entry("acme"),
+	}
 }
 
 func (m *mapStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
@@ -331,7 +351,7 @@ func buildSecretFixture(
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}
@@ -1115,7 +1135,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		t.Fatalf("parse ref: %v", refErr)
 	}
 
-	if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+	if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 		t.Fatalf("create stack: %v", createErr)
 	}
 
@@ -1546,7 +1566,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		t.Fatalf("parse ref: %v", refErr)
 	}
 
-	if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+	if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 		t.Fatalf("create stack: %v", createErr)
 	}
 
@@ -1705,7 +1725,7 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}
@@ -1940,7 +1960,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}
