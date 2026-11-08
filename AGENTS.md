@@ -348,7 +348,8 @@ skill (ADR 14):
 - Prefer a code structure that makes a class of bug impossible over an added
   check or an added tool.
 - Use the stable ID for each stored reference to an entity that a user can
-  rename, or remove and make again. A name is a label for people only.
+  rename, or remove and make again. A name is a label for people only
+  (ADR 362).
 - File a bug issue and a tech-debt issue as before. Their change uses the
   short proposal form of `openspec/project.md`.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
