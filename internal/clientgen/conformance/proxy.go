@@ -406,8 +406,10 @@ func (p *RecordingProxy) forward(r *http.Request, body []byte) (upstreamAnswer, 
 		return up, fmt.Errorf("new request: %w", err)
 	}
 
+	nominated := connectionNominated(r.Header)
+
 	for name, values := range r.Header {
-		if !hopByHop(name) {
+		if !hopByHop(name, nominated) {
 			req.Header[name] = slices.Clone(values)
 		}
 	}
@@ -444,8 +446,46 @@ func (p *RecordingProxy) target(r *http.Request) (string, error) {
 	return target.String(), nil
 }
 
-// hopByHop says that a header belongs to one connection.
-func hopByHop(name string) bool {
+// connectionNominated returns the header names that the Connection header of h
+// nominates, in lower case. A message can hold the header more than one time,
+// and each value can hold a comma-separated list.
+func connectionNominated(h http.Header) map[string]bool {
+	nominated := make(map[string]bool)
+
+	for name, values := range h {
+		if strings.EqualFold(name, "Connection") {
+			for _, value := range values {
+				for _, field := range connectionNames(value) {
+					nominated[field] = true
+				}
+			}
+		}
+	}
+
+	return nominated
+}
+
+// connectionNames returns the header names of one Connection value, in lower
+// case.
+func connectionNames(value string) []string {
+	var names []string
+
+	for field := range strings.SplitSeq(value, ",") {
+		if field = strings.TrimSpace(field); field != "" {
+			names = append(names, strings.ToLower(field))
+		}
+	}
+
+	return names
+}
+
+// hopByHop says that a header belongs to one connection: it is a fixed header,
+// or a header that the Connection header of the message nominated.
+func hopByHop(name string, nominated map[string]bool) bool {
+	if nominated[strings.ToLower(name)] {
+		return true
+	}
+
 	switch http.CanonicalHeaderKey(name) {
 	case "Connection",
 		"Keep-Alive",
@@ -463,8 +503,10 @@ func hopByHop(name string) bool {
 
 // writeUpstream copies the answer of the server to the client.
 func writeUpstream(w http.ResponseWriter, up upstreamAnswer) int {
+	nominated := connectionNominated(up.header)
+
 	for name, values := range up.header {
-		if !hopByHop(name) {
+		if !hopByHop(name, nominated) {
 			w.Header()[name] = slices.Clone(values)
 		}
 	}

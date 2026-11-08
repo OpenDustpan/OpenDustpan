@@ -314,6 +314,65 @@ func TestRuntimeExportsAreReserved(t *testing.T) {
 	}
 }
 
+// objectSchema is an object schema with only a name.
+func objectSchema(name string) model.Schema {
+	return model.Schema{
+		Name: name, Kind: model.KindObject, Description: "", Fields: nil, Values: nil, Open: false,
+		Extra: nil, Discriminator: "", Variants: nil, Base: "", Union: "",
+	}
+}
+
+// enumSchema is a closed enum schema with one value.
+func enumSchema(name string) model.Schema {
+	return model.Schema{
+		Name: name, Kind: model.KindEnum, Description: "", Fields: nil, Values: []string{"a"}, Open: false,
+		Extra: nil, Discriminator: "", Variants: nil, Base: "", Union: "",
+	}
+}
+
+// TestRenderRefusesEmittedNameCollisions checks that a schema claims the
+// identifiers that the templates emit: its name, decode<Name> and, for an
+// enum, <Name>Values. A clash fails in either schema order.
+func TestRenderRefusesEmittedNameCollisions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		schemas []model.Schema
+	}{
+		{"Foo then decodeFoo", []model.Schema{objectSchema("Foo"), objectSchema("decodeFoo")}},
+		{"decodeFoo then Foo", []model.Schema{objectSchema("decodeFoo"), objectSchema("Foo")}},
+		{"enum Foo then FooValues", []model.Schema{enumSchema("Foo"), enumSchema("FooValues")}},
+		{"enum FooValues then Foo", []model.Schema{enumSchema("FooValues"), enumSchema("Foo")}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			api := synthetic(t)
+			api.Schemas = append(api.Schemas, tc.schemas...)
+
+			if _, err := typescript.New().Render(api, options(api.Version)); !errors.Is(err, clientgen.ErrInvalidName) {
+				t.Fatalf("want ErrInvalidName, got %v", err)
+			}
+		})
+	}
+}
+
+// TestRenderAllowsNamesThatDoNotCollide checks that the claims accept a
+// description whose emitted identifiers differ.
+func TestRenderAllowsNamesThatDoNotCollide(t *testing.T) {
+	t.Parallel()
+
+	api := synthetic(t)
+	api.Schemas = append(api.Schemas, enumSchema("Foo"), objectSchema("Bar"))
+
+	if files := render(t, api); len(files) == 0 {
+		t.Fatal("render gave no files")
+	}
+}
+
 // TestRenderRefusesHostileInput sends hostile input to the template set as a
 // model that the parser did not check.
 func TestRenderRefusesHostileInput(t *testing.T) {
