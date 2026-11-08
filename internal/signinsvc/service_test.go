@@ -790,8 +790,19 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 
 			w := newWorld()
 			cfg := signinsvc.Config{
-				Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w,
-				Groups: nil, Removals: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+				Principals:     w,
+				Disabler:       w,
+				Generations:    w,
+				Sessions:       w,
+				Audit:          w,
+				TempAdmins:     w,
+				Groups:         nil,
+				Removals:       nil,
+				States:         nil,
+				Locks:          nil,
+				NameKeys:       nil,
+				Logger:         slog.New(slog.DiscardHandler),
+				OnAuditFailure: nil,
 			}
 			tc.clear(&cfg)
 

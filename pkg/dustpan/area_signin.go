@@ -255,6 +255,21 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 		return nil, fmt.Errorf("%w: it keeps no temporary administrators", errSignInStore)
 	}
 
+	// A store without the counts or their key leaves both nil: the sign-in of
+	// a password method then refuses every request.
+	var (
+		locks    authgate.NameLockCounter
+		nameKeys signinsvc.NameKeys
+	)
+
+	if counter, hasCounter := in.store.(authgate.NameLockCounter); hasCounter {
+		locks = counter
+	}
+
+	if keys, hasKeys := in.store.(signinsvc.NameKeys); hasKeys {
+		nameKeys = keys
+	}
+
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals:     in.principals,
 		Disabler:       records,
@@ -265,6 +280,8 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 		Groups:         nil,
 		Removals:       removals,
 		States:         generations,
+		Locks:          locks,
+		NameKeys:       nameKeys,
 		Logger:         in.logger,
 		OnAuditFailure: in.onAuditFailure,
 	})

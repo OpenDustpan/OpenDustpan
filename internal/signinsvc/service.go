@@ -21,6 +21,11 @@
 // The local password reads its own records and has its own entry,
 // CompleteLocal. It checks the Assertion and starts the session with the
 // generation that the check of the password read.
+//
+// A password method (LDAP) has its own entry, CompletePassword. It counts the
+// failures of the typed name and of the person that the method found, stops a
+// locked attempt before the password reaches the directory, and then does the
+// steps above.
 package signinsvc
 
 import (
@@ -34,6 +39,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -251,7 +257,12 @@ type Config struct {
 	// States reads the state of a person for the passkey sign-in. Nil means
 	// that the passkey sign-in refuses every request.
 	States States
-	Logger *slog.Logger
+	// Locks counts the failed attempts of a password method. Nil, or a nil
+	// NameKeys, means that CompletePassword refuses every request.
+	Locks authgate.NameLockCounter
+	// NameKeys reads the key of the digests of the counts of Locks.
+	NameKeys NameKeys
+	Logger   *slog.Logger
 	// OnAuditFailure is called when an audit entry cannot be written. Nil
 	// means no call.
 	OnAuditFailure func()
