@@ -81,14 +81,16 @@ func checkStagedRemovalAlertsResult(t *testing.T, s *Store, restoreAt time.Time,
 	switch {
 	case want == nil && err != nil:
 		t.Fatalf("check = %v, want nil", err)
-	case want != nil && !errors.Is(err, want):
+	case want == nil:
+	case err == nil:
+		t.Fatalf("check = nil, want %v", want)
+	case !errors.Is(err, want):
 		t.Fatalf("check = %v, want %v", err, want)
-	case want != nil:
+	default:
 		for _, text := range []string{"identity-provider", "idp-1"} {
 			if !strings.Contains(err.Error(), text) {
 				t.Fatalf("check = %v, want it to name %q", err, text)
 			}
 		}
-	default:
 	}
 }
