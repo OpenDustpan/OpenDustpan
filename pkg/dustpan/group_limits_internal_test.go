@@ -85,7 +85,7 @@ func newGroupLimitFixture(t *testing.T) groupLimitFixture {
 	// Each group holds the member, so a remove and a delete find it. The
 	// administrator makes the adds: the guard of the caller refuses an add
 	// to the group of the unless clause.
-	for _, group := range []principal.Group{named, other, free} {
+	for _, group := range []*principal.Group{&named, &other, &free} {
 		if _, err := svc.AddMember(ctx, adminEntry(), admin(), group.ID, member.ID); err != nil {
 			t.Fatalf("add the member to group %s: %v", group.Name, err)
 		}

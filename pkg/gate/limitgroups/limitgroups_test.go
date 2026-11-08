@@ -61,7 +61,7 @@ func (g fakeGroups) GetGroup(_ context.Context, id string) (principal.Group, err
 
 	return principal.Group{
 		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}, nil
 }
 
