@@ -4687,6 +4687,68 @@ func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInPr
 	return result.RowsAffected(), nil
 }
 
+const dueBreakGlassReviews = `-- name: DueBreakGlassReviews :many
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews
+WHERE state = 'pending' AND next_notice_at_ms <> 0 AND next_notice_at_ms <= $1::bigint
+ORDER BY next_notice_at_ms, id
+LIMIT $2::bigint
+`
+
+type DueBreakGlassReviewsParams struct {
+	NowMs   int64
+	MaxRows int64
+}
+
+// The pending reviews with a notice due at or before now, oldest first.
+func (q *Queries) DueBreakGlassReviews(ctx context.Context, arg DueBreakGlassReviewsParams) ([]BreakGlassReview, error) {
+	rows, err := q.db.Query(ctx, dueBreakGlassReviews, arg.NowMs, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BreakGlassReview
+	for rows.Next() {
+		var i BreakGlassReview
+		if err := rows.Scan(
+			&i.ID,
+			&i.UseKind,
+			&i.UseRef,
+			&i.UseScope,
+			&i.UseObject,
+			&i.UseSubject,
+			&i.UsePeople,
+			&i.UseReason,
+			&i.UseAtMs,
+			&i.UseUntilMs,
+			&i.State,
+			&i.CreatedAtMs,
+			&i.DueAtMs,
+			&i.Calendar,
+			&i.CalendarFromNamespace,
+			&i.CalendarFromGroup,
+			&i.Step,
+			&i.NextNoticeAtMs,
+			&i.VerdictReviewer,
+			&i.VerdictNote,
+			&i.VerdictAuth,
+			&i.VerdictAuthAtMs,
+			&i.VerdictReviewedAtMs,
+			&i.VerdictActAs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const durableStepExists = `-- name: DurableStepExists :one
 SELECT EXISTS (SELECT 1 FROM durable_steps WHERE operation_id = $1 AND name = $2) AS done
 `
@@ -5607,6 +5669,93 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.EndedAtMs,
 		&i.Target,
 		&i.Error,
+	)
+	return i, err
+}
+
+const getBreakGlassReview = `-- name: GetBreakGlassReview :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE id = $1
+`
+
+func (q *Queries) GetBreakGlassReview(ctx context.Context, id string) (BreakGlassReview, error) {
+	row := q.db.QueryRow(ctx, getBreakGlassReview, id)
+	var i BreakGlassReview
+	err := row.Scan(
+		&i.ID,
+		&i.UseKind,
+		&i.UseRef,
+		&i.UseScope,
+		&i.UseObject,
+		&i.UseSubject,
+		&i.UsePeople,
+		&i.UseReason,
+		&i.UseAtMs,
+		&i.UseUntilMs,
+		&i.State,
+		&i.CreatedAtMs,
+		&i.DueAtMs,
+		&i.Calendar,
+		&i.CalendarFromNamespace,
+		&i.CalendarFromGroup,
+		&i.Step,
+		&i.NextNoticeAtMs,
+		&i.VerdictReviewer,
+		&i.VerdictNote,
+		&i.VerdictAuth,
+		&i.VerdictAuthAtMs,
+		&i.VerdictReviewedAtMs,
+		&i.VerdictActAs,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getBreakGlassReviewByUse = `-- name: GetBreakGlassReviewByUse :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE use_kind = $1 AND use_ref = $2
+`
+
+type GetBreakGlassReviewByUseParams struct {
+	UseKind string
+	UseRef  string
+}
+
+// The review of the kind and the reference of a use, for an open that runs
+// again after a crash. The unique index makes at most one row match.
+func (q *Queries) GetBreakGlassReviewByUse(ctx context.Context, arg GetBreakGlassReviewByUseParams) (BreakGlassReview, error) {
+	row := q.db.QueryRow(ctx, getBreakGlassReviewByUse, arg.UseKind, arg.UseRef)
+	var i BreakGlassReview
+	err := row.Scan(
+		&i.ID,
+		&i.UseKind,
+		&i.UseRef,
+		&i.UseScope,
+		&i.UseObject,
+		&i.UseSubject,
+		&i.UsePeople,
+		&i.UseReason,
+		&i.UseAtMs,
+		&i.UseUntilMs,
+		&i.State,
+		&i.CreatedAtMs,
+		&i.DueAtMs,
+		&i.Calendar,
+		&i.CalendarFromNamespace,
+		&i.CalendarFromGroup,
+		&i.Step,
+		&i.NextNoticeAtMs,
+		&i.VerdictReviewer,
+		&i.VerdictNote,
+		&i.VerdictAuth,
+		&i.VerdictAuthAtMs,
+		&i.VerdictReviewedAtMs,
+		&i.VerdictActAs,
+		&i.Version,
 	)
 	return i, err
 }
@@ -10313,6 +10462,82 @@ func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams
 		arg.PurgedAtMs,
 	)
 	return err
+}
+
+const insertBreakGlassReview = `-- name: InsertBreakGlassReview :execrows
+INSERT INTO break_glass_reviews (
+  id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+  $24, $25
+) ON CONFLICT DO NOTHING
+`
+
+type InsertBreakGlassReviewParams struct {
+	ID                    string
+	UseKind               string
+	UseRef                string
+	UseScope              string
+	UseObject             string
+	UseSubject            string
+	UsePeople             string
+	UseReason             string
+	UseAtMs               int64
+	UseUntilMs            int64
+	State                 string
+	CreatedAtMs           int64
+	DueAtMs               int64
+	Calendar              string
+	CalendarFromNamespace string
+	CalendarFromGroup     string
+	Step                  int64
+	NextNoticeAtMs        int64
+	VerdictReviewer       string
+	VerdictNote           string
+	VerdictAuth           string
+	VerdictAuthAtMs       int64
+	VerdictReviewedAtMs   int64
+	VerdictActAs          string
+	Version               int64
+}
+
+// Inserts the review of a new use. The unique index on (use_kind, use_ref)
+// keeps one review for each use and the primary key keeps one for each ID,
+// so a repeated open stores no second review.
+func (q *Queries) InsertBreakGlassReview(ctx context.Context, arg InsertBreakGlassReviewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertBreakGlassReview,
+		arg.ID,
+		arg.UseKind,
+		arg.UseRef,
+		arg.UseScope,
+		arg.UseObject,
+		arg.UseSubject,
+		arg.UsePeople,
+		arg.UseReason,
+		arg.UseAtMs,
+		arg.UseUntilMs,
+		arg.State,
+		arg.CreatedAtMs,
+		arg.DueAtMs,
+		arg.Calendar,
+		arg.CalendarFromNamespace,
+		arg.CalendarFromGroup,
+		arg.Step,
+		arg.NextNoticeAtMs,
+		arg.VerdictReviewer,
+		arg.VerdictNote,
+		arg.VerdictAuth,
+		arg.VerdictAuthAtMs,
+		arg.VerdictReviewedAtMs,
+		arg.VerdictActAs,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
@@ -22244,6 +22469,80 @@ func (q *Queries) UnlockSweep(ctx context.Context, class int32) (bool, error) {
 	var unlocked bool
 	err := row.Scan(&unlocked)
 	return unlocked, err
+}
+
+const updateBreakGlassReviewStep = `-- name: UpdateBreakGlassReviewStep :execrows
+UPDATE break_glass_reviews
+SET step = $1, next_notice_at_ms = $2, version = $3
+WHERE id = $4 AND version = $5
+`
+
+type UpdateBreakGlassReviewStepParams struct {
+	Step           int64
+	NextNoticeAtMs int64
+	Version        int64
+	ID             string
+	PrevVersion    int64
+}
+
+// Stores the notice step of a review. It changes no row when the stored
+// version is not the one that the caller read.
+func (q *Queries) UpdateBreakGlassReviewStep(ctx context.Context, arg UpdateBreakGlassReviewStepParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateBreakGlassReviewStep,
+		arg.Step,
+		arg.NextNoticeAtMs,
+		arg.Version,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateBreakGlassReviewVerdict = `-- name: UpdateBreakGlassReviewVerdict :execrows
+UPDATE break_glass_reviews
+SET state = $1, verdict_reviewer = $2,
+  verdict_note = $3, verdict_auth = $4,
+  verdict_auth_at_ms = $5,
+  verdict_reviewed_at_ms = $6, verdict_act_as = $7,
+  next_notice_at_ms = 0, version = $8
+WHERE id = $9 AND version = $10
+`
+
+type UpdateBreakGlassReviewVerdictParams struct {
+	State               string
+	VerdictReviewer     string
+	VerdictNote         string
+	VerdictAuth         string
+	VerdictAuthAtMs     int64
+	VerdictReviewedAtMs int64
+	VerdictActAs        string
+	Version             int64
+	ID                  string
+	PrevVersion         int64
+}
+
+// Stores the verdict of a review and clears the next notice. It changes no
+// row when the stored version is not the one that the caller read.
+func (q *Queries) UpdateBreakGlassReviewVerdict(ctx context.Context, arg UpdateBreakGlassReviewVerdictParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateBreakGlassReviewVerdict,
+		arg.State,
+		arg.VerdictReviewer,
+		arg.VerdictNote,
+		arg.VerdictAuth,
+		arg.VerdictAuthAtMs,
+		arg.VerdictReviewedAtMs,
+		arg.VerdictActAs,
+		arg.Version,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateExists = `-- name: UpdateExists :one
