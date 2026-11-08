@@ -344,7 +344,16 @@ func (a limitedAuthorizer) Authorize(
 		return err
 	}
 
-	return fmt.Errorf("%w: %w", identity.ErrDenied, err)
+	// Only a refusal of a limit is a denial. A store or engine failure keeps its
+	// own cause and does not match identity.ErrDenied. It still refuses the
+	// call, because Authorize returns a non-nil error.
+	// Defense in depth: the caller denies on any error; this check stays so that
+	// a failure is never classified as an access refusal.
+	if _, ok := errors.AsType[*RefusalError](err); ok {
+		return fmt.Errorf("%w: %w", identity.ErrDenied, err)
+	}
+
+	return err
 }
 
 // ListObjects returns the scope of inner, with no filter of the access
