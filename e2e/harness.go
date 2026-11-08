@@ -282,6 +282,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		deltaCutoff:       0,
 		sinkSenders:       nil,
 		issuer:            nil,
+		ldap:              nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -380,6 +381,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 		deltaCutoff:       0,
 		sinkSenders:       nil,
 		issuer:            nil,
+		ldap:              nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -441,6 +443,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:       cutoff,
 		sinkSenders:       nil,
 		issuer:            nil,
+		ldap:              nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
@@ -489,6 +492,7 @@ func startInprocessServer(
 		}
 
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
+		signIn.ldap = in.ldap
 	}
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;

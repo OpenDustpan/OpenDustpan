@@ -235,6 +235,36 @@ func (coveragePasswordLimiter) Admit(context.Context) error { return nil }
 
 func (coveragePasswordLimiter) Fail(context.Context) {}
 
+// coveragePasswordMethod is the method of the password provider of the
+// coverage handler. The coverage test calls no route, so it checks nothing.
+type coveragePasswordMethod struct{}
+
+func (coveragePasswordMethod) Kind() session.MethodKind { return session.MethodLDAP }
+
+func (coveragePasswordMethod) Verify(
+	context.Context,
+	session.Credentials,
+	session.BindGate,
+) (session.Assertion, error) {
+	var none session.Assertion
+
+	return none, session.ErrMethodUnavailable
+}
+
+// coveragePasswordProvider returns the LDAP provider of the coverage handler,
+// so the route table holds the password sign-in of a provider.
+func coveragePasswordProvider() serverapi.PasswordProvider {
+	return serverapi.PasswordProvider{
+		Method: coveragePasswordMethod{}, ID: "coverage-ldap", DisplayName: "", AutoCreate: false,
+		LDAP: serverapi.LDAPSettings{
+			AllowedRanges: nil, URL: "", BindDN: "", BaseDN: "", UserFilter: "", UserNameAttribute: "",
+			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
+			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
+			StartTLS: false,
+		},
+	}
+}
+
 // coverageSignInService returns the sign-in service over st.
 func coverageSignInService(
 	tb testing.TB, st *sqlite.Store, principals *principal.Service, sessions *session.Sessions,
@@ -269,7 +299,7 @@ func coverageSignIn(
 		Stored:            nil,
 		Admin:             admin,
 		Providers:         nil,
-		PasswordProviders: nil, Origins: nil,
+		PasswordProviders: []serverapi.PasswordProvider{coveragePasswordProvider()}, Origins: nil,
 		PasswordLimiter: coveragePasswordLimiter{},
 		Passkeys:        passkeys,
 		PasskeySignIn:   passkeys,
@@ -356,6 +386,17 @@ func signInAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// ldapSignInAllowEntries returns the password sign-in of a provider. The steps
+// of TestLDAPSignIn drive it against a test LDAP directory on each store.
+func ldapSignInAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodPost, Path: "/api/dustpan/v1/sign-in/providers/{provider}/password",
+		CoveringTest: "TestLDAPSignIn",
+		Reason: "Console route: no CLI signs in with the password of a directory. The harness step signs " +
+			"in over TLS and with no TLS, before and after the change of the setting of plain connections.",
+	}}
 }
 
 // signInProviderAllowEntries returns the operator and console routes of

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ldaptest"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
@@ -86,7 +87,9 @@ type signInSetup struct {
 	beta      *oauthtest.Provider
 	hub       *oauthtest.Provider
 	clock     *TestClock
-	shared    bool
+	// ldap is the test LDAP directory of the LDAP providers, or nil.
+	ldap   *ldaptest.Server
+	shared bool
 	// mu makes the sign-ins of PersonalToken take turns: the test
 	// provider signs in one person at a time.
 	mu sync.Mutex
@@ -115,7 +118,7 @@ func (s *signInSetup) options() []dustpan.Option {
 		opts = append(opts, dustpan.WithClock(s.clock.Now))
 	}
 
-	return opts
+	return append(opts, s.ldapOptions()...)
 }
 
 // newSignInSetup starts a test provider for a server at publicURL. With a
@@ -160,7 +163,8 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 	})
 
 	return &signInSetup{
-		publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, shared: shared != nil, mu: sync.Mutex{},
+		publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, ldap: nil, shared: shared != nil,
+		mu:      sync.Mutex{},
 		adminMu: sync.Mutex{}, adminID: "",
 	}
 }
@@ -242,7 +246,7 @@ func NewEnvWithIssuer(ctx context.Context, tb testing.TB, cli Install, store Sto
 		tb,
 		cli,
 		store,
-		signInEnvOptions{issuer: issuer, realTime: true, ipAllowlists: false},
+		signInEnvOptions{issuer: issuer, ldap: nil, realTime: true, ipAllowlists: false},
 	)
 }
 
@@ -252,12 +256,19 @@ func NewEnvWithIssuer(ctx context.Context, tb testing.TB, cli Install, store Sto
 func NewEnvWithIPAllowlistsAndSignIn(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
-	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{issuer: nil, realTime: true, ipAllowlists: true})
+	return startSignInEnvWith(
+		ctx,
+		tb,
+		cli,
+		store,
+		signInEnvOptions{issuer: nil, ldap: nil, realTime: true, ipAllowlists: true},
+	)
 }
 
 // signInEnvOptions are the switches of a sign-in env.
 type signInEnvOptions struct {
 	issuer       *OIDCIssuerFake
+	ldap         *ldaptest.Server
 	realTime     bool
 	ipAllowlists bool
 }
@@ -272,7 +283,7 @@ func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store
 		tb,
 		cli,
 		store,
-		signInEnvOptions{issuer: nil, realTime: realTime, ipAllowlists: false},
+		signInEnvOptions{issuer: nil, ldap: nil, realTime: realTime, ipAllowlists: false},
 	)
 }
 
@@ -288,6 +299,7 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 		disableJournaling: false,
 		ipAllowlists:      opts.ipAllowlists,
 		issuer:            opts.issuer,
+		ldap:              opts.ldap,
 		signIn:            true,
 		signInRealTime:    realTime,
 		passkeys:          false,
