@@ -101,11 +101,12 @@ rules:
       # in merge groups, and how close the bound is to the time on a loaded
       # runner. An entry matches each function of that name in any test file,
       # so a name that more than one file defines names its files here.
-      # Rank 1. TestBackupTakeoverAfterKill in
-      # internal/servertest/backup_test.go: upper bound 3*backupLease+5s = 11s.
-      # Failed once in 199 merge-group runs: took 12.7s. Not fixed yet.
+      # Rank 1. TestBackupTakeoverAfterGracefulStop in
+      # internal/servertest/backup_test.go: upper bound 5s on the claim after
+      # the stop signal. The lease is 30s, so only the release at the stop
+      # explains a claim within the bound. Kept on purpose.
       - pattern-not-inside: |
-          func TestBackupTakeoverAfterKill(...) { ... }
+          func TestBackupTakeoverAfterGracefulStop(...) { ... }
       # Rank 2. checkPlanPage in
       # pkg/store/postgres/namespace_page_internal_test.go: upper bound 250ms on
       # one page query. Not fixed yet.
@@ -154,7 +155,8 @@ rules:
       - pattern-not-inside: |
           func TestLazyWaiterLeavesAtItsDeadline(...) { ... }
       # Rank 12. waitSurvivorClaim in internal/servertest/backup_test.go:
-      # deadline 4*backupLease+10s = 18s. Same takeover as rank 1. Not fixed yet.
+      # deadline takeoverDeadline = 60s. It only stops a takeover test that
+      # hangs.
       - pattern-not-inside: |
           func waitSurvivorClaim(...) { ... }
       # Rank 13. checkProbeBody in pkg/dustpan/health_internal_test.go: upper

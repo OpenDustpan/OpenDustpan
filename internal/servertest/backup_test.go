@@ -342,7 +342,7 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 
 	waitSurvivorClaim(t, c, survivor)
 
-	checkClaimedAfterExpiry(t, dead, servertest.InstanceID(victim))
+	checkClaimedAfterExpiry(t, dead, servertest.InstanceID(victim), holder.Claim.ExpiresAt)
 
 	got := waitBackup(t, c, survivor, id, takeoverDeadline)
 	if got.State != string(backup.StateSucceeded) {
@@ -417,14 +417,26 @@ func TestBackupTakeoverAfterGracefulStop(t *testing.T) {
 
 // checkClaimedAfterExpiry fails the test when the survivor claimed the
 // operation before the claim of the victim expired. dead is the operation as
-// the test read it just after the kill. When that read already shows another
-// owner, the test stalled for more than the lease after the kill and the
-// survivor claimed it legally, so the check cannot run: it logs that and
-// checks nothing. The checks of the expiry and of the attempt still run.
-func checkClaimedAfterExpiry(t *testing.T, dead durable.Operation, victim string) {
+// the test read it just after the kill, and firstExpiry the expiry of the
+// claim of the victim at the first read. When the read after the kill already
+// shows another owner, the test stalled for more than the lease after the
+// kill. The exact check cannot run then: it checks only that the other owner
+// came after firstExpiry, and logs the stall. The checks of the expiry count
+// and of the attempt still run.
+func checkClaimedAfterExpiry(t *testing.T, dead durable.Operation, victim string, firstExpiry time.Time) {
 	t.Helper()
 
 	if dead.Claim.Owner != victim {
+		// firstExpiry is the expiry of the claim of the victim at the first
+		// read, before the kill. A renewal only extends the expiry, so the
+		// final expiry is not before it. Another owner before firstExpiry is a
+		// claim before the victim expired: this check cannot fail a correct
+		// server.
+		if now := time.Now(); now.Before(firstExpiry) {
+			t.Fatalf("another owner (%q) at %v, before the claim of the victim expired at %v or later",
+				dead.Claim.Owner, now, firstExpiry)
+		}
+
 		t.Logf("the test read the operation after the takeover (owner %q): it stalled for more than the lease "+
 			"after the kill, so the check that the claim waited for the expiry does not run", dead.Claim.Owner)
 
