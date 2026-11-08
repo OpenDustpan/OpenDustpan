@@ -68,13 +68,19 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
+	// The write moves the update time of the row even when the clock of the
+	// database did not move since the last write. The clock time stays the
+	// time of the phase records, of the state change and of the freeze
+	// check: a reader compares those with the clock.
+	updated := nextUpdateAt(now, cur.UpdatedAt)
+
 	next := cloneJob(&cur)
 
 	if err := change(ctx, tx, &next, c, now); err != nil {
 		return job.Job{}, err
 	}
 
-	settle(&next, to, c, cur.Version, now)
+	settle(&next, to, c, cur.Version, updated)
 
 	if err := closeLate(ctx, tx, &next, c.Event); err != nil {
 		return job.Job{}, err
@@ -217,10 +223,11 @@ func loadJob(ctx context.Context, tx Tx, id job.ID, ns namespace.Name) (job.Job,
 	return jobOf(&row)
 }
 
-// settle sets the state, the version, the wait reason and the reason of next
-// after the event of c moved the job from the version prev to state to.
-func settle(next *job.Job, to job.State, c *job.Change, prev int64, now time.Time) {
-	next.State, next.Version, next.UpdatedAt = to, prev+1, now
+// settle sets the state, the version, the update time, the wait reason and
+// the reason of next after the event of c moved the job from the version prev
+// to state to. updated is the update time of the write.
+func settle(next *job.Job, to job.State, c *job.Change, prev int64, updated time.Time) {
+	next.State, next.Version, next.UpdatedAt = to, prev+1, updated
 
 	next.Wait = job.WaitNone
 	if to == job.StateQueued {
@@ -314,9 +321,12 @@ func closeAwaiting(
 			return nil, err
 		}
 
+		at := nextUpdateAt(now, j.UpdatedAt)
+
 		prev := j.Version
 		j.Version++
-		j.UpdatedAt, j.StateChangedAt = now, now
+		// The update time moves; the state change stays on the clock.
+		j.UpdatedAt, j.StateChangedAt = at, now
 
 		if err := update(ctx, tx, &j, prev); err != nil {
 			return nil, err
@@ -369,6 +379,8 @@ func setVerificationIn(
 		return false, err
 	}
 
+	now = nextUpdateAt(now, j.UpdatedAt)
+
 	prev := j.Version
 	j.Verification, j.Version, j.UpdatedAt = v, prev+1, now
 
@@ -413,6 +425,8 @@ func (s *Store) AppendStepRecord(ctx context.Context, pc job.PhaseClaim, r job.S
 		if err != nil {
 			return err
 		}
+
+		now = nextUpdateAt(now, j.UpdatedAt)
 
 		prev := j.Version
 		j.Phases[pc.Phase].Steps = append(j.Phases[pc.Phase].Steps, r)

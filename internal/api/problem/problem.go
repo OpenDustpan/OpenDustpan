@@ -4,7 +4,8 @@
 // namespace and maintenance), the headers of an error answer and the log
 // rules: a 500 logs its status, a cause class from a closed list and the
 // request ID, never the error text; a fenced write logs its wrap, and a
-// refusal whose answer is not its error text logs that text at Debug.
+// refusal whose answer is not its error text logs its status and code at Debug,
+// never the error text.
 //
 // Every answer has a code of the catalog. The package writes no code of its
 // own text: a class names the constant of the catalog, and the writer makes
@@ -189,9 +190,10 @@ type Writer struct {
 }
 
 // Write answers err. A fenced write logs its wrap, which names the write. A
-// refusal whose answer is not the text of err logs that text at Debug, so the
-// log names the operation without the answer naming it. Every error answer
-// carries Cache-Control: no-store. WriteProblem holds the rest.
+// refusal whose answer is not the text of err logs its status and code only:
+// never the text of err, which can wrap a secret, such as an authentication or
+// session detail. Every error answer carries Cache-Control: no-store.
+// WriteProblem holds the rest.
 func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	p := wr.Problem(err)
 	if p.Status == http.StatusInternalServerError {
@@ -202,8 +204,11 @@ func (wr Writer) Write(ctx context.Context, w http.ResponseWriter, err error) {
 	case errors.Is(err, namespace.ErrFenced):
 		wr.Logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	case p.Message != err.Error() && p.Status < http.StatusInternalServerError:
+		// Defense in depth: the callers build an answer that holds no secret;
+		// they do not rely on this line to hide a secret. The line names the
+		// status and the code only.
 		wr.Logger.DebugContext(ctx, "request refused",
-			slog.Int("status", p.Status), slog.String("code", p.Code), slog.String("error", err.Error()))
+			slog.Int("status", p.Status), slog.String("code", p.Code))
 	default:
 		// The answer holds the text of err, or the status is a 500: nothing to add.
 	}
