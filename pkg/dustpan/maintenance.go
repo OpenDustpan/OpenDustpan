@@ -225,9 +225,8 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		return shapeRunner, true
 	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix),
 		strings.HasPrefix(path, "/api/runners/"):
-		// The backup and restore routes must stay in the bypass cases above
-		// when they move under v1Prefix: an operator reads and restores a
-		// backup while the gate refuses the tool-neutral routes.
+		// The backup and restore routes under v1Prefix are gated like the
+		// other tool-neutral routes. They have no bypass case.
 		return shapeInventory, true
 	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
 		return shapeTFE, true
