@@ -302,7 +302,7 @@ func checkSecretControlRefused(t *testing.T, vars map[string]string, source, val
 	t.Helper()
 
 	got, err := secretFrom(envOf(vars), oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
-	if !errors.Is(err, errSecretControlChar) {
+	if err == nil || !errors.Is(err, errSecretControlChar) {
 		t.Fatalf("secretFrom = %q, %v; want %v", got, err, errSecretControlChar)
 	}
 
