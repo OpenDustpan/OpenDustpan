@@ -259,3 +259,7 @@ regions, no control home, no namespace directory with one writer, no home
 lease and no automatic promotion, and a partition does not stop writes.
 Section 8 (joins between namespaces) moves into the "Not decided" section of ADR 248, with
 "installation" for "region". Open questions 3 and 6 are moot.
+
+The open design items of ADR 248 that came from this RFC (forwarding, the
+replication mechanics, keys, the discovery document and joins) have a
+proposal in [RFC 126](0126-placement-replication-and-moves.md).

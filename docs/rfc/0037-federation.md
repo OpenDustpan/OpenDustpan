@@ -17,6 +17,13 @@ On 2026-10-18 the owner decided parts of it. See "Outcome": the hosted
 service is multitenant with the namespace as the tenant (ADR 215), and
 routing between installations is an opt-in capability (RFC 79).
 
+On 2026-11-07 [RFC 126](0126-placement-replication-and-moves.md) took up
+the open design points of this RFC with the model of ADR 248: the namespace
+row and a static peer list as the placement map, forwarding of the tool APIs
+with 503 when the primary installation does not answer, IDs with no
+placement hint, and the move of a namespace (design point 6). Read RFC 126
+part A for the current proposal. The text below is kept as history.
+
 ## Problem
 
 Where does a namespace live, and how does a request reach it?
