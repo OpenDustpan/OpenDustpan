@@ -465,6 +465,10 @@ const (
 	ActionJobReadPlans Action = "job:read-plans"
 	// ActionJobCancel allows canceling a job. Its object is a unit.
 	ActionJobCancel Action = "job:cancel"
+	// ActionJobWriteCost allows a job token to push the cost of the phases of
+	// its own job. Its object is a unit. Only the job token of a job holds
+	// it, on the unit of the job. No role gives it.
+	ActionJobWriteCost Action = "job:write-cost"
 	// ActionJobApprove allows approving or rejecting a job that waits for
 	// approval. Its object is a unit. The gate can also limit the approvers
 	// to groups.

@@ -192,6 +192,20 @@ func (s *signInScope) record(subject string) {
 	s.recorded[subject] = true
 }
 
+// passesThrough reports whether p needs no temporary administrator record:
+// a job token passes through unchanged, and so does an administrator.
+func passesThrough(p identity.Principal) bool {
+	// Defense in depth: jobtoken.Service.Authenticate clears the
+	// administrator flags, and identity.JobTokenRule clears them before the
+	// authorizer. This check stays so that no job token is marked, also when
+	// a new authenticator returns one with the flag set.
+	if p.Credential == identity.CredentialJobToken {
+		return true
+	}
+
+	return p.Admin
+}
+
 // AuthenticateToken resolves token with Next, then marks a temporary
 // administrator and writes its sign-in entry. A caller with no record, and
 // a bootstrap administrator, pass through unchanged. A record counts only
@@ -205,7 +219,7 @@ func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identi
 		return identity.Principal{}, err
 	}
 
-	if p.Admin {
+	if passesThrough(p) {
 		return p, nil
 	}
 

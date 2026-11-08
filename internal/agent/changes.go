@@ -343,21 +343,23 @@ type Changes interface {
 	Support(ctx context.Context, actor Actor, unit identity.Object) (UnitSupport, error)
 	// StartActions returns the actions that the start of plan for req
 	// needs on req.Unit, as the start requirements of the job model give
-	// them, with no break-glass. The Toolset checks each one for the person
-	// before Start, and the audit entry of the call names them. It returns
-	// ErrInvalid and ErrModeNotSupported.
+	// them, with no break-glass. req must not be nil. The method does not
+	// change req and does not keep it after it returns. The Toolset checks
+	// each one for the person before Start, and the audit entry of the call
+	// names them. It returns ErrInvalid and ErrModeNotSupported.
 	StartActions(req *ChangeRequest, plan ChangePlan) ([]identity.Action, error)
 	// Start resolves req with ChangePolicy.Plan, checks the actions of the
 	// start for the person, puts the confirmation gate in front of each
-	// phase of the plan, and starts the job. It returns the change that
-	// req.Key already names when the request is the same. The confirmation
-	// gate holds even when no policy is installed, and only the person who
-	// asked passes it, in the console, with a fresh MFA step. It returns
-	// ErrInvalid, ErrServicePrincipal for an actor with ServicePrincipal
-	// (nobody could pass its confirmation gate), ErrModeNotSupported,
-	// ErrDirectNotAllowed, ErrChangeFrozen, ErrChangePolicyDenied,
-	// ErrChangeKeyConflict, and an error that wraps identity.ErrDenied when
-	// the person does not hold an action of the start.
+	// phase of the plan, and starts the job. req must not be nil. The method
+	// does not change req and does not keep it after it returns. It returns
+	// the change that req.Key already names when the request is the same.
+	// The confirmation gate holds even when no policy is installed, and only
+	// the person who asked passes it, in the console, with a fresh MFA step.
+	// It returns ErrInvalid, ErrServicePrincipal for an actor with
+	// ServicePrincipal (nobody could pass its confirmation gate),
+	// ErrModeNotSupported, ErrDirectNotAllowed, ErrChangeFrozen,
+	// ErrChangePolicyDenied, ErrChangeKeyConflict, and an error that wraps
+	// identity.ErrDenied when the person does not hold an action of the start.
 	Start(ctx context.Context, req *ChangeRequest) (Change, error)
 	// Get returns the change id. It returns ErrChangeNotFound, also for a
 	// change that the person of the actor cannot read.

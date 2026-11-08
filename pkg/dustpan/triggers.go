@@ -13,11 +13,19 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trigger"
 	"opendustpan.org/opendustpan/pkg/trigger/jobstarter"
 )
+
+// WithJobTokenStore sets the store of job tokens. With it, a job token
+// authenticates a runner request as the starter of its job, limited to the
+// unit and the job of the token. Without it, no job token authenticates.
+func WithJobTokenStore(st jobtoken.Store) Option {
+	return func(o *settings) { o.jobTokenStore = st }
+}
 
 // WithTriggerStore sets the store of run triggers. With it, the server serves
 // the trigger API under /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/

@@ -15,11 +15,14 @@ import (
 )
 
 // Service issues job tokens and authenticates them. It reads the live claim
-// and the job at each request, so a token stops without a revoke.
+// and the job at each request, so a token stops without a revoke. It is an
+// identity.Authenticator through AuthenticateToken.
 type Service struct {
 	store Store
 	now   func() time.Time
 }
+
+var _ identity.Authenticator = (*Service)(nil)
 
 // NewService returns a Service. A nil now uses time.Now.
 func NewService(store Store, now func() time.Time) *Service {
@@ -133,8 +136,9 @@ func currentOperation(j *job.Job) durable.ID {
 }
 
 // Authenticate returns the starter principal of the job token secret, with
-// the job ID set, and the unit of the job of the token. The caller must limit
-// every action of the principal to that unit. It returns an error that wraps
+// the job ID and the job unit set, and the unit of the job of the token. The
+// caller must limit every action of the principal to that unit. It returns an
+// error that wraps
 // identity.ErrUnauthenticated for every refusal: a value that is not a
 // secret, an unknown record, a record whose digest differs, a claim or job
 // that is not live, or a starter that is deleted or disabled. On every
@@ -199,6 +203,7 @@ func (s *Service) Authenticate(
 
 	p := m.Claim.Starter
 	p.JobID = string(m.Token.JobID)
+	p.JobUnit = m.Token.Unit
 	p.Credential = identity.CredentialJobToken
 	p.TokenExpiresAt = m.Token.ExpiresAt
 
@@ -210,6 +215,18 @@ func (s *Service) Authenticate(
 	p.TemporaryExpiresAt = time.Time{}
 
 	return p, m.Token.Unit, nil
+}
+
+// AuthenticateToken returns the principal of Authenticate. The principal
+// carries the unit of the job in JobUnit, so this method drops only the
+// separate unit answer. It returns the same errors as Authenticate.
+func (s *Service) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
+	p, _, err := s.Authenticate(ctx, token)
+	if err != nil {
+		return identity.Principal{}, err
+	}
+
+	return p, nil
 }
 
 // live returns an error that wraps identity.ErrUnauthenticated when the claim

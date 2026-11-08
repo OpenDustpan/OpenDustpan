@@ -826,6 +826,141 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 	}
 }
 
+// readCountingStore counts the record and principal reads of a fake store.
+type readCountingStore struct {
+	*fakeStore
+
+	recordReads    int
+	principalReads int
+}
+
+// GetTempAdminBySubject implements tempadmin.Reader.
+func (s *readCountingStore) GetTempAdminBySubject(
+	ctx context.Context, subject string,
+) (tempadmin.TempAdmin, error) {
+	s.recordReads++
+
+	return s.fakeStore.GetTempAdminBySubject(ctx, subject)
+}
+
+// GetPrincipalBySubject implements tempadmin.Principals.
+func (s *readCountingStore) GetPrincipalBySubject(
+	ctx context.Context, subject string,
+) (principal.Principal, error) {
+	s.principalReads++
+
+	return s.fakeStore.GetPrincipalBySubject(ctx, subject)
+}
+
+// TestDecoratorLeavesAJobTokenAlone proves that a job token passes through
+// unchanged: a record of its subject never marks it, and the decorator reads
+// no record for it.
+func TestDecoratorLeavesAJobTokenAlone(t *testing.T) {
+	t.Parallel()
+
+	base := newFakeStore()
+	store := &readCountingStore{fakeStore: base, recordReads: 0, principalReads: 0}
+	audits := newFakeAudit()
+
+	_, err := testService(base).Create(t.Context(), callerEntry(), tempadmin.Input{
+		Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason,
+	})
+	if err != nil {
+		t.Fatalf("create temporary administrator: %v", err)
+	}
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit: %v", err)
+	}
+
+	caller := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: identity.CredentialJobToken, JobID: "job-a", JobUnit: unit.WithUnitID("unt-1"),
+	}
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next: fakeAuthn{principal: caller}, Records: store, Principals: store, Request: nil,
+		Expirer: store, Audit: audits, Now: func() time.Time { return baseTime().Add(time.Hour) }, Logger: nil,
+	})
+	if err != nil {
+		t.Fatalf("new decorator: %v", err)
+	}
+
+	got, err := dec.AuthenticateToken(t.Context(), "good")
+	if err != nil {
+		t.Fatalf("job token sign-in: %v", err)
+	}
+
+	if got != caller {
+		t.Fatalf("job token principal = %+v, want it unchanged", got)
+	}
+
+	if store.recordReads != 0 || store.principalReads != 0 {
+		t.Fatalf(
+			"store reads = %d records, %d principals; want no read for a job token",
+			store.recordReads, store.principalReads,
+		)
+	}
+
+	if len(audits.entries) != 0 {
+		t.Fatalf("sign-in entries = %d, want none", len(audits.entries))
+	}
+}
+
+// TestDecoratorLeavesAnAdministratorAlone proves that an administrator
+// passes through unchanged: a record of its subject never marks it, and the
+// decorator reads no record for it.
+func TestDecoratorLeavesAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+
+	base := newFakeStore()
+	store := &readCountingStore{fakeStore: base, recordReads: 0, principalReads: 0}
+	audits := newFakeAudit()
+
+	_, err := testService(base).Create(t.Context(), callerEntry(), tempadmin.Input{
+		Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason,
+	})
+	if err != nil {
+		t.Fatalf("create temporary administrator: %v", err)
+	}
+
+	caller := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: identity.CredentialAccessToken, JobID: "", JobUnit: identity.Object{},
+	}
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next: fakeAuthn{principal: caller}, Records: store, Principals: store, Request: nil,
+		Expirer: store, Audit: audits, Now: func() time.Time { return baseTime().Add(time.Hour) }, Logger: nil,
+	})
+	if err != nil {
+		t.Fatalf("new decorator: %v", err)
+	}
+
+	got, err := dec.AuthenticateToken(t.Context(), "good")
+	if err != nil {
+		t.Fatalf("administrator sign-in: %v", err)
+	}
+
+	if got != caller {
+		t.Fatalf("administrator principal = %+v, want it unchanged", got)
+	}
+
+	if store.recordReads != 0 || store.principalReads != 0 {
+		t.Fatalf(
+			"store reads = %d records, %d principals; want no read for an administrator",
+			store.recordReads, store.principalReads,
+		)
+	}
+
+	if len(audits.entries) != 0 {
+		t.Fatalf("sign-in entries = %d, want none", len(audits.entries))
+	}
+}
+
 func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 	t.Parallel()
 

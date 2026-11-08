@@ -422,9 +422,75 @@ func checkPrincipal(
 	want.Admin = false
 	want.TemporaryAdministrator = false
 	want.TemporaryExpiresAt = time.Time{}
+	want.JobUnit = m.Token.Unit
 
 	if p != want {
 		t.Fatalf("principal = %+v, want %+v", p, want)
+	}
+
+	if p.JobUnit != unit {
+		t.Fatalf("principal job unit = %+v, want the unit of the record %+v", p.JobUnit, unit)
+	}
+}
+
+// TestAuthenticateToken proves that AuthenticateToken answers the principal
+// of Authenticate, with the unit of the record in JobUnit.
+func TestAuthenticateToken(t *testing.T) {
+	t.Parallel()
+
+	secret, err := jobtoken.NewSecret()
+	if err != nil {
+		t.Fatalf("new secret: %v", err)
+	}
+
+	var store fakeStore
+
+	store.match = liveMatch(t, jobtoken.DigestOf(secret), testNow())
+
+	svc := jobtoken.NewService(&store, testNow)
+
+	want, unit, err := svc.Authenticate(t.Context(), secret.Reveal())
+	if err != nil {
+		t.Fatalf("Authenticate = %v", err)
+	}
+
+	got, err := svc.AuthenticateToken(t.Context(), secret.Reveal())
+	if err != nil {
+		t.Fatalf("AuthenticateToken = %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("AuthenticateToken = %+v, want %+v", got, want)
+	}
+
+	if got.JobUnit != unit || !got.JobUnit.IsUnit() {
+		t.Fatalf("AuthenticateToken job unit = %+v, want the unit of the record %+v", got.JobUnit, unit)
+	}
+}
+
+// TestAuthenticateTokenRefusesAValueThatIsNotASecret proves the fail-closed
+// layer of AuthenticateToken: a value without the job token form reaches no
+// store.
+func TestAuthenticateTokenRefusesAValueThatIsNotASecret(t *testing.T) {
+	t.Parallel()
+
+	var store fakeStore
+
+	svc := jobtoken.NewService(&store, testNow)
+
+	p, err := svc.AuthenticateToken(t.Context(), "not-a-secret")
+	if !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("AuthenticateToken = %v, want ErrUnauthenticated", err)
+	}
+
+	var zero identity.Principal
+
+	if p != zero {
+		t.Fatalf("AuthenticateToken returned the principal %+v", p)
+	}
+
+	if !store.got.IsZero() {
+		t.Fatal("a value that is not a secret reached the store")
 	}
 }
 

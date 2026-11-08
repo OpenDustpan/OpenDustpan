@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -51,39 +52,80 @@ func noSignInGates() signInGates {
 	return signInGates{gate: nil, signInGate: nil, passwordGate: nil, passkeyGate: nil, passkeyBeginGate: nil}
 }
 
+// gatedAuthenticatorConfig holds the inputs of gatedAuthenticator.
+type gatedAuthenticatorConfig struct {
+	next      identity.Authenticator
+	tokens    *accesstoken.Service
+	jobTokens jobtoken.Store
+	store     namespace.Store
+	logger    *slog.Logger
+	now       func() time.Time
+}
+
 // gatedAuthenticator returns the authenticator that every adapter and the
 // request log use, and the gates that it builds: next first, so the
 // bootstrap admin tokens never meet the failure budget, then the stored
-// access tokens when the store keeps them, behind a gate. The gate resolves a
+// access tokens when the store keeps them, behind a gate, then the job tokens
+// when the store keeps them, behind a gate of their own. Each gate resolves a
 // token once for each request and slows the misses of secret-shaped values
-// from one source. It never refuses a valid token. With nil tokens it returns
-// next and no gate.
+// from one source. A gate never refuses a valid token. With no job tokens and
+// nil tokens it returns next and no gate. With no access tokens it returns
+// next and the job token gate when the job token store is set.
 //
 //nolint:ireturn // The adapters take the port.
-func gatedAuthenticator(
-	next identity.Authenticator, tokens *accesstoken.Service, store namespace.Store,
-	logger *slog.Logger, now func() time.Time,
-) (identity.Authenticator, signInGates, error) {
+func gatedAuthenticator(cfg gatedAuthenticatorConfig) (identity.Authenticator, signInGates, error) {
 	none := noSignInGates()
 
-	if tokens == nil {
-		return next, none, nil
+	if cfg.tokens == nil && cfg.jobTokens == nil {
+		return cfg.next, none, nil
 	}
 
 	// failures shares the failure budget of every instance on one database,
 	// or keeps the budget in the process when the store keeps no counter.
 	var failures authgate.FailureCounter
-	if counter, ok := store.(authgate.FailureCounter); ok {
+	if counter, ok := cfg.store.(authgate.FailureCounter); ok {
 		failures = counter
 	}
 
+	var jobGate *authgate.Gate
+
+	if cfg.jobTokens != nil {
+		gate, err := jobTokenGate(cfg.jobTokens, failures, cfg.logger, cfg.now)
+		if err != nil {
+			return nil, none, err
+		}
+
+		jobGate = gate
+	}
+
+	if cfg.tokens == nil {
+		return identity.Chain{cfg.next, jobGate}, none, nil
+	}
+
+	gates, err := accessGates(cfg.tokens, failures, cfg.logger, cfg.now)
+	if err != nil {
+		return nil, none, err
+	}
+
+	if jobGate == nil {
+		return identity.Chain{cfg.next, gates.gate}, gates, nil
+	}
+
+	return identity.Chain{cfg.next, gates.gate, jobGate}, gates, nil
+}
+
+// accessGates returns the gate of the access token lookups and the gates of
+// the sign-in routes that go with it.
+func accessGates(
+	tokens *accesstoken.Service, failures authgate.FailureCounter, logger *slog.Logger, now func() time.Time,
+) (signInGates, error) {
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: logger, Now: now,
 		Failures: failures, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("authentication gate: %w", err)
+		return noSignInGates(), fmt.Errorf("authentication gate: %w", err)
 	}
 
 	signInGate, err := authgate.New(authgate.Config{
@@ -92,7 +134,7 @@ func gatedAuthenticator(
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("sign-in gate: %w", err)
+		return noSignInGates(), fmt.Errorf("sign-in gate: %w", err)
 	}
 
 	passwordGate, err := authgate.New(authgate.Config{
@@ -101,12 +143,12 @@ func gatedAuthenticator(
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("password gate: %w", err)
+		return noSignInGates(), fmt.Errorf("password gate: %w", err)
 	}
 
 	passkeyGate, err := newPasskeyFailureGate(failures, logger, now)
 	if err != nil {
-		return nil, none, fmt.Errorf("passkey gate: %w", err)
+		return noSignInGates(), fmt.Errorf("passkey gate: %w", err)
 	}
 
 	passkeyBeginGate, err := authgate.NewRefusing(authgate.Config{
@@ -115,20 +157,39 @@ func gatedAuthenticator(
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("passkey begin gate: %w", err)
+		return noSignInGates(), fmt.Errorf("passkey begin gate: %w", err)
 	}
 
-	gates := signInGates{
+	return signInGates{
 		gate: gate, signInGate: signInGate, passwordGate: passwordGate, passkeyGate: passkeyGate,
 		passkeyBeginGate: passkeyBeginGate,
+	}, nil
+}
+
+// jobTokenGate returns the gate of the job token lookups of a store.
+func jobTokenGate(
+	jobTokens jobtoken.Store, failures authgate.FailureCounter, logger *slog.Logger, now func() time.Time,
+) (*authgate.Gate, error) {
+	gate, err := authgate.New(authgate.Config{
+		Next: jobtoken.NewService(jobTokens, now), Charge: jobtoken.LooksLikeSecret, Logger: logger, Now: now,
+		Failures: failures, Window: 0, CounterErrors: nil, Scope: jobTokenGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("job token gate: %w", err)
 	}
 
-	return identity.Chain{next, gate}, gates, nil
+	return gate, nil
 }
 
 // signInGateScope names the budget of the sign-in routes in the shared
 // count.
 const signInGateScope = "signin"
+
+// jobTokenGateScope names the budget of the job token lookups in the shared
+// count. It is separate from the access token budget, so a guess at one never
+// spends the other.
+const jobTokenGateScope = "jobtoken"
 
 // passwordGateScope names the budget of the routes that check a password or
 // a one-time code of a local user in the shared count.
