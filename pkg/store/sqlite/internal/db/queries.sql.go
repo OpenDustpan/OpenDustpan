@@ -1193,7 +1193,8 @@ type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
 // The number of deliveries of the subscription at or before the cursor (next
 // time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
 // the deliveries that a page after the cursor leaves behind. The count stops
-// at max_rows.
+// at max_rows. The ORDER BY does not change the count; it stays so that the
+// plan reads the index of the history in order and stops at max_rows.
 func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNotificationDeliveriesOfSubscriptionBefore,
 		arg.Scope,

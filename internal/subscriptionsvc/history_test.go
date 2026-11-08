@@ -36,6 +36,9 @@ type fakeDeliveries struct {
 	notify.Deliveries
 
 	rows []notify.Delivery
+
+	// countErr, when set, is the error of each CountBefore.
+	countErr error
 }
 
 func (f fakeDeliveries) History(
@@ -72,6 +75,10 @@ func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
 func (f fakeDeliveries) CountBefore(
 	_ context.Context, _ namespace.Name, _ string, after *notify.DeliveryCursor, maxCount int,
 ) (int, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+
 	if after == nil || maxCount <= 0 {
 		return 0, nil
 	}
@@ -131,7 +138,7 @@ func newService(t *testing.T, rows []notify.Delivery) *subscriptionsvc.Service {
 	t.Helper()
 
 	svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: fakeSubs{nil}, Deliveries: fakeDeliveries{Deliveries: nil, rows: rows},
+		Subscriptions: fakeSubs{nil}, Deliveries: fakeDeliveries{Deliveries: nil, rows: rows, countErr: nil},
 		Namespaces: fakeNamespaces{}, Now: at,
 	})
 	if err != nil {
@@ -321,6 +328,49 @@ func TestHistoryBoundFromTheStore(t *testing.T) {
 			if len(page.Deliveries) != tc.wantLen || page.More != tc.wantMore {
 				t.Fatalf("page = %d deliveries, more = %t; want %d, %t",
 					len(page.Deliveries), page.More, tc.wantLen, tc.wantMore)
+			}
+		})
+	}
+}
+
+// errCount is the error of a store that cannot count the deliveries.
+var errCount = errors.New("the deliveries cannot be counted")
+
+// TestHistoryReturnsTheCountError reads a page after a cursor from a store
+// whose count fails. The service returns the error and no page.
+func TestHistoryReturnsTheCountError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		after *notify.DeliveryCursor
+	}{
+		{"a cursor inside the history", &notify.DeliveryCursor{NextAt: at(), ID: "dlv-0003"}},
+		{"a cursor after the last row", &notify.DeliveryCursor{NextAt: at(), ID: "dlv-0000"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
+				Subscriptions: fakeSubs{nil},
+				Deliveries:    fakeDeliveries{Deliveries: nil, rows: historyRows(at(), 1, 5), countErr: errCount},
+				Namespaces:    fakeNamespaces{}, Now: at,
+			})
+			if err != nil {
+				t.Fatalf("new service: %v", err)
+			}
+
+			page, err := svc.History(t.Context(), "acme", "sub-1", subscriptionsvc.HistoryRequest{
+				After: tc.after, Size: 2,
+			})
+			if !errors.Is(err, errCount) {
+				t.Fatalf("history = %v, want the count error", err)
+			}
+
+			if len(page.Deliveries) != 0 || page.More {
+				t.Fatalf("page = %d deliveries, more = %t; want no page", len(page.Deliveries), page.More)
 			}
 		})
 	}
