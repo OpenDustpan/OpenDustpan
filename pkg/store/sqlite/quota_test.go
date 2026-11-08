@@ -130,14 +130,18 @@ func TestQuotaReserveRefusesReservationOfAnotherNamespace(t *testing.T) {
 	fence := quotaFence(t, s, "payments")
 	quotaFence(t, s, "other")
 
+	// The reservation and its keys are of another namespace, and the check is
+	// of the fenced namespace, so that only the check of the reservation
+	// namespace can refuse the reservation.
 	other := quota.Key{Namespace: "other", Blueprint: "postgres", Kind: quota.KindUnits, Scope: "namespace"}
+	mine := quota.Key{Namespace: "payments", Blueprint: "postgres", Kind: quota.KindUnits, Scope: "namespace"}
 	r := quota.Reservation{
 		ID: "req-1/1", Namespace: "other", State: quota.ReservationOpen,
 		Keys: []quota.Key{other}, At: quotaTime(), EndsAt: quotaTime().Add(24 * time.Hour),
 	}
 
 	err := s.QuotaCounter().InTx(t.Context(), fence, func(tx quota.Tx) error {
-		_, reserveErr := tx.Reserve(t.Context(), r, []quota.Check{{Key: other, Window: 0, Max: 1}})
+		_, reserveErr := tx.Reserve(t.Context(), r, []quota.Check{{Key: mine, Window: 0, Max: 1}})
 
 		return reserveErr
 	})
@@ -145,9 +149,11 @@ func TestQuotaReserveRefusesReservationOfAnotherNamespace(t *testing.T) {
 		t.Fatalf("Reserve(a reservation of another namespace) = %v, want ErrFenced", err)
 	}
 
-	if u := quotaUsages(t, s, []quota.Check{{Key: other, Window: 0, Max: 0}}, quotaTime())[0]; u.Settled != 0 ||
-		u.Reserved != 0 {
-		t.Fatalf("Usage(%s) after the refusal = %+v, want no usage", other, u)
+	for _, key := range []quota.Key{other, mine} {
+		if u := quotaUsages(t, s, []quota.Check{{Key: key, Window: 0, Max: 0}}, quotaTime())[0]; u.Settled != 0 ||
+			u.Reserved != 0 {
+			t.Fatalf("Usage(%s) after the refusal = %+v, want no usage", key, u)
+		}
 	}
 }
 
