@@ -92,9 +92,10 @@ func (c *opsClaimer) Claim(ctx context.Context, req job.ClaimRequest) (job.Assig
 	j.ID = job.ID(op.Key)
 
 	return job.Assignment{
-		Claim: job.PhaseClaim{Job: j.ID, Phase: 0, Claim: op.Claim, Fence: fence},
-		Job:   j,
-		Plan:  nil,
+		Claim:   job.PhaseClaim{Job: j.ID, Phase: 0, Claim: op.Claim, Fence: fence},
+		Job:     j,
+		Plan:    nil,
+		Profile: "",
 	}, nil
 }
 
@@ -395,6 +396,8 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Now:                        opts.now,
 		PollInterval:               20 * time.Millisecond,
 		DenialLimiter:              nil,
+		Plans:                      nil,
+		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
 	}
 

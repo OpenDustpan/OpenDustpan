@@ -475,6 +475,11 @@ func pgNameLockControlTables() []pgCopyTable {
 			columns: []string{"id", pgColKey},
 			orderBy: []string{"id"},
 		},
+		{
+			table:   backup.TableUsedTickets,
+			columns: []string{"provider_id", "ticket_digest", "until_ms"},
+			orderBy: []string{"provider_id", "ticket_digest"},
+		},
 	}
 }
 

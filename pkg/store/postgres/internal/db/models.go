@@ -1341,6 +1341,12 @@ type UpdateJournalSequence struct {
 	Sha256   []byte
 }
 
+type UsedTicket struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
 type Workspace struct {
 	ID                    string
 	Namespace             string

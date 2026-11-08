@@ -1,6 +1,10 @@
 package jobstore
 
-import "opendustpan.org/opendustpan/pkg/job"
+import (
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/job"
+)
 
 // EncodeJobBody exposes encodeBody to the black-box tests.
 func EncodeJobBody(j *job.Job) (string, error) { return encodeBody(j) }
@@ -10,3 +14,6 @@ func DecodeJobBody(body string, j *job.Job) error { return decodeBody(body, j) }
 
 // RowToJob exposes jobOf to the black-box tests.
 func RowToJob(r *Row) (job.Job, error) { return jobOf(r) }
+
+// NextJobUpdateAt exposes nextUpdateAt to the black-box tests.
+func NextJobUpdateAt(now, stored time.Time) time.Time { return nextUpdateAt(now, stored) }

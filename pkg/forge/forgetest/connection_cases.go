@@ -57,7 +57,7 @@ func methods(secret []byte) []method {
 				ctx,
 				repo,
 				"main",
-				forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: validBase},
+				anyDelivery("Dustpan-Job: j-1", validBase),
 				time.Unix(0, 0),
 			)
 

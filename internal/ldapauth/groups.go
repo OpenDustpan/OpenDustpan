@@ -57,17 +57,18 @@ func (m *Method) groupsOf(ctx context.Context, conn *ldap.Conn, e *ldap.Entry, u
 		return nil, nil
 	}
 
-	if err := conn.Bind(m.bindDN, m.bindPassword.Reveal()); err != nil {
-		return nil, m.serviceBindError(ctx, err)
-	}
-
-	// One deadline covers the whole read of the groups. At the deadline
-	// the connection closes, so an operation that waits ends too.
+	// One deadline covers the whole read of the groups, the rebind as the
+	// service account included. At the deadline the connection closes, so
+	// an operation that waits ends too.
 	walkCtx, cancel := context.WithTimeout(ctx, m.groupTimeout)
 	defer cancel()
 
 	stop := context.AfterFunc(walkCtx, func() { m.closeConn(ctx, conn) })
 	defer stop()
+
+	if err := conn.Bind(m.bindDN, m.bindPassword.Reveal()); err != nil {
+		return nil, m.serviceBindError(ctx, err)
+	}
 
 	w := &groupWalk{seen: map[string]struct{}{}, names: map[string]struct{}{}, queue: nil}
 
