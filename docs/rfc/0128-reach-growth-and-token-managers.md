@@ -64,10 +64,12 @@ amplification") holds for the actions that A adds. The approval of the edge
 as a whole is split between two people, G for the old reach and A for the
 new actions, and A may not know that H exists.
 
-The access review shows the wider reach of H, because reach includes act-as
-edges. The audit entry of a grant to a service principal already names the
-holders in the change `tokenManagers`. So the record exists. A decision
-about the edge does not.
+The access-review export (`pkg/access` `Service.Review`) returns grant
+rows only: the grant of the edge on P and the grants of P. It has no row for
+the reach of H and no flag. The flag of ADR 70 decision 6 is not built. The
+audit entry of a grant to a service principal names the holders in the
+change `tokenManagers` (`withTokenManagers`, on `Grant` only). So a record
+exists for a grant only. A decision about the edge does not exist.
 
 The reviewer of #2877 also names a second path: H revokes its own reach.
 Under ADR 67 the own reach of H does not bound P. A smaller reach of H does
@@ -88,7 +90,9 @@ a release, or the identity provider.
 - **P grows.** The reach over grants of P after a change holds a pair that
   it did not hold before. So a grant that P already has, the create of a
   unit or a collection, and the move of a unit under an existing grant do
-  not grow P.
+  not grow P. This is deliberate: P can act on more units, but no grant
+  changed. The re-enable of a disabled P is not growth under this
+  definition. Option (g) flags it as its own cause.
 - **Transitive edges.** The code follows act-as edges transitively and
   stops on a cycle (`pkg/access/reach.go`, type `Reach`). ADR 70
   decision 1 says "the grants of each principal that it can act as". This
@@ -131,8 +135,10 @@ Two of these paths are gaps under every option, also under (d) and (g):
 - The role update that adds `namespace:manage-principal-tokens` creates
   edges without the check of ADR 70 decision 3. That is a new edge, not a
   growth, and it contradicts decision 3 as written (open question 9).
+  Option (g) flags it.
 - The identity provider adds holders to an unprotected group that holds an
   edge to a principal of a namespace, with no granter (open question 10).
+  Option (g) flags it.
 
 ## Options
 
@@ -211,9 +217,10 @@ the mark, or revokes the edge. The access review lists each mark.
 No new check and no new record. The escape is the record that exists:
 
 - the `tokenManagers` change of the audit entry of each grant;
-- the access review, which shows reach through act-as edges;
-- the flag of ADR 70 decision 6, which already covers a token whose
-  principal got more grants after its maker made the token.
+- the access-review export, which lists the grant of the edge and the
+  grants of P as rows, but not the reach of H;
+- the flag of ADR 70 decision 6, which covers a token whose principal got
+  more grants after its maker made the token. It is not built yet.
 
 - **Administrator.** No friction. Must read the audit entry or the review
   to know.
@@ -296,10 +303,10 @@ The paths without a request need their own rule:
 
 - **A release.** No caller exists, so step 2 cannot apply. Proposed rule:
   the release notes name each action that a release adds to a built-in
-  role. At the first start of the release, the server writes one audit
-  entry, by the server, for each edge that the release widens, and the
-  access review flags them as the flag of ADR 70 decision 6 does. Or the
-  owner names this as an explicit exception (open question 11).
+  role. One durable operation, keyed by the release version, writes an
+  audit entry by the server and a reach flag of option (g) for each edge
+  that the release widens, once for the installation. Or the owner names
+  this as an explicit exception (open question 11).
 - **The identity provider and SCIM.** They never grow P. They add holders
   to a group. Under (f), "keep" of a group edge covers later adds, as said
   above. Whether ADR 70 decision 3 applies to these adds is open
@@ -331,26 +338,166 @@ The paths without a request need their own rule:
   - It does not close the release path or the identity-provider path with a
     decision. It records them.
 
-### (g) Keep ADR 67 decision 3 and show each widened edge
+### (g) Keep ADR 67 decision 3 and flag each widened edge
 
-ADR 67 decision 3 stays. No request is refused. Each change that grows P
-returns the list of widened edges, with the same scope and the same columns
-as the list of (f). The audit entry of the change records the list. The
-access review flags each widened edge as the flag of ADR 70 decision 6 does,
-until a person whose reach covers the new reach of P acknowledges it or
-revokes the edge. A release writes the same entries at its first start.
+ADR 67 decision 3 stays. No request is refused. The server writes a stored
+**reach flag** for each act-as edge that a change widens or creates without
+a covering approval. A person whose reach covers the current reach of P
+acknowledges the flag or revokes the edge. The flag of ADR 70 decision 6 is
+not built yet, so (g) defines its own record. The list of widened edges uses
+the scope and the columns of the list of (f).
+
+#### What (g) flags on each path
+
+One line for each row of "Code paths". "Response" is the response that holds
+the list of widened edges, or "none". "Actor" is the actor of the audit
+entry of the change, and of the flags that it opens.
+
+| Path | Flagged | Response | Actor |
+| --- | --- | --- | --- |
+| Grant to P | Yes: each edge to P, with the added pairs. | The grant response: `widenedEdges` (at most 100 items), `widenedEdgeCount`, and the change ID to filter the flag list. | The caller. |
+| Grant to a group of P | Yes: each edge to each service principal member that grows. | The grant response, as above. | The caller. |
+| Member add | Yes: each edge to P when P joins a group with grants. | The member-add response, as above. | The caller. |
+| Role update, more actions | Yes: each edge to each service principal that holds the role and grows. | The role-update response, as above. | The caller. |
+| Role update, adds `namespace:manage-principal-tokens` | Yes, as cause `new-edge`: each new edge, with the full reach of P as the added pairs. Open question 9 asks whether a check refuses it too. | The role-update response, as above. | The caller. |
+| Release that adds actions to built-in roles | Yes: each edge to each service principal that grows. | None. No caller exists. The release notes name each added action. | The server. One durable operation, keyed by the release version, writes the flags and one audit entry for the installation. A restart or a second instance finds the operation done and writes nothing again. |
+| Identity provider or SCIM adds a holder | Yes, as cause `new-holder`: the edge of the new member, with the full reach of P as the added pairs. Open question 10 asks whether a protection refuses it too. | None. A sign-in sync has no response to the identity provider. A SCIM response keeps the SCIM shape and carries no list. | The sync identity: the identity-provider connection, or the principal of the SCIM token. |
+| Restore of the access tables | Yes, as cause `restore`: each edge in the restored tables whose reach of P is not in the baseline of the edge (see "Bounds"). Restored acknowledgments keep their covered reach. An edge whose restored reach of P is wider than that covered reach gets a new flag. Open question 12 asks whether a check refuses it too. | The result of the restore operation: the count of flags and the change ID to filter the flag list. | The caller of the restore. |
+| Re-enable of a disabled P (`principal` `EnablePrincipal`) | Yes, as cause `re-enable`: each edge to P, with the full reach of P as the added pairs. The person who enables P decides that the grants act again. That person did not approve the edges. | The enable response, as above. | The caller. |
+| H revokes its own reach | No. Under ADR 67 the own reach of H does not bound P (see "The question"). If open question 1 makes the own reach of H a bound, the revoke opens a flag with the pairs of P that H no longer covers. | None. | Not applicable. |
+| Revoke, member removal, disable | No. These only shrink. | None. | Not applicable. |
+| Token create and rotate | No. A token does not change an edge. | None. | Not applicable. |
+| Trust-rule create and change | No. ADR 70 decision 3 checks the granter of a new edge already. | None. | Not applicable. |
+| Trust-rule exchange | No. It does not change an edge. Open question 8. | None. | Not applicable. |
+
+A flag never blocks a request. An open or acknowledged flag does not block a
+revoke, a member removal, a disable, a token create, a rotation or an
+exchange. A revoke of an edge is an ordinary `Revoke` in a second request.
+The namespace hold of open question 5 cannot revoke one edge alone.
+
+#### The flag record
+
+The flag is a stored record. The API lists it. A rule in the review code is
+not enough.
+
+- **Home.** `pkg/access` owns the record, the port and the conformance
+  tests, next to the edges and `Reach`. The record is in the access tables,
+  so a backup, an export and a restore of the access tables carry it.
+- **Fields.**
+  - `id`;
+  - the edge: the holder (a principal or `group:<id>#member`), P, and the
+    kind of hold (direct, group, namespace, trust rule, or transitive
+    through Q);
+  - the cause: `growth`, `new-edge`, `new-holder`, `restore`, `re-enable`
+    or `release`;
+  - `changes`: the IDs of the audit entries of the changes that added pairs
+    while the flag is open, at most 100, with a count;
+  - `addedPairs`: the pairs (action, object) that the reach of P has and the
+    baseline of the edge does not have;
+  - `state`: `open`, `acknowledged`, `revoked` (the edge was revoked while
+    the flag was open) or `superseded` (the edge or P stopped existing
+    through another change);
+  - `openedAt`, `closedAt`;
+  - for an acknowledgment: `acknowledgedBy`, `acknowledgedAt` and
+    `coveredReach`, the reach of P at the time of the acknowledgment.
+- **Fence.** A flag of P of a namespace lives in the namespace of P. Each
+  write carries the fence of that namespace, and the store checks it in the
+  same transaction. A change in one namespace writes its flags in its own
+  transaction. A change of installation scope (a role update of a role
+  granted in many namespaces, a release, a restore) writes the flags through
+  a durable operation, with one step for each namespace under the fence of
+  that namespace. The response of such a role update holds the list and the
+  ID of that operation. A flag of P of the installation has no namespace
+  fence, as other installation grants.
+- **List endpoints.**
+  - `GET /api/server/namespaces/{namespace}/reach-flags`, action
+    `namespace:read-access` on the namespace;
+  - `GET /api/server/reach-flags`, action `server:read-access` on the
+    installation.
+
+  Filters: `state`, `principal`, `holder`, `change`. The access-review
+  export of P and of H links to the open flags.
+- **Acknowledge endpoints.** `POST .../reach-flags/{id}/acknowledge` and the
+  bulk form in "Bounds", under the same two prefixes.
+
+#### Bounds
+
+- **One open flag for each edge.** A growth while the flag is open adds its
+  change ID and its pairs to that flag. It does not open a second flag.
+- **A baseline for each edge.** The baseline is the reach of P that a
+  person last approved for the edge: the reach that ADR 70 decision 3
+  checked when the edge was made, or the `coveredReach` of the last
+  acknowledgment. A flag opens only when the reach of P has a pair outside
+  the baseline. So an acknowledgment covers the reach at the time it is
+  given, and the next flag opens only when P grows past it. For an edge that
+  exists before this change ships, one durable operation sets the baseline
+  to the reach of P at that time and writes an audit entry for each edge.
+  The causes `new-edge`, `new-holder` and `re-enable` use an empty baseline.
+- **Metrics.** A gauge of the count of open flags, and a gauge of the age
+  of the oldest open flag in seconds. Both are for the installation, with no
+  label for a namespace or a principal.
+- **Bulk acknowledgment for each change.** `POST
+  .../reach-flags/acknowledge` with a `change` ID acknowledges each open
+  flag whose `changes` holds that ID, one by one, with the checks of
+  "Acknowledgment" for each flag. The audit entry records the change ID.
+  The response lists the flags that stay open and the reason for each. No
+  form acknowledges every flag.
+
+#### Acknowledgment
+
+An acknowledgment is a privileged action. The proposal, for open
+question 13:
+
+- **Action and object.** A new action `principal:acknowledge-reach` on the
+  object P. It is in the administration family. The catalog gives it to the
+  built-in roles that hold `namespace:manage-access` or
+  `server:manage-access` today.
+- **Reach check at the point of use.** In the write transaction of the
+  acknowledgment, under the fence of the namespace of P: the reach over
+  grants of the acknowledger, without the edges through P, covers the
+  current reach over grants of P, not only the `addedPairs`. Else the server
+  refuses with `403`, names the count of pairs that the acknowledger does
+  not cover, and writes the denial to the audit log. The store also refuses
+  a flag that is not `open`, as a compare-and-set on the state.
+- **Audit.** Each acknowledgment writes an audit entry with the flag ID, the
+  edge, the change IDs, the count of covered pairs and the actor. The flag
+  stores `acknowledgedBy`, `acknowledgedAt` and `coveredReach`.
+- **Who may not acknowledge.**
+  - H, for a flag on its own edge;
+  - the actor of a change in `changes`, in any request. So the author of a
+    grant cannot clear its own flag, and (g) does not work as (f) with an
+    optional list;
+  - a service principal or an agent: only a person acknowledges;
+  - a person without a fresh step-up, when the installation has step-up
+    (`internal/stepup`; the ports are not built yet).
+- **Fail closed.** An unknown state, cause or kind of hold refuses the
+  acknowledgment and writes the denial to the audit log.
+
+#### Impact
 
 - **Administrator.** No friction. The response and the console show who
-  gains, after the change. A can revoke an edge in a second request.
+  gains, after the change. A can revoke an edge in a second request. Another
+  person acknowledges the flag.
 - **Team lead.** No change.
 - **Automation.** No change. Management as code can read the list.
-- **Paths.** Grant, member add, role update (to compute the list), the
-  startup of a release, the audit entry and the access review.
+- **Paths.**
+  - Grant, member add, role update, enable, restore and the release
+    startup compute the list. `withTokenManagers` (`pkg/access/service.go`)
+    runs on `Grant` only today. (g) needs the same read on `AddMember`,
+    `UpdateRole`, `EnablePrincipal` and restore.
+  - The flag store and its conformance tests in `pkg/access`.
+  - The list and acknowledge endpoints, the new action, the two gauges.
+  - The durable operations for a release, the first baseline, and changes
+    of installation scope.
 - **Failure modes.**
   - The growth applies before a person decides. The window is the time
-    until the review.
-  - The acknowledgment is state that a restore must carry, as in (c), but
-    it blocks nothing.
+    until the acknowledgment.
+  - The flags can collect when nobody acknowledges them. The gauge of the
+    oldest open flag shows that. The flags do not expire (open
+    question 14).
+  - A deliberate gap of the definition of "P grows": a new unit in a
+    namespace where P holds `admin` does not grow the reach over grants, so
+    it opens no flag, but P can act on more units.
 
 ## Precedent
 
@@ -366,7 +513,8 @@ What the precedent shows:
 
 - The clouds and Kubernetes check act-as at the time of the grant. A later
   growth of the target flows to each holder. None refuses the growth. Google
-  Cloud detects it. ADR 67 decision 3 chose this model on 2026-10-14.
+  Cloud detects it, and its insights have the states ACTIVE and ACCEPTED.
+  ADR 67 decision 3 chose this model on 2026-10-14.
 - An AWS session policy and GitHub fine-grained tokens bound an act-as
   right by an intersection. That is option (e), and the agent ceiling of
   ADR 354.
@@ -376,6 +524,7 @@ What the precedent shows:
 - No surveyed product decides again who holds an act-as right when its
   target grows. Option (f) has no direct precedent. Option (g) is close to
   the detection of Google Cloud, with a record at the time of the change.
+  The ACCEPTED state of an insight is the analog of an acknowledged flag.
 
 Sources:
 
@@ -423,7 +572,11 @@ each widened edge at the time of the change.
 - (g) never refuses a request. So it fits ADR 70 decisions 19 and 20, NIST
   SP 800-63C and PCI DSS 8.2.5, and it stops no automation.
 - "Why can H do this" has an answer: the grant of the edge, its granter,
-  the change that grew P, and the list in its audit entry.
+  the change that grew P, the list in its audit entry, and the flag with
+  its acknowledgment.
+- The flag is a stored record with a list endpoint, an authorization
+  action and an audit entry for each acknowledgment. The review-only rule of
+  the first version of (g) did not exist in the code.
 
 Option (f) stays the choice if the owner wants growth to need a decision
 before it applies. Option (e) is the strongest bound, but it changes the
@@ -432,7 +585,11 @@ choice if the owner wants no change at all.
 
 Independent of the option, the two gaps of "Code paths" need a rule: the
 role update that creates edges (open question 9), and the identity-provider
-adds into an unprotected group (open question 10).
+adds into an unprotected group (open question 10). Under (g), both are
+flagged. The owner can add a refusal or a protection on top.
+
+(g) also needs two owner decisions of its own: who may acknowledge a flag
+(open question 13), and the bound on the flags (open question 14).
 
 The proposal changes these parts, by a new ADR:
 
@@ -441,9 +598,9 @@ The proposal changes these parts, by a new ADR:
 | 67 | Decision 3, "now or gets later ... this decision accepts it" | None. | Reversed: growth of P is a new grant of each edge. |
 | 70 | Decision 2 | None. | A hold on one principal is still not compared at token creation. The edge is checked when P grows. |
 | 70 | Decision 3 | None. | A change that grows the target of an act-as edge is a grant of that edge, and needs the same reach. |
-| 70 | Decision 6, the flag of a token whose principal got more grants | The flag also covers each widened edge, until a person acknowledges or revokes it. | The flag covers the edges that a release or a restore widens. |
+| 70 | Decision 6, the flag of a token whose principal got more grants | A stored reach flag for each widened edge, with its list endpoints, the action `principal:acknowledge-reach`, the bounds and the rules of acknowledgment of option (g). | The flag covers the edges that a release or a restore widens. |
 | 70 | Decision 7 and decision 8, restore | Per open question 12. | Per open question 12. |
-| 70 | Decision 32, row "67, decision 3" | The server lists the widened edges on a change that grows a principal. | The server compares reach in a third place: a change that grows a principal with act-as edges. |
+| 70 | Decision 32, row "67, decision 3" | The server lists and flags the widened edges on each path of the (g) table. | The server compares reach in a third place: a change that grows a principal with act-as edges. |
 | `pkg/access/roles.go` | Descriptions of `account-administrator` and `token-manager` ("now or gets later") | None. | Change to say that a growth needs a decision of each edge. |
 
 ## Open questions
@@ -484,14 +641,17 @@ as the author of a trust rule that names P).
    creates an act-as edge from each holder of the role to each principal of
    each namespace where the role is granted. Today `UpdateRole` does not
    run the check of ADR 70 decision 3 (the caller's reach must cover each
-   target). Should it, for every option?
+   target). Choices: (i) run the check and refuse the update when the
+   caller does not cover each target; (ii) flag each new edge as option (g)
+   does, with no refusal; (iii) both.
 10. **The identity provider adds a person to a group that holds an act-as
     right on a principal of a namespace.** ADR 70 decision 13 does not
     protect such a group, because it protects only an act-as right on a
     principal of the installation. So the add has no granter, and ADR 70
-    decision 3 does not run. Should decision 13 also protect a group with
-    an act-as right on a principal of a namespace, or should such adds be
-    accepted and recorded?
+    decision 3 does not run. Choices: (i) decision 13 also protects a group
+    with an act-as right on a principal of a namespace; (ii) accept the add
+    and flag the edge of the new holder as option (g) does, with the sync
+    identity as the actor; (iii) both.
 11. **A release that adds an action to a built-in role.** `admin`,
     `account-administrator` and `site-administrator` hold whole action
     families, so a new action in a family grows every service principal
@@ -506,7 +666,29 @@ as the author of a trust rule that names P).
     each holder of `server:restore`. Which rule applies: the reach of the
     caller must cover each restored edge, or the restore records each edge
     that it widens (compared with the tables before the restore) in the
-    audit log and flags it in the access review?
+    audit log and opens a reach flag of option (g) for it?
+
+13. **Who may acknowledge a reach flag?** Option (g) stores a flag for each
+    act-as edge from H to P that a change widens, until a person
+    acknowledges it or revokes the edge. The proposal: a new action
+    `principal:acknowledge-reach` on P; a check in the write transaction
+    that the acknowledger's reach over grants, without the edges through P,
+    covers the current reach of P; an audit entry for each acknowledgment.
+    Choices: (i) a person only, not H, not the actor of a change that the
+    flag names, with a fresh step-up where the installation has it (the
+    proposal); (ii) as (i), but the actor of the change may acknowledge in
+    a later request; (iii) each principal with the action and a covering
+    reach, service principals and agents included.
+14. **What bounds the reach flags?** Without a bound, each grant to P with a
+    `token-manager` holder opens a flag for each holder, and a release can
+    open many flags at once. The proposal: one open flag for each edge,
+    which collects the added pairs while it is open; an acknowledgment that
+    covers the reach of P at its time, so that the next flag opens only when
+    P grows past it; two gauges, the count of open flags and the age of the
+    oldest open flag; a bulk acknowledgment for one change ID, never for
+    all flags. Choices: (i) the proposal; (ii) the proposal, plus an expiry
+    that closes an open flag after a set time with an audit entry by the
+    server; (iii) no bound.
 
 ## Checklist
 
@@ -514,8 +696,13 @@ as the author of a trust rule that names P).
   namespace writes only its own half, under its own fence, and no write
   waits for another installation (ADR 248 decisions 3, 6 and 9). Not
   checked yet. The edge list reads holders on the installation and on the
-  namespace in the transaction of the grant. An installation-wide grant or
-  role update reads holders of many namespaces.
+  namespace in the transaction of the grant. Under (g), a flag of P lives in
+  the namespace of P under its fence. A change in one namespace writes its
+  flags in its own transaction. A change of installation scope (a role
+  update of a role granted in many namespaces, a release, a restore) writes
+  the flags through a durable operation, one step for each namespace under
+  that namespace's fence. So no write spans two namespaces. The read of
+  holders on the installation for a namespace change is still to check.
 
 ## Outcome
 
