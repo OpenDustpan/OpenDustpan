@@ -65,7 +65,10 @@ func TestForcedDeclareWithoutOverrideIsRefused(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -115,7 +118,10 @@ func TestRefusedOverrideIsAudited(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -255,7 +261,10 @@ func declareRefused(t *testing.T, err error) (*httptest.ResponseRecorder, []audi
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if newErr != nil {
 		t.Fatalf("handler: %v", newErr)

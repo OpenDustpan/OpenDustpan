@@ -2,6 +2,7 @@ package jobstore
 
 import (
 	"context"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -21,3 +22,6 @@ func CheckReservedPlan(
 ) (*job.PlanRef, error) {
 	return checkReserved(ctx, tx, j, pc, p)
 }
+
+// NextJobUpdateAt exposes nextUpdateAt to the black-box tests.
+func NextJobUpdateAt(now, stored time.Time) time.Time { return nextUpdateAt(now, stored) }

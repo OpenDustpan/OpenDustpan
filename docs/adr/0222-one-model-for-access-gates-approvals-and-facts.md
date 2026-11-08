@@ -7,6 +7,7 @@ Changed by:
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 - ADR 335 extends decision 7: Cedar is the default engine, and another engine can be an adapter.
+- ADR 351 extends: the gates over facts also decide the admission of a package.
 - ADR 354 changes decision 5: two evaluations for a delegated request.
 .
 ## Context

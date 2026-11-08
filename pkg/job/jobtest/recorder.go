@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -133,6 +134,7 @@ func NewRecorderHarnessWithRetention(
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: parts.Records, Jobs: parts.Harness.Jobs, Blobs: artifacts, Sealer: sealer,
 		Namespaces: parts.Harness.Namespaces, Retention: retention, Now: time.Now,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
@@ -172,7 +174,8 @@ type recorderCase struct {
 func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
-	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
+	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planPartCases(),
+		planReadCases(),
 		reserveBindingCases(), deliveryCases(), keyTxCases(), chunkKeyCases())
 
 	for _, tc := range cases {
