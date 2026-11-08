@@ -233,7 +233,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runTokenOp(w, r, op, p, none); ok {
+		if res, err := h.runTokenOp(w, r, op, p, none); err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -241,47 +241,47 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 
 // serveTokenChange adapts a change to a route handler. The Service writes
 // the success entry in the transaction of the change. A refused change
-// writes one failure entry here, best effort. An answer with a secret
-// carries Cache-Control: no-store.
+// writes one failure entry here, best effort, with the missing actions of a
+// reach refusal. An answer with a secret carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		r = r.WithContext(context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness))
-		res, ok := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
+		res, err := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
-		if !ok && res.object != "" && h.tokens != nil {
-			h.appendServerChange(r, p, serverChange{
+		if err != nil && res.object != "" && h.tokens != nil {
+			h.appendServerChangeReason(r, p, serverChange{
 				at: h.tokens.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			}, reachReason(err))
 		}
 
-		if ok {
+		if err == nil {
 			w.Header().Set("Cache-Control", "no-store")
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// runTokenOp runs op and writes its error. It reports whether op succeeded,
-// with the result in both cases.
+// runTokenOp runs op and writes its error. It answers the result in both
+// cases, and the error of the operation.
 func (h *Handler) runTokenOp(
 	w http.ResponseWriter, r *http.Request, op tokenOp, p identity.Principal, e audit.Entry,
-) (principalResult, bool) {
+) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.tokens == nil {
 		h.writeError(ctx, w, errNoTokenStore)
 
-		return principalResult{body: nil, object: "", status: 0}, false
+		return principalResult{body: nil, object: "", status: 0}, errNoTokenStore
 	}
 
 	res, err := op(w, r, h.tokens, p, e)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // resolveCaller resolves the object of the own-token routes: the caller.
@@ -779,9 +779,11 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 // classifyToken maps the access token errors to their status and message.
 // A source over its failure budget answers 429 (internal/authgate). Next:
 // a bad body, query, name, expiry or page, and a principal kind that gets no
-// token, answer 400; an unknown token or principal 404; a token that ended
-// 409; and a store with no token port 501. The domain wraps each sentinel
-// with the ID or the value it acted on, never with driver text or a secret.
+// token, answer 400; an unknown token or principal 404; a sign-in that the
+// caller needs, and a reach that is not inside the reach of the caller, 403;
+// a token that ended 409; and a store with no token port 501. The domain
+// wraps each sentinel with the ID or the value it acted on, never with
+// driver text or a secret.
 func classifyToken(err error) (failure, bool) {
 	if f, ok := classifyTokenRequest(err); ok {
 		return f, true
@@ -812,7 +814,8 @@ func classifyTokenRequest(err error) (failure, bool) {
 }
 
 // classifyTokenState maps the errors of an unknown, wrong, ended or taken
-// token, and of a store with no token port.
+// token, of a reach that is not inside the reach of the caller, and of a
+// store with no token port.
 func classifyTokenState(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, accesstoken.ErrNotFound):
@@ -825,6 +828,12 @@ func classifyTokenState(err error) (failure, bool) {
 		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenCallerNotPerson), true
 	case errors.Is(err, accesstoken.ErrSignInRequired):
 		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenRequiresSignIn), true
+	case errors.Is(err, accesstoken.ErrReachExceeded):
+		// Defense in depth: the server answers this refusal in keepDenied,
+		// with the text that names the missing actions, and the code of
+		// errcode.Forbidden. This case stays so that a caller that classifies
+		// a token error directly cannot skip the 403 and the code.
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenReachExceeded), true
 	case errors.Is(err, accesstoken.ErrEnded):
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
 	case errors.Is(err, accesstoken.ErrAlreadyExists):

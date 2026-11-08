@@ -1576,6 +1576,7 @@
           "token.invalid",
           "token.kind-has-none",
           "token.not-found",
+          "token.outside-reach",
           "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",

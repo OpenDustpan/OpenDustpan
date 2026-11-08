@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -321,6 +322,23 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 	return groupOf(g, protected), nil
 }
 
+// storedGroupOf returns one stored group on the wire with its protected
+// flag. The write is stored, so the answer must match the stored state: a
+// failed check answers protected, the fail-closed value of access.Protected.
+func (h *Handler) storedGroupOf(ctx context.Context, g principal.Group) groupResponse {
+	body, err := h.protectedGroupOf(ctx, g)
+	if err != nil {
+		// The cause is the error type only: the text of a store error can hold
+		// driver text, and the log must not carry it.
+		h.logger.WarnContext(ctx, "the protected check of a stored group failed",
+			slog.String("group", g.ID), slog.String("cause", causeType(err)))
+
+		return groupOf(g, true)
+	}
+
+	return body
+}
+
 // protectedGroupsOf returns one page of groups on the wire with the
 // protected flag of each. It checks the whole page with one ProtectedGroups
 // call. A failed check of one group answers its error, so the route answers
@@ -395,7 +413,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); ok {
+		if res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -403,44 +421,45 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 
 // servePrincipalChange adapts a change to a route handler. The Service
 // writes the success entry in the transaction of the change. A refused
-// change writes one failure entry here, best effort.
+// change writes one failure entry here, best effort, with the missing
+// actions of a reach refusal.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
-		if !ok && res.object != "" && h.principals != nil {
-			h.appendServerChange(r, p, serverChange{
+		if err != nil && res.object != "" && h.principals != nil {
+			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			}, reachReason(err))
 		}
 
-		if ok {
+		if err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// runPrincipalOp runs op and writes its error. It reports whether op
-// succeeded, with the result in both cases.
+// runPrincipalOp runs op and writes its error. It answers the result in both
+// cases, and the error of the operation.
 func (h *Handler) runPrincipalOp(
 	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
-) (principalResult, bool) {
+) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.principals == nil {
 		h.writeError(ctx, w, errNoPrincipalStore)
 
-		return principalResult{body: nil, object: "", status: 0}, false
+		return principalResult{body: nil, object: "", status: 0}, errNoPrincipalStore
 	}
 
 	res, err := op(w, r, h.principals, c.e, c.p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // writePrincipalResult writes the status and the body of a success. A body
@@ -923,12 +942,7 @@ func (h *Handler) createGroup(
 		return failed("groups"), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(principal.GroupRef(g.ID)), err
-	}
-
-	return ok(http.StatusCreated, body, principal.GroupRef(g.ID)), nil
+	return ok(http.StatusCreated, h.storedGroupOf(r.Context(), g), principal.GroupRef(g.ID)), nil
 }
 
 // listGroups serves GET /api/server/groups: one page, ordered by name, with
@@ -1000,12 +1014,7 @@ func (h *Handler) changeGroup(
 		return failed(object), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(object), err
-	}
-
-	return ok(http.StatusOK, body, object), nil
+	return ok(http.StatusOK, h.storedGroupOf(r.Context(), g), object), nil
 }
 
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and

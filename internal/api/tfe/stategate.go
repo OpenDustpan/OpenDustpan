@@ -46,7 +46,9 @@ func (h *Handler) guardStateWrite(
 		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI,
 		State: check.state, StateErr: check.stateErr,
 	}, func(ctx context.Context, reason string) {
-		h.guard.Record(ctx, r, p, refusal.Denial{Action: check.action, Object: obj, Reason: reason, Window: 0})
+		h.guard.Record(ctx, r, p, refusal.Denial{
+			Action: check.action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		})
 	})
 
 	switch {
