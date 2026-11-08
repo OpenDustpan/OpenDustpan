@@ -343,7 +343,7 @@ func (f *fakeServer) start(t *testing.T) *httptest.Server {
 		writeFake(t, w, doc)
 	})
 
-	mux.HandleFunc("GET /api/server/upgrade-check", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/upgrade-check", func(w http.ResponseWriter, _ *http.Request) {
 		embedded, version := schema.EmbeddedMigrationNames()
 
 		writeFake(t, w, map[string]any{

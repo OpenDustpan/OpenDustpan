@@ -189,7 +189,7 @@ func embeddedNames(t *testing.T) ([]string, int64) {
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckFresh(t *testing.T) {
 	names, binVersion := embeddedNames(t)
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, upgradeCheckBody(t, nil))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -220,7 +220,7 @@ func TestUpgradeCheckBeforeBaseline(t *testing.T) {
 
 	const oldVersion = 76
 
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, upgradeCheckBody(t, []string{"0075_sign_in_freshness.sql", "0076_sign_in_providers.sql"}))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -246,7 +246,7 @@ func TestUpgradeCheckBeforeBaseline(t *testing.T) {
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckCurrent(t *testing.T) {
 	names, binVersion := embeddedNames(t)
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, upgradeCheckBody(t, names))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -269,7 +269,7 @@ func TestUpgradeCheckNewerAtMinimum(t *testing.T) {
 	setBinaryVersion(t, "v0.2.0")
 
 	newer := append(slices.Clone(names), fmt.Sprintf("%04d_future.sql", binVersion+1))
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, upgradeCheckBodyWithMinimum(t, newer, "v0.2.0"))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -300,7 +300,7 @@ func TestUpgradeCheckBelowMinimum(t *testing.T) {
 	names, binVersion := embeddedNames(t)
 	setBinaryVersion(t, "v0.1.0")
 
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, upgradeCheckBodyWithMinimum(t, names, "v0.2.0"))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -341,7 +341,7 @@ func TestUpgradeCheckDevBuildIgnoresMinimum(t *testing.T) {
 		t.Fatalf("encode upgrade check answer: %v", err)
 	}
 
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, string(body))
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check", http.StatusOK, string(body))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
 	if err != nil {
@@ -377,7 +377,7 @@ func TestUpgradeCheckVersionMismatch(t *testing.T) {
 		t.Fatalf("encode mismatched answer: %v", err)
 	}
 
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, string(body))
 
 	_, err = runUpgradeCheckCommand(t, fake.server.URL)
@@ -388,7 +388,7 @@ func TestUpgradeCheckVersionMismatch(t *testing.T) {
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckOversizedBody(t *testing.T) {
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check",
 		http.StatusOK, strings.Repeat("x", maxClientBodyBytes+10))
 
 	_, err := runUpgradeCheckCommand(t, fake.server.URL)
@@ -711,7 +711,7 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 			t.Fatalf("%s: encode upgrade check answer: %v", tc.name, err)
 		}
 
-		fake := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, string(body))
+		fake := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check", http.StatusOK, string(body))
 
 		out, runErr := runUpgradeCheckCommand(t, fake.server.URL)
 		if runErr != nil {

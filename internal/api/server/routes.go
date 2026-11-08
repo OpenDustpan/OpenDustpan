@@ -248,7 +248,7 @@ func (h *Handler) checkRoutes() []Route {
 		},
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/upgrade-check",
+			Path:    upgradeCheckPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
 			Resolve: resolveServer, ActionsFor: nil,
@@ -262,7 +262,7 @@ func (h *Handler) maintenanceRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/maintenance",
+			Path:    maintenancePath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
 			Resolve: resolveServer, ActionsFor: nil,
@@ -270,7 +270,7 @@ func (h *Handler) maintenanceRoutes() []Route {
 		},
 		{
 			Method:  http.MethodPost,
-			Path:    "/api/server/maintenance/enter",
+			Path:    maintenanceEnterPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
 			Resolve: resolveServer, ActionsFor: nil,
@@ -278,7 +278,7 @@ func (h *Handler) maintenanceRoutes() []Route {
 		},
 		{
 			Method:  http.MethodPost,
-			Path:    "/api/server/maintenance/leave",
+			Path:    maintenanceLeavePath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
 			Resolve: resolveServer, ActionsFor: nil,

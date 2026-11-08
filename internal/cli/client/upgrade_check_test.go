@@ -30,7 +30,7 @@ func serveApplied(t *testing.T, journaled, version int64, applied []string) *htt
 	t.Helper()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/server/upgrade-check" {
+		if r.URL.Path != "/api/dustpan/v1/upgrade-check" {
 			http.NotFound(w, r)
 
 			return

@@ -122,7 +122,7 @@ func TestRestartWithStoredSettingKeepsOperatorMaintenance(t *testing.T) {
 	appendChainEntry(t, st, acme, "req-1")
 
 	on := runChainServer(t, st, audit.ChainOn)
-	if status, body := on.do(t, http.MethodPost, "/api/server/maintenance/enter"); status != http.StatusOK {
+	if status, body := on.do(t, http.MethodPost, "/api/dustpan/v1/maintenance/enter"); status != http.StatusOK {
 		t.Fatalf("enter maintenance mode: %d %s, want 200", status, body)
 	}
 
@@ -208,7 +208,9 @@ func TestAuditChainMismatchAfterAnotherApproval(t *testing.T) {
 		pauseChain(t)
 	}
 
-	for _, path := range []string{"/health/live", "/api/server/audit/chain", "/api/server/maintenance"} {
+	for _, path := range []string{
+		"/health/live", "/api/server/audit/chain", "/api/dustpan/v1/maintenance",
+	} {
 		if status, body := on.do(t, http.MethodGet, path); status == http.StatusServiceUnavailable {
 			t.Fatalf("%s while the setting differs: 503, want it served (%s)", path, body)
 		}

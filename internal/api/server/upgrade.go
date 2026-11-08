@@ -8,6 +8,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
+// upgradeCheckPath is the path of the upgrade check route of the
+// installation API.
+const upgradeCheckPath = "/api/dustpan/v1/upgrade-check"
+
 // errNoSchemaStore reports an upgrade check on a server with no schema
 // store. Every production server wires its store; only tests run without
 // one.

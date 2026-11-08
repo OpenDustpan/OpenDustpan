@@ -295,9 +295,9 @@ func TestMaintenanceKeepsServerAPIAndProbes(t *testing.T) {
 		t.Fatalf("enter maintenance mode: %v", err)
 	}
 
-	status, _, body := f.doRaw(t, http.MethodGet, "/api/server/maintenance", "Bearer "+adminToken)
+	status, _, body := f.doRaw(t, http.MethodGet, "/api/dustpan/v1/maintenance", "Bearer "+adminToken)
 	if status != http.StatusOK || !strings.Contains(body, `"state":"maintenance"`) {
-		t.Fatalf("GET /api/server/maintenance answers %d, want 200 with maintenance (%s)",
+		t.Fatalf("GET /api/dustpan/v1/maintenance answers %d, want 200 with maintenance (%s)",
 			status, body)
 	}
 
@@ -312,9 +312,9 @@ func TestMaintenanceKeepsServerAPIAndProbes(t *testing.T) {
 		t.Fatalf("GET /health/live in maintenance answers %d, want %d", status, http.StatusNoContent)
 	}
 
-	status, _, body = f.doRaw(t, http.MethodPost, "/api/server/maintenance/leave", "Bearer "+adminToken)
+	status, _, body = f.doRaw(t, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "Bearer "+adminToken)
 	if status != http.StatusOK || !strings.Contains(body, `"state":"normal"`) {
-		t.Fatalf("POST /api/server/maintenance/leave answers %d, want 200 with normal (%s)",
+		t.Fatalf("POST /api/dustpan/v1/maintenance/leave answers %d, want 200 with normal (%s)",
 			status, body)
 	}
 
@@ -329,17 +329,17 @@ func TestMaintenanceEnterThroughAPI(t *testing.T) {
 	f := newFixture(t)
 	f.createNamespace(t, "acme", installationName)
 
-	status, _, body := f.doRaw(t, http.MethodPost, "/api/server/maintenance/enter", "Bearer "+adminToken)
+	status, _, body := f.doRaw(t, http.MethodPost, "/api/dustpan/v1/maintenance/enter", "Bearer "+adminToken)
 	if status != http.StatusOK || !strings.Contains(body, `"state":"maintenance"`) {
-		t.Fatalf("POST /api/server/maintenance/enter answers %d, want 200 with maintenance (%s)",
+		t.Fatalf("POST /api/dustpan/v1/maintenance/enter answers %d, want 200 with maintenance (%s)",
 			status, body)
 	}
 
 	waitForToolStatus(t, f, http.StatusServiceUnavailable)
 
-	status, _, body = f.doRaw(t, http.MethodPost, "/api/server/maintenance/leave", "Bearer "+adminToken)
+	status, _, body = f.doRaw(t, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "Bearer "+adminToken)
 	if status != http.StatusOK {
-		t.Fatalf("POST /api/server/maintenance/leave answers %d, want %d (%s)",
+		t.Fatalf("POST /api/dustpan/v1/maintenance/leave answers %d, want %d (%s)",
 			status, http.StatusOK, body)
 	}
 

@@ -147,7 +147,7 @@ func haCountNoWorkerWork(ctx context.Context, t *testing.T, env *e2e.Env) haNoWo
 	}
 
 	// The worker report lists each durable operation that no worker claimed.
-	status, body, err = env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/worker", "")
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/worker", "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("GET worker answers %d: %v (%s)", status, err, body)
 	}
@@ -206,7 +206,7 @@ func haWaitNoWorker(ctx context.Context, t *testing.T, env *e2e.Env, size int) {
 	defer cancel()
 
 	for stuck := 0; stuck < size; {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/worker", "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/worker", "")
 		if err != nil || status != http.StatusOK {
 			t.Fatalf("GET worker answers %d: %v (%s)", status, err, body)
 		}

@@ -321,7 +321,7 @@ func listStates(t *testing.T, states []componentState) string {
 	return strings.Join(names, ",")
 }
 
-// installationComponents is the body of GET /api/server/components.
+// installationComponents is the body of GET /api/dustpan/v1/components.
 type installationComponents struct {
 	Components []string `json:"components"`
 }
@@ -333,9 +333,9 @@ func TestInstallationAPIListsComponents(t *testing.T) {
 
 	srv := startComponentServer(t, mustParse(t, "api"))
 
-	status, body := getStatus(t, srv.base, "/api/server/components")
+	status, body := getStatus(t, srv.base, "/api/dustpan/v1/components")
 	if status != http.StatusOK {
-		t.Fatalf("GET /api/server/components: status %d, body %q", status, body)
+		t.Fatalf("GET /api/dustpan/v1/components: status %d, body %q", status, body)
 	}
 
 	var doc installationComponents
@@ -360,7 +360,7 @@ type dueSchedule struct {
 	Name string `json:"name"`
 }
 
-// workerDoc is the body of GET /api/server/worker.
+// workerDoc is the body of GET /api/dustpan/v1/worker.
 type workerDoc struct {
 	Stuck     bool          `json:"stuck"`
 	Schedules []dueSchedule `json:"schedules"`
@@ -394,9 +394,9 @@ func TestNoWorkerRefusesTheStartOfAnOperation(t *testing.T) {
 		t.Fatalf("body %q does not name the command that helps", body)
 	}
 
-	status, body = getStatus(t, srv.base, "/api/server/worker")
+	status, body = getStatus(t, srv.base, "/api/dustpan/v1/worker")
 	if status != http.StatusOK {
-		t.Fatalf("GET /api/server/worker: status %d, body %q", status, body)
+		t.Fatalf("GET /api/dustpan/v1/worker: status %d, body %q", status, body)
 	}
 
 	var doc workerDoc
