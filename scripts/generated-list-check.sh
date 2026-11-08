@@ -7,7 +7,11 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
-mapfile -t LIST < <(grep -v -e '^#' -e '^$' scripts/generated-paths.txt)
+# A read loop, not mapfile: the bash of macOS (3.2) has no mapfile.
+LIST=()
+while IFS= read -r line; do
+	LIST+=("$line")
+done < <(grep -v -e '^#' -e '^$' scripts/generated-paths.txt)
 
 missing=0
 for entry in "${LIST[@]}"; do

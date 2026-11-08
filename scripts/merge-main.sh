@@ -11,7 +11,11 @@ cd "$(git rev-parse --show-toplevel)"
 
 # The generated files. The list is in scripts/generated-paths.txt and
 # scripts/generated-list-check.sh checks it against make regen.
-mapfile -t GENERATED < <(grep -v -e '^#' -e '^$' scripts/generated-paths.txt)
+# A read loop, not mapfile: the bash of macOS (3.2) has no mapfile.
+GENERATED=()
+while IFS= read -r line; do
+	GENERATED+=("$line")
+done < <(grep -v -e '^#' -e '^$' scripts/generated-paths.txt)
 
 MAIN_URL="https://github.com/OpenDustpan/OpenDustpan.git"
 
