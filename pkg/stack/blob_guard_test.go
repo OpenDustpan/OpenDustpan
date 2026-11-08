@@ -483,10 +483,11 @@ func TestPurgeBlobDeleteReleasesTheLease(t *testing.T) {
 	requireLeaseReleased(t, guard, "after the delete")
 }
 
-// TestCheckpointReplaceKeepsTheBlobWhenTheLeaseEnded proves that a save which
-// replaces a checkpoint deletes nothing when the context of the delete lease
-// ended before the delete: the previous blob stays.
-func TestCheckpointReplaceKeepsTheBlobWhenTheLeaseEnded(t *testing.T) {
+// TestCheckpointReplaceTakesNoDeleteLease proves that a save which replaces a
+// checkpoint deletes nothing and takes no delete lease, also when the guard
+// ends a lease at once: both blobs stay, and the store marks the blob of the
+// row that the save replaces.
+func TestCheckpointReplaceTakesNoDeleteLease(t *testing.T) {
 	t.Parallel()
 
 	clk, guard := endedLeaseFixture()
@@ -496,11 +497,19 @@ func TestCheckpointReplaceKeepsTheBlobWhenTheLeaseEnded(t *testing.T) {
 
 	f.saveSeq(t, s, 2, `{"a":2}`)
 
-	if got := updateBlobs(t, f, s.Update.ID); len(got) != 2 {
-		t.Fatalf("blobs of the update with an ended lease = %d, want both checkpoints", len(got))
+	got := updateBlobs(t, f, s.Update.ID)
+	if len(got) != 2 {
+		t.Fatalf("blobs of the update after a replacement = %d, want both checkpoints", len(got))
 	}
 
-	requireLeaseReleased(t, guard, "after the failed delete")
+	if takes := guard.Takes(); takes != 0 {
+		t.Fatalf("delete lease takes = %d, want none: the save deletes no blob", takes)
+	}
+
+	marks, err := f.store.SupersededBlobs(t.Context(), "stk-test")
+	if err != nil || len(marks) != 1 || marks[0].Key != got[0].Key {
+		t.Fatalf("marks = %+v, %v, want one mark of %s", marks, err, got[0].Key)
+	}
 }
 
 // TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded proves that the build of
@@ -770,8 +779,8 @@ func TestPurgeLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 }
 
 // TestSweepLoopReadsTheGuardBeforeEachDelete proves the same for the sweep:
-// two orphans are due, a restore starts after the first delete, and the second
-// orphan stays.
+// the blob of the replaced checkpoint and two orphans are due, a restore
+// starts before the last delete, and that orphan stays.
 func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
@@ -796,9 +805,10 @@ func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 
 	aged.ageAll(2 * time.Hour)
 
-	// The save reads the guard once for the replace of its previous checkpoint,
-	// then once before each delete of the sweep. The restore starts at the
-	// third read, so the first orphan goes and the second stays.
+	// The save deletes nothing, and its sweep reads the guard once before
+	// each delete: the blob of the replaced checkpoint, then each orphan. The
+	// restore starts at the third read, before the delete of the second
+	// orphan, so that orphan stays.
 	guard.OnRead(func() {
 		if guard.Calls() == 3 {
 			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})

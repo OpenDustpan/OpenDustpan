@@ -152,6 +152,16 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "checkpoint_supersedes",
+			columns: []string{
+				backupColBlobKey,
+				backupColStackID,
+				backupColUpdateID,
+				backupColSize,
+				"superseded_at_ms",
+			},
+		},
+		{
 			table: "update_events",
 			columns: []string{
 				backupColStackID,

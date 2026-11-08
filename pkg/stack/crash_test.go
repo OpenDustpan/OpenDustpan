@@ -46,7 +46,8 @@ func TestCrashBlobWithoutRow(t *testing.T) {
 		nil,
 	)
 	ctx := t.Context()
-	input := checkpointInput([]byte(`{"resources":[]}`))
+	body := []byte(`{"resources":[]}`)
+	input := checkpointInput(1, []byte(envelope(string(body))))
 
 	if err := f.updates.SaveCheckpoint(ctx, f.ref, f.id, f.tok, input); !errors.Is(err, namespace.ErrUnavailable) {
 		t.Fatalf("save with a faulted commit: err = %v, want ErrUnavailable", err)
@@ -72,15 +73,16 @@ func TestCrashBlobWithoutRow(t *testing.T) {
 
 	assertBlobsReferenced(t, f.blobs, f.sql, f.ref)
 
-	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, input.Deployment) {
-		t.Fatalf("export = %q, want %q", got, input.Deployment)
+	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, body) {
+		t.Fatalf("export = %q, want %q", got, body)
 	}
 }
 
-// TestCrashRowWithoutDelete fails every blob delete after the SQL commit
-// (ADR 37 decision 3). Each save still succeeds, the superseded blob stays,
-// no row names a missing blob, and the next save succeeds.
-func TestCrashRowWithoutDelete(t *testing.T) {
+// TestCrashSaveKeepsTheMarkedBlob fails every blob delete. Each save still
+// succeeds and deletes no blob: the blob of the previous save stays, the
+// store marks it as superseded, no row names a missing blob, and the next
+// save succeeds.
+func TestCrashSaveKeepsTheMarkedBlob(t *testing.T) {
 	t.Parallel()
 
 	f := newCrashFixture(t,
@@ -89,23 +91,37 @@ func TestCrashRowWithoutDelete(t *testing.T) {
 	)
 	ctx := t.Context()
 
-	first := checkpointInput([]byte(`{"resources":[]}`))
-	second := checkpointInput([]byte(`{"resources":[{"urn":"urn:pulumi:prod::web::x"}]}`))
+	firstBody := []byte(`{"resources":[]}`)
+	secondBody := []byte(`{"resources":[{"urn":"urn:pulumi:prod::web::x"}]}`)
+	thirdBody := []byte(`{"resources":[{"urn":"urn:pulumi:prod::web::y"}]}`)
+
+	first := checkpointInput(1, []byte(envelope(string(firstBody))))
+	second := checkpointInput(2, []byte(envelope(string(secondBody))))
 
 	if err := f.updates.SaveCheckpoint(ctx, f.ref, f.id, f.tok, first); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
 
+	if n := len(listUpdateBlobs(t, f.blobs, f.nsID, f.stackID, f.id)); n != 1 {
+		t.Fatalf("stored blobs after the first save = %d, want one", n)
+	}
+
+	previous, err := f.sql.LatestCheckpoint(ctx, f.ref)
+	if err != nil {
+		t.Fatalf("latest checkpoint after the first save: %v", err)
+	}
+
 	if err := f.updates.SaveCheckpoint(ctx, f.ref, f.id, f.tok, second); err != nil {
-		t.Fatalf("second save with a faulted delete: %v", err)
+		t.Fatalf("second save: %v", err)
 	}
 
-	if n := f.blobs.Calls("Delete"); n < 1 {
-		t.Fatalf("blob Delete calls = %d, want at least one faulted delete", n)
+	// The save deletes no blob, so the faulted delete never fires.
+	if n := f.blobs.Calls("Delete"); n != 0 {
+		t.Fatalf("blob Delete calls = %d, want none", n)
 	}
 
-	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, second.Deployment) {
-		t.Fatalf("export = %q, want the second save %q", got, second.Deployment)
+	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, secondBody) {
+		t.Fatalf("export = %q, want the second save %q", got, secondBody)
 	}
 
 	if n := len(listUpdateBlobs(t, f.blobs, f.nsID, f.stackID, f.id)); n != 2 {
@@ -113,17 +129,22 @@ func TestCrashRowWithoutDelete(t *testing.T) {
 	}
 
 	assertBlobsReferenced(t, f.blobs, f.sql, f.ref)
+	assertMarked(t, f, previous.BlobKey, previous.BlobSize)
 
-	third := checkpointInput([]byte(`{"resources":[{"urn":"urn:pulumi:prod::web::y"}]}`))
+	third := checkpointInput(3, []byte(envelope(string(thirdBody))))
 
 	if err := f.updates.SaveCheckpoint(ctx, f.ref, f.id, f.tok, third); err != nil {
-		t.Fatalf("third save with a faulted delete: %v", err)
+		t.Fatalf("third save: %v", err)
 	}
 
 	assertBlobsReferenced(t, f.blobs, f.sql, f.ref)
 
-	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, third.Deployment) {
-		t.Fatalf("export = %q, want the third save %q", got, third.Deployment)
+	if got := exportDeployment(t, f.updates, f.ref); !bytes.Equal(got, thirdBody) {
+		t.Fatalf("export = %q, want the third save %q", got, thirdBody)
+	}
+
+	if marks := supersededMarks(t, f); len(marks) != 2 {
+		t.Fatalf("marks after three saves = %+v, want two", marks)
 	}
 }
 
@@ -295,13 +316,36 @@ func crashNamespaces(t *testing.T, store *storefault.Store) *namespace.Service {
 }
 
 // checkpointInput returns an unsequenced checkpoint input holding deployment.
-func checkpointInput(deployment []byte) stack.CheckpointInput {
+func checkpointInput(seq int64, deployment []byte) stack.CheckpointInput {
 	return stack.CheckpointInput{
 		Features:      nil,
 		Deployment:    deployment,
 		SchemaVersion: 1,
-		Sequence:      0,
+		Sequence:      seq,
 		Invalid:       false,
+	}
+}
+
+// supersededMarks returns the marks of the crash fixture's stack.
+func supersededMarks(t *testing.T, f crashFixture) []stack.SupersededBlob {
+	t.Helper()
+
+	marks, err := f.sql.SupersededBlobs(t.Context(), f.stackID)
+	if err != nil {
+		t.Fatalf("superseded blobs of %s: %v", f.stackID, err)
+	}
+
+	return marks
+}
+
+// assertMarked checks that the store holds one mark of the crash fixture's
+// stack for key, with the size of the stored blob and a time.
+func assertMarked(t *testing.T, f crashFixture, key blob.Key, size int64) {
+	t.Helper()
+
+	marks := supersededMarks(t, f)
+	if len(marks) != 1 || marks[0].Key != key || marks[0].Size != size || marks[0].At.IsZero() {
+		t.Fatalf("marks = %+v, want one mark of %s with size %d", marks, key, size)
 	}
 }
 

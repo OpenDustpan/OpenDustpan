@@ -104,6 +104,17 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "referenced blob keys list every checkpoint key of the stack", test: testReferencedBlobKeys},
 		{name: "referenced blob keys list the journal keys of the stack", test: testReferencedBlobKeysJournal},
 		{name: "referenced blob keys follow the stack ID and refuse a missing stack", test: testReferencedBlobKeysByID},
+		{
+			name: "a first checkpoint save and a save without a sequence number mark no superseded blob",
+			test: testSupersededBlobsFirstSave,
+		},
+		{name: "a second checkpoint save marks the blob of the first", test: testSupersededBlobsSecondSave},
+		{name: "a checkpoint replay marks no superseded blob", test: testSupersededBlobsReplay},
+		{name: "a third checkpoint save marks both earlier blobs in key order", test: testSupersededBlobsOrder},
+		{name: "a refused checkpoint save marks no superseded blob", test: testSupersededBlobsRefused},
+		{name: "a purge cascades the superseded marks of the stack", test: testSupersededBlobsCascade},
+		{name: "superseded marks of a missing or soft-deleted stack are not found", test: testSupersededBlobsByID},
+		{name: "a built checkpoint marks the blob it replaces", test: testSupersededBlobsBuilt},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "a checkpoint replay under another key keeps the first key", test: testCheckpointReplayOtherKey},
@@ -1840,6 +1851,348 @@ func testReferencedBlobKeysByID(t *testing.T, f fixture) {
 		if !errors.Is(err, stack.ErrNotFound) || len(keys) != 0 {
 			t.Fatalf("referenced keys of %s = %v, %v; want no keys and ErrNotFound", tc.name, keys, err)
 		}
+	}
+}
+
+// superseded returns the marks of the stack id, or fails the test.
+func (f fixture) superseded(t *testing.T, id stack.ID) []stack.SupersededBlob {
+	t.Helper()
+
+	marks, err := f.s.SupersededBlobs(t.Context(), id)
+	if err != nil {
+		t.Fatalf("superseded blobs of %s: %v", id, err)
+	}
+
+	return marks
+}
+
+// markClock returns the time of the clock of the database before a save, or
+// the zero time when the store does not read it.
+func markClock(t *testing.T, s UpdatesStore) time.Time {
+	t.Helper()
+
+	clock, ok := s.(blob.DatabaseClock)
+	if !ok {
+		return time.Time{}
+	}
+
+	now, err := clock.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	return now
+}
+
+// assertMark checks one mark against the key and the size of the checkpoint
+// that it replaces. before is the time of the clock of the database before
+// the save that wrote the mark, or the zero time when the store does not
+// read that clock: a zero time checks only that the mark time is not zero.
+func assertMark(t *testing.T, mark stack.SupersededBlob, key blob.Key, size int64, before time.Time) {
+	t.Helper()
+
+	if mark.Key != key || mark.Size != size {
+		t.Fatalf("mark = %s size %d, want %s size %d", mark.Key, mark.Size, key, size)
+	}
+
+	if mark.At.IsZero() {
+		t.Fatalf("mark of %s has a zero time", key)
+	}
+
+	if !before.IsZero() && mark.At.Before(before) {
+		t.Fatalf("mark of %s at %s, want no earlier than %s", key, mark.At, before)
+	}
+}
+
+// markKeys returns the keys of the marks, in their order.
+func markKeys(marks []stack.SupersededBlob) []blob.Key {
+	out := make([]blob.Key, 0, len(marks))
+
+	for i := range marks {
+		out = append(out, marks[i].Key)
+	}
+
+	return out
+}
+
+// testSupersededBlobsFirstSave checks that the first save of an update marks
+// nothing, and that a save without a sequence number marks nothing either:
+// the row of the update names no other blob when the first write lands, and a
+// write without a sequence number replaces the row without a comparison.
+func testSupersededBlobsFirstSave(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"n":1}`), f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 0 {
+		t.Fatalf("marks after the first save = %+v, want none", marks)
+	}
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"n":0}`), f.fence); err != nil {
+		t.Fatalf("save without a sequence number: %v", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 0 {
+		t.Fatalf("marks after a save without a sequence number = %+v, want none", marks)
+	}
+}
+
+// testSupersededBlobsSecondSave checks that the second sequenced save of an
+// update marks the blob of the first, with the size of the stored blob and
+// the time of the save that replaced it.
+func testSupersededBlobsSecondSave(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+	first := f.checkpoint(t, u, 1, `{"n":1}`)
+
+	if _, err := f.s.PutCheckpoint(t.Context(), first, f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	before := markClock(t, f.s)
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 2, `{"n":2}`), f.fence); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	marks := f.superseded(t, id)
+	if len(marks) != 1 {
+		t.Fatalf("marks after the second save = %+v, want one", marks)
+	}
+
+	assertMark(t, marks[0], first.BlobKey, first.BlobSize, before)
+}
+
+// testSupersededBlobsReplay checks that a replay of one sequence and one
+// digest under the key of another attempt marks nothing: the row keeps the
+// blob of the first write.
+func testSupersededBlobsReplay(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+	first := f.attemptCheckpoint(t, u, 2, `{"n":2}`, "attempt0001")
+	replay := f.attemptCheckpoint(t, u, 2, `{"n":2}`, "attempt0002")
+
+	if _, err := f.s.PutCheckpoint(t.Context(), first, f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	known, err := f.s.PutCheckpoint(t.Context(), replay, f.fence)
+	if err != nil || !known {
+		t.Fatalf("replay: known = %v, err = %v, want true, nil", known, err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 0 {
+		t.Fatalf("marks after a replay = %+v, want none", marks)
+	}
+}
+
+// testSupersededBlobsOrder checks that a third save marks both earlier blobs,
+// ordered by key.
+func testSupersededBlobsOrder(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+	first := f.checkpoint(t, u, 1, `{"n":1}`)
+	second := f.checkpoint(t, u, 2, `{"n":2}`)
+	third := f.checkpoint(t, u, 3, `{"n":3}`)
+
+	saves := []stack.Checkpoint{first, second, third}
+
+	for i := range saves {
+		if _, err := f.s.PutCheckpoint(t.Context(), saves[i], f.fence); err != nil {
+			t.Fatalf("save %d: %v", i+1, err)
+		}
+	}
+
+	marks := f.superseded(t, id)
+	if len(marks) != 2 {
+		t.Fatalf("marks after three saves = %+v, want two", marks)
+	}
+
+	// The keys of the two replaced blobs order by their sequence numbers.
+	want := []blob.Key{first.BlobKey, second.BlobKey}
+	if got := markKeys(marks); !slices.Equal(got, want) {
+		t.Fatalf("mark keys = %v, want %v, ordered", got, want)
+	}
+}
+
+// testSupersededBlobsRefused checks that a refused save marks nothing: a
+// stale sequence and a stale fence both leave the marks of the update as
+// they were.
+func testSupersededBlobsRefused(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 2, `{"n":2}`), f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	stale := f.checkpoint(t, u, 1, `{"n":1}`)
+	if _, err := f.s.PutCheckpoint(t.Context(), stale, f.fence); !errors.Is(err, stack.ErrStaleCheckpoint) {
+		t.Fatalf("save with a stale sequence: err = %v, want ErrStaleCheckpoint", err)
+	}
+
+	fenced := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 3, `{"n":3}`), fenced); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
+		t.Fatalf("save with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 0 {
+		t.Fatalf("marks after refused saves = %+v, want none", marks)
+	}
+}
+
+// testSupersededBlobsCascade checks that the delete of the stack removes the
+// marks of its updates: the delete of the updates cascades them, so a mark
+// that the delete left would fail it. The port has no update delete, so the
+// case purges the whole stack.
+func testSupersededBlobsCascade(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 2, `{"v":2}`), f.fence); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if marks := f.superseded(t, id); len(marks) != 1 {
+		t.Fatalf("marks before the delete = %+v, want one", marks)
+	}
+
+	deleteFixtureStackWith(t, f, countedGuard(u, `{"v":2}`))
+
+	entry := lifecycleEntry(f.ref.Namespace, "unit:purge")
+	if err := f.s.PurgeStack(t.Context(), id, f.fence, time.Time{}, entry); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
+
+	if marks, err := f.s.SupersededBlobs(t.Context(), id); !errors.Is(err, stack.ErrNotFound) || len(marks) != 0 {
+		t.Fatalf("marks after the purge = %+v, %v; want no marks and ErrNotFound", marks, err)
+	}
+}
+
+// testSupersededBlobsByID checks the marks of a sweep: the read is by the
+// stack ID, the key that the sweep lists the blobs by, so the marks survive
+// a rename. A stack that is missing, or soft-deleted, returns ErrNotFound
+// and no marks: an empty mark set there would let a sweep delete the marked
+// blobs without the grace period of a mark.
+func testSupersededBlobsByID(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+
+	if _, err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 2, `{"v":2}`), f.fence); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 1 {
+		t.Fatalf("marks after a rename = %+v, want one", marks)
+	}
+
+	empty := f.other(t)
+	deleted := f.stackIDOf(t, empty)
+
+	if marks := f.superseded(t, deleted); len(marks) != 0 {
+		t.Fatalf("marks of a live stack without marks = %+v, want none", marks)
+	}
+
+	delErr := f.s.DeleteStack(
+		t.Context(), empty, f.fence, stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(empty.Namespace), PurgeAfter: purgeAt()},
+	)
+	if delErr != nil {
+		t.Fatalf("delete stack: %v", delErr)
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   stack.ID
+	}{
+		{name: "soft-deleted stack", id: deleted},
+		{name: "unknown ID", id: "no-such-stack-id"},
+		{name: "empty ID", id: ""},
+	} {
+		marks, err := f.s.SupersededBlobs(t.Context(), tc.id)
+		if !errors.Is(err, stack.ErrNotFound) || len(marks) != 0 {
+			t.Fatalf("marks of %s = %+v, %v; want no marks and ErrNotFound", tc.name, marks, err)
+		}
+	}
+}
+
+// testSupersededBlobsBuilt checks that a built checkpoint marks the blob of
+// the row it replaces, as a sequenced save does, and that a retry of the
+// build under the key of the first build marks nothing: the row still names
+// that blob.
+func testSupersededBlobsBuilt(t *testing.T, f fixture) {
+	t.Helper()
+
+	id := f.stackIDOf(t, f.ref)
+	u := f.runJournaled(t, f.ref, "u1")
+	first := f.attemptCheckpoint(t, u, 0, `{"n":1}`, "attempt0001")
+	second := f.attemptCheckpoint(t, u, 0, `{"n":2}`, "attempt0002")
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), first, f.fence); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 0 {
+		t.Fatalf("marks after the first build = %+v, want none", marks)
+	}
+
+	before := markClock(t, f.s)
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), second, f.fence); err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+
+	marks := f.superseded(t, id)
+	if len(marks) != 1 {
+		t.Fatalf("marks after the second build = %+v, want one", marks)
+	}
+
+	assertMark(t, marks[0], first.BlobKey, first.BlobSize, before)
+
+	// A retry of the second build writes its key again, so the row of the
+	// update still names that blob: it is not superseded, and the write marks
+	// nothing more.
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), second, f.fence); err != nil {
+		t.Fatalf("retry of the build: %v", err)
+	}
+
+	if marks := f.superseded(t, id); len(marks) != 1 {
+		t.Fatalf("marks after a retry of the build = %+v, want one", marks)
 	}
 }
 

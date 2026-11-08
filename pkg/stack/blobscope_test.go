@@ -186,13 +186,13 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		tail  string
+		heads []string
 		saves []int64
 	}{
-		{"one sequenced save", "1", []int64{1}},
-		{"a sequenced save replaces the one before", "2", []int64{1, 2}},
-		{"an unsequenced save", "0", []int64{0}},
-		{"unsequenced saves keep one blob", "0", []int64{0, 0}},
+		{"one sequenced save", []string{"1"}, []int64{1}},
+		{"two sequenced saves keep the key of each", []string{"1", "2"}, []int64{1, 2}},
+		{"an unsequenced save", []string{"0"}, []int64{0}},
+		{"two unsequenced saves keep the key of each", []string{"0", "0"}, []int64{0, 0}},
 	}
 
 	for _, tc := range tests {
@@ -209,7 +209,7 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 				}
 			}
 
-			wantAttemptKey(t, blobKeysOf(t, f.blobs), f.prefix+"stk-test/"+s.Update.ID.String()+"/"+tc.tail+"-")
+			wantAttemptKeys(t, blobKeysOf(t, f.blobs), f.prefix+"stk-test/"+s.Update.ID.String()+"/", tc.heads)
 		})
 	}
 }
@@ -217,14 +217,20 @@ func TestStackBlobsLiveUnderTheNamespacePrefix(t *testing.T) {
 // attemptIDLength is the length of the attempt ID that a save writes in its key.
 const attemptIDLength = 20
 
-// wantAttemptKey fails the test unless keys holds one key that is head
-// followed by an attempt ID.
-func wantAttemptKey(t *testing.T, keys []string, head string) {
+// wantAttemptKeys fails the test unless keys holds one key for each head, in
+// the order of the keys: the directory, the head, and an attempt ID.
+func wantAttemptKeys(t *testing.T, keys []string, dir string, heads []string) {
 	t.Helper()
 
-	if len(keys) != 1 || !strings.HasPrefix(keys[0], head) ||
-		len(strings.TrimPrefix(keys[0], head)) != attemptIDLength {
-		t.Fatalf("blob keys = %v, want one key that starts with %s and ends in an attempt ID", keys, head)
+	if len(keys) != len(heads) {
+		t.Fatalf("blob keys = %v, want one key for each of %v", keys, heads)
+	}
+
+	for i, key := range keys {
+		head := dir + heads[i] + "-"
+		if !strings.HasPrefix(key, head) || len(strings.TrimPrefix(key, head)) != attemptIDLength {
+			t.Fatalf("blob key %d = %s, want a key that starts with %s and ends in an attempt ID", i, key, head)
+		}
 	}
 }
 

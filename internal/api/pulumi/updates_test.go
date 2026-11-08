@@ -391,6 +391,14 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 	return slices.Compact(out), nil
 }
 
+// SupersededBlobs implements stack.CheckpointStore. The fixture keeps no
+// marks: its saves replace the row of an update without a sequence number.
+func (m *memUpdateStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
 func (m *memUpdateStore) AppendEvents(
 	_ context.Context,
 	batch stack.EventBatch,

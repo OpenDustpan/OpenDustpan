@@ -811,17 +811,14 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 70. The second save replaces the previous checkpoint
-		// blob, so it holds a blob delete lease while it deletes the blob: 9
-		// round trips. The take is a transaction of 5 round trips: begin, the
-		// schema check, the shared lock, the insert and commit. The release is
-		// a transaction of 4: begin, the schema check, the delete and commit.
-		// A backup or a restore that starts while the lease is live waits for
-		// it, so it cannot lose the blob. The transaction of the create writes
+		// The budget is 62. The second save replaces the previous checkpoint
+		// blob without a delete: the save holds no delete lease, which held 9
+		// round trips, and the mark of the replaced blob holds 1.
+		// The transaction of the create writes
 		// the record of the item key of the update, which seals its event
 		// payloads at rest: a read of the record, a read of the namespace, the
 		// insert and a read back.
-		{"pulumi update cycle", 70, func(h *rtHarness) {
+		{"pulumi update cycle", 62, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()

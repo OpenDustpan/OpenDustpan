@@ -482,6 +482,16 @@ CREATE TABLE "checkpoints" (
     FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE "checkpoint_supersedes" (
+    blob_key         TEXT    NOT NULL PRIMARY KEY,
+    stack_id         TEXT    NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
+    update_id        TEXT    NOT NULL,
+    size             INTEGER NOT NULL,
+    superseded_at_ms INTEGER NOT NULL,
+    FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
+    FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE sign_in_failures (
     source TEXT NOT NULL,
     window_end_ms INTEGER NOT NULL,
@@ -1445,6 +1455,8 @@ WHERE status = 'running' AND dry_run = 0 AND kind <> 'preview';
 
 CREATE INDEX updates_history ON updates (stack_id, version)
 WHERE status <> 'not started' AND dry_run = 0 AND kind <> 'preview';
+
+CREATE INDEX checkpoint_supersedes_age ON checkpoint_supersedes (stack_id, superseded_at_ms);
 
 CREATE INDEX inventory_unit_id ON inventory (unit_id);
 

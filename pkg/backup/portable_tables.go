@@ -155,6 +155,17 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "checkpoint_supersedes",
+			OrderBy: []string{portColStackID, portColBlobKey},
+			Columns: []Column{
+				{Name: portColBlobKey, Kind: KindText},
+				{Name: portColStackID, Kind: KindText},
+				{Name: portColUpdateID, Kind: KindText},
+				{Name: portColSize, Kind: KindInteger},
+				{Name: "superseded_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "update_events",
 			OrderBy: []string{portColStackID, portColUpdateID, portColSequence},
 			Columns: []Column{
