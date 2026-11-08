@@ -4789,6 +4789,20 @@ WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
 ORDER BY next_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
+-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+-- time, delivery ID): the rows with an older next time, or with the same next
+-- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+-- query. The bound on next_at_ms lets the index scan start at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+  AND (next_at_ms < sqlc.arg(after_ms)
+    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
 -- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
 SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,

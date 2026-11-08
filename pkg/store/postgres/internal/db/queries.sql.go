@@ -15469,6 +15469,71 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 	return items, nil
 }
 
+const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = $1 AND subscription_id = $2
+  AND (next_at_ms < $3
+    OR (next_at_ms = $3 AND id COLLATE "C" < $4))
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT $5
+`
+
+type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int32
+}
+
+// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+// time, delivery ID): the rows with an older next time, or with the same next
+// time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+// query. The bound on next_at_ms lets the index scan start at the cursor.
+func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.Query(ctx, listNotificationDeliveriesOfSubscriptionAfter,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationDelivery
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.NotificationID,
+			&i.SubscriptionID,
+			&i.SinkID,
+			&i.Contact,
+			&i.Principal,
+			&i.State,
+			&i.Attempts,
+			&i.NextAtMs,
+			&i.LastError,
+			&i.DeliveredAtMs,
+			&i.Owner,
+			&i.LeaseUntilMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationScopesAbove = `-- name: ListNotificationScopesAbove :many
 SELECT s.scope
 FROM notification_sequences AS s

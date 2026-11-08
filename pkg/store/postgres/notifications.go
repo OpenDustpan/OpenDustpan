@@ -1112,7 +1112,7 @@ func (k NotificationStore) Record(ctx context.Context, fence namespace.Fence, a 
 
 // History implements notify.Deliveries.
 func (k NotificationStore) History(
-	ctx context.Context, scope namespace.Name, id string, limit int,
+	ctx context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, limit int,
 ) ([]notify.Delivery, error) {
 	var out []notify.Delivery
 
@@ -1133,10 +1133,21 @@ func (k NotificationStore) History(
 			return nil
 		}
 
-		rows, err := q.ListNotificationDeliveriesOfSubscription(ctx,
-			db.ListNotificationDeliveriesOfSubscriptionParams{
-				Scope: scope.String(), SubscriptionID: id, MaxRows: rowLimit(limit),
-			})
+		var rows []db.NotificationDelivery
+
+		if after == nil {
+			rows, err = q.ListNotificationDeliveriesOfSubscription(ctx,
+				db.ListNotificationDeliveriesOfSubscriptionParams{
+					Scope: scope.String(), SubscriptionID: id, MaxRows: rowLimit(limit),
+				})
+		} else {
+			rows, err = q.ListNotificationDeliveriesOfSubscriptionAfter(ctx,
+				db.ListNotificationDeliveriesOfSubscriptionAfterParams{
+					Scope: scope.String(), SubscriptionID: id,
+					AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(limit),
+				})
+		}
+
 		if err != nil {
 			return fmt.Errorf("select deliveries: %w", err)
 		}

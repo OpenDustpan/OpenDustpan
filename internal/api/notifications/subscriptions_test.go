@@ -73,12 +73,14 @@ func (f fixture) makeSubscriptionTo(t *testing.T, sink string) subscriptionWire 
 }
 
 // seedDelivery stores a delivery of sub in the namespace ns as the dispatcher
-// does, and stops it in the state. A pending delivery stays pending.
-func (f fixture) seedDelivery(
+// does, with the next time nextAt, and stops it in the state. A pending
+// delivery stays pending.
+func (f fixture) seedDeliveryAt(
 	t *testing.T,
 	ns namespace.Name,
 	sub subscriptionWire,
 	state notify.DeliveryState,
+	nextAt time.Time,
 ) notify.Delivery {
 	t.Helper()
 
@@ -90,7 +92,7 @@ func (f fixture) seedDelivery(
 	d := notify.Delivery{
 		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 		Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
-		Attempts: 0, NextAt: time.Now().Add(-time.Minute).Truncate(time.Millisecond), LastError: "",
+		Attempts: 0, NextAt: nextAt, LastError: "",
 		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
@@ -103,7 +105,7 @@ func (f fixture) seedDelivery(
 		return d
 	}
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := f.clock.Now().UTC().Truncate(time.Millisecond)
 
 	claimed, err := store.Claim(t.Context(), n.Fence(), notify.ClaimRequest{
 		Scope: ns, Owner: "test", Now: now, Lease: time.Minute, Limit: 100,
@@ -119,7 +121,7 @@ func (f fixture) seedDelivery(
 
 		err = store.Record(t.Context(), n.Fence(), notify.Attempt{
 			ID: d.ID, Owner: "test", Version: claimed[i].Version, Now: now, State: state, Attempts: 1,
-			NextAt: now, LastError: "", DeliveredAt: now,
+			NextAt: d.NextAt, LastError: "", DeliveredAt: now,
 		})
 		if err != nil {
 			t.Fatalf("record: %v", err)
@@ -131,6 +133,19 @@ func (f fixture) seedDelivery(
 	t.Fatalf("claim did not return the delivery %s", d.ID)
 
 	return d
+}
+
+// seedDelivery stores a delivery of sub with a next time one minute before
+// the clock of the fixture, and stops it in the state.
+func (f fixture) seedDelivery(
+	t *testing.T,
+	ns namespace.Name,
+	sub subscriptionWire,
+	state notify.DeliveryState,
+) notify.Delivery {
+	t.Helper()
+
+	return f.seedDeliveryAt(t, ns, sub, state, f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond))
 }
 
 // subscriptionEntries returns the audit entries of the subscription and
@@ -398,6 +413,62 @@ func TestDeliveryHistoryPages(t *testing.T) {
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, []byte(got.body),
 				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
 		})
+	}
+}
+
+// TestDeliveryHistorySameNextAt pages the history of many deliveries that
+// share one next time, with a page edge between them. Every delivery comes
+// back once, in the order of the history.
+func TestDeliveryHistorySameNextAt(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sub := f.makeSubscription(t)
+
+	nextAt := f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+
+	want := make([]string, 0, 5)
+	for range 5 {
+		want = append(want, f.seedDeliveryAt(t, "acme", sub, notify.DeliveryDone, nextAt).ID)
+	}
+
+	// The history orders the rows of one next time by ID, greatest first.
+	slices.SortFunc(want, func(a, b string) int { return strings.Compare(b, a) })
+
+	path := subscriptionsBase + "/" + sub.ID + "/deliveries"
+
+	var (
+		got   []string
+		token string
+	)
+
+	for page := 1; ; page++ {
+		if page > 6 {
+			t.Fatalf("the history does not end: %v", got)
+		}
+
+		target := path + "?pageSize=2"
+		if token != "" {
+			target += "&pageToken=" + token
+		}
+
+		answer := f.do(t, get("reader", target))
+		wantCode(t, fmt.Sprintf("page %d", page), answer, http.StatusOK)
+
+		resp := decode[historyWire](t, answer)
+		for _, d := range resp.Deliveries {
+			got = append(got, d.ID)
+		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+
+		token = resp.NextPageToken
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("history = %v, want %v: every delivery once, in order", got, want)
 	}
 }
 

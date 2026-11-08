@@ -1156,7 +1156,7 @@ func (k NotificationStore) Record(ctx context.Context, fence namespace.Fence, a 
 
 // History implements notify.Deliveries.
 func (k NotificationStore) History(
-	ctx context.Context, scope namespace.Name, id string, limit int,
+	ctx context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, limit int,
 ) ([]notify.Delivery, error) {
 	k.s.mu.RLock()
 	defer k.s.mu.RUnlock()
@@ -1176,12 +1176,26 @@ func (k NotificationStore) History(
 		return nil, nil
 	}
 
-	rows, err := k.s.queries.ListNotificationDeliveriesOfSubscription(ctx,
-		db.ListNotificationDeliveriesOfSubscriptionParams{
-			Scope: scope.String(), SubscriptionID: id, MaxRows: int64(limit),
-		})
-	if err != nil {
-		return nil, fmt.Errorf("select deliveries: %w", err)
+	var (
+		rows []db.NotificationDelivery
+		sel  error
+	)
+
+	if after == nil {
+		rows, sel = k.s.queries.ListNotificationDeliveriesOfSubscription(ctx,
+			db.ListNotificationDeliveriesOfSubscriptionParams{
+				Scope: scope.String(), SubscriptionID: id, MaxRows: int64(limit),
+			})
+	} else {
+		rows, sel = k.s.queries.ListNotificationDeliveriesOfSubscriptionAfter(ctx,
+			db.ListNotificationDeliveriesOfSubscriptionAfterParams{
+				Scope: scope.String(), SubscriptionID: id,
+				AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: int64(limit),
+			})
+	}
+
+	if sel != nil {
+		return nil, fmt.Errorf("select deliveries: %w", sel)
 	}
 
 	return deliveriesOf(rows)
