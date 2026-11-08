@@ -57,6 +57,7 @@ installation:
 | Contents | Read | Reads the head of a ref and the files at a commit. | `files` |
 | Contents | Read and write | Makes commits and branches. Deletes a branch of the write-back. | `commit` |
 | Pull requests | Read and write | Opens, reads and closes review requests. | `review` |
+| Commit statuses | Read and write | Sets the commit status of a review request. | `status` |
 
 The capability `review` needs the write of the contents and the write of the
 pull requests. A check lists the capability only when the installation has both

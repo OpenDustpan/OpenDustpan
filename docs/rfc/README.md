@@ -29,7 +29,7 @@ title: What sits under a namespace
 status: draft          # draft | discussing | accepted | dropped
 created: 2026-10-10
 adr: 16                # only when accepted
-was: proposed ADR 9    # only for RFCs 1 to 3, which were proposed ADRs
+was: proposed under number 9    # only for RFCs 1 to 3, which were proposed ADRs
 ```
 
 The front matter and the first lines of prose give the same state. Change
@@ -42,8 +42,8 @@ both together.
 - `make docs-lint` does not check RFCs, so that writing one costs little. The
   ADR that comes from an RFC follows ADR 14.
 - RFCs 1 to 3 were proposed ADRs 9 to 11. ADRs 12 and 13 cite those numbers.
-  ADR 1 forbids edits to accepted ADRs, so read "ADR 9" there as RFC 1,
-  "ADR 10" as RFC 2 and "ADR 11" as RFC 3.
+  ADR 1 forbids edits to accepted ADRs, so read the numbers 9, 10 and 11
+  there as RFC 1, RFC 2 and RFC 3.
 
 ## Index
 
@@ -85,7 +85,7 @@ both together.
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | accepted (ADRs 27, 246, 283) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
-| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
+| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79; open design points in RFC 126 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft; saved views in RFC 100, a saved view is a server object with an API (ADR 266) |
@@ -114,7 +114,7 @@ both together.
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | accepted |
 | [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | accepted |
 | [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | accepted |
-| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244) |
+| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244); no move between namespaces (ADR 346); moves between installations in RFC 126 |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
 | [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings and one settings API accepted (ADR 212), the namespace as the tenant (ADR 215) and a lock that turns a feature off (ADR 219) |
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
@@ -170,3 +170,4 @@ both together.
 | [121](0121-agent-principals.md) | Agent principals, delegation and the kind agent | accepted |
 | [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | accepted |
 | [124](0124-codegen-for-discovered-resources.md) | Code for unmanaged resources: a verified floor in each language, and a placement engine | discussing |
+| [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |

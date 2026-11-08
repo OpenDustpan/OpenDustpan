@@ -2582,8 +2582,9 @@ VALUES (
 -- name: GetDurableSchedule :one
 SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?;
 
--- name: InsertDurableSchedule :exec
-INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL);
+-- name: InsertDurableSchedule :execrows
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL)
+ON CONFLICT (name) DO NOTHING;
 
 -- name: SetDurableScheduleInterval :exec
 -- Sets the interval, and moves the next run to now plus the interval when
@@ -2615,7 +2616,7 @@ DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms');
 
 -- name: GetLatestDurableHeartbeat :one
 SELECT owner, at_ms, lease_ms FROM durable_heartbeats
-ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
+ORDER BY at_ms + 2 * lease_ms DESC, at_ms DESC, owner DESC LIMIT 1;
 
 -- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
 -- each count once. The window comes from DatabaseNowMs, the clock of the

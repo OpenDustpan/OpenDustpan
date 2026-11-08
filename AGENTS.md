@@ -119,7 +119,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
-  agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+  agent/, dependency/, source/ (the source pipeline of runner jobs), stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/, selfservice/
                        features with their own package and suite (<name>test/)
