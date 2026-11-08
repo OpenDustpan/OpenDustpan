@@ -5318,11 +5318,13 @@ WHERE n.name = sqlc.arg(namespace) AND s.id = sqlc.arg(id);
 
 -- name: GetUnmanagedTarget :one
 -- The pool of a target and its purpose, for a write of the target and for the
--- kind of the durable operation of a sweep.
-SELECT t.pool_id, p.purpose
+-- kind of the durable operation of a sweep. A target whose pool belongs to
+-- another namespace gives no row.
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
 FROM unmanaged_targets AS t
 JOIN runner_pools AS p ON p.id = t.pool_id
-WHERE t.namespace_id = sqlc.arg(namespace_id) AND t.name = sqlc.arg(name);
+WHERE t.namespace_id = sqlc.arg(namespace_id) AND t.name = sqlc.arg(name)
+  AND p.namespace_id = t.namespace_id;
 
 -- name: InsertUnmanagedScan :exec
 INSERT INTO unmanaged_scans (
@@ -5362,13 +5364,15 @@ ORDER BY s.seq DESC
 LIMIT sqlc.arg(page_size);
 
 -- name: ListUnmanagedTargets :many
--- The targets of a namespace with the name of their pool, ordered by name.
+-- The targets of a namespace with the name of their pool, ordered by name. A
+-- target whose pool belongs to another namespace gives no row.
 SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
        t.timeout_ms, t.enabled
 FROM unmanaged_targets AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 JOIN runner_pools AS p ON p.id = t.pool_id
 WHERE n.name = sqlc.arg(namespace)
+  AND p.namespace_id = t.namespace_id
 ORDER BY t.name;
 
 -- name: NextUnmanagedScanSeq :one

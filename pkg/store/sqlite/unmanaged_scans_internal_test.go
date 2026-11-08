@@ -201,3 +201,291 @@ func execWithoutForeignKeys(t *testing.T, s *Store, stmt string) {
 		t.Fatalf("release the connection: %v", closeErr)
 	}
 }
+
+// unmanagedAt returns the time of the fixtures of a sweep.
+func unmanagedAt() time.Time {
+	return time.UnixMilli(1_800_000_000_000).UTC()
+}
+
+// seedForeignPool makes the namespace other with a pool of sweeps (sweepers)
+// and returns the pool.
+func seedForeignPool(t *testing.T, s *Store) runner.Pool {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                "other",
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace other: %v", err)
+	}
+
+	pool, err := s.Runners().CreatePool(t.Context(), runner.Pool{
+		ID: "", Namespace: ns.Name, Name: "sweepers", Purpose: runner.PurposeSweeps, Lease: runner.DefaultLease,
+		Concurrency: 2, Isolation: []runner.Isolation{runner.IsolationKubernetes},
+		GitCredentials: runner.GitCredentials{Mode: runner.GitCredentialsForge, Helper: ""},
+		CreatedAt:      unmanagedAt(), UpdatedAt: unmanagedAt(),
+	}, ns.Fence(), []audit.Entry{unmanagedEntry(ns.Name, "namespace:manage-runners")})
+	if err != nil {
+		t.Fatalf("create the pool of other: %v", err)
+	}
+
+	return pool
+}
+
+// repointTarget points the target aws of the namespace acme at poolID with raw
+// SQL, as a damaged row does.
+func repointTarget(t *testing.T, s *Store, poolID string) {
+	t.Helper()
+
+	acme, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	_, err = s.conn.ExecContext(t.Context(),
+		`UPDATE unmanaged_targets SET pool_id = ? WHERE namespace_id = ? AND name = 'aws'`,
+		poolID, acme.ID)
+	if err != nil {
+		t.Fatalf("point the target at pool %s: %v", poolID, err)
+	}
+}
+
+// foreignTarget returns a valid target of the namespace other that names the
+// pool sweeps of that namespace.
+func foreignTarget() unmanaged.Target {
+	return unmanaged.Target{
+		Namespace: "other", Name: "aws", Pool: "sweepers",
+		Scopes:  []unmanaged.TargetScope{{Provider: "aws", Scope: "111111111111", Regions: nil}},
+		Command: []string{"inventory-sweep"}, Every: 24 * time.Hour, Timeout: 0, Enabled: true,
+	}
+}
+
+// cloudScanIn returns a cloud sweep of the target aws of the namespace ns, as
+// a start reads it.
+func cloudScanIn(ns string) unmanaged.Scan {
+	return unmanaged.Scan{
+		Namespace: namespace.Name(ns),
+		Kind:      unmanaged.ScanCloud,
+		Target:    "aws",
+		CreatedAt: unmanagedAt(),
+		EndedAt:   time.Time{},
+		ID:        "",
+		Status:    "",
+		StartedBy: "",
+		Reason:    "",
+		Scopes:    nil,
+		Counts: unmanaged.ScanCounts{
+			Records: 0, Managed: 0, Elsewhere: 0, NotInAnyUnit: 0, LeftBehind: 0, ManagedTwice: 0, Resolved: 0,
+			Rejected: 0, OutOfScope: 0,
+		},
+	}
+}
+
+// TestUnmanagedTargetsRefuseAPoolOfAnotherNamespace proves the read layer: a
+// target row written with raw SQL that names the sweep pool of another
+// namespace does not read, and a sweep of it does not start.
+func TestUnmanagedTargetsRefuseAPoolOfAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedUnmanaged(t, s)
+
+	foreign := seedForeignPool(t, s)
+	repointTarget(t, s, foreign.ID)
+
+	acme, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	targets, err := s.UnmanagedScans().Targets(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("targets: %v", err)
+	}
+
+	if len(targets) != 0 {
+		t.Fatalf("targets = %+v, want none", targets)
+	}
+
+	_, readErr := unmanagedTargetRow(t.Context(), s.queries, acme.ID.String(), "aws")
+	if !errors.Is(readErr, unmanaged.ErrNotFound) {
+		t.Fatalf("target read = %v, want ErrNotFound", readErr)
+	}
+
+	_, err = s.UnmanagedScans().StartScan(t.Context(), cloudScanIn("acme"), acme.Fence(),
+		unmanagedEntry("acme", "namespace:start-sweep"))
+	if !errors.Is(err, unmanaged.ErrNotFound) {
+		t.Fatalf("start = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCheckStagedUnmanagedRefusesAForeignPool proves that a staged target
+// whose pool belongs to another namespace is corrupt, so a restore never
+// brings in a target that names the pool of another namespace.
+func TestCheckStagedUnmanagedRefusesAForeignPool(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedUnmanaged(t, s)
+
+	foreign := seedForeignPool(t, s)
+	repointTarget(t, s, foreign.ID)
+
+	err := checkStagedUnmanaged(t.Context(), s.conn)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), "another namespace") {
+		t.Fatalf("check = %v, want the refusal of a target whose pool is of another namespace", err)
+	}
+}
+
+// TestUnmanagedScansRefuseAnotherNamespace proves each check that compares a
+// value with the fence or the entry of its namespace: a value of another
+// namespace is refused by the layer that owns it, so the removal of that layer
+// fails this test.
+func TestUnmanagedScansRefuseAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	acmeEntry := unmanagedEntry("acme", "namespace:manage-sweeps")
+	otherEntry := unmanagedEntry("other", "namespace:manage-sweeps")
+
+	for _, tc := range []struct {
+		name string
+		call func(t *testing.T, s *Store) error
+		want error
+	}{
+		{
+			name: "create a target of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				return s.UnmanagedScans().CreateTarget(t.Context(), foreignTarget(), fence, acmeEntry)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "update a target of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				return s.UnmanagedScans().UpdateTarget(t.Context(), foreignTarget(), fence, acmeEntry)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "delete a target of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				return s.UnmanagedScans().DeleteTarget(t.Context(), "other", "aws", fence, acmeEntry)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "start a sweep of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				_, err := s.UnmanagedScans().StartScan(t.Context(), cloudScanIn("other"), fence, acmeEntry)
+
+				return err
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "advance a sweep of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				_, err := s.UnmanagedScans().AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+					Namespace: "other", ID: "scn-none", Event: unmanaged.ScanEventCancel,
+					Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+				}, fence, acmeEntry)
+
+				return err
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "advance a sweep with an entry of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				scans, err := s.UnmanagedScans().Scans(t.Context(), "acme", "", "", 10)
+				if err != nil || len(scans) != 1 {
+					t.Fatalf("sweeps = %+v, %v, want one", scans, err)
+				}
+
+				_, err = s.UnmanagedScans().AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+					Namespace: "acme", ID: scans[0].ID, Event: unmanaged.ScanEventCancel,
+					Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+				}, fence, otherEntry)
+
+				return err
+			},
+			want: audit.ErrInvalidEntry,
+		},
+		{
+			name: "create a target with an entry of another namespace",
+			call: func(t *testing.T, s *Store) error {
+				t.Helper()
+
+				target := foreignTarget()
+				target.Namespace = "acme"
+				target.Name = "second"
+
+				return s.UnmanagedScans().CreateTarget(t.Context(), target, fence, otherEntry)
+			},
+			want: audit.ErrInvalidEntry,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			seedUnmanaged(t, s)
+
+			err := tc.call(t, s)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("call = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestSweepPoolOfRefusesAJobPool proves the purpose check of a start: a target
+// row written with raw SQL that names a jobs pool does not start a sweep.
+func TestSweepPoolOfRefusesAJobPool(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedUnmanaged(t, s)
+
+	jobs, err := s.Runners().CreatePool(t.Context(), runner.Pool{
+		ID: "", Namespace: "acme", Name: "builders", Purpose: runner.PurposeJobs, Lease: runner.DefaultLease,
+		Concurrency: 2, Isolation: []runner.Isolation{runner.IsolationKubernetes},
+		GitCredentials: runner.GitCredentials{Mode: runner.GitCredentialsForge, Helper: ""},
+		CreatedAt:      unmanagedAt(), UpdatedAt: unmanagedAt(),
+	}, namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		[]audit.Entry{unmanagedEntry("acme", "namespace:manage-runners")})
+	if err != nil {
+		t.Fatalf("create the jobs pool: %v", err)
+	}
+
+	repointTarget(t, s, jobs.ID)
+
+	_, err = s.UnmanagedScans().StartScan(t.Context(), cloudScanIn("acme"),
+		namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		unmanagedEntry("acme", "namespace:start-sweep"))
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Fatalf("start = %v, want ErrInvalidTarget", err)
+	}
+}

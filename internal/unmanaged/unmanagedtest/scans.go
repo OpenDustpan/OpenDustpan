@@ -1,6 +1,7 @@
 package unmanagedtest
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,9 +14,32 @@ func scanCases() []suiteCase {
 	return []suiteCase{
 		{"sweeps: targets have unique names and a sweep pool of their namespace", testTargets},
 		{"sweeps: a disabled target reads back disabled", testTargetDisabled},
+		{"sweeps: a target above the limit is refused", testTargetLimit},
 		{"sweeps: one sweep of a target at a time", testScanBusy},
+		{"sweeps: a delete cancels the sweep that did not end", testDeleteTargetCancelsScan},
 		{"sweeps: the state table holds", testScanTable},
 		{"sweeps: a stale fence refuses each write", testScansFenced},
+	}
+}
+
+// scanOf returns a sweep of the namespace ns: a cloud sweep of the target name
+// target, or a state check.
+func scanOf(ns string, k unmanaged.ScanKind, target string) unmanaged.Scan {
+	return unmanaged.Scan{
+		Namespace: namespace.Name(ns),
+		Kind:      k,
+		Target:    target,
+		CreatedAt: at(),
+		EndedAt:   time.Time{},
+		ID:        "",
+		Status:    "",
+		StartedBy: "",
+		Reason:    "",
+		Scopes:    nil,
+		Counts: unmanaged.ScanCounts{
+			Records: 0, Managed: 0, Elsewhere: 0, NotInAnyUnit: 0, LeftBehind: 0, ManagedTwice: 0, Resolved: 0,
+			Rejected: 0, OutOfScope: 0,
+		},
 	}
 }
 
@@ -100,6 +124,46 @@ func testTargetDisabled(t *testing.T, h Harness) {
 
 	if len(got) != 1 || !got[0].Enabled {
 		t.Errorf("targets %+v, want the one target enabled", got)
+	}
+}
+
+// testTargetLimit proves the bound of the targets of a namespace: the target
+// above MaxTargets is refused.
+func testTargetLimit(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+
+	for i := range unmanaged.MaxTargets {
+		must(t, "create",
+			h.Scans.CreateTarget(t.Context(), targetOf("acme", fmt.Sprintf("target-%03d", i)), f, e))
+	}
+
+	wantErr(t, "create above the limit",
+		h.Scans.CreateTarget(t.Context(), targetOf("acme", "one-too-many"), f, e), unmanaged.ErrLimit)
+}
+
+// testDeleteTargetCancelsScan proves that a delete of a target cancels its
+// sweep that did not end.
+func testDeleteTargetCancelsScan(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+
+	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	s, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, e)
+	must(t, "start", err)
+
+	must(t, "delete target", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e))
+
+	got, err := h.Scans.Scan(t.Context(), "acme", s.ID)
+	must(t, "sweep", err)
+
+	if got.Status != unmanaged.ScanCanceled {
+		t.Errorf("sweep status = %q, want canceled", got.Status)
 	}
 }
 

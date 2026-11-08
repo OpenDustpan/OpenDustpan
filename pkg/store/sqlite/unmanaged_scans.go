@@ -285,7 +285,7 @@ func startScan(
 // sweepPoolOf returns the ID of the runner pool of the target of s, or "" for a
 // state check, which reads the index in the server. It returns ErrNotFound for
 // a target that is not there, and ErrInvalidTarget for a pool that does not run
-// sweeps.
+// sweeps or that belongs to another namespace.
 func sweepPoolOf(ctx context.Context, q *db.Queries, nsID string, s unmanaged.Scan) (string, error) {
 	if s.Kind != unmanaged.ScanCloud {
 		return "", nil
@@ -294,6 +294,14 @@ func sweepPoolOf(ctx context.Context, q *db.Queries, nsID string, s unmanaged.Sc
 	target, err := unmanagedTargetRow(ctx, q, nsID, s.Target)
 	if err != nil {
 		return "", err
+	}
+
+	// Defense in depth: the read query joins the pool by namespace too; this
+	// check stays so that a damaged row cannot start a sweep on a pool of
+	// another namespace.
+	if target.PoolNamespaceID != nsID {
+		return "", fmt.Errorf("%w: the pool of target %q belongs to another namespace",
+			unmanaged.ErrInvalidTarget, s.Target)
 	}
 
 	// Defense in depth: the purpose of a pool is set when the pool is made and

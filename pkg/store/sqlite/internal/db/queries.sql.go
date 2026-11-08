@@ -9017,10 +9017,11 @@ func (q *Queries) GetUnmanagedScan(ctx context.Context, arg GetUnmanagedScanPara
 }
 
 const getUnmanagedTarget = `-- name: GetUnmanagedTarget :one
-SELECT t.pool_id, p.purpose
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
 FROM unmanaged_targets AS t
 JOIN runner_pools AS p ON p.id = t.pool_id
 WHERE t.namespace_id = ?1 AND t.name = ?2
+  AND p.namespace_id = t.namespace_id
 `
 
 type GetUnmanagedTargetParams struct {
@@ -9029,16 +9030,18 @@ type GetUnmanagedTargetParams struct {
 }
 
 type GetUnmanagedTargetRow struct {
-	PoolID  string
-	Purpose string
+	PoolID          string
+	Purpose         string
+	PoolNamespaceID string
 }
 
 // The pool of a target and its purpose, for a write of the target and for the
-// kind of the durable operation of a sweep.
+// kind of the durable operation of a sweep. A target whose pool belongs to
+// another namespace gives no row.
 func (q *Queries) GetUnmanagedTarget(ctx context.Context, arg GetUnmanagedTargetParams) (GetUnmanagedTargetRow, error) {
 	row := q.db.QueryRowContext(ctx, getUnmanagedTarget, arg.NamespaceID, arg.Name)
 	var i GetUnmanagedTargetRow
-	err := row.Scan(&i.PoolID, &i.Purpose)
+	err := row.Scan(&i.PoolID, &i.Purpose, &i.PoolNamespaceID)
 	return i, err
 }
 
@@ -17692,6 +17695,7 @@ FROM unmanaged_targets AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 JOIN runner_pools AS p ON p.id = t.pool_id
 WHERE n.name = ?1
+  AND p.namespace_id = t.namespace_id
 ORDER BY t.name
 `
 
@@ -17706,7 +17710,8 @@ type ListUnmanagedTargetsRow struct {
 	Enabled     bool
 }
 
-// The targets of a namespace with the name of their pool, ordered by name.
+// The targets of a namespace with the name of their pool, ordered by name. A
+// target whose pool belongs to another namespace gives no row.
 func (q *Queries) ListUnmanagedTargets(ctx context.Context, namespace string) ([]ListUnmanagedTargetsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUnmanagedTargets, namespace)
 	if err != nil {

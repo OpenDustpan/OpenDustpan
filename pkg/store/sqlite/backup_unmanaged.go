@@ -63,7 +63,8 @@ func checkStagedUnmanaged(ctx context.Context, conn *sql.DB) error {
 }
 
 func checkStagedUnmanagedTargets(ctx context.Context, conn *sql.DB) error {
-	const query = `SELECT n.name, t.name, p.name, t.scopes_json, t.command_json, t.every_ms, t.timeout_ms, t.enabled
+	const query = `SELECT n.name, t.name, p.name, t.scopes_json, t.command_json, t.every_ms, t.timeout_ms, t.enabled,
+t.namespace_id, p.namespace_id
 FROM unmanaged_targets AS t
 LEFT JOIN namespaces AS n ON n.id = t.namespace_id
 LEFT JOIN runner_pools AS p ON p.id = t.pool_id`
@@ -81,13 +82,16 @@ LEFT JOIN runner_pools AS p ON p.id = t.pool_id`
 
 	for rows.Next() {
 		var (
-			row  unmanagedstore.TargetRow
-			ns   sql.NullString
-			pool sql.NullString
+			row      unmanagedstore.TargetRow
+			ns       sql.NullString
+			pool     sql.NullString
+			targetNS sql.NullString
+			poolNS   sql.NullString
 		)
 
 		scanErr := rows.Scan(
 			&ns, &row.Name, &pool, &row.ScopesJSON, &row.CommandJSON, &row.EveryMs, &row.TimeoutMs, &row.Enabled,
+			&targetNS, &poolNS,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged sweep targets: %w", backup.ErrExportRead)
@@ -104,6 +108,10 @@ LEFT JOIN runner_pools AS p ON p.id = t.pool_id`
 			return fmt.Errorf("staged sweep target %q has no runner pool: %w", row.Name, backup.ErrCorrupt)
 		}
 
+		if namespaceErr := checkStagedTargetPoolNamespace(row.Name, targetNS, poolNS); namespaceErr != nil {
+			return namespaceErr
+		}
+
 		row.Namespace, row.Pool = ns.String, pool.String
 
 		if _, targetErr := unmanagedstore.Target(namespace.Name(ns.String), row); targetErr != nil {
@@ -113,6 +121,19 @@ LEFT JOIN runner_pools AS p ON p.id = t.pool_id`
 
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("read staged sweep targets: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// checkStagedTargetPoolNamespace returns backup.ErrCorrupt when the pool of a
+// staged target row belongs to another namespace than the row. Defense in
+// depth: the read query joins the pool by namespace too; this check stays so
+// that a damaged row fails the restore and does not wait for a reader.
+func checkStagedTargetPoolNamespace(name string, targetNS, poolNS sql.NullString) error {
+	if !targetNS.Valid || !poolNS.Valid || targetNS.String != poolNS.String {
+		return fmt.Errorf("staged sweep target %q names a runner pool of another namespace: %w",
+			name, backup.ErrCorrupt)
 	}
 
 	return nil

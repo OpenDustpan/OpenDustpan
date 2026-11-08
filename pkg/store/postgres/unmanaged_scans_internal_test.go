@@ -177,3 +177,36 @@ func TestCheckStagedUnmanagedRefusesAMissingPool(t *testing.T) {
 		t.Fatalf("check = %v, want the refusal of a target with no runner pool", err)
 	}
 }
+
+// TestCheckStagedUnmanagedRefusesAForeignPool proves that a staged target
+// whose pool belongs to another namespace is corrupt, so a restore never
+// brings in a target that names the pool of another namespace.
+func TestCheckStagedUnmanagedRefusesAForeignPool(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedUnmanaged(t, s)
+
+	for _, stmt := range []string{
+		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id) ` +
+			`VALUES ('other', 'eu-west', 1, 0, 'ns-other')`,
+		`INSERT INTO runner_pools (id, namespace_id, name, purpose, lease_ms, concurrency, isolation, ` +
+			`git_mode, git_helper, created_at_ms, updated_at_ms) ` +
+			`VALUES ('rpl-other', 'ns-other', 'sweepers', 'sweeps', 90000, 2, '["kubernetes"]', 'forge', '', ` +
+			`1800000000000, 1800000000000)`,
+		`UPDATE unmanaged_targets SET pool_id = 'rpl-other'`,
+	} {
+		if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
+	}
+
+	err := checkStagedUnmanaged(t.Context(), s.pool, currentSchema(t, s))
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), "another namespace") {
+		t.Fatalf("check = %v, want the refusal of a target whose pool is of another namespace", err)
+	}
+}

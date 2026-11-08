@@ -64,8 +64,9 @@ func checkStagedUnmanaged(ctx context.Context, pool pgQuerier, staging string) e
 }
 
 func checkStagedUnmanagedTargets(ctx context.Context, pool pgQuerier, staging string) error {
-	query := "SELECT n.name, t.name, p.name, t.scopes_json, t.command_json, t.every_ms, t.timeout_ms, t.enabled FROM " +
-		stagingTable(staging, "unmanaged_targets") + " AS t LEFT JOIN " + stagingTable(staging, "namespaces") +
+	query := "SELECT n.name, t.name, p.name, t.scopes_json, t.command_json, t.every_ms, t.timeout_ms, t.enabled, " +
+		"t.namespace_id, p.namespace_id FROM " + stagingTable(staging, "unmanaged_targets") +
+		" AS t LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = t.namespace_id LEFT JOIN " + stagingTable(staging, "runner_pools") +
 		" AS p ON p.id = t.pool_id"
 
@@ -78,13 +79,16 @@ func checkStagedUnmanagedTargets(ctx context.Context, pool pgQuerier, staging st
 
 	for rows.Next() {
 		var (
-			row  unmanagedstore.TargetRow
-			ns   *string
-			pool *string
+			row      unmanagedstore.TargetRow
+			ns       *string
+			pool     *string
+			targetNS *string
+			poolNS   *string
 		)
 
 		scanErr := rows.Scan(
 			&ns, &row.Name, &pool, &row.ScopesJSON, &row.CommandJSON, &row.EveryMs, &row.TimeoutMs, &row.Enabled,
+			&targetNS, &poolNS,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged sweep targets: %w", backup.ErrExportRead)
@@ -99,6 +103,14 @@ func checkStagedUnmanagedTargets(ctx context.Context, pool pgQuerier, staging st
 
 		if pool == nil {
 			return fmt.Errorf("staged sweep target %q has no runner pool: %w", row.Name, backup.ErrCorrupt)
+		}
+
+		// Defense in depth: the read query joins the pool by namespace too;
+		// this check stays so that a damaged row fails the restore and does
+		// not wait for a reader.
+		if targetNS == nil || poolNS == nil || *targetNS != *poolNS {
+			return fmt.Errorf("staged sweep target %q names a runner pool of another namespace: %w",
+				row.Name, backup.ErrCorrupt)
 		}
 
 		row.Namespace, row.Pool = *ns, *pool
