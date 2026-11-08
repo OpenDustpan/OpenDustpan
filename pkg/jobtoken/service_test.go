@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // errStoreFailed is the error of a store that fails.
@@ -29,14 +30,16 @@ type fakeStore struct {
 	err      error
 	issueErr error
 	got      jobtoken.Digest
+	entry    audit.Entry
 	issued   []jobtoken.Token
 	issues   int
 }
 
 // Issue implements jobtoken.Store.
-func (f *fakeStore) Issue(_ context.Context, t jobtoken.Token, _ namespace.Fence, _ audit.Entry) error {
+func (f *fakeStore) Issue(_ context.Context, t jobtoken.Token, _ namespace.Fence, e audit.Entry) error {
 	f.issues++
 	f.issued = append(f.issued, t)
+	f.entry = e
 
 	return f.issueErr
 }
@@ -102,7 +105,7 @@ func liveMatch(t *testing.T, d jobtoken.Digest, now time.Time) jobtoken.Match {
 	m.Claim.JobStarterID = "prn-alice"
 	m.Claim.Starter = starter
 	m.Claim.StarterRecordID = "prn-alice"
-	m.Claim.StarterDisabled = false
+	m.Claim.StarterEnabled = true
 
 	return m
 }
@@ -193,6 +196,9 @@ func serviceCases() []serviceCase {
 		denyCase("the job state is unknown", func(m *jobtoken.Match) {
 			m.Claim.JobState = job.State("unknown-state")
 		}),
+		denyCase("the job state is paused-unknown", func(m *jobtoken.Match) {
+			m.Claim.JobState = job.State("paused-unknown")
+		}),
 		denyCase("the job is terminal", func(m *jobtoken.Match) {
 			m.Claim.JobState = job.StateFailed
 		}),
@@ -215,8 +221,11 @@ func serviceCases() []serviceCase {
 			m.Token.CreatedAt = testNow().Add(-time.Hour)
 			m.Token.ExpiresAt = m.Token.CreatedAt.Add(jobtoken.MaxLifetime + time.Millisecond)
 		}),
-		denyCase("the starter is disabled", func(m *jobtoken.Match) {
-			m.Claim.StarterDisabled = true
+		denyCase("the starter is not enabled", func(m *jobtoken.Match) {
+			m.Claim.StarterEnabled = false
+		}),
+		denyCase("the starter has no subject", func(m *jobtoken.Match) {
+			m.Claim.Starter.Subject = ""
 		}),
 		denyCase("the starter is not the job starter", func(m *jobtoken.Match) {
 			m.Token.StarterID = "prn-bob"
@@ -234,8 +243,8 @@ func serviceCases() []serviceCase {
 				m.Claim.StarterRecordID = "prn-bob"
 			},
 		),
-		denyCase("the store returns another digest", func(m *jobtoken.Match) {
-			m.Token.Digest = jobtoken.Digest{}
+		denyCase("the store returns a valid record with another digest", func(m *jobtoken.Match) {
+			m.Token.Digest[0] ^= 1
 		}),
 		denyCase("the token and the claim have an empty starter on both sides", func(m *jobtoken.Match) {
 			m.Token.StarterID = ""
@@ -257,6 +266,9 @@ func serviceCases() []serviceCase {
 			m.Claim.Starter.TokenID = "tok-x"
 			m.Claim.Starter.TemporaryAdministrator = true
 			m.Claim.Starter.TemporaryExpiresAt = testNow().Add(2 * time.Hour)
+		}),
+		allowCase("the starter is an administrator", func(m *jobtoken.Match) {
+			m.Claim.Starter.Admin = true
 		}),
 		unknownCase("the store does not find the digest"),
 		failingCase("the store fails"),
@@ -302,11 +314,12 @@ func runServiceCase(t *testing.T, tc serviceCase, secret jobtoken.Secret, d jobt
 		raw = "not-a-secret"
 	}
 
-	p, err := svc.Authenticate(t.Context(), raw)
+	p, unit, err := svc.Authenticate(t.Context(), raw)
 
 	var result serviceResult
 
 	result.principal = p
+	result.unit = unit
 	result.err = err
 	result.store = &store
 	result.raw = raw
@@ -318,6 +331,7 @@ func runServiceCase(t *testing.T, tc serviceCase, secret jobtoken.Secret, d jobt
 // serviceResult is the answer of one service case.
 type serviceResult struct {
 	principal identity.Principal
+	unit      identity.Object
 	err       error
 	store     *fakeStore
 	raw       string
@@ -331,15 +345,17 @@ func checkServiceResult(t *testing.T, tc serviceCase, r *serviceResult) {
 	case tc.failClosed:
 		checkFailClosed(t, r.err, tc.storeErr)
 		checkZeroPrincipal(t, r.principal)
+		checkZeroObject(t, r.unit)
 	case tc.refusal:
 		checkRefusal(t, r.err, r.raw, &r.match.Token)
 		checkZeroPrincipal(t, r.principal)
+		checkZeroObject(t, r.unit)
 
 		if tc.noStore && !r.store.got.IsZero() {
 			t.Fatal("a value that is not a secret reached the store")
 		}
 	default:
-		checkPrincipal(t, r.principal, r.err, r.match)
+		checkPrincipal(t, r.principal, r.unit, r.err, r.match)
 	}
 }
 
@@ -375,11 +391,27 @@ func checkZeroPrincipal(t *testing.T, p identity.Principal) {
 	}
 }
 
-func checkPrincipal(t *testing.T, p identity.Principal, err error, m *jobtoken.Match) {
+func checkZeroObject(t *testing.T, o identity.Object) {
+	t.Helper()
+
+	var zero identity.Object
+
+	if o != zero {
+		t.Fatal("a refusal returned an object")
+	}
+}
+
+func checkPrincipal(
+	t *testing.T, p identity.Principal, unit identity.Object, err error, m *jobtoken.Match,
+) {
 	t.Helper()
 
 	if err != nil {
 		t.Fatalf("Authenticate = %v", err)
+	}
+
+	if unit != m.Token.Unit || unit.UnitID() == "" {
+		t.Fatalf("unit = %+v, want the unit of the record with its stable unit ID", unit)
 	}
 
 	want := m.Claim.Starter
@@ -387,6 +419,7 @@ func checkPrincipal(t *testing.T, p identity.Principal, err error, m *jobtoken.M
 	want.Credential = identity.CredentialJobToken
 	want.TokenExpiresAt = m.Token.ExpiresAt
 	want.TokenID = ""
+	want.Admin = false
 	want.TemporaryAdministrator = false
 	want.TemporaryExpiresAt = time.Time{}
 
@@ -407,63 +440,137 @@ func checkNoLeak(t *testing.T, err error, secret string, tok *jobtoken.Token) {
 	}
 }
 
-func TestIssueRefusesAnExpiryNotAfterTheIssueTime(t *testing.T) {
+// maxResourceSteps returns two steps of the maximum timeout that each change
+// resources.
+func maxResourceSteps() []job.Step {
+	steps := make([]job.Step, 2)
+	names := []string{"apply-a", "apply-b"}
+
+	for i := range steps {
+		steps[i] = job.Step{
+			Name:             names[i],
+			Role:             job.RoleTool,
+			Phase:            job.PhaseApply,
+			Args:             []string{"tofu", "apply"},
+			Env:              nil,
+			Dir:              "",
+			Timeout:          job.MaxStepTimeout,
+			AllowFailure:     false,
+			ChangesResources: true,
+			Outputs:          nil,
+		}
+	}
+
+	return steps
+}
+
+// issueExpiryCase is one row of the expiry table of Issue.
+type issueExpiryCase struct {
+	name       string
+	mutate     func(*jobtoken.IssueRequest)
+	wantText   string
+	wantIssues int
+}
+
+func TestIssueExpiry(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name     string
-		expiry   time.Time
-		wantText string
-	}{
-		{name: "at the issue time", expiry: testNow(), wantText: "the expiry is not after the issue time"},
-		{
-			name: "before the issue time", expiry: testNow().Add(-time.Millisecond),
-			wantText: "the expiry is not after the issue time",
-		},
-		{
-			name:     "one millisecond after the maximum lifetime",
-			expiry:   testNow().Add(jobtoken.MaxLifetime + time.Millisecond),
-			wantText: "the expiry is above the maximum lifetime",
-		},
-	} {
+	for _, tc := range issueExpiryCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			var store fakeStore
-
-			svc := jobtoken.NewService(&store, testNow)
-			req := issueRequest(t, tc.expiry)
-
-			_, err := svc.Issue(t.Context(), req)
-			if !errors.Is(err, jobtoken.ErrInvalid) {
-				t.Fatalf("Issue = %v, want ErrInvalid", err)
-			}
-
-			if !strings.Contains(err.Error(), tc.wantText) {
-				t.Fatalf("Issue = %v, want the text %q", err, tc.wantText)
-			}
-
-			if store.issues != 0 {
-				t.Fatal("a refused issue reached the store")
-			}
+			runIssueExpiryCase(t, tc)
 		})
 	}
 }
 
-func TestIssueAllowsAnExpiryAtTheMaximumLifetime(t *testing.T) {
-	t.Parallel()
+func issueExpiryCases() []issueExpiryCase {
+	return []issueExpiryCase{
+		{
+			name:       "at the issue time",
+			mutate:     func(req *jobtoken.IssueRequest) { req.ExpiresAt = testNow() },
+			wantText:   "the expiry is not after the issue time",
+			wantIssues: 0,
+		},
+		{
+			name:       "before the issue time",
+			mutate:     func(req *jobtoken.IssueRequest) { req.ExpiresAt = testNow().Add(-time.Millisecond) },
+			wantText:   "the expiry is not after the issue time",
+			wantIssues: 0,
+		},
+		{
+			name: "a job with no steps",
+			mutate: func(req *jobtoken.IssueRequest) {
+				req.Job.Spec.Steps = nil
+				req.ExpiresAt = testNow().Add(30 * time.Minute)
+			},
+			wantText:   "the job has no steps",
+			wantIssues: 0,
+		},
+		{
+			name: "two steps of the maximum timeout and an expiry 30 hours after the issue",
+			mutate: func(req *jobtoken.IssueRequest) {
+				req.Job.Spec.Steps = maxResourceSteps()
+				req.ExpiresAt = testNow().Add(30 * time.Hour)
+			},
+			wantText:   "",
+			wantIssues: 1,
+		},
+		{
+			name: "one millisecond after the deadline of the phase",
+			mutate: func(req *jobtoken.IssueRequest) {
+				req.Job.Spec.Steps = maxResourceSteps()
+				req.ExpiresAt = testNow().Add(
+					runner.LimitsFor(req.Job.Spec.Steps).Deadline + time.Millisecond,
+				)
+			},
+			wantText:   "the expiry is above the deadline of the phase",
+			wantIssues: 0,
+		},
+		{
+			name: "at the deadline of the phase",
+			mutate: func(req *jobtoken.IssueRequest) {
+				req.Job.Spec.Steps = maxResourceSteps()
+				req.ExpiresAt = testNow().Add(runner.LimitsFor(req.Job.Spec.Steps).Deadline)
+			},
+			wantText:   "",
+			wantIssues: 1,
+		},
+	}
+}
+
+func runIssueExpiryCase(t *testing.T, tc issueExpiryCase) {
+	t.Helper()
 
 	var store fakeStore
 
 	svc := jobtoken.NewService(&store, testNow)
-	req := issueRequest(t, testNow().Add(jobtoken.MaxLifetime))
+	req := issueRequest(t, testNow().Add(time.Hour))
+	tc.mutate(req)
 
-	if _, err := svc.Issue(t.Context(), req); err != nil {
-		t.Fatalf("Issue at the maximum lifetime = %v", err)
+	_, err := svc.Issue(t.Context(), req)
+
+	if tc.wantIssues != 0 {
+		if err != nil {
+			t.Fatalf("Issue = %v", err)
+		}
+
+		if store.issues != tc.wantIssues {
+			t.Fatalf("store issues = %d, want %d", store.issues, tc.wantIssues)
+		}
+
+		return
 	}
 
-	if store.issues != 1 {
-		t.Fatalf("store issues = %d, want 1", store.issues)
+	if !errors.Is(err, jobtoken.ErrInvalid) {
+		t.Fatalf("Issue = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), tc.wantText) {
+		t.Fatalf("Issue = %v, want the text %q", err, tc.wantText)
+	}
+
+	if store.issues != 0 {
+		t.Fatal("a refused issue reached the store")
 	}
 }
 
@@ -494,6 +601,33 @@ func TestIssueReturnsASecretAndStoresTheDigest(t *testing.T) {
 
 	if secret.String() != "[job token]" {
 		t.Fatalf("formatted secret = %q, want the redacted text", secret)
+	}
+}
+
+func TestIssueSetsTheEntryTime(t *testing.T) {
+	t.Parallel()
+
+	var store fakeStore
+
+	svc := jobtoken.NewService(&store, testNow)
+	req := issueRequest(t, testNow().Add(time.Hour))
+	req.Entry.At = testNow().Add(-time.Hour)
+	req.Entry.Action = "job:issue"
+
+	if _, err := svc.Issue(t.Context(), req); err != nil {
+		t.Fatalf("Issue = %v", err)
+	}
+
+	if !store.entry.At.Equal(testNow()) {
+		t.Fatalf("entry time = %v, want %v", store.entry.At, testNow())
+	}
+
+	if store.entry.Action != req.Entry.Action {
+		t.Fatalf("entry action = %q, want %q", store.entry.Action, req.Entry.Action)
+	}
+
+	if !req.Entry.At.Equal(testNow().Add(-time.Hour)) {
+		t.Fatal("Issue changed the entry of the request")
 	}
 }
 
@@ -584,6 +718,10 @@ func issueRequest(t *testing.T, expiry time.Time) *jobtoken.IssueRequest {
 
 	j.ID = "job-1"
 	j.Spec.Unit = unit
+	j.Spec.Steps = []job.Step{{
+		Name: "apply", Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{"tofu", "apply"},
+		Env: nil, Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: true, Outputs: nil,
+	}}
 	j.StartedBy = "alice"
 	j.Phases = []job.Phase{{
 		Kind: job.PhaseKind(""), Operation: "op-1", Claims: 0, Executor: "", Steps: nil, StateVersion: "",

@@ -84,7 +84,7 @@ func testRoundTrip(t *testing.T, h Harness) {
 	want := jobtoken.Claim{
 		OperationState: durable.StateRunning, LeaseEndsAt: op.LeaseEnd, JobID: j.ID, JobState: job.StateRunning,
 		JobOperation: op.ID, JobUnitID: unit.UnitID(), JobStarterID: starter.ID, Starter: starter.Principal,
-		StarterRecordID: starter.ID, OperationClaimToken: op.Token, StarterDisabled: false,
+		StarterRecordID: starter.ID, OperationClaimToken: op.Token, StarterEnabled: true,
 	}
 	if m.Claim != want {
 		t.Fatalf("read claim = %+v, want %+v", m.Claim, want)
@@ -150,7 +150,7 @@ func testTakeover(t *testing.T, h Harness) {
 	want := jobtoken.Claim{
 		OperationState: durable.StateRunning, LeaseEndsAt: leaseEnd, JobID: j.ID, JobState: job.StateRunning,
 		JobOperation: op.ID, JobUnitID: unit.UnitID(), JobStarterID: starter.ID, Starter: starter.Principal,
-		StarterRecordID: starter.ID, OperationClaimToken: op.Token + 1, StarterDisabled: false,
+		StarterRecordID: starter.ID, OperationClaimToken: op.Token + 1, StarterEnabled: true,
 	}
 	if m.Claim != want {
 		t.Fatalf("read claim = %+v, want %+v", m.Claim, want)
@@ -336,8 +336,8 @@ func testDisabledStarter(t *testing.T, h Harness) {
 		t.Fatalf("Issue with a disabled starter = %v, want ErrNotLive", err)
 	}
 
-	if m := mustRead(t, h, tok.Digest); !m.Claim.StarterDisabled {
-		t.Fatal("read claim does not mark the disabled starter")
+	if m := mustRead(t, h, tok.Digest); m.Claim.StarterEnabled {
+		t.Fatal("read claim marks a disabled starter as enabled")
 	}
 }
 

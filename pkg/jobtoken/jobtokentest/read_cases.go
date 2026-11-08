@@ -24,12 +24,23 @@ func readCases() []suiteCase {
 			test: testRawStarterAnotherPrincipal,
 		},
 		{name: "read of a raw row whose starter is deleted returns not found", test: testRawMissingStarter},
-		{name: "read of a raw row whose starter is disabled sets the disable flag", test: testRawDisabledStarter},
+		{
+			name: "read of a raw row whose starter is disabled clears the enabled flag",
+			test: testRawDisabledStarter,
+		},
 		{
 			name: "read of a raw row whose namespace differs from its unit returns not found",
 			test: testRawNamespaceMismatch,
 		},
 		{name: "read of a raw row of a queued job gives the queued state", test: testRawQueuedJob},
+		{
+			name: "a token of a namespace that is deleted after the issue is not found",
+			test: testNamespaceDeleted,
+		},
+		{
+			name: "a token of a namespace that is renamed after the issue is not found",
+			test: testNamespaceRenamed,
+		},
 	}
 }
 
@@ -69,7 +80,7 @@ func testRawRestoredRow(t *testing.T, h Harness) {
 	want := jobtoken.Claim{
 		OperationState: op.State, LeaseEndsAt: op.LeaseEnd, JobID: j.ID, JobState: job.StateRunning,
 		JobOperation: op.ID, JobUnitID: unit.UnitID(), JobStarterID: starter.ID, Starter: starter.Principal,
-		StarterRecordID: starter.ID, OperationClaimToken: op.Token, StarterDisabled: false,
+		StarterRecordID: starter.ID, OperationClaimToken: op.Token, StarterEnabled: true,
 	}
 	if m.Claim != want {
 		t.Fatalf("read claim = %+v, want %+v", m.Claim, want)
@@ -196,8 +207,8 @@ func testRawDisabledStarter(t *testing.T, h Harness) {
 	h.Disable(t, starter)
 
 	m := mustRead(t, h, tok.Digest)
-	if !m.Claim.StarterDisabled {
-		t.Fatal("read claim does not mark the disabled starter")
+	if m.Claim.StarterEnabled {
+		t.Fatal("read claim marks a disabled starter as enabled")
 	}
 }
 
@@ -236,5 +247,41 @@ func testRawQueuedJob(t *testing.T, h Harness) {
 	m := mustRead(t, h, tok.Digest)
 	if m.Claim.JobState != job.StateQueued {
 		t.Fatalf("job state = %q, want %q", m.Claim.JobState, job.StateQueued)
+	}
+}
+
+func testNamespaceDeleted(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-deleted-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	mustIssue(t, h, tok, fence)
+	h.DeleteNamespace(t, fence.Namespace)
+
+	if _, err := h.Store.GetByDigest(t.Context(), tok.Digest); !errors.Is(err, jobtoken.ErrNotFound) {
+		t.Fatalf("GetByDigest of a token of a deleted namespace = %v, want ErrNotFound", err)
+	}
+}
+
+func testNamespaceRenamed(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-renamed-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	mustIssue(t, h, tok, fence)
+	h.RenameNamespace(t, fence.Namespace, "gamma")
+
+	if _, err := h.Store.GetByDigest(t.Context(), tok.Digest); !errors.Is(err, jobtoken.ErrNotFound) {
+		t.Fatalf("GetByDigest of a token of a renamed namespace = %v, want ErrNotFound", err)
 	}
 }

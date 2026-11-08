@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // redactedText is what a formatted secret shows.
@@ -228,6 +230,20 @@ func checkDigestBadParse(t *testing.T, _ jobtoken.Secret, _, _ jobtoken.Digest) 
 
 	if _, err := jobtoken.ParseDigest("zz"); !errors.Is(err, jobtoken.ErrInvalid) {
 		t.Fatalf("ParseDigest of a bad value = %v, want ErrInvalid", err)
+	}
+}
+
+func TestMaxLifetime(t *testing.T) {
+	t.Parallel()
+
+	steps := make([]job.Step, job.MaxSteps)
+	for i := range steps {
+		steps[i].Timeout = job.MaxStepTimeout
+		steps[i].ChangesResources = true
+	}
+
+	if got, want := jobtoken.MaxLifetime, runner.LimitsFor(steps).Deadline; got != want {
+		t.Fatalf("MaxLifetime = %v, want the deadline %v of the longest phase", got, want)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 // Service issues job tokens and authenticates them. It reads the live claim
@@ -39,30 +40,40 @@ type IssueRequest struct {
 	Job job.Job
 	// Claim is the live claim of the current operation of the job.
 	Claim durable.Claim
-	// ExpiresAt is the hard expiry: the step timeout plus a grace period.
+	// ExpiresAt is the hard expiry of the token: the deadline that
+	// runner.LimitsFor gives for the steps of the job.
 	ExpiresAt time.Time
 	// Fence is the fence of the namespace of the unit.
 	Fence namespace.Fence
-	// Entry is the audit entry of the issue.
+	// Entry is the audit entry of the issue. Issue copies the entry and sets
+	// its At to the time of the service clock, so the record, the audit entry
+	// and the store check use one time.
 	Entry audit.Entry
 }
 
-// Issue returns a new secret for a job token of the request. It refuses an
-// expiry that is not after the time of the service clock, or that is above
-// MaxLifetime, with ErrInvalid, and it writes nothing. A store error comes
-// back wrapped, so the caller never gets a secret for a failed issue.
+// Issue returns a new secret for a job token of the request. It refuses a
+// request with no steps, an expiry that is not after the time of the service
+// clock, or an expiry after the deadline that runner.LimitsFor gives for the
+// steps, with ErrInvalid, and it writes nothing. It reads the service clock
+// once: the creation time of the record and the At of the audit entry are
+// that time. A store error comes back wrapped, so the caller never gets a
+// secret for a failed issue.
 func (s *Service) Issue(ctx context.Context, req *IssueRequest) (Secret, error) {
 	if req == nil {
 		return Secret{}, fmt.Errorf("%w: missing request", ErrInvalid)
 	}
 
 	now := s.now().UTC()
+	if len(req.Job.Spec.Steps) == 0 {
+		return Secret{}, fmt.Errorf("%w: the job has no steps", ErrInvalid)
+	}
+
 	if !req.ExpiresAt.After(now) {
 		return Secret{}, fmt.Errorf("%w: the expiry is not after the issue time", ErrInvalid)
 	}
 
-	if req.ExpiresAt.After(now.Add(MaxLifetime)) {
-		return Secret{}, fmt.Errorf("%w: the expiry is above the maximum lifetime", ErrInvalid)
+	if req.ExpiresAt.After(now.Add(runner.LimitsFor(req.Job.Spec.Steps).Deadline)) {
+		return Secret{}, fmt.Errorf("%w: the expiry is above the deadline of the phase", ErrInvalid)
 	}
 
 	secret, err := NewSecret()
@@ -101,7 +112,10 @@ func (s *Service) Issue(ctx context.Context, req *IssueRequest) (Secret, error) 
 		return Secret{}, fmt.Errorf("%w: the claim is not the current operation of the job", ErrInvalid)
 	}
 
-	if err := s.store.Issue(ctx, t, req.Fence, req.Entry); err != nil {
+	entry := req.Entry
+	entry.At = now
+
+	if err := s.store.Issue(ctx, t, req.Fence, entry); err != nil {
 		return Secret{}, fmt.Errorf("issue job token: %w", err)
 	}
 
@@ -119,33 +133,44 @@ func currentOperation(j *job.Job) durable.ID {
 }
 
 // Authenticate returns the starter principal of the job token secret, with
-// the job ID set. It returns an error that wraps identity.ErrUnauthenticated
-// for every refusal: a value that is not a secret, an unknown record, a
-// record whose digest differs, a claim or job that is not live, or a starter
-// that is deleted or disabled. The error holds no token text, digest, job ID,
-// unit name or namespace name. A store error other than ErrNotFound comes
-// back wrapped, so the caller never gets a principal with an error.
-func (s *Service) Authenticate(ctx context.Context, secret string) (identity.Principal, error) {
+// the job ID set, and the unit of the job of the token. The caller must limit
+// every action of the principal to that unit. It returns an error that wraps
+// identity.ErrUnauthenticated for every refusal: a value that is not a
+// secret, an unknown record, a record whose digest differs, a claim or job
+// that is not live, or a starter that is deleted or disabled. On every
+// refusal and every error it returns the zero principal and the zero object.
+// The error holds no token text, digest, job ID, unit name or namespace name.
+// A store error other than ErrNotFound comes back wrapped, so the caller
+// never gets a principal with an error.
+func (s *Service) Authenticate(
+	ctx context.Context, secret string,
+) (identity.Principal, identity.Object, error) {
 	if !LooksLikeSecret(secret) {
-		return identity.Principal{}, fmt.Errorf("%w: job token format", identity.ErrUnauthenticated)
+		return identity.Principal{}, identity.Object{}, fmt.Errorf(
+			"%w: job token format", identity.ErrUnauthenticated,
+		)
 	}
 
 	d := digestOfRaw(secret)
 
 	m, err := s.store.GetByDigest(ctx, d)
 	if errors.Is(err, ErrNotFound) {
-		return identity.Principal{}, fmt.Errorf("%w: job token not found", identity.ErrUnauthenticated)
+		return identity.Principal{}, identity.Object{}, fmt.Errorf(
+			"%w: job token not found", identity.ErrUnauthenticated,
+		)
 	}
 
 	if err != nil {
-		return identity.Principal{}, fmt.Errorf("authenticate job token: %w", err)
+		return identity.Principal{}, identity.Object{}, fmt.Errorf("authenticate job token: %w", err)
 	}
 
 	// Defense in depth: the store keeps only the digest and answers a lookup
 	// by it. This check stays so that an adapter that returns another record
 	// cannot authenticate a secret against the wrong row.
 	if !m.Token.Digest.Equal(d) {
-		return identity.Principal{}, fmt.Errorf("%w: job token digest differs", identity.ErrUnauthenticated)
+		return identity.Principal{}, identity.Object{}, fmt.Errorf(
+			"%w: job token digest differs", identity.ErrUnauthenticated,
+		)
 	}
 
 	// Defense in depth: Store.Issue validates the token record before it
@@ -153,13 +178,23 @@ func (s *Service) Authenticate(ctx context.Context, secret string) (identity.Pri
 	// empty fields, or with a far expiry, cannot authenticate. Service.Issue
 	// refuses such an expiry at the issue.
 	if err := m.Token.Validate(); err != nil {
-		return identity.Principal{}, fmt.Errorf(
+		return identity.Principal{}, identity.Object{}, fmt.Errorf(
 			"%w: the job token record is not valid: %w", identity.ErrUnauthenticated, err,
 		)
 	}
 
 	if err := live(&m, s.now()); err != nil {
-		return identity.Principal{}, err
+		return identity.Principal{}, identity.Object{}, err
+	}
+
+	// Defense in depth: Store.GetByDigest reads the starter principal by the
+	// ID of the row and refuses a deleted principal. This check stays so that
+	// an adapter that returns a starter record with no subject cannot
+	// authenticate a principal with no identity.
+	if m.Claim.Starter.Subject == "" {
+		return identity.Principal{}, identity.Object{}, fmt.Errorf(
+			"%w: the starter has no subject", identity.ErrUnauthenticated,
+		)
 	}
 
 	p := m.Claim.Starter
@@ -167,13 +202,14 @@ func (s *Service) Authenticate(ctx context.Context, secret string) (identity.Pri
 	p.Credential = identity.CredentialJobToken
 	p.TokenExpiresAt = m.Token.ExpiresAt
 
-	// A job token never carries the token ID of another credential or a
-	// temporary elevation.
+	// A job token never carries the token ID of another credential, an
+	// administrator flag or a temporary elevation.
 	p.TokenID = ""
+	p.Admin = false
 	p.TemporaryAdministrator = false
 	p.TemporaryExpiresAt = time.Time{}
 
-	return p, nil
+	return p, m.Token.Unit, nil
 }
 
 // live returns an error that wraps identity.ErrUnauthenticated when the claim
@@ -232,13 +268,15 @@ func live(m *Match, now time.Time) error {
 		return fmt.Errorf("%w: the job token expired", identity.ErrUnauthenticated)
 	}
 
-	// Check 8: the starter principal is not disabled. Defense in depth: the
-	// store returns ErrNotFound for a deleted starter and reads the disable
-	// flag in the same lookup. This check stays so that a record of another
-	// version, or a new caller that skips the store check, cannot
+	// Check 8: the starter principal is enabled. Defense in depth: the store
+	// returns ErrNotFound for a deleted starter and reads the enabled flag in
+	// the same lookup. The flag is true only when the store read the starter
+	// and the starter is not disabled, so a false value refuses. This check
+	// stays so that a record of another version, a new caller that skips the
+	// store check, or an adapter that does not read the flag cannot
 	// authenticate.
-	if m.Claim.StarterDisabled {
-		return fmt.Errorf("%w: the starter is disabled", identity.ErrUnauthenticated)
+	if !m.Claim.StarterEnabled {
+		return fmt.Errorf("%w: the starter is not enabled", identity.ErrUnauthenticated)
 	}
 
 	// Check 9: the starter of the record is the principal that started the

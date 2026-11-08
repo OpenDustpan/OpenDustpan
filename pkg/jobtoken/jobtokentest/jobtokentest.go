@@ -41,6 +41,14 @@ type Harness struct {
 
 	// Namespace makes the namespace called name and returns its fence.
 	Namespace func(t *testing.T, name string) namespace.Fence
+	// DeleteNamespace deletes the namespace ns. A read of a token of the
+	// namespace returns ErrNotFound.
+	DeleteNamespace func(t *testing.T, ns namespace.Name)
+	// RenameNamespace changes the name of the namespace ns to newName. The
+	// stable ID of the namespace stays. A read of a token of the namespace
+	// returns ErrNotFound when the current name differs from the namespace of
+	// the unit of the record.
+	RenameNamespace func(t *testing.T, ns namespace.Name, newName string)
 	// Unit makes the unit of the tool called name in the namespace ns, and
 	// returns its reference with the stable unit ID set.
 	Unit func(t *testing.T, ns, tool, name string) identity.Object
@@ -130,7 +138,7 @@ const (
 	// oneMillisecond is one millisecond.
 	oneMillisecond = time.Millisecond
 	// caseCount is the number of cases of the suite.
-	caseCount = 35
+	caseCount = 37
 )
 
 // issueTime returns the time of the cases.

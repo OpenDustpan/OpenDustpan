@@ -31,16 +31,17 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
-// MaxLifetime is the largest time from the issue of a job token to its hard
-// expiry: the longest step timeout plus the longest grace period. A valid
-// token never lives longer than the longest step timeout plus the longest
-// grace period.
-const MaxLifetime = job.MaxStepTimeout + runner.GraceChanges
+// MaxLifetime is the deadline that runner.LimitsFor gives for the longest
+// phase that job.ValidateSteps accepts: job.MaxSteps steps, each with
+// job.MaxStepTimeout and the grace period of a step that changes resources.
+// Token.Validate uses it as the backstop at read time. The live checks of the
+// claim and the lease end a token earlier.
+const MaxLifetime = runner.StartAllowance + job.MaxSteps*(job.MaxStepTimeout+runner.GraceChanges) + runner.ReportTime
 
 // Sentinel errors returned by this package and by Store implementations.
 var (
 	// ErrInvalid reports a token with a missing or bad field, an expiry that
-	// is not after the issue time or is above the maximum lifetime, or a
+	// is not after the issue time or is above the deadline of the phase, or a
 	// starter that is not the principal that started the job.
 	ErrInvalid = errors.New("invalid job token")
 	// ErrNotFound reports a record, a job, a claim operation or a starter
@@ -253,12 +254,13 @@ func (t Token) validateTimes() error {
 // record: the state of the durable operation, its claim token, the end of its
 // lease, the ID of the job, the state of the job, the current operation of the
 // job, the unit ID of the job, the principal that started the job, the starter
-// principal and whether the starter is disabled. JobID is the ID of the job
+// principal and whether the starter is enabled. JobID is the ID of the job
 // that the store read. JobStarterID is the ID of the principal that the store
 // resolved from the subject in job.StartedBy; a subject with no principal
 // gives ErrNotFound. Starter is the principal record of Token.StarterID,
 // with the fields that a request carries. StarterRecordID is the ID of that
-// principal record.
+// principal record. StarterEnabled is true only when the store read the
+// starter and the starter is not disabled.
 type Claim struct {
 	OperationState      durable.State
 	LeaseEndsAt         time.Time
@@ -270,7 +272,7 @@ type Claim struct {
 	Starter             identity.Principal
 	StarterRecordID     string
 	OperationClaimToken int64
-	StarterDisabled     bool
+	StarterEnabled      bool
 }
 
 // Match is the answer of a lookup by digest: the token record and the claim

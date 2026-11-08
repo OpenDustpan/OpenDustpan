@@ -47,18 +47,34 @@ type memClaim struct {
 	leaseEnd time.Time
 }
 
+// memNamespace is one namespace in memory: its stable ID and its current
+// name.
+type memNamespace struct {
+	id   string
+	name namespace.Name
+}
+
+// memToken is one token row in memory. It keeps the namespace by its stable
+// ID, as an adapter keeps a foreign key.
+type memToken struct {
+	token       jobtoken.Token
+	namespaceID string
+}
+
 // memWorld is a jobtoken.Store in memory. It proves that the cases hold for
 // a correct adapter.
 type memWorld struct {
 	mu         sync.Mutex
 	fences     map[namespace.Name]int64
+	namespaces map[string]*memNamespace
+	nsByName   map[namespace.Name]string
 	units      map[string]identity.Object
 	principals map[string]*memPrincipal
 	// bySubject maps the subject of a principal to the ID of its record.
 	bySubject map[string]string
 	jobs      map[job.ID]*job.Job
 	claims    map[durable.ID]*memClaim
-	tokens    map[jobtoken.Digest]jobtoken.Token
+	tokens    map[jobtoken.Digest]memToken
 	audit     map[namespace.Name][]audit.Entry
 }
 
@@ -68,12 +84,14 @@ func newMemWorld() *memWorld {
 	return &memWorld{
 		mu:         sync.Mutex{},
 		fences:     map[namespace.Name]int64{},
+		namespaces: map[string]*memNamespace{},
+		nsByName:   map[namespace.Name]string{},
 		units:      map[string]identity.Object{},
 		principals: map[string]*memPrincipal{},
 		bySubject:  map[string]string{},
 		jobs:       map[job.ID]*job.Job{},
 		claims:     map[durable.ID]*memClaim{},
-		tokens:     map[jobtoken.Digest]jobtoken.Token{},
+		tokens:     map[jobtoken.Digest]memToken{},
 		audit:      map[namespace.Name][]audit.Entry{},
 	}
 }
@@ -101,12 +119,18 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 
 	var mch jobtoken.Match
 
-	tok, ok := m.tokens[d]
+	row, ok := m.tokens[d]
 	if !ok {
 		return mch, jobtoken.ErrNotFound
 	}
 
-	if tok.Namespace != tok.Unit.Namespace() {
+	ns, ok := m.namespaces[row.namespaceID]
+	if !ok {
+		return mch, jobtoken.ErrNotFound
+	}
+
+	tok := row.token
+	if ns.name != tok.Unit.Namespace() {
 		return mch, jobtoken.ErrNotFound
 	}
 
@@ -142,14 +166,15 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 	mch.Claim.JobStarterID = jobStarterID
 	mch.Claim.Starter = starter.principal
 	mch.Claim.StarterRecordID = starter.id
-	mch.Claim.StarterDisabled = starter.disabled
+	mch.Claim.StarterEnabled = !starter.disabled
 
 	return mch, nil
 }
 
 // issueLocked writes tok and its audit entry. The caller holds the lock.
 func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audit.Entry) error {
-	if fence.Namespace != tok.Namespace || fence.FailoverVersion != m.fences[tok.Namespace] {
+	namespaceID, current := m.namespaceOf(tok.Namespace, fence)
+	if !current {
 		return namespace.ErrFenced
 	}
 
@@ -184,10 +209,23 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return err
 	}
 
-	m.tokens[tok.Digest] = tok
+	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: namespaceID}
 	m.audit[tok.Namespace] = append(m.audit[tok.Namespace], e)
 
 	return nil
+}
+
+// namespaceOf returns the stable ID of the namespace ns when the fence is
+// current. The second result is false when the fence is stale, names another
+// namespace, or names no namespace.
+func (m *memWorld) namespaceOf(ns namespace.Name, fence namespace.Fence) (string, bool) {
+	if fence.Namespace != ns || fence.FailoverVersion != m.fences[ns] {
+		return "", false
+	}
+
+	id, ok := m.nsByName[ns]
+
+	return id, ok
 }
 
 // checkEntry refuses an audit entry that fails validation or that names
@@ -229,22 +267,24 @@ func currentOperation(j *job.Job) durable.ID {
 
 func (m *memWorld) harness() jobtokentest.Harness {
 	return jobtokentest.Harness{
-		Store:        m,
-		Namespace:    m.makeNamespace,
-		Unit:         m.makeUnit,
-		Principal:    m.makePrincipal,
-		Disable:      m.disable,
-		Delete:       m.deletePrincipal,
-		Rename:       m.rename,
-		Job:          m.makeJob,
-		Takeover:     m.takeover,
-		SetJobState:  m.setJobState,
-		EndClaim:     m.endClaim,
-		ReleaseClaim: m.releaseClaim,
-		EndJob:       m.endJob,
-		MoveJob:      m.moveJob,
-		WriteRaw:     m.writeRaw,
-		Audit:        m.entries,
+		Store:           m,
+		Namespace:       m.makeNamespace,
+		DeleteNamespace: m.deleteNamespace,
+		RenameNamespace: m.renameNamespace,
+		Unit:            m.makeUnit,
+		Principal:       m.makePrincipal,
+		Disable:         m.disable,
+		Delete:          m.deletePrincipal,
+		Rename:          m.rename,
+		Job:             m.makeJob,
+		Takeover:        m.takeover,
+		SetJobState:     m.setJobState,
+		EndClaim:        m.endClaim,
+		ReleaseClaim:    m.releaseClaim,
+		EndJob:          m.endJob,
+		MoveJob:         m.moveJob,
+		WriteRaw:        m.writeRaw,
+		Audit:           m.entries,
 	}
 }
 
@@ -260,11 +300,75 @@ func (m *memWorld) makeNamespace(t *testing.T, name string) namespace.Fence {
 	defer m.mu.Unlock()
 
 	if _, ok := m.fences[ns]; !ok {
+		id := ident.NewID("ns-")
 		m.fences[ns] = memFence
+		m.namespaces[id] = &memNamespace{id: id, name: ns}
+		m.nsByName[ns] = id
 		m.audit[ns] = nil
 	}
 
 	return namespace.Fence{Namespace: ns, FailoverVersion: memFence}
+}
+
+// deleteNamespace deletes the namespace ns and its fence.
+func (m *memWorld) deleteNamespace(t *testing.T, ns namespace.Name) {
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id, ok := m.nsByName[ns]
+	if !ok {
+		t.Fatalf("namespace %s does not exist", ns)
+	}
+
+	delete(m.nsByName, ns)
+	delete(m.namespaces, id)
+	delete(m.fences, ns)
+	delete(m.audit, ns)
+}
+
+// renameNamespace changes the name of namespace ns to newName. The stable ID
+// of the namespace stays.
+func (m *memWorld) renameNamespace(t *testing.T, ns namespace.Name, newName string) {
+	t.Helper()
+
+	renamed, err := namespace.ParseName(newName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id, ok := m.nsByName[ns]
+	if !ok {
+		t.Fatalf("namespace %s does not exist", ns)
+	}
+
+	if _, ok := m.nsByName[renamed]; ok {
+		t.Fatalf("namespace %s already exists", renamed)
+	}
+
+	record, found := m.namespaces[id]
+	if !found || record == nil {
+		t.Fatalf("namespace %s has no record", ns)
+	}
+
+	record.name = renamed
+
+	delete(m.nsByName, ns)
+	m.nsByName[renamed] = id
+
+	if version, ok := m.fences[ns]; ok {
+		delete(m.fences, ns)
+		m.fences[renamed] = version
+	}
+
+	if entries, ok := m.audit[ns]; ok {
+		delete(m.audit, ns)
+		m.audit[renamed] = entries
+	}
 }
 
 func (m *memWorld) makeUnit(t *testing.T, nsName, tool, name string) identity.Object {
@@ -484,7 +588,7 @@ func (m *memWorld) writeRaw(t *testing.T, tok jobtoken.Token) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.tokens[tok.Digest] = tok
+	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: m.nsByName[tok.Namespace]}
 }
 
 func (m *memWorld) entries(t *testing.T, ns namespace.Name) []audit.Entry {
@@ -719,6 +823,10 @@ func issueRequest(
 	req.StarterID = starter.ID
 	req.StarterSubject = starter.Principal.Subject
 	req.Job = f.job
+	req.Job.Spec.Steps = []job.Step{{
+		Name: "apply", Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{"tofu", "apply"},
+		Env: nil, Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: true, Outputs: nil,
+	}}
 	req.Claim = claim
 	req.ExpiresAt = memExpiry()
 	req.Fence = f.fence
@@ -732,12 +840,18 @@ func issueRequest(
 func wantUnauthenticated(t *testing.T, svc *jobtoken.Service, secret string, tok jobtoken.Token) {
 	t.Helper()
 
-	p, err := svc.Authenticate(t.Context(), secret)
+	p, unit, err := svc.Authenticate(t.Context(), secret)
 
 	var zero identity.Principal
 
 	if p != zero {
 		t.Fatal("Authenticate returned a principal with an error")
+	}
+
+	var zeroObject identity.Object
+
+	if unit != zeroObject {
+		t.Fatal("Authenticate returned an object with an error")
 	}
 
 	if !errors.Is(err, identity.ErrUnauthenticated) {
