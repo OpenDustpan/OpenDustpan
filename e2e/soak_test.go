@@ -48,8 +48,8 @@ type soakCounters struct {
 	failures atomic.Int64
 }
 
-// soakTools holds one installed CLI per tool: the first label of each
-// matrix, so E2E_PULUMI_VERSIONS and E2E_TOFU_VERSIONS select them.
+// soakTools holds one installed CLI per tool: the version that Single
+// returns, so E2E_PULUMI_VERSIONS and E2E_TOFU_VERSIONS select them.
 type soakTools struct {
 	pulumi e2e.Install
 	tofu   e2e.Install
@@ -170,12 +170,12 @@ func soakInstallTools(ctx context.Context, t *testing.T, cfg soakConfig) soakToo
 	fetcher := sharedFetcher(t)
 
 	pulumiTool := e2e.Pulumi()
-	pulumiVersions := pulumiTool.Versions()
-	if len(pulumiVersions) == 0 {
+	pulumiVersion := pulumiTool.Single()
+	if pulumiVersion == "" {
 		t.Fatalf("empty %s %q: want at least one version", "E2E_PULUMI_VERSIONS", os.Getenv("E2E_PULUMI_VERSIONS"))
 	}
 
-	pulumi, err := fetcher.Install(ctx, pulumiTool, pulumiVersions[0])
+	pulumi, err := fetcher.Install(ctx, pulumiTool, pulumiVersion)
 	if err != nil {
 		t.Fatalf("install pulumi: %v", err)
 	}
@@ -186,12 +186,12 @@ func soakInstallTools(ctx context.Context, t *testing.T, cfg soakConfig) soakToo
 
 	if cfg.tofu > 0 && runtime.GOOS == "linux" {
 		tofuTool := e2e.OpenTofu()
-		tofuVersions := tofuTool.Versions()
-		if len(tofuVersions) == 0 {
+		tofuVersion := tofuTool.Single()
+		if tofuVersion == "" {
 			t.Fatalf("empty %s %q: want at least one version", "E2E_TOFU_VERSIONS", os.Getenv("E2E_TOFU_VERSIONS"))
 		}
 
-		tools.tofu, err = fetcher.Install(ctx, tofuTool, tofuVersions[0])
+		tools.tofu, err = fetcher.Install(ctx, tofuTool, tofuVersion)
 		if err != nil {
 			t.Fatalf("install opentofu: %v", err)
 		}

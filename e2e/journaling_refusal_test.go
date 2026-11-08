@@ -31,15 +31,15 @@ func TestPulumiJournalRefusalCancel(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	pulumiVersions := e2e.Pulumi().Versions()
-	if len(pulumiVersions) == 0 {
+	pulumiVersion := e2e.Pulumi().Single()
+	if pulumiVersion == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runPulumiJournalRefusalCancel(t, fetcher, pulumiVersions[0], db)
+			runPulumiJournalRefusalCancel(t, fetcher, pulumiVersion, db)
 		})
 	}
 }

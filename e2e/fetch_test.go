@@ -344,6 +344,200 @@ func TestFetchRejectsBadVersions(t *testing.T) {
 	}
 }
 
+func TestFetchPinnedVersionFailsClosed(t *testing.T) {
+	tofu := e2e.OpenTofu()
+	pulumi := e2e.Pulumi()
+
+	cases := []struct {
+		name      string
+		tool      e2e.Tool
+		env       string
+		versions  string
+		label     string
+		checksums string
+	}{
+		{
+			name:      "opentofu default",
+			tool:      tofu,
+			env:       "E2E_TOFU_VERSIONS",
+			versions:  "",
+			label:     tofu.Single(),
+			checksums: "tofu_" + tofu.Single() + "_SHA256SUMS",
+		},
+		{
+			name:      "pulumi journal version",
+			tool:      pulumi,
+			env:       "E2E_PULUMI_VERSIONS",
+			versions:  "3.268.0",
+			label:     "3.268.0",
+			checksums: "pulumi-3.268.0-checksums.txt",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.versions)
+
+			checkPinnedFailsClosed(t, tc.tool, tc.label, tc.checksums)
+		})
+	}
+}
+
+// checkPinnedFailsClosed installs label, whose sum is pinned, against a fake
+// server whose archive has another sum. It checks that Install fails closed and
+// requests neither the checksum file nor the latest version.
+func checkPinnedFailsClosed(t *testing.T, tool e2e.Tool, label, checksumFile string) {
+	t.Helper()
+
+	name, err := tool.ArchiveName(label)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	archive := validArchive(t)
+
+	var checksums, latest atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, werr := w.Write(archive); werr != nil {
+			t.Errorf("serve archive: %v", werr)
+		}
+	})
+	mux.HandleFunc("/"+checksumFile, func(w http.ResponseWriter, _ *http.Request) {
+		checksums.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		latest.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	_, err = fetcher.Install(t.Context(), tool, label)
+	if !errors.Is(err, e2e.ErrChecksumMismatch) {
+		t.Fatalf("install pinned %s: got error %v, want ErrChecksumMismatch", label, err)
+	}
+
+	entries, readErr := os.ReadDir(fetcher.CacheDir)
+	if readErr != nil {
+		t.Fatalf("read cache: %v", readErr)
+	}
+
+	// The lock file of the entry stays; nothing else may.
+	for _, entry := range entries {
+		if entry.Name() != name+".lock" {
+			t.Errorf("cache holds %q after a rejected download, want only the lock file", entry.Name())
+		}
+	}
+
+	if got := checksums.Load(); got != 0 {
+		t.Errorf("checksum file requested %d times, want 0", got)
+	}
+
+	if got := latest.Load(); got != 0 {
+		t.Errorf("latest version requested %d times, want 0", got)
+	}
+}
+
+// errUnexpectedRequest fails every request of countingErrorTransport.
+var errUnexpectedRequest = errors.New("unexpected network request")
+
+// countingErrorTransport fails every request and counts it.
+type countingErrorTransport struct {
+	requests atomic.Int32
+}
+
+func (t *countingErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.requests.Add(1)
+
+	return nil, errUnexpectedRequest
+}
+
+func TestFetchRefusesUnpinnedWithoutMatrix(t *testing.T) {
+	tool := e2e.OpenTofu()
+
+	if _, err := tool.ArchiveName(fakeVersion); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	cases := []struct {
+		name         string
+		versions     string
+		label        string
+		wantUnpinned bool
+		wantRequests bool
+	}{
+		{
+			name:         "latest without variable",
+			versions:     "",
+			label:        e2e.Latest,
+			wantUnpinned: true,
+			wantRequests: false,
+		},
+		{
+			name:         "unpinned version without variable",
+			versions:     "",
+			label:        fakeVersion,
+			wantUnpinned: true,
+			wantRequests: false,
+		},
+		{
+			name:         "latest with variable",
+			versions:     e2e.Latest,
+			label:        e2e.Latest,
+			wantUnpinned: false,
+			wantRequests: true,
+		},
+		{
+			name:         "unpinned version with variable",
+			versions:     fakeVersion,
+			label:        fakeVersion,
+			wantUnpinned: false,
+			wantRequests: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("E2E_TOFU_VERSIONS", tc.versions)
+
+			transport := new(countingErrorTransport)
+			fetcher := &e2e.Fetcher{
+				Client:   &http.Client{Transport: transport},
+				CacheDir: filepath.Join(t.TempDir(), "cache"),
+			}
+
+			_, err := fetcher.Install(t.Context(), tool, tc.label)
+
+			if got := errors.Is(err, e2e.ErrUnpinnedFetch); got != tc.wantUnpinned {
+				t.Fatalf(
+					"Install(%q) with E2E_TOFU_VERSIONS=%q error = %v, want ErrUnpinnedFetch %t",
+					tc.label,
+					tc.versions,
+					err,
+					tc.wantUnpinned,
+				)
+			}
+
+			requests := transport.requests.Load()
+			if tc.wantRequests && requests == 0 {
+				t.Errorf("Install(%q) made no request, want at least one", tc.label)
+			}
+
+			if !tc.wantRequests && requests != 0 {
+				t.Errorf("Install(%q) made %d requests, want none", tc.label, requests)
+			}
+		})
+	}
+}
+
 func TestFetchRejectsUnsafeArchives(t *testing.T) {
 	t.Parallel()
 

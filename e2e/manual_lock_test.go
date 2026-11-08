@@ -283,17 +283,17 @@ func newLockE2E(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) lockE2E {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	defer cancel()
 
-	pulumiVersions, tofuVersions := e2e.Pulumi().Versions(), e2e.OpenTofu().Versions()
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	pulumiVersion, tofuVersion := e2e.Pulumi().Single(), e2e.OpenTofu().Single()
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersion)
 	if err != nil {
 		t.Fatalf("install pulumi: %v", err)
 	}
 
-	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
 		t.Fatalf("install tofu: %v", err)
 	}

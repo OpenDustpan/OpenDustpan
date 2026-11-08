@@ -66,6 +66,10 @@ func wantPublicStatus(route apiserver.Route) int {
 		return http.StatusFound
 	case "/api/dustpan/v1/sign-in/dev-code":
 		return http.StatusForbidden
+	case "/api/dustpan/v1/sign-in/password":
+		// The request has no JSON media type, so the check against login
+		// CSRF refuses it with the answer of a failed sign-in.
+		return http.StatusUnauthorized
 	case "/api/dustpan/v1/capabilities", "/api/dustpan/v1/openapi.json":
 		return http.StatusOK
 	}
@@ -511,9 +515,12 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		Principals: st,
 		Freshness:  nil,
 		Authorizer: allowAll{},
-		Logger:     nil,
-		Now:        nil,
-		NewID:      nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Logger: nil,
+		Now:    nil,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -628,8 +635,12 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: nil, NewID: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -709,7 +720,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := st.CreateGroup(ctx, group, storetest.ServerChange(at, "group:"+testGroupID)); err != nil {
 		t.Fatalf("seed group: %v", err)
@@ -728,7 +739,8 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: allowAllGuard{}, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: st, Tokens: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -1985,7 +1997,7 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 
 	principals, err := principal.NewService(principal.Config{
 		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil, Now: nil,
-		NewID: nil,
+		NewID: nil, GroupReach: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

@@ -47,10 +47,6 @@ const (
 	channelHeader = "Dustpan-Channel"
 	// idempotencyHeader is the header of the key of an idempotent write.
 	idempotencyHeader = "Idempotency-Key"
-
-	// reservedKeyPrefix starts the idempotency keys that the server makes for
-	// its own drift checks. A client key does not start with it.
-	reservedKeyPrefix = "drift-"
 )
 
 // Config holds the dependencies of a Handler. Sessions checks the console

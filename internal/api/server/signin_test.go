@@ -1154,7 +1154,8 @@ func TestSignInProviderDown(t *testing.T) {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: allowAllGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: nil, Tokens: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)
@@ -1631,8 +1632,12 @@ func newSignInAccess(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: clock.Now, NewID: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -1660,7 +1665,7 @@ func TestSignInJoinsNoGroup(t *testing.T) {
 	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
 		g := principal.Group{
 			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
 			t.Fatalf("create group %s: %v", name, err)

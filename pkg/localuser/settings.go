@@ -44,7 +44,7 @@ func SettingDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingEnabled, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",
-			Secret: false, Database: true, Apply: setting.ApplyLive, Check: checkEnabled,
+			Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive, Check: checkEnabled,
 			// A change to "true" or back to the configuration can turn the
 			// password sign-in on next to an identity provider. Each such
 			// change needs a fresh authentication.
@@ -54,21 +54,23 @@ func SettingDeclarations() []setting.Declaration {
 		},
 		{
 			Key: SettingMinLength, Level: setting.LevelInstallation, Kind: setting.KindInt,
-			Default: strconv.Itoa(DefaultMinLength), Secret: false, Database: true, Apply: setting.ApplyLive,
+			Default: strconv.Itoa(DefaultMinLength), Secret: false, Database: true, StaticCredentialHost: false,
+			Apply: setting.ApplyLive,
 			Check: checkMinLength, ReducesSecurity: func(old, next string) bool { return atoi(next) < atoi(old) },
 			Doc: fmt.Sprintf("The minimum length of a new password, in characters: %d to %d.",
 				MinLengthFloor, MinLengthCeiling),
 		},
 		{
 			Key: SettingRequireLettersAndDigits, Level: setting.LevelInstallation, Kind: setting.KindBool,
-			Default: textFalse, Secret: false, Database: true, Apply: setting.ApplyLive, Check: nil,
+			Default: textFalse, Secret: false, Database: true, StaticCredentialHost: false,
+			Apply: setting.ApplyLive, Check: nil,
 			ReducesSecurity: func(old, next string) bool { return old == textTrue && next != textTrue },
 			Doc:             "Each new password holds at least one letter and one digit.",
 		},
 		{
 			Key: SettingResetLifetime, Level: setting.LevelInstallation, Kind: setting.KindString,
-			Default: DefaultResetLifetime.String(), Secret: false, Database: true, Apply: setting.ApplyLive,
-			Check: checkResetLifetime,
+			Default: DefaultResetLifetime.String(), Secret: false, Database: true, StaticCredentialHost: false,
+			Apply: setting.ApplyLive, Check: checkResetLifetime,
 			ReducesSecurity: func(old, next string) bool {
 				o, oErr := time.ParseDuration(old)
 				n, nErr := time.ParseDuration(next)

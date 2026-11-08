@@ -18,6 +18,7 @@ package cedargo
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -115,6 +116,19 @@ func (e *Engine) Check(ctx context.Context, schema gate.Schema, policies []gate.
 	}
 
 	return diags, nil
+}
+
+// CheckLimitMembership implements gate.Engine.
+func (e *Engine) CheckLimitMembership(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("check the membership of an access limit: %w", err)
+	}
+
+	if _, err := LimitGroupDirections(text); errors.Is(err, gate.ErrLimitMembership) {
+		return err
+	}
+
+	return nil
 }
 
 // Evaluate implements gate.Engine.

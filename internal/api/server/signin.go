@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -54,15 +55,16 @@ const defaultReturnPath = "/"
 
 // Errors of the sign-in routes.
 var (
-	errUnknownProvider = errors.New("unknown sign-in provider")
-	errProviderDown    = errors.New("identity provider is not available: try again later")
-	errReturnPath      = errors.New("return path is not a path of this server")
-	errSignInFailed    = errors.New("sign-in failed: start the sign-in again")
-	errSignInRefused   = errcode.Refusal(errcode.SignInRefused, "sign-in refused")
-	errNoSession       = errors.New("the request has no console session")
-	errCSRF            = sessionauth.ErrCSRF
-	errOtherSite       = sessionauth.ErrOtherSite
-	errFreshParam      = errors.New(`the query parameter fresh must be "1" or absent`)
+	errUnknownProvider        = errors.New("unknown sign-in provider")
+	errProviderDown           = errors.New("identity provider is not available: try again later")
+	errReturnPath             = errors.New("return path is not a path of this server")
+	errSignInFailed           = errors.New("sign-in failed: start the sign-in again")
+	errRemovalAlertUnrecorded = errors.New("the removal alert and its audit entry could not be written")
+	errSignInRefused          = errcode.Refusal(errcode.SignInRefused, "sign-in refused")
+	errNoSession              = errors.New("the request has no console session")
+	errCSRF                   = sessionauth.ErrCSRF
+	errOtherSite              = sessionauth.ErrOtherSite
+	errFreshParam             = errors.New(`the query parameter fresh must be "1" or absent`)
 )
 
 // SignInLimiter is the per-address limit of the sign-in routes. It has its
@@ -260,19 +262,19 @@ func (h *Handler) signInRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: signInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.startSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.startSignIn,
 		},
 		{
 			Method: http.MethodGet, Path: callbackPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.finishSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.finishSignIn,
 		},
 		{
 			Method: http.MethodGet, Path: sessionPath, Scope: ScopeAuthorized, Actions: self, Resolve: resolveCaller,
-			ActionsFor: nil, Serve: h.readSession,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.readSession,
 		},
 		{
 			Method: http.MethodPost, Path: signOutPath, Scope: ScopeAuthorized, Actions: self, Resolve: resolveCaller,
-			ActionsFor: nil, Serve: h.signOut,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.signOut,
 		},
 	}
 }
@@ -712,7 +714,11 @@ func classifySignIn(err error) (failure, bool) {
 		return fail(http.StatusBadRequest, errReturnPath.Error()), true
 	case errors.Is(err, errSignInFailed):
 		return fail(http.StatusBadRequest, errSignInFailed.Error()), true
-	case errors.Is(err, errNoSession):
+	case errors.Is(err, signinsvc.ErrRemovalAlertUnrecorded):
+		return failCoded(
+			http.StatusServiceUnavailable, errRemovalAlertUnrecorded.Error(), errcode.PrincipalRemovalAlertUnrecorded,
+		), true
+	case errors.Is(err, errNoSession), errors.Is(err, session.ErrEnded):
 		return fail(http.StatusNotFound, errNoSession.Error()), true
 	case errors.Is(err, errDevCode), errors.Is(err, errDevKind):
 		return fail(http.StatusForbidden, err.Error()), true
@@ -722,9 +728,27 @@ func classifySignIn(err error) (failure, bool) {
 		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errReauthenticate):
 		return fail(http.StatusUnauthorized, err.Error()), true
-	case errors.Is(err, session.ErrEnded):
-		return fail(http.StatusNotFound, errNoSession.Error()), true
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// reasonOtherSite is the reason of the audit entry of a sign-in that the check
+// against login CSRF refused.
+const reasonOtherSite = "sign-in request of another site: not JSON, a foreign Origin or cross-site"
+
+// recordOtherSiteSignIn writes the audit entry of a sign-in that the check
+// against login CSRF refused. The request has no principal yet, so the entry
+// names actor, the sign-in route. The limiter of the denial recorder bounds
+// the entries: under a burst it writes the first refusal of each window and
+// counts the others.
+func (h *Handler) recordOtherSiteSignIn(ctx context.Context, r *http.Request, actor string) {
+	var p identity.Principal
+
+	p.Subject = actor
+
+	h.guard.Record(ctx, r, p, denials.Denial{
+		Action: identity.Action(session.ActionSignIn), Object: identity.ServerObject(), Reason: reasonOtherSite,
+		ReasonWithin: nil, Window: 0,
+	})
 }

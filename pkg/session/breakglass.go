@@ -49,7 +49,8 @@ func SettingDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingBreakGlassMaxLength, Level: setting.LevelInstallation, Kind: setting.KindString,
-			Default: DefaultBreakGlassMaxLength.String(), Secret: false, Database: true, Apply: setting.ApplyLive,
+			Default: DefaultBreakGlassMaxLength.String(), Secret: false, Database: true, StaticCredentialHost: false,
+			Apply: setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := ParseBreakGlassMaxLength(value)
 

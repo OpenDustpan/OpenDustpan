@@ -16,7 +16,8 @@ func TestIsMatrixEnd(t *testing.T) {
 		label    string
 		want     bool
 	}{
-		{name: "default latest", versions: "", label: e2e.Latest, want: true},
+		{name: "latest label", versions: "", label: e2e.Latest, want: true},
+		{name: "default newest", versions: "", label: "3.262.0", want: true},
 		{name: "default oldest", versions: "", label: "3.200.0", want: true},
 		{name: "default middle", versions: "", label: "3.250.0", want: false},
 		{name: "highest without latest", versions: "3.200.0,3.250.0,3.300.0", label: "3.300.0", want: true},
@@ -70,7 +71,7 @@ func TestVersionsPinnedLeavesOutLatest(t *testing.T) {
 			tool:  e2e.Pulumi(),
 			env:   "E2E_PULUMI_VERSIONS",
 			value: "",
-			want:  []string{e2e.Latest, "3.262.0", "3.250.0", "3.200.0"},
+			want:  []string{"3.262.0", "3.250.0", "3.200.0"},
 		},
 		{
 			name:  "pulumi pinned twice",
@@ -101,6 +102,67 @@ func TestVersionsPinnedLeavesOutLatest(t *testing.T) {
 
 			if got := tc.tool.Versions(); !slices.Equal(got, tc.want) {
 				t.Fatalf("Versions() with %q = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSingle(t *testing.T) {
+	cases := []struct {
+		name       string
+		pulumi     string
+		tofu       string
+		wantPulumi string
+		wantTofu   string
+	}{
+		{
+			name:       "not set",
+			pulumi:     "",
+			tofu:       "",
+			wantPulumi: "3.262.0",
+			wantTofu:   "1.12.12",
+		},
+		{
+			name:       "latest",
+			pulumi:     "latest",
+			tofu:       "latest",
+			wantPulumi: e2e.Latest,
+			wantTofu:   e2e.Latest,
+		},
+		{
+			name:       "pinned",
+			pulumi:     "pinned",
+			tofu:       "pinned",
+			wantPulumi: "3.262.0",
+			wantTofu:   "1.12.12",
+		},
+		{
+			name:       "latest then a pin",
+			pulumi:     "latest,3.250.0",
+			tofu:       "latest,1.11.14",
+			wantPulumi: "3.250.0",
+			wantTofu:   "1.11.14",
+		},
+		{
+			name:       "commas only",
+			pulumi:     ",",
+			tofu:       ",",
+			wantPulumi: "",
+			wantTofu:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("E2E_PULUMI_VERSIONS", tc.pulumi)
+			t.Setenv("E2E_TOFU_VERSIONS", tc.tofu)
+
+			if got := e2e.Pulumi().Single(); got != tc.wantPulumi {
+				t.Fatalf("Pulumi Single() with %q = %q, want %q", tc.pulumi, got, tc.wantPulumi)
+			}
+
+			if got := e2e.OpenTofu().Single(); got != tc.wantTofu {
+				t.Fatalf("OpenTofu Single() with %q = %q, want %q", tc.tofu, got, tc.wantTofu)
 			}
 		})
 	}

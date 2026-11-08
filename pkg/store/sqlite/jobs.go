@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -72,6 +73,9 @@ type jobRunner struct {
 }
 
 var _ jobstore.Runner = jobRunner{s: nil}
+
+// Logger implements jobstore.Runner.
+func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 
 // Write implements jobstore.Runner.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {

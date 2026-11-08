@@ -138,12 +138,12 @@ func TestDeletedUnits(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
 		t.Fatalf("install %s: %v", e2e.Pulumi().Name, err)
 	}

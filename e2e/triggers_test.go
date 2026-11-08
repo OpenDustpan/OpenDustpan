@@ -110,17 +110,17 @@ func TestRunTriggers(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.OpenTofu().Versions()
-	if len(versions) == 0 {
+	version := e2e.OpenTofu().Single()
+	if version == "" {
 		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.OpenTofu(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.OpenTofu(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, version, err)
 	}
 
 	for _, db := range databases {

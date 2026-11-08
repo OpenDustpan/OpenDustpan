@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/calendar"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -305,6 +307,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupSinks(t, s, acme)
 	seedBackupTriggers(t, s, acme)
 	seedBackupItemKeys(t, s, acme)
+	seedBackupBreakGlass(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -361,6 +364,158 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		if err := keeper.SavedViews().Create(t.Context(), v, acme.Fence(), entry); err != nil {
 			t.Fatalf("create saved view %d: %v", i, err)
 		}
+	}
+}
+
+// BreakGlassPorts holds the break-glass store of one store.
+type BreakGlassPorts struct {
+	// Store is the store of break-glass reviews, or nil when the store keeps
+	// none.
+	Store breakglass.Store
+}
+
+// BreakGlassSeeder is an optional BackupStore capability: a store that keeps
+// break-glass reviews gives its store, so the round trip fills and compares
+// the break-glass table. A store with no break-glass port skips it: the fake
+// of this package's own tests is one.
+type BreakGlassSeeder interface {
+	BreakGlassPorts() BreakGlassPorts
+}
+
+// seedBackupBreakGlass writes two break-glass reviews, one pending in the
+// namespace acme and one accepted in audit.ServerScope, when s keeps a
+// break-glass store. A store with no break-glass port skips it: the fake of
+// this package's own tests is one.
+func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	seeder, ok := s.(BreakGlassSeeder)
+	if !ok {
+		return
+	}
+
+	store := seeder.BreakGlassPorts().Store
+	if store == nil {
+		return
+	}
+
+	at := now().Add(-3 * time.Hour)
+	entry := audit.Entry{
+		At:            now(),
+		Namespace:     acme.Name,
+		Subject:       "server",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "namespace:review-break-glass",
+		Object:        acme.Name.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "test",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req-break-glass",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+	}
+
+	// The pending review carries a notice step that is due, so the round trip
+	// carries every notice column with a value that is not the default.
+	pending := breakglass.Review{
+		ID: ident.NewID(breakglass.IDPrefix),
+		Use: breakglass.Use{
+			Kind: breakglass.KindFreezeBreak, Ref: "seed-break-glass-pending", Scope: acme.Name,
+			Object: "opentofu:acme/network", Subject: "alice", People: []string{"alice", "carol"},
+			Reason: "Roll back the failed apply", At: at, Until: time.Time{},
+		},
+		State:        breakglass.StatePending,
+		CreatedAt:    at,
+		DueAt:        at.Add(31 * time.Hour),
+		Calendar:     calendar.DefaultID,
+		CalendarFrom: calendar.Scope{Namespace: acme.Name, Group: ""},
+		Step:         0,
+		NextNoticeAt: at.Add(time.Hour),
+		Verdict: breakglass.Verdict{
+			Reviewer: "", Note: "", Auth: "", AuthAt: time.Time{}, ReviewedAt: time.Time{}, ActAs: nil,
+		},
+		Version: 0,
+	}
+
+	if _, err := store.Open(t.Context(), pending, acme.Fence(), entry); err != nil {
+		t.Fatalf("open pending break-glass review: %v", err)
+	}
+
+	// The accepted review carries a verdict and no notice step, so the round
+	// trip carries every verdict column with a value that is not the default.
+	inSession := breakglass.Review{
+		ID: ident.NewID(breakglass.IDPrefix),
+		Use: breakglass.Use{
+			Kind: breakglass.KindAccountSession, Ref: "seed-break-glass-reviewed", Scope: audit.ServerScope,
+			Object: "", Subject: "bob", People: []string{"bob"},
+			Reason: "The console session of the break-glass account", At: at, Until: at.Add(time.Hour),
+		},
+		State:        breakglass.StatePending,
+		CreatedAt:    at,
+		DueAt:        time.Time{},
+		Calendar:     calendar.DefaultID,
+		CalendarFrom: calendar.Scope{Namespace: "", Group: ""},
+		Step:         0,
+		NextNoticeAt: time.Time{},
+		Verdict: breakglass.Verdict{
+			Reviewer: "", Note: "", Auth: "", AuthAt: time.Time{}, ReviewedAt: time.Time{}, ActAs: nil,
+		},
+		Version: 0,
+	}
+
+	serverEntry := entry
+	serverEntry.Namespace = audit.ServerScope
+	serverEntry.Action = "server:review-break-glass"
+	serverEntry.Object = audit.ServerScope.String()
+
+	opened, err := store.Open(t.Context(), inSession, zeroFence(), serverEntry)
+	if err != nil {
+		t.Fatalf("open the session break-glass review: %v", err)
+	}
+
+	accepted := opened
+	accepted.State = breakglass.StateAccepted
+	accepted.Verdict = breakglass.Verdict{
+		Reviewer: "dana", Note: "The sign-in was necessary", Auth: breakglass.AuthMFA,
+		AuthAt: at.Add(55 * time.Minute), ReviewedAt: at.Add(time.Hour), ActAs: []string{"erin"},
+	}
+
+	if err := store.Record(t.Context(), accepted, zeroFence(), serverEntry); err != nil {
+		t.Fatalf("record the break-glass review: %v", err)
+	}
+}
+
+// zeroFence is the fence of a write in audit.ServerScope.
+func zeroFence() namespace.Fence { return namespace.Fence{Namespace: "", FailoverVersion: 0} }
+
+// checkBreakGlassRowCounts proves that the seed wrote the two break-glass
+// reviews that the round trip carries. A store with no break-glass port skips
+// it: the fake of this package's own tests is one.
+func checkBreakGlassRowCounts(t *testing.T, s BackupStore, sum backup.Summary) {
+	t.Helper()
+
+	seeder, ok := s.(BreakGlassSeeder)
+	if !ok || seeder.BreakGlassPorts().Store == nil {
+		return
+	}
+
+	const table = "break_glass_reviews"
+
+	if got := sum.RowCounts[table]; got != 2 {
+		t.Errorf("exported rows of %q = %d, want 2", table, got)
 	}
 }
 
@@ -763,14 +918,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		}
 	}
 
+	// The group carries the switch that closes it to the identity provider,
+	// so that the round trip compares that column too.
 	g := principal.Group{
-		CreatedAt:   now(),
-		UpdatedAt:   now(),
-		ID:          "grp-ops",
-		Name:        "Ops",
-		Description: "Runs the platform",
-		Source:      principal.SourceLocal,
-		MemberCount: 0,
+		CreatedAt:                now(),
+		UpdatedAt:                now(),
+		ID:                       "grp-ops",
+		Name:                     "Ops",
+		Description:              "Runs the platform",
+		Source:                   principal.SourceLocal,
+		MemberCount:              0,
+		ClosedToIdentityProvider: true,
 	}
 	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
 		t.Fatalf("create group: %v", err)

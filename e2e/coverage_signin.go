@@ -116,7 +116,8 @@ func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
@@ -243,7 +244,8 @@ func coverageSignInService(
 
 	service, err := signinsvc.New(signinsvc.Config{
 		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: st,
-		TempAdmins: st, Groups: nil, States: st, Logger: slog.New(slog.DiscardHandler),
+		TempAdmins: st, Groups: nil,
+		Removals: nil, States: st, Locks: st, NameKeys: st, Logger: slog.New(slog.DiscardHandler),
 		OnAuditFailure: nil,
 	})
 	if err != nil {

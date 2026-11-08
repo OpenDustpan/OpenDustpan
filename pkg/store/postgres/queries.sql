@@ -47,6 +47,13 @@ SELECT ip_allowlist
 FROM namespaces
 WHERE name = $1;
 
+-- name: NamespacesWithList :many
+-- Lists the namespaces that have an IP allowlist.
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name;
+
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
 UPDATE namespaces
@@ -1533,12 +1540,12 @@ UPDATE group_members SET removed_at_ms = $1
 WHERE principal_id = $2 AND removed_at_ms IS NULL;
 
 -- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 
@@ -1546,7 +1553,7 @@ FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 SELECT id FROM principal_groups WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
 
 -- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -1563,8 +1570,8 @@ WHERE deleted_at_ms IS NULL
   AND (@high::text = '' OR name_key COLLATE "C" < @high::text);
 
 -- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
-WHERE id = $5 AND deleted_at_ms IS NULL;
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, closed_to_identity_provider = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL;
 
 -- name: DeleteGroup :execrows
 UPDATE principal_groups SET deleted_at_ms = $1
@@ -1616,8 +1623,16 @@ WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text);
 
+-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C";
+
 -- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
@@ -1705,6 +1720,46 @@ SELECT group_id, source, source_id, state, pinned
 FROM group_members
 WHERE principal_id = $1 AND removed_at_ms IS NULL
 ORDER BY group_id COLLATE "C";
+
+-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms;
+
+-- name: MemberRemovalAlertedAt :one
+-- The time of the last alert of one source, or 0 when the source has none.
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = @source_kind AND source_id = @source_id), 0)::bigint
+    AS alerted_at_ms;
+
+-- name: MemberRemovalTotals :one
+-- The totals of the removals of one source in one window: the members that
+-- the source removed from any group, the members that it removed from one
+-- group, and the largest group that it saw before a removal. The window
+-- holds the rows above low_ms and at most high_ms.
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = @group_id THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = @group_id THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = @source_kind AND source_id = @source_id
+  AND at_ms > @low_ms::bigint AND at_ms <= @high_ms::bigint;
+
+-- name: PruneMemberRemovals :execrows
+-- Deletes at most max_rows of the oldest rows of one source at or before
+-- cutoff_ms.
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = @source_kind AND m.source_id = @source_id
+      AND m.at_ms <= @cutoff_ms::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT @max_rows::bigint
+);
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
@@ -1804,6 +1859,14 @@ SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind,
 FROM grants
 WHERE subject_kind = $1 AND subject_id = $2 AND revoked_at_ms IS NULL
 ORDER BY target, role;
+
+-- name: GrantsOfSubjects :many
+-- The current grants of each subject of the list, in one query. The unique
+-- index grants_current starts with the subject, so each subject is one seek.
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY(@subjects::text[]) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role;
 
 -- name: CountRoleGrantsBelowInstallation :one
 SELECT COUNT(*) FROM grants
@@ -2183,6 +2246,16 @@ SELECT c.name
 FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = $1;
+
+-- name: GetUnitCollectionByName :one
+-- The ID and the collection of one live unit by its name, in one statement.
+-- The collection is NULL when the unit is in no collection. No row means that
+-- the namespace holds no live unit with the name.
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
 
 -- name: UnitCollectionID :one
 -- The stable ID of the collection of one unit by its ID.
@@ -2690,6 +2763,61 @@ WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND pr
 -- record. A principal that is already disabled stays as it is.
 UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
+-- name: InsertBreakGlassReview :execrows
+-- Inserts the review of a new use. The unique index on (use_kind, use_ref)
+-- keeps one review for each use and the primary key keeps one for each ID,
+-- so a repeated open stores no second review.
+INSERT INTO break_glass_reviews (
+  id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+  $24, $25
+) ON CONFLICT DO NOTHING;
+
+-- name: GetBreakGlassReview :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE id = $1;
+
+-- name: GetBreakGlassReviewByUse :one
+-- The review of the kind and the reference of a use, for an open that runs
+-- again after a crash. The unique index makes at most one row match.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE use_kind = $1 AND use_ref = $2;
+
+-- name: UpdateBreakGlassReviewVerdict :execrows
+-- Stores the verdict of a review and clears the next notice. It changes no
+-- row when the stored version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET state = sqlc.arg('state'), verdict_reviewer = sqlc.arg('verdict_reviewer'),
+  verdict_note = sqlc.arg('verdict_note'), verdict_auth = sqlc.arg('verdict_auth'),
+  verdict_auth_at_ms = sqlc.arg('verdict_auth_at_ms'),
+  verdict_reviewed_at_ms = sqlc.arg('verdict_reviewed_at_ms'), verdict_act_as = sqlc.arg('verdict_act_as'),
+  next_notice_at_ms = 0, version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: UpdateBreakGlassReviewStep :execrows
+-- Stores the notice step of a review. It changes no row when the stored
+-- version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET step = sqlc.arg('step'), next_notice_at_ms = sqlc.arg('next_notice_at_ms'), version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: DueBreakGlassReviews :many
+-- The pending reviews with a notice due at or before now, oldest first.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews
+WHERE state = 'pending' AND next_notice_at_ms <> 0 AND next_notice_at_ms <= sqlc.arg('now_ms')::bigint
+ORDER BY next_notice_at_ms, id
+LIMIT sqlc.arg('max_rows')::bigint;
 
 -- name: InsertOIDCProvider :exec
 -- The first start with a provider ID records its issuer. A later start
@@ -3274,6 +3402,13 @@ SELECT id, version, body
 FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind)
 ORDER BY id COLLATE "C";
+
+-- name: ListGateObjectsOfKind :many
+-- Every object of one kind, of every scope, ordered by scope key and ID.
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = sqlc.arg(kind)
+ORDER BY scope_key COLLATE "C", id COLLATE "C";
 
 -- name: ListGateObjectsOfScope :many
 -- Every object and setting of one scope, ordered by kind and ID.

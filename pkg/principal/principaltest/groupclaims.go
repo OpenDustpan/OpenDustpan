@@ -418,8 +418,8 @@ type GroupClaimsFixture struct {
 const (
 	skipProtectedGroup = "skipped: the protected-group rule has no data yet: " +
 		"the server computes no protection for a group"
-	skipClosedGroup = "skipped: the closed-group rule has no data yet: " +
-		"no closed or trusted flag exists on a group"
+	skipClosedGroup = "skipped: the closed-group rule is not applied yet: " +
+		"the applier does not read the closed flag of a group"
 	skipFullSync = "skipped: the full-sync rule has no data yet: no installation setting for full sync exists"
 	skipSuspend  = "skipped: the suspension rule has no data yet: " +
 		"no protected group exists, so no removal can suspend a membership"

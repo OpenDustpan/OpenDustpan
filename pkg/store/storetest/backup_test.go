@@ -135,14 +135,21 @@ type fakeBackupStore struct {
 }
 
 var (
-	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
-	_ storetest.RestoreStore   = (*fakeBackupStore)(nil)
-	_ storetest.Reopener       = (*fakeBackupStore)(nil)
-	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
-	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
-	_ backup.Applier           = (*fakeBackupStore)(nil)
-	_ backup.Fencer            = (*fakeBackupStore)(nil)
+	_ storetest.BackupStore      = (*fakeBackupStore)(nil)
+	_ storetest.RestoreStore     = (*fakeBackupStore)(nil)
+	_ storetest.Reopener         = (*fakeBackupStore)(nil)
+	_ storetest.StagingWitness   = (*fakeBackupStore)(nil)
+	_ storetest.BreakGlassSeeder = (*fakeBackupStore)(nil)
+	_ backup.KeyPeeker           = (*fakeBackupStore)(nil)
+	_ backup.Applier             = (*fakeBackupStore)(nil)
+	_ backup.Fencer              = (*fakeBackupStore)(nil)
 )
+
+// BreakGlassPorts implements storetest.BreakGlassSeeder. The fake keeps no
+// break-glass reviews.
+func (*fakeBackupStore) BreakGlassPorts() storetest.BreakGlassPorts {
+	return storetest.BreakGlassPorts{Store: nil}
+}
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
 // schema version 10.

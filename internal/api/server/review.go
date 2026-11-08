@@ -224,15 +224,32 @@ func (h *Handler) reviewRoutes() []Route {
 		{resolvePrincipalPath, principalReviewPath, identity.ActionServerReadAccess},
 	}
 
-	callers := []Route{{
-		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-		Serve: h.serveAccessRead(callerAccess),
-	}, {
-		Method: http.MethodGet, Path: callerGrantsPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-		Serve: h.serveAccessRead(callerGrants),
-	}}
+	callers := []Route{
+		{
+			Method: http.MethodGet,
+			Path:   callerAccessPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerAccess),
+		},
+		{
+			Method: http.MethodGet,
+			Path:   callerGrantsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerGrants),
+		},
+	}
 
 	out := make([]Route, 0, len(kinds)+len(callers))
 
@@ -244,7 +261,7 @@ func (h *Handler) reviewRoutes() []Route {
 			Actions: []identity.Action{
 				k.action,
 			},
-			Resolve: k.resolve, ActionsFor: nil,
+			Resolve: k.resolve, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.serveAccessRead(h.reviewAccess(k.action)),
 		})
 	}

@@ -301,7 +301,8 @@ func (h *Handler) denyHost(w http.ResponseWriter, r *http.Request) {
 	gate.Subject = registryHostGateSubject
 
 	h.guard.Record(ctx, r, gate, refusal.Denial{
-		Action: identity.ActionRegistryRead, Object: obj, Reason: "request for another host", Window: 0,
+		Action: identity.ActionRegistryRead, Object: obj, Reason: "request for another host",
+		ReasonWithin: nil, Window: 0,
 	})
 
 	h.registryNotFound(ctx, w)

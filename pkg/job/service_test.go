@@ -133,7 +133,9 @@ func (s *svcStore) Apply(_ context.Context, c job.Change, _ namespace.Fence, _ [
 	return j, nil
 }
 
-func (*svcStore) List(context.Context, job.Filter) ([]job.Job, error) { return nil, nil }
+func (*svcStore) List(context.Context, job.Filter) (job.Page, error) {
+	return job.Page{Jobs: nil, Damaged: nil, After: ""}, nil
+}
 
 func (*svcStore) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
 	return nil, nil
@@ -144,7 +146,13 @@ func (*svcStore) SetVerification(context.Context, job.ID, job.Verification, name
 	return nil
 }
 
-func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, error) { return nil, nil }
+func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, error) {
+	return nil, nil, nil
+}
+
+func (*svcStore) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
+	return nil
+}
 
 type svcUnits struct {
 	unit identity.Object
@@ -254,7 +262,7 @@ func (a *svcAuthorizer) Authorize(_ context.Context, p identity.Principal, actio
 }
 
 func (*svcAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // svcGates is a job.GateGuard that returns the gates in enforced, or err.

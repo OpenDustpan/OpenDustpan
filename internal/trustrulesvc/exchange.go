@@ -110,6 +110,7 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 
 	own, err := NewService(Config{
 		Store: cfg.Rules, Namespaces: cfg.Namespaces, Principals: cfg.Principals, Authorizer: denyAll{},
+		Reach:            nil,
 		InstallationURLs: cfg.InstallationURLs, OwnIssuer: cfg.OwnIssuer, CheckURL: nil, Now: now,
 	})
 	if err != nil {
@@ -752,5 +753,5 @@ func (denyAll) Authorize(context.Context, identity.Principal, identity.Action, i
 }
 
 func (denyAll) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }

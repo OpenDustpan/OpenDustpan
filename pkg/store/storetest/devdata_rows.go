@@ -199,7 +199,7 @@ func DevPasskeyRow(id, principalID string) map[string]any {
 func DevGroupRow(id string) map[string]any {
 	return map[string]any{
 		"id": id, "name": id, "name_key": id, "description": "", "source": "local",
-		"created_at_ms": 1, "updated_at_ms": 1, "deleted_at_ms": nil,
+		"created_at_ms": 1, "updated_at_ms": 1, "deleted_at_ms": nil, "closed_to_identity_provider": false,
 	}
 }
 

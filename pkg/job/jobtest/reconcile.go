@@ -120,13 +120,13 @@ func checkStateChangedFilter(t *testing.T, h Harness, j *job.Job) {
 		Namespace: "", UnitID: "", States: []job.State{job.StateQueued}, Limit: 0, After: "",
 		StateChangedBefore: j.StateChangedAt, StateChangedAfter: time.Time{},
 	}
-	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 0 {
-		t.Fatalf("List before the state change = %v, %v; want none", ids(got), err)
+	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got.Jobs) != 0 {
+		t.Fatalf("List before the state change = %v, %v; want none", ids(got.Jobs), err)
 	}
 
 	queued.StateChangedBefore = j.StateChangedAt.Add(smallestStep)
-	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got) != 1 || got[0].ID != j.ID {
-		t.Fatalf("List after the state change = %v, %v; want %s", ids(got), err, j.ID)
+	if got, err := h.Jobs.List(t.Context(), queued); err != nil || len(got.Jobs) != 1 || got.Jobs[0].ID != j.ID {
+		t.Fatalf("List after the state change = %v, %v; want %s", ids(got.Jobs), err, j.ID)
 	}
 
 	// StateChangedAfter is strict too: the time of the change itself selects
@@ -135,13 +135,13 @@ func checkStateChangedFilter(t *testing.T, h Harness, j *job.Job) {
 		Namespace: "", UnitID: "", States: nil, Limit: 0, After: "",
 		StateChangedBefore: time.Time{}, StateChangedAfter: j.StateChangedAt,
 	}
-	if got, err := h.Jobs.List(t.Context(), since); err != nil || slices.Contains(ids(got), j.ID) {
-		t.Fatalf("List of changes after the state change = %v, %v; want no %s", ids(got), err, j.ID)
+	if got, err := h.Jobs.List(t.Context(), since); err != nil || slices.Contains(ids(got.Jobs), j.ID) {
+		t.Fatalf("List of changes after the state change = %v, %v; want no %s", ids(got.Jobs), err, j.ID)
 	}
 
 	since.StateChangedAfter = j.StateChangedAt.Add(-smallestStep)
-	if got, err := h.Jobs.List(t.Context(), since); err != nil || !slices.Contains(ids(got), j.ID) {
-		t.Fatalf("List of changes before the state change = %v, %v; want %s", ids(got), err, j.ID)
+	if got, err := h.Jobs.List(t.Context(), since); err != nil || !slices.Contains(ids(got.Jobs), j.ID) {
+		t.Fatalf("List of changes before the state change = %v, %v; want %s", ids(got.Jobs), err, j.ID)
 	}
 }
 
@@ -496,7 +496,8 @@ func testReconcileOrphans(t *testing.T, h Harness) {
 
 	assertState(t, h, live.ID, job.StateRunning)
 
-	if orphans, err := h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 {
+	if orphans, damaged, err := h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 ||
+		len(damaged) != 0 {
 		t.Fatalf("Orphans after the reconcile = %v, %v; want none", orphanIDs(orphans), err)
 	}
 }
@@ -591,8 +592,8 @@ type failingOrphans struct {
 var errOrphanRead = errors.New("the read of the orphans failed")
 
 // Orphans implements job.Store.
-func (failingOrphans) Orphans(context.Context, int) ([]job.Orphan, error) {
-	return nil, errOrphanRead
+func (failingOrphans) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, error) {
+	return nil, nil, errOrphanRead
 }
 
 func testReconcileOrphanReadFails(t *testing.T, h Harness) {

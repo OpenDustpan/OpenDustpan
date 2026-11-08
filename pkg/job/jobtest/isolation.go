@@ -107,7 +107,7 @@ func testParallelCreatesOneKey(t *testing.T, h Harness) {
 		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	})
-	if err != nil || len(all) != 1 {
-		t.Fatalf("List = %d jobs, %v; want 1", len(all), err)
+	if err != nil || len(all.Jobs) != 1 {
+		t.Fatalf("List = %d jobs, %v; want 1", len(all.Jobs), err)
 	}
 }

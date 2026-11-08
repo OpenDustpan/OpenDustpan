@@ -3,6 +3,7 @@ package jobstore_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -419,6 +420,9 @@ func (r fakeRunner) Write(_ context.Context, _ namespace.Fence, fn func(jobstore
 func (r fakeRunner) Read(_ context.Context, fn func(jobstore.Tx) error) error {
 	return fn(r.tx)
 }
+
+// Logger implements jobstore.Runner: nil, so the store logs nothing.
+func (fakeRunner) Logger() *slog.Logger { return nil }
 
 // writePath is one path that writes a job row through a public store method.
 type writePath struct {

@@ -72,9 +72,7 @@ func (refusingNamespace) Authorize(
 }
 
 func (refusingNamespace) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{ //nolint:exhaustruct_v5 // An All scope only.
-		All: true,
-	}, nil
+	return identity.Every(), nil
 }
 
 func (a scopedAuthorizer) Authorize(
@@ -130,7 +128,7 @@ func TestListWorkspacesStorePage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, scope := range []identity.Scope{namespaceScope("acme"), {All: true}} { //nolint:exhaustruct_v5 // All.
+			for _, scope := range []identity.Scope{namespaceScope("acme"), identity.Every()} {
 				checkStorePage(t, scope, tc.query, tc.want, tc.total)
 			}
 		})

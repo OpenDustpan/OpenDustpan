@@ -26,6 +26,10 @@ func (coverageIPAllowlistStore) SetNamespaceList(
 	return nil
 }
 
+func (coverageIPAllowlistStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+	return nil, nil
+}
+
 // coverageIPAllowlists returns the IP allowlist service of the route table.
 func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	tb.Helper()
