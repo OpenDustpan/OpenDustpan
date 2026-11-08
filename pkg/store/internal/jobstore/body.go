@@ -502,6 +502,13 @@ func encodeBody(j *job.Job) (string, error) {
 		}
 	}
 
+	// Defense in depth: the decode checks each stored body again. This check
+	// stays so that a write of an unknown value fails at the write and never
+	// stores a row that cannot decode.
+	if err := checkEnums(&b, job.ErrInvalid); err != nil {
+		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
+	}
+
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
@@ -510,25 +517,27 @@ func encodeBody(j *job.Job) (string, error) {
 	return string(raw), nil
 }
 
-// checkEnums returns a decode error for a source kind, an agent mode or a
-// verification result in b that this server never writes. A stored row is
-// untrusted: a restore or another version may have written it, and the
-// checks of the write path alone do not cover such a row.
-func checkEnums(b *jobBody, id job.ID) error {
+// checkEnums returns an error that wraps sentinel for a source kind, an
+// agent mode or a verification result in b that this server never writes.
+// The error names the field and never the value. The decode wraps ErrDamaged,
+// because a stored row is untrusted: a restore or another version may have
+// written it. The encode wraps job.ErrInvalid, because there the value comes
+// from the caller. The empty agent mode is accepted, the empty source is
+// refused, and the empty verification is valid.
+func checkEnums(b *jobBody, sentinel error) error {
 	source := job.SourceKind(b.Source)
 	if !source.Valid() {
-		return fmt.Errorf("decode job %s: source: %w: %q is not a source kind", id, job.ErrInvalid, b.Source)
+		return fmt.Errorf("source: %w", sentinel)
 	}
 
 	mode := job.AgentMode(b.AgentMode)
 	if mode != "" && !mode.Valid() {
-		return fmt.Errorf("decode job %s: agent mode: %w: %q is not an agent mode", id, job.ErrInvalid, b.AgentMode)
+		return fmt.Errorf("agent mode: %w", sentinel)
 	}
 
 	verification := job.Verification(b.Verification)
 	if !verification.Valid() {
-		return fmt.Errorf("decode job %s: verification: %w: %q is not a verification result", id, job.ErrInvalid,
-			b.Verification)
+		return fmt.Errorf("verification: %w", sentinel)
 	}
 
 	return nil
@@ -551,8 +560,8 @@ func decodeBody(body string, j *job.Job) error {
 		return fmt.Errorf("decode job %s: %w", j.ID, err)
 	}
 
-	if err := checkEnums(&b, j.ID); err != nil {
-		return err
+	if err := checkEnums(&b, ErrDamaged); err != nil {
+		return fmt.Errorf("decode job %s: %w", j.ID, err)
 	}
 
 	j.Spec, j.Reason, j.StartedBy, j.Agent, j.AgentMode = spec, b.Reason, b.StartedBy, b.Agent, job.AgentMode(
