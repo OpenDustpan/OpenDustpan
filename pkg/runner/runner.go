@@ -89,6 +89,10 @@ var (
 	// claim that is no longer the live claim of its operation. It wraps
 	// durable.ErrClaimLost.
 	ErrClaimLost = fmt.Errorf("claim of the runner is lost: %w", durable.ErrClaimLost)
+	// ErrWrongRunner reports a request for a claim that another runner holds.
+	// It wraps ErrClaimLost, so a caller that checks for ErrClaimLost
+	// still matches, and the answer to the runner does not change.
+	ErrWrongRunner = fmt.Errorf("%w: the claim belongs to another runner", ErrClaimLost)
 	// ErrSessionWaitPassed reports a renewal of a claim that has no job
 	// session after MaxSessionWait. The claim is lost. The store changes
 	// nothing: the caller releases the claim through the job.Claimer or

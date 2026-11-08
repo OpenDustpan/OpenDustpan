@@ -163,7 +163,7 @@ counts each file, directory and link of the flattened file system.
 
 The spike added a stub `dustpan-runner` command that imports
 `pkg/runner`, `client-go` and go-containerregistry, in three ways, on a
-copy of `main` at `89138bd`.
+copy of `main` at `e4a8a7c`.
 
 | Measure | A: same `go.mod`, the linker leaves it out | B: same `go.mod`, a build tag | C: nested module `cmd/dustpan-runner/go.mod` |
 | --- | --- | --- | --- |

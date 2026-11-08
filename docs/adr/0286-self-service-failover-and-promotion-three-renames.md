@@ -85,7 +85,7 @@ the product manager, who decides by what Google, AWS, PCI DSS, SOC 2 or ISO
 
 ## Inventory
 
-The counts come from `rg` on `main` at `e51bf461`. A count of lines is the
+The counts come from `rg` on `main` at `e6c8c3e6`. A count of lines is the
 number of lines with a match, case-insensitive.
 
 ### Self-service (decision 1)

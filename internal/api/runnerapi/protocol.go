@@ -602,8 +602,12 @@ func (h *Handler) liveClaim(r *http.Request, rn *runner.Runner) (durable.Claim, 
 		return durable.Claim{}, durable.Operation{}, fmt.Errorf("get operation: %w", err)
 	}
 
-	if op.State != durable.StateRunning || op.Claim.Owner != rn.ID {
+	if op.State != durable.StateRunning {
 		return durable.Claim{}, durable.Operation{}, runner.ErrClaimLost
+	}
+
+	if op.Claim.Owner != rn.ID {
+		return durable.Claim{}, durable.Operation{}, runner.ErrWrongRunner
 	}
 
 	return op.Claim, op, nil
@@ -615,6 +619,7 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 
 	claim, _, err := h.liveClaim(r, &c.runner)
 	if err != nil {
+		h.recordHandoffClaimRefusal(ctx, r, err, &c.runner)
 		h.writeError(ctx, w, ScopeRunnerKey, err)
 
 		return
@@ -635,6 +640,7 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	if err = h.handoffs.IssueHandoffToken(ctx, tok, claim); err != nil {
+		h.recordHandoffClaimRefusal(ctx, r, err, &c.runner)
 		h.writeError(ctx, w, ScopeRunnerKey, err)
 
 		return

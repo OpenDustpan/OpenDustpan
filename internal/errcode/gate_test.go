@@ -54,6 +54,7 @@ func gated() []errcodetest.Adapter {
 		// The runner protocol has its own codes and its own versions.
 		api("runnerapi", nil,
 			[]string{"classifyProtocol", "classifyProtocolOther"}),
+		api("selfservice", nil, nil),
 		api("settings", []string{"bulkError"}, nil),
 		api("server", []string{
 			"errorResponse", "codedResponse", "codedError", "enterRefusedResponse",

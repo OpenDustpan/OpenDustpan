@@ -52,7 +52,7 @@ only when benchstat gives p < 0.05.
 
 ### What `main` does today
 
-At `main` commit `48ca1345244194d657cdc10ff72d3a9c7688b587`:
+At `main` commit `25586f72d307c9e655a90f6bd879c63120274322`:
 
 - Every JSON path uses `encoding/json`. `go.mod` has no JSON library.
 - A Pulumi checkpoint body decodes into a struct whose `deployment` field

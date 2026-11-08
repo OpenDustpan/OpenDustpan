@@ -43,6 +43,7 @@ func RunSchedules(t *testing.T, newHarness ScheduleFactory) {
 		{"a new schedule is due at once and ensure keeps its next run", testScheduleEnsure},
 		{"a tick uses the stored interval", testTickStoredInterval},
 		{"concurrent claims of one tick give one operation", testTickRace},
+		{"concurrent ensures of one schedule all succeed", testEnsureRace},
 		{"missed ticks collapse into one run", testMissedTicks},
 		{"an instance clock ahead cannot claim a tick early", testTickClockSkew},
 		{"a shorter interval moves the next run closer", testScheduleShorterInterval},
@@ -210,6 +211,39 @@ func testTickRace(t *testing.T, h ScheduleHarness) {
 
 	if ops := mustList(t, stores[1], durable.Filter{Kind: kindA, States: nil, Limit: 0}); len(ops) != 1 {
 		t.Fatalf("%d operations after one tick, want 1", len(ops))
+	}
+}
+
+func testEnsureRace(t *testing.T, h ScheduleHarness) {
+	t.Helper()
+
+	stores := []ScheduledStore{h.Open(t, 0), h.Open(t, 0)}
+	spec := scheduleSpec("sweep-race", time.Hour)
+
+	schedules := make([]durable.Schedule, racers)
+	errs := make([]error, racers)
+
+	var wg sync.WaitGroup
+
+	for i := range racers {
+		wg.Go(func() { schedules[i], errs[i] = stores[i%len(stores)].EnsureSchedule(t.Context(), spec) })
+	}
+
+	wg.Wait()
+
+	for i := range racers {
+		if errs[i] != nil {
+			t.Fatalf("EnsureSchedule %d: error = %v, want nil", i, errs[i])
+		}
+
+		if schedules[i].Name != spec.Name || schedules[i].Interval != spec.Interval {
+			t.Fatalf("schedule %d = %+v, want name %q and interval %v", i, schedules[i], spec.Name, spec.Interval)
+		}
+	}
+
+	got, err := stores[1].GetSchedule(t.Context(), spec.Name)
+	if err != nil || got.Interval != spec.Interval {
+		t.Fatalf("GetSchedule after the race = %+v, %v; want one schedule with interval %v", got, err, spec.Interval)
 	}
 }
 

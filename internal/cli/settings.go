@@ -228,7 +228,7 @@ var Settings = []*Setting{
 		"ip-allowlists", "DUSTPAN_IP_ALLOWLISTS",
 		"turn on IP allowlists: a namespace that has a list refuses requests from addresses outside it "+
 			"(DUSTPAN_IP_ALLOWLISTS)",
-		"(none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). "+
+		"(none: off). Set `true` to turn the feature on. A namespace opts in with its own list. "+
 			"The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, "+
 			"or every client reads as the address of the proxy. "+
 			"See Recovery in docs/explanation/security-model.md for the recovery path.",
@@ -334,7 +334,7 @@ var Settings = []*Setting{
 		"soft-delete-retention", "DUSTPAN_SOFT_DELETE_RETENTION", "720h",
 		"how long a deleted stack or workspace stays before its final delete, at least 1h "+
 			"(DUSTPAN_SOFT_DELETE_RETENTION)",
-		"`720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records "+
+		"`720h` (30 days). A Go duration of at least `1h`, for example `168h`. A delete records "+
 			"the end of its retention, so a change applies to later deletes",
 	).WithFile("soft-delete-retention"),
 	intSetting(
