@@ -135,6 +135,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected(), nil
 }
 
+const addMemberRemoval = `-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type AddMemberRemovalParams struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
+func (q *Queries) AddMemberRemoval(ctx context.Context, arg AddMemberRemovalParams) error {
+	_, err := q.db.Exec(ctx, addMemberRemoval,
+		arg.ID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.GroupID,
+		arg.Removed,
+		arg.MembersBefore,
+		arg.AtMs,
+	)
+	return err
+}
+
 const addSignInFailure = `-- name: AddSignInFailure :one
 
 WITH now_ms AS (
@@ -2409,19 +2437,20 @@ func (q *Queries) CreateGrant(ctx context.Context, arg CreateGrantParams) (int64
 }
 
 const createGroup = `-- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
 type CreateGroupParams struct {
-	ID          string
-	Name        string
-	NameKey     string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
+	ID                       string
+	Name                     string
+	NameKey                  string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
 }
 
 func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64, error) {
@@ -2433,6 +2462,7 @@ func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64
 		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.ClosedToIdentityProvider,
 	)
 	if err != nil {
 		return 0, err
@@ -6538,19 +6568,20 @@ func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) 
 }
 
 const getGroup = `-- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL
 `
 
 type GetGroupRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
@@ -6563,6 +6594,7 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.ClosedToIdentityProvider,
 		&i.MemberCount,
 	)
 	return i, err
@@ -9477,6 +9509,35 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getUnitCollectionByName = `-- name: GetUnitCollectionByName :one
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GetUnitCollectionByNameParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetUnitCollectionByNameRow struct {
+	UnitID         string
+	CollectionName pgtype.Text
+}
+
+// The ID and the collection of one live unit by its name, in one statement.
+// The collection is NULL when the unit is in no collection. No row means that
+// the namespace holds no live unit with the name.
+func (q *Queries) GetUnitCollectionByName(ctx context.Context, arg GetUnitCollectionByNameParams) (GetUnitCollectionByNameRow, error) {
+	row := q.db.QueryRow(ctx, getUnitCollectionByName, arg.Namespace, arg.Tool, arg.Name)
+	var i GetUnitCollectionByNameRow
+	err := row.Scan(&i.UnitID, &i.CollectionName)
+	return i, err
 }
 
 const getUnitDefaults = `-- name: GetUnitDefaults :one
@@ -12571,6 +12632,35 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 	return items, nil
 }
 
+const listActiveGroupNamesOfPrincipal = `-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C"
+`
+
+func (q *Queries) ListActiveGroupNamesOfPrincipal(ctx context.Context, principalID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listActiveGroupNamesOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditChainMarks = `-- name: ListAuditChainMarks :many
 SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope
 `
@@ -14039,7 +14129,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -14058,13 +14148,14 @@ type ListGroupsParams struct {
 }
 
 type ListGroupsRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListGroupsRow, error) {
@@ -14088,6 +14179,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -14101,7 +14193,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 }
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
@@ -14121,13 +14213,14 @@ type ListGroupsOfPrincipalParams struct {
 }
 
 type ListGroupsOfPrincipalRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPrincipalParams) ([]ListGroupsOfPrincipalRow, error) {
@@ -14152,6 +14245,7 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -18449,6 +18543,23 @@ func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
 	return err
 }
 
+const markMemberRemovalAlert = `-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms
+`
+
+type MarkMemberRemovalAlertParams struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
+}
+
+func (q *Queries) MarkMemberRemovalAlert(ctx context.Context, arg MarkMemberRemovalAlertParams) error {
+	_, err := q.db.Exec(ctx, markMemberRemovalAlert, arg.SourceKind, arg.SourceID, arg.AlertedAtMs)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -18519,6 +18630,66 @@ func (q *Queries) MarkTempAdminReviewOpened(ctx context.Context, arg MarkTempAdm
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const memberRemovalAlertedAt = `-- name: MemberRemovalAlertedAt :one
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = $1 AND source_id = $2), 0)::bigint
+    AS alerted_at_ms
+`
+
+type MemberRemovalAlertedAtParams struct {
+	SourceKind string
+	SourceID   string
+}
+
+// The time of the last alert of one source, or 0 when the source has none.
+func (q *Queries) MemberRemovalAlertedAt(ctx context.Context, arg MemberRemovalAlertedAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, memberRemovalAlertedAt, arg.SourceKind, arg.SourceID)
+	var alerted_at_ms int64
+	err := row.Scan(&alerted_at_ms)
+	return alerted_at_ms, err
+}
+
+const memberRemovalTotals = `-- name: MemberRemovalTotals :one
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = $1 THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = $1 THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = $2 AND source_id = $3
+  AND at_ms > $4::bigint AND at_ms <= $5::bigint
+`
+
+type MemberRemovalTotalsParams struct {
+	GroupID    string
+	SourceKind string
+	SourceID   string
+	LowMs      int64
+	HighMs     int64
+}
+
+type MemberRemovalTotalsRow struct {
+	SourceRemoved int64
+	GroupRemoved  int64
+	GroupMembers  int64
+}
+
+// The totals of the removals of one source in one window: the members that
+// the source removed from any group, the members that it removed from one
+// group, and the largest group that it saw before a removal. The window
+// holds the rows above low_ms and at most high_ms.
+func (q *Queries) MemberRemovalTotals(ctx context.Context, arg MemberRemovalTotalsParams) (MemberRemovalTotalsRow, error) {
+	row := q.db.QueryRow(ctx, memberRemovalTotals,
+		arg.GroupID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.LowMs,
+		arg.HighMs,
+	)
+	var i MemberRemovalTotalsRow
+	err := row.Scan(&i.SourceRemoved, &i.GroupRemoved, &i.GroupMembers)
+	return i, err
 }
 
 const minAuditSequence = `-- name: MinAuditSequence :one
@@ -18961,6 +19132,39 @@ DELETE FROM local_user_resets WHERE expires_at_ms <= $1
 
 func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneLocalUserResets, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneMemberRemovals = `-- name: PruneMemberRemovals :execrows
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = $1 AND m.source_id = $2
+      AND m.at_ms <= $3::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT $4::bigint
+)
+`
+
+type PruneMemberRemovalsParams struct {
+	SourceKind string
+	SourceID   string
+	CutoffMs   int64
+	MaxRows    int64
+}
+
+// Deletes at most max_rows of the oldest rows of one source at or before
+// cutoff_ms.
+func (q *Queries) PruneMemberRemovals(ctx context.Context, arg PruneMemberRemovalsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneMemberRemovals,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.CutoffMs,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -22094,16 +22298,17 @@ func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHo
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
-WHERE id = $5 AND deleted_at_ms IS NULL
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, closed_to_identity_provider = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL
 `
 
 type UpdateGroupParams struct {
-	Name        string
-	NameKey     string
-	Description string
-	UpdatedAtMs int64
-	ID          string
+	Name                     string
+	NameKey                  string
+	Description              string
+	ClosedToIdentityProvider bool
+	UpdatedAtMs              int64
+	ID                       string
 }
 
 func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64, error) {
@@ -22111,6 +22316,7 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64
 		arg.Name,
 		arg.NameKey,
 		arg.Description,
+		arg.ClosedToIdentityProvider,
 		arg.UpdatedAtMs,
 		arg.ID,
 	)

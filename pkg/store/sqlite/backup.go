@@ -678,7 +678,9 @@ func (s *Store) reopenDatabase(ctx context.Context) error {
 // checkRestoreFile opens the staged file, checks its integrity, reads its
 // summary, and compares the schema version and the row counts with the
 // manifest. It returns the summary of what the swap will load.
-func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (backup.Summary, error) {
+func checkRestoreFile(
+	ctx context.Context, path string, want backup.Summary, restoreAt time.Time,
+) (backup.Summary, error) {
 	conn, err := openSnapshot(ctx, path)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -702,7 +704,7 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
 	}
 
-	if rowsErr := checkStagedRows(ctx, conn); rowsErr != nil {
+	if rowsErr := checkStagedRows(ctx, conn, restoreAt); rowsErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", rowsErr)
 	}
 
@@ -804,12 +806,12 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 // checkStagedRows checks the rows of the staged database with the rules of
 // the store: the namespace IDs, the owned rows, the grants and the
 // memberships of principals of a namespace, and the feature rows.
-func checkStagedRows(ctx context.Context, conn *sql.DB) error {
+func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) error {
 	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
 		return idsErr
 	}
 
-	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
 		return ownedErr
 	}
 
@@ -1259,6 +1261,10 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // the notification sinks, the triggers, the self-service blueprints and the trust rules.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedJobs(ctx, conn); err != nil {
 		return err
 	}
 

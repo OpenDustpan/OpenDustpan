@@ -140,6 +140,8 @@ var Tables = []string{
 	TablePrincipalGroups,
 	TableGroupMembers,
 	TableGroupMappings,
+	"member_removal_alerts",
+	"member_removals",
 	TableTempAdmins,
 	TableAccessTokens,
 	TableSessions,

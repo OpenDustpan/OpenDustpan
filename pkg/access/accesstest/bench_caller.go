@@ -99,7 +99,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 
 		g := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: "team-" + id, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := s.CreateGroup(ctx, g, entry()); err != nil {
 			b.Fatalf("seed group: %v", err)

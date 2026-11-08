@@ -187,12 +187,13 @@ the same name, without regard to case, gets `409` with the code
 | --- | --- | --- |
 | `GET /api/server/groups` | `server:read-principals` | `200`, a page ordered by name |
 | `GET /api/server/groups/{id}` | `server:read-principals` | `200` |
-| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, or both. |
+| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, `closedToIdentityProvider`, or a combination of them. |
 | `DELETE /api/server/groups/{id}` | `server:manage-groups`, with a fresh sign-in | `204` |
 | `GET /api/server/principals/{id}/groups` | `server:read-principals` | `200`, the groups of a principal |
 
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
-`createdAt`, `updatedAt`, `memberCount` and `protected`.
+`createdAt`, `updatedAt`, `memberCount`, `closedToIdentityProvider` and
+`protected`.
 
 `protected` is `true` when the group holds a sensitive action on the
 installation or on a principal of the installation through its own grants. A
@@ -253,6 +254,32 @@ A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
 `mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
 
+### Close a group to the identity provider
+
+A group carries the switch `closedToIdentityProvider`. The default is `false`:
+the group is open. A `true` value marks the group as closed to the identity
+provider.
+
+A caller with `server:manage-groups` changes the switch with
+`PATCH /api/server/groups/{id}`. The body holds the switch as a JSON boolean:
+
+```sh
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"closedToIdentityProvider":true}' \
+  https://dustpan.example.com/api/server/groups/grp-...
+```
+
+A value of another type gets `400` with the code `request.body-invalid`. A
+change of the switch writes an audit entry for the group. The reason of the
+entry names the new value: `the identity provider may add members: off` for a
+closed group, and `the identity provider may add members: on` for an open one.
+A call that names the current value again is not an error.
+
+The server stores the switch. SCIM and the group claims of a sign-in do not
+read it yet, so the identity provider can still add a member to a closed
+group.
+
 ## Manage group members
 
 A member is a principal. The routes are these:
@@ -280,6 +307,49 @@ Add a member in the console. The add needs a fresh sign-in. The body holds the p
 
 A group that a directory manages does not take membership changes from this
 API. Change the membership in the directory.
+
+## The mass removal alert
+
+The server counts the memberships that one source ends or suspends in a
+rolling window. The count is for each source and for each group.
+
+The server alerts the administrators when one source crosses a limit in the
+window:
+
+- the number of memberships that it ended or suspended:
+  `principal.removalAlertCount`, 1 to 10000, default 10,
+- the percent of the members of one group that it ended or suspended:
+  `principal.removalAlertPercent`, 1 to 100, default 20.
+
+`principal.removalAlertWindow` holds the window (1 minute to 24 hours, default
+15 minutes), as a duration, for example `15m`. The three settings are
+installation settings, see [The settings
+API](../reference/settings-api.md) for how to read and change them.
+
+A larger count or percent, and a shorter window, reduce security. Such a
+change needs a fresh sign-in.
+
+The alert writes three records:
+
+- a notification of the type `membership.mass-removal` for the administrators,
+- one audit entry with the action `principal:mass-removal-alert` in the scope
+  of the installation,
+- one warning log line.
+
+Each record names the source, the group, the count of members, the percent and
+the window. The server writes one alert for each source in each window, all
+groups included, or a repeat when a write stops after the notification or two
+writes race. The limits count the removals of each source on its own, so
+removals that are spread across providers do not add up. A marker with a time
+after the removal counts as no marker, and the server writes an audit entry
+with the code `principal.removal-alert-marker-invalid`.
+
+When the alert cannot be written, the sign-in goes on, the server writes an
+ERROR log line and an audit entry of the failed alert, and it tries the alert
+again at the next removal of the source.
+
+The server refuses a sign-in when it cannot store the membership changes of
+its group claims. No session starts then.
 
 ## Errors on these routes
 

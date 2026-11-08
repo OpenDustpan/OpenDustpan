@@ -57,8 +57,8 @@ func (r *Registry) Lookup(level Level, key string) (Declaration, bool) {
 	}
 
 	return Declaration{
-		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, Apply: "",
-		Check: nil, ReducesSecurity: nil, Doc: "",
+		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, StaticCredentialHost: false,
+		Apply: "", Check: nil, ReducesSecurity: nil, Doc: "",
 	}, false
 }
 
