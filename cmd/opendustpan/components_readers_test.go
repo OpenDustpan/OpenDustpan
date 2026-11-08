@@ -58,6 +58,7 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 	"ldap-group-member-attribute":     "ldapProviders",
 	"ldap-group-member-of-attribute":  "ldapProviders",
 	"ldap-group-name-attribute":       "ldapProviders",
+	"ldap-allowed-ranges":             "ldapProviders",
 	"ldap-no-auto-create":             "ldapProviders",
 	"blob-cache-bytes":                "blobCacheBytes",
 	"max-checkpoint-bytes":            "maxCheckpointBytes",

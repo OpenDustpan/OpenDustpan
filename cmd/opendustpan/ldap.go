@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/egress"
 )
 
 // Variables of the password of the service account of the LDAP sign-in. A
@@ -34,6 +35,7 @@ type ldapFlags struct {
 	providerID             string
 	displayName            string
 	caFile                 string
+	allowedRanges          string
 	bindDN                 string
 	baseDN                 string
 	userFilter             string
@@ -64,6 +66,7 @@ func (l *ldapFlags) register(fs *flag.FlagSet) {
 		{"ldap-provider", &l.providerID},
 		{"ldap-display-name", &l.displayName},
 		{"ldap-ca-file", &l.caFile},
+		{"ldap-allowed-ranges", &l.allowedRanges},
 		{"ldap-bind-dn", &l.bindDN},
 		{"ldap-base-dn", &l.baseDN},
 		{"ldap-user-filter", &l.userFilter},
@@ -92,7 +95,7 @@ func (l *ldapFlags) register(fs *flag.FlagSet) {
 // subject and the groups have defaults, so they do not count.
 func (l *ldapFlags) partial() bool {
 	for _, v := range []string{
-		l.providerID, l.displayName, l.caFile, l.bindDN, l.baseDN, l.userFilter, l.userNameAttribute,
+		l.providerID, l.displayName, l.caFile, l.allowedRanges, l.bindDN, l.baseDN, l.userFilter, l.userNameAttribute,
 		l.emailAttribute, l.nameAttribute, l.disabledAttribute, l.disabledMask, l.disabledValues, l.groupBaseDN,
 		l.groupFilter, l.groupMemberAttribute, l.groupMemberOfAttribute, l.groupNameAttribute,
 	} {
@@ -170,15 +173,37 @@ func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
 		return dustpan.LDAPProvider{}, err //nolint:exhaustruct // An error answers no provider.
 	}
 
+	ranges, err := egress.ParseAllowedRanges(splitList(l.allowedRanges))
+	if err != nil {
+		//nolint:exhaustruct // An error answers no provider.
+		return dustpan.LDAPProvider{}, fmt.Errorf("invalid --ldap-allowed-ranges %q: %w", l.allowedRanges, err)
+	}
+
 	return dustpan.LDAPProvider{
-		RootCAs: roots, ID: l.providerID, DisplayName: l.displayName, URL: strings.TrimSpace(l.url),
-		BindDN: l.bindDN, BindPassword: password, BaseDN: l.baseDN, UserFilter: l.userFilter,
-		UserNameAttribute: l.userNameAttribute, EmailAttribute: l.emailAttribute, NameAttribute: l.nameAttribute,
-		Subject: l.subject, DisabledAttribute: l.disabledAttribute, Groups: l.groups, GroupBaseDN: l.groupBaseDN,
-		GroupFilter: l.groupFilter, GroupMemberAttribute: l.groupMemberAttribute,
-		GroupMemberOfAttribute: l.groupMemberOfAttribute, GroupNameAttribute: l.groupNameAttribute,
-		DisabledValues: splitList(l.disabledValues), DisabledMask: mask, StartTLS: l.startTLS,
-		AutoCreate: !l.noAutoCreate,
+		RootCAs:                roots,
+		AllowedRanges:          ranges,
+		ID:                     l.providerID,
+		DisplayName:            l.displayName,
+		URL:                    strings.TrimSpace(l.url),
+		BindDN:                 l.bindDN,
+		BindPassword:           password,
+		BaseDN:                 l.baseDN,
+		UserFilter:             l.userFilter,
+		UserNameAttribute:      l.userNameAttribute,
+		EmailAttribute:         l.emailAttribute,
+		NameAttribute:          l.nameAttribute,
+		Subject:                l.subject,
+		DisabledAttribute:      l.disabledAttribute,
+		Groups:                 l.groups,
+		GroupBaseDN:            l.groupBaseDN,
+		GroupFilter:            l.groupFilter,
+		GroupMemberAttribute:   l.groupMemberAttribute,
+		GroupMemberOfAttribute: l.groupMemberOfAttribute,
+		GroupNameAttribute:     l.groupNameAttribute,
+		DisabledValues:         splitList(l.disabledValues),
+		DisabledMask:           mask,
+		StartTLS:               l.startTLS,
+		AutoCreate:             !l.noAutoCreate,
 	}, nil
 }
 

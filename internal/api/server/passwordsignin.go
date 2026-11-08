@@ -54,6 +54,9 @@ type PasswordProvider struct {
 // LDAPSettings are the settings of an LDAP provider that the list of the
 // providers shows. The bind password is not one of them.
 type LDAPSettings struct {
+	// AllowedRanges are the private-network ranges that a connection to the
+	// directory may reach, in addition to public addresses.
+	AllowedRanges          []string
 	URL                    string
 	BindDN                 string
 	BaseDN                 string
@@ -75,23 +78,24 @@ type LDAPSettings struct {
 // providerLDAP is the LDAP settings of a provider on the wire. BindPasswordSet
 // is true when the provider has a bind password; no answer holds it.
 type providerLDAP struct {
-	URL                    string `json:"url"`
-	BindDN                 string `json:"bindDn"`
-	BaseDN                 string `json:"baseDn"`
-	UserFilter             string `json:"userFilter"`
-	UserNameAttribute      string `json:"userNameAttribute"`
-	EmailAttribute         string `json:"emailAttribute"`
-	NameAttribute          string `json:"nameAttribute"`
-	Subject                string `json:"subject"`
-	DisabledAttribute      string `json:"disabledAttribute"`
-	Groups                 string `json:"groups"`
-	GroupBaseDN            string `json:"groupBaseDn"`
-	GroupFilter            string `json:"groupFilter"`
-	GroupMemberAttribute   string `json:"groupMemberAttribute"`
-	GroupMemberOfAttribute string `json:"groupMemberOfAttribute"`
-	GroupNameAttribute     string `json:"groupNameAttribute"`
-	StartTLS               bool   `json:"startTLS"`
-	BindPasswordSet        bool   `json:"bindPasswordSet"`
+	AllowedRanges          []string `json:"allowedRanges"`
+	URL                    string   `json:"url"`
+	BindDN                 string   `json:"bindDn"`
+	BaseDN                 string   `json:"baseDn"`
+	UserFilter             string   `json:"userFilter"`
+	UserNameAttribute      string   `json:"userNameAttribute"`
+	EmailAttribute         string   `json:"emailAttribute"`
+	NameAttribute          string   `json:"nameAttribute"`
+	Subject                string   `json:"subject"`
+	DisabledAttribute      string   `json:"disabledAttribute"`
+	Groups                 string   `json:"groups"`
+	GroupBaseDN            string   `json:"groupBaseDn"`
+	GroupFilter            string   `json:"groupFilter"`
+	GroupMemberAttribute   string   `json:"groupMemberAttribute"`
+	GroupMemberOfAttribute string   `json:"groupMemberOfAttribute"`
+	GroupNameAttribute     string   `json:"groupNameAttribute"`
+	StartTLS               bool     `json:"startTLS"`
+	BindPasswordSet        bool     `json:"bindPasswordSet"`
 }
 
 // Answers of the password sign-in of a provider.
@@ -264,12 +268,36 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 		Enabled: true, ClientSecretSet: false, Mode: string(session.ModeLDAP), AuthorizationURL: "", TokenURL: "",
 		UserinfoURL: "", Claims: nil,
 		LDAP: &providerLDAP{
-			URL: s.URL, BindDN: s.BindDN, BaseDN: s.BaseDN, UserFilter: s.UserFilter,
-			UserNameAttribute: s.UserNameAttribute, EmailAttribute: s.EmailAttribute, NameAttribute: s.NameAttribute,
-			Subject: s.Subject, DisabledAttribute: s.DisabledAttribute, Groups: s.Groups, GroupBaseDN: s.GroupBaseDN,
-			GroupFilter: s.GroupFilter, GroupMemberAttribute: s.GroupMemberAttribute,
-			GroupMemberOfAttribute: s.GroupMemberOfAttribute, GroupNameAttribute: s.GroupNameAttribute,
-			StartTLS: s.StartTLS, BindPasswordSet: true,
+			AllowedRanges: nonNilRanges(
+				s.AllowedRanges,
+			),
+			URL:                    s.URL,
+			BindDN:                 s.BindDN,
+			BaseDN:                 s.BaseDN,
+			UserFilter:             s.UserFilter,
+			UserNameAttribute:      s.UserNameAttribute,
+			EmailAttribute:         s.EmailAttribute,
+			NameAttribute:          s.NameAttribute,
+			Subject:                s.Subject,
+			DisabledAttribute:      s.DisabledAttribute,
+			Groups:                 s.Groups,
+			GroupBaseDN:            s.GroupBaseDN,
+			GroupFilter:            s.GroupFilter,
+			GroupMemberAttribute:   s.GroupMemberAttribute,
+			GroupMemberOfAttribute: s.GroupMemberOfAttribute,
+			GroupNameAttribute:     s.GroupNameAttribute,
+			StartTLS:               s.StartTLS,
+			BindPasswordSet:        true,
 		},
 	}
+}
+
+// nonNilRanges returns ranges, or an empty list for nil, so the answer shows
+// the effective value [] and not null.
+func nonNilRanges(ranges []string) []string {
+	if ranges == nil {
+		return []string{}
+	}
+
+	return ranges
 }

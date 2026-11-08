@@ -69,6 +69,7 @@ the same list.
 | `--ldap-display-name` | `DUSTPAN_LDAP_DISPLAY_NAME` | `ldap.displayName` | (the provider ID) |
 | `--ldap-start-tls` | `DUSTPAN_LDAP_START_TLS` | `ldap.startTLS` | false |
 | `--ldap-ca-file` | `DUSTPAN_LDAP_CA_FILE` | `ldap.caFile` | (none: the system roots) |
+| `--ldap-allowed-ranges` | `DUSTPAN_LDAP_ALLOWED_RANGES` | `ldap.allowedRanges` | (none: a connection reaches public addresses only). Set the range of a directory on a private network, for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, also inside a range. It checks the address at each connection. |
 | `--ldap-bind-dn` | `DUSTPAN_LDAP_BIND_DN` | `ldap.bindDN` | (none) |
 | `--ldap-base-dn` | `DUSTPAN_LDAP_BASE_DN` | `ldap.baseDN` | (none) |
 | `--ldap-user-filter` | `DUSTPAN_LDAP_USER_FILTER` | `ldap.userFilter` | (none). The server escapes the user name before it puts it in place of `{user}`. |

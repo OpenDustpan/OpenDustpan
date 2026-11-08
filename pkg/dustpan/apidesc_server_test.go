@@ -23,7 +23,7 @@ func newEveryModuleServer(t *testing.T) *dustpan.Server {
 // connection until a sign-in.
 func describedLDAPProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
-		RootCAs: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
+		RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
 		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: "service-password",
 		BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(&(objectClass=person)(uid={user}))",
 		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",

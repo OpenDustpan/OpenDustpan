@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -57,6 +58,15 @@ func ldapSetupCases() []ldapSetupCase {
 		{name: "unknown groups source", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.Groups = "all"
 		}, want: "ldap sign-in", withOIDC: false},
+		{name: "allowed range that is too wide", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+		}, want: "allowed ranges", withOIDC: false},
+		{name: "allowed loopback range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+		}, want: "allowed ranges", withOIDC: false},
+		{name: "allowed private range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+		}, want: "", withOIDC: false},
 		{name: "reserved local ID", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.ID = session.LocalProviderID
 		}, want: "provider ID", withOIDC: false},
@@ -109,7 +119,7 @@ func TestNewServerLDAPSetup(t *testing.T) {
 // ldapProvider returns a valid LDAP provider with the ID corp-ldap.
 func ldapProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
-		RootCAs: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
+		RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
 		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: "bind-password-of-the-test",
 		BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(&(objectClass=person)(uid={user}))",
 		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",

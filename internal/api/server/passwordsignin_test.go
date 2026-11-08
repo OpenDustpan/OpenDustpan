@@ -69,7 +69,8 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 	e := newProviderEnvWith(t, []apiserver.PasswordProvider{{
 		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true,
 		LDAP: apiserver.LDAPSettings{
-			URL: dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
+			AllowedRanges: nil,
+			URL:           dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
 			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
 			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
@@ -319,10 +320,11 @@ type ldapListProvider struct {
 
 // ldapListSettings are the LDAP settings of a provider of ldapListDoc.
 type ldapListSettings struct {
-	BindDN          string `json:"bindDn"`
-	Subject         string `json:"subject"`
-	Groups          string `json:"groups"`
-	BindPasswordSet bool   `json:"bindPasswordSet"`
+	AllowedRanges   []string `json:"allowedRanges"`
+	BindDN          string   `json:"bindDn"`
+	Subject         string   `json:"subject"`
+	Groups          string   `json:"groups"`
+	BindPasswordSet bool     `json:"bindPasswordSet"`
 }
 
 // checkLDAPListEntry fails when p is not the static LDAP provider with its
@@ -331,7 +333,8 @@ func checkLDAPListEntry(t *testing.T, p *ldapListProvider) {
 	t.Helper()
 
 	if p.Source != "static" || p.Mode != "ldap" || p.LDAP == nil || p.LDAP.BindDN != ldaptest.ServiceDN ||
-		p.LDAP.Subject != "entryUUID" || p.LDAP.Groups != "off" || !p.LDAP.BindPasswordSet {
+		p.LDAP.Subject != "entryUUID" || p.LDAP.Groups != "off" || !p.LDAP.BindPasswordSet ||
+		p.LDAP.AllowedRanges == nil || len(p.LDAP.AllowedRanges) != 0 {
 		t.Fatalf("provider = %+v, want static ldap with its effective settings", p)
 	}
 }

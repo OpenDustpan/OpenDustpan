@@ -69,6 +69,7 @@ var componentOnly = map[string]string{
 	"ldap-group-member-attribute":     ComponentAPI,
 	"ldap-group-member-of-attribute":  ComponentAPI,
 	"ldap-group-name-attribute":       ComponentAPI,
+	"ldap-allowed-ranges":             ComponentAPI,
 	"ldap-no-auto-create":             ComponentAPI,
 	"max-checkpoint-bytes":            ComponentAPI,
 	"checkpoint-delta-cutoff":         ComponentAPI,

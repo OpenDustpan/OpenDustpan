@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
@@ -24,13 +25,17 @@ import (
 // connection with no TLS is refused, except to a loopback IP address or when
 // the setting egress.allowPlainConnections is on; the server reads that
 // setting at each sign-in. RootCAs are the certificate authorities of the
-// directory: nil uses the system roots. BindPassword is the password of the
+// directory: nil uses the system roots. AllowedRanges are the address ranges
+// of a private network that a connection to the directory may reach, in
+// addition to public addresses; NewServer refuses a range that is too wide
+// (see egress.ParseAllowedRanges). BindPassword is the password of the
 // service account. Subject is "entryUUID", "objectGUID" or the name of another
 // attribute. Groups is "off", "search" or "memberOf"; the server reads the
 // groups of a person and applies no membership. AutoCreate makes a principal
 // at the first sign-in of a person, with no grant and no group.
 type LDAPProvider struct {
 	RootCAs                *x509.CertPool
+	AllowedRanges          []netip.Prefix
 	ID                     string
 	DisplayName            string
 	URL                    string
@@ -81,6 +86,15 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 	for i := range cfg.ldapProviders {
 		p := &cfg.ldapProviders[i]
 
+		// Defense in depth: the flag parser refuses a range that is too wide,
+		// and the egress rules never open loopback or metadata addresses. This
+		// check stays so that an embedder cannot pass a wide range.
+		for _, r := range p.AllowedRanges {
+			if rangeErr := egress.CheckAllowedRange(r); rangeErr != nil {
+				return nil, fmt.Errorf("%w: provider %q: allowed ranges: %w", errLDAPSetup, p.ID, rangeErr)
+			}
+		}
+
 		m, err := ldapauth.NewMethod(ldapConfig(cfg, p, settingsSvc))
 		if err != nil {
 			return nil, fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, err)
@@ -89,12 +103,25 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 		out = append(out, serverapi.PasswordProvider{
 			Method: m, ID: p.ID, DisplayName: displayNameOr(p.DisplayName, p.ID), AutoCreate: p.AutoCreate,
 			LDAP: serverapi.LDAPSettings{
-				URL: p.URL, BindDN: p.BindDN, BaseDN: p.BaseDN, UserFilter: p.UserFilter,
-				UserNameAttribute: p.UserNameAttribute, EmailAttribute: p.EmailAttribute,
-				NameAttribute: p.NameAttribute, Subject: subjectOr(p.Subject), DisabledAttribute: p.DisabledAttribute,
-				Groups: groupsOr(p.Groups), GroupBaseDN: p.GroupBaseDN, GroupFilter: p.GroupFilter,
-				GroupMemberAttribute: p.GroupMemberAttribute, GroupMemberOfAttribute: p.GroupMemberOfAttribute,
-				GroupNameAttribute: p.GroupNameAttribute, StartTLS: p.StartTLS,
+				AllowedRanges: rangeTexts(
+					p.AllowedRanges,
+				),
+				URL:                    p.URL,
+				BindDN:                 p.BindDN,
+				BaseDN:                 p.BaseDN,
+				UserFilter:             p.UserFilter,
+				UserNameAttribute:      p.UserNameAttribute,
+				EmailAttribute:         p.EmailAttribute,
+				NameAttribute:          p.NameAttribute,
+				Subject:                subjectOr(p.Subject),
+				DisabledAttribute:      p.DisabledAttribute,
+				Groups:                 groupsOr(p.Groups),
+				GroupBaseDN:            p.GroupBaseDN,
+				GroupFilter:            p.GroupFilter,
+				GroupMemberAttribute:   p.GroupMemberAttribute,
+				GroupMemberOfAttribute: p.GroupMemberOfAttribute,
+				GroupNameAttribute:     p.GroupNameAttribute,
+				StartTLS:               p.StartTLS,
 			},
 		})
 	}
@@ -133,7 +160,7 @@ func ldapConfig(cfg *settings, p *LDAPProvider, settingsSvc *setting.Service) ld
 			MemberAttribute: p.GroupMemberAttribute, MemberOfAttribute: p.GroupMemberOfAttribute,
 			NameAttribute: p.GroupNameAttribute,
 		},
-		Egress:         egress.Rules{Allow: nil, LoopbackForTests: cfg.ldapLoopback},
+		Egress:         egress.Rules{Allow: p.AllowedRanges, LoopbackForTests: cfg.ldapLoopback},
 		ConnectTimeout: 0, OperationTimeout: 0, GroupTimeout: 0, StartTLS: p.StartTLS,
 	}
 }
@@ -170,6 +197,16 @@ func ldapIDs(cfg *settings) []string {
 	out := make([]string, 0, len(cfg.ldapProviders))
 	for i := range cfg.ldapProviders {
 		out = append(out, cfg.ldapProviders[i].ID)
+	}
+
+	return out
+}
+
+// rangeTexts returns the text of each range of ranges.
+func rangeTexts(ranges []netip.Prefix) []string {
+	out := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		out = append(out, r.String())
 	}
 
 	return out

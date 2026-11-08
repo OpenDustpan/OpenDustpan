@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/egress"
 )
 
 // ldapTestPassword is the password of the service account in the tests of the
@@ -19,7 +20,7 @@ const ldapTestPassword = "bind-password-of-the-test"
 // the subject and the groups.
 func defaultLDAP() ldapFlags {
 	return ldapFlags{
-		url: "", providerID: "", displayName: "", caFile: "", bindDN: "", baseDN: "", userFilter: "",
+		url: "", providerID: "", displayName: "", caFile: "", allowedRanges: "", bindDN: "", baseDN: "", userFilter: "",
 		userNameAttribute: "", emailAttribute: "", nameAttribute: "", subject: "entryUUID",
 		disabledAttribute: "", disabledMask: "", disabledValues: "", groups: "off", groupBaseDN: "",
 		groupFilter: "", groupMemberAttribute: "", groupMemberOfAttribute: "", groupNameAttribute: "",
@@ -134,6 +135,22 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 		{
 			"a CA file that does not exist", func(l *ldapFlags) { l.caFile = filepath.Join(dir, "missing") },
 			withPassword, 0, os.ErrNotExist,
+		},
+		{"ranges with no URL", func(l *ldapFlags) {
+			*l = defaultLDAP()
+			l.allowedRanges = "10.20.0.0/16"
+		}, withPassword, 0, errNoLDAPURL},
+		{
+			"a range that is too wide", func(l *ldapFlags) { l.allowedRanges = "10.0.0.0/4" }, withPassword, 0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"a loopback range", func(l *ldapFlags) { l.allowedRanges = "127.0.0.0/8" }, withPassword, 0,
+			egress.ErrRangeTooWide,
+		},
+		{
+			"a private range", func(l *ldapFlags) { l.allowedRanges = "10.20.0.0/16, fd00:20::/48" }, withPassword, 1,
+			nil,
 		},
 		{"the password in the variable", func(*ldapFlags) {}, withPassword, 1, nil},
 		{
