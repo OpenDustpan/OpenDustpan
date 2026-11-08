@@ -23,7 +23,7 @@ func removalAlertDeclaration(t *testing.T, key string) setting.Declaration {
 
 	return setting.Declaration{
 		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, Apply: "", Check: nil,
-		ReducesSecurity: nil, Doc: "",
+		StaticCredentialHost: false, ReducesSecurity: nil, Doc: "",
 	}
 }
 
