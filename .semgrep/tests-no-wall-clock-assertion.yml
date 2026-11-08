@@ -96,6 +96,293 @@ rules:
       # and the reason. Remove the entry when a fix lands. Add an entry only
       # for a benchmark or a step against a real network, or for an offender
       # that the sweep lists and that is not fixed yet.
+      #
+      # The ranks come from the sweep: how often the package of the test ran
+      # in merge groups, and how close the bound is to the time on a loaded
+      # runner. An entry matches each function of that name in any test file,
+      # so a name that more than one file defines names its files here.
+      # Rank 1. TestBackupTakeoverAfterKill in
+      # internal/servertest/backup_test.go: upper bound 3*backupLease+5s = 11s.
+      # Failed once in 199 merge-group runs: took 12.7s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestBackupTakeoverAfterKill(...) { ... }
+      # Rank 2. checkPlanPage in
+      # pkg/store/postgres/namespace_page_internal_test.go: upper bound 250ms on
+      # one page query. Not fixed yet.
+      - pattern-not-inside: |
+          func checkPlanPage(...) { ... }
+      # Rank 3. TestPasskeyFailureGateBudget in
+      # pkg/dustpan/passkey_gate_internal_test.go: upper bound 1s on one
+      # refusal. The package runs about 400s under -race. Not fixed yet.
+      - pattern-not-inside: |
+          func TestPasskeyFailureGateBudget(...) { ... }
+      # Rank 4. TestBuildJournalCheckpointTimesOut in
+      # pkg/stack/journal_bounds_test.go: upper bound 1s on one refused build.
+      #. Not fixed yet.
+      - pattern-not-inside: |
+          func TestBuildJournalCheckpointTimesOut(...) { ... }
+      # Rank 5. checkSwapDoesNotQueueReads in
+      # pkg/store/postgres/snapshot_swap_internal_test.go: upper bound readBound
+      # = 500ms. Not fixed yet.
+      - pattern-not-inside: |
+          func checkSwapDoesNotQueueReads(...) { ... }
+      # Rank 6. writeStacksPastThreshold in pkg/store/sqlite/wal_test.go: upper
+      # bound 2s. Not fixed yet.
+      - pattern-not-inside: |
+          func writeStacksPastThreshold(...) { ... }
+      # Rank 7. TestReleaseOfStalledLongConnFreesTheSlot in
+      # pkg/store/postgres/long_path_internal_test.go: upper bound
+      # resetTimeout+1s = 3s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestReleaseOfStalledLongConnFreesTheSlot(...) { ... }
+      # Rank 8. TestStatementDeadlineClosesStalledConnection in
+      # pkg/store/postgres/failover_internal_test.go: upper bound deadlineBound
+      # = 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestStatementDeadlineClosesStalledConnection(...) { ... }
+      # Rank 9. waitForFileLine in pkg/dustpan/canary_test.go: deadline 5s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func waitForFileLine(...) { ... }
+      # Rank 10. TestTheReadOfTheGroupsHasOneDeadline in
+      # internal/ldapauth/hostile_test.go: upper bound MaxTimeout/2 = 5s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func TestTheReadOfTheGroupsHasOneDeadline(...) { ... }
+      # Rank 11. TestLazyWaiterLeavesAtItsDeadline in
+      # internal/oauth/client_test.go: upper bound 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestLazyWaiterLeavesAtItsDeadline(...) { ... }
+      # Rank 12. waitSurvivorClaim in internal/servertest/backup_test.go:
+      # deadline 4*backupLease+10s = 18s. Same takeover as rank 1. Not fixed yet.
+      - pattern-not-inside: |
+          func waitSurvivorClaim(...) { ... }
+      # Rank 13. checkProbeBody in pkg/dustpan/health_internal_test.go: upper
+      # bound 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func checkProbeBody(...) { ... }
+      # Rank 14. waitUntil in pkg/dustpan/before_serve_test.go: deadline 10s.
+      #. Not fixed yet.
+      - pattern-not-inside: |
+          func waitUntil(...) { ... }
+      # Rank 15. waitForRuns in pkg/dustpan/schedules_internal_test.go: deadline
+      # scheduleTestDeadline = 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForRuns(...) { ... }
+      # Rank 16. waitForPurge in pkg/dustpan/schedules_internal_test.go:
+      # deadline 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForPurge(...) { ... }
+      # Rank 17. waitForMetric in pkg/dustpan/auditsinks_test.go: deadline
+      # shipWait = 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForMetric(...) { ... }
+      # Rank 18. staleFinish in pkg/store/storetest/backup_test.go: deadline
+      # 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func staleFinish(...) { ... }
+      # Rank 19. terminateSessions in pkg/store/postgres/store_lost_test.go:
+      # deadline killWait = 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func terminateSessions(...) { ... }
+      # Rank 20. waitForFailedTicks in pkg/store/sqlite/wal_test.go: deadline
+      # 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForFailedTicks(...) { ... }
+      # Rank 21. waitForWALBelow in pkg/store/sqlite/wal_test.go: deadline 10s.
+      #. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForWALBelow(...) { ... }
+      # Rank 22. waitForBusyWarnings in pkg/store/sqlite/wal_test.go: deadline
+      # 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForBusyWarnings(...) { ... }
+      # Rank 23. waitForStoreTicks in pkg/store/sqlite/wal_test.go: deadline 10s
+      # to 15s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForStoreTicks(...) { ... }
+      # Rank 24, 57, 58. waitFor in pkg/backup/service_durable_test.go,
+      # pkg/logsink/canary_test.go, pkg/durable/runner_test.go: deadline
+      # durableWait = 15s; deadline 5s (2 sites); deadline settleWait = 10s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func waitFor(...) { ... }
+      # Rank 25. TestHealthReadySlowCheck in pkg/dustpan/health_test.go: upper
+      # bound 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestHealthReadySlowCheck(...) { ... }
+      # Rank 26. eventually in internal/servertest/auditcheck_test.go: deadline
+      # auditCheckWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func eventually(...) { ... }
+      # Rank 27. waitBackup in internal/servertest/backup_test.go: deadline
+      # limit, 30s at the callers. Not fixed yet.
+      - pattern-not-inside: |
+          func waitBackup(...) { ... }
+      # Rank 28. TestAuditChainMismatchAfterAnotherApproval in
+      # pkg/dustpan/auditchain_test.go: deadline chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestAuditChainMismatchAfterAnotherApproval(...) { ... }
+      # Rank 29. waitForMaintenance in pkg/dustpan/auditchain_test.go: deadline
+      # chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForMaintenance(...) { ... }
+      # Rank 30. waitForLive in pkg/dustpan/auditchain_test.go: deadline
+      # chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForLive(...) { ... }
+      # Rank 31. waitForRecord in pkg/dustpan/auditchain_test.go: deadline
+      # chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForRecord(...) { ... }
+      # Rank 32. waitForMetricLine in pkg/dustpan/auditchain_test.go: deadline
+      # chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForMetricLine(...) { ... }
+      # Rank 33. waitForCopy in pkg/dustpan/auditcheckpoints_test.go: deadline
+      # chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForCopy(...) { ... }
+      # Rank 34. waitForInvalidScopes in pkg/dustpan/auditcheckpoints_test.go:
+      # deadline chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForInvalidScopes(...) { ... }
+      # Rank 35. waitForPostgresRecord in
+      # pkg/dustpan/auditchain_durable_test.go: deadline chainWait = 30s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func waitForPostgresRecord(...) { ... }
+      # Rank 36. waitForPostgresMaintenance in
+      # pkg/dustpan/auditchain_durable_test.go: deadline chainWait = 30s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func waitForPostgresMaintenance(...) { ... }
+      # Rank 37. runTakeoverRunner in pkg/dustpan/auditchain_durable_test.go:
+      # deadline chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func runTakeoverRunner(...) { ... }
+      # Rank 38. waitTakeoverReleased in pkg/dustpan/auditchain_durable_test.go:
+      # deadline chainWait = 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitTakeoverReleased(...) { ... }
+      # Rank 39. waitTakeoverSucceeded in
+      # pkg/dustpan/auditchain_durable_test.go: deadline 30s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitTakeoverSucceeded(...) { ... }
+      # Rank 40. TestWaiterWakesWhenMissesInFlightResolve in
+      # internal/authgate/shared_test.go: upper bound 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestWaiterWakesWhenMissesInFlightResolve(...) { ... }
+      # Rank 41. TestProcessAdapterTimeoutCoversTheWrite in
+      # internal/clientgen/conformance/process_test.go: upper bound 5s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func TestProcessAdapterTimeoutCoversTheWrite(...) { ... }
+      # Rank 42. TestTheLauncherStopsAStep in pkg/launcher/run/run_test.go:
+      # upper bound 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestTheLauncherStopsAStep(...) { ... }
+      # Rank 43. TestSendSlowServer in pkg/notify/chat/sender_test.go: upper
+      # bound 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestSendSlowServer(...) { ... }
+      # Rank 44. changeAuditChain in e2e/audit_chain_test.go: deadline
+      # auditChainWait = 60s. Not fixed yet.
+      - pattern-not-inside: |
+          func changeAuditChain(...) { ... }
+      # Rank 45. waitForEntries in e2e/audit_sinks_test.go: deadline sinkWait =
+      # 90s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForEntries(...) { ... }
+      # Rank 46. waitRestoreSucceeded in pkg/store/postgres/postgres_test.go:
+      # deadline StuckTestLimit = 20min. Not fixed yet.
+      - pattern-not-inside: |
+          func waitRestoreSucceeded(...) { ... }
+      # Rank 47. waitBackupEnd in pkg/store/sqlite/backup_recovery_test.go:
+      # deadline StuckTestLimit = 20min. Not fixed yet.
+      - pattern-not-inside: |
+          func waitBackupEnd(...) { ... }
+      # Rank 48. checkMaxLifetime in e2e/tokenpolicy_test.go: window around now:
+      # token expiry within 50min to 1h of now. Fails only after 10 minutes of
+      # delay. Not fixed yet.
+      - pattern-not-inside: |
+          func checkMaxLifetime(...) { ... }
+      # Rank 49. checkExchanged in internal/api/trustrules/exchange_test.go:
+      # window around now: token expiry within 59min to 1h of now. Fails only
+      # after 1 minute of delay. Not fixed yet.
+      - pattern-not-inside: |
+          func checkExchanged(...) { ... }
+      # Rank 50. waitHashFor in pkg/audit/ship_hash_test.go: deadline 5s. Not
+      # fixed yet.
+      - pattern-not-inside: |
+          func waitHashFor(...) { ... }
+      # Rank 51. TestWaitingCapAnswers429WithNoStoreRead in
+      # internal/authgate/authgate_test.go: deadline 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestWaitingCapAnswers429WithNoStoreRead(...) { ... }
+      # Rank 52. TestSendStopsAtTheDeadline in
+      # pkg/notify/webhook/webhook_test.go: upper bound 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestSendStopsAtTheDeadline(...) { ... }
+      # Rank 53. TestDeleteRetriedDoesNotRetryAPermanentError in
+      # pkg/blob/retry_test.go: upper bound 100ms. Not fixed yet.
+      - pattern-not-inside: |
+          func TestDeleteRetriedDoesNotRetryAPermanentError(...) { ... }
+      # Rank 54. waitStandbyTakeover in pkg/audit/ship_test.go: deadline 10s.
+      #. Not fixed yet.
+      - pattern-not-inside: |
+          func waitStandbyTakeover(...) { ... }
+      # Rank 55. TestRunDoesNotWaitForAnAdapterThatIgnoresItsContext in
+      # pkg/profile/provider/run_bound_test.go: upper bound 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestRunDoesNotWaitForAnAdapterThatIgnoresItsContext(...) { ... }
+      # Rank 56. TestCloseThatTimesOutCountsTheUnwrittenRecords in
+      # pkg/logsink/slogsink/slogsink_test.go: deadline 5s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestCloseThatTimesOutCountsTheUnwrittenRecords(...) { ... }
+      # Rank 59. waitForOps in pkg/durable/scheduler_test.go: deadline
+      # settleWait = 10s. Not fixed yet.
+      - pattern-not-inside: |
+          func waitForOps(...) { ... }
+      # Rank 60. TestPatternMatchesIsBounded in
+      # pkg/collection/placement_test.go: upper bound 20s. Not fixed yet.
+      - pattern-not-inside: |
+          func TestPatternMatchesIsBounded(...) { ... }
+      # Rank 61. TestReadinessDuringDrain in internal/servertest/drain_test.go:
+      # lower bound drainTestPeriod = 5s. Load cannot make it fail. Not fixed
+      # yet.
+      - pattern-not-inside: |
+          func TestReadinessDuringDrain(...) { ... }
+      # Rank 62. TestDelayCallsThroughAfterTheDelay in
+      # internal/store/storefault/storefault_test.go +
+      # internal/blob/blobfault/blobfault_test.go: lower bound 50ms. Load cannot
+      # make it fail. Not fixed yet.
+      - pattern-not-inside: |
+          func TestDelayCallsThroughAfterTheDelay(...) { ... }
+      # Rank 63. TestSweepPasses in pkg/job/artifactsweep_test.go: lower bound
+      # window start at least sweep window - 1min ago. Load cannot make it fail.
+      # Not fixed yet.
+      - pattern-not-inside: |
+          func TestSweepPasses(...) { ... }
+      # Rank 64. TestOverTheBudgetEveryRequestWaitsBeforeTheStore in
+      # internal/authgate/authgate_test.go: lower bound 20ms. Load cannot make
+      # it fail. Not fixed yet.
+      - pattern-not-inside: |
+          func TestOverTheBudgetEveryRequestWaitsBeforeTheStore(...) { ... }
+      # Rank 65. TestShipperReleaseRespectsShipReleaseTimeout in
+      # pkg/audit/ship_test.go: lower bound ShipReleaseTimeout = 5s. Load cannot
+      # make it fail. Not fixed yet.
+      - pattern-not-inside: |
+          func TestShipperReleaseRespectsShipReleaseTimeout(...) { ... }
+      # Rank 66. TestDeleteRetriedBacksOff in pkg/blob/retry_test.go: lower
+      # bound 100ms. Load cannot make it fail. Not fixed yet.
+      - pattern-not-inside: |
+          func TestDeleteRetriedBacksOff(...) { ... }
+      # Rank 67. TestLatencyThroughProxy in e2e/faults/faults_test.go: lower
+      # bound 500ms through Toxiproxy. Permanent: a step against a real network
+      # proxy, and a lower bound, so load cannot make it fail.
+      - pattern-not-inside: |
+          func TestLatencyThroughProxy(...) { ... }
     paths:
       include:
         - "*_test.go"
