@@ -87,8 +87,10 @@ func (s *RestoreService) unverifiedLimit() int {
 
 // recordUnverifiedOverLimit records, as an audit event of the restore and in
 // the log, that the manifest of the backup names more unverified keys than the
-// bound allows. The restore goes on: the bound stops a new backup, and a
-// manifest that an earlier version of the server wrote stays restorable.
+// bound allows. A second run of the step after a crash records the same
+// object, and the store keeps one copy, so the restore has one such event. The
+// log line can repeat. The restore goes on: the bound stops a new backup, and
+// a manifest that an earlier version of the server wrote stays restorable.
 func (s *RestoreService) recordUnverifiedOverLimit(
 	ctx context.Context, fence durable.StepFence, in restoreInput, count, limit int,
 ) error {
