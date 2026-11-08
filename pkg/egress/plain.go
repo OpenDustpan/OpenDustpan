@@ -62,6 +62,12 @@ func PlainAllowed(ctx context.Context, read PlainRead) bool {
 		return false
 	}
 
+	// A nil settings service in the interface is not a nil interface, and its
+	// Effective panics. Refuse it as no reader.
+	if svc, ok := read.(*setting.Service); ok && svc == nil {
+		return false
+	}
+
 	item, err := read.Effective(ctx, setting.InstallationScope(), SettingAllowPlainConnections)
 	if err != nil {
 		return false

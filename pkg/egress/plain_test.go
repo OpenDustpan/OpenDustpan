@@ -147,6 +147,7 @@ func TestPlainAllowedRefusesAReadThatFails(t *testing.T) {
 		{name: "a read error", reader: plainReaderError(errRead)},
 		{name: "an unknown key", reader: plainReaderError(setting.ErrUnknownKey)},
 		{name: "no reader", reader: nil},
+		{name: "a nil settings service", reader: (*setting.Service)(nil)},
 	}
 
 	for _, tc := range tests {
