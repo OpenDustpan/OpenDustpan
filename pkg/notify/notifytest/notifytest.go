@@ -72,6 +72,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"record after a later claim is ErrConflict", testRecordConflict},
 		{"redeliver makes a delivery pending again", testRedeliver},
 		{"redeliver waits after a delivery stops", testRedeliverWait},
+		{"redeliver stops at its limit", testRedeliverLimit},
+		{"redeliver follows the retry schedule", testRedeliverSchedule},
+		{"redeliver counts manual redeliveries only", testRedeliveriesCount},
 		{"append refuses a repeated notification ID", testAppendRepeatedID},
 		{"enqueue refuses a repeated or invalid delivery", testEnqueueID},
 		{"history shows only the deliveries of its scope", testHistoryScope},
@@ -231,6 +234,7 @@ func deliveryIn(scope namespace.Name, id, ntf string, next time.Time) notify.Del
 		Principal:    "alice",
 		State:        notify.DeliveryPending,
 		Attempts:     0,
+		Redeliveries: 0,
 		NextAt:       next,
 		LastError:    "",
 		DeliveredAt:  time.Time{},
@@ -711,7 +715,7 @@ func testRedeliver(t *testing.T, h Harness) {
 	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
 	abandon(t, h, fence, shop)
 
-	err := h.Deliveries.Redeliver(t.Context(), "dlv-1", now().Add(notify.RedeliverAfter), fence, manage())
+	err := h.Deliveries.Redeliver(t.Context(), "dlv-1", now().Add(notify.RetryWait(1)), fence, manage())
 	if err != nil {
 		t.Fatalf("Redeliver: %v", err)
 	}
@@ -760,10 +764,10 @@ func testRedeliverWait(t *testing.T, h Harness) {
 	}{
 		{
 			"one millisecond before the wait ends", "dlv-1",
-			stop.Add(notify.RedeliverAfter - time.Millisecond), true,
+			stop.Add(notify.RetryWait(1) - time.Millisecond), true,
 		},
-		{"when the wait ends", "dlv-2", stop.Add(notify.RedeliverAfter), false},
-		{"after the wait ends", "dlv-3", stop.Add(notify.RedeliverAfter + time.Millisecond), false},
+		{"when the wait ends", "dlv-2", stop.Add(notify.RetryWait(1)), false},
+		{"after the wait ends", "dlv-3", stop.Add(notify.RetryWait(1) + time.Millisecond), false},
 	}
 
 	for _, tc := range cases {
@@ -823,14 +827,173 @@ func checkTooSoonWait(t *testing.T, err error) {
 	}
 }
 
-// checkDeliveryUnchanged checks that after holds the state, attempts, version
-// and stop time of before.
+// checkDeliveryUnchanged checks that after holds the state, attempts, count of
+// redeliveries, version and stop time of before.
 func checkDeliveryUnchanged(t *testing.T, after, before notify.Delivery) {
 	t.Helper()
 
 	if after.State != before.State || after.Attempts != before.Attempts ||
+		after.Redeliveries != before.Redeliveries ||
 		after.Version != before.Version || !after.DeliveredAt.Equal(before.DeliveredAt) {
 		t.Fatalf("delivery after a refused redeliver = %+v, want %+v", after, before)
+	}
+}
+
+// stopDelivery claims the delivery id at the time at and records it as
+// delivered.
+func stopDelivery(t *testing.T, h Harness, fence namespace.Fence, at time.Time) {
+	t.Helper()
+
+	const id = "dlv-1"
+
+	got := claim(t, h, fence, at, 10)
+
+	for i := range got {
+		if got[i].ID != id {
+			continue
+		}
+
+		if err := h.Deliveries.Record(t.Context(), fence, attempt(got[i], at)); err != nil {
+			t.Fatalf("Record %s: %v", id, err)
+		}
+
+		return
+	}
+
+	t.Fatalf("Claim = %s, want %s", ids(got), id)
+}
+
+// testRedeliverLimit checks that a delivery refuses a redelivery after
+// MaxAttempts manual redeliveries, with no change to the row and no audit
+// entry.
+func testRedeliverLimit(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	stopAt := now()
+	stopDelivery(t, h, fence, stopAt)
+
+	for n := range notify.MaxAttempts {
+		at := stopAt.Add(notify.RetryWait(n + 1))
+		checkRedeliverAccepted(t, h, fence, "dlv-1", at)
+
+		if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != n+1 {
+			t.Fatalf("Redeliveries after %d redeliveries = %d, want %d", n+1, d.Redeliveries, n+1)
+		}
+
+		stopAt = at
+		stopDelivery(t, h, fence, stopAt)
+	}
+
+	before := mustDelivery(t, h, "dlv-1")
+	entries := entriesOf(t, h)
+
+	// The delivery is also too soon for a redelivery: the limit comes first.
+	err := h.Deliveries.Redeliver(t.Context(), "dlv-1", stopAt, fence, manage())
+	if !errors.Is(err, notify.ErrRedeliverLimit) {
+		t.Fatalf("Redeliver at the limit: err = %v, want ErrRedeliverLimit", err)
+	}
+
+	checkDeliveryUnchanged(t, mustDelivery(t, h, "dlv-1"), before)
+
+	if got := len(entriesOf(t, h)); got != len(entries) {
+		t.Fatalf("audit entries after a refused redeliver = %d, want %d", got, len(entries))
+	}
+}
+
+// testRedeliverSchedule checks the wait after the n-th manual redelivery
+// against RetryWait(n+1), and that the wait stops at MaxRetryWait.
+func testRedeliverSchedule(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	stopAt := now()
+	stopDelivery(t, h, fence, stopAt)
+
+	cases := []struct {
+		name         string
+		redeliveries int
+	}{
+		{"first redelivery", 0},
+		{"second redelivery", 1},
+		{"redelivery at the cap", 7},
+	}
+
+	current := 0
+
+	for _, tc := range cases {
+		for current < tc.redeliveries {
+			at := stopAt.Add(notify.RetryWait(current + 1))
+			checkRedeliverAccepted(t, h, fence, "dlv-1", at)
+
+			stopAt = at
+			stopDelivery(t, h, fence, stopAt)
+			current++
+		}
+
+		at := stopAt.Add(notify.RetryWait(current + 1))
+		want := current + 1
+
+		t.Run(tc.name, func(t *testing.T) {
+			checkRedeliverTooSoon(t, h, fence, "dlv-1", at.Add(-time.Millisecond))
+			checkRedeliverAccepted(t, h, fence, "dlv-1", at)
+
+			if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != want {
+				t.Fatalf("Redeliveries = %d, want %d", d.Redeliveries, want)
+			}
+		})
+
+		stopAt = at
+		stopDelivery(t, h, fence, stopAt)
+		current++
+	}
+}
+
+// testRedeliveriesCount checks that the count of manual redeliveries reads
+// back after each redelivery, and that an automatic retry does not change it.
+func testRedeliveriesCount(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	got := claim(t, h, fence, now(), 1)
+	if len(got) != 1 {
+		t.Fatalf("Claim = %s, want one", ids(got))
+	}
+
+	retry := attempt(got[0], now())
+	retry.State, retry.Attempts = notify.DeliveryPending, 1
+	retry.NextAt, retry.DeliveredAt = now().Add(notify.RetryWait(1)), time.Time{}
+
+	if err := h.Deliveries.Record(t.Context(), fence, retry); err != nil {
+		t.Fatalf("Record an automatic retry: %v", err)
+	}
+
+	if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != 0 {
+		t.Fatalf("Redeliveries after an automatic retry = %d, want 0", d.Redeliveries)
+	}
+
+	stopAt := retry.NextAt
+	stopDelivery(t, h, fence, stopAt)
+
+	for n := 1; n <= 3; n++ {
+		at := stopAt.Add(notify.RetryWait(n))
+		checkRedeliverAccepted(t, h, fence, "dlv-1", at)
+
+		if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != n {
+			t.Fatalf("Redeliveries after %d redeliveries = %d, want %d", n, d.Redeliveries, n)
+		}
+
+		stopAt = at
+		stopDelivery(t, h, fence, stopAt)
 	}
 }
 
@@ -1441,7 +1604,7 @@ func writes() []write {
 			return h.Deliveries.Record(ctx, f, attempt(d, now()))
 		}, checkDelivery(notify.DeliveryPending, owner), notify.ErrNotFound},
 		{"Redeliver", abandonedIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
-			return h.Deliveries.Redeliver(ctx, "dlv-1", now().Add(notify.RedeliverAfter), f, entry(s))
+			return h.Deliveries.Redeliver(ctx, "dlv-1", now().Add(notify.RetryWait(1)), f, entry(s))
 		}, checkDelivery(notify.DeliveryAbandoned, ""), notify.ErrNotFound},
 	}
 }

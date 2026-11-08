@@ -58,8 +58,11 @@ var (
 	// the notification, or whose contact is gone. The dispatcher skips it.
 	ErrNoAccess = errors.New("the principal of the delivery can no longer read the notification")
 	// ErrTooSoon reports a redeliver of a delivery that stopped less than
-	// RedeliverAfter ago.
+	// the retry schedule waits.
 	ErrTooSoon = errors.New("the delivery stopped too recently")
+	// ErrRedeliverLimit reports a redeliver of a delivery that has no
+	// manual redeliveries left.
+	ErrRedeliverLimit = errors.New("the delivery has no redeliveries left")
 )
 
 // Bounds of a notification.

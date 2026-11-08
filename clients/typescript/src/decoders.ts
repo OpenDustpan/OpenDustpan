@@ -1397,6 +1397,8 @@ export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<
   notification: string,
   principal: string,
   redeliverableAt: optional(dateTime),
+  redeliveriesRemaining: int64,
+  redeliveryLimit: int64,
   sink: string,
   state: string,
   subscription: string,

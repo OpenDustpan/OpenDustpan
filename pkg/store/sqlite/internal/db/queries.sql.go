@@ -456,7 +456,7 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT ?5
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
@@ -495,6 +495,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -7098,7 +7099,7 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = ?1
@@ -7117,6 +7118,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.Redeliveries,
 		&i.NextAtMs,
 		&i.LastError,
 		&i.DeliveredAtMs,
@@ -10739,11 +10741,11 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
-    ?6, ?7, 'pending', 0, ?8, '', 0, '', 0, 1
+    ?6, ?7, 'pending', 0, 0, ?8, '', 0, '', 0, 1
 )
 `
 
@@ -15012,7 +15014,7 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
@@ -15045,6 +15047,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -15066,7 +15069,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
@@ -15113,6 +15116,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -19004,8 +19008,8 @@ func (q *Queries) RecordPasskeyUse(ctx context.Context, arg RecordPasskeyUsePara
 
 const redeliverNotificationDelivery = `-- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = ?1 AND notification_deliveries.scope = ?2
   AND notification_deliveries.state <> 'pending'
 `

@@ -18,7 +18,7 @@ const (
 		attributes, recipients, dedupe_key, at_ms)`
 	subscriptionColumns = `(id, scope, sink_id, types, objects, min_severity, state, reason, created_by, version)`
 	deliveryColumns     = `(id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts,
-		next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version)`
+		redeliveries, next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version)`
 )
 
 // TestCheckStagedNotificationsRefusesBadRows gives the restore check rows that
@@ -100,14 +100,14 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 		{
 			"a delivery that holds the text of a network error", false,
 			[]string{`INSERT INTO notification_deliveries ` + deliveryColumns + `
-					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'pending', 0, 1,
+					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'pending', 0, 0, 1,
 					'dial tcp 10.0.0.1: refused', 0, '', 0, 1)`},
 			"staged delivery",
 		},
 		{
 			"a delivery that names a sink of another scope", true,
 			[]string{`INSERT INTO notification_deliveries ` + deliveryColumns + `
-					VALUES ('dlv-1', '@server', 'ntf-1', '', 'snk-aaaaaaaa', 'a@example.com', 'alice', 'pending', 0, 1,
+					VALUES ('dlv-1', '@server', 'ntf-1', '', 'snk-aaaaaaaa', 'a@example.com', 'alice', 'pending', 0, 0, 1,
 					'', 0, '', 0, 1)`},
 			"names a sink of another scope",
 		},
@@ -117,7 +117,7 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 				`INSERT INTO notification_subscriptions ` + subscriptionColumns + `
 					VALUES ('sub-1', 'acme', 'snk-aaaaaaaa', '[]', '[]', 0, 'active', '', 'alice', 1)`,
 				`INSERT INTO notification_deliveries ` + deliveryColumns + `
-					VALUES ('dlv-1', '@server', 'ntf-1', 'sub-1', '', '', 'alice', 'pending', 0, 1, '', 0, '', 0, 1)`,
+					VALUES ('dlv-1', '@server', 'ntf-1', 'sub-1', '', '', 'alice', 'pending', 0, 0, 1, '', 0, '', 0, 1)`,
 			},
 			"names a subscription of another scope",
 		},
@@ -128,7 +128,7 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 				`INSERT INTO notifications ` + notificationColumns + `
 					VALUES ('acme', 1, 'ntf-1', 'job.failed', 'o', '', '', '', 2, 'x', '[]', '{}', '[]', 'k', 1)`,
 				`INSERT INTO notification_deliveries ` + deliveryColumns + `
-					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'pending', 0, 1, '', 0, '', 0, 1)`,
+					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'pending', 0, 0, 1, '', 0, '', 0, 1)`,
 			},
 			"names a notification of another scope",
 		},
@@ -158,6 +158,20 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 	}
 }
 
+// TestNotificationDeliveriesRefuseNegativeRedeliveries checks the constraint
+// of the table, as if a write had skipped the check of the domain.
+func TestNotificationDeliveriesRefuseNegativeRedeliveries(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+
+	_, err := s.conn.ExecContext(t.Context(), `INSERT INTO notification_deliveries `+deliveryColumns+`
+		VALUES ('dlv-1', '@server', 'ntf-1', '', '', '', 'alice', 'pending', 0, -1, 1, '', 0, '', 0, 1)`)
+	if err == nil {
+		t.Fatal("a delivery with a negative count of redeliveries was stored")
+	}
+}
+
 // TestCheckStagedNotificationsAcceptsGoodRows proves that the checks stop the
 // rows above and nothing else: a database that the store wrote passes.
 func TestCheckStagedNotificationsAcceptsGoodRows(t *testing.T) {
@@ -174,9 +188,9 @@ func TestCheckStagedNotificationsAcceptsGoodRows(t *testing.T) {
 		`INSERT INTO notification_subscriptions ` + subscriptionColumns + `
 			VALUES ('sub-1', 'acme', 'snk-aaaaaaaa', '[]', '[]', 0, 'active', '', 'alice', 1)`,
 		`INSERT INTO notification_deliveries ` + deliveryColumns + `
-			VALUES ('dlv-1', 'acme', 'ntf-1', 'sub-1', 'snk-aaaaaaaa', '', 'alice', 'pending', 0, 1, '', 0, '', 0, 1)`,
+			VALUES ('dlv-1', 'acme', 'ntf-1', 'sub-1', 'snk-aaaaaaaa', '', 'alice', 'pending', 0, 0, 1, '', 0, '', 0, 1)`,
 		`INSERT INTO notification_deliveries ` + deliveryColumns + `
-			VALUES ('dlv-2', 'acme', 'ntf-gone', 'sub-gone', 'snk-gone', '', 'alice', 'delivered', 1, 1, '', 1, '', 0, 2)`,
+			VALUES ('dlv-2', 'acme', 'ntf-gone', 'sub-gone', 'snk-gone', '', 'alice', 'delivered', 1, 0, 1, '', 1, '', 0, 2)`,
 	} {
 		if _, err := s.conn.ExecContext(t.Context(), stmt); err != nil {
 			t.Fatalf("plant the row: %v", err)

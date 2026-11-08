@@ -189,6 +189,11 @@ func TestSubscriptionErrorsHaveCodes(t *testing.T) {
 				&notify.TooSoonError{Wait: time.Millisecond})),
 			http.StatusTooManyRequests, errcode.SinkDeliveryTooSoon,
 		},
+		{
+			"delivery with no redeliveries left", notifications.WriteDeliveryError,
+			fmt.Errorf("redeliver: %w", errors.Join(subscriptionsvc.ErrRedeliverLimit, notify.ErrRedeliverLimit)),
+			http.StatusConflict, errcode.SinkDeliveryRedeliverLimit,
+		},
 	}
 
 	for _, tc := range tests {

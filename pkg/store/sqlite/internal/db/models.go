@@ -694,6 +694,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64

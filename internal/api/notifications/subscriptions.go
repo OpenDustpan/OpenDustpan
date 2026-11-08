@@ -79,7 +79,11 @@ type deliveryDocument struct {
 	LastError       string     `json:"lastError,omitempty"`
 	DeliveredAt     time.Time  `json:"deliveredAt,omitzero"`
 	RedeliverableAt *time.Time `json:"redeliverableAt,omitempty"`
-	Version         int64      `json:"version"`
+	// RedeliveryLimit is the largest number of manual redeliveries of a
+	// delivery. RedeliveriesRemaining is the number that it has left.
+	RedeliveryLimit       int   `json:"redeliveryLimit"`
+	RedeliveriesRemaining int   `json:"redeliveriesRemaining"`
+	Version               int64 `json:"version"`
 }
 
 // historyResponse is one page of the delivery history, newest first.
@@ -125,10 +129,12 @@ func toDeliveryDocument(d *notify.Delivery) deliveryDocument {
 	doc := deliveryDocument{
 		ID: d.ID, Notification: d.Notification, Subscription: d.Subscription, Sink: d.Sink, Contact: d.Contact,
 		Principal: d.Principal, State: string(d.State), Attempts: d.Attempts, NextAt: d.NextAt.UTC(),
-		LastError: d.LastError, DeliveredAt: d.DeliveredAt.UTC(), RedeliverableAt: nil, Version: d.Version,
+		LastError: d.LastError, DeliveredAt: d.DeliveredAt.UTC(), RedeliverableAt: nil,
+		RedeliveryLimit: notify.MaxAttempts, RedeliveriesRemaining: notify.RedeliveriesRemaining(*d),
+		Version: d.Version,
 	}
 
-	if d.State != notify.DeliveryPending {
+	if d.State != notify.DeliveryPending && notify.RedeliveriesRemaining(*d) > 0 {
 		at := notify.RedeliverableAt(*d).UTC()
 		doc.RedeliverableAt = &at
 	}
@@ -255,15 +261,18 @@ func subscriptionErrors(err error) (problem.Problem, bool) {
 // of the sink service.
 func deliveryErrors(err error) (problem.Problem, bool) {
 	switch {
+	case errors.Is(err, subscriptionsvc.ErrRedeliverLimit):
+		return problem.New(http.StatusConflict, errcode.SinkDeliveryRedeliverLimit,
+			"the delivery has no redeliveries left"), true
 	case errors.Is(err, subscriptionsvc.ErrRedeliverTooSoon):
-		wait := notify.RedeliverAfter
+		wait := notify.RetryWait(1)
 		if tooSoon, ok := errors.AsType[*notify.TooSoonError](err); ok {
 			wait = tooSoon.Wait
 		}
 
 		p := problem.New(http.StatusTooManyRequests, errcode.SinkDeliveryTooSoon,
 			"the delivery stopped too recently: send it again after the Retry-After time")
-		p.RetryAfter = wait
+		p.RetryAfter = min(wait, notify.MaxRetryWait)
 
 		return p, true
 	case errors.Is(err, subscriptionsvc.ErrNotRedeliverable):

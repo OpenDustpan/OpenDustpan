@@ -1213,6 +1213,7 @@ CREATE TABLE notification_deliveries (
     principal       TEXT    NOT NULL,
     state           TEXT    NOT NULL,
     attempts        INTEGER NOT NULL,
+    redeliveries    INTEGER NOT NULL CHECK (redeliveries >= 0),
     next_at_ms      INTEGER NOT NULL,
     last_error      TEXT    NOT NULL,
     delivered_at_ms INTEGER NOT NULL,

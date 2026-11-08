@@ -4323,7 +4323,7 @@ SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', 
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
@@ -4335,11 +4335,11 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -4360,7 +4360,7 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT sqlc.arg(max_rows)
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
@@ -4390,7 +4390,7 @@ SELECT COUNT(*) FROM (
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4402,7 +4402,7 @@ LIMIT sqlc.arg(max_rows);
 -- time, delivery ID): the rows with an older next time, or with the same next
 -- time and a smaller ID. The bound on next_at_ms lets the index scan start at
 -- the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4413,8 +4413,8 @@ LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
   AND notification_deliveries.state <> 'pending';
 

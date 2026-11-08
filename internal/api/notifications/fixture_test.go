@@ -350,7 +350,8 @@ func buildFixtureFull(
 	}
 
 	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Now: clock.Now,
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Audit: store,
+		Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("subscription service: %v", err)

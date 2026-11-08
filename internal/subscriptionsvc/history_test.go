@@ -103,9 +103,22 @@ func historyRows(next time.Time, first, count int) []notify.Delivery {
 	out := make([]notify.Delivery, 0, count)
 	for i := range count {
 		out = append(out, notify.Delivery{
-			ID: fmt.Sprintf("dlv-%04d", first+i), Notification: "ntf-1", Scope: "acme", Subscription: "sub-1",
-			Sink: "snk-1", Contact: "", Principal: "alice", State: notify.DeliveryDone, Attempts: 0,
-			NextAt: next, LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
+			ID:           fmt.Sprintf("dlv-%04d", first+i),
+			Notification: "ntf-1",
+			Scope:        "acme",
+			Subscription: "sub-1",
+			Sink:         "snk-1",
+			Contact:      "",
+			Principal:    "alice",
+			State:        notify.DeliveryDone,
+			Attempts:     0,
+			Redeliveries: 0,
+			NextAt:       next,
+			LastError:    "",
+			DeliveredAt:  time.Time{},
+			Owner:        "",
+			LeaseUntil:   time.Time{},
+			Version:      0,
 		})
 	}
 
@@ -139,7 +152,7 @@ func newService(t *testing.T, rows []notify.Delivery) *subscriptionsvc.Service {
 
 	svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
 		Subscriptions: fakeSubs{nil}, Deliveries: fakeDeliveries{Deliveries: nil, rows: rows, countErr: nil},
-		Namespaces: fakeNamespaces{}, Now: at,
+		Namespaces: fakeNamespaces{}, Audit: &redeliverAudit{Store: nil, entries: nil, err: nil}, Now: at,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -356,7 +369,7 @@ func TestHistoryReturnsTheCountError(t *testing.T) {
 			svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
 				Subscriptions: fakeSubs{nil},
 				Deliveries:    fakeDeliveries{Deliveries: nil, rows: historyRows(at(), 1, 5), countErr: errCount},
-				Namespaces:    fakeNamespaces{}, Now: at,
+				Namespaces:    fakeNamespaces{}, Audit: &redeliverAudit{Store: nil, entries: nil, err: nil}, Now: at,
 			})
 			if err != nil {
 				t.Fatalf("new service: %v", err)
@@ -392,7 +405,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: nil, Deliveries: nil, Namespaces: nil, Now: nil,
+		Subscriptions: nil, Deliveries: nil, Namespaces: nil, Audit: nil, Now: nil,
 	})
 	if !errors.Is(err, subscriptionsvc.ErrMissingDependency) {
 		t.Fatalf("NewService = %v, want ErrMissingDependency", err)

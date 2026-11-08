@@ -872,15 +872,30 @@ const (
 	// with no success before the dispatcher suspends it. It also caps the
 	// wait that a receiver asks for.
 	SuspendAfter = 24 * time.Hour
-	// RedeliverAfter is the wait after a delivery stops before a person
-	// can send it again.
-	RedeliverAfter = FirstRetry
 )
 
+// RetryWait returns the wait before the attempt after attempt n: FirstRetry
+// doubled for each attempt after the first, at most MaxRetryWait.
+func RetryWait(n int) time.Duration {
+	wait := FirstRetry
+	for i := 1; i < n && wait < MaxRetryWait; i++ {
+		wait *= 2
+	}
+
+	return min(wait, MaxRetryWait)
+}
+
 // RedeliverableAt returns the time from which a person can send the stopped
-// delivery d again: the time it stopped plus RedeliverAfter.
+// delivery d again: the time it stopped plus the wait after its next manual
+// redelivery.
 func RedeliverableAt(d Delivery) time.Time {
-	return d.DeliveredAt.Add(RedeliverAfter)
+	return d.DeliveredAt.Add(RetryWait(d.Redeliveries + 1))
+}
+
+// RedeliveriesRemaining returns the number of manual redeliveries that the
+// delivery d has left.
+func RedeliveriesRemaining(d Delivery) int {
+	return max(0, MaxAttempts-d.Redeliveries)
 }
 
 // TooSoonError is an ErrTooSoon with the wait until a stopped delivery can
@@ -972,12 +987,7 @@ func RetryAt(n int, at time.Time, err error) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	wait := FirstRetry
-	for i := 1; i < n && wait < MaxRetryWait; i++ {
-		wait *= 2
-	}
-
-	wait = min(wait, MaxRetryWait)
+	wait := RetryWait(n)
 
 	if ra, ok := errors.AsType[*RetryAfterError](err); ok {
 		wait = max(wait, min(ra.Wait, SuspendAfter))

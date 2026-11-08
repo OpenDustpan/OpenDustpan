@@ -1064,8 +1064,8 @@ func deliveryRow(r *db.NotificationDelivery) notifystore.DeliveryRow {
 	return notifystore.DeliveryRow{
 		ID: r.ID, Scope: r.Scope, NotificationID: r.NotificationID, SubscriptionID: r.SubscriptionID,
 		SinkID: r.SinkID, Contact: r.Contact, Principal: r.Principal, State: r.State, Attempts: r.Attempts,
-		NextAtMs: r.NextAtMs, LastError: r.LastError, DeliveredAtMs: r.DeliveredAtMs, Owner: r.Owner,
-		LeaseUntilMs: r.LeaseUntilMs, Version: r.Version,
+		Redeliveries: r.Redeliveries, NextAtMs: r.NextAtMs, LastError: r.LastError,
+		DeliveredAtMs: r.DeliveredAtMs, Owner: r.Owner, LeaseUntilMs: r.LeaseUntilMs, Version: r.Version,
 	}
 }
 
@@ -1223,12 +1223,8 @@ func (k NotificationStore) Redeliver(
 			return fmt.Errorf("delivery %s: %w", id, err)
 		}
 
-		if d.State == notify.DeliveryPending {
-			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
-		}
-
-		if at := notify.RedeliverableAt(d); now.Before(at) {
-			return fmt.Errorf("redeliver %s: %w", id, &notify.TooSoonError{Wait: at.Sub(now)})
+		if refusal := checkRedeliver(d, now); refusal != nil {
+			return refusal
 		}
 
 		if sendErr := checkSubscriptionSends(ctx, q, d); sendErr != nil {
@@ -1248,6 +1244,21 @@ func (k NotificationStore) Redeliver(
 
 		return finishCompletion(ctx, q, id)
 	})
+}
+
+// checkRedeliver returns the refusal of a redeliver of d at now, or nil. The
+// limit check comes before the too-soon check.
+func checkRedeliver(d notify.Delivery, now time.Time) error {
+	switch {
+	case d.State == notify.DeliveryPending:
+		return fmt.Errorf("redeliver %s: %w: the delivery is pending", d.ID, notify.ErrConflict)
+	case d.Redeliveries >= notify.MaxAttempts:
+		return fmt.Errorf("redeliver %s: %w", d.ID, notify.ErrRedeliverLimit)
+	case now.Before(notify.RedeliverableAt(d)):
+		return fmt.Errorf("redeliver %s: %w", d.ID, &notify.TooSoonError{Wait: notify.RedeliverableAt(d).Sub(now)})
+	default:
+		return nil
+	}
 }
 
 // checkSubscriptionSends returns notify.ErrConflict when d belongs to a

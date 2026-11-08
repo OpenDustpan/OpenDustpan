@@ -146,7 +146,7 @@ func testRedeliverAfterSinkChange(t *testing.T, h Harness) {
 		t.Helper()
 
 		err := h.Deliveries.Redeliver(
-			t.Context(), "dlv-1", now().Add(notify.RedeliverAfter), fence, manage(),
+			t.Context(), "dlv-1", now().Add(notify.RetryWait(1)), fence, manage(),
 		)
 		if !errors.Is(err, want) || (want == nil && err != nil) {
 			t.Fatalf("Redeliver %s: err = %v, want %v", when, err, want)

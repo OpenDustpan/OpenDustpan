@@ -333,6 +333,7 @@ const (
 	ErrorCodeSinkConflict                          ErrorCode = "sink.conflict"
 	ErrorCodeSinkDeliveryNotFound                  ErrorCode = "sink.delivery-not-found"
 	ErrorCodeSinkDeliveryNotRedeliverable          ErrorCode = "sink.delivery-not-redeliverable"
+	ErrorCodeSinkDeliveryRedeliverLimit            ErrorCode = "sink.delivery-redeliver-limit"
 	ErrorCodeSinkDeliveryTooSoon                   ErrorCode = "sink.delivery-too-soon"
 	ErrorCodeSinkInvalid                           ErrorCode = "sink.invalid"
 	ErrorCodeSinkNoSender                          ErrorCode = "sink.no-sender"

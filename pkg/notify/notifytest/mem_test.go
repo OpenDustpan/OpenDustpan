@@ -607,6 +607,10 @@ func (m *memStore) Redeliver(_ context.Context, id string, now time.Time, fence 
 			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
 		}
 
+		if d.Redeliveries >= notify.MaxAttempts {
+			return fmt.Errorf("redeliver %s: %w", id, notify.ErrRedeliverLimit)
+		}
+
 		if at := notify.RedeliverableAt(d); now.Before(at) {
 			return fmt.Errorf("redeliver %s: %w", id, &notify.TooSoonError{Wait: at.Sub(now)})
 		}
@@ -616,6 +620,7 @@ func (m *memStore) Redeliver(_ context.Context, id string, now time.Time, fence 
 		}
 
 		d.State, d.Attempts, d.LastError = notify.DeliveryPending, 0, ""
+		d.Redeliveries++
 		d.Owner, d.LeaseUntil = "", time.Time{}
 		d.Version++
 		m.deliveries[id] = d
