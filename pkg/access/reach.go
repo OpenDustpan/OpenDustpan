@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -124,6 +125,48 @@ func (r Reach) Covers(ctx context.Context, other Reach) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// HeldAction is one action of a reach on one object.
+type HeldAction struct {
+	Action identity.Action
+	Object identity.Object
+}
+
+// Missing returns the actions of other that r does not hold, with the
+// object of each, sorted by action and then by object. An empty result
+// means that r covers other. It returns an error only when a resolver
+// fails.
+func (r Reach) Missing(ctx context.Context, other Reach) ([]HeldAction, error) {
+	var out []HeldAction
+
+	for key := range other.entries {
+		e := other.entries[key]
+		if e == nil {
+			continue
+		}
+
+		for action := range e.actions {
+			holds, err := r.Has(ctx, action, e.object)
+			if err != nil {
+				return nil, err
+			}
+
+			if !holds {
+				out = append(out, HeldAction{Action: action, Object: e.object})
+			}
+		}
+	}
+
+	slices.SortFunc(out, func(a, b HeldAction) int {
+		if c := strings.Compare(string(a.Action), string(b.Action)); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.Object.String(), b.Object.String())
+	})
+
+	return out, nil
 }
 
 // ActionsOn returns the sorted actions that r holds on obj. It returns an

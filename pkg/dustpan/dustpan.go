@@ -3210,7 +3210,9 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // personal token for another person is the grants of grants, and the
 // authorizer of grants decides principal:manage-tokens for a service
 // token. With nil grants, a store that keeps none, only an administrator
-// passes either.
+// passes either. The reach config decides the reach rule of a token change:
+// a store that keeps no grants refuses each such change of a caller that is
+// not an administrator.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -3227,8 +3229,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		authz = grants.Authorizer()
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access token reach: %w", err)
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {

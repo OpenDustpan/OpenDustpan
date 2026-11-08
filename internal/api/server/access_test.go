@@ -212,7 +212,11 @@ func newAccessFixtureAll(
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -316,6 +320,14 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 		return
 	}
 
+	f.grant(t, subject, role, obj)
+}
+
+// grant writes the grant of role on obj to the principal "prn-<subject>".
+func (f accessFixture) grant(t *testing.T, subject, role string, obj identity.Object) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	grt := access.Grant{
 		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-seed-" + subject, Role: role, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},

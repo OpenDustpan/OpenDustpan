@@ -497,9 +497,12 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		Principals: st,
 		Freshness:  nil,
 		Authorizer: allowAll{},
-		Logger:     nil,
-		Now:        nil,
-		NewID:      nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Logger: nil,
+		Now:    nil,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

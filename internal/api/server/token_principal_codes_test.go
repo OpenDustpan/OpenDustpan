@@ -55,6 +55,10 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			errcode.TokenCallerNotPerson, nil, "",
 		},
 		{"sign-in required", accesstoken.ErrSignInRequired, http.StatusForbidden, errcode.TokenRequiresSignIn, nil, ""},
+		{
+			"reach exceeded", accesstoken.ErrReachExceeded, http.StatusForbidden,
+			errcode.TokenReachExceeded, nil, "",
+		},
 		{"token ended", accesstoken.ErrEnded, http.StatusConflict, errcode.TokenEnded, nil, ""},
 		{"token exists", accesstoken.ErrAlreadyExists, http.StatusConflict, errcode.TokenAlreadyExists, nil, ""},
 		{

@@ -44,7 +44,7 @@ server does not store them, and an operator cannot change them.
 | `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
 | `installation-operator` | Every action of the operator family for the installation. |
-| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. |
+| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
 | `site-administrator` | The operator, administration, data and delegation families. It holds every action except the actions of the caller's own access. |
 | `token-manager` | The action `principal:manage-tokens`, which issues service tokens. |
 

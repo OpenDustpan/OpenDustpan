@@ -779,9 +779,11 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 // classifyToken maps the access token errors to their status and message.
 // A source over its failure budget answers 429 (internal/authgate). Next:
 // a bad body, query, name, expiry or page, and a principal kind that gets no
-// token, answer 400; an unknown token or principal 404; a token that ended
-// 409; and a store with no token port 501. The domain wraps each sentinel
-// with the ID or the value it acted on, never with driver text or a secret.
+// token, answer 400; an unknown token or principal 404; a sign-in that the
+// caller needs, and a reach that is not inside the reach of the caller, 403;
+// a token that ended 409; and a store with no token port 501. The domain
+// wraps each sentinel with the ID or the value it acted on, never with
+// driver text or a secret.
 func classifyToken(err error) (failure, bool) {
 	if f, ok := classifyTokenRequest(err); ok {
 		return f, true
@@ -812,7 +814,8 @@ func classifyTokenRequest(err error) (failure, bool) {
 }
 
 // classifyTokenState maps the errors of an unknown, wrong, ended or taken
-// token, and of a store with no token port.
+// token, of a reach that is not inside the reach of the caller, and of a
+// store with no token port.
 func classifyTokenState(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, accesstoken.ErrNotFound):
@@ -825,6 +828,12 @@ func classifyTokenState(err error) (failure, bool) {
 		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenCallerNotPerson), true
 	case errors.Is(err, accesstoken.ErrSignInRequired):
 		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenRequiresSignIn), true
+	case errors.Is(err, accesstoken.ErrReachExceeded):
+		// Defense in depth: the server answers this refusal in keepDenied,
+		// with the text that names the missing actions, and the code of
+		// errcode.Forbidden. This case stays so that a caller that classifies
+		// a token error directly cannot skip the 403 and the code.
+		return failCoded(http.StatusForbidden, err.Error(), errcode.TokenReachExceeded), true
 	case errors.Is(err, accesstoken.ErrEnded):
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
 	case errors.Is(err, accesstoken.ErrAlreadyExists):
