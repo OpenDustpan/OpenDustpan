@@ -245,7 +245,7 @@ func coverageSignInService(
 	service, err := signinsvc.New(signinsvc.Config{
 		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: st,
 		TempAdmins: st, Groups: nil,
-		Removals: nil, States: st, Logger: slog.New(slog.DiscardHandler),
+		Removals: nil, States: st, Locks: st, NameKeys: st, Logger: slog.New(slog.DiscardHandler),
 		OnAuditFailure: nil,
 	})
 	if err != nil {

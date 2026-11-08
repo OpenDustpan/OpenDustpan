@@ -380,6 +380,8 @@ How-to guides:
 
 Reference:
 
+- [Code rules](docs/reference/code-rules.md): the rules that the server
+  applies and that no grant, setting or administrator can change.
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
 - [Journaling](docs/reference/journaling.md): the setting, the recovery

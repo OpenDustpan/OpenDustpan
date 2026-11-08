@@ -77,7 +77,9 @@ The change leaves too few working break-glass accounts. Add or enable a working 
 The request changes nothing. The account stays enabled. Before the answer,
 the server writes one audit entry in the scope `@server` with the outcome
 `denied` and the reason `principal.no-working-break-glass`. When the server
-cannot write this entry, it still answers 409 and logs the failure.
+cannot write this entry, it still answers 409 and logs the failure. This
+refusal is one of the [code rules](../reference/code-rules.md) that no grant,
+setting or administrator can change.
 
 A disabled account does not count as a second account, because it cannot
 sign in. The server checks the count in the same database transaction as the

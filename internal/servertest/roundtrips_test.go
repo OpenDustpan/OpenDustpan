@@ -1347,9 +1347,13 @@ func backupModel() costModel {
 //
 // The fixed part also holds removalAlertTrips for member_removal_alerts, a
 // table of Tables that the dev strip never counts either.
+//
+// The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
+// the grants and the memberships of principals of a namespace.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips,
+		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
+			stagedPrincipalCheckTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1377,6 +1381,13 @@ const breakGlassReviewTrips = 1
 // statement, once for each restore. It does not grow with the units or the
 // tables.
 const stagedJobCheckTrips = 1
+
+// stagedPrincipalCheckTrips is the number of round trips of the staged checks
+// of the principals of a namespace: checkStagedNamespacePrincipalGrants and
+// checkStagedNamespacePrincipalMemberships each read the staging schema in one
+// query, once for each restore. The count is fixed: it does not grow with the
+// units or the tables.
+const stagedPrincipalCheckTrips = 2
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

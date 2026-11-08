@@ -262,7 +262,7 @@ func (a *svcAuthorizer) Authorize(_ context.Context, p identity.Principal, actio
 }
 
 func (*svcAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // svcGates is a job.GateGuard that returns the gates in enforced, or err.

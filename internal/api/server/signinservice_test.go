@@ -29,6 +29,8 @@ func newTestSignInService(
 		Groups:         nil,
 		Removals:       nil,
 		States:         st,
+		Locks:          st,
+		NameKeys:       st,
 		Logger:         slog.New(slog.DiscardHandler),
 		OnAuditFailure: nil,
 	})

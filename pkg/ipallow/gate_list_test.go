@@ -60,7 +60,6 @@ func newListFixture(t *testing.T) listFixture {
 			},
 			Units:      []identity.Object{unitIn("acme"), unitIn("beta")},
 			Principals: []identity.Object{identity.PrincipalObject("prn-bot")},
-			All:        false,
 		},
 	}
 }
@@ -109,7 +108,7 @@ func TestGateListObjectsDropsDeniedNamespaces(t *testing.T) {
 		}
 	}
 
-	if got.All {
+	if got.CoversEveryObject() {
 		t.Fatal("all = true, want false")
 	}
 }
@@ -219,7 +218,7 @@ func (exactAll) ScopeExact() bool { return true }
 
 // TestGateScopeExact proves that the gate says its scope is exact only when
 // it is off and the scope of Next is exact: an enabled gate refuses objects
-// that a scope with All set holds.
+// that a scope that covers every object holds.
 func TestGateScopeExact(t *testing.T) {
 	t.Parallel()
 
@@ -279,9 +278,7 @@ func TestGateExactScopeWithinAuthorize(t *testing.T) {
 	}
 
 	for _, enabled := range []bool{true, false} {
-		next := exactAll{scopeNext{scope: identity.Scope{ //nolint:exhaustruct_v5 // An All scope only.
-			All: true,
-		}}}
+		next := exactAll{scopeNext{scope: identity.Every()}}
 		gate := ipallow.Gate{Next: next, Rules: f.rules, Enabled: enabled, IncludeBootstrap: false}
 
 		identitytest.CheckExactScope(
