@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ type JobStore interface {
 //
 //nolint:ireturn // The stores of jobs and freezes are two ports over one adapter.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s}, s.logger)
+	return jobstore.New(jobRunner{s: s})
 }
 
 // PutUnitStateVersion records version as the current state version of the unit
@@ -72,6 +73,9 @@ type jobRunner struct {
 }
 
 var _ jobstore.Runner = jobRunner{s: nil}
+
+// Logger implements jobstore.Runner.
+func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 
 // Write implements jobstore.Runner. It takes the shared write lock, reads the
 // installation state, and holds the namespace row FOR UPDATE before fn reads

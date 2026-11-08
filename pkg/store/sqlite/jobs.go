@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ type JobStore interface {
 //
 //nolint:ireturn // Store-agnostic wiring takes the ports.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s}, s.logger)
+	return jobstore.New(jobRunner{s: s})
 }
 
 // PutUnitStateVersion records version as the current state version of the unit
@@ -72,6 +73,9 @@ type jobRunner struct {
 }
 
 var _ jobstore.Runner = jobRunner{s: nil}
+
+// Logger implements jobstore.Runner.
+func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 
 // Write implements jobstore.Runner.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {

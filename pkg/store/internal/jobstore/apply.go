@@ -246,7 +246,7 @@ func (s *Store) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		var err error
 
-		closed, err = observeIn(ctx, tx, &v, fence.Namespace, s.log)
+		closed, err = observeIn(ctx, tx, &v, fence.Namespace, s.logger())
 
 		return err
 	})

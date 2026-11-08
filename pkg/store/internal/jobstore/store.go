@@ -37,9 +37,6 @@ const createAttempts = 2
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
 	run Runner
-	// log records a damaged row that a reader skips. It defaults to a
-	// discard handler.
-	log *slog.Logger
 }
 
 var (
@@ -48,15 +45,9 @@ var (
 	_ job.FinalVersionReader = (*Store)(nil)
 )
 
-// New returns the job stores over run. log records a damaged row that a
-// reader skips, for example the close loop of ObserveStateVersion. Nil
-// discards.
-func New(run Runner, log *slog.Logger) *Store {
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
-
-	return &Store{run: run, log: log}
+// New returns the job stores over run.
+func New(run Runner) *Store {
+	return &Store{run: run}
 }
 
 // Create implements job.Store.
@@ -728,4 +719,15 @@ func noJob() job.Job {
 // the job store would refuse.
 func Decode(r *Row) (job.Job, error) {
 	return jobOf(r)
+}
+
+// logger returns the logger of the runner, which records a damaged row that a
+// reader skips, for example the close loop of ObserveStateVersion. A nil
+// logger discards.
+func (s *Store) logger() *slog.Logger {
+	if log := s.run.Logger(); log != nil {
+		return log
+	}
+
+	return slog.New(slog.DiscardHandler)
 }
