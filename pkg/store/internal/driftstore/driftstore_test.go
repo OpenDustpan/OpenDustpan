@@ -75,7 +75,7 @@ func unit() graph.Unit {
 func jobBody(tool, ns, unitID, purpose string) string {
 	return fmt.Sprintf(`{"spec":{"unit":{"tool":%q,"namespace":%q,"name":"network","unitID":%q},`+
 		`"operation":"refresh","purpose":%q,"executor":"runner","location":{},"steps":[],"pool":"","profile":"",`+
-		`"edits":[],"delivery":""},"phases":[]}`, tool, ns, unitID, purpose)
+		`"edits":[],"delivery":""},"phases":[],"source":"schedule"}`, tool, ns, unitID, purpose)
 }
 
 // jobRow returns a stored job of the unit that ran from epoch to epoch plus

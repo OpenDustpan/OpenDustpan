@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forgelink"
@@ -99,7 +100,7 @@ func (f accessFixture) proveLink(t *testing.T, token, id, login string) {
 		DeliveryID: "delivery-" + id,
 	}
 
-	svc := forgelink.NewService(f.store.ForgeLinks(), f.store, nil, nil).WithIntake()
+	svc := forgelinksvc.NewService(f.store.ForgeLinks(), f.store, nil, nil).WithIntake()
 	if _, err := svc.Prove(t.Context(), token, p); err != nil {
 		t.Fatalf("prove: %v", err)
 	}
@@ -542,8 +543,8 @@ func TestGitHostLinkRequestRoutesWaitForTheIntake(t *testing.T) {
 	f := newAccessFixtureLinks(
 		t,
 		func(st *sqlite.Store) auditStore { return st },
-		func(st *sqlite.Store) *forgelink.Service {
-			return forgelink.NewService(st.ForgeLinks(), st, nil, nil)
+		func(st *sqlite.Store) *forgelinksvc.Service {
+			return forgelinksvc.NewService(st.ForgeLinks(), st, nil, nil)
 		},
 	)
 

@@ -191,6 +191,13 @@ func (h *Handler) createStateVersion(
 
 	id := workspace.ID(r.PathValue("id"))
 
+	// A workspace that no collection holds takes no state.
+	if err = h.placer.Require(ctx, obj); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)

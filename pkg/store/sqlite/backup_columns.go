@@ -556,6 +556,10 @@ func sqliteNameLockControlTables() []sqliteBackupTable {
 			table:   backup.TableNameLockKey,
 			columns: []string{"id", "key"},
 		},
+		{
+			table:   backup.TableUsedTickets,
+			columns: []string{"provider_id", "ticket_digest", "until_ms"},
+		},
 	}
 }
 

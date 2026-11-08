@@ -398,9 +398,8 @@ func TestCheckPadding(t *testing.T) {
 }
 
 // gitArchive returns a tar.gz file in the form of git archive: a pax global
-// header first, whose records hold hostile path and link fields, then the
-// files.
-func gitArchive(t *testing.T) []byte {
+// header first, then the files. The global header holds records.
+func gitArchive(t *testing.T, records map[string]string) []byte {
 	t.Helper()
 
 	var buf bytes.Buffer
@@ -411,9 +410,7 @@ func gitArchive(t *testing.T) []byte {
 	var global tar.Header
 
 	global.Name, global.Typeflag, global.Format = "pax_global_header", tar.TypeXGlobalHeader, tar.FormatPAX
-	global.PAXRecords = map[string]string{
-		"comment": "0123456789abcdef0123456789abcdef01234567", "path": "../evil", "linkpath": "/etc/passwd",
-	}
+	global.PAXRecords = records
 
 	if err := tw.WriteHeader(&global); err != nil {
 		t.Fatalf("global header: %v", err)
@@ -443,19 +440,48 @@ func gitArchive(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// TestCheckGitArchive proves that a pax global header is read as metadata: the
-// archive is accepted, and the path and link fields of the header do not apply
-// to the entries after it.
+// TestCheckGitArchive proves that a pax global header is read as metadata: a
+// comment is accepted, and any other record is refused because other archive
+// readers apply it to the entries after the header.
 func TestCheckGitArchive(t *testing.T) {
 	t.Parallel()
 
-	got, err := modulecheck.Check(gitArchive(t))
-	if err != nil || got != modulecheck.FormatTarGz {
-		t.Fatalf("Check = %q, %v, want tar.gz and no error", got, err)
+	const comment = "0123456789abcdef0123456789abcdef01234567"
+
+	tests := []struct {
+		name    string
+		records map[string]string
+		refuse  string
+	}{
+		{"comment", map[string]string{"comment": comment}, ""},
+		{"comment and path", map[string]string{"comment": comment, "path": "../evil"}, "global header"},
+		{"comment and linkpath", map[string]string{"comment": comment, "linkpath": "/etc/passwd"}, "global header"},
+		{"path only", map[string]string{"path": "../evil"}, "global header"},
+		{"mtime only", map[string]string{"mtime": "1700000000"}, "global header"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := modulecheck.Check(gitArchive(t, tc.records))
+			if tc.refuse != "" {
+				wantRefused(t, err, tc.refuse)
+
+				return
+			}
+
+			if err != nil || got != modulecheck.FormatTarGz {
+				t.Fatalf("Check = %q, %v, want tar.gz and no error", got, err)
+			}
+		})
 	}
 
 	// A global header counts as an entry, so it cannot be repeated without end.
-	_, err = modulecheck.CheckWith(gitArchive(t), modulecheck.Limits{UnpackedBytes: 1 << 20, Entries: 2})
+	_, err := modulecheck.CheckWith(
+		gitArchive(t, map[string]string{"comment": comment}),
+		modulecheck.Limits{UnpackedBytes: 1 << 20, Entries: 2},
+	)
 	wantRefused(t, err, "more than 2 entries")
 }
 
@@ -533,4 +559,65 @@ func TestCheckZipDirectoryBytes(t *testing.T) {
 
 	_, err := modulecheck.CheckWith(lying, modulecheck.Limits{UnpackedBytes: 1 << 20, Entries: 10})
 	wantRefused(t, err, "larger than")
+}
+
+// longPath returns a valid path of exactly MaxPathBytes bytes. The first
+// segment holds i, so each path is unique, and every segment is at most 255
+// bytes.
+func longPath(i int) string {
+	return fmt.Sprintf("%0255d", i) + "/" +
+		strings.Repeat("a", 255) + "/" +
+		strings.Repeat("b", 255) + "/" +
+		strings.Repeat("c", 254) + "/d"
+}
+
+// TestCheckZipLongPaths proves that the directory budget holds the longest
+// path that the check allows for every entry that the entry limit allows. The
+// entry count is still checked before the directory is built.
+func TestCheckZipLongPaths(t *testing.T) {
+	t.Parallel()
+
+	if got := len(longPath(0)); got != modulecheck.MaxPathBytes {
+		t.Fatalf("long path is %d bytes, want %d", got, modulecheck.MaxPathBytes)
+	}
+
+	members := make([]member, modulecheck.MaxEntries)
+	for i := range members {
+		members[i] = file(longPath(i), "")
+	}
+
+	data := makeZip(t, members)
+	if len(data) >= 64<<20 {
+		t.Fatalf("the test archive is %d bytes, want less than 64 MiB", len(data))
+	}
+
+	tests := []struct {
+		name   string
+		limits modulecheck.Limits
+		refuse string
+	}{
+		{"at the entry limit", modulecheck.DefaultLimits(), ""},
+		{
+			"above a lower entry limit",
+			modulecheck.Limits{UnpackedBytes: modulecheck.MaxUnpackedBytes, Entries: modulecheck.MaxEntries - 1},
+			"states more than",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := modulecheck.CheckWith(data, tc.limits)
+			if tc.refuse != "" {
+				wantRefused(t, err, tc.refuse)
+
+				return
+			}
+
+			if err != nil || got != modulecheck.FormatZip {
+				t.Fatalf("CheckWith = %q, %v, want zip and no error", got, err)
+			}
+		})
+	}
 }

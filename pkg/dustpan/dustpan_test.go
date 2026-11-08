@@ -276,13 +276,13 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatal("server has no workspace service")
 	}
 
-	w := createLockedWorkspace(t, svc)
+	w := createLockedWorkspace(t, svc, f.store)
 	finalized := uploadWorkspaceState(t, svc, w.ID, `{"version":4,"serial":1,"lineage":"l1"}`)
 	checkWorkspaceContent(t, svc, w.ID, finalized.ID, `{"version":4,"serial":1,"lineage":"l1"}`)
 }
 
 // createLockedWorkspace creates a workspace in acme and locks it for apply.
-func createLockedWorkspace(t *testing.T, svc *workspace.Service) workspace.Workspace {
+func createLockedWorkspace(t *testing.T, svc *workspace.Service, store any) workspace.Workspace {
 	t.Helper()
 
 	name, err := workspace.ParseName("e2e-workspace")
@@ -290,7 +290,7 @@ func createLockedWorkspace(t *testing.T, svc *workspace.Service) workspace.Works
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	w, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	w, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, store, "acme"))
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

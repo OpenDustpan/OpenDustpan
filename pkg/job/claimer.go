@@ -553,9 +553,10 @@ func claimEvent(j *Job) (Event, string, bool) {
 // the current phase of j.
 func assignmentOf(op *durable.Operation, fence namespace.Fence, j *Job) Assignment {
 	a := Assignment{
-		Claim: PhaseClaim{Job: j.ID, Phase: j.Current, Claim: op.Claim, Fence: fence},
-		Job:   *j,
-		Plan:  nil,
+		Claim:   PhaseClaim{Job: j.ID, Phase: j.Current, Claim: op.Claim, Fence: fence},
+		Job:     *j,
+		Plan:    nil,
+		Profile: j.Spec.Profile,
 	}
 
 	if j.Current > 0 && j.Phases[j.Current].Kind == PhaseApply && j.Phases[j.Current-1].Kind == PhasePlan {

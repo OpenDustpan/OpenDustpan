@@ -623,6 +623,17 @@ const (
 	VerificationUnverified Verification = "unverified"
 )
 
+// Valid reports whether v is one of the verification results of this
+// package. VerificationNone, the empty result, is one of them.
+func (v Verification) Valid() bool {
+	switch v {
+	case VerificationNone, VerificationPending, VerificationVerified, VerificationUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
 // StateVersion is a new state version of a unit, as the internal wiring
 // of the server reports it for the tool package that wrote it. Commit is
 // the commit that the tool reported with the write, or empty when the tool

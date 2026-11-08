@@ -2,6 +2,7 @@ package jobstore_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -138,6 +139,177 @@ func TestBodyRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("decoded job differs from the job:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// TestBodyChecksTheEnumValues proves that each source kind, agent mode and
+// verification result that this server writes survives the body.
+func TestBodyChecksTheEnumValues(t *testing.T) {
+	t.Parallel()
+
+	set := map[string]func(j *job.Job, value string){
+		"source":       func(j *job.Job, value string) { j.Source = job.SourceKind(value) },
+		"agent mode":   func(j *job.Job, value string) { j.AgentMode = job.AgentMode(value) },
+		"verification": func(j *job.Job, value string) { j.Verification = job.Verification(value) },
+	}
+	read := map[string]func(j job.Job) string{
+		"source":       func(j job.Job) string { return string(j.Source) },
+		"agent mode":   func(j job.Job) string { return string(j.AgentMode) },
+		"verification": func(j job.Job) string { return string(j.Verification) },
+	}
+
+	tests := []struct {
+		field string
+		value string
+	}{
+		{"source", string(job.SourceAPI)},
+		{"source", string(job.SourceAgent)},
+		{"source", string(job.SourceSelfService)},
+		{"source", string(job.SourceForge)},
+		{"source", string(job.SourceSchedule)},
+		{"source", string(job.SourceTrigger)},
+		{"agent mode", ""},
+		{"agent mode", string(job.AgentModeApproveFirst)},
+		{"agent mode", string(job.AgentModeReviewRequest)},
+		{"agent mode", string(job.AgentModeDirect)},
+		{"verification", string(job.VerificationNone)},
+		{"verification", string(job.VerificationPending)},
+		{"verification", string(job.VerificationVerified)},
+		{"verification", string(job.VerificationUnverified)},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s %q", tt.field, tt.value), func(t *testing.T) {
+			t.Parallel()
+
+			j := fullJob(t)
+			set[tt.field](&j, tt.value)
+
+			body, err := jobstore.EncodeJobBody(&j)
+			if err != nil {
+				t.Fatalf("EncodeJobBody = %v", err)
+			}
+
+			var got job.Job
+			if err := jobstore.DecodeJobBody(body, &got); err != nil {
+				t.Fatalf("DecodeJobBody of a %s %q = %v", tt.field, tt.value, err)
+			}
+
+			if value := read[tt.field](got); value != tt.value {
+				t.Fatalf("decoded %s = %q, want %q", tt.field, value, tt.value)
+			}
+		})
+	}
+}
+
+// TestBodyRefusesDamagedEnumValues proves that a body whose source kind,
+// agent mode or verification result is not one that this server writes is a
+// damaged stored row: the decode wraps ErrDamaged, not job.ErrInvalid, and
+// the text names the field and the job ID and never the stored value. A
+// stored row is untrusted: a restore or another version may have written it.
+func TestBodyRefusesDamagedEnumValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		from  string
+		to    string
+		value string
+	}{
+		{"source", `"source":"schedule"`, `"source":"bogus"`, "bogus"},
+		{"agent mode", `"agentMode":"direct"`, `"agentMode":"bogus"`, "bogus"},
+		{"verification", `"verification":"pending"`, `"verification":"bogus"`, "bogus"},
+		{"source", `"source":"schedule"`, `"source":""`, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s %q", tt.field, tt.value), func(t *testing.T) {
+			t.Parallel()
+
+			body := damagedBody(t, tt.from, tt.to)
+
+			var got job.Job
+			got.ID = "job-1"
+
+			err := jobstore.DecodeJobBody(body, &got)
+			if !errors.Is(err, jobstore.ErrDamaged) {
+				t.Fatalf("DecodeJobBody of a %s %q = %v, want ErrDamaged", tt.field, tt.value, err)
+			}
+
+			if errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("DecodeJobBody of a %s %q = %v, want no job.ErrInvalid", tt.field, tt.value, err)
+			}
+
+			if !strings.Contains(err.Error(), tt.field) || !strings.Contains(err.Error(), string(got.ID)) {
+				t.Fatalf("DecodeJobBody of a %s %q = %v, want the field and the job ID in the text", tt.field,
+					tt.value, err)
+			}
+
+			if tt.value != "" && strings.Contains(err.Error(), tt.value) {
+				t.Fatalf("DecodeJobBody of a %s %q = %v, want no stored value in the text", tt.field, tt.value, err)
+			}
+		})
+	}
+}
+
+// damagedBody returns the body of a full job with the text from replaced by
+// to. A write refuses a value that this server never writes, and a stored row
+// is untrusted, so the damaged body starts from one that this server writes.
+func damagedBody(t *testing.T, from, to string) string {
+	t.Helper()
+
+	j := fullJob(t)
+
+	body, err := jobstore.EncodeJobBody(&j)
+	if err != nil {
+		t.Fatalf("EncodeJobBody = %v", err)
+	}
+
+	damaged := strings.Replace(body, from, to, 1)
+	if damaged == body {
+		t.Fatalf("the body has no %s member", from)
+	}
+
+	return damaged
+}
+
+// TestEncodeBodyRefusesUnknownEnumValues proves that a write of a source
+// kind, an agent mode or a verification result that this server never writes
+// fails with job.ErrInvalid: the write never stores a row that cannot decode.
+func TestEncodeBodyRefusesUnknownEnumValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		value string
+	}{
+		{"source", "bogus"},
+		{"agent mode", "bogus"},
+		{"verification", "bogus"},
+		{"source", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s %q", tt.field, tt.value), func(t *testing.T) {
+			t.Parallel()
+
+			j := fullJob(t)
+
+			switch tt.field {
+			case "source":
+				j.Source = job.SourceKind(tt.value)
+			case "agent mode":
+				j.AgentMode = job.AgentMode(tt.value)
+			case "verification":
+				j.Verification = job.Verification(tt.value)
+			default:
+				t.Fatalf("unknown field %q", tt.field)
+			}
+
+			if _, err := jobstore.EncodeJobBody(&j); !errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("EncodeJobBody of a %s %q = %v, want job.ErrInvalid", tt.field, tt.value, err)
+			}
+		})
 	}
 }
 

@@ -128,9 +128,10 @@ A state that the client encrypted is a known condition, not an error: the
 restore goes on, `context.state.available` is `false`, and the warning above is
 in the decision record. The server reads a state as encrypted only when it is
 exactly the encryption envelope of OpenTofu: the members `meta`,
-`encrypted_data` and `encryption_version`, and the plain `serial` and
-`lineage`. A document that has the member `encrypted_data` and any other shape
-is refused as not valid, so a plaintext state never reads as encrypted.
+`encrypted_data` and `encryption_version` with the value `v0`, and the plain
+`serial` and `lineage`. A document that has the member `encrypted_data` and any
+other shape is refused as not valid, so a plaintext state never reads as
+encrypted and a state the server cannot classify never reads as plain.
 
 The server refuses a restore when it cannot read one of the two states for
 another reason: the store fails, the state holds a resource or an instance
