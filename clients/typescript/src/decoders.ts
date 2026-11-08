@@ -514,15 +514,15 @@ export const decodeCreateCollectionRequest: Decoder<CreateCollectionRequest> = o
 
 /** The validator of CreateGitHostConnectionRequest. */
 export const decodeCreateGitHostConnectionRequest: Decoder<CreateGitHostConnectionRequest> = object<CreateGitHostConnectionRequest>("CreateGitHostConnectionRequest", {
-  apiAddress: nullable(string),
-  appID: nullable(string),
+  apiAddress: anyValue,
+  appID: anyValue,
   auth: nullable(string),
-  credential: nullable(string),
-  credentials: nullable(array(anyValue)),
-  eventSecret: nullable(string),
+  credential: anyValue,
+  credentials: anyValue,
+  eventSecret: anyValue,
   installationID: nullable(string),
   kind: nullable(string),
-  privateKey: nullable(string),
+  privateKey: anyValue,
   push: nullable(boolean),
 });
 

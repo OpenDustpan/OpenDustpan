@@ -175,6 +175,73 @@ func TestGitHostCheckAuditsItsRefusals(t *testing.T) {
 	}
 }
 
+// TestGitHostRefusedChangesNameTheirConnection sends the changes that the
+// routes refuse to the connections of a namespace, and checks that each
+// failure entry names the connection of the request. A create that fails names
+// no connection: the route never made one.
+func TestGitHostRefusedChangesNameTheirConnection(t *testing.T) {
+	t.Parallel()
+
+	e := newHostEnv(t, hostAllowAll())
+	e.register(t)
+
+	first := e.connect(t, "101")
+	wantHost(t, e.send(t, http.MethodPut, hostInstallationsPath+"/102", `{"namespace":"acme"}`), http.StatusCreated)
+	second := e.connect(t, "102")
+
+	// The delete of the default connection is refused while another connection
+	// exists.
+	wantHost(t, e.send(t, http.MethodDelete, hostConnectionsPath+"/"+first, ""), http.StatusConflict)
+
+	// The make-default is refused with a header that is not a version and with
+	// a version that the connection does not have.
+	for _, tc := range []struct {
+		header string
+		status int
+	}{
+		{"abc", http.StatusBadRequest},
+		{`"99"`, http.StatusPreconditionFailed},
+	} {
+		wantHost(t, e.do(t, hostCall{
+			headers: map[string]string{"If-Match": tc.header}, method: http.MethodPost,
+			target: hostConnectionsPath + "/" + second + "/make-default", body: "",
+		}), tc.status)
+	}
+
+	// The create of a connection with an auth kind that the server does not
+	// support fails before any connection exists.
+	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath,
+		`{"kind":"github","auth":"token","installationID":"101"}`), http.StatusBadRequest)
+
+	tests := []struct {
+		name   string
+		object string
+		count  int
+	}{
+		{"a refused delete", "git-host-connection:delete:" + first, 1},
+		{"a refused make-default", "git-host-connection:make-default:" + second, 2},
+		{"a refused create", "git-host-connection:create", 1},
+	}
+
+	entries := e.auditEntries(t, "acme")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, entry := range entries {
+				if entry.Outcome == audit.OutcomeFailure && entry.Object == tt.object && entry.Namespace != "acme" {
+					t.Fatalf("entry = %+v, want the namespace acme", entry)
+				}
+			}
+
+			if n := countEntries(entries, audit.OutcomeFailure, tt.object); n != tt.count {
+				t.Fatalf("%d failure entries with the object %q, want %d", n, tt.object, tt.count)
+			}
+		})
+	}
+}
+
 // TestGitHostConnectionIDOfAnotherNamespaceIsNotFound sends the ID of a
 // connection of acme through the routes of beta, as a caller who may act on
 // both namespaces. Each route answers 404 and the connection of acme stays as
