@@ -172,6 +172,49 @@ func TestNotificationDeliveriesRefuseNegativeRedeliveries(t *testing.T) {
 	}
 }
 
+// TestNotificationDeliveryRedeliverPredicates checks the predicates of the
+// update on their own, as if two redelivers had read the row at the same time.
+func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		state        string
+		redeliveries int
+		want         int64
+	}{
+		{"a pending delivery", "pending", 0, 0},
+		{"a delivery at the limit", "done", notify.MaxAttempts, 0},
+		{"a delivery one below the limit", "done", notify.MaxAttempts - 1, 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openForSavedViews(t)
+
+			_, err := s.pool.Exec(t.Context(), `INSERT INTO notification_deliveries `+deliveryColumns+`
+				VALUES ('dlv-1', '@server', 'ntf-1', '', '', '', 'alice', $1, 0, $2, 1, '', 0, '', 0, 1)`,
+				tc.state, tc.redeliveries)
+			if err != nil {
+				t.Fatalf("plant the delivery: %v", err)
+			}
+
+			n, err := s.queries.RedeliverNotificationDelivery(t.Context(), db.RedeliverNotificationDeliveryParams{
+				ID: "dlv-1", Scope: "@server", MaxRedeliveries: notify.MaxAttempts,
+			})
+			if err != nil {
+				t.Fatalf("redeliver the delivery: %v", err)
+			}
+
+			if n != tc.want {
+				t.Fatalf("rows of the redeliver = %d, want %d", n, tc.want)
+			}
+		})
+	}
+}
+
 // TestCheckStagedNotificationsAcceptsGoodRows proves that the checks stop the
 // rows above and nothing else: a database that the store wrote passes.
 func TestCheckStagedNotificationsAcceptsGoodRows(t *testing.T) {

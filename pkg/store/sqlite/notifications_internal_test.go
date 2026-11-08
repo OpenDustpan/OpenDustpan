@@ -181,9 +181,11 @@ func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 		name         string
 		state        string
 		redeliveries int
+		want         int64
 	}{
-		{"a pending delivery", "pending", 0},
-		{"a delivery at the limit", "done", notify.MaxAttempts},
+		{"a pending delivery", "pending", 0, 0},
+		{"a delivery at the limit", "done", notify.MaxAttempts, 0},
+		{"a delivery one below the limit", "done", notify.MaxAttempts - 1, 1},
 	}
 
 	for _, tc := range tests {
@@ -206,8 +208,8 @@ func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 				t.Fatalf("redeliver the delivery: %v", err)
 			}
 
-			if n != 0 {
-				t.Fatalf("rows of the redeliver = %d, want 0", n)
+			if n != tc.want {
+				t.Fatalf("rows of the redeliver = %d, want %d", n, tc.want)
 			}
 		})
 	}
