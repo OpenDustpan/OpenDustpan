@@ -758,7 +758,9 @@ func (s *Store) StageRestore(
 		return backup.Summary{}, none, removeErr
 	}
 
-	sum, err := s.buildCheckedStaging(ctx, path, in.Open, index, in.Want)
+	sum, err := s.buildCheckedStaging(ctx, path, in.Open, portableCheck{
+		index: index, want: in.Want, restoreAt: in.Options.RestoreAt,
+	})
 	if err != nil {
 		return backup.Summary{}, none, err
 	}

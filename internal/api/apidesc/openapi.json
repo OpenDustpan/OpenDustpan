@@ -261,6 +261,51 @@
         ],
         "type": "object"
       },
+      "BackupTooManyUnverifiedError": {
+        "description": "The error answer with the code backup.too-many-unverified.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.too-many-unverified"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupTooManyUnverifiedErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.too-many-unverified.",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "limit"
+        ],
+        "type": "object"
+      },
       "BulkUnitSettingsError": {
         "properties": {
           "code": {
@@ -1177,6 +1222,7 @@
           "mapping": {
             "access.collection-unit-cap": "#/components/schemas/AccessCollectionUnitCapError",
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
             "lock.locked": "#/components/schemas/LockLockedError",
@@ -1210,6 +1256,9 @@
           },
           {
             "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedError"
           },
           {
             "$ref": "#/components/schemas/ContextFieldFromCodeError"
@@ -1302,6 +1351,7 @@
           "auth.rate-limited",
           "auth.unauthenticated",
           "backup.corrupt",
+          "backup.too-many-unverified",
           "collection.already-exists",
           "collection.changed",
           "collection.invalid-name",
@@ -1447,6 +1497,9 @@
           "principal.managed-by-directory",
           "principal.not-disabled",
           "principal.not-found",
+          "principal.removal-alert-failed",
+          "principal.removal-alert-marker-invalid",
+          "principal.removal-alert-unrecorded",
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
@@ -5309,7 +5362,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"

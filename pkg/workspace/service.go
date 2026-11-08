@@ -1559,7 +1559,7 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
@@ -1608,7 +1608,7 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
@@ -2286,7 +2286,7 @@ func (s *Service) copyBlob(
 		)
 	}
 
-	r = &closeReader{reader: opened, closer: r, id: src.ID}
+	r = &closeReader{reader: opened, opened: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace:   w.Ref.Namespace,
@@ -2731,12 +2731,14 @@ func sanitizeOpenError(id StateVersionID, err error) error {
 	return fmt.Errorf("open state %s: %w", id, ErrSealedContent)
 }
 
-// closeReader reads sealed content and closes the underlying blob object. A
-// decryption failure while streaming maps to ErrSealedContent with the
-// version ID only, so the error holds no key, scope or content; anything
-// else passes through unchanged.
+// closeReader reads sealed content, and at Close closes the opened stream,
+// which clears its key, and the underlying blob object. A decryption failure
+// while streaming maps to ErrSealedContent with the version ID only, so the
+// error holds no key, scope or content; anything else passes through
+// unchanged.
 type closeReader struct {
 	reader io.Reader
+	opened io.Closer
 	closer io.Closer
 	id     StateVersionID
 }
@@ -2784,7 +2786,7 @@ func (v *verifiedReader) Read(p []byte) (int, error) {
 
 // Close closes the underlying blob object.
 func (r *closeReader) Close() error {
-	return r.closer.Close() //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
+	return errors.Join(r.opened.Close(), r.closer.Close())
 }
 
 // change applies a lock transition to the stored workspace and saves it.

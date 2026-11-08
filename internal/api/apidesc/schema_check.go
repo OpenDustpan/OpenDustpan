@@ -30,6 +30,10 @@ func checkDeclared(schema any) error {
 		return fmt.Errorf("%w: a schema is not an object", errDeclared)
 	}
 
+	if err := checkTypeValue(errDeclared, members); err != nil {
+		return err
+	}
+
 	for key, child := range members {
 		if !slices.Contains(subsetSchemaKeys, key) {
 			return fmt.Errorf("%w: member %q is not in the subset", errDeclared, key)
@@ -43,7 +47,8 @@ func checkDeclared(schema any) error {
 	return nil
 }
 
-// checkDeclaredMember checks the schemas that a member of a schema holds.
+// checkDeclaredMember checks the schemas that a member of a schema holds, and
+// the values of the members with a value of their own.
 func checkDeclaredMember(key string, child any) error {
 	switch key {
 	case keyProperties:
@@ -56,9 +61,191 @@ func checkDeclaredMember(key string, child any) error {
 		}
 
 		return checkDeclared(child)
+	case keyType:
+		return checkDeclaredType(child)
+	case keyRequired:
+		return checkDeclaredRequired(child)
 	default:
 		return nil
 	}
+}
+
+// checkDeclaredType checks the value of a type member: one type name of the
+// subset, or a non-empty list of them, as the reflector writes for a value
+// that can also be null.
+func checkDeclaredType(child any) error {
+	if name, isString := child.(string); isString {
+		if isTypeName(name) {
+			return nil
+		}
+
+		return fmt.Errorf("%w: member %q is the type name %q, which is not in the subset", errDeclared, keyType, name)
+	}
+
+	names, isList := child.([]any)
+	if !isList || len(names) == 0 {
+		return fmt.Errorf("%w: member %q is %v, which is not a type name or a non-empty list of type names",
+			errDeclared, keyType, child)
+	}
+
+	for _, name := range names {
+		text, isString := name.(string)
+		if !isString || !isTypeName(text) {
+			return fmt.Errorf("%w: member %q holds %v, which is not a type name of the subset", errDeclared,
+				keyType, name)
+		}
+	}
+
+	return nil
+}
+
+// checkDeclaredRequired checks the value of a required member: a list of
+// strings, as the reflector writes.
+func checkDeclaredRequired(child any) error {
+	names, isList := child.([]any)
+	if !isList {
+		return fmt.Errorf("%w: member %q is %v, which is not a list of strings", errDeclared, keyRequired, child)
+	}
+
+	for _, name := range names {
+		if _, isString := name.(string); !isString {
+			return fmt.Errorf("%w: member %q holds the value %v, which is not a string", errDeclared, keyRequired,
+				name)
+		}
+	}
+
+	return nil
+}
+
+// The numbers of names of a type list. The shortest list holds two names, and
+// the nullable form [X, "null"] holds two as well.
+const (
+	typeListMinNames  = 2
+	typeListNullNames = 2
+)
+
+// isTypeName reports whether the name is a type name that the subset knows:
+// a primitive type, an object or an array.
+func isTypeName(name string) bool {
+	switch name {
+	case typeString, typeNumber, typeInteger, typeBoolean, typeObject, typeArray, typeNull:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPrimitiveTypeName reports whether the name is one of the primitive types
+// of JSON: string, number, integer, boolean and null.
+func isPrimitiveTypeName(name string) bool {
+	switch name {
+	case typeString, typeNumber, typeInteger, typeBoolean, typeNull:
+		return true
+	default:
+		return false
+	}
+}
+
+// checkTypeValue checks the type member of a schema: one string, or a list of
+// type names. It reads the members beside the type too, because an enum or a
+// format is refused beside a type list. It wraps sentinel in the error, so
+// that each caller reports the member with its own error type.
+func checkTypeValue(sentinel error, schema map[string]any) error {
+	value, hasType := schema[keyType]
+	if !hasType {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case string:
+		return nil
+	case []any:
+		return checkTypeList(sentinel, schema, v)
+	default:
+		return fmt.Errorf("%w: the type %v is not a string or a list of names", sentinel, value)
+	}
+}
+
+// checkTypeList checks the names of a type list. The list holds at least two
+// names that the subset knows, with no repeat. A list without null holds
+// primitives only. The name null stands in the second place of a list of two
+// names, and the first name is any type name: it is the nullable form
+// [X, "null"], which the reflector writes for a pointer to a map or to a
+// slice. A list that is not the nullable form carries no enum and no format:
+// the enum or the format would apply to one name of the list only.
+func checkTypeList(sentinel error, schema map[string]any, names []any) error {
+	if len(names) < typeListMinNames {
+		return fmt.Errorf("%w: the type list %v has fewer than two names", sentinel, names)
+	}
+
+	parsed, seen, err := typeListNames(sentinel, names)
+	if err != nil {
+		return err
+	}
+
+	if seen[typeNull] {
+		return checkNullableForm(sentinel, parsed)
+	}
+
+	return checkPlainList(sentinel, schema, parsed)
+}
+
+// typeListNames checks each name of a type list: a string that names a type
+// that the subset knows, with no repeat.
+func typeListNames(sentinel error, names []any) ([]string, map[string]bool, error) {
+	seen := make(map[string]bool, len(names))
+	parsed := make([]string, 0, len(names))
+
+	for _, item := range names {
+		name, isString := item.(string)
+		if !isString {
+			return nil, nil, fmt.Errorf("%w: the type name %v is not a string", sentinel, item)
+		}
+
+		if !isTypeName(name) {
+			return nil, nil, fmt.Errorf("%w: the type name %q is not a type name", sentinel, name)
+		}
+
+		if seen[name] {
+			return nil, nil, fmt.Errorf("%w: the type name %q is listed twice", sentinel, name)
+		}
+
+		seen[name] = true
+		parsed = append(parsed, name)
+	}
+
+	return parsed, seen, nil
+}
+
+// checkNullableForm checks the nullable form [X, "null"]: the name null stands
+// in the second place of a list of two names only.
+func checkNullableForm(sentinel error, names []string) error {
+	if len(names) != typeListNullNames || names[1] != typeNull {
+		return fmt.Errorf(
+			"%w: the type name %q stands in the second place of a list of two names only",
+			sentinel, typeNull,
+		)
+	}
+
+	return nil
+}
+
+// checkPlainList checks a type list without null: every name is primitive, and
+// the schema carries no enum and no format.
+func checkPlainList(sentinel error, schema map[string]any, names []string) error {
+	for _, name := range names {
+		if !isPrimitiveTypeName(name) {
+			return fmt.Errorf("%w: the type name %q is not a primitive type name", sentinel, name)
+		}
+	}
+
+	for _, key := range []string{keyEnum, keyFormat} {
+		if schema[key] != nil {
+			return fmt.Errorf("%w: %s beside a type list", sentinel, key)
+		}
+	}
+
+	return nil
 }
 
 // checkDeclaredProperties checks the schemas of the members of an object.
@@ -162,6 +349,90 @@ func (r *reflector) checkForms() error {
 			return nil
 		}
 	})
+}
+
+// checkTypeLists returns ErrInvalidBody when a finished schema holds a type
+// member that the subset does not allow.
+//
+// Defense in depth: checkDeclared refuses the same forms in a declaration;
+// this check stays so that a reflected type cannot write one either.
+func (r *reflector) checkTypeLists() error {
+	for name, schema := range r.schemas {
+		if err := checkSchemaType(schema); err != nil {
+			return fmt.Errorf("%w: schema %s: %w", ErrInvalidBody, name, err)
+		}
+	}
+
+	return nil
+}
+
+// checkSchemaType checks the type member of a schema and of the schemas below
+// it. The walk reads the members that hold schemas, so that a property that a
+// schema names type is not taken for a type member.
+func checkSchemaType(value any) error {
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	if err := checkTypeValue(ErrInvalidBody, schema); err != nil {
+		return err
+	}
+
+	for key, child := range schema {
+		if err := checkSchemaChild(key, child); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkSchemaChild checks the schemas that one member of a schema holds.
+func checkSchemaChild(key string, child any) error {
+	switch key {
+	case keyProperties:
+		return checkSchemaProperties(child)
+	case keyItems, keyAdditional:
+		return checkSchemaType(child)
+	case keyAnyOf, keyOneOf:
+		return checkSchemaBranches(child)
+	default:
+		// A format, an enum or a description holds no schema.
+		return nil
+	}
+}
+
+// checkSchemaProperties checks the schema of each member of an object.
+func checkSchemaProperties(child any) error {
+	props, ok := child.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	for _, prop := range props {
+		if err := checkSchemaType(prop); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkSchemaBranches checks the schema of each branch of an anyOf or a oneOf.
+func checkSchemaBranches(child any) error {
+	branches, ok := child.([]any)
+	if !ok {
+		return nil
+	}
+
+	for _, branch := range branches {
+		if err := checkSchemaType(branch); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // checkOpenEnum checks the branches of an anyOf.

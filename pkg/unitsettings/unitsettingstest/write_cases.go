@@ -25,6 +25,10 @@ func writeCases() []suiteCase {
 		{name: "put of a unit with a wrong stable ID returns unknown unit", test: testPutWrongID},
 		{name: "put of a unit with no stable ID returns invalid", test: testPutNoID},
 		{name: "put keeps the arguments of the steps out of the audit entry", test: testPutStepsAudit},
+		{
+			name: "put after a change of the defaults gives the effective value of the new defaults",
+			test: testPutDefaultsOfTheTransaction,
+		},
 	}
 }
 
@@ -38,12 +42,12 @@ func put(
 ) unitsettings.Settings {
 	t.Helper()
 
-	got, err := h.Store.Put(t.Context(), s, expected, fence, auditEntry(fence.Namespace))
+	out, err := h.Store.Put(t.Context(), s, expected, fence, auditEntry(fence.Namespace))
 	if err != nil {
 		t.Fatalf("Put at version %d: %v", expected, err)
 	}
 
-	return got
+	return out.Settings
 }
 
 func testPutConflict(t *testing.T, h Harness) {
@@ -237,5 +241,67 @@ func testPutStepsAudit(t *testing.T, h Harness) {
 		if !slices.ContainsFunc(e.Changes, func(c audit.Change) bool { return c.Key == "steps" }) {
 			t.Fatalf("the entry has no change of the steps: %+v", e.Changes)
 		}
+	}
+}
+
+// testPutDefaultsOfTheTransaction checks that Put returns the unit defaults of
+// its own transaction, so a change of the defaults between an earlier read and
+// the write cannot give an effective value from the old defaults.
+func testPutDefaultsOfTheTransaction(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+
+	if _, err := trySetDefaults(t, h, poolDefaults(fence.Namespace, testPool), 0, fence); err != nil {
+		t.Fatalf("SetDefaults: %v", err)
+	}
+
+	read, readErr := h.Store.Defaults(t.Context(), fence.Namespace)
+	if readErr != nil {
+		t.Fatalf("Defaults: %v", readErr)
+	}
+
+	if read.Pool != testPool || read.Version != 1 {
+		t.Fatalf("Defaults = %+v, want the first pool at version 1", read)
+	}
+
+	// Another writer changes the defaults after the read above. The write must
+	// give the defaults of its own transaction, not the defaults that the read
+	// found.
+	next := "rp-" + "fedcba9876543210"
+
+	if _, err := trySetDefaults(t, h, poolDefaults(fence.Namespace, next), 1, fence); err != nil {
+		t.Fatalf("SetDefaults: %v", err)
+	}
+
+	s := settingsFor(unit)
+
+	out, err := h.Store.Put(t.Context(), &s, 0, fence, auditEntry(fence.Namespace))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	if out.Settings.Pool != "" {
+		t.Fatalf("stored pool = %q, want empty: a write copies no default into the record", out.Settings.Pool)
+	}
+
+	wantDefaultsOfTheWrite(t, out, next)
+}
+
+// wantDefaultsOfTheWrite fails the test unless out holds the defaults pool at
+// version 2 and the effective pool of the record comes from them.
+func wantDefaultsOfTheWrite(t *testing.T, out unitsettings.PutResult, pool string) {
+	t.Helper()
+
+	if out.Defaults.Pool != pool || out.Defaults.Version != 2 || !out.Defaults.UpdatedAt.Equal(writeTime()) {
+		t.Fatalf("Put defaults = %+v, want the pool %s at version 2 at %v", out.Defaults, pool, writeTime())
+	}
+
+	c := unitsettings.Context{DefaultConnection: "", HasJobPool: false, DefaultFiles: nil}
+
+	eff := unitsettings.Resolve(&out.Settings, out.Defaults, c)
+	if eff.Pool.Value != pool || eff.Pool.Origin != unitsettings.OriginNamespaceDefault {
+		t.Fatalf("effective pool = %+v, want %s from the namespace defaults", eff.Pool, pool)
 	}
 }

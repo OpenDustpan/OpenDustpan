@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
@@ -25,6 +26,11 @@ func TestNameLockConformance(t *testing.T) {
 
 		return authgatetest.NameLockHarness{
 			Open: func(*testing.T) authgate.NameLockCounter { return s },
+			Age: func(t *testing.T, d time.Duration) {
+				t.Helper()
+
+				ageNameLocks(t, s, d)
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 
@@ -94,4 +100,20 @@ func serverNotices(t *testing.T, n notify.Outbox) []notify.Notification {
 	}
 
 	return got
+}
+
+// ageNameLocks moves every time column of every name count of s back by d,
+// so a case reaches the age of a count without a wait. A time of 0, a count
+// with no lock or no end, stays 0.
+func ageNameLocks(t *testing.T, s *sqlite.Store, d time.Duration) {
+	t.Helper()
+
+	_, err := sqlite.DB(s).ExecContext(t.Context(), `UPDATE name_locks SET
+		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN locked_until_ms - ? ELSE 0 END,
+		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN last_failure_ms - ? ELSE 0 END,
+		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN last_lock_end_ms - ? ELSE 0 END`,
+		d.Milliseconds(), d.Milliseconds(), d.Milliseconds())
+	if err != nil {
+		t.Fatalf("age the name counts: %v", err)
+	}
 }

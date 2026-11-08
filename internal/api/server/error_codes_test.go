@@ -12,6 +12,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -100,6 +101,11 @@ func TestWriteErrorCodes(t *testing.T) {
 		{
 			"state unavailable", maintenance.ErrUnavailable, http.StatusInternalServerError,
 			errcode.MaintenanceUnavailable, nil, "",
+		},
+		{
+			"removal alert unrecorded", signinsvc.ErrRemovalAlertUnrecorded, http.StatusServiceUnavailable,
+			errcode.PrincipalRemovalAlertUnrecorded, nil,
+			"the removal alert and its audit entry could not be written",
 		},
 		{"unclassified", errUnclassified, http.StatusInternalServerError, errcode.ServerInternal, nil, ""},
 	}
