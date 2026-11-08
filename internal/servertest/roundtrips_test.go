@@ -1283,6 +1283,10 @@ func backupModel() costModel {
 // name_lock_key tables of the installation, so that a restore cannot clear a
 // lockout, and each kept table costs one delete and one copy.
 //
+// The restore keeps the used_tickets table too, so that a restore cannot let
+// a ticket that a server used work again. The measured cost of that table is
+// 1 round trip more than perOther gives, so the fixed part holds 1 more.
+//
 // perOther counts 2 round trips for each table that a backup leaves out. An
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
@@ -1301,7 +1305,7 @@ func backupModel() costModel {
 // deleters.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + forgeStripClassTrips + blobDeleteLeaseTrips,
+		fixed:        344 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,

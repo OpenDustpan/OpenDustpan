@@ -58,9 +58,12 @@ const (
 // ArtifactNames is what the rows of one job name in the blob store.
 type ArtifactNames struct {
 	// Plans holds the ID of each plan row of the job: a stored plan, a plan
-	// that a replan cleared and a reserved plan with no part yet. A plan row
-	// names every part of its plan.
+	// that a replan cleared and a reserved plan with no part yet.
 	Plans []string
+	// Parts holds, for each stored plan of Plans, the kinds of the parts that
+	// its manifest names. A plan that is not in Parts, or that has no kind in
+	// it, is a reserved plan: no row names a blob of it.
+	Parts map[string][]OutputKind
 	// ChunkKeys holds the blob key of each confirmed chunk of each log version
 	// of the job, as ChunkBlobKey reads it.
 	ChunkKeys []string
@@ -75,6 +78,13 @@ type ArtifactKeyStore interface {
 	// namespace, so the sweep never reads an empty set for a job that it
 	// cannot find.
 	ArtifactNames(ctx context.Context, ns namespace.Name, id ID) (ArtifactNames, error)
+}
+
+// PhaseOperations is the part of durable.Store that the sweep reads: the
+// operation of a phase, with its claim.
+type PhaseOperations interface {
+	// Get returns the operation id, or durable.ErrNotFound.
+	Get(ctx context.Context, id durable.ID) (durable.Operation, error)
 }
 
 // ArtifactSweeperConfig configures an ArtifactSweeper. Every field but Logger
@@ -93,6 +103,9 @@ type ArtifactSweeperConfig struct {
 	Guard blobguard.Leases
 	// Clock reads the clock of the database. The sweep takes now from it.
 	Clock blob.DatabaseClock
+	// Operations reads the durable operation of a plan phase, to tell whether
+	// the claim that uploads the parts of a plan is still live.
+	Operations PhaseOperations
 	// Audit takes the audit entry of each run, in the scope of the server.
 	Audit audit.ServerStore
 	// Logger is the logger of the sweep. The default discards.
@@ -174,6 +187,7 @@ type ArtifactSweeper struct {
 	namespaces NamespaceReader
 	guard      blobguard.Leases
 	clock      blob.DatabaseClock
+	operations PhaseOperations
 	audit      audit.ServerStore
 	logger     *slog.Logger
 	now        func() time.Time
@@ -194,6 +208,8 @@ func NewArtifactSweeper(cfg ArtifactSweeperConfig) (*ArtifactSweeper, error) {
 		return nil, fmt.Errorf("%w: blob delete guard", ErrInvalid)
 	case cfg.Clock == nil:
 		return nil, fmt.Errorf("%w: database clock", ErrInvalid)
+	case cfg.Operations == nil:
+		return nil, fmt.Errorf("%w: operation reader", ErrInvalid)
 	case cfg.Audit == nil:
 		return nil, fmt.Errorf("%w: audit store", ErrInvalid)
 	}
@@ -210,7 +226,7 @@ func NewArtifactSweeper(cfg ArtifactSweeperConfig) (*ArtifactSweeper, error) {
 
 	return &ArtifactSweeper{
 		jobs: cfg.Jobs, names: cfg.Names, blobs: cfg.Blobs, namespaces: cfg.Namespaces, guard: cfg.Guard,
-		clock: cfg.Clock, audit: cfg.Audit, logger: logger, now: now,
+		clock: cfg.Clock, operations: cfg.Operations, audit: cfg.Audit, logger: logger, now: now,
 	}, nil
 }
 
@@ -314,7 +330,7 @@ func (s *ArtifactSweeper) sweepOne(ctx context.Context, j *Job, now time.Time, r
 		return err
 	}
 
-	at := sweepAt{ns: ns, nsID: nsID, job: j.ID, now: now}
+	at := sweepAt{ns: ns, nsID: nsID, job: j.ID, now: now, current: j}
 
 	err = s.blobs.WalkJob(ctx, nsID, j.ID, func(page []ArtifactBlob) error {
 		return s.sweepPage(ctx, at, page, res)
@@ -405,6 +421,8 @@ type sweepAt struct {
 	ns   namespace.Name
 	nsID namespace.ID
 	job  ID
+	// current is the job as the sweep read it, for the claim of its phase.
+	current *Job
 }
 
 // sweepPage deletes the blobs of one page that are older than the grace
@@ -434,13 +452,10 @@ func (s *ArtifactSweeper) sweepPage(
 		return nil
 	}
 
-	names, err := s.names.ArtifactNames(ctx, at.ns, at.job)
+	named, live, err := s.readNames(ctx, &at)
 	if err != nil {
-		// A failed read deletes nothing, also for a job that is gone.
-		return fmt.Errorf("read the names of the artifact blobs: %w", err)
+		return err
 	}
-
-	named := namedSet(names)
 
 	for _, b := range old {
 		key, parseErr := ParseArtifactKey(at.job, b.Rel)
@@ -451,7 +466,7 @@ func (s *ArtifactSweeper) sweepPage(
 			continue
 		}
 
-		if named.has(key, b.Rel) {
+		if named.has(key, b.Rel, live) {
 			continue
 		}
 
@@ -494,21 +509,88 @@ func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel 
 	return nil
 }
 
-// artifactNameSet is the set of the plans and chunk keys that the rows of a
-// job name.
+// readNames reads what the rows of the job name, and the plan of its live claim.
+// The live plan comes before the names. A claim that is not live now never
+// stores a plan later, so the names that follow show its final state. A claim
+// that is live now keeps its plan, also if it commits after the read of the
+// names. A failed read deletes nothing, also for a job that is gone.
+func (s *ArtifactSweeper) readNames(ctx context.Context, at *sweepAt) (artifactNameSet, string, error) {
+	live, err := s.liveClaimPlan(ctx, at)
+	if err != nil {
+		return artifactNameSet{}, "", err
+	}
+
+	names, err := s.names.ArtifactNames(ctx, at.ns, at.job)
+	if err != nil {
+		return artifactNameSet{}, "", fmt.Errorf("read the names of the artifact blobs: %w", err)
+	}
+
+	return namedSet(names), live, nil
+}
+
+// liveClaimPlan returns the ID of the plan that the live claim of the job
+// stores, or an empty ID when no claim stores one. A claim stores a plan only in
+// a plan phase of a job that has not ended, while its operation runs and its
+// lease has not passed at the time of the run. The ID comes from the claim, as
+// PlanIDOf makes it. A failed read of the operation is an error, so the sweep
+// does not take a claim for lost when it cannot tell.
+func (s *ArtifactSweeper) liveClaimPlan(ctx context.Context, at *sweepAt) (string, error) {
+	j := at.current
+	if j == nil || j.State.Terminal() || j.Current < 0 || j.Current >= len(j.Phases) {
+		return "", nil
+	}
+
+	phase := &j.Phases[j.Current]
+	if phase.Kind != PhasePlan || phase.Operation == "" {
+		return "", nil
+	}
+
+	op, err := s.operations.Get(ctx, durable.ID(phase.Operation))
+	if errors.Is(err, durable.ErrNotFound) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read the operation of the plan phase of job %s: %w", j.ID, err)
+	}
+
+	if op.State != durable.StateRunning || !at.now.Before(op.Claim.ExpiresAt) {
+		return "", nil
+	}
+
+	claim := PhaseClaim{
+		Job: j.ID, Phase: j.Current, Claim: op.Claim, Fence: namespace.Fence{Namespace: "", FailoverVersion: 0},
+	}
+
+	return PlanIDOf(claim), nil
+}
+
+// artifactNameSet is the set of the plans, the parts of the stored plans and the
+// chunk keys that the rows of a job name.
 type artifactNameSet struct {
 	plans  map[string]struct{}
+	parts  map[string]map[OutputKind]struct{}
 	chunks map[string]struct{}
 }
 
 // namedSet returns the set of names.
 func namedSet(names ArtifactNames) artifactNameSet {
 	set := artifactNameSet{
-		plans: make(map[string]struct{}, len(names.Plans)), chunks: make(map[string]struct{}, len(names.ChunkKeys)),
+		plans:  make(map[string]struct{}, len(names.Plans)),
+		parts:  make(map[string]map[OutputKind]struct{}, len(names.Parts)),
+		chunks: make(map[string]struct{}, len(names.ChunkKeys)),
 	}
 
 	for _, p := range names.Plans {
 		set.plans[p] = struct{}{}
+	}
+
+	for plan, kinds := range names.Parts {
+		set.parts[plan] = make(map[OutputKind]struct{}, len(kinds))
+
+		for _, k := range kinds {
+			set.parts[plan][k] = struct{}{}
+		}
 	}
 
 	for _, k := range names.ChunkKeys {
@@ -518,17 +600,30 @@ func namedSet(names ArtifactNames) artifactNameSet {
 	return set
 }
 
-// has reports whether a row names the blob rel, which key parsed.
-func (n artifactNameSet) has(key ArtifactKey, rel string) bool {
-	if key.Plan != "" {
-		_, ok := n.plans[key.Plan]
+// has reports whether the sweep keeps the blob rel, which key parsed. A row
+// names a log chunk by its blob key. A stored plan names the parts of its
+// manifest and no other blob. A reserved plan names none: the blobs of the plan
+// of the live claim stay, as the claim can still store the plan, and the blobs
+// of any other reserved plan go, because their claim ended and none stores
+// them.
+func (n artifactNameSet) has(key ArtifactKey, rel, live string) bool {
+	if key.Plan == "" {
+		_, ok := n.chunks[rel]
 
 		return ok
 	}
 
-	_, ok := n.chunks[rel]
+	if _, ok := n.plans[key.Plan]; !ok {
+		return false
+	}
 
-	return ok
+	if kinds := n.parts[key.Plan]; len(kinds) > 0 {
+		_, ok := kinds[key.Kind]
+
+		return ok
+	}
+
+	return key.Plan == live
 }
 
 // record appends the audit entry of one run at the time at: the sweep, its

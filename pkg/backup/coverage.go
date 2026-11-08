@@ -27,7 +27,8 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // access tables. The instance version rows describe the server processes
 // that run now, so the swap keeps them. The store check rows describe the
 // store of this installation at the time of a check, so the swap keeps
-// them too. The schema holds every table of Tables and of ControlTables,
+// them too. The used CAS ticket records stay too: a restore must not let a
+// ticket that a server used after the backup work again. The schema holds every table of Tables and of ControlTables,
 // and no other table (schema_migrations and audit_chain_state aside, which
 // the adapters keep as bookkeeping). Treat the list as a constant and never mutate it.
 //
@@ -39,6 +40,7 @@ var ControlTables = []string{
 	TableSignInFailures,
 	TableNameLocks,
 	TableNameLockKey,
+	TableUsedTickets,
 	TableAuditChainCheck,
 	TableAuditChainMark,
 	TableBackups,

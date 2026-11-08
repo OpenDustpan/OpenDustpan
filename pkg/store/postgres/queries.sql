@@ -2621,6 +2621,16 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1;
 
+-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3;
+
+-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= $1;
+
 -- name: GetSessionPolicy :one
 SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
 
@@ -4345,13 +4355,19 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 ORDER BY r.version COLLATE "C";
 
 -- name: ListRegistryAddresses :many
+-- One page of the distinct addresses of a kind in a namespace, after the
+-- cursor (name, system). The caller reads one row more than the page size, so
+-- that the extra row tells whether a next page exists.
 SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+  AND (r.name COLLATE "C" > sqlc.arg(after_name)
+    OR (r.name COLLATE "C" = sqlc.arg(after_name) AND r.system COLLATE "C" > sqlc.arg(after_system)))
 GROUP BY r.name, r.system
 -- The order is by code point, whatever the collation of the database.
-ORDER BY r.name COLLATE "C", r.system COLLATE "C";
+ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT sqlc.arg(lim);
 
 -- name: InsertRegistryKey :execrows
 -- The caller checks the fence in the same transaction. A key with the same

@@ -241,9 +241,15 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 		return nil, fmt.Errorf("%w: it keeps no session generations", errSignInStore)
 	}
 
+	tempAdmins, ok := in.store.(principal.TempAdmins)
+	if !ok {
+		return nil, fmt.Errorf("%w: it keeps no temporary administrators", errSignInStore)
+	}
+
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
-		Audit: in.audit, Groups: nil, States: generations, Logger: in.logger, OnAuditFailure: in.onAuditFailure,
+		Audit: in.audit, TempAdmins: tempAdmins, Groups: nil, States: generations, Logger: in.logger,
+		OnAuditFailure: in.onAuditFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sign-in service: %w", err)
