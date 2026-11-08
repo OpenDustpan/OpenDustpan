@@ -8,7 +8,8 @@ Changed by:
   check.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
-
+- ADR 354 extends decisions 3 and 6: the content of act and the claim agent.
+.
 ## Context
 
 The project owner decided on 18 October 2026 that a token of the

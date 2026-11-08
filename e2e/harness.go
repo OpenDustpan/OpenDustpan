@@ -181,6 +181,8 @@ type Env struct {
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
+	// skipped holds the scenarios that did not run in this mode.
+	skipped []SkippedScenario
 	// tls reports whether the server speaks HTTPS. OpenTofu always needs
 	// it; the Pulumi CLI needs it only on a TLS server, where it trusts
 	// the certificate through SSL_CERT_FILE.
@@ -551,6 +553,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           in.cli.Tool == ToolTofu || in.signIn,
 		binPath:       "",
 		backendCfg:    backendConfig{}, //nolint:exhaustruct_v5 // The in-process mode has no binary backend.
@@ -1212,6 +1215,22 @@ var errInventoryList = errors.New("inventory list failed")
 // Steps returns the scenario steps run so far.
 func (e *Env) Steps() []StepResult {
 	return append([]StepResult(nil), e.steps...)
+}
+
+// SkipScenario records that a scenario does not run in this mode and logs the
+// reason. gaps names the contract lines that only this scenario produces. The
+// contract check then reports them as not checked and does not fail the run.
+// A mode that runs the scenario records nothing, so it still requires them.
+func (e *Env) SkipScenario(tb testing.TB, name, reason string, gaps ...Gap) {
+	tb.Helper()
+
+	e.skipped = append(e.skipped, SkippedScenario{Name: name, Reason: reason, Gaps: gaps})
+	tb.Logf("skip %s: %s", name, reason)
+}
+
+// Skipped returns the scenarios that did not run in this mode.
+func (e *Env) Skipped() []SkippedScenario {
+	return append([]SkippedScenario(nil), e.skipped...)
 }
 
 // Install returns the CLI under test.

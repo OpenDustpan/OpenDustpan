@@ -611,6 +611,8 @@ func spawnBinaryBackend(ctx context.Context, cfg backendConfig, port string) (*e
 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	// Set before Start: os/exec reads WaitDelay in its context watcher.
+	cmd.WaitDelay = stepLogWaitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start server binary: %w", err)
@@ -948,6 +950,67 @@ func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 	e.backendLogs = handle.logs
 }
 
+// StartServerExpectingRefusal starts the binary server on the database at
+// dbURL with the same settings as StartServer, and waits for the process to
+// exit. It does not wait for GET /health/live, because the server must refuse
+// the database. It returns the exit code and the combined output. It fails
+// the test when the server still runs after commandTimeout, and kills it
+// then. It needs E2E_SERVER=binary, and no server of the environment may run.
+func (e *Env) StartServerExpectingRefusal(ctx context.Context, tb testing.TB, dbURL string) (int, string) {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("StartServerExpectingRefusal needs E2E_SERVER=binary")
+	}
+
+	if e.ha != nil {
+		tb.Fatalf("StartServerExpectingRefusal does not run with several instances")
+	}
+
+	if e.backendCmd != nil {
+		tb.Fatalf("StartServerExpectingRefusal: the server still runs")
+	}
+
+	cfg := e.backendCfg
+	cfg.dbURL = dbURL
+
+	cmd, out, err := spawnBinaryBackend(ctx, cfg, e.backendPort)
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	timer := time.NewTimer(commandTimeout)
+	defer timer.Stop()
+
+	select {
+	case waitErr := <-done:
+		var exitErr *exec.ExitError
+		if waitErr != nil && !errors.As(waitErr, &exitErr) {
+			tb.Fatalf("wait for server binary: %v\n%s", waitErr, out.String())
+		}
+
+		return cmd.ProcessState.ExitCode(), out.String()
+	case <-timer.C:
+		// The process may exit between the timer and the kill. Then the kill
+		// reports that the process is done, and the wait below returns its status.
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			tb.Errorf("kill server binary: %v", killErr)
+		}
+
+		tb.Logf("server binary after kill: %v", <-done)
+
+		tb.Fatalf("server binary still runs after %s, want a refusal\n%s", commandTimeout, out.String())
+
+		return 0, ""
+	}
+}
+
 // waitForBackend waits until the backend answers /health/live with 204.
 func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs *lockedBuffer) {
 	tb.Helper()
@@ -1222,6 +1285,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           true,
 		binPath:       bin,
 		backupDir:     "",
@@ -1295,7 +1359,6 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
-
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
@@ -1313,6 +1376,7 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		skipped:       nil,
 		tls:           true,
 		binPath:       bin,
 		backupDir:     "",

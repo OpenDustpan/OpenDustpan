@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "namespace": "payments",
+  "name": "orders-db",
+  "blueprint": { "name": "postgres", "version": 3 },
+  "ensure": "present",
+  "inputs": { "network": "net-0a1b2c", "size": "large" }
+}

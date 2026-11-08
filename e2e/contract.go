@@ -400,13 +400,52 @@ func commonPaths(path string, elements []any) []string {
 	return common
 }
 
+// statusGoneFormat is the part of a Missing line that says a status is gone.
+const statusGoneFormat = "the status %d is gone"
+
+// GapSplit is the result of SplitGaps.
+type GapSplit struct {
+	Failed     []string
+	NotChecked []string
+}
+
+// SplitGaps divides lines, the result of Contract.Missing, into the lines that
+// fail the run and the lines that a skipped scenario explains. A line is
+// explained only when a scenario that skipped in this mode named it as a gap.
+// In a mode where the scenario runs, nothing is named, so every line fails.
+func SplitGaps(lines []string, skipped []SkippedScenario) GapSplit {
+	var split GapSplit
+
+	for _, line := range lines {
+		name := ""
+
+		for i := range skipped {
+			if slices.ContainsFunc(skipped[i].Gaps, func(g Gap) bool { return g.Line() == line }) {
+				name = skipped[i].Name
+
+				break
+			}
+		}
+
+		if name == "" {
+			split.Failed = append(split.Failed, line)
+
+			continue
+		}
+
+		split.NotChecked = append(split.NotChecked, line+" (not checked in this mode: scenario "+name+" skipped)")
+	}
+
+	return split
+}
+
 // Missing returns what want has and got does not: a route, a status, a field or
 // a header. Each line names one thing. It returns nothing when got keeps the
 // whole contract of want. Extra routes, statuses, fields and headers in got
 // are no problem.
 func (want Contract) Missing(got Contract) []string {
 	return want.lacking(got,
-		"the CLI did not use this route", "the status %d is gone", "status %d: the answer has no field %q",
+		"the CLI did not use this route", statusGoneFormat, "status %d: the answer has no field %q",
 		"status %d: the answer has no header %q")
 }
 

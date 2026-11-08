@@ -7,6 +7,8 @@ Changed by:
 - ADR 166 changes decisions 14, 15 and 19: the match waits while the index is
   not ready, the built-in roles.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 343 changes decision 5: a sweep pool no longer runs only sweeps.
+- ADR 343 extends decision 9: converters run on a pool that has the sweep purpose.
 
 ## Context
 

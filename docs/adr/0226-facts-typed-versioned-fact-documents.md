@@ -12,7 +12,12 @@ Changed by:
   check.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
-
+- ADR 342 extends decision 4: state facts for three more writes.
+- ADR 353 changes decisions 2 and 4: each fact group names its origin.
+- ADR 353 changes decision 10: a check can run as a check step.
+- ADR 353 extends decision 13: the paths come from two trees that the server read.
+- ADR 354 extends decisions 3 and 4: new facts, and approver exclusions name the subject.
+.
 ## Context
 
 The policy input of a job start holds the key paths of the edits and their

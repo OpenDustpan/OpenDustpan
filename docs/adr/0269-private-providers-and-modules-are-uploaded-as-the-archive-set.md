@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-18 · decisions 1 to 3 by the project owner, decisions 4 to 11 by the product manager (2026-10-20). One design question is open in RFC 101
 
+Changed by:
+
+- ADR 345 changes decision 11: the life cycle of a version has four states.
+
 ## Context
 
 A team builds its own OpenTofu providers and modules (ADR 170). ADR 177 gives

@@ -35,21 +35,29 @@ func (d *DurableOperations) EnsureSchedule(ctx context.Context, spec durable.Sch
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			insertErr := q.InsertDurableSchedule(ctx, db.InsertDurableScheduleParams{
+			// Two instances can start at the same time and both find no
+			// row. The insert then reports no row, because the other
+			// instance inserted the schedule first.
+			var rows int64
+
+			rows, err = q.InsertDurableSchedule(ctx, db.InsertDurableScheduleParams{
 				Name: spec.Name, IntervalMs: interval, NowMs: now,
 			})
-			if insertErr != nil {
-				return fmt.Errorf("write durable schedule: %w", insertErr)
+			if err == nil && rows == 0 {
+				err = q.SetDurableScheduleInterval(ctx, db.SetDurableScheduleIntervalParams{
+					IntervalMs: interval, NowMs: now, Name: spec.Name,
+				})
 			}
 		case err == nil:
-			setErr := q.SetDurableScheduleInterval(ctx, db.SetDurableScheduleIntervalParams{
+			err = q.SetDurableScheduleInterval(ctx, db.SetDurableScheduleIntervalParams{
 				IntervalMs: interval, NowMs: now, Name: spec.Name,
 			})
-			if setErr != nil {
-				return fmt.Errorf("write durable schedule: %w", setErr)
-			}
 		default:
 			return fmt.Errorf("read durable schedule: %w", err)
+		}
+
+		if err != nil {
+			return fmt.Errorf("write durable schedule: %w", err)
 		}
 
 		sc, err = readSchedule(ctx, q, spec.Name, now)

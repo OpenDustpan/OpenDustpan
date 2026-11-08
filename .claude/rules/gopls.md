@@ -15,9 +15,9 @@ load this file directly into a session where the gopls MCP server is connected.
 
 ## Detecting a Go workspace
 
-At the start of every session, you MUST use the `go_workspace` tool to learn about the Go workspace. ONLY if you are in
-a Go workspace, you MUST run `go_vulncheck` immediately afterwards to identify any existing security risks. The rest of
-these instructions apply whenever that tool indicates that the user is in a Go workspace.
+The gopls tools are optional. Use them when they are connected. If they are not connected, or a call times out, do not
+wait or retry: use `go build`, `go vet` and grep. Never run `go_vulncheck` at the start of a session. CI runs
+`make vuln`. Run it only after a change to go.mod.
 
 ## Go programming workflows
 
@@ -41,7 +41,7 @@ The goal of the read workflow is to understand the codebase.
 3. **Understand a file and its intra-package dependencies**: When you have a file path and want to understand its
    contents and how it connects to other files *in the same package*, use `go_file_context`. This tool will show you a
    summary of the declarations from other files in the same package that are used by the current file. `go_file_context`
-   MUST be used immediately after reading any Go file for the first time, and MAY be re-used if dependencies have
+   should be used immediately after reading any Go file for the first time, and MAY be re-used if dependencies have
    changed.
    EXAMPLE: to understand `server.go`'s dependencies on other files in its package:
    `go_file_context({"file":"/path/to/server.go"})`
@@ -66,7 +66,7 @@ The editing workflow is iterative. You should cycle through these steps until th
 3. **Make edits**: Make the required edits, including edits to references you identified in the previous step. Don't
    proceed to the next step until all planned edits are complete.
 
-4. **Check for errors**: After every code modification, you MUST call the `go_diagnostics` tool. Pass the paths of the
+4. **Check for errors**: After every code modification, you should call the `go_diagnostics` tool. Pass the paths of the
    files you have edited. This tool will report any build or analysis errors.
    EXAMPLE: `go_diagnostics({"files":["/path/to/server.go"]})`
 
