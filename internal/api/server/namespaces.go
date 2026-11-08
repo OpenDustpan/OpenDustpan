@@ -357,7 +357,7 @@ func (h *Handler) visibleNamespaces(
 		return none, false, err
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return namespace.Filter{All: true, Names: nil}, false, nil
 	}
 

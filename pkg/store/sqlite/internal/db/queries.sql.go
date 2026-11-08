@@ -18517,6 +18517,37 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 	return result.RowsAffected()
 }
 
+const namespacesWithList = `-- name: NamespacesWithList :many
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name
+`
+
+// Lists the namespaces that have an IP allowlist.
+func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, namespacesWithList)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one
 INSERT INTO inventory_change_heads (namespace_id, last_seq)
 VALUES (?, 1)
