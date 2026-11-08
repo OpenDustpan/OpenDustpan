@@ -26,7 +26,7 @@ const devJobBody = `{"spec":{"unit":{"tool":"opentofu","namespace":"acme","name"
 	`"timeoutNanos":0,"bindPlan":false}],"approvals":[{"gate":"approval","subject":"` + devJobApprover + `",` +
 	`"agent":"","verdict":"approve","comment":"","plan":null,"at":"2026-10-20T09:30:00Z","auth":"",` +
 	`"authAt":"0001-01-01T00:00:00Z"}],"startedAt":"0001-01-01T00:00:00Z","finishedAt":"0001-01-01T00:00:00Z"}],` +
-	`"startedBy":"` + devJobStarter + `","source":"","agent":"","agentMode":"","breakGlass":null,"delivery":null,` +
+	`"startedBy":"` + devJobStarter + `","source":"api","agent":"","agentMode":"","breakGlass":null,"delivery":null,` +
 	`"closed":null,"verification":"","requestHash":""}`
 
 // devJobCase is the strip case of a job that a dev person started and approved.

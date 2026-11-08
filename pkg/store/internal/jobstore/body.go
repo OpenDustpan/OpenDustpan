@@ -114,6 +114,12 @@ type planBody struct {
 	CreatedAt    time.Time      `json:"createdAt"`
 	ExpiresAt    time.Time      `json:"expiresAt"`
 	RedactedAt   time.Time      `json:"redactedAt"`
+	// ReservePhase, ReserveOperation and ReserveToken name the phase and the
+	// claim that recorded a reserve. Only the claim that made the reserve
+	// fills it. A filled plan keeps no binding.
+	ReservePhase     int    `json:"reservePhase"`
+	ReserveOperation string `json:"reserveOperation"`
+	ReserveToken     int64  `json:"reserveToken"`
 }
 
 type gateBody struct {
@@ -319,6 +325,7 @@ func encodePlan(p *job.PlanRef) *planBody {
 	out := &planBody{
 		ID: p.ID, ItemKey: string(p.ItemKey), StateVersion: p.StateVersion, Parts: nil, CreatedAt: p.CreatedAt,
 		ExpiresAt: p.ExpiresAt, RedactedAt: p.RedactedAt,
+		ReservePhase: 0, ReserveOperation: "", ReserveToken: 0,
 	}
 
 	for _, part := range p.Parts {
@@ -327,6 +334,15 @@ func encodePlan(p *job.PlanRef) *planBody {
 			StoredSize: part.StoredSize, StoredMD5: part.StoredMD5,
 		})
 	}
+
+	return out
+}
+
+// encodeReservePlan returns the body of a reserve: the plan fields, and the
+// phase, the operation and the token of the claim that made the reserve.
+func encodeReservePlan(p *job.PlanRef, pc job.PhaseClaim) *planBody {
+	out := encodePlan(p)
+	out.ReservePhase, out.ReserveOperation, out.ReserveToken = pc.Phase, string(pc.Claim.Operation), pc.Claim.Token
 
 	return out
 }
@@ -502,12 +518,45 @@ func encodeBody(j *job.Job) (string, error) {
 		}
 	}
 
+	// Defense in depth: the decode checks each stored body again. This check
+	// stays so that a write of an unknown value fails at the write and never
+	// stores a row that cannot decode.
+	if err := checkEnums(&b, job.ErrInvalid); err != nil {
+		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
+	}
+
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
 	}
 
 	return string(raw), nil
+}
+
+// checkEnums returns an error that wraps sentinel for a source kind, an
+// agent mode or a verification result in b that this server never writes.
+// The error names the field and never the value. The decode wraps ErrDamaged,
+// because a stored row is untrusted: a restore or another version may have
+// written it. The encode wraps job.ErrInvalid, because there the value comes
+// from the caller. The empty agent mode is accepted, the empty source is
+// refused, and the empty verification is valid.
+func checkEnums(b *jobBody, sentinel error) error {
+	source := job.SourceKind(b.Source)
+	if !source.Valid() {
+		return fmt.Errorf("source: %w", sentinel)
+	}
+
+	mode := job.AgentMode(b.AgentMode)
+	if mode != "" && !mode.Valid() {
+		return fmt.Errorf("agent mode: %w", sentinel)
+	}
+
+	verification := job.Verification(b.Verification)
+	if !verification.Valid() {
+		return fmt.Errorf("verification: %w", sentinel)
+	}
+
+	return nil
 }
 
 // decodeBody fills the fields of j that the body holds.
@@ -524,6 +573,10 @@ func decodeBody(body string, j *job.Job) error {
 
 	closed, err := decodeStateVersion(b.Closed)
 	if err != nil {
+		return fmt.Errorf("decode job %s: %w", j.ID, err)
+	}
+
+	if err := checkEnums(&b, ErrDamaged); err != nil {
 		return fmt.Errorf("decode job %s: %w", j.ID, err)
 	}
 

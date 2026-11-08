@@ -37,6 +37,9 @@ const (
 	backupColUpdatedAtMs = "updated_at_ms"
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
+	backupColSourceID    = "source_id"
+	backupColSourceKind  = "source_kind"
+	backupColGroupID     = "group_id"
 	backupColKind        = "kind"
 	backupColUsedAtMs    = "used_at_ms"
 	backupColSubject     = "subject"
@@ -559,6 +562,10 @@ func sqliteNameLockControlTables() []sqliteBackupTable {
 			table:   backup.TableNameLockKey,
 			columns: []string{"id", "key"},
 		},
+		{
+			table:   backup.TableUsedTickets,
+			columns: []string{"provider_id", "ticket_digest", "until_ms"},
+		},
 	}
 }
 
@@ -733,12 +740,12 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 		{
 			table: "group_members",
 			columns: []string{
-				"group_id",
+				backupColGroupID,
 				backupColPrincipalID,
 				"added_at_ms",
 				"removed_at_ms",
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				backupColState,
 				"suspended_at_ms",
 				"pinned",
@@ -748,11 +755,31 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			table: "group_mappings",
 			columns: []string{
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				"claim_value",
-				"group_id",
+				backupColGroupID,
 				backupColCreatedBy,
 				backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "member_removal_alerts",
+			columns: []string{
+				backupColSourceKind,
+				backupColSourceID,
+				"alerted_at_ms",
+			},
+		},
+		{
+			table: "member_removals",
+			columns: []string{
+				"id",
+				backupColSourceKind,
+				backupColSourceID,
+				backupColGroupID,
+				"removed",
+				"members_before",
+				backupColAtMs,
 			},
 		},
 		{

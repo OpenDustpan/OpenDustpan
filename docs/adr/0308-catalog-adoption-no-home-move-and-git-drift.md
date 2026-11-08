@@ -6,6 +6,10 @@ Changes:
 
 - Extends ADR 110: adoption of units, no move of a request, and git drift.
 
+Changed by:
+
+- ADR 360 extends decision 2: an upgrade to a new blueprint version does not move a request.
+
 ## Context
 
 The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. ADR 110 does not decide them.

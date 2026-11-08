@@ -23,7 +23,7 @@ func TestJobStoreOptionHasTheClaimer(t *testing.T) {
 
 	defer st.close()
 
-	if got := len(jobStoreOption(st)); got != 2 {
+	if got := len(jobStoreOption(st, slog.New(slog.DiscardHandler))); got != 2 {
 		t.Fatalf("job options for a store with jobs = %d, want 2: the job store and the job claimer", got)
 	}
 }
