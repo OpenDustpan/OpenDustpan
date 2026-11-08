@@ -1112,7 +1112,7 @@ CREATE TABLE quota_reservation_keys (
     namespace_id   TEXT NOT NULL,
     reservation_id TEXT NOT NULL,
     blueprint      TEXT NOT NULL,
-    kind           TEXT NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind = 'units'),
     scope          TEXT NOT NULL,
     PRIMARY KEY (namespace_id, reservation_id, blueprint, kind, scope),
     FOREIGN KEY (namespace_id, reservation_id) REFERENCES quota_reservations (namespace_id, id)
@@ -1122,7 +1122,7 @@ CREATE TABLE quota_requests (
     id           TEXT    NOT NULL PRIMARY KEY,
     namespace_id TEXT    NOT NULL REFERENCES namespaces (id),
     blueprint    TEXT    NOT NULL,
-    kind         TEXT    NOT NULL,
+    kind         TEXT    NOT NULL CHECK (kind = 'requests'),
     scope        TEXT    NOT NULL,
     at_ms        INTEGER NOT NULL
 ) STRICT;
