@@ -289,6 +289,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}, nil
 	case jobToken, jobIDOnAccessToken:
 		cred := identity.CredentialJobToken
@@ -307,6 +308,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Kind:           "",
 			Credential:     cred,
 			JobID:          "job-1",
+			JobUnit:        identity.Object{},
 		}, nil
 	case userToken:
 		return identity.Principal{
@@ -319,6 +321,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}, nil
 	default:
 		return identity.Principal{
@@ -331,6 +334,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}, identity.ErrUnauthenticated
 	}
 }

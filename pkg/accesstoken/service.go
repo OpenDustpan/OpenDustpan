@@ -675,6 +675,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		Kind:           identity.Kind(m.Owner.Kind),
 		Credential:     credentialOf(m.Token.Kind),
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}, nil
 }
 

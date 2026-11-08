@@ -164,6 +164,7 @@ func TestDeletedReadScopeCollectionGrant(t *testing.T) {
 			p := identity.Principal{
 				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: tc.subject, DisplayName: "",
 				Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+				JobUnit: identity.Object{},
 			}
 
 			all, ids, err := tc.scope.ReadableUnits(t.Context(), p, tc.ns)

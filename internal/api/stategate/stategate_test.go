@@ -91,6 +91,7 @@ func principal(credential identity.Credential, jobID string) identity.Principal 
 		Subject: "bo@example.com", DisplayName: "", Admin: false, TokenID: "tok-1", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: credential, JobID: jobID,
+		JobUnit: identity.Object{},
 	}
 }
 

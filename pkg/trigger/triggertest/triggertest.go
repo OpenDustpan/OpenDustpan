@@ -306,6 +306,7 @@ func ActorOf(subject string) job.Actor {
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		},
 		Agent:       "",
 		Mode:        "",

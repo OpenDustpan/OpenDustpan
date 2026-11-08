@@ -384,6 +384,7 @@ func sharedCaller() *sinks.Caller {
 			Subject: "alice", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 			Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		By: audit.Entry{
 			At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",

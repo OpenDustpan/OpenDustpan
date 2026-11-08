@@ -73,6 +73,7 @@ func actorAda() job.Actor {
 		Principal: identity.Principal{
 			Subject: "ada", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{},
 	}

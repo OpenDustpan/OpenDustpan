@@ -281,6 +281,7 @@ func (r saverRecords) Saver(ctx context.Context, subject string) (trigger.SaverR
 			Subject: p.Subject, DisplayName: p.DisplayName, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.Kind(p.Kind),
 			Credential: identity.CredentialAccessToken, JobID: "",
+			JobUnit: identity.Object{},
 		},
 		ID: p.ID,
 	}, nil

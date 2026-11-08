@@ -257,6 +257,7 @@ func TestSignInFailsWithOneAnswer(t *testing.T) {
 	caller := identity.Principal{
 		Subject: "admin", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 	de := base("admin")
 	de.Action = "principal:disable"

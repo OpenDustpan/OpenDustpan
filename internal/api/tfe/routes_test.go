@@ -96,6 +96,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}, nil
 }
 

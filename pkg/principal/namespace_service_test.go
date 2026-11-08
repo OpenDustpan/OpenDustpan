@@ -146,6 +146,7 @@ func TestPlantedNamespaceServiceRecordIsNotEditable(t *testing.T) {
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 
 	group, err := f.svc.CreateGroup(t.Context(), testEntry(), principal.GroupInput{Name: "ops", Description: ""})

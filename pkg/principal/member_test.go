@@ -106,6 +106,7 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {
@@ -153,6 +154,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	_, err = svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1")
@@ -179,6 +181,7 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 		Kind:       "",
 		Credential: "",
 		JobID:      "",
+		JobUnit:    identity.Object{},
 	}
 
 	for _, tc := range []struct {

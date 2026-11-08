@@ -121,7 +121,8 @@ func gatePrincipal(subject string, kind identity.Kind, credential identity.Crede
 	return identity.Principal{
 		Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: credential,
-		JobID: "",
+		JobID:   "",
+		JobUnit: identity.Object{},
 	}
 }
 

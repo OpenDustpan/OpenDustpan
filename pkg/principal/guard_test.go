@@ -75,6 +75,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	p, err := svc.CreatePrincipal(

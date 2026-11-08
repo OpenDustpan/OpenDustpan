@@ -86,6 +86,7 @@ func (testAuthn) AuthenticateToken(_ context.Context, token string) (identity.Pr
 		Subject: token, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

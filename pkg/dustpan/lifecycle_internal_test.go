@@ -164,6 +164,7 @@ func TestDeletedReadScope(t *testing.T) {
 				Kind:           "",
 				Credential:     "",
 				JobID:          "",
+				JobUnit:        identity.Object{},
 			}
 
 			all, ids, err := scope.ReadableUnits(t.Context(), p, tc.ns)
@@ -196,6 +197,7 @@ func TestDeletedReadScopeFailsClosed(t *testing.T) {
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}
 
 		all, ids, err := scope.ReadableUnits(t.Context(), p, "acme")

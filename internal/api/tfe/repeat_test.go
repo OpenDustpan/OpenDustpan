@@ -46,6 +46,7 @@ func (repeatAuthenticator) AuthenticateToken(_ context.Context, raw string) (ide
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: subject, DisplayName: subject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

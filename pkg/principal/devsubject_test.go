@@ -154,6 +154,7 @@ func personWith(subject string) identity.Principal {
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: subject,
 		DisplayName: subject, Admin: false, TokenID: "tok", TokenExpiresAt: time.Time{},
 		Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 
@@ -258,5 +259,6 @@ func (a staticAuthenticator) AuthenticateToken(context.Context, string) (identit
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: a.subject,
 		DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }

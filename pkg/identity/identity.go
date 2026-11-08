@@ -75,6 +75,10 @@ type Principal struct {
 	// JobID is the job whose token authenticated the request. It is empty
 	// for every other credential.
 	JobID string
+	// JobUnit is the unit of the job whose token authenticated the request.
+	// The authorizer limits a job token to this unit. It is the zero Object
+	// for every other credential.
+	JobUnit Object
 }
 
 // Kind is the kind of a principal record. Its values equal the kinds of a
@@ -1149,6 +1153,8 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 		return nil, fmt.Errorf("%w: need at least %d bytes", ErrWeakToken, minTokenLength)
 	}
 
+	var noJobUnit Object
+
 	return &StaticToken{
 		principal: Principal{
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
@@ -1160,6 +1166,7 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        noJobUnit,
 		},
 		token: []byte(token),
 	}, nil
@@ -1205,6 +1212,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	hashes := make([][32]byte, 0, len(tokens))
 	seen := make(map[[32]byte]struct{}, len(tokens))
 
+	var noJobUnit Object
+
 	for i, raw := range tokens {
 		token := strings.TrimSpace(raw)
 		if len(token) < minTokenLength {
@@ -1236,6 +1245,7 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 				Kind:                   "",
 				Credential:             "",
 				JobID:                  "",
+				JobUnit:                noJobUnit,
 			},
 		)
 		hashes = append(hashes, sum)
