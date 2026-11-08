@@ -53,8 +53,9 @@ Consider a change done only when `make check` passes with zero findings:
   Resolve a conflict in a generated file (the API description, the clients,
   the golden files, `internal/db`) with a new run of its generator on the
   merged code, never by hand.
-- A feature that a user can see has its page in the user documentation in
-  the same pull request (ADR 214).
+- A feature is complete only when a user can reach it. That needs the wiring, the
+  route, an e2e step, a page in the user documentation in the same pull
+  request (ADR 214) and a usability check.
 
 Do not report work as finished if any of these fail. Say what fails instead.
 
@@ -336,7 +337,20 @@ skill (ADR 14):
 - Keep changes small and reviewable, with one concern per change.
 - Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
-- Agent work starts from a change in `openspec/changes` with no open questions, and its pull request links the change and its issue.
+- Agent work starts only from an OpenSpec change in `openspec/changes`. The
+  proposal of the change says "Open questions: none". The pull request of an
+  agent links its change and its issue. The rules for a change are in
+  `openspec/project.md`.
+- Each proposal and each design checks the existing ADRs. It lists the ADRs
+  that it touches, quotes their decision lines, follows the "Changed by" chain
+  and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
+  stops the change until the owner decides.
+- Prefer a code structure that makes a class of bug impossible over an added
+  check or an added tool.
+- Use the stable ID for each stored reference to an entity that a user can
+  rename, or remove and make again. A name is a label for people only.
+- File a bug issue and a tech-debt issue as before. Their change uses the
+  short proposal form of `openspec/project.md`.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
