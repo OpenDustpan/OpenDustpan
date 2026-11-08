@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-08. Records five decisions of the project owner of 8 November 2026, in the owner's words
 
+Changed by:
+
+- ADR 363 extends decision 2: RFC 103 step 8 also comes before ADR 220 decisions 1, 2 and 3.
+
 Changes:
 
 - Changes ADR 223 decisions 4 and 11: a Cedar entity for a group uses the stable ID of the group, not its name.

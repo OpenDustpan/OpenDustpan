@@ -4040,3 +4040,16 @@ decisions:
   accepted_artifact: "docs/adr/0362-owner-decisions-of-8-november-2026-stable-ids-store-order-mysql-baseline-hashes-and-portable-backups.md"
   evidence:
   - "docs/adr/0362-owner-decisions-of-8-november-2026-stable-ids-store-order-mysql-baseline-hashes-and-portable-backups.md"
+- id: "adr-0363"
+  title: "ADR 363: The store move comes before the namespace ID change"
+  decision: "1. **The store move first (owner, 2026-11-08).** The owner answered \"Yes lgtm on both, continue as proposed\". RFC 103 step 8 comes before the work of ADR 220 decisions 1, 2 and 3. The design of that work can start before the move ends. Its implementation starts after the move."
+  reason: "ADR 220 decision 1 gives each row of a namespace a namespace ID. Decision 2 adds composite foreign keys between the rows of a namespace. Decision 3 adds row-level security on PostgreSQL. On `main` in November 2026, the name of a namespace is still a key column of many tables. The work of decisions 1, 2 and 3 is not done."
+  scope:
+  - "internal/store"
+  - "pkg/store"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-08"
+  accepted_artifact: "docs/adr/0363-the-store-move-comes-before-the-namespace-id-change.md"
+  evidence:
+  - "docs/adr/0363-the-store-move-comes-before-the-namespace-id-change.md"
