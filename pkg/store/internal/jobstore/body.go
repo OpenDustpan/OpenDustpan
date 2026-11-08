@@ -510,6 +510,30 @@ func encodeBody(j *job.Job) (string, error) {
 	return string(raw), nil
 }
 
+// checkEnums returns a decode error for a source kind, an agent mode or a
+// verification result in b that this server never writes. A stored row is
+// untrusted: a restore or another version may have written it, and the
+// checks of the write path alone do not cover such a row.
+func checkEnums(b *jobBody, id job.ID) error {
+	source := job.SourceKind(b.Source)
+	if !source.Valid() {
+		return fmt.Errorf("decode job %s: source: %w: %q is not a source kind", id, job.ErrInvalid, b.Source)
+	}
+
+	mode := job.AgentMode(b.AgentMode)
+	if mode != "" && !mode.Valid() {
+		return fmt.Errorf("decode job %s: agent mode: %w: %q is not an agent mode", id, job.ErrInvalid, b.AgentMode)
+	}
+
+	verification := job.Verification(b.Verification)
+	if !verification.Valid() {
+		return fmt.Errorf("decode job %s: verification: %w: %q is not a verification result", id, job.ErrInvalid,
+			b.Verification)
+	}
+
+	return nil
+}
+
 // decodeBody fills the fields of j that the body holds.
 func decodeBody(body string, j *job.Job) error {
 	var b jobBody
@@ -525,6 +549,10 @@ func decodeBody(body string, j *job.Job) error {
 	closed, err := decodeStateVersion(b.Closed)
 	if err != nil {
 		return fmt.Errorf("decode job %s: %w", j.ID, err)
+	}
+
+	if err := checkEnums(&b, j.ID); err != nil {
+		return err
 	}
 
 	j.Spec, j.Reason, j.StartedBy, j.Agent, j.AgentMode = spec, b.Reason, b.StartedBy, b.Agent, job.AgentMode(

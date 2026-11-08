@@ -2,6 +2,7 @@ package jobstore_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -137,6 +138,79 @@ func TestBodyRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("decoded job differs from the job:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// TestBodyChecksTheEnumValues proves that a body whose source kind, agent
+// mode or verification result is not one that this server writes is an
+// error, and that each value it writes survives the body. A stored row is
+// untrusted: a restore or another version may have written it.
+func TestBodyChecksTheEnumValues(t *testing.T) {
+	t.Parallel()
+
+	set := map[string]func(j *job.Job, value string){
+		"source":       func(j *job.Job, value string) { j.Source = job.SourceKind(value) },
+		"agent mode":   func(j *job.Job, value string) { j.AgentMode = job.AgentMode(value) },
+		"verification": func(j *job.Job, value string) { j.Verification = job.Verification(value) },
+	}
+	read := map[string]func(j job.Job) string{
+		"source":       func(j job.Job) string { return string(j.Source) },
+		"agent mode":   func(j job.Job) string { return string(j.AgentMode) },
+		"verification": func(j job.Job) string { return string(j.Verification) },
+	}
+
+	tests := []struct {
+		field string
+		value string
+		ok    bool
+	}{
+		{"source", string(job.SourceAPI), true},
+		{"source", string(job.SourceAgent), true},
+		{"source", string(job.SourceSelfService), true},
+		{"source", string(job.SourceForge), true},
+		{"source", string(job.SourceSchedule), true},
+		{"source", string(job.SourceTrigger), true},
+		{"source", "", false},
+		{"source", "bogus", false},
+		{"agent mode", "", true},
+		{"agent mode", string(job.AgentModeApproveFirst), true},
+		{"agent mode", string(job.AgentModeReviewRequest), true},
+		{"agent mode", string(job.AgentModeDirect), true},
+		{"agent mode", "bogus", false},
+		{"verification", string(job.VerificationNone), true},
+		{"verification", string(job.VerificationPending), true},
+		{"verification", string(job.VerificationVerified), true},
+		{"verification", string(job.VerificationUnverified), true},
+		{"verification", "bogus", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s %q", tt.field, tt.value), func(t *testing.T) {
+			t.Parallel()
+
+			j := fullJob(t)
+			set[tt.field](&j, tt.value)
+
+			body, err := jobstore.EncodeJobBody(&j)
+			if err != nil {
+				t.Fatalf("EncodeBody = %v", err)
+			}
+
+			var got job.Job
+			err = jobstore.DecodeJobBody(body, &got)
+
+			if (err == nil) != tt.ok {
+				t.Fatalf("DecodeBody of a %s %q = %v, want ok %t", tt.field, tt.value, err, tt.ok)
+			}
+
+			if err != nil {
+				return
+			}
+
+			if value := read[tt.field](got); value != tt.value {
+				t.Fatalf("decoded %s = %q, want %q", tt.field, value, tt.value)
+			}
+		})
 	}
 }
 
