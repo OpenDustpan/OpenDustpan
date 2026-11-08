@@ -139,10 +139,13 @@ func Trigger(r Row) (trigger.Trigger, error) {
 // CheckStaged checks the trigger row r that a restore stages, with now as the
 // clock of the store. It checks the row with Trigger, and then refuses an
 // enabled schedule trigger whose next slot is not a slot of its schedule, or is
-// after the first slot of the schedule after now: every claim of a real slot
-// would answer ErrNotDue, so the schedule would stop. A trigger that is off, or
-// a trigger of another kind, has no slot, and this rule does not apply to it.
-// It returns ErrCorrupt for a row that fails.
+// after the first slot of the schedule after now plus trigger.MaxClaimSkew. A
+// claim accepts a slot up to now plus trigger.MaxClaimSkew, so a backup from an
+// instance whose clock is ahead inside the skew can hold such a next slot. A
+// later next slot would answer ErrNotDue to every claim of a real slot, so the
+// schedule would stop. A trigger that is off, or a trigger of another kind, has
+// no slot, and this rule does not apply to it. It returns ErrCorrupt for a row
+// that fails.
 //
 // Defense in depth: the store checks a row again when it reads it, and Put
 // writes the slot from the same clock. This check stays so that a bad row fails
@@ -164,14 +167,19 @@ func CheckStaged(r Row, now time.Time) error {
 			ErrCorrupt, trigger.ErrInvalid, next)
 	}
 
-	after, err := trigger.NextSlot(t, now)
+	after, err := trigger.NextSlot(t, now.Add(trigger.MaxClaimSkew))
 	if err != nil {
 		return fmt.Errorf("%w: %w: %w", ErrCorrupt, trigger.ErrInvalid, err)
 	}
 
 	if next.After(after) {
-		return fmt.Errorf("%w: %w: the next slot %v is after the first slot after the clock of the store, %v",
-			ErrCorrupt, trigger.ErrInvalid, next, after)
+		return fmt.Errorf(
+			"%w: %w: the next slot %v is after the first slot after the clock of the store plus the claim skew, %v",
+			ErrCorrupt,
+			trigger.ErrInvalid,
+			next,
+			after,
+		)
 	}
 
 	return nil

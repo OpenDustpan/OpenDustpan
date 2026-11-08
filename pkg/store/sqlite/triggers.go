@@ -285,10 +285,14 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	return nil
 }
 
-// Now implements triggerstore.Tx. A SQLite store has one process, so the clock of
-// the process is the clock of the database.
-func (triggerTx) Now(_ context.Context) (time.Time, error) {
-	return time.Now().UTC(), nil
+// Now implements triggerstore.Tx. It reads the clock of the store.
+func (x triggerTx) Now(ctx context.Context) (time.Time, error) {
+	ms, err := storeNow(ctx, x.q)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 // Remove implements triggerstore.Tx.

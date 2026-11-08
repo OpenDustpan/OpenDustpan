@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -124,6 +125,30 @@ func TestCheckStagedTriggersRefusesANextSlotInTheFuture(t *testing.T) {
 	err = checkStagedTriggers(t.Context(), s.conn)
 	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, triggerstore.ErrCorrupt) {
 		t.Fatalf("check = %v, want ErrCorrupt of the backup and of the store", err)
+	}
+}
+
+// TestCheckStagedTriggersReadsTheClockOfTheStore proves the layer of the clock:
+// the restore check takes its time from the store, through the read of
+// DatabaseNowMs, and not from the clock of the process. A canceled context
+// fails the read of the clock of the store; the clock of the process never
+// fails.
+func TestCheckStagedTriggersReadsTheClockOfTheStore(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedTriggers(t, s)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := checkStagedTriggers(ctx, s.conn)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("check = %v, want the canceled context of the clock read", err)
+	}
+
+	if !strings.Contains(fmt.Sprint(err), "read the clock of the store") {
+		t.Fatalf("check = %v, want the refusal of the clock read", err)
 	}
 }
 

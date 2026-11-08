@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/triggerstore"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // sqliteTriggerBackupTables holds the backup columns of the trigger table, in
@@ -45,10 +47,12 @@ func sqliteTriggerBackupTables() []sqliteBackupTable {
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedTriggers(ctx context.Context, conn *sql.DB) error {
-	now, err := triggerTx{q: nil}.Now(ctx)
+	nowMs, err := storeNow(ctx, db.New(conn))
 	if err != nil {
-		return fmt.Errorf("read the clock of the store: %w", err)
+		return err
 	}
+
+	now := time.UnixMilli(nowMs).UTC()
 
 	const query = `SELECT n.name, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
 t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,

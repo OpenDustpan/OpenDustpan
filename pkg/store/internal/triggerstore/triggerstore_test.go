@@ -160,15 +160,33 @@ func TestTriggerRefusesACorruptRow(t *testing.T) {
 
 // TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach checks the rule of a
 // staged row: an enabled schedule trigger whose next slot is not a slot of its
-// schedule, or is after the first slot of the schedule after now, would never be
-// due, so the schedule would stop. A trigger that is off, or of another kind,
-// has no slot to check.
+// schedule, or is after the first slot of the schedule after now plus the claim
+// skew, would never be due, so the schedule would stop. A claim accepts a slot
+// up to now plus MaxClaimSkew, so a backup from an instance whose clock is ahead
+// inside the skew can hold a next slot up to that bound. A trigger that is off,
+// or of another kind, has no slot to check.
 func TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 10, 30, 11, 30, 0, 0, time.UTC)
+	now := time.Date(2026, 10, 30, 11, 59, 30, 0, time.UTC)
 	first := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	in2100 := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// The first slot after now plus the claim skew: a claim accepts a slot up
+	// to that time, and the next slot of the claim is the first slot after it.
+	afterSkew, err := trigger.NextSlot(hourly(), now.Add(trigger.MaxClaimSkew))
+	if err != nil {
+		t.Fatalf("next slot: %v", err)
+	}
+
+	if !afterSkew.After(first) {
+		t.Fatalf("the first slot after now plus the claim skew = %v, want later than %v", afterSkew, first)
+	}
+
+	stepAfterSkew, err := trigger.NextSlot(hourly(), afterSkew)
+	if err != nil {
+		t.Fatalf("next slot: %v", err)
+	}
 
 	rowWithSlot := func(tr trigger.Trigger, slot time.Time) triggerstore.Row {
 		row := triggerstore.RowOf(tr, now.UnixMilli())
@@ -186,6 +204,12 @@ func TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach(t *testing.T) {
 		want error
 	}{
 		{"the first slot after now", rowWithSlot(hourly(), first), nil},
+		{"the first slot after now plus the claim skew", rowWithSlot(hourly(), afterSkew), nil},
+		{
+			"one schedule step after the first slot after now plus the claim skew",
+			rowWithSlot(hourly(), stepAfterSkew),
+			triggerstore.ErrCorrupt,
+		},
 		{"a slot in 2100", rowWithSlot(hourly(), in2100), triggerstore.ErrCorrupt},
 		{
 			"a time that is not a slot of the schedule",

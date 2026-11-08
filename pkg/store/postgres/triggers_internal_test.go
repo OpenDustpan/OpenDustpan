@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,6 +125,27 @@ func TestCheckStagedTriggersRefusesANextSlotInTheFuture(t *testing.T) {
 	err = checkStagedTriggers(t.Context(), s.pool, currentSchema(t, s))
 	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, triggerstore.ErrCorrupt) {
 		t.Fatalf("check = %v, want ErrCorrupt of the backup and of the store", err)
+	}
+}
+
+// TestCheckStagedTriggersReadsTheClockOfTheDatabase proves the layer of the
+// clock: the restore check takes its time from the database, through the
+// DatabaseNowMs statement, and not from the clock of the process.
+func TestCheckStagedTriggersReadsTheClockOfTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	log := &statementLog{mu: sync.Mutex{}, sql: nil}
+	s := openWithStatementLog(t, log)
+	seedTriggers(t, s)
+
+	log.reset()
+
+	if err := checkStagedTriggers(t.Context(), s.pool, currentSchema(t, s)); err != nil {
+		t.Fatalf("check = %v, want nil", err)
+	}
+
+	if !log.saw("DatabaseNowMs") {
+		t.Error("the restore check did not read the clock of the database")
 	}
 }
 
