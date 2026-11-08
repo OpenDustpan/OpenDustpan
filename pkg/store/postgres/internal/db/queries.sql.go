@@ -19114,6 +19114,34 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 	return result.RowsAffected(), nil
 }
 
+const namespacesWithList = `-- name: NamespacesWithList :many
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name
+`
+
+// Lists the namespaces that have an IP allowlist.
+func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, namespacesWithList)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextJobSeq = `-- name: NextJobSeq :one
 SELECT (COALESCE(MAX(j.seq), 0) + 1)::bigint AS seq
 FROM jobs AS j

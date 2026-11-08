@@ -525,11 +525,15 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET",
 		"The client secret of the server at the OpenID Connect provider. Required when you set "+
-			"`--oidc-issuer` and no secret file.",
+			"`--oidc-issuer` and no secret file. The server removes leading and trailing white space, "+
+			"and refuses a secret with a control character in it. "+
+			"When you set both, this variable wins over `DUSTPAN_OIDC_CLIENT_SECRET_FILE`.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
 		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
+			"The server removes leading and trailing white space, such as a final line break, "+
+			"and refuses a secret with a control character in it. "+
 			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
 	),
 	envSetting(

@@ -23,15 +23,15 @@ func TestPulumiJournalingOnVersion(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	pulumiVersions := e2e.Pulumi().Versions()
-	if len(pulumiVersions) == 0 {
+	pulumiVersion := e2e.Pulumi().Single()
+	if pulumiVersion == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runPulumiJournalingOnVersion(t, fetcher, pulumiVersions[0], db)
+			runPulumiJournalingOnVersion(t, fetcher, pulumiVersion, db)
 		})
 	}
 }

@@ -50,17 +50,17 @@ func TestAccessTokens(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -405,8 +405,10 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("personal token = %+v, want a personal token of the person, made by the person, with days left", read)
 	}
 
+	// The service-token route answers the opaque 403 for a token of another
+	// kind, so a caller cannot learn whether the token exists.
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusBadRequest,
+		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusForbidden,
 	}, nil)
 
 	own := "/api/server/caller/tokens"

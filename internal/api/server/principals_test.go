@@ -80,6 +80,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 			TempAdmins: nil,
 			Store:      st,
 			Guard:      allowAllGuard{},
+			GroupReach: allowAllReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -128,6 +129,9 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -140,6 +144,7 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 			Guard:      grants,
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: allowAllReach{},
 			Now:        nil,
 			NewID:      nil,
 		},
@@ -210,9 +215,21 @@ func reachConfigOf(principals *principal.Service) access.ReachConfig {
 
 // newReachPrincipalHandler builds a Handler like newAuditedPrincipalHandler
 // with reach as the reach config of the group routes, so a test can make the
-// check fail.
+// check fail. The handler discards its log records.
 func newReachPrincipalHandler(
 	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
+) testHandler {
+	t.Helper()
+
+	return newReachPrincipalHandlerWithLogger(t, principals, entries, reach, slog.New(slog.DiscardHandler))
+}
+
+// newReachPrincipalHandlerWithLogger builds a Handler like
+// newReachPrincipalHandler with logger as its logger, so a test can read the
+// records.
+func newReachPrincipalHandlerWithLogger(
+	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
+	logger *slog.Logger,
 ) testHandler {
 	t.Helper()
 
@@ -241,7 +258,7 @@ func newReachPrincipalHandler(
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
+		Logger:           logger,
 		Namespaces:       newTestNamespaces(t),
 		Backups:          nil,
 		Restores:         nil,
@@ -1038,6 +1055,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 			TempAdmins: nil,
 			Store:      failingStore{st},
 			Guard:      allowAllGuard{},
+			GroupReach: allowAllReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -1448,6 +1466,13 @@ func (allowAllGuard) CheckGroupGrants(
 func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
 	return nil
 }
+
+// allowAllReach is a principal.GroupReach that allows every membership add.
+// These tests check the routes, not the reach check, which the principal
+// package tests.
+type allowAllReach struct{}
+
+func (allowAllReach) CheckGroupReach(context.Context, identity.Principal, string) error { return nil }
 
 // TestLastSiteAdministratorIsKept proves that each principal route that could end the
 // last site administrator answers 409 with a JSON error, changes nothing, and

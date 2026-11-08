@@ -92,6 +92,7 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})
@@ -140,6 +141,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})
@@ -205,6 +207,7 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		})
@@ -228,4 +231,88 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 			t.Fatalf("%s: actsAs = %q (found %t), want %q (found %t)", tc.name, got, found, tc.want, tc.found)
 		}
 	}
+}
+
+// TestAddMemberWithoutAReachPortRefusesANonAdministrator proves the
+// fail-closed rule of a Service with no GroupReach: an administrator adds a
+// member, and every other caller is refused, because the server cannot check
+// the reach of the group.
+func TestAddMemberWithoutAReachPortRefusesANonAdministrator(t *testing.T) {
+	t.Parallel()
+
+	person := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "tester", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	administrator := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
+		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	tests := []struct {
+		name   string
+		caller identity.Principal
+		want   error
+	}{
+		{name: "a non-administrator", caller: person, want: identity.ErrDenied},
+		{name: "an administrator", caller: administrator, want: nil},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fx := newMemberFixture(t)
+
+			_, err := fx.svc.AddMember(t.Context(), testEntry(), tc.caller, fx.gid, fx.pid)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("add member = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// memberFixture is a service with a permissive guard and no reach port, with
+// the ID of one person and the ID of one group.
+type memberFixture struct {
+	svc      *principal.Service
+	pid, gid string
+}
+
+// newMemberFixture returns a memberFixture.
+func newMemberFixture(t *testing.T) memberFixture {
+	t.Helper()
+
+	checks := 0
+
+	var changes []groupCheck
+
+	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
+		Store:      openStore(t),
+		Guard:      fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes},
+		Namespaces: nil,
+		Tokens:     nil,
+		GroupReach: nil,
+		Now:        nil,
+		NewID:      nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	p, err := svc.CreatePrincipal(t.Context(), testEntry(),
+		principal.Input{Subject: "alice", DisplayName: "", Kind: principal.KindPerson})
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+
+	g, err := svc.CreateGroup(t.Context(), testEntry(), principal.GroupInput{Name: "ops", Description: ""})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	return memberFixture{svc: svc, pid: p.ID, gid: g.ID}
 }

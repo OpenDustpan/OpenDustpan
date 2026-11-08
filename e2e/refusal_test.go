@@ -45,21 +45,21 @@ func TestRefusedActionsAreAudited(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	pulumiVersion := e2e.Pulumi().Single()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("the Pulumi and OpenTofu tools each need a version in their matrix")
 	}
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersion)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, pulumiVersions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, pulumiVersion, err)
 	}
 
-	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersion, err)
 	}
 
 	for _, db := range databases {

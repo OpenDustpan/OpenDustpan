@@ -545,10 +545,11 @@ func (h *Handler) writeAccessLimit(
 	if groups, groupsErr := cedargo.LimitGroupDirections(in.Policy); groupsErr == nil && len(groups) > 0 {
 		if reachErr := h.limitGroupReach(ctx, p); reachErr != nil {
 			h.guard.Record(ctx, r, p, denials.Denial{
-				Action: identity.ActionNamespaceManageGates,
-				Object: obj,
-				Reason: "access limit names a group that the author cannot manage",
-				Window: 0,
+				Action:       identity.ActionNamespaceManageGates,
+				Object:       obj,
+				Reason:       "access limit names a group that the author cannot manage",
+				ReasonWithin: nil,
+				Window:       0,
 			})
 			h.writeError(ctx, w, reachErr)
 

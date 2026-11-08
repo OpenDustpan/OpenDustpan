@@ -56,6 +56,17 @@ func ClassifyForTest(err error) (int, string) {
 	return f.status, f.message
 }
 
+// TokenCodeForTest returns the code of the catalog that the token classifier
+// gives for err, and false when the classifier maps no error.
+func TokenCodeForTest(err error) (string, bool) {
+	f, ok := classifyToken(err)
+	if !ok {
+		return "", false
+	}
+
+	return f.code, true
+}
+
 // WriteErrorForTest writes the error answer of err, as a handler of the
 // installation API does.
 func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {
@@ -91,6 +102,12 @@ func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.mux = newPatternMux()
 	h.ServeHTTP(w, r)
+}
+
+// ServeRouteForTest serves r with route through the registration wrapper of h,
+// so a test can exercise the wrapper on a route that it builds.
+func (h *Handler) ServeRouteForTest(w http.ResponseWriter, r *http.Request, route Route) {
+	h.enforce(route)(w, r)
 }
 
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the

@@ -219,14 +219,26 @@ func (e *Evaluator) run(
 
 	select {
 	case r := <-done:
-		if r.err != nil {
-			return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, clip(r.err))
-		}
-
-		return r.out, nil
+		return runOutcome(ctx, r)
 	case <-ctx.Done():
 		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, ctx.Err())
 	}
+}
+
+// runOutcome answers the result of a run that ended. When both cases of the
+// select in run are ready, select picks one at random. So runOutcome checks
+// the time limit first: a result that the run gives after the limit is never
+// used.
+func runOutcome(ctx context.Context, r runResult) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, err)
+	}
+
+	if r.err != nil {
+		return nil, fmt.Errorf("%w: %w", selfservice.ErrRuleFailed, clip(r.err))
+	}
+
+	return r.out, nil
 }
 
 // compile checks the limits and the syntax, and compiles source. With typed it

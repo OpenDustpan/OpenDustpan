@@ -23,8 +23,10 @@ var (
 
 // signInOptions returns the console sign-in option of the serve flags: one
 // OpenID Connect provider when --oidc-issuer is set, else none. A process
-// without the api component gets none.
-func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
+// without the api component gets none. The client secret comes from lookup,
+// which the start sets to the real environment: f.lookup is the snapshot of
+// the reloads and holds only a fingerprint of a sensitive variable.
+func (f *serveFlags) signInOptions(lookup func(string) (string, bool)) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -37,20 +39,43 @@ func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
 		return nil, nil
 	}
 
-	if f.oidcIssuer == "" {
-		if f.oidcProvider != "" || f.oidcClientID != "" {
-			return nil, fmt.Errorf("%w: unset --oidc-provider and --oidc-client-id, or set the issuer", errNoOIDCIssuer)
-		}
-
-		return nil, nil
-	}
-
-	secret, err := secretFrom(f.lookup, oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
-	if err != nil {
+	provider, ok, err := f.oidcProviderOption(lookup)
+	if err != nil || !ok {
 		return nil, err
 	}
 
-	return []dustpan.Option{dustpan.WithOIDCProvider(dustpan.OIDCProvider{
+	return []dustpan.Option{dustpan.WithOIDCProvider(provider)}, nil
+}
+
+// oidcProviderOption returns the OpenID Connect provider of the serve flags,
+// and false when --oidc-issuer is not set.
+func (f *serveFlags) oidcProviderOption(lookup func(string) (string, bool)) (dustpan.OIDCProvider, bool, error) {
+	none := dustpan.OIDCProvider{
+		HTTPClient:   nil,
+		ID:           "",
+		DisplayName:  "",
+		Issuer:       "",
+		ClientID:     "",
+		ClientSecret: "",
+		Scopes:       nil,
+		AutoCreate:   false,
+	}
+
+	if f.oidcIssuer == "" {
+		if f.oidcProvider != "" || f.oidcClientID != "" {
+			return none, false,
+				fmt.Errorf("%w: unset --oidc-provider and --oidc-client-id, or set the issuer", errNoOIDCIssuer)
+		}
+
+		return none, false, nil
+	}
+
+	secret, err := secretFrom(lookup, oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+	if err != nil {
+		return none, false, err
+	}
+
+	return dustpan.OIDCProvider{
 		HTTPClient:   nil,
 		ID:           f.oidcProvider,
 		DisplayName:  f.oidcDisplayName,
@@ -59,5 +84,5 @@ func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
 		ClientSecret: string(secret),
 		Scopes:       splitList(f.oidcScopes),
 		AutoCreate:   !f.oidcNoAutoCreate,
-	})}, nil
+	}, true, nil
 }
