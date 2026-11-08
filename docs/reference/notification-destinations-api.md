@@ -145,10 +145,15 @@ sends no message and writes no audit entry. A test of a destination whose
 address the rules refuse counts against the limits too. The limits count in
 the database, so they hold for all server instances of one installation. Each
 limit uses fixed windows, and a refused test counts in its window too.
+The windows start at fixed times, so two adjacent windows can permit two tests
+of one destination and twenty tests of one namespace in a short interval: ten
+tests at the end of one minute window and ten at the start of the next.
 
 When the server cannot read or write the count, it sends no message and
 answers 503 `sink.test-limit-unavailable`. A test that the server cannot count
-would be a test without a limit.
+would be a test without a limit. When the database does not answer, the server
+returns 503 `namespace.unavailable` with the header `Retry-After` (5 seconds),
+also when the counter of the test limit wraps that error.
 
 The server sends the message only after these steps: this installation is the primary
 installation of the namespace, the limits take the test, the address passes the outbound rules,
