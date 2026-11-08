@@ -364,7 +364,9 @@ func createWebWorkspace(t *testing.T, f fixture) workspace.Workspace {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	w, err := f.srv.Workspaces().Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	w, err := f.srv.Workspaces().Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
