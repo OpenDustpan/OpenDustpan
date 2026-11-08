@@ -20,6 +20,10 @@ import (
 func planCases() []recorderCase {
 	return []recorderCase{
 		{"plans: PutPlan stores the plan with the hashes, the state version and the retention", testPlanPut},
+		{
+			"plans: two plan phases get two plan IDs and two sets of part keys, and both plans read back",
+			testPlanTwoPhases,
+		},
 		{"plans: a second plan for the phase is ErrConflict and leaves the first", testPlanTwice},
 		{"plans: no part, an unknown kind, a kind twice or no content is ErrInvalid", testPlanInvalidParts},
 		{"plans: a phase that is not a plan phase is ErrInvalid and leaves no blob", testPlanWrongPhase},
@@ -111,6 +115,50 @@ func checkPlanParts(t *testing.T, p *job.PlanRef) {
 		apply.Size != int64(len(applyBinary)) || apply.SHA256 != hashOf(applyBinary) || !apply.Secret {
 		t.Fatalf("parts = %+v, want sizes and hashes of the plaintext, and the apply part marked secret", p.Parts)
 	}
+}
+
+// testPlanTwoPhases stores a plan in each of two plan phases and checks that
+// the plans keep their own ID, their own part keys and their own content.
+func testPlanTwoPhases(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	first := openPlan(t, h, f, "unit-0")
+	second := openPlan(t, h, f, "unit-1")
+
+	one := putPlan(t, h, first)
+
+	two, err := h.Recorder.PutPlan(t.Context(), second.Claim, planParts("other display", "other apply"))
+	if err != nil {
+		t.Fatalf("PutPlan = %v", err)
+	}
+
+	if one.ID == two.ID {
+		t.Fatalf("plan IDs = %q and %q, want two IDs", one.ID, two.ID)
+	}
+
+	firstKeys := []string{
+		planKey(t, first.Claim.Job, one.ID, job.OutputPlanDisplay),
+		planKey(t, first.Claim.Job, one.ID, job.OutputPlanApply),
+	}
+
+	secondKeys := []string{
+		planKey(t, second.Claim.Job, two.ID, job.OutputPlanDisplay),
+		planKey(t, second.Claim.Job, two.ID, job.OutputPlanApply),
+	}
+
+	for _, key := range firstKeys {
+		for _, other := range secondKeys {
+			if key == other {
+				t.Fatalf("part key %s of both plans, want two sets of keys", key)
+			}
+		}
+	}
+
+	assertPart(t, h, one.ID, job.OutputPlanDisplay, displayJSON)
+	assertPart(t, h, one.ID, job.OutputPlanApply, applyBinary)
+	assertPart(t, h, two.ID, job.OutputPlanDisplay, "other display")
+	assertPart(t, h, two.ID, job.OutputPlanApply, "other apply")
 }
 
 func testPlanTwice(t *testing.T, h RecorderHarness) {
