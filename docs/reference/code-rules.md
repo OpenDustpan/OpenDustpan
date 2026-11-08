@@ -15,7 +15,9 @@ that a grant seems to allow.
   and a person sees the effect in the `protected` flag of a group. The flag
   is `true` when the group holds a sensitive action on the installation or on
   a principal of the installation. A read that cannot check the group answers
-  500 with the code `server.internal`, never `protected: false`
+  500 with the code `server.internal`, never `protected: false`. A create or a
+  change that cannot check the stored group answers `protected: true`, and
+  the server logs the failed check
   ([Groups](../guides/principals-and-groups.md#groups)).
 
 ## Git host links
