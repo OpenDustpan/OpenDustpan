@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -624,6 +625,16 @@ func TestGateRoutesAnswerCodes(t *testing.T) {
 			"gate.limit-membership",
 		},
 		{
+			"limit names a group that the caller cannot manage",
+			nil,
+			http.MethodPut,
+			"/access-limits/x",
+			`{"policy":"forbid (principal in OpenDustpan::Group::\"ops\", action, resource);"}`,
+			"",
+			http.StatusForbidden,
+			"gate.limit-group-reach",
+		},
+		{
 			"bad id",
 			nil,
 			http.MethodPut,
@@ -760,6 +771,153 @@ func runGateCodeCase(t *testing.T, base string, tt gateCodeCase) {
 
 	if !strings.Contains(rec.Body.String(), `"errorCode":"`+tt.code+`"`) {
 		t.Errorf("body = %s, want the code %s", rec.Body.String(), tt.code)
+	}
+}
+
+// failingGroupReachGates allows the gate actions on acme and fails the check
+// of the manage-groups action with an error that is not a denial.
+type failingGroupReachGates struct {
+	gateAuthorizer
+
+	err error
+}
+
+func (a failingGroupReachGates) Authorize(
+	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if action == identity.ActionServerManageGroups {
+		return a.err
+	}
+
+	return a.gateAuthorizer.Authorize(ctx, p, action, obj)
+}
+
+// groupManagerGates allows both gate actions on acme and the management of
+// the groups of the installation.
+func groupManagerGates() gateAuthorizer {
+	a := adminGates()
+	a.allow[identity.ActionServerManageGroups] = ""
+
+	return a
+}
+
+// accessLimitGroupCase is one request of TestAccessLimitNamesOnlyManagedGroups.
+type accessLimitGroupCase struct {
+	name   string
+	authz  identity.Authorizer
+	policy string
+	status int
+	stored bool
+	denied bool
+}
+
+// TestAccessLimitNamesOnlyManagedGroups proves that a save refuses an access
+// limit that names a group when its author may not manage the groups of the
+// installation, in each position of the group, and that it stores the limit
+// for an author who may manage groups or is the bootstrap administrator.
+func TestAccessLimitNamesOnlyManagedGroups(t *testing.T) {
+	t.Parallel()
+
+	const reason = "access limit names a group that the author cannot manage"
+
+	groupInPrincipal := `{"policy":"forbid (principal in OpenDustpan::Group::\"ops\", action, resource);"}`
+	groupInWhen := `{"policy":"forbid (principal, action, resource) when { principal in ` +
+		`OpenDustpan::Group::\"ops\" };"}`
+	groupInUnless := `{"policy":"forbid (principal, action, resource) unless { principal in ` +
+		`OpenDustpan::Group::\"ops\" };"}`
+
+	tests := []accessLimitGroupCase{
+		{"group in the principal scope", adminGates(), groupInPrincipal, http.StatusForbidden, false, true},
+		{"group in a when clause", adminGates(), groupInWhen, http.StatusForbidden, false, true},
+		{"group in an unless clause", adminGates(), groupInUnless, http.StatusForbidden, false, true},
+		{"no group", adminGates(), noWritesDoc, http.StatusOK, true, false},
+		{"the caller manages groups", groupManagerGates(), groupInPrincipal, http.StatusOK, true, false},
+		{
+			"the bootstrap administrator",
+			selectiveAuthorizer{deny: map[identity.Action]bool{}},
+			groupInPrincipal, http.StatusOK, true, false,
+		},
+		{
+			"the group decision fails",
+			failingGroupReachGates{gateAuthorizer: adminGates(), err: errPrincipalsDown},
+			groupInPrincipal, http.StatusForbidden, false, true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runAccessLimitGroupCase(t, tt, reason)
+		})
+	}
+}
+
+// runAccessLimitGroupCase sends one save of an access limit and checks its
+// answer, its audit entry and the stored limit.
+func runAccessLimitGroupCase(t *testing.T, tt accessLimitGroupCase, reason string) {
+	t.Helper()
+
+	st, h := newGateHandler(t, tt.authz)
+	item := gateBase + "acme/access-limits/limit"
+
+	rec := serveGate(t, h, gateCall{http.MethodPut, item, tt.policy, ""})
+	wantStatus(t, rec, tt.status)
+
+	if tt.status == http.StatusForbidden {
+		checkLimitGroupReachRefusal(t, rec)
+	}
+
+	if tt.denied {
+		checkLimitGroupReachDenial(t, st, reason)
+	}
+
+	read := serveGate(t, h, gateCall{http.MethodGet, item, "", ""})
+	if tt.stored {
+		wantStatus(t, read, http.StatusOK)
+	} else {
+		wantStatus(t, read, http.StatusNotFound)
+	}
+}
+
+// checkLimitGroupReachRefusal fails unless rec answers the code of a group
+// that the author cannot manage, and names no group.
+func checkLimitGroupReachRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `"errorCode":"`+errcode.GateLimitGroupReach+`"`) {
+		t.Errorf("body = %s, want the code %s", body, errcode.GateLimitGroupReach)
+	}
+
+	if strings.Contains(body, "ops") {
+		t.Errorf("refusal body names the group: %s", body)
+	}
+}
+
+// checkLimitGroupReachDenial fails unless acme holds one denial entry of the
+// gate management action with the reason of a group that its author cannot
+// manage.
+func checkLimitGroupReachDenial(t *testing.T, st *sqlite.Store, reason string) {
+	t.Helper()
+
+	var denied []audit.Entry
+
+	entries := listNamespaceEntries(t, st, "acme")
+	for i := range entries {
+		if entries[i].Outcome == audit.OutcomeDenied &&
+			entries[i].Action == string(identity.ActionNamespaceManageGates) {
+			denied = append(denied, entries[i])
+		}
+	}
+
+	if len(denied) != 1 {
+		t.Fatalf("denied entries = %+v, want one", denied)
+	}
+
+	if !strings.HasPrefix(denied[0].Reason, reason) {
+		t.Errorf("reason = %q, want it to start with %q", denied[0].Reason, reason)
 	}
 }
 

@@ -22,6 +22,8 @@ const (
 	GateInvalid = "gate.invalid"
 	// GateLimit means that a write to the gate configuration is over a limit of its scope.
 	GateLimit = "gate.limit"
+	// GateLimitGroupReach means that an access limit names a group that its author may not manage.
+	GateLimitGroupReach = "gate.limit-group-reach"
 	// GateLimitMembership means that the right side of a membership test of principal in an access limit is not a
 	// named group.
 	GateLimitMembership = "gate.limit-membership"
@@ -63,6 +65,11 @@ func gateSpecs() []Spec {
 			Args:    nil,
 		},
 		{Code: GateLimit, Meaning: "a write to the gate configuration is over a limit of its scope", Args: nil},
+		{
+			Code:    GateLimitGroupReach,
+			Meaning: "an access limit names a group that its author may not manage",
+			Args:    nil,
+		},
 		{
 			Code:    GateLimitMembership,
 			Meaning: "the right side of a membership test of principal in an access limit is not a named group",
