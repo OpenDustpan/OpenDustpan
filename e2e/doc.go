@@ -75,20 +75,30 @@
 //   - a request to a path that no route holds, and a 5xx answer;
 //   - the order or the timing of the requests.
 //
-// The version matrix follows this policy. For each CLI, the matrix runs
-// "latest" and three pinned versions. The pins are spread by age, so that each
-// pin tests a different group of users, because the release cadence differs
-// per tool. For OpenTofu, which releases a minor version every few months, the
-// pins are the newest patch of each of the three minor versions before the
-// current one. For Pulumi, which releases a minor version about every week, the
-// pins are about two, four and twelve months old, each the newest patch of its
-// minor version at that age. A pin moves to a new version only after that
-// version passes three nightly runs of this suite in a row. Adding a pin adds
-// its sha256 sum to e2e/tool.go, from the checksum file that the vendor
-// publishes. A sum computed from a download alone is not accepted. A red
-// "latest" run opens a ci-red issue, and a maintainer triages that issue within
-// 24 hours. A red run of a pinned version blocks merges, as any required check
-// does. e2e/tool.go lists the current pins.
+// The version matrix follows this policy. Pull request and merge queue runs use
+// the pinned versions only: the default matrix holds no "latest". The nightly
+// run adds "latest" as two jobs: one runs the pinned set and one runs the
+// "latest" set. The pins are spread by age, so that each pin tests a different
+// group of users, because the release cadence differs per tool. For OpenTofu,
+// which releases a minor version every few months, the pins are the newest patch
+// of each of the three minor versions before the current one. For Pulumi, which
+// releases a minor version about every week, the pins are about two, four and
+// twelve months old, each the newest patch of its minor version at that age. A
+// pin moves to a new version only after that version passes three nightly runs
+// of this suite in a row. Adding a pin adds its sha256 sum to e2e/tool.go, from
+// the checksum file that the vendor publishes. A sum computed from a download
+// alone is not accepted. A red nightly "latest" job opens a ci-red issue, and a
+// maintainer triages that issue within 24 hours. A red run of a pinned version
+// blocks merges, as any required check does. e2e/tool.go lists the current pins.
+//
+// When E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS is not set, Install refuses a
+// request for the newest version or for a published checksum file with
+// ErrUnpinnedFetch, so a run with the default matrix makes no such request.
+//
+// A test that installs one version of a tool uses Tool.Single, the first version
+// of the matrix that is not "latest", so that it makes no network request when
+// the binary is in the cache. When the matrix holds "latest" only, as in the
+// nightly "latest" job, Single returns "latest".
 //
 // Environment variables:
 //
