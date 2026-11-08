@@ -171,6 +171,7 @@ func TestNewServerAuthenticatorChain(t *testing.T) {
 		"dustpan.recordingAuthorizer",
 		"identity.SelfAllowed",
 		"identity.NamespaceServiceRule",
+		"identity.JobTokenRule",
 		"ipallow.Gate",
 	}
 	// The manual lock service is reachable with no route in front of it. Each
