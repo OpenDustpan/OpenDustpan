@@ -1,8 +1,8 @@
 # Code rules
 
 A code rule is a rule that the server applies and that no grant, setting or
-administrator can change. Each rule here names what the server refuses and
-what a person sees. Read this page to learn why the server refused an action
+administrator can change. Each rule here names what the server refuses or
+shows, and what a person sees. Read this page to learn why the server refused an action
 that a grant seems to allow.
 
 ## Sensitive actions
@@ -12,9 +12,11 @@ that a grant seems to allow.
   cannot raise a privilege. A new action of those families is sensitive with
   no other change, and an action that no family classifies is not sensitive.
   A check that must fail closed on an unknown action reads the family itself,
-  and a person sees the effect in the `protected` flag of a group, which
-  shows `protected: true` for a sensitive action on the installation or on a
-  principal ([Groups](../guides/principals-and-groups.md#groups)).
+  and a person sees the effect in the `protected` flag of a group. The flag
+  is `true` when the group holds a sensitive action on the installation or on
+  a principal of the installation. A read that cannot check the group answers
+  500 with the code `server.internal`, never `protected: false`
+  ([Groups](../guides/principals-and-groups.md#groups)).
 
 ## Git host links
 
@@ -32,3 +34,8 @@ that a grant seems to allow.
   nothing. The server writes one failure entry in the audit log for the
   refusal, best effort
   ([Keep a break-glass account](../guides/break-glass-accounts.md#the-rule)).
+- A restore does not replay a disable that would leave no enabled break-glass
+  account. The account stays as the restored data holds it, and the server
+  writes an audit entry with the outcome `denied` and the reason
+  `principal.last-break-glass`
+  ([Revocations in maintenance mode](../guides/backup-restore-upgrade.md#revocations-in-maintenance-mode)).
