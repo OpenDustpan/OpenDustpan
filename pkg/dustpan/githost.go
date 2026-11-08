@@ -218,6 +218,7 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 		OnAuditFailure: func() { deps.observed.IncAuditAppendFailure() },
 		OnRefused:      func(reason string) { deps.observed.ObserveGitHostRefused(reason) },
 		CheckLimits:    cfg.gitHost.checkLimits,
+		Logger:         cfg.logger,
 		Now:            cfg.now,
 	})
 	if err != nil {

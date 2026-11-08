@@ -280,7 +280,7 @@ func newHostEnvWrapped(
 
 			env.refused = append(env.refused, reason)
 		},
-		CheckLimits: limits, Now: nil,
+		CheckLimits: limits, Logger: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)

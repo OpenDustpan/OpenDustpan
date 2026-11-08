@@ -465,7 +465,8 @@ func newRig(t *testing.T) *rig {
 
 			r.refused = append(r.refused, reason)
 		},
-		Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
+		Logger: nil,
+		Now:    func() time.Time { return time.UnixMilli(r.clock.Load()) },
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

@@ -223,12 +223,14 @@ GitHub limit of 5,000. All installations and all namespaces of the app share
 this budget. A call over the budget makes no call to GitHub, and the request
 answers 503 with `Retry-After`.
 
-When one namespace uses the budget, the other namespaces wait too. To find
-the cause, read the audit log of the installation for the check entries of
-the Git host connections, and for the write-backs and the reads of each
-namespace. To stop it, delete the grant that lets the principal check the
-connections, or end the assignment of the installation to the namespace (see
-"Step 2: the operator gives an installation to a namespace").
+When one namespace uses the budget, the other namespaces wait too. A refused
+check writes a warning to the server log with the namespace, the connection
+and the wait. To find the namespace that uses the budget, read that log line
+and the audit log of the installation for the check entries, the write-backs
+and the reads of each namespace. To stop it, delete the grant that lets the
+principal check the connections, or end the assignment of the installation
+to the namespace (see "Step 2: the operator gives an installation to a
+namespace").
 
 The check takes no `Idempotency-Key`. A retry is safe.
 
