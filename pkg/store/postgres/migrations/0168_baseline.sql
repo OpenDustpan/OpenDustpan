@@ -964,7 +964,8 @@ CREATE TABLE quota_requests (
     blueprint text NOT NULL,
     kind text NOT NULL,
     scope text NOT NULL,
-    at_ms bigint NOT NULL
+    at_ms bigint NOT NULL,
+    CONSTRAINT quota_requests_kind_check CHECK ((kind = 'requests'::text))
 );
 
 CREATE TABLE quota_reservation_keys (
@@ -972,7 +973,8 @@ CREATE TABLE quota_reservation_keys (
     reservation_id text NOT NULL,
     blueprint text NOT NULL,
     kind text NOT NULL,
-    scope text NOT NULL
+    scope text NOT NULL,
+    CONSTRAINT quota_reservation_keys_kind_check CHECK ((kind = 'units'::text))
 );
 
 CREATE TABLE quota_reservations (
