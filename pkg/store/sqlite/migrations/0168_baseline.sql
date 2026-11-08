@@ -1378,6 +1378,19 @@ CREATE TABLE name_lock_key (
     key BLOB    NOT NULL CHECK (length(key) = 32)
 ) STRICT;
 
+-- Records of the CAS tickets that a server used. A ticket gives one sign-in
+-- only, at every server of the installation and after a restart. The table
+-- keeps the SHA-256 of a ticket in lower-case hex, never the ticket. A record
+-- ends at until_ms and refuses nothing at or after it.
+CREATE TABLE used_tickets (
+    provider_id   TEXT    NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 256),
+    ticket_digest TEXT    NOT NULL CHECK (length(ticket_digest) = 64 AND ticket_digest NOT GLOB '*[^0-9a-f]*'),
+    until_ms      INTEGER NOT NULL CHECK (until_ms > 0),
+    PRIMARY KEY (provider_id, ticket_digest)
+) STRICT;
+
+CREATE INDEX used_tickets_until ON used_tickets (until_ms);
+
 -- Links from an account of a Git host to a principal, and the one-time requests
 -- that make them. A link and a request belong to the installation, not to a
 -- namespace: a person has one principal for every namespace. An account is

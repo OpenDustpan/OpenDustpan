@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -30,7 +31,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
-	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -145,7 +145,7 @@ type Config struct {
 	// GitHostLinks keeps the links from Git host accounts to principals. Nil
 	// means the store keeps none: the link routes answer 501. Both SQL adapters
 	// keep them.
-	GitHostLinks *forgelink.Service
+	GitHostLinks *forgelinksvc.Service
 	// LocalUsers is the service of the local users and of the password
 	// sign-in. Nil means the server keeps no local users: their routes are
 	// not mounted.
@@ -238,7 +238,7 @@ type Handler struct {
 	kind           installation.Kind
 	stateWrite     stategate.Effective
 	preferences    *preferences.Service
-	gitHostLinks   *forgelink.Service
+	gitHostLinks   *forgelinksvc.Service
 	localUsers     *localusersvc.Service
 	// passkeys is the passkey service of the console sign-in. With no
 	// sign-in there is no service.
