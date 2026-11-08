@@ -193,7 +193,7 @@ func newAccessFixtureAll(
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

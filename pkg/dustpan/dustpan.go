@@ -3191,10 +3191,16 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		return nil, fmt.Errorf("access service: %w", reachErr)
 	}
 
+	var limits access.LimitGroups
+
+	if reader := accessLimitGroups(cfg, stores); reader != nil {
+		limits = reader
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
 		Reach: reach, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)

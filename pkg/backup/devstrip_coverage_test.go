@@ -185,6 +185,11 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "copy of the history text of a released lock; a repeated unlock needs its own authorization",
 	},
+	"break_glass_reviews.use_subject": {
+		strip: false,
+		reason: "history text of who broke the glass; a review records a use that already happened and " +
+			"grants no authority",
+	},
 }
 
 // TestDevStripCoversEveryPrincipalColumn lists the columns of the backup that

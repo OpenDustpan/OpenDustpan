@@ -324,3 +324,4 @@ that the named part applies, and the later ADR adds to it.
 | [358](0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md) | Automatic drift remediation is opt-in, and a namespace can always opt out | accepted | extends ADR 263 decision 7 | - | this ADR |
 | [359](0359-review-request-mirror-checks-commands-and-apply-timing.md) | Review requests: mirrored approvals, checks, comment commands and apply timing | accepted | extends ADR 299 decision 1; extends ADR 299 decision 15; extends ADR 299 decision 25 | - | this ADR |
 | [360](0360-catalog-upgrade-paths-and-time-to-live-of-units.md) | Catalog: three paths to a new blueprint version, and time to live of units | accepted | extends ADR 112; extends ADR 308 decision 2 | - | this ADR |
+| [361](0361-a-scope-that-covers-every-object-names-the-namespaces-that-it-leaves-out.md) | A scope that covers every object names the namespaces that it leaves out | accepted | - | - | this ADR |

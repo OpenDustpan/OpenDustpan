@@ -247,8 +247,8 @@ func groupEditors(
 	rename := func(t *testing.T, id, name string) {
 		t.Helper()
 
-		_, err := svc.UpdateGroup(t.Context(), entry(identity.ActionServerManageGroups), id,
-			principal.GroupChange{Name: &name, Description: nil, ClosedToIdentityProvider: nil})
+		_, err := svc.UpdateGroup(t.Context(), entry(identity.ActionServerManageGroups), admin, id,
+			principal.GroupUpdate{Name: &name, Description: nil, ClosedToIdentityProvider: nil})
 		if err != nil {
 			t.Fatalf("rename group %q to %q: %v", id, name, err)
 		}

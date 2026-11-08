@@ -735,6 +735,23 @@ func runCheckUnusableSchema(t *testing.T, e gate.Engine) {
 	}
 }
 
+func runCheckLimitMembershipNeedsAGroup(t *testing.T, e gate.Engine) {
+	t.Helper()
+
+	fx := newFixtures()
+
+	group := limitPolicy(pid(fx.acme, "no-agent-destroy"), forbidAgent)
+	if err := e.CheckLimitMembership(t.Context(), group.Text); err != nil {
+		t.Fatalf("CheckLimitMembership of a limit that names a group = %v, want nil", err)
+	}
+
+	noGroup := limitPolicy(pid(fx.acme, "membership-no-group"),
+		`forbid (principal, action, resource) when { principal in resource.owners };`)
+	if err := e.CheckLimitMembership(t.Context(), noGroup.Text); !errors.Is(err, gate.ErrLimitMembership) {
+		t.Fatalf("CheckLimitMembership of a limit that names no group = %v, want ErrLimitMembership", err)
+	}
+}
+
 // engineRunners returns the runner of each executable case, by name.
 func engineRunners() map[string]engineRunner {
 	return map[string]engineRunner{
@@ -768,6 +785,7 @@ func engineRunners() map[string]engineRunner {
 		"check-refuses-group-of-other-point":    runCheckRefusesGroupOfOtherPoint,
 		"check-refuses-unknown-path-set":        runCheckRefusesUnknownPathSet,
 		"check-one-diagnostic-each":             runCheckOneDiagnosticEach,
+		"check-limit-membership-needs-a-group":  runCheckLimitMembershipNeedsAGroup,
 		"check-unusable-schema":                 runCheckUnusableSchema,
 	}
 }

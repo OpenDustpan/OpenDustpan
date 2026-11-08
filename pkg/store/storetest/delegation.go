@@ -11,14 +11,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // DelegationStore is what the delegation suite wires: the principals, the
-// roles and grants, the access tokens, the namespaces and the audit log.
-// Both SQL stores meet it.
+// roles and grants, the access tokens, the namespaces, the audit log and the
+// gates. Both SQL stores meet it.
 type DelegationStore interface {
 	principal.Store
 	access.Store
@@ -27,6 +29,7 @@ type DelegationStore interface {
 	accesstoken.Store
 	namespace.Store
 	audit.Store
+	gate.Store
 }
 
 // DelegationFactory returns a fresh, empty store for one subtest.
@@ -49,6 +52,10 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "principal:manage-tokens gives no right on a personal token", test: testNoRightOnPersonalTokens},
 		{name: "a grant of manage-tokens needs server:manage-access", test: testManageTokensGrantNeedsAccess},
 		{name: "a membership that gives manage-tokens needs server:manage-access", test: testMembershipNeedsAccess},
+		{
+			name: "a member add that can lift an access limit needs a site administrator",
+			test: testMemberAddLiftingLimitNeedsSiteAdministrator,
+		},
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
 		{name: "an account administrator cannot act as a site administrator", test: testNoPersonalEscalation},
 		{
@@ -131,7 +138,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
 		Now:   nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -450,6 +457,109 @@ func testMembershipNeedsAccess(t *testing.T, d *delegation) {
 		signedIn(grouper), group.ID, alice.ID)
 	if !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("membership that gives manage-tokens: err = %v, want ErrEscalation", err)
+	}
+}
+
+// testMemberAddLiftingLimitNeedsSiteAdministrator proves that an add of a
+// member to a group that an access limit names needs a site administrator,
+// also when the caller holds server:manage-groups and every grant of the
+// group, and that a caller with the site-administrator role on the
+// installation passes.
+func testMemberAddLiftingLimitNeedsSiteAdministrator(t *testing.T, d *delegation) {
+	t.Helper()
+
+	role, err := d.access.CreateRole(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageRoles),
+		bootstrap(), access.RoleInput{
+			Name: "grouper", Description: "",
+			Actions: []identity.Action{identity.ActionServerManageGroups},
+		})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		group  string
+		limit  string
+		setup  func(t *testing.T, group principal.Group) identity.Principal
+		want   error
+		member int64
+	}{
+		{
+			name: "a caller who is not a site administrator is refused", group: "readers-one", limit: "lim-one",
+			setup: func(t *testing.T, _ principal.Group) identity.Principal {
+				t.Helper()
+
+				grouper := d.principalOf(t, "grouper@example.com", principal.KindPerson)
+				d.mustGrant(t, bootstrap(), grouper, access.RoleViewer, identity.NamespaceObject("acme"))
+				d.mustGrant(t, bootstrap(), grouper, role.ID, identity.ServerObject())
+
+				return signedIn(grouper)
+			},
+			want:   access.ErrEscalation,
+			member: 0,
+		},
+		{
+			name: "a site administrator by a stored grant passes", group: "readers-two", limit: "lim-two",
+			setup: func(t *testing.T, _ principal.Group) identity.Principal {
+				t.Helper()
+
+				site := d.principalOf(t, "site@example.com", principal.KindPerson)
+				d.mustGrant(t, bootstrap(), site, access.RoleSiteAdministrator, identity.ServerObject())
+
+				return signedIn(site)
+			},
+			want:   nil,
+			member: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			group := d.groupOf(t, tc.group)
+			d.grantToGroup(t, group, identity.NamespaceObject("acme"))
+			d.putLimit(t, gate.AccessLimit{
+				Scope: gate.NamespaceScope("acme"), ID: gate.ID(tc.limit), Version: 0,
+				Policy: fmt.Sprintf(
+					`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::%q };`,
+					tc.group,
+				),
+			})
+
+			caller := tc.setup(t, group)
+			added := d.principalOf(t, tc.group+"-member@example.com", principal.KindPerson)
+
+			_, err := d.principals.AddMember(t.Context(), changeEntry(caller, identity.ActionServerManageGroups),
+				caller, group.ID, added.ID)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("add to group %q: err = %v, want %v", tc.group, err, tc.want)
+			}
+
+			page, err := d.principals.ListMembers(t.Context(), group.ID,
+				principal.PageRequest{Prefix: "", Cursor: "", Limit: 0})
+			if err != nil {
+				t.Fatalf("list members of group %q: %v", tc.group, err)
+			}
+
+			if page.Total != tc.member {
+				t.Fatalf("members of group %q = %d, want %d", tc.group, page.Total, tc.member)
+			}
+		})
+	}
+}
+
+// putLimit stores an access limit of the namespace acme straight in the
+// store, as a restore writes it. The store does not parse the policy.
+func (d *delegation) putLimit(t *testing.T, limit gate.AccessLimit) {
+	t.Helper()
+
+	e := ServerChange(time.Unix(0, 0), "limit:"+string(limit.ID))
+	e.Namespace = "acme"
+
+	_, err := d.st.AccessLimits().Put(t.Context(), limit, 0,
+		namespace.Fence{Namespace: "acme", FailoverVersion: 1}, e)
+	if err != nil {
+		t.Fatalf("put access limit %s: %v", limit.ID, err)
 	}
 }
 
