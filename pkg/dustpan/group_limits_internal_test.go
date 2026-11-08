@@ -126,14 +126,14 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 
 	rename := func(f groupLimitFixture, caller identity.Principal, group principal.Group, name string) error {
 		_, err := f.svc.UpdateGroup(t.Context(), adminEntry(), caller, group.ID,
-			principal.GroupUpdate{Name: &name, Description: nil})
+			principal.GroupUpdate{Name: &name, Description: nil, ClosedToIdentityProvider: nil})
 
 		return err
 	}
 
 	describe := func(f groupLimitFixture, group principal.Group, description string) error {
 		_, err := f.svc.UpdateGroup(t.Context(), adminEntry(), f.caller, group.ID,
-			principal.GroupUpdate{Name: nil, Description: &description})
+			principal.GroupUpdate{Name: nil, Description: &description, ClosedToIdentityProvider: nil})
 
 		return err
 	}

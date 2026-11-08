@@ -196,7 +196,7 @@ CREATE TABLE principal_groups (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     deleted_at_ms INTEGER
-) STRICT;
+, closed_to_identity_provider INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE group_members (
     group_id      TEXT    NOT NULL REFERENCES principal_groups (id),
@@ -214,6 +214,13 @@ CREATE TABLE group_mappings (
     created_by    TEXT    NOT NULL,
     created_at_ms INTEGER NOT NULL,
     PRIMARY KEY (source, source_id, claim_value, group_id)
+) STRICT;
+
+CREATE TABLE member_removal_alerts (
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    alerted_at_ms  INTEGER NOT NULL CHECK (alerted_at_ms > 0),
+    PRIMARY KEY (source_kind, source_id)
 ) STRICT;
 
 CREATE TABLE member_removals (

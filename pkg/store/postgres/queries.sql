@@ -1533,12 +1533,12 @@ UPDATE group_members SET removed_at_ms = $1
 WHERE principal_id = $2 AND removed_at_ms IS NULL;
 
 -- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 
@@ -1546,7 +1546,7 @@ FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 SELECT id FROM principal_groups WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
 
 -- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -1563,8 +1563,8 @@ WHERE deleted_at_ms IS NULL
   AND (@high::text = '' OR name_key COLLATE "C" < @high::text);
 
 -- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
-WHERE id = $5 AND deleted_at_ms IS NULL;
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, closed_to_identity_provider = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL;
 
 -- name: DeleteGroup :execrows
 UPDATE principal_groups SET deleted_at_ms = $1
@@ -1625,7 +1625,7 @@ GROUP BY g.name, g.name_key
 ORDER BY g.name_key COLLATE "C";
 
 -- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
@@ -1717,6 +1717,17 @@ ORDER BY group_id COLLATE "C";
 -- name: AddMemberRemoval :exec
 INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms;
+
+-- name: MemberRemovalAlertedAt :one
+-- The time of the last alert of one source, or 0 when the source has none.
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = @source_kind AND source_id = @source_id), 0)::bigint
+    AS alerted_at_ms;
 
 -- name: MemberRemovalTotals :one
 -- The totals of the removals of one source in one window: the members that
@@ -2220,6 +2231,16 @@ SELECT c.name
 FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = $1;
+
+-- name: GetUnitCollectionByName :one
+-- The ID and the collection of one live unit by its name, in one statement.
+-- The collection is NULL when the unit is in no collection. No row means that
+-- the namespace holds no live unit with the name.
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
 
 -- name: UnitCollectionID :one
 -- The stable ID of the collection of one unit by its ID.

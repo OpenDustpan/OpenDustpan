@@ -872,7 +872,7 @@ func StageAs(t *testing.T, s any) backup.StageOptions {
 		}
 	}
 
-	return backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}
+	return backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false, RestoreAt: restoreAt()}
 }
 
 // testPortableNoPlainWebhookURL checks that an export carries the webhook URL

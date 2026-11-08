@@ -10,6 +10,7 @@ package jobstore
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -216,6 +217,9 @@ type Runner interface {
 	Write(ctx context.Context, fence namespace.Fence, fn func(Tx) error) error
 	// Read runs fn in one read transaction.
 	Read(ctx context.Context, fn func(Tx) error) error
+	// Logger returns the logger of the adapter, or nil. The store reads it at
+	// each use, so the adapter can set its logger after it gives the runner.
+	Logger() *slog.Logger
 }
 
 // PlanRow is one stored plan: the lookup row of job_plans. Body is the JSON of

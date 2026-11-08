@@ -117,7 +117,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 
 	renamed := "ops-two"
 
-	_, renameErr := svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{Name: &renamed, Description: nil})
+	_, renameErr := svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{Name: &renamed, Description: nil, ClosedToIdentityProvider: nil})
 	refused(t, renameErr, "rename group")
 
 	deleteErr := svc.DeleteGroup(ctx, e, caller, g.ID)
@@ -152,7 +152,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("add member that the guard allows: %v", addAllowedErr)
 	}
 
-	g, err = svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{Name: &renamed, Description: nil})
+	g, err = svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{Name: &renamed, Description: nil, ClosedToIdentityProvider: nil})
 	if err != nil || g.Name != renamed {
 		t.Fatalf("rename group that the guard allows = %+v, %v, want the name %s", g, err, renamed)
 	}

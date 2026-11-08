@@ -223,12 +223,13 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 	return nil
 }
 
-// UnitCollection implements collection.Store.
+// UnitCollection implements collection.Store. It reads the unit and its
+// collection with one statement.
 func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (collection.Ref, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	unitID, err := s.queries.GetInventoryUnit(ctx, db.GetInventoryUnitParams{
+	row, err := s.queries.GetUnitCollectionByName(ctx, db.GetUnitCollectionByNameParams{
 		Namespace: unit.Namespace.String(),
 		Tool:      unit.Tool,
 		Name:      unit.Name,
@@ -238,19 +239,14 @@ func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (co
 	}
 
 	if err != nil {
-		return collection.Ref{}, fmt.Errorf("select inventory unit: %w", err)
+		return collection.Ref{}, fmt.Errorf("select unit collection: %w", err)
 	}
 
-	name, err := currentUnitCollection(ctx, s.queries, unitID)
-	if err != nil {
-		return collection.Ref{}, err
-	}
-
-	if name == "" {
+	if !row.CollectionName.Valid || row.CollectionName.String == "" {
 		return collection.Ref{}, collection.ErrNoCollection
 	}
 
-	return collection.Ref{Namespace: unit.Namespace, Name: name}, nil
+	return collection.Ref{Namespace: unit.Namespace, Name: collection.Name(row.CollectionName.String)}, nil
 }
 
 // ListCollectionUnitIDs implements collection.Store.

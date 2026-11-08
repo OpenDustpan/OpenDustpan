@@ -44,12 +44,13 @@ type principalDoc struct {
 }
 
 type groupDoc struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"`
-	MemberCount int64  `json:"memberCount"`
-	Protected   bool   `json:"protected"`
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	Description              string `json:"description"`
+	Source                   string `json:"source"`
+	MemberCount              int64  `json:"memberCount"`
+	ClosedToIdentityProvider bool   `json:"closedToIdentityProvider"`
+	Protected                bool   `json:"protected"`
 }
 
 type memberDoc struct {
@@ -474,6 +475,102 @@ func deleteLifeCycleRecords(t *testing.T, h testHandler, group groupDoc, alice, 
 	}
 }
 
+// TestGroupIdentityProviderSwitch proves that a group carries the switch
+// that closes it to the identity provider: a new group is open, a change
+// sets the switch and a read and a list return it, a change clears it, each
+// change writes an entry that names the new permission, and a value of
+// another type answers 400 with the body error.
+func TestGroupIdentityProviderSwitch(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	var group groupDoc
+	mustCall(t, h, apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &group)
+
+	if group.ClosedToIdentityProvider {
+		t.Fatalf("a new group = %+v, want it open to the identity provider", group)
+	}
+
+	path := "/api/server/groups/" + group.ID
+
+	var closed groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPatch, path, `{"closedToIdentityProvider":true}`, http.StatusOK,
+	}, &closed)
+
+	if !closed.ClosedToIdentityProvider || closed.Name != "ops" {
+		t.Fatalf("group after the close = %+v, want ops closed", closed)
+	}
+
+	var read groupDoc
+	mustCall(t, h, apiCall{http.MethodGet, path, "", http.StatusOK}, &read)
+
+	if !read.ClosedToIdentityProvider {
+		t.Fatalf("read of the closed group = %+v, want it closed", read)
+	}
+
+	var page groupListDoc
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/groups", "", http.StatusOK}, &page)
+
+	if len(page.Groups) != 1 || !page.Groups[0].ClosedToIdentityProvider {
+		t.Fatalf("group page = %+v, want one closed group", page.Groups)
+	}
+
+	var open groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPatch, path, `{"closedToIdentityProvider":false}`, http.StatusOK,
+	}, &open)
+
+	if open.ClosedToIdentityProvider {
+		t.Fatalf("group after the clear = %+v, want it open", open)
+	}
+
+	checkGroupSwitchEntries(t, st, group.ID)
+
+	status, body := call(t, h, apiCall{
+		http.MethodPatch, path, `{"closedToIdentityProvider":"true"}`, http.StatusBadRequest,
+	})
+	if status != http.StatusBadRequest || !strings.Contains(body, "invalid group change body") {
+		t.Fatalf("a switch of another type answers %d (%s), want 400 with the body error", status, body)
+	}
+
+	if got, err := st.GetGroup(t.Context(), group.ID); err != nil || got.ClosedToIdentityProvider {
+		t.Fatalf("stored group after the refused change = %+v, %v; want it open", got, err)
+	}
+}
+
+// checkGroupSwitchEntries proves that each change of the switch wrote an
+// entry for the group that names the new permission of the identity
+// provider. The newest entry is the last change.
+func checkGroupSwitchEntries(t *testing.T, st *sqlite.Store, groupID string) {
+	t.Helper()
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	entries := listing.Entries
+	if len(entries) != 3 {
+		t.Fatalf("server entries = %d, want the create and the two changes: %+v", len(entries), entries)
+	}
+
+	want := []string{
+		"the identity provider may add members: on",
+		"the identity provider may add members: off",
+	}
+
+	for i, reason := range want {
+		e := entries[i]
+		if e.Object != "group:"+groupID || e.Action != "server:manage-groups" ||
+			e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess || e.Reason != reason {
+			t.Fatalf("entry %d = %+v, want a change of the group with the reason %q", i, e, reason)
+		}
+	}
+}
+
 // TestPrincipalRefusals answers 400 for each bad body, subject, kind and
 // name, 409 for each taken subject, name and membership, and 404 for each
 // unknown ID.
@@ -720,6 +817,15 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 		{
 			name: "empty group change",
 			call: apiCall{method: http.MethodPatch, path: grp, body: `{}`, want: http.StatusBadRequest},
+		},
+		{
+			name: "group change switch of another type",
+			call: apiCall{
+				method: http.MethodPatch,
+				path:   grp,
+				body:   `{"closedToIdentityProvider":"true"}`,
+				want:   http.StatusBadRequest,
+			},
 		},
 		{
 			name: "group change of unknown",
@@ -1105,7 +1211,7 @@ func TestPrincipalCountsAndSource(t *testing.T) {
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	directory := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-ldap", Name: "engineering", Description: "",
-		Source: principal.SourceLDAP, MemberCount: 0,
+		Source: principal.SourceLDAP, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 
 	if err := st.CreateGroup(t.Context(), directory, storetest.ServerChange(at, "group:grp-ldap")); err != nil {

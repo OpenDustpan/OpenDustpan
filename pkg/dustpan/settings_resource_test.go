@@ -15,7 +15,8 @@ func TestWithSettingsRefusesADeclarationThatIsNotValid(t *testing.T) {
 
 	bad := []setting.Declaration{{
 		Key: "Not A Key", Level: setting.LevelInstallation, Kind: setting.KindString, Default: "", Secret: false,
-		Database: true, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil, Doc: "A setting.",
+		Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil,
+		Doc: "A setting.",
 	}}
 
 	opts := append(fullServerOptions(t, p.st, p.blobs, p.authn), dustpan.WithSettings(p.st.SettingStore(), bad, nil))

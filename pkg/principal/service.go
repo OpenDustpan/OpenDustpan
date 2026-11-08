@@ -315,13 +315,14 @@ type GroupInput struct {
 func (s *Service) CreateGroup(ctx context.Context, e audit.Entry, in GroupInput) (Group, error) {
 	at := s.Now()
 	g := Group{
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		ID:          s.newID(groupIDPrefix),
-		Name:        in.Name,
-		Description: in.Description,
-		Source:      SourceLocal,
-		MemberCount: 0,
+		CreatedAt:                at,
+		UpdatedAt:                at,
+		ID:                       s.newID(groupIDPrefix),
+		Name:                     in.Name,
+		Description:              in.Description,
+		Source:                   SourceLocal,
+		MemberCount:              0,
+		ClosedToIdentityProvider: false,
 	}
 
 	if err := g.Validate(); err != nil {
@@ -362,14 +363,20 @@ func (s *Service) ListGroups(ctx context.Context, req PageRequest) (Page[Group],
 }
 
 // GroupUpdate names the fields of a group that a change sets. A nil field
-// keeps its value.
+// keeps its value. A change that sets ClosedToIdentityProvider to its
+// current value is not an error.
 type GroupUpdate struct {
 	Name        *string
 	Description *string
+	// ClosedToIdentityProvider sets the switch of the group: true closes
+	// the group to the identity provider.
+	ClosedToIdentityProvider *bool
 }
 
 // UpdateGroup applies c to the group with the ID id, with the entry e, and
-// returns the stored group.
+// returns the stored group. A change of the switch ClosedToIdentityProvider
+// records the new value in the reason of the entry. A change of the name or
+// the description keeps its entry.
 //
 // A rename moves the members of the group from its old name to its new
 // name, so an access limit that names either name can lift for them: the
@@ -393,7 +400,18 @@ func (s *Service) UpdateGroup(
 		g.Description = *c.Description
 	}
 
-	g.UpdatedAt = s.Now()
+	entry := change(e, s.Now(), GroupRef(id))
+
+	if c.ClosedToIdentityProvider != nil && *c.ClosedToIdentityProvider != g.ClosedToIdentityProvider {
+		g.ClosedToIdentityProvider = *c.ClosedToIdentityProvider
+
+		entry.Reason = identityProviderMembersOn
+		if g.ClosedToIdentityProvider {
+			entry.Reason = identityProviderMembersOff
+		}
+	}
+
+	g.UpdatedAt = entry.At
 
 	if err := g.Validate(); err != nil {
 		return Group{}, err
@@ -405,12 +423,20 @@ func (s *Service) UpdateGroup(
 		}
 	}
 
-	if err := s.store.UpdateGroup(ctx, g, change(e, g.UpdatedAt, GroupRef(id))); err != nil {
+	if err := s.store.UpdateGroup(ctx, g, entry); err != nil {
 		return Group{}, fmt.Errorf("update group %q: %w", id, err)
 	}
 
 	return g, nil
 }
+
+// The reasons of the audit entry of a change of the switch that closes a
+// group to the identity provider: the identity provider may add members only
+// while the group is open.
+const (
+	identityProviderMembersOn  = "the identity provider may add members: on"
+	identityProviderMembersOff = "the identity provider may add members: off"
+)
 
 // DeleteGroup ends the group with the ID id and its memberships, with the
 // entry e. The store revokes its grants in the same transaction, so the

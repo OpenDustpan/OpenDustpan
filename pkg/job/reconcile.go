@@ -162,9 +162,10 @@ type ReconcileResult struct {
 // in the result and in the log, not in the error.
 func (r *Reconciler) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	run := reconcileRun{
-		r:      r,
-		now:    r.cfg.Now().UTC(),
-		fences: make(map[namespace.Name]namespace.Fence),
+		r:       r,
+		now:     r.cfg.Now().UTC(),
+		fences:  make(map[namespace.Name]namespace.Fence),
+		damaged: make(map[ID]struct{}),
 		res: ReconcileResult{
 			Ended:      0,
 			Expired:    0,
@@ -193,7 +194,10 @@ type reconcileRun struct {
 	r      *Reconciler
 	now    time.Time
 	fences map[namespace.Name]namespace.Fence
-	res    ReconcileResult
+	// damaged holds the job IDs of the damaged rows that the run reported, so
+	// that one row is logged once in one run.
+	damaged map[ID]struct{}
+	res     ReconcileResult
 }
 
 // fence returns the current fence of ns, read once for each run.
@@ -218,7 +222,7 @@ func (run *reconcileRun) fence(ctx context.Context, ns namespace.Name) (namespac
 // an ended job leaves the next read.
 func (run *reconcileRun) endOrphans(ctx context.Context) error {
 	for range maxReconcilePages {
-		orphans, err := run.r.cfg.Store.Orphans(ctx, run.r.cfg.Batch)
+		orphans, damaged, err := run.r.cfg.Store.Orphans(ctx, run.r.cfg.Batch)
 		if err != nil {
 			// The expiry and the dispatch do not need the orphans. They run in
 			// this tick, and the next tick reads the orphans again.
@@ -231,6 +235,8 @@ func (run *reconcileRun) endOrphans(ctx context.Context) error {
 
 			return nil
 		}
+
+		run.reportDamaged(ctx, damaged)
 
 		ended := 0
 
@@ -245,7 +251,7 @@ func (run *reconcileRun) endOrphans(ctx context.Context) error {
 			}
 		}
 
-		if ended == 0 || len(orphans) < run.r.cfg.Batch {
+		if ended == 0 || len(orphans)+len(damaged) < run.r.cfg.Batch {
 			return nil
 		}
 	}
@@ -470,30 +476,51 @@ func stateFilter(s State, before time.Time) Filter {
 }
 
 // eachJob calls fn for each job that f selects, newest first, in pages. A page
-// reads Batch jobs, and a run reads at most maxReconcilePages pages.
+// reads Batch rows, and a run reads at most maxReconcilePages pages. A damaged
+// row is not a job: the run reports it once and goes on.
 func (run *reconcileRun) eachJob(ctx context.Context, f Filter, fn func(*Job) error) error {
 	f.Limit = run.r.cfg.Batch
 
 	for range maxReconcilePages {
-		jobs, err := run.r.cfg.Store.List(ctx, f)
+		page, err := run.r.cfg.Store.List(ctx, f)
 		if err != nil {
 			return fmt.Errorf("list jobs: %w", err)
 		}
 
-		for i := range jobs {
-			if err := fn(&jobs[i]); err != nil {
+		run.reportDamaged(ctx, page.Damaged)
+
+		for i := range page.Jobs {
+			if err := fn(&page.Jobs[i]); err != nil {
 				return err
 			}
 		}
 
-		if len(jobs) < f.Limit {
+		if page.After == "" {
 			return nil
 		}
 
-		f.After = jobs[len(jobs)-1].ID
+		f.After = page.After
 	}
 
 	return nil
+}
+
+// reportDamaged logs each damaged row of the run once, with its job ID and the
+// kind of the damage. A damaged row stays where it is: the run never
+// dispatches, expires or closes it. A person reads the row and cancels the job
+// by its ID.
+func (run *reconcileRun) reportDamaged(ctx context.Context, rows []DamagedRow) {
+	for i := range rows {
+		id := rows[i].ID
+		if _, seen := run.damaged[id]; seen {
+			continue
+		}
+
+		run.damaged[id] = struct{}{}
+
+		run.r.cfg.Log.WarnContext(ctx, "job reconcile skipped a damaged job row", slog.String("job", string(id)),
+			slog.String("reason", rows[i].Reason))
+	}
 }
 
 // apply applies c to j with one audit entry, and reports whether the job

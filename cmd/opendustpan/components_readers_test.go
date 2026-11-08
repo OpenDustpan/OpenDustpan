@@ -108,8 +108,12 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 	"auditSinks": {"newAuditShipper": "all"},
 	// The sink routes and the built-in webhook sender take the ports. Both
 	// serve the api component only. allHandlers names the adapter field of the
-	// same name for the description of the routes.
-	"sinks": {"allHandlers": "api", "mountAPI": "api", "newSinksHandler": "api", "sinkSenders": "api"},
+	// same name for the description of the routes. The removal alert service
+	// writes to the outbox of the sinks for the sign-in routes only.
+	"sinks": {
+		"allHandlers": "api", "mountAPI": "api", "newSinksHandler": "api",
+		"removalAlertServiceOf": "api", "sinkSenders": "api",
+	},
 }
 
 // readersOf returns, for each field, the names of the functions of package

@@ -61,6 +61,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces: svc.namespaces,
 		Jobs:       cfg.jobStore,
+		Units:      cfg.inventoryReader,
 		Artifacts:  artifacts,
 		Logs: &jobsapi.LogOptions{
 			Poll:         0,
