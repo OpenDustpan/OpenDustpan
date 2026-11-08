@@ -162,6 +162,10 @@ type roundTripTracer struct {
 	mu    sync.Mutex
 	mode  traceMode
 	trips []roundTrip
+	// swapHook, when set, is the one-shot hook of the next statement that
+	// locks the durable control tables of a swap. The tracer runs the hook on
+	// the goroutine that sends the statement, before the statement goes out.
+	swapHook func()
 }
 
 var (
@@ -172,7 +176,7 @@ var (
 )
 
 func newRoundTripTracer() *roundTripTracer {
-	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil}
+	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil, swapHook: nil}
 }
 
 // statementLabel shortens a statement to its sqlc name or its first characters.
@@ -189,12 +193,18 @@ func statementLabel(sql string) string {
 	return flat
 }
 
-// TraceQueryStart implements pgx.QueryTracer.
+// TraceQueryStart implements pgx.QueryTracer. A swap hook runs before the
+// statement is recorded, so the hook adds no round trip of its own to the
+// count.
 func (r *roundTripTracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
+	if hook := r.takeSwapHook(data.SQL); hook != nil {
+		hook()
+	}
+
 	r.record("query", data.SQL)
 
 	return ctx
@@ -352,6 +362,33 @@ func (r *roundTripTracer) record(kind, sql string) {
 	r.mu.Lock()
 	r.trips = append(r.trips, roundTrip{kind: kind, sql: statementLabel(sql), frame: facts.caller})
 	r.mu.Unlock()
+}
+
+// setSwapHook sets hook as the one-shot hook of the next statement that locks
+// the durable control tables of a swap. The hook runs on the goroutine that
+// sends the statement, before the statement goes out.
+func (r *roundTripTracer) setSwapHook(hook func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.swapHook = hook
+}
+
+// takeSwapHook returns the hook of the first statement that locks the durable
+// control tables of a swap, and clears it. It returns nil for every other
+// statement and after the hook ran once, so the hook runs at most one time.
+func (r *roundTripTracer) takeSwapHook(sql string) func() {
+	if !strings.HasPrefix(sql, "LOCK TABLE ") || !strings.Contains(sql, ".durable_operations,") {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	hook := r.swapHook
+	r.swapHook = nil
+
+	return hook
 }
 
 // storeOptions returns the options that give the store of a cluster the tracer.
