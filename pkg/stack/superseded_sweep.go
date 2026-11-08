@@ -37,6 +37,10 @@ type SupersededSweepResult struct {
 	// Deleted is the number of marked blobs that the run deleted, including
 	// the blobs that the blob store did not hold.
 	Deleted int `json:"deleted"`
+	// DeletedBytes is the sum of the sizes that the marks record of the
+	// marked blobs that the run deleted, including the blobs that the blob
+	// store did not hold.
+	DeletedBytes int64 `json:"deletedBytes"`
 	// Kept is the number of marked blobs that the run kept: the mark was
 	// missing, because another sweep dropped it and owns the delete, or a
 	// checkpoint row or a journal batch row of the stack names the key again.
@@ -100,7 +104,8 @@ func (s *Updates) SweepSuperseded(ctx context.Context) (SupersededSweepResult, e
 
 	if res.Failed > 0 {
 		s.logger.WarnContext(ctx, "sweep superseded checkpoint blobs",
-			slog.Int("deleted", res.Deleted), slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
+			slog.Int("deleted", res.Deleted), slog.Int64("deleted_bytes", res.DeletedBytes),
+			slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
 	}
 
 	return res, nil
@@ -160,6 +165,7 @@ func (s *Updates) sweepSupersededPage(
 		}
 
 		res.Deleted++
+		res.DeletedBytes += mark.Size
 	}
 
 	if releaseErr := release(ctx); releaseErr != nil {

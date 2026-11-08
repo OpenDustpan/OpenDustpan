@@ -153,7 +153,8 @@ func testSupersededSweepBackup(t *testing.T, r *blobDeleteRig) {
 	r.finish(t, b, []blob.Key{mark.Key})
 
 	res, err := r.updates.SweepSuperseded(t.Context())
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 1, Kept: 0, Failed: 0}, "after the backup ended")
+	requireSwept(t, res, err,
+		stack.SupersededSweepResult{Deleted: 1, DeletedBytes: mark.Size, Kept: 0, Failed: 0}, "after the backup ended")
 	r.requireDeleted(t, []blob.Key{mark.Key}, "after the backup ended")
 	r.requireNoMark(t, c, mark.Key, "after the backup ended")
 }
@@ -200,7 +201,8 @@ func testSupersededSweepRestore(t *testing.T, r *blobDeleteRig) {
 	}
 
 	res, err := r.updates.SweepSuperseded(ctx)
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 1, Kept: 0, Failed: 0}, "after the restore ended")
+	requireSwept(t, res, err,
+		stack.SupersededSweepResult{Deleted: 1, DeletedBytes: mark.Size, Kept: 0, Failed: 0}, "after the restore ended")
 	r.requireDeleted(t, []blob.Key{mark.Key}, "after the restore ended")
 	r.requireNoMark(t, c, mark.Key, "after the restore ended")
 }
@@ -246,7 +248,7 @@ func testSupersededSweepNamed(t *testing.T, r *blobDeleteRig) {
 	r.ageMarks(t, c)
 
 	res, err := r.updates.SweepSuperseded(ctx)
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 1, Failed: 0},
+	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 1, Failed: 0},
 		"with a row that names the marked key")
 	r.requireStored(t, []blob.Key{mark.Key}, "with a row that names the marked key")
 	r.requireNoMark(t, c, mark.Key, "with a row that names the marked key")
@@ -300,7 +302,8 @@ func testSupersededSweepMissingBlob(t *testing.T, r *blobDeleteRig) {
 	r.ageMarks(t, c)
 
 	res, err := r.updates.SweepSuperseded(t.Context())
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 1, Kept: 0, Failed: 0}, "with a missing blob")
+	requireSwept(t, res, err,
+		stack.SupersededSweepResult{Deleted: 1, DeletedBytes: mark.Size, Kept: 0, Failed: 0}, "with a missing blob")
 	r.requireNoMark(t, c, mark.Key, "with a missing blob")
 }
 
@@ -316,7 +319,8 @@ func testSupersededSweepYoung(t *testing.T, r *blobDeleteRig) {
 	mark := r.onlyMark(t, c)
 
 	res, err := r.updates.SweepSuperseded(t.Context())
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 0, Failed: 0}, "with a young mark")
+	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 0, Failed: 0},
+		"with a young mark")
 	r.requireStored(t, []blob.Key{mark.Key}, "with a young mark")
 	r.requireMark(t, c, mark.Key, "with a young mark")
 }
@@ -357,7 +361,7 @@ func testSupersededSweepDeletedStack(t *testing.T, r *blobDeleteRig) {
 	}
 
 	res, err := r.updates.SweepSuperseded(ctx)
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 0, Failed: 0},
+	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 0, Failed: 0},
 		"with a soft-deleted stack")
 	r.requireStored(t, []blob.Key{mark.Key}, "with a soft-deleted stack")
 }
@@ -397,6 +401,12 @@ func testSupersededSweepPaging(t *testing.T, r *blobDeleteRig) {
 
 	all := append(slices.Clone(first), next...)
 
+	var wantBytes int64
+
+	for _, mark := range all {
+		wantBytes += mark.Size
+	}
+
 	if !slices.IsSortedFunc(all, func(a, b stack.SupersededMark) int {
 		if order := strings.Compare(string(a.StackID), string(b.StackID)); order != 0 {
 			return order
@@ -410,7 +420,8 @@ func testSupersededSweepPaging(t *testing.T, r *blobDeleteRig) {
 	r.ageMarks(t, c)
 
 	res, err := r.updates.SweepSuperseded(ctx)
-	requireSwept(t, res, err, stack.SupersededSweepResult{Deleted: saves - 1, Kept: 0, Failed: 0},
+	requireSwept(t, res, err,
+		stack.SupersededSweepResult{Deleted: saves - 1, DeletedBytes: wantBytes, Kept: 0, Failed: 0},
 		"with more marks than one page")
 
 	left, err := r.store.SupersededMarks(ctx, stack.SupersededCursor{StackID: "", Key: ""}, markClock(t, r.store), 100)

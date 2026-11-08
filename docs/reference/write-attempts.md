@@ -64,8 +64,11 @@ did:
 
 | Record | Content |
 | --- | --- |
-| The output of the step of its durable operation | The number of deleted blobs, of kept blobs and of failed deletes. |
-| One log line, `superseded checkpoint sweep` | The same counts. |
+| The output of the step of its durable operation | The number of deleted blobs (`deleted`), the size in bytes of the deleted blobs (`deletedBytes`), the number of kept blobs (`kept`) and the number of failed deletes (`failed`). |
+| One log line, `superseded checkpoint sweep` | The same counts. The log line names the size `deleted_bytes`. |
+
+A run that stops with an error logs the counts of what it did before the
+error.
 
 The schedule `job.artifact-sweep` sweeps each job that has not ended, and
 each job whose state changed in the last 25 hours. One run reads at most 2,000

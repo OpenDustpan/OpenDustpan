@@ -610,7 +610,7 @@ type Server struct {
 	// supersededSweeper deletes the marked checkpoint blobs that a later save
 	// replaced: the schedule stack.superseded-checkpoint-sweep. It is nil
 	// without the update service.
-	supersededSweeper *stack.Updates
+	supersededSweeper supersededSweeper
 	// nameLocks holds the counts of the lockout by name: the schedule
 	// name-lock-prune deletes the counts that can no longer change a lock.
 	// It is nil when the store keeps no such counts.

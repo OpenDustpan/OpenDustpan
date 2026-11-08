@@ -246,10 +246,21 @@ func (s *Server) artifactSweepKind() durable.KindSpec {
 	}
 }
 
+// supersededSweeper is the sweep of the marked checkpoint blobs that a later
+// save replaced.
+type supersededSweeper interface {
+	// SweepSuperseded deletes the marked checkpoint blobs that no row names.
+	// It returns the counts of the run so far with an error when the run stops
+	// before it ends.
+	SweepSuperseded(ctx context.Context) (stack.SupersededSweepResult, error)
+}
+
 // supersededSweepKind returns the runner kind of the schedule of the sweep of
 // superseded checkpoint blobs. Its step returns the error of a run, so the
 // runner counts a failed run as a failed attempt. The output of the step is
-// the result of the run in JSON: its counts. The step writes one log line.
+// the result of the run in JSON: its counts. The step writes one log line: an
+// info line when the run ends, and a warning line with the counts of what the
+// run did when it stops with an error.
 func (s *Server) supersededSweepKind() durable.KindSpec {
 	return durable.KindSpec{
 		Kind:       stack.KindSupersededSweep,
@@ -259,11 +270,17 @@ func (s *Server) supersededSweepKind() durable.KindSpec {
 			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
 				res, err := s.supersededSweeper.SweepSuperseded(ctx)
 				if err != nil {
+					s.logger.WarnContext(ctx, "superseded checkpoint sweep: stopped with an error",
+						slog.String("error", err.Error()),
+						slog.Int("deleted", res.Deleted), slog.Int64("deleted_bytes", res.DeletedBytes),
+						slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
+
 					return nil, fmt.Errorf("superseded checkpoint sweep: %w", err)
 				}
 
 				s.logger.InfoContext(ctx, "superseded checkpoint sweep: deleted the marked blobs that no row names",
-					slog.Int("deleted", res.Deleted), slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
+					slog.Int("deleted", res.Deleted), slog.Int64("deleted_bytes", res.DeletedBytes),
+					slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
 
 				out, err := json.Marshal(res)
 				if err != nil {

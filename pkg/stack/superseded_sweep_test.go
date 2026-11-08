@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 // errNoDatabaseClock reports a store that cannot read the clock of the
 // database.
 var errNoDatabaseClock = errors.New("the clock of the database does not answer")
+
+// errMarksRead reports a store that cannot read the superseded marks.
+var errMarksRead = errors.New("the marks read failed")
 
 // requireSweepResult checks the result of one sweep.
 func requireSweepResult(
@@ -121,7 +125,8 @@ func TestSupersededSweepWaitsForWork(t *testing.T) {
 			guard.End()
 
 			res, err := f.svc.SweepSuperseded(t.Context())
-			requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 1, Kept: 0, Failed: 0},
+			requireSweepResult(t, res, err,
+				stack.SupersededSweepResult{Deleted: 1, DeletedBytes: mark.Size, Kept: 0, Failed: 0},
 				"after "+name+" ended")
 			requireBlobGone(t, f, mark.Key, "after "+name+" ended")
 
@@ -167,7 +172,7 @@ func TestSupersededSweepKeepsNamedBlob(t *testing.T) {
 	f.clock.Advance(2 * blob.UnnamedGracePeriod)
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 1, Failed: 0},
+	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 1, Failed: 0},
 		"with a row that names the marked key")
 	requireBlobStored(t, f, mark.Key, "with a row that names the marked key")
 
@@ -191,11 +196,76 @@ func TestSupersededSweepMissingBlob(t *testing.T) {
 	f.clock.Advance(2 * blob.UnnamedGracePeriod)
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 1, Kept: 0, Failed: 0}, "with a missing blob")
+	requireSweepResult(t, res, err,
+		stack.SupersededSweepResult{Deleted: 1, DeletedBytes: mark.Size, Kept: 0, Failed: 0}, "with a missing blob")
 
 	if got := marksOf(t, f); len(got) != 0 {
 		t.Fatalf("marks after the sweep = %+v, want none", got)
 	}
+}
+
+// TestSupersededSweepCountsDeletedBytes proves that the run counts the sizes
+// of the marked blobs that it deletes, and not the size of a blob that a row
+// names again.
+func TestSupersededSweepCountsDeletedBytes(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	s := f.started(t, stack.KindUpdate)
+	f.saveSeq(t, s, 1, `{"a":1}`)
+	f.saveSeq(t, s, 2, `{"a":2,"pad":"`+strings.Repeat("0123456789abcdef", 8)+`"}`)
+	f.saveSeq(t, s, 3, `{"a":3,"pad":"`+strings.Repeat("0123456789abcdef", 32)+`"}`)
+	f.saveSeq(t, s, 4, `{"a":4}`)
+
+	marks := marksOf(t, f)
+	if len(marks) != 3 {
+		t.Fatalf("marks before the sweep = %+v, want three", marks)
+	}
+
+	if marks[0].Size == marks[1].Size || marks[1].Size == marks[2].Size || marks[0].Size == marks[2].Size {
+		t.Fatalf("mark sizes = %d, %d, %d; want different sizes", marks[0].Size, marks[1].Size, marks[2].Size)
+	}
+
+	deleted, missing, kept := marks[0], marks[1], marks[2]
+
+	if err := f.blobs.Delete(t.Context(), missing.Key); err != nil {
+		t.Fatalf("delete the missing blob: %v", err)
+	}
+
+	deployment := []byte(`{"deployment":{"named":true}}`)
+	cp := stack.Checkpoint{
+		NamespaceID:      "",
+		StackID:          "",
+		SavedAt:          f.clock.Now(),
+		Features:         nil,
+		Deployment:       deployment,
+		Update:           s.Update.ID,
+		Ref:              f.ref,
+		Lease:            s.Update.Lease.Digest,
+		SchemaVersion:    3,
+		Sequence:         0,
+		Digest:           sha256.Sum256(deployment),
+		Invalid:          false,
+		BlobKey:          kept.Key,
+		BlobSize:         kept.Size,
+		BlobMD5:          [16]byte{},
+		AttemptStartedAt: f.clock.Now(),
+	}
+
+	if _, err := f.store.PutCheckpoint(t.Context(), cp, f.nsStore.ns.Fence()); err != nil {
+		t.Fatalf("write the checkpoint row that names the kept key: %v", err)
+	}
+
+	f.clock.Advance(2 * blob.UnnamedGracePeriod)
+
+	res, err := f.svc.SweepSuperseded(t.Context())
+	requireSweepResult(t, res, err,
+		stack.SupersededSweepResult{Deleted: 2, DeletedBytes: deleted.Size + missing.Size, Kept: 1, Failed: 0},
+		"with three marks of different sizes")
+
+	requireBlobGone(t, f, deleted.Key, "after the sweep")
+	requireBlobGone(t, f, missing.Key, "after the sweep")
+	requireBlobStored(t, f, kept.Key, "after the sweep")
 }
 
 // TestSupersededSweepKeepsBlobOfADroppedMark proves that the sweep keeps the
@@ -211,7 +281,7 @@ func TestSupersededSweepKeepsBlobOfADroppedMark(t *testing.T) {
 	f.clock.Advance(2 * blob.UnnamedGracePeriod)
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 1, Failed: 0},
+	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 1, Failed: 0},
 		"with a mark that another sweep dropped first")
 	requireBlobStored(t, f, mark.Key, "with a mark that another sweep dropped first")
 
@@ -258,6 +328,55 @@ func TestSupersededSweepStopsWhenTheLeaseEnds(t *testing.T) {
 	requireBlobStored(t, f, before[1].Key, "after the lease ended")
 }
 
+// TestSupersededSweepReturnsTheCountsOfAFailedRun proves that a sweep whose
+// second page fails returns the counts and the bytes of the first page with
+// the error.
+func TestSupersededSweepReturnsTheCountsOfAFailedRun(t *testing.T) {
+	t.Parallel()
+
+	const saves = 102
+
+	f := newUpdatesWrapped(t, newClock(), nil, func(m *memUpdates) stack.CheckpointStore {
+		return &failMarksAfter{memUpdates: m, err: errMarksRead, reads: 0}
+	})
+
+	s := f.started(t, stack.KindUpdate)
+
+	for seq := int64(1); seq <= saves; seq++ {
+		f.saveSeq(t, s, seq, `{"a":1}`)
+	}
+
+	before := marksOf(t, f)
+	if len(before) != saves-1 {
+		t.Fatalf("marks before the sweep = %d, want %d", len(before), saves-1)
+	}
+
+	var wantBytes int64
+
+	for _, mark := range before[:len(before)-1] {
+		wantBytes += mark.Size
+	}
+
+	f.clock.Advance(2 * blob.UnnamedGracePeriod)
+
+	res, err := f.svc.SweepSuperseded(t.Context())
+	if !errors.Is(err, errMarksRead) {
+		t.Fatalf("sweep with a failed second page: %v, want errMarksRead", err)
+	}
+
+	want := stack.SupersededSweepResult{Deleted: saves - 2, DeletedBytes: wantBytes, Kept: 0, Failed: 0}
+	if res != want {
+		t.Fatalf("sweep with a failed second page = %+v, want %+v", res, want)
+	}
+
+	left := marksOf(t, f)
+	if len(left) != 1 || left[0].Key != before[len(before)-1].Key {
+		t.Fatalf("marks after the failed run = %+v, want the mark of %q", left, before[len(before)-1].Key)
+	}
+
+	requireBlobStored(t, f, before[len(before)-1].Key, "after the failed run")
+}
+
 // TestSupersededSweepKeepsYoungMark proves that a mark newer than the grace
 // period is not read, so its blob stays.
 func TestSupersededSweepKeepsYoungMark(t *testing.T) {
@@ -267,7 +386,8 @@ func TestSupersededSweepKeepsYoungMark(t *testing.T) {
 	_, mark := saveTwoCheckpoints(t, f)
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 0, Failed: 0}, "with a young mark")
+	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 0, Failed: 0},
+		"with a young mark")
 	requireBlobStored(t, f, mark.Key, "with a young mark")
 
 	if got := marksOf(t, f); len(got) != 1 || got[0].Key != mark.Key {
@@ -292,7 +412,7 @@ func TestSupersededSweepSkipsDeletedStack(t *testing.T) {
 	}
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, Kept: 0, Failed: 0},
+	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 0, Failed: 0},
 		"with a soft-deleted stack")
 	requireBlobStored(t, f, mark.Key, "with a soft-deleted stack")
 }
@@ -316,10 +436,17 @@ func TestSupersededSweepPages(t *testing.T) {
 		t.Fatalf("marks before the sweep = %d, want %d", len(before), saves-1)
 	}
 
+	var wantBytes int64
+
+	for _, mark := range before {
+		wantBytes += mark.Size
+	}
+
 	f.clock.Advance(2 * blob.UnnamedGracePeriod)
 
 	res, err := f.svc.SweepSuperseded(t.Context())
-	requireSweepResult(t, res, err, stack.SupersededSweepResult{Deleted: saves - 1, Kept: 0, Failed: 0},
+	requireSweepResult(t, res, err,
+		stack.SupersededSweepResult{Deleted: saves - 1, DeletedBytes: wantBytes, Kept: 0, Failed: 0},
 		"with more marks than one page")
 
 	if got := marksOf(t, f); len(got) != 0 {
@@ -363,7 +490,7 @@ func TestSupersededSweepRefusesAnUntrustedClock(t *testing.T) {
 				t.Fatalf("sweep with %s: err = %v, want blob.ErrClockSkew", tc.name, err)
 			}
 
-			if res != (stack.SupersededSweepResult{Deleted: 0, Kept: 0, Failed: 0}) {
+			if res != (stack.SupersededSweepResult{Deleted: 0, DeletedBytes: 0, Kept: 0, Failed: 0}) {
 				t.Fatalf("sweep with %s = %+v, want no counts", tc.name, res)
 			}
 
@@ -414,4 +541,25 @@ func (c *cancelAfterDrop) DropSupersededMark(
 	}
 
 	return keep, err
+}
+
+// failMarksAfter is a checkpoint store that fails the marks read after the
+// first page, so a sweep stops on its second page.
+type failMarksAfter struct {
+	*memUpdates
+
+	err   error
+	reads int
+}
+
+// SupersededMarks implements stack.CheckpointStore.
+func (f *failMarksAfter) SupersededMarks(
+	ctx context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	f.reads++
+	if f.reads > 1 {
+		return nil, f.err
+	}
+
+	return f.memUpdates.SupersededMarks(ctx, after, olderThan, limit)
 }
