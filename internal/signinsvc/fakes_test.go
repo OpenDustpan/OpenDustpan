@@ -1,6 +1,7 @@
 package signinsvc_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -48,6 +49,7 @@ type world struct {
 	entries      []audit.Entry
 	claims       []principal.GroupClaims
 	auditFailed  int
+	logs         bytes.Buffer
 }
 
 // newWorld returns the fake ports of a test. By default the principal prn-1
@@ -166,7 +168,7 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: groups,
-		States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
+		States: nil, Logger: slog.New(slog.NewTextHandler(&w.logs, nil)), OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)

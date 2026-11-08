@@ -343,8 +343,11 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	// principal of another kind or for a temporary administrator.
 	target, targetErr := s.isTarget(ctx, &p, subject)
 	if targetErr != nil {
+		s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
+			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+
 		return none, s.refuse(ctx, req, &refusal{
-			reason: ReasonTargetLookup, answer: AnswerRefused, idpSubject: a.Subject, cause: targetErr,
+			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject, cause: targetErr,
 		})
 	}
 

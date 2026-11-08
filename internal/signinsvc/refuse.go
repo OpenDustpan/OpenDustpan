@@ -206,6 +206,9 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 	// principal of another subject or kind, or with a temporary administrator.
 	target, targetErr := s.isTarget(ctx, &p, subject)
 	if targetErr != nil {
+		s.cfg.Logger.WarnContext(ctx, "disable refused: the read of the temporary administrators failed",
+			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+
 		return s.refuse(ctx, req, &refusal{
 			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject,
 			cause: errors.Join(cause, targetErr),

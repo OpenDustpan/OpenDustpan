@@ -734,6 +734,7 @@ func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 			}
 
 			checkRefusalCause(t, err, tc.cause)
+			checkCauseLogged(t, w, tc.cause)
 
 			if len(w.disabled) != 0 || len(w.bumped) != 0 {
 				t.Fatalf("disabled %v, bumped %v, want none", w.disabled, w.bumped)
@@ -773,7 +774,29 @@ func TestCompleteChecksTheLookup(t *testing.T) {
 			checkRefusalCause(t, err, tc.cause)
 
 			checkRefusedEntry(t, w, reason, "corp", session.MethodOIDC)
+
+			// A failed read is a fault, not a decision about the person.
+			answer, outcome := signinsvc.AnswerRefused, audit.OutcomeDenied
+			if tc.cause != nil {
+				answer, outcome = signinsvc.AnswerFailed, audit.OutcomeFailure
+			}
+
+			if r.Answer != answer || w.entries[0].Outcome != outcome {
+				t.Fatalf("answer %v, outcome %q, want %v, %q", r.Answer, w.entries[0].Outcome, answer, outcome)
+			}
+
+			checkCauseLogged(t, w, tc.cause)
 		})
+	}
+}
+
+// checkCauseLogged fails unless the log of w holds the text of cause, or the
+// cause is nil.
+func checkCauseLogged(t *testing.T, w *world, cause error) {
+	t.Helper()
+
+	if cause != nil && !strings.Contains(w.logs.String(), cause.Error()) {
+		t.Fatalf("the log does not name the cause %q: %s", cause, w.logs.String())
 	}
 }
 
