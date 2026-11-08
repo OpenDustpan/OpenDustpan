@@ -82,6 +82,10 @@ type Harness struct {
 	// WriteRaw writes tok straight into the store with no check, as a
 	// restored row arrives.
 	WriteRaw func(t *testing.T, tok jobtoken.Token)
+	// WriteRawInNamespace writes tok straight into the store with no check,
+	// as a restored row arrives, with the namespace ID of the namespace
+	// called ns. The namespace name of the token stays as tok carries it.
+	WriteRawInNamespace func(t *testing.T, tok jobtoken.Token, ns namespace.Name)
 	// Audit returns the audit entries of a namespace, oldest first.
 	Audit func(t *testing.T, ns namespace.Name) []audit.Entry
 }
@@ -138,7 +142,7 @@ const (
 	// oneMillisecond is one millisecond.
 	oneMillisecond = time.Millisecond
 	// caseCount is the number of cases of the suite.
-	caseCount = 37
+	caseCount = 42
 )
 
 // issueTime returns the time of the cases.

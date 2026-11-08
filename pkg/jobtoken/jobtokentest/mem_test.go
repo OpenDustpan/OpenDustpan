@@ -182,7 +182,12 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return fmt.Errorf("%w: the expiry is not after the issue time", jobtoken.ErrInvalid)
 	}
 
-	if _, ok := m.tokens[tok.Digest]; ok {
+	starter, ok := m.principals[tok.StarterID]
+	if !ok || starter.deleted {
+		return jobtoken.ErrNotLive
+	}
+
+	if _, found := m.tokens[tok.Digest]; found {
 		return jobtoken.ErrAlreadyExists
 	}
 
@@ -196,8 +201,7 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return jobtoken.ErrNotFound
 	}
 
-	starter, ok := m.principals[tok.StarterID]
-	if !ok || starter.deleted || starter.disabled {
+	if starter.disabled {
 		return jobtoken.ErrNotLive
 	}
 
@@ -267,24 +271,25 @@ func currentOperation(j *job.Job) durable.ID {
 
 func (m *memWorld) harness() jobtokentest.Harness {
 	return jobtokentest.Harness{
-		Store:           m,
-		Namespace:       m.makeNamespace,
-		DeleteNamespace: m.deleteNamespace,
-		RenameNamespace: m.renameNamespace,
-		Unit:            m.makeUnit,
-		Principal:       m.makePrincipal,
-		Disable:         m.disable,
-		Delete:          m.deletePrincipal,
-		Rename:          m.rename,
-		Job:             m.makeJob,
-		Takeover:        m.takeover,
-		SetJobState:     m.setJobState,
-		EndClaim:        m.endClaim,
-		ReleaseClaim:    m.releaseClaim,
-		EndJob:          m.endJob,
-		MoveJob:         m.moveJob,
-		WriteRaw:        m.writeRaw,
-		Audit:           m.entries,
+		Store:               m,
+		Namespace:           m.makeNamespace,
+		DeleteNamespace:     m.deleteNamespace,
+		RenameNamespace:     m.renameNamespace,
+		Unit:                m.makeUnit,
+		Principal:           m.makePrincipal,
+		Disable:             m.disable,
+		Delete:              m.deletePrincipal,
+		Rename:              m.rename,
+		Job:                 m.makeJob,
+		Takeover:            m.takeover,
+		SetJobState:         m.setJobState,
+		EndClaim:            m.endClaim,
+		ReleaseClaim:        m.releaseClaim,
+		EndJob:              m.endJob,
+		MoveJob:             m.moveJob,
+		WriteRaw:            m.writeRaw,
+		WriteRawInNamespace: m.writeRawInNamespace,
+		Audit:               m.entries,
 	}
 }
 
@@ -589,6 +594,15 @@ func (m *memWorld) writeRaw(t *testing.T, tok jobtoken.Token) {
 	defer m.mu.Unlock()
 
 	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: m.nsByName[tok.Namespace]}
+}
+
+func (m *memWorld) writeRawInNamespace(t *testing.T, tok jobtoken.Token, ns namespace.Name) {
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: m.nsByName[ns]}
 }
 
 func (m *memWorld) entries(t *testing.T, ns namespace.Name) []audit.Entry {
