@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -57,6 +58,12 @@ type Route struct {
 	// the resolved object needs, for a route whose object can be of more
 	// than one kind. Nil means every entry of Actions.
 	ActionsFor func(obj identity.Object) []identity.Action
+	// OpaqueDenial, when it is true, answers a refused authorization
+	// with the plain coded text, without the action and the kind of the
+	// object. Set it on a route whose object comes from stored state that
+	// the caller may not see, so that the 403 is the same whatever that
+	// state is.
+	OpaqueDenial bool
 	// Serve handles the request after the wrapper has enforced the row.
 	Serve RouteHandler
 }
@@ -69,6 +76,17 @@ func (r Route) ActionsOn(obj identity.Object) []identity.Action {
 	}
 
 	return r.Actions
+}
+
+// authorizedRoute returns a row that needs actions on the resolved object and
+// answers a refusal with the named action and object kind.
+func authorizedRoute(
+	method, path string, actions []identity.Action, resolve ObjectResolver, serve RouteHandler,
+) Route {
+	return Route{
+		Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions,
+		Resolve: resolve, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
+	}
 }
 
 // buildRoutes returns the route table. It is the single source of the
@@ -128,7 +146,7 @@ func (h *Handler) auditSinkRoutes() []Route {
 			Path:    "/api/server/audit/sinks",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.listAuditSinks,
 		},
 	}
@@ -137,60 +155,24 @@ func (h *Handler) auditSinkRoutes() []Route {
 // coreRoutes returns the namespace and metrics rows of the route table.
 func (h *Handler) coreRoutes() []Route {
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/namespaces",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerCreateNamespace},
-			Resolve: resolveCreateNamespace, ActionsFor: nil,
-			Serve: h.createNamespace,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/namespaces",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead},
-			Resolve: resolveCaller, ActionsFor: nil,
-			Serve: h.listNamespaces,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/metrics",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.serveMetrics,
-		},
+		authorizedRoute(http.MethodPost, "/api/server/namespaces",
+			[]identity.Action{identity.ActionServerCreateNamespace}, resolveCreateNamespace, h.createNamespace),
+		authorizedRoute(http.MethodGet, "/api/server/namespaces",
+			[]identity.Action{identity.ActionCallerRead}, resolveCaller, h.listNamespaces),
+		authorizedRoute(http.MethodGet, "/api/server/metrics",
+			[]identity.Action{identity.ActionServerObserve}, resolveServer, h.serveMetrics),
 	}
 }
 
 // backupRoutes returns the backup rows of the route table (ADR 30).
 func (h *Handler) backupRoutes() []Route {
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/backups",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.startBackup,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/backups",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.listBackups,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/backups/{id}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getBackup,
-		},
+		authorizedRoute(http.MethodPost, "/api/server/backups",
+			[]identity.Action{identity.ActionServerBackup}, resolveServer, h.startBackup),
+		authorizedRoute(http.MethodGet, "/api/server/backups",
+			[]identity.Action{identity.ActionServerBackup}, resolveServer, h.listBackups),
+		authorizedRoute(http.MethodGet, "/api/server/backups/{id}",
+			[]identity.Action{identity.ActionServerBackup}, resolveServer, h.getBackup),
 	}
 }
 
@@ -204,7 +186,7 @@ func (h *Handler) restoreRoutes() []Route {
 			Path:    "/api/server/restores",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.startRestore,
 		},
 		{
@@ -212,7 +194,7 @@ func (h *Handler) restoreRoutes() []Route {
 			Path:    "/api/server/restores",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.listRestores,
 		},
 		{
@@ -220,7 +202,7 @@ func (h *Handler) restoreRoutes() []Route {
 			Path:    "/api/server/restores/{id}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.getRestore,
 		},
 		{
@@ -228,7 +210,7 @@ func (h *Handler) restoreRoutes() []Route {
 			Path:    "/api/server/restores/{id}/cancel",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.cancelRestore,
 		},
 	}
@@ -243,7 +225,7 @@ func (h *Handler) checkRoutes() []Route {
 			Path:    "/api/server/backups/{id}/check",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.checkBackup,
 		},
 		{
@@ -251,7 +233,7 @@ func (h *Handler) checkRoutes() []Route {
 			Path:    "/api/server/upgrade-check",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.serveUpgradeCheck,
 		},
 	}
@@ -260,30 +242,12 @@ func (h *Handler) checkRoutes() []Route {
 // maintenanceRoutes returns the maintenance routes (ADR 38).
 func (h *Handler) maintenanceRoutes() []Route {
 	return []Route{
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/server/maintenance",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getMaintenance,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/maintenance/enter",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.enterMaintenance,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/maintenance/leave",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.leaveMaintenance,
-		},
+		authorizedRoute(http.MethodGet, "/api/server/maintenance",
+			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.getMaintenance),
+		authorizedRoute(http.MethodPost, "/api/server/maintenance/enter",
+			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.enterMaintenance),
+		authorizedRoute(http.MethodPost, "/api/server/maintenance/leave",
+			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.leaveMaintenance),
 	}
 }
 
@@ -427,7 +391,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		for _, action := range actions {
 			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
-				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
+				h.writeError(ctx, w, authorizeRefusal(route, action, err))
 
 				return
 			}
@@ -436,3 +400,34 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		route.Serve(w, r, p, obj)
 	}
 }
+
+// authorizeRefusal returns the error that answers a refused action, with the
+// action in its text. On a route with OpaqueDenial, a plain denial is opaque,
+// so the answer does not name the action or the kind of the object.
+func authorizeRefusal(route Route, action identity.Action, err error) error {
+	refusal := fmt.Errorf("authorize %s: %w", action, err)
+
+	// Defense in depth: the route still authorizes every action on the
+	// stored object; this layer only stops the 403 text from telling which
+	// object kind the stored state gave.
+	if route.OpaqueDenial && errors.Is(err, identity.ErrDenied) &&
+		errcode.Forbidden(err) == errcode.AccessDenied {
+		return opaqueDenialError{err: refusal}
+	}
+
+	return refusal
+}
+
+// opaqueDenialError answers a refused authorization with the plain denial text:
+// it keeps the full inner text for the log and unwraps only to
+// identity.ErrDenied, so the answer names neither the action nor the kind of
+// the object.
+type opaqueDenialError struct {
+	err error
+}
+
+// Error returns the full text of the denial, with the action and the object.
+func (e opaqueDenialError) Error() string { return e.err.Error() }
+
+// Unwrap returns only the sentinel, so the chain holds no typed denial.
+func (e opaqueDenialError) Unwrap() error { return identity.ErrDenied }
