@@ -488,6 +488,51 @@ func TestGateAndRuleLiftedBy(t *testing.T) {
 			lifted: false,
 		},
 		{
+			name:    "a gate whose condition is the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in principal`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is the resource variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in resource`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is a set of the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in [principal]`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is a principal entity names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in OpenDustpan::Principal::"olga"`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose unless is the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt("", `principal in principal`)}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
 			name:    "a rename to the new name of an unless clause of a gate lifts",
 			group:   "grp-1",
 			newName: "auditors",
@@ -568,6 +613,18 @@ func TestGateAndRuleLiftedByErrors(t *testing.T) {
 		{
 			name:  "a gate clause that does not parse",
 			store: storeOf(nil, []gate.Gate{gateAt(`principal in`, "")}, nil),
+		},
+		{
+			name: "a gate whose membership test holds a group in another shape",
+			store: storeOf(nil, []gate.Gate{gateAt(
+				`principal in (if true then OpenDustpan::Group::"sre" else OpenDustpan::Group::"sre")`, "",
+			)}, nil),
+		},
+		{
+			name: "a gate whose membership test mixes a group and a principal",
+			store: storeOf(nil, []gate.Gate{gateAt(
+				`principal in [OpenDustpan::Group::"sre", OpenDustpan::Principal::"olga"]`, "",
+			)}, nil),
 		},
 		{
 			name:  "a read of the gates that fails",
