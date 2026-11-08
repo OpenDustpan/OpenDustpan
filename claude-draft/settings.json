@@ -97,6 +97,10 @@
       "Read(~/.aws/**)",
       "Read(~/.npmrc)",
       "Read(~/.config/git/credentials)",
+      "Read(~/.claude.json)",
+      "Read(~/.claude.json.backup*)",
+      "Read(~/.claude/backups/**)",
+      "Read(~/_netrc)",
       "Edit(~/.config/gh/**)",
       "Edit(~/.git-credentials)",
       "Edit(~/.ssh/**)",
@@ -105,6 +109,10 @@
       "Edit(~/.aws/**)",
       "Edit(~/.npmrc)",
       "Edit(~/.config/git/credentials)",
+      "Edit(~/.claude.json)",
+      "Edit(~/.claude.json.backup*)",
+      "Edit(~/.claude/backups/**)",
+      "Edit(~/_netrc)",
       "Bash(*.config/gh*)",
       "Bash(* *.config*gh*)",
       "Bash(*/./*)",
@@ -213,7 +221,11 @@
         "~/.claude/.credentials.json",
         "~/.aws",
         "~/.npmrc",
-        "~/.config/git/credentials"
+        "~/.config/git/credentials",
+        "~/.claude.json",
+        "~/.claude.json.backup*",
+        "~/.claude/backups",
+        "~/_netrc"
       ]
     }
   },

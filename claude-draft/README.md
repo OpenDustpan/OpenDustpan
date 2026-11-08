@@ -48,9 +48,17 @@ some dangerous forms.
 The file turns on the Claude Code sandbox and hides the credential files
 from each sandboxed command with `sandbox.filesystem.denyRead`:
 `~/.config/gh`, `~/.git-credentials`, `~/.ssh`, `~/.netrc`,
-`~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc` and
-`~/.config/git/credentials`. The operating system enforces these entries.
-They do not depend on `rtk` or on the text of a command.
+`~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc`,
+`~/.config/git/credentials`, `~/.claude.json`, `~/.claude.json.backup*`,
+`~/.claude/backups` and `~/_netrc`. The operating system enforces these
+entries. They do not depend on `rtk` or on the text of a command.
+
+The sandbox does not cover these:
+
+- The hook process (`rtk hook claude`). Claude Code starts it outside the
+  sandbox.
+- The Read and Edit tools. Their `Read()` and `Edit()` deny rules cover the
+  same files instead.
 
 - `failIfUnavailable: true`: when the sandbox cannot start, Claude Code does
   not start. Without it, Claude Code runs each command without the sandbox,
@@ -103,6 +111,9 @@ Then delete the directory `claude-draft/`.
 - Git reads, `git add` of named files, `git commit`, `git merge`, `git fetch`
   from `OpenDustpan` and `origin`, and `git push` of `HEAD` to the repository
   URL. A push to `origin` is not allowed.
+- A `git fetch` of the repository URL prompts, because `rtk` reads the
+  colon in `https:` as the old `prefix:*` form. Agents fetch a pull request
+  with `git fetch origin pull/<n>/head`.
 - `gh api` with no explicit method: GET reads and the implicit POST of a
   comment (`-F body=@file`). The deny of `-X` also blocks `-X GET`. For a
   search, put the query in the URL:
@@ -126,9 +137,10 @@ Then delete the directory `claude-draft/`.
   `environ` files under `/proc`, and the Read tool under `/proc`.
 - Reads and edits of the credential files with the Read and Edit tools: the
   GitHub CLI configuration, `~/.git-credentials`, `~/.ssh`, `~/.netrc`,
-  `~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc` and
-  `~/.config/git/credentials`. A `Bash` command that names one of them is
-  denied too.
+  `~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc`,
+  `~/.config/git/credentials`, `~/.claude.json`, `~/.claude.json.backup*`,
+  `~/.claude/backups` and `~/_netrc`. A `Bash` command that names one of the
+  first eight is denied too.
 - A `Bash` command that contains `/./`, or that contains `.config` and then
   `gh`. These are a fallback layer for other spellings of a path. The
   sandbox is the layer that holds.
