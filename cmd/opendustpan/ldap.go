@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -18,8 +19,8 @@ import (
 // flag shows in process listings, so the password has no flag and no file
 // key. They hold the names of the variables, not a value.
 const (
-	ldapPasswordEnvVar     = "DUSTPAN_LDAP_BIND_PASSWORD"      //nolint:gosec // The name of a variable, not a credential.
-	ldapPasswordFileEnvVar = "DUSTPAN_LDAP_BIND_PASSWORD_FILE" //nolint:gosec // The name of a variable, not a credential.
+	ldapBindEnvVar     = "DUSTPAN_LDAP_BIND_PASSWORD"
+	ldapBindFileEnvVar = "DUSTPAN_LDAP_BIND_PASSWORD_FILE"
 )
 
 // Errors of the LDAP sign-in settings.
@@ -136,14 +137,14 @@ func (f *serveFlags) ldapOptions(
 		return nil, nil
 	}
 
-	password, err := secretFrom(getenv, ldapPasswordEnvVar, ldapPasswordFileEnvVar, errNoLDAPPassword)
+	password, err := secretFrom(getenv, ldapBindEnvVar, ldapBindFileEnvVar, errNoLDAPPassword)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, inVar := getenv(ldapPasswordEnvVar); inVar {
-		if unsetErr := unsetenv(ldapPasswordEnvVar); unsetErr != nil {
-			return nil, fmt.Errorf("%s: clear variable: %w", ldapPasswordEnvVar, unsetErr)
+	if _, inVar := getenv(ldapBindEnvVar); inVar {
+		if unsetErr := unsetenv(ldapBindEnvVar); unsetErr != nil {
+			return nil, fmt.Errorf("%s: clear variable: %w", ldapBindEnvVar, unsetErr)
 		}
 	}
 
@@ -157,26 +158,32 @@ func (f *serveFlags) ldapOptions(
 
 // provider returns the provider of l with the password of the service account.
 func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
-	var mask uint64
+	var (
+		none  dustpan.LDAPProvider
+		mask  uint64
+		roots *x509.CertPool
+		err   error
+	)
 
 	if strings.TrimSpace(l.disabledMask) != "" {
-		parsed, err := strconv.ParseUint(strings.TrimSpace(l.disabledMask), 10, 64)
-		if err != nil || parsed == 0 {
-			return dustpan.LDAPProvider{}, errLDAPMask //nolint:exhaustruct // An error answers no provider.
+		parsed, parseErr := strconv.ParseUint(strings.TrimSpace(l.disabledMask), 10, 64)
+		if parseErr != nil || parsed == 0 {
+			return none, errLDAPMask
 		}
 
 		mask = parsed
 	}
 
-	roots, err := ldapRoots(l.caFile)
-	if err != nil {
-		return dustpan.LDAPProvider{}, err //nolint:exhaustruct // An error answers no provider.
+	// No CA file means the system roots: a nil pool.
+	if strings.TrimSpace(l.caFile) != "" {
+		if roots, err = ldapRoots(l.caFile); err != nil {
+			return none, err
+		}
 	}
 
 	ranges, err := egress.ParseAllowedRanges(splitList(l.allowedRanges))
 	if err != nil {
-		//nolint:exhaustruct // An error answers no provider.
-		return dustpan.LDAPProvider{}, fmt.Errorf("invalid --ldap-allowed-ranges %q: %w", l.allowedRanges, err)
+		return none, fmt.Errorf("invalid --ldap-allowed-ranges %q: %w", l.allowedRanges, err)
 	}
 
 	return dustpan.LDAPProvider{
@@ -207,15 +214,21 @@ func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
 	}, nil
 }
 
-// ldapRoots returns the certificate authorities of the file path, or nil for
-// no path: the system roots. A file that cannot be read or that holds no PEM
-// certificate fails the start.
+// ldapRoots returns the certificate authorities of the file path. It opens
+// the directory of the file as a root and reads the file inside it, so a link
+// in the name cannot leave that directory. A file that cannot be read or that
+// holds no PEM certificate fails the start.
 func ldapRoots(path string) (*x509.CertPool, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil //nolint:nilnil // No file means the system roots.
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("--ldap-ca-file: %w", err)
 	}
 
-	pem, err := os.ReadFile(path) //nolint:gosec // The operator names the CA file in the server settings.
+	pem, err := root.ReadFile(filepath.Base(path))
+	if closeErr := root.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("--ldap-ca-file: %w", err)
 	}

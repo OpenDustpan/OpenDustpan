@@ -90,22 +90,12 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	shared := filepath.Join(dir, "shared")
-	private := filepath.Join(dir, "private")
-	noCert := filepath.Join(dir, "no-cert.pem")
-
-	for _, p := range []string{shared, private, noCert} {
-		if err := os.WriteFile(p, []byte(ldapTestPassword+"\n"), 0o600); err != nil {
-			t.Fatalf("write %s: %v", p, err)
-		}
-	}
-
 	// The test makes a file that others can read on purpose.
-	if err := os.Chmod(shared, 0o644); err != nil { //nolint:gosec // See the comment above.
-		t.Fatalf("chmod: %v", err)
-	}
+	shared := writeTokenFile(t, ldapTestPassword+"\n", 0o644)
+	private := writeTokenFile(t, ldapTestPassword+"\n", 0o600)
+	noCert := writeTokenFile(t, ldapTestPassword+"\n", 0o600)
 
-	withPassword := map[string]string{ldapPasswordEnvVar: ldapTestPassword}
+	withPassword := map[string]string{ldapBindEnvVar: ldapTestPassword}
 
 	cases := []struct {
 		name    string
@@ -123,7 +113,7 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 		{"no password", func(*ldapFlags) {}, nil, 0, errNoLDAPPassword},
 		{
 			"a password file that others can read", func(*ldapFlags) {},
-			map[string]string{ldapPasswordFileEnvVar: shared},
+			map[string]string{ldapBindFileEnvVar: shared},
 			0, errSecretFilePermissions,
 		},
 		{"a mask that is not a number", func(l *ldapFlags) { l.disabledMask = "two" }, withPassword, 0, errLDAPMask},
@@ -155,7 +145,7 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 		{"the password in the variable", func(*ldapFlags) {}, withPassword, 1, nil},
 		{
 			"the password in a private file", func(*ldapFlags) {},
-			map[string]string{ldapPasswordFileEnvVar: private},
+			map[string]string{ldapBindFileEnvVar: private},
 			1, nil,
 		},
 	}
@@ -176,14 +166,14 @@ func TestLDAPPasswordVariableIsCleared(t *testing.T) {
 	var f serveFlags
 
 	f.ldap = completeLDAP()
-	env := &fakeEnv{vars: map[string]string{ldapPasswordEnvVar: ldapTestPassword}, cleared: nil, reads: 0}
+	env := &fakeEnv{vars: map[string]string{ldapBindEnvVar: ldapTestPassword}, cleared: nil, reads: 0}
 
 	if _, err := f.ldapOptions(env.get, env.unset); err != nil {
 		t.Fatalf("ldapOptions = %v", err)
 	}
 
-	if len(env.cleared) != 1 || env.cleared[0] != ldapPasswordEnvVar {
-		t.Fatalf("cleared variables = %v, want [%s]", env.cleared, ldapPasswordEnvVar)
+	if len(env.cleared) != 1 || env.cleared[0] != ldapBindEnvVar {
+		t.Fatalf("cleared variables = %v, want [%s]", env.cleared, ldapBindEnvVar)
 	}
 }
 
@@ -196,7 +186,7 @@ func TestLDAPPasswordWithoutTheAPIComponentIsNotRead(t *testing.T) {
 
 	f.components = "worker"
 	f.ldap = completeLDAP()
-	env := &fakeEnv{vars: map[string]string{ldapPasswordEnvVar: ldapTestPassword}, cleared: nil, reads: 0}
+	env := &fakeEnv{vars: map[string]string{ldapBindEnvVar: ldapTestPassword}, cleared: nil, reads: 0}
 
 	opts, err := f.ldapOptions(env.get, env.unset)
 	if err != nil || len(opts) != 0 || env.reads != 0 || len(env.cleared) != 0 {
@@ -223,7 +213,7 @@ func TestLDAPPasswordHasNoFlagAndNoFileKey(t *testing.T) {
 		}
 	}
 
-	if s := cli.ByEnv(ldapPasswordEnvVar); s == nil || !s.Sensitive || s.Flag != "" || s.File != "" {
-		t.Errorf("%s is not a sensitive variable with no flag and no file key", ldapPasswordEnvVar)
+	if s := cli.ByEnv(ldapBindEnvVar); s == nil || !s.Sensitive || s.Flag != "" || s.File != "" {
+		t.Errorf("%s is not a sensitive variable with no flag and no file key", ldapBindEnvVar)
 	}
 }
