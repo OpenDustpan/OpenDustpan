@@ -1,22 +1,17 @@
-## 1. Provider settings
+## 1. Dependencies
 
-- [ ] 1.1 Add `session.LDAPSettings` and the mode `ldap` to `ProviderConfig.Validate` with an allowlist. Check: `go test ./pkg/session/...` including a field-list test against `ldapauth.Config` and a table of hostile settings.
-- [ ] 1.2 Store and read the settings in both dialects (edit the baseline in place, run `make generate`). Check: `go test -race -timeout 60m ./pkg/store/...` and `sqlc diff` is clean.
+- [ ] 1.1 PR #2981 (`SignInFromBody`) and PR #2968 (the static provider and the route) are merged to `main`. Check: `git log main` holds both, and `make e2e -run TestLDAPSignIn` passes on `main`.
 
-## 2. Wiring
+## 2. The lockout setting
 
-- [ ] 2.1 Build one `ldapauth.Method` for each enabled provider in `cmd/opendustpan` and give the set to `signinsvc` with `Locks` and `NameKeys`. Check: a test that starts the server with an LDAP provider and reaches the method.
-- [ ] 2.2 Read `egress.allowPlainConnections` on each connection through a reader. Check: a test that flips the setting between two connections.
+- [ ] 2.1 Add `ldap.subjectFailureLimit` as static configuration: flag, `DUSTPAN_LDAP_*` variable and file key, 5 by default, 1 to 100, outside the range stops the start. Check: `go test ./cmd/opendustpan/ ./internal/cli/` with a table of values 0, 1, 100, 101, a text and an empty value.
+- [ ] 2.2 Pass the limit to `signinsvc` and show its effective value and source in `GET /api/server/sign-in-providers`. Check: a test locks a subject after exactly the limit, and the list shows the value and the source.
+- [ ] 2.3 Regenerate the API description and the clients (`make generate`). Check: `make clients-check` and `sqlc diff` are clean.
 
-## 3. Route
+## 3. Verification
 
-- [ ] 3.1 Add the sign-in route for a password method (path from open question 1) with declared actions and the public-list entry. Check: the route test passes and the API description is regenerated (`make generate`).
-- [ ] 3.2 One `401` answer for each failure. Check: a table test of the handler for each failure in the spec.
-
-## 4. Verification
-
-- [ ] 4.1 E2E: sign-in over TLS; sign-in over a plain connection with the opt-in on; refusal with the opt-in off. Check: `make e2e` runs the three steps against a test directory.
-- [ ] 4.2 Hostile tests for the settings, the connection, the method and the handler, and a test per guard that fails when the guard is removed. Check: `go test -race ./internal/ldapauth/... ./internal/signinsvc/... ./internal/api/...`.
-- [ ] 4.3 Update `docs/guides/ldap-sign-in.md`. Check: the usability check below.
-- [ ] 4.4 Usability check: a person follows the guide alone against the test directory and signs in. Each error they cause names the one command that helps.
-- [ ] 4.5 `make check` reports zero findings; `make docs-lint` passes.
+- [ ] 3.1 E2E: sign-in over TLS; plain connection refused with the opt-in off, allowed with it on, refused again with it off. Check: `make e2e` runs `TestLDAPSignIn` on SQLite and PostgreSQL.
+- [ ] 3.2 Hostile tests for the settings, the connection, the method and the handler, and one test per guard that fails when the guard is removed. Check: `go test -race ./cmd/opendustpan/ ./pkg/dustpan/ ./internal/ldapauth/ ./internal/signinsvc/ ./internal/api/server/`.
+- [ ] 3.3 Update `docs/guides/ldap-sign-in.md`: the lockout setting, its risk, and "groups are read and not applied". Check: `make docs-lint` exits 0.
+- [ ] 3.4 Usability check: a person follows the guide alone against the test directory and signs in. Each error they cause names the setting or the one command that helps. Check: the steps and the errors are in the pull request description.
+- [ ] 3.5 `make check` reports zero findings.

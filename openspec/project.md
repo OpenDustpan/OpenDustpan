@@ -43,6 +43,8 @@ Names, voice, tool labels ("Pulumi", "OpenTofu") and the "unit" rule are in
   hostile test of each layer.
 - The schema has one baseline migration per dialect until the first tag. A spec
   never adds a numbered migration or a compatibility shim.
+- A stored reference to an entity that a user can rename, or remove and make
+  again, uses the stable ID. A name is a label for people only.
 - Do not add a dependency, and do not add phone-home code, without the owner.
 
 ## The ADR rule

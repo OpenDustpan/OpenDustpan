@@ -13,6 +13,7 @@ rules:
     - Add a section "Open questions". A change may be implemented only when it reads "none".
     - A bug or tech-debt change may use a short proposal - problem, evidence, fix boundary, check, "Open questions - none".
   design:
+    - Use the stable ID for each stored reference to an entity that a user can rename, or remove and make again. A name is a label for people only.
     - Prefer a structure that makes a bug class impossible over added checks. Add no new tooling as a fix.
   tasks:
     - Name the acceptance check of each task.
