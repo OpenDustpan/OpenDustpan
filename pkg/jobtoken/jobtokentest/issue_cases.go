@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -26,12 +27,24 @@ func issueCases() []suiteCase {
 		{name: "issue after the claim was released returns not live", test: testReleasedClaim},
 		{name: "issue on an ended job returns not live", test: testEndedJob},
 		{name: "issue on a queued job returns not live", test: testQueuedJob},
+		{
+			name: "issue on a job with an unknown state returns not live and writes nothing",
+			test: testUnknownJobState,
+		},
 		{name: "issue after the job moved to another operation returns not live", test: testMovedJob},
 		{name: "issue of a hard-expired token returns invalid", test: testHardExpired},
 		{name: "issue of a token with a lifetime above the maximum returns invalid", test: testLifetimeTooLong},
 		{name: "issue for another unit than the job unit returns not live", test: testUnitMismatch},
 		{name: "issue with a disabled starter returns not live", test: testDisabledStarter},
 		{name: "issue with a deleted starter returns not live", test: testDeletedStarter},
+		{
+			name: "issue with a starter that has no principal row returns not live and writes nothing",
+			test: testMissingStarterRecord,
+		},
+		{
+			name: "issue of a duplicate digest with a starter that has no principal row returns not live",
+			test: testDuplicateMissingStarterRecord,
+		},
 		{name: "issue with a starter that is not the job starter returns invalid", test: testStarterMismatch},
 		{name: "issue for a job that does not exist returns not found", test: testMissingJob},
 		{name: "issue for a claim operation that does not exist returns not found", test: testMissingClaim},
@@ -241,6 +254,25 @@ func testQueuedJob(t *testing.T, h Harness) {
 	wantNothing(t, h, tok.Digest, fence.Namespace)
 }
 
+func testUnknownJobState(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-unknown-state")
+	j := h.Job(t, unit, starter, op)
+
+	h.SetJobState(t, j.ID, job.State("bogus"))
+
+	tok := liveToken(t, unit, starter, j.ID, op)
+	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue on a job with an unknown state = %v, want ErrNotLive", err)
+	}
+
+	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
 func testMovedJob(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -361,6 +393,55 @@ func testDeletedStarter(t *testing.T, h Harness) {
 	next := liveToken(t, unit, starter, j.ID, op)
 	if err := tryIssue(t, h, next, fence); !errors.Is(err, jobtoken.ErrNotLive) {
 		t.Fatalf("Issue with a deleted starter = %v, want ErrNotLive", err)
+	}
+}
+
+func testMissingStarterRecord(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-missing-starter-record")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+	tok.StarterID = ident.NewID("prn-")
+
+	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue with a starter that has no principal row = %v, want ErrNotLive", err)
+	}
+
+	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
+// testDuplicateMissingStarterRecord pins the error order of the port: a
+// starter with no principal row gives ErrNotLive before a duplicate digest
+// gives ErrAlreadyExists. The first record stays.
+func testDuplicateMissingStarterRecord(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-duplicate-missing-starter")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	mustIssue(t, h, tok, fence)
+
+	dup := tok
+	dup.StarterID = ident.NewID("prn-")
+
+	if err := tryIssue(t, h, dup, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue of a duplicate digest with a starter that has no principal row = %v, want ErrNotLive", err)
+	}
+
+	if m := mustRead(t, h, tok.Digest); m.Token.StarterID != starter.ID {
+		t.Fatalf("starter of the stored record = %q, want %q", m.Token.StarterID, starter.ID)
+	}
+
+	if got := len(h.Audit(t, fence.Namespace)); got != 1 {
+		t.Fatalf("audit entries = %d, want 1", got)
 	}
 }
 

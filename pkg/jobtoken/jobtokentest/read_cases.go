@@ -32,7 +32,15 @@ func readCases() []suiteCase {
 			name: "read of a raw row whose namespace differs from its unit returns not found",
 			test: testRawNamespaceMismatch,
 		},
+		{
+			name: "read of a raw row whose namespace ID is another namespace returns not found",
+			test: testRawTokenNamespaceID,
+		},
 		{name: "read of a raw row of a queued job gives the queued state", test: testRawQueuedJob},
+		{
+			name: "read of a raw row of a job with an unknown state gives the unknown state",
+			test: testRawUnknownJobState,
+		},
 		{
 			name: "a token of a namespace that is deleted after the issue is not found",
 			test: testNamespaceDeleted,
@@ -40,6 +48,10 @@ func readCases() []suiteCase {
 		{
 			name: "a token of a namespace that is renamed after the issue is not found",
 			test: testNamespaceRenamed,
+		},
+		{
+			name: "a token of a namespace that is recreated after the issue is not found",
+			test: testNamespaceRecreated,
 		},
 	}
 }
@@ -231,6 +243,30 @@ func testRawNamespaceMismatch(t *testing.T, h Harness) {
 	}
 }
 
+// testRawTokenNamespaceID holds a token row whose namespace ID is the
+// namespace beta, while its unit namespace and its job are in acme. It kills
+// the mutation that joins the token row to its namespace by the name in
+// unit_namespace instead of by t.namespace_id: that join finds acme, the job
+// join and the unit check pass, and the record comes back. The row must give
+// ErrNotFound.
+func testRawTokenNamespaceID(t *testing.T, h Harness) {
+	t.Helper()
+
+	h.Namespace(t, "acme")
+	otherFence := h.Namespace(t, "beta")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-raw-token-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	h.WriteRawInNamespace(t, tok, otherFence.Namespace)
+
+	if _, err := h.Store.GetByDigest(t.Context(), tok.Digest); !errors.Is(err, jobtoken.ErrNotFound) {
+		t.Fatalf("GetByDigest of a token row with another namespace ID = %v, want ErrNotFound", err)
+	}
+}
+
 func testRawQueuedJob(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -250,6 +286,29 @@ func testRawQueuedJob(t *testing.T, h Harness) {
 	}
 }
 
+func testRawUnknownJobState(t *testing.T, h Harness) {
+	t.Helper()
+
+	h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-raw-unknown-state")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	h.WriteRaw(t, tok)
+	h.SetJobState(t, j.ID, job.State("bogus"))
+
+	m := mustRead(t, h, tok.Digest)
+	if m.Claim.JobState != job.State("bogus") {
+		t.Fatalf("job state = %q, want %q", m.Claim.JobState, job.State("bogus"))
+	}
+
+	if jobtoken.JobStateLive(m.Claim.JobState) {
+		t.Fatalf("JobStateLive(%q) = true, want false", m.Claim.JobState)
+	}
+}
+
 func testNamespaceDeleted(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -265,6 +324,25 @@ func testNamespaceDeleted(t *testing.T, h Harness) {
 
 	if _, err := h.Store.GetByDigest(t.Context(), tok.Digest); !errors.Is(err, jobtoken.ErrNotFound) {
 		t.Fatalf("GetByDigest of a token of a deleted namespace = %v, want ErrNotFound", err)
+	}
+}
+
+func testNamespaceRecreated(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-recreated-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	mustIssue(t, h, tok, fence)
+	h.DeleteNamespace(t, fence.Namespace)
+	h.Namespace(t, fence.Namespace.String())
+
+	if _, err := h.Store.GetByDigest(t.Context(), tok.Digest); !errors.Is(err, jobtoken.ErrNotFound) {
+		t.Fatalf("GetByDigest of a token of a recreated namespace = %v, want ErrNotFound", err)
 	}
 }
 

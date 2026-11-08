@@ -55,24 +55,25 @@ func TestJobTokensConformance(t *testing.T) {
 // harness returns the hooks of the suite over the world.
 func (w *jobTokenWorld) harness() jobtokentest.Harness {
 	return jobtokentest.Harness{
-		Store:           w.s.JobTokens(),
-		Namespace:       w.makeNamespace,
-		DeleteNamespace: w.deleteNamespace,
-		RenameNamespace: w.renameNamespace,
-		Unit:            w.makeUnit,
-		Principal:       w.makePrincipal,
-		Disable:         w.disable,
-		Delete:          w.deletePrincipal,
-		Rename:          w.rename,
-		Job:             w.makeJob,
-		Takeover:        w.takeover,
-		SetJobState:     w.setJobState,
-		EndClaim:        w.endClaim,
-		ReleaseClaim:    w.releaseClaim,
-		EndJob:          w.endJob,
-		MoveJob:         w.moveJob,
-		WriteRaw:        w.writeRaw,
-		Audit:           w.entries,
+		Store:               w.s.JobTokens(),
+		Namespace:           w.makeNamespace,
+		DeleteNamespace:     w.deleteNamespace,
+		RenameNamespace:     w.renameNamespace,
+		Unit:                w.makeUnit,
+		Principal:           w.makePrincipal,
+		Disable:             w.disable,
+		Delete:              w.deletePrincipal,
+		Rename:              w.rename,
+		Job:                 w.makeJob,
+		Takeover:            w.takeover,
+		SetJobState:         w.setJobState,
+		EndClaim:            w.endClaim,
+		ReleaseClaim:        w.releaseClaim,
+		EndJob:              w.endJob,
+		MoveJob:             w.moveJob,
+		WriteRaw:            w.writeRaw,
+		WriteRawInNamespace: w.writeRawInNamespace,
+		Audit:               w.entries,
 	}
 }
 
@@ -353,6 +354,24 @@ func (w *jobTokenWorld) writeRaw(t *testing.T, tok jobtoken.Token) {
 			?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		tok.Digest.String(), tok.Namespace.String(), tok.Namespace.String(), tok.StarterID, string(tok.JobID),
+		tok.Unit.Tool(), tok.Unit.UnitID(), tok.Unit.UnitName(), string(tok.ClaimOperation), tok.ClaimToken,
+		tok.ExpiresAt.UnixMilli(), tok.CreatedAt.UnixMilli(),
+	)
+}
+
+// writeRawInNamespace writes tok straight into the store with no check, with
+// the namespace ID of the namespace called ns.
+func (w *jobTokenWorld) writeRawInNamespace(t *testing.T, tok jobtoken.Token, ns namespace.Name) {
+	t.Helper()
+
+	w.exec(t, `
+		INSERT INTO job_tokens (
+			digest, namespace_id, unit_namespace, starter_id, job_id, unit_tool, unit_id, unit_name,
+			claim_operation, claim_token, expires_at_ms, created_at_ms
+		) VALUES (
+			?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		)`,
+		tok.Digest.String(), ns.String(), tok.Namespace.String(), tok.StarterID, string(tok.JobID),
 		tok.Unit.Tool(), tok.Unit.UnitID(), tok.Unit.UnitName(), string(tok.ClaimOperation), tok.ClaimToken,
 		tok.ExpiresAt.UnixMilli(), tok.CreatedAt.UnixMilli(),
 	)

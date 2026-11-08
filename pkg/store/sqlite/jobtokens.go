@@ -131,9 +131,19 @@ func (t *JobTokens) issueRecord(
 		return fmt.Errorf("%w: the expiry is not after the issue time", jobtoken.ErrInvalid)
 	}
 
-	// The insert runs before the reads so that a duplicate digest answers
-	// ErrAlreadyExists before a missing job. An error after it rolls the
-	// transaction back, so it writes nothing.
+	// The starter row must exist before the insert: the foreign key of the
+	// token row would otherwise turn a missing starter into a driver error.
+	// The other reads run after the insert so that a duplicate digest answers
+	// ErrAlreadyExists before a missing job. An error after the insert rolls
+	// the transaction back, so it writes nothing.
+	//
+	// Defense in depth: loadIssueWorld reads the starter again and checks
+	// that it is enabled; this read stays so that the insert cannot reach its
+	// foreign key with a starter that has no row.
+	if err := requireStarter(ctx, q, tok.StarterID); err != nil {
+		return err
+	}
+
 	if err := insertJobToken(ctx, q, tok); err != nil {
 		return err
 	}
@@ -244,6 +254,20 @@ func checkIssueLive(tok jobtoken.Token, w *issueWorld, at time.Time) error {
 func claimLive(tok jobtoken.Token, claim *db.DurableOperation, at time.Time) bool {
 	return claim.State == string(durable.StateRunning) && claim.ClaimToken == tok.ClaimToken &&
 		claim.ClaimExpiresAtMs.Valid && claim.ClaimExpiresAtMs.Int64 > at.UnixMilli()
+}
+
+// requireStarter returns ErrNotLive when no principal has the ID id, so that
+// the foreign key of the token row never reports a missing starter.
+func requireStarter(ctx context.Context, q *db.Queries, id string) error {
+	if _, err := q.GetPrincipal(ctx, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return jobtoken.ErrNotLive
+		}
+
+		return fmt.Errorf("select starter principal: %w", err)
+	}
+
+	return nil
 }
 
 // insertJobToken writes the record of tok.
