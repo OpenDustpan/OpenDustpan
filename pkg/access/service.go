@@ -631,8 +631,10 @@ func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object stri
 // group of an unless clause, a remove from a group of a when clause or of
 // the principal scope. A rename removes the members from the old name and
 // adds them to the new name, so it can lift a limit that names either name.
-// The caller must be a site administrator then. A change that can only add
-// a forbid keeps the grants check, and a read or a parse that fails refuses
+// The caller must be a site administrator then: the bootstrap administrator,
+// or a caller whom the access decision allows every action of the
+// site-administrator role on the installation. A change that can only add a
+// forbid keeps the grants check, and a read or a parse that fails refuses
 // the change.
 func (s *Service) CheckGroupGrants(
 	ctx context.Context, caller identity.Principal, groupID, newName string, change principal.GroupChange,
@@ -641,7 +643,16 @@ func (s *Service) CheckGroupGrants(
 		return err
 	}
 
-	if caller.Admin || s.limits == nil {
+	if s.limits == nil {
+		return nil
+	}
+
+	siteAdministrator, err := s.isSiteAdministrator(ctx, caller)
+	if err != nil {
+		return fmt.Errorf("%w: check the site administrator actions of the caller: %w", ErrEscalation, err)
+	}
+
+	if siteAdministrator {
 		return nil
 	}
 
@@ -781,6 +792,33 @@ func (s *Service) CheckMove(
 
 		cursor = page.NextCursor
 	}
+}
+
+// isSiteAdministrator reports whether the access decision makes caller a
+// site administrator: the bootstrap administrator, or a caller whom the
+// decision allows every action of the site-administrator role on the
+// installation. A caller that the decision refuses one action is not a site
+// administrator. It returns the error of a decision that fails for another
+// reason than a denial.
+func (s *Service) isSiteAdministrator(ctx context.Context, caller identity.Principal) (bool, error) {
+	if caller.Admin {
+		return true, nil
+	}
+
+	for _, action := range builtInActions(RoleSiteAdministrator) {
+		err := s.authz.Authorize(ctx, caller, action, identity.ServerObject())
+		if err == nil {
+			continue
+		}
+
+		if errors.Is(err, identity.ErrDenied) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("decide %s on the installation: %w", action, err)
+	}
+
+	return true, nil
 }
 
 // limitReadable reports whether caller may read the gate configuration of

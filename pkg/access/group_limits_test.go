@@ -271,6 +271,61 @@ func TestCheckGroupGrantsReadsTheAccessLimits(t *testing.T) {
 	}
 }
 
+// TestCheckGroupGrantsAllowsASiteAdministratorByTheDecision proves that the
+// limit check lets a change pass for a caller whom the access decision makes
+// a site administrator, and refuses a caller who holds less, though it holds
+// every grant of the group.
+func TestCheckGroupGrantsAllowsASiteAdministratorByTheDecision(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	// The group holds a viewer grant on acme, which each caller below
+	// holds too, so only the limit check decides.
+	readers := f.group(t, "readers")
+	f.grant(t, readers, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	site := f.person(t, "site")
+	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
+
+	acct := f.accountAdministrator(t, "acct")
+
+	nsAdmin := f.person(t, "nsadmin")
+	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	limits := fakeLimits{
+		lifted: map[limitKey]bool{
+			{group: readers.ID, newName: "", change: principal.GroupChangeAddMember}: true,
+		},
+		err: nil,
+	}
+
+	cases := []struct {
+		name   string
+		caller identity.Principal
+		want   error
+	}{
+		{name: "a site administrator by a stored grant passes", caller: site, want: nil},
+		{name: "an account administrator is refused", caller: acct, want: access.ErrEscalation},
+		{name: "a namespace administrator is refused", caller: nsAdmin, want: access.ErrEscalation},
+		{name: "the bootstrap administrator passes", caller: admin(), want: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := serviceWithLimits(t, f, limits)
+
+			err := svc.CheckGroupGrants(ctx, tc.caller, readers.ID, "", principal.GroupChangeAddMember)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("CheckGroupGrants(readers) = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 // TestCheckGroupGrantsRefusalNamesTheLimit proves that the refusal of a
 // change that can lift an access limit carries the sentinel that the routes
 // map to 403, and names the limit, its scope and the group. The refusal of
@@ -356,6 +411,10 @@ func TestCheckGroupGrantsRefusalHidesALimitThatTheCallerCannotRead(t *testing.T)
 	})
 
 	readErr := svc.CheckGroupGrants(ctx, acct, readers.ID, "", principal.GroupChangeAddMember)
+	if readErr == nil {
+		t.Fatal("CheckGroupGrants(readers, acct) = nil, want ErrEscalation")
+	}
+
 	if !errors.Is(readErr, access.ErrEscalation) {
 		t.Fatalf("CheckGroupGrants(readers, acct) = %v, want ErrEscalation", readErr)
 	}
@@ -367,6 +426,10 @@ func TestCheckGroupGrantsRefusalHidesALimitThatTheCallerCannotRead(t *testing.T)
 	}
 
 	hiddenErr := svc.CheckGroupGrants(ctx, carol, ops.ID, "", principal.GroupChangeAddMember)
+	if hiddenErr == nil {
+		t.Fatal("CheckGroupGrants(ops, carol) = nil, want ErrEscalation")
+	}
+
 	if !errors.Is(hiddenErr, access.ErrEscalation) {
 		t.Fatalf("CheckGroupGrants(ops, carol) = %v, want ErrEscalation", hiddenErr)
 	}

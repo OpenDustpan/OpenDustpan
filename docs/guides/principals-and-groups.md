@@ -194,9 +194,11 @@ the same name, without regard to case, gets `409` with the code
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
 `createdAt`, `updatedAt` and `memberCount`.
 
-A rename removes the members from the old name and adds them to the new name,
-so it can lift an access limit that names either name. Such a rename needs a
-site administrator, see [Manage group members](#manage-group-members).
+A rename moves the members from the old name to the new name, so it can lift
+an access limit that names either name. Such a rename needs a site
+administrator, a caller who holds every action of the installation (the
+site-administrator role on the installation). See
+[Manage group members](#manage-group-members).
 
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
@@ -218,19 +220,21 @@ of the change decides:
 
 - An add of a member to a group that an `unless` clause names can lift the
   policy for that member.
-- A remove of a member from a group that a `when` clause or the principal
+- A delete of a member from a group that a `when` clause or the principal
   scope names can lift the policy for that member.
 
-The delete of a group removes all its members, so it counts as a remove. A
-rename removes the members from the old name and adds them to the new name,
-so it can lift a policy that names either name. A caller who holds only
+The delete of a group deletes all its members, so it counts as a delete of
+each member. A rename moves the members from the old name to the new name,
+so it can lift a policy that names either name. A rename runs the grants
+check of the group too, so the caller must hold every action that the grants
+of the group give. A caller who holds only
 `server:manage-groups` gets `403` for a change that can lift a policy. A
 change that can only add a policy, and a group that no access limit names,
 keep the `server:manage-groups` check. When the server cannot read the group
 or the limits, or a limit does not parse, only a site administrator can make
-the change. The refusal names the limit, its scope and the group. A limit of
-a namespace that the caller cannot read is named as an access limit that the
-caller cannot read, so the refusal tells nothing about it.
+the change. The refusal names the limit, its scope and the group. The refusal
+of a limit of a namespace that the caller cannot read does not name the
+limit, but it shows that some access limit names the group.
 
 Add a member:
 
