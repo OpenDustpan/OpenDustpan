@@ -89,15 +89,9 @@ func (i Install) Binary() string {
 // Install resolves label for tool, downloads and verifies the release if it is
 // not cached, and returns it. Concurrent calls for different versions are safe.
 func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install, error) {
-	version := strings.TrimPrefix(label, "v")
-
-	if label == Latest {
-		resolved, err := f.latest(ctx, tool)
-		if err != nil {
-			return Install{}, err
-		}
-
-		version = resolved
+	version, err := f.version(ctx, tool, label)
+	if err != nil {
+		return Install{}, err
 	}
 
 	archive, err := tool.ArchiveName(version)
@@ -234,6 +228,31 @@ func (f *Fetcher) markCacheChecked(key checkKey) {
 	}
 
 	f.checked[key] = true
+}
+
+// version returns the release that label names: the latest release for
+// Latest, else the label without a leading "v". It refuses a version that is
+// not a plain "x.y.z" release.
+func (f *Fetcher) version(ctx context.Context, tool Tool, label string) (string, error) {
+	version := strings.TrimPrefix(label, "v")
+
+	if label == Latest {
+		resolved, err := f.latest(ctx, tool)
+		if err != nil {
+			return "", err
+		}
+
+		version = resolved
+	}
+
+	// Defense in depth: os.Root contains each cache path too. This check does
+	// not rely on it: the version also goes into the download URL, and a
+	// label that is not a plain release must not name a path at all.
+	if semver(version) == nil {
+		return "", fmt.Errorf("install %s: %w: %q", tool.Name, ErrBadVersion, label)
+	}
+
+	return version, nil
 }
 
 func (f *Fetcher) latest(ctx context.Context, tool Tool) (string, error) {

@@ -303,6 +303,46 @@ func TestFetchRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+// TestFetchRejectsBadVersions sends labels that are not a plain release. Each
+// is refused before it names a path or a URL: nothing is downloaded and the
+// cache directory is not made.
+func TestFetchRejectsBadVersions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		label string
+	}{
+		{name: "parent directory", label: "../x"},
+		{name: "path after a release", label: "1.2.3/../../x"},
+		{name: "sign", label: "+1.2.3"},
+		{name: "two parts", label: "1.2"},
+		{name: "pre-release", label: "1.2.3-rc.1"},
+		{name: "empty", label: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fetcher, tool, downloads := release(t, validArchive(t), "")
+
+			_, err := fetcher.Install(t.Context(), tool, tc.label)
+			if !errors.Is(err, e2e.ErrBadVersion) {
+				t.Fatalf("got error %v, want ErrBadVersion", err)
+			}
+
+			if got := downloads.Load(); got != 0 {
+				t.Errorf("got %d downloads, want 0", got)
+			}
+
+			if _, statErr := os.Stat(fetcher.CacheDir); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("cache directory after a bad version: %v, want it not made", statErr)
+			}
+		})
+	}
+}
+
 func TestFetchRejectsUnsafeArchives(t *testing.T) {
 	t.Parallel()
 
