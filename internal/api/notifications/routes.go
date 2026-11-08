@@ -59,12 +59,12 @@ func (h *Handler) buildRoutes() []Route {
 	return []Route{
 		h.readRoute(sinksPath, read, h.list),
 		keyedRoute(keyedSpec{
-			method: http.MethodPost, path: sinksPath, actions: manage, serve: h.create, answer: createdAnswer,
+			method: http.MethodPost, path: sinksPath, actions: manage, serve: h.create, answer: h.createdAnswer,
 			secret: sinkID,
 		}),
 		h.readRoute(sinkPath, read, h.get),
 		keyedRoute(keyedSpec{
-			method: http.MethodPut, path: sinkPath, actions: manage, serve: h.replace, answer: replacedAnswer,
+			method: http.MethodPut, path: sinkPath, actions: manage, serve: h.replace, answer: h.replacedAnswer,
 			secret: nil,
 		}),
 		keyedRoute(keyedSpec{

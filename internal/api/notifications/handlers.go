@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -76,17 +77,24 @@ type testDocument struct {
 // address. A webhook or chat sink shows its host, and an empty string unless
 // the target is a bare host that passes the host checks.
 //
+// A stored target that the checks refuse gets an empty target and a
+// diagnostic that names the sink by its ID. The diagnostic holds no target
+// and no URL: the target of a webhook sink can hold a token.
+//
 // Defense in depth: the write path and the migration keep a URL out of the
 // target, and the store checks the target when it reads a row. This check
 // stays so that a row from a restore or from another version, with a whole
 // URL as its target, never puts a path, a query or a token in an answer.
-func answerTarget(s *notify.Sink) string {
+func (h *Handler) answerTarget(s *notify.Sink) string {
 	if s.Kind == notify.SinkEmail {
 		return s.Target
 	}
 
 	host, err := notify.WebhookHost("https://" + s.Target + "/")
 	if err != nil || host != s.Target {
+		h.logger.Warn("notification sink target left out of the answer: it fails its checks",
+			slog.String("id", s.ID))
+
 		return ""
 	}
 
@@ -101,10 +109,10 @@ func hasURL(s *notify.Sink) bool {
 		!strings.HasPrefix(s.SecretRefs[0], notify.NoURLRefPrefix)
 }
 
-func toDocument(s *notify.Sink) sinkDocument {
+func (h *Handler) toDocument(s *notify.Sink) sinkDocument {
 	return sinkDocument{
 		ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,
-		Target: answerTarget(s), URLSet: hasURL(s), CreatedBy: s.CreatedBy,
+		Target: h.answerTarget(s), URLSet: hasURL(s), CreatedBy: s.CreatedBy,
 		Version: s.Version, HostNeedsUpdate: s.HostNeedsUpdate(),
 	}
 }
@@ -164,7 +172,7 @@ func sinkID(result any) string {
 
 // createdAnswer answers a create: 201 with the sink, its Location and, for a
 // webhook, the signing key.
-func createdAnswer(st *requestState) answerFunc {
+func (h *Handler) createdAnswer(st *requestState) answerFunc {
 	return func(result any) (idempotency.Answer, error) {
 		s, err := sinkOf(result)
 		if err != nil {
@@ -173,21 +181,21 @@ func createdAnswer(st *requestState) answerFunc {
 
 		return jsonAnswer(
 			http.StatusCreated,
-			createdDocument{sinkDocument: toDocument(&s), SigningKey: st.signingKey},
+			createdDocument{sinkDocument: h.toDocument(&s), SigningKey: st.signingKey},
 			map[string]string{"Location": location(s.Scope, s.ID)},
 		)
 	}
 }
 
 // replacedAnswer answers a replace: 200 with the sink.
-func replacedAnswer(*requestState) answerFunc {
+func (h *Handler) replacedAnswer(*requestState) answerFunc {
 	return func(result any) (idempotency.Answer, error) {
 		s, err := sinkOf(result)
 		if err != nil {
 			return idempotency.Answer{}, err
 		}
 
-		return jsonAnswer(http.StatusOK, toDocument(&s), nil)
+		return jsonAnswer(http.StatusOK, h.toDocument(&s), nil)
 	}
 }
 
@@ -233,7 +241,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, _ identity.Princi
 
 	resp := listResponse{Sinks: make([]sinkDocument, 0, len(all))}
 	for i := range all {
-		resp.Sinks = append(resp.Sinks, toDocument(&all[i]))
+		resp.Sinks = append(resp.Sinks, h.toDocument(&all[i]))
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -252,7 +260,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, toDocument(&s))
+	h.writeJSON(ctx, w, h.toDocument(&s))
 }
 
 // createBody is the body of a create. The fields are pointers so that a
@@ -307,7 +315,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	st.signingKey = made.SigningKey
 
-	h.send(w, r, createdAnswer(st), made.Sink)
+	h.send(w, r, h.createdAnswer(st), made.Sink)
 }
 
 // replaceBody is the body of a replace.
@@ -347,7 +355,7 @@ func (h *Handler) replace(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
-	h.send(w, r, replacedAnswer(stateOf(ctx)), next)
+	h.send(w, r, h.replacedAnswer(stateOf(ctx)), next)
 }
 
 // delete serves DELETE /sinks/{sink_id}.
