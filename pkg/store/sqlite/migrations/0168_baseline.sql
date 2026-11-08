@@ -1586,6 +1586,15 @@ CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 
+-- The partial index holds the live rows alone (deleted_at_ms IS NULL), so the
+-- deleted workspaces are not in it. A list of the live workspaces of a
+-- namespace walks the index in name order, and the offset pagination of the
+-- list skips index entries and reads no deleted row. The unique constraint on
+-- (namespace, name) has no predicate, so it covers the deleted rows too. A
+-- soft delete moves the name to deleted_name and sets name to "deleted:" plus
+-- the ID, so the deleted row keeps an entry in that index. That index holds
+-- the deleted entries with the live ones, so a walk of it reads the deleted
+-- rows to skip them. It cannot give the same live-only walk.
 CREATE INDEX workspaces_live_name ON workspaces (namespace, name) WHERE deleted_at_ms IS NULL;
 
 CREATE INDEX triggers_unit ON triggers (namespace_id, unit_tool, unit_id);
