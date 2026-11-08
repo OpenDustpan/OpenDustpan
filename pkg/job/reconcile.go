@@ -546,6 +546,11 @@ func (run *reconcileRun) afterRefusedDispatch(ctx context.Context, j *Job, err e
 		run.res.Waiting++
 
 		return false, nil
+	case errors.Is(err, ErrNoPlan):
+		// Checked before ErrPlanStale, which an ErrNoPlan error also wraps: a
+		// new plan phase would store no plan either, so the job would plan
+		// again with no end.
+		return false, run.failNoPlan(ctx, j)
 	case errors.Is(err, ErrPlanStale):
 		return false, run.replan(ctx, j)
 	default:
@@ -553,6 +558,37 @@ func (run *reconcileRun) afterRefusedDispatch(ctx context.Context, j *Job, err e
 
 		return false, nil
 	}
+}
+
+// ReasonNoPlan is the reason of a job that failed because its plan phase
+// stored no plan and the next phase needs one.
+const ReasonNoPlan = "the plan phase stored no plan, so the next phase cannot run: read the log of the plan phase " +
+	"and start a new job"
+
+// failNoPlan applies EventPhaseFailed to the queued job j whose plan phase
+// stored no plan, with the reason ReasonNoPlan.
+func (run *reconcileRun) failNoPlan(ctx context.Context, j *Job) error {
+	action, err := reconcileAction(j)
+	if err != nil {
+		run.fail(j, "fail no plan", err)
+
+		return nil
+	}
+
+	changed, err := run.apply(ctx, j, &Change{
+		Job: j.ID, Version: j.Version, Event: EventPhaseFailed, Wait: WaitNone, Reason: ReasonNoPlan, Dispatch: nil,
+		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+		End: nil,
+	}, action, ReasonNoPlan)
+	if err != nil {
+		return err
+	}
+
+	if changed {
+		run.res.Ended++
+	}
+
+	return nil
 }
 
 // replan applies EventReplan to the queued job j whose plan is stale.
