@@ -172,8 +172,9 @@ func callViolations(file string, call *ast.CallExpr, httpNames []string) []strin
 }
 
 // statusViolations returns the violation of the status argument arg of a
-// WriteHeader call. A net/http status name must be a success status, and an
-// integer literal must be below 400.
+// WriteHeader call. Only a net/http status name and an integer literal are
+// checked: a net/http status name must be a success status, and an integer
+// literal must be below 400. Another form of expression is not checked.
 func statusViolations(file string, arg ast.Expr, httpNames []string) []string {
 	const violation = "error status in WriteHeader"
 
@@ -778,6 +779,14 @@ func TestStaleRows(t *testing.T) {
 			bodies:   map[string]map[string]string{"server": {"errorResponse": "reason"}},
 			readErr:  errRead,
 			want:     1,
+		},
+		{
+			name:     "nested key under a listed dir",
+			dirs:     []string{"server"},
+			contract: map[string]string{"server/nested": "reason"},
+			bodies:   map[string]map[string]string{"server/nested": {"errorResponse": "reason"}},
+			readErr:  nil,
+			want:     2,
 		},
 	}
 

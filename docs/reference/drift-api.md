@@ -40,7 +40,7 @@ object of at most 64 KiB. A field that is not in the table fails the request wit
 | --- | --- |
 | `pool` | Optional. The name of a runner pool of the namespace. The pool runs jobs, not sweeps. With no pool, the server uses the only pool of the namespace that runs jobs. A request that names a pool also needs `namespace:manage-runners` on the namespace. |
 | `location` | Optional. Where the program and the config are in git: `repository` and `ref`, and the optional `connection`, `directory` and `revision`. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. The host of the URL is a DNS name. An IP address such as `10.0.0.5` or `[fd00::1]`, a number such as `2130706433`, and `localhost` are refused. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. |
-| `reason` | Optional text for the audit entry. It has at most 500 characters and no control character. |
+| `reason` | Optional text for the audit entry. It has at most 500 characters, and no control character, format character, line separator (U+2028) or paragraph separator (U+2029). |
 
 The route takes no `Idempotency-Key` header, and a request with the header gets
 400. The server makes one job for two starts of one workspace in the same minute.
