@@ -1,0 +1,377 @@
+package server_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/ldapauth"
+	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/session"
+)
+
+// Values of the LDAP sign-in tests of the handler.
+const (
+	ldapRouteID       = "corp-ldap"
+	ldapRoutePath     = "/api/dustpan/v1/sign-in/providers/" + ldapRouteID + "/password"
+	ldapRoutePassword = "right-password-of-alice"
+	ldapRouteUUID     = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+)
+
+// ldapRouteEnv is a sign-in env with the LDAP provider corp-ldap over a test
+// directory, over TLS.
+type ldapRouteEnv struct {
+	providerEnv
+
+	dir  *ldaptest.Server
+	logs *bytes.Buffer
+}
+
+// newLDAPRouteEnv starts a test directory with the person alice and builds a
+// sign-in env with the LDAP provider of that directory.
+func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
+	t.Helper()
+
+	dir := ldaptest.Start(t)
+	dir.AddUser(ldaptest.User{
+		Attributes: map[string][]string{"entryUUID": {ldapRouteUUID}}, UserName: "alice", Password: ldapRoutePassword,
+	})
+
+	logs := &bytes.Buffer{}
+
+	m, err := ldapauth.NewMethod(ldapauth.Config{
+		Enabled:    func(context.Context) (bool, error) { return true, nil },
+		AllowPlain: func(context.Context) (bool, error) { return false, nil },
+		Now:        nil, Logger: slog.New(slog.NewTextHandler(logs, nil)), RootCAs: dir.CertPool(),
+		ProviderID: ldapRouteID, URL: dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
+		UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
+		NameAttribute: "", BindPassword: session.NewPassword(dir.ServicePassword()),
+		Subject:  ldapauth.Subject{Kind: ldapauth.SubjectEntryUUID, Attribute: ""},
+		Disabled: ldapauth.Disabled{Attribute: "", Values: nil, Mask: 0},
+		Groups: ldapauth.Groups{
+			Source: ldapauth.GroupsOff, BaseDN: "", Filter: "", MemberAttribute: "", MemberOfAttribute: "",
+			NameAttribute: "",
+		},
+		Egress:         egress.Rules{Allow: nil, LoopbackForTests: true},
+		ConnectTimeout: 0, OperationTimeout: 0, GroupTimeout: 0, StartTLS: false,
+	})
+	if err != nil {
+		t.Fatalf("NewMethod() = %v", err)
+	}
+
+	e := newProviderEnvWith(t, []apiserver.PasswordProvider{{
+		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true,
+		LDAP: apiserver.LDAPSettings{
+			URL: dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
+			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
+			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
+			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
+			StartTLS: false,
+		},
+	}})
+
+	return ldapRouteEnv{providerEnv: e, dir: dir, logs: logs}
+}
+
+// post sends a password sign-in with body to path, with no credential.
+func (e ldapRouteEnv) post(t *testing.T, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// signInBody returns the body of a password sign-in.
+func signInBody(userName, password string) string {
+	b, err := json.Marshal(map[string]string{"userName": userName, "password": password})
+	if err != nil {
+		panic(err)
+	}
+
+	return string(b)
+}
+
+// TestLDAPRouteSignsAPersonIn proves the success path: the right password
+// over TLS gives 204, a console session cookie and a session of the subject
+// of the entryUUID of the person.
+func TestLDAPRouteSignsAPersonIn(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("sign-in = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	cookie := cookieOf(rec, apiserver.SessionCookie)
+	checkBrowserCookie(t, apiserver.SessionCookie, cookie, http.SameSiteStrictMode)
+
+	status, body := e.readSession(t, cookie)
+	if status != http.StatusOK || body.Subject != ldapRouteID+":"+ldapRouteUUID || body.Provider != ldapRouteID {
+		t.Fatalf("session = %d %+v, want the subject %s:%s", status, body, ldapRouteID, ldapRouteUUID)
+	}
+
+	if rec.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q, want no-referrer", rec.Header().Get("Referrer-Policy"))
+	}
+}
+
+// ldapRefusal is one hostile request to the password route and its answer.
+type ldapRefusal struct {
+	name, path, body, code string
+	status                 int
+	// spends is the count of units of the password budget that the request
+	// spends.
+	spends int
+}
+
+// ldapRefusals are the hostile requests to the password route. Each refusal
+// of a person, a name or a provider gets the same answer.
+func ldapRefusals() []ldapRefusal {
+	const failed = "sign-in.failed"
+
+	otherPath := "/api/dustpan/v1/sign-in/providers/"
+
+	return []ldapRefusal{
+		{
+			name: "wrong password", path: ldapRoutePath, body: signInBody("alice", "wrong-password"),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name: "unknown user", path: ldapRoutePath, body: signInBody("nobody", ldapRoutePassword),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name: "empty password", path: ldapRoutePath, body: signInBody("alice", ""),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name: "filter characters in the name", path: ldapRoutePath, body: signInBody("*)(uid=*", ldapRoutePassword),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name: "CR and LF in the name", path: ldapRoutePath, body: signInBody("alice\r\nadmin", ldapRoutePassword),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name: "unknown provider", path: otherPath + "nope/password", body: signInBody("alice", ldapRoutePassword),
+			code: failed, status: http.StatusUnauthorized, spends: 1,
+		},
+		{
+			name:   "ID of an OIDC provider",
+			path:   otherPath + "corp/password",
+			body:   signInBody("alice", ldapRoutePassword),
+			code:   failed,
+			status: http.StatusUnauthorized,
+			spends: 1,
+		},
+		{
+			name: "unknown field", path: ldapRoutePath, body: `{"userName":"alice","password":"x","admin":true}`,
+			code: "request.body-invalid", status: http.StatusBadRequest, spends: 1,
+		},
+		{
+			name: "oversized body", path: ldapRoutePath,
+			body: signInBody("alice", strings.Repeat("a", 9*1024)), code: "request.body-invalid",
+			status: http.StatusBadRequest, spends: 1,
+		},
+	}
+}
+
+// TestLDAPRouteRefusals sends each hostile request to the password route.
+// Each one spends the password budget, sets no cookie, and gets an answer
+// that holds no password and no text of the directory. The refusals of a
+// person, a name and a provider have the same body. No log line of the
+// method holds a password.
+func TestLDAPRouteRefusals(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+
+	var failedBody string
+
+	for _, tc := range ldapRefusals() {
+		rec := checkLDAPRefusal(t, e, &tc)
+
+		if rec.Code != http.StatusUnauthorized {
+			continue
+		}
+
+		if failedBody == "" {
+			failedBody = rec.Body.String()
+		}
+
+		if rec.Body.String() != failedBody {
+			t.Fatalf("%s: answer %q differs from %q", tc.name, rec.Body.String(), failedBody)
+		}
+	}
+
+	for _, secret := range []string{ldapRoutePassword, "wrong-password", e.dir.ServicePassword()} {
+		if strings.Contains(e.logs.String(), secret) {
+			t.Fatalf("a log line of the method holds a password: %s", e.logs.String())
+		}
+	}
+}
+
+// checkLDAPRefusal sends the request of tc and fails when its answer, its
+// spend of the password budget or its content is not what tc wants.
+func checkLDAPRefusal(t *testing.T, e ldapRouteEnv, tc *ldapRefusal) *httptest.ResponseRecorder {
+	t.Helper()
+
+	before := e.limiter.count()
+	rec := e.post(t, tc.path, tc.body)
+
+	if rec.Code != tc.status || errorCodeOf(t, rec.Body.String()) != tc.code {
+		t.Fatalf("%s: answer = %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.status, tc.code)
+	}
+
+	if got := e.limiter.count() - before; got != tc.spends {
+		t.Fatalf("%s: the request spent %d units of the budget, want %d", tc.name, got, tc.spends)
+	}
+
+	checkLDAPAnswerIsClean(t, e, tc.name, rec)
+
+	return rec
+}
+
+// checkLDAPAnswerIsClean fails when rec sets a cookie, or holds a password,
+// the text of the directory or a DN.
+func checkLDAPAnswerIsClean(t *testing.T, e ldapRouteEnv, name string, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("%s: the answer sets a cookie", name)
+	}
+
+	for _, text := range []string{ldapRoutePassword, e.dir.ServicePassword(), ldaptest.DiagnosticPrefix, "dc=example"} {
+		if strings.Contains(rec.Body.String(), text) {
+			t.Fatalf("%s: the answer %q holds %q", name, rec.Body.String(), text)
+		}
+	}
+}
+
+// TestLDAPRouteFullBudgetSendsNoBind proves that a full password budget
+// refuses the sign-in with 429 before the handler reads the body, so the
+// directory gets no request at all.
+func TestLDAPRouteFullBudgetSendsNoBind(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+
+	e.limiter.mu.Lock()
+	e.limiter.refuse = true
+	e.limiter.mu.Unlock()
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sign-in = %d %s, want 429", rec.Code, rec.Body.String())
+	}
+
+	if n := e.dir.Connections(); n != 0 {
+		t.Fatalf("the directory got %d connections, want 0", n)
+	}
+}
+
+// TestLDAPRouteDirectoryDown proves that a directory that does not answer
+// gives 503, spends no unit of the password budget and gives no cookie.
+func TestLDAPRouteDirectoryDown(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+	e.dir.Stop()
+
+	before := e.limiter.count()
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != http.StatusServiceUnavailable || errorCodeOf(t, rec.Body.String()) != "sign-in.unavailable" {
+		t.Fatalf("sign-in = %d %s, want 503 sign-in.unavailable", rec.Code, rec.Body.String())
+	}
+
+	if e.limiter.count() != before {
+		t.Fatalf("the budget changed from %d to %d, want no change", before, e.limiter.count())
+	}
+
+	checkLDAPAnswerIsClean(t, e, "directory down", rec)
+}
+
+// ldapListDoc is the list of the sign-in providers, in the LDAP tests.
+type ldapListDoc struct {
+	Providers []ldapListProvider `json:"providers"`
+}
+
+// ldapListProvider is a provider of ldapListDoc.
+type ldapListProvider struct {
+	LDAP   *ldapListSettings `json:"ldap"`
+	ID     string            `json:"id"`
+	Source string            `json:"source"`
+	Mode   string            `json:"mode"`
+}
+
+// ldapListSettings are the LDAP settings of a provider of ldapListDoc.
+type ldapListSettings struct {
+	BindDN          string `json:"bindDn"`
+	Subject         string `json:"subject"`
+	Groups          string `json:"groups"`
+	BindPasswordSet bool   `json:"bindPasswordSet"`
+}
+
+// checkLDAPListEntry fails when p is not the static LDAP provider with its
+// effective settings.
+func checkLDAPListEntry(t *testing.T, p *ldapListProvider) {
+	t.Helper()
+
+	if p.Source != "static" || p.Mode != "ldap" || p.LDAP == nil || p.LDAP.BindDN != ldaptest.ServiceDN ||
+		p.LDAP.Subject != "entryUUID" || p.LDAP.Groups != "off" || !p.LDAP.BindPasswordSet {
+		t.Fatalf("provider = %+v, want static ldap with its effective settings", p)
+	}
+}
+
+// TestLDAPProviderListShowsNoPassword proves that the list of the sign-in
+// providers shows the LDAP provider with its effective settings and the
+// source static, and never the bind password.
+func TestLDAPProviderListShowsNoPassword(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnv(t)
+
+	rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
+	}
+
+	var list ldapListDoc
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+
+	found := false
+
+	for i := range list.Providers {
+		p := &list.Providers[i]
+		if p.ID != ldapRouteID {
+			continue
+		}
+
+		found = true
+
+		checkLDAPListEntry(t, p)
+	}
+
+	if !found {
+		t.Fatalf("list %s has no provider %s", rec.Body.String(), ldapRouteID)
+	}
+
+	if strings.Contains(rec.Body.String(), e.dir.ServicePassword()) {
+		t.Fatal("the list holds the bind password")
+	}
+}

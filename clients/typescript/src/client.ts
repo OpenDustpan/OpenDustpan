@@ -163,6 +163,7 @@ import type {
   SetUnitAccessLimitInput,
   SetUnitGateInput,
   SignInWithPasswordInput,
+  SignInWithProviderPasswordInput,
   StageRegistryUploadInput,
   StartDriftCheckInput,
   StartJobInput,
@@ -1128,6 +1129,10 @@ export class Client {
 
   signInWithPassword(input: SignInWithPasswordInput): Promise<Answer<void>> {
     return execute(this.transport, operations.signInWithPassword, input);
+  }
+
+  signInWithProviderPassword(input: SignInWithProviderPasswordInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.signInWithProviderPassword, input);
   }
 
   stageRegistryUpload(input: StageRegistryUploadInput): Promise<Answer<StagedUpload>> {

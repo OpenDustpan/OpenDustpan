@@ -69,7 +69,7 @@ var noDevAdmin = identity.Principal{
 // hasStaticSignIn reports whether cfg names a sign-in that needs no stored
 // provider: a provider of the configuration, or the dev sign-in.
 func hasStaticSignIn(cfg *settings) bool {
-	return len(cfg.oidcProviders) > 0 || cfg.devSignIn != nil
+	return len(cfg.oidcProviders) > 0 || len(cfg.ldapProviders) > 0 || cfg.devSignIn != nil
 }
 
 // newSignIn returns the console sign-in of cfg, or nil when cfg has none.
@@ -108,13 +108,13 @@ func newSignIn(
 	}
 
 	in := &serverapi.SignIn{
-		Service:   nil,
-		Sessions:  sessions,
-		Limiter:   nil,
-		Stored:    nil,
-		Admin:     nil,
-		Providers: providers,
-		Origins: append(
+		Service:           nil,
+		Sessions:          sessions,
+		Limiter:           nil,
+		Stored:            nil,
+		Admin:             nil,
+		Providers:         providers,
+		PasswordProviders: nil, Origins: append(
 			[]string{origin},
 			cfg.allowedOrigins...,
 		),

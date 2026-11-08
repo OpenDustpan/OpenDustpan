@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
@@ -21,10 +22,27 @@ var (
 	errNoOIDCIssuer = errors.New("an OpenID Connect setting needs --oidc-issuer")
 )
 
-// signInOptions returns the console sign-in option of the serve flags: one
+// signInOptions returns the sign-in options of the serve flags: the OpenID
+// Connect provider of oidcOptions and the LDAP provider of ldapOptions. The
+// LDAP password comes from the variables of the process.
+func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
+	oidc, err := f.oidcOptions()
+	if err != nil {
+		return nil, err
+	}
+
+	ldap, err := f.ldapOptions(os.LookupEnv, os.Unsetenv)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(oidc, ldap...), nil
+}
+
+// oidcOptions returns the console sign-in option of the serve flags: one
 // OpenID Connect provider when --oidc-issuer is set, else none. A process
 // without the api component gets none.
-func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
+func (f *serveFlags) oidcOptions() ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)

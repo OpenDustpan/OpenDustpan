@@ -296,6 +296,7 @@ type serveFlags struct {
 	oidcClientID                 string
 	oidcScopes                   string
 	oidcNoAutoCreate             bool
+	ldap                         ldapFlags
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
@@ -534,6 +535,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
 	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
 	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
+	f.ldap.register(fs)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)

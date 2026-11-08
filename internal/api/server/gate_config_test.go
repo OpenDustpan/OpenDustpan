@@ -99,8 +99,14 @@ func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gate
 	t.Helper()
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, noGateEngine: noEngine, stored: nil, authz: authz, hostile: nil,
-		namespaces: []namespace.Name{"acme", "beta"},
+		autoCreate:     true,
+		noPolicyRoutes: false,
+		noGateEngine:   noEngine,
+		stored:         nil,
+		authz:          authz,
+		hostile:        nil,
+		passwords:      nil,
+		namespaces:     []namespace.Name{"acme", "beta"},
 	})
 	sess := e.freshSignIn(t)
 
