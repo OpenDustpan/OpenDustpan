@@ -710,6 +710,10 @@ func runJobClaimCase(t *testing.T, tc jobClaimCase) {
 		return
 	}
 
+	if err == nil {
+		t.Fatal("AuthorizeJobClaim = nil, want ErrDenied")
+	}
+
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("AuthorizeJobClaim = %v, want ErrDenied", err)
 	}
