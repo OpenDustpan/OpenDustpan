@@ -1300,9 +1300,13 @@ func backupModel() costModel {
 //
 // The fixed part also holds blobDeleteLeaseTrips: the waits for the blob
 // deleters.
+//
+// The fixed part also holds checkpointSupersedesTrips: the table holds no
+// marks in the run, so the restore makes 2 round trips fewer for it than the
+// model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips,
+		fixed:        344 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips + checkpointSupersedesTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1326,6 +1330,16 @@ const forgeStripClassTrips = 2
 // empties, and it costs 1 round trip, not the 2 of perOther, so the model takes
 // 1 off.
 const blobDeleteLeaseTrips = 3 - 1
+
+// checkpointSupersedesTrips is the number of round trips that the
+// checkpoint_supersedes table takes off the model. The restore makes 5 round
+// trips for the table, 2 fewer than the cost of a table in the model: the dev
+// strip does not count its rows, because it counts only the tables of the dev
+// classes, so the counts of the strip and of the swap check are absent. The
+// other statements are the two column checks and the export read of the
+// backup, the column read before the staging load, and the row count of the
+// staged table.
+const checkpointSupersedesTrips = 5 - 7
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

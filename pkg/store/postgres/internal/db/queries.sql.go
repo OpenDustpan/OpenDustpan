@@ -18485,7 +18485,8 @@ INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, supersed
 SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
        FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
 FROM checkpoints AS c
-WHERE c.stack_id = $1 AND c.update_id = $2 AND c.blob_key <> $3
+WHERE c.stack_id = $1 AND c.update_id = $2
+  AND c.blob_key <> $3 AND c.blob_key = $4
 ON CONFLICT (blob_key) DO NOTHING
 `
 
@@ -18493,14 +18494,22 @@ type MarkSupersededCheckpointParams struct {
 	StackID  string
 	UpdateID string
 	BlobKey  string
+	ReadKey  string
 }
 
 // Marks the checkpoint blob that a save of the update replaces, with the time
 // of the database clock, from the same expression as the checkpoint upsert.
-// The mark names the blob of the stored row and the size of the stored blob,
-// and a mark of an earlier save stays as it is.
+// It marks only the row that still names the key that the sequence check read:
+// the row is not locked, and a concurrent attempt can replace it between the
+// read and the mark. The mark names the blob of that row and the size of the
+// stored blob, and a mark of an earlier save stays as it is.
 func (q *Queries) MarkSupersededCheckpoint(ctx context.Context, arg MarkSupersededCheckpointParams) error {
-	_, err := q.db.Exec(ctx, markSupersededCheckpoint, arg.StackID, arg.UpdateID, arg.BlobKey)
+	_, err := q.db.Exec(ctx, markSupersededCheckpoint,
+		arg.StackID,
+		arg.UpdateID,
+		arg.BlobKey,
+		arg.ReadKey,
+	)
 	return err
 }
 

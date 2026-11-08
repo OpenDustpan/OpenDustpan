@@ -431,11 +431,12 @@ func sequenceWrite(
 	}
 
 	// checkSequence answered from the row read of this transaction, and a
-	// replay and a refusal returned above. A write that
-	// proceeds replaces the row, so its blob is superseded. A mark of an
-	// earlier save stays as it is.
+	// replay and a refusal returned above. A write that proceeds replaces the
+	// row, so its blob is superseded. The row is not locked, so a concurrent
+	// attempt can replace it between the read and the mark. The mark names the
+	// key that the read returned, so it marks no row that changed.
 	if check.replaced {
-		return false, markSuperseded(ctx, q, cp, stackID)
+		return false, markSuperseded(ctx, q, cp, stackID, check.readKey)
 	}
 
 	return false, nil
@@ -922,9 +923,11 @@ func checkMutates(ctx context.Context, q *db.Queries, stackID string, id stack.U
 // update names another blob key: the write replaces the blob of that row, and
 // the caller marks it. The caller marks only a write that proceeds, because a
 // replay and a refusal return before the mark: the row still names the blob
-// of a replay. A write without a sequence number is the built checkpoint of a
-// journaled update: it replaces the row of its update without a comparison,
-// and the caller reads the row here for the blob that it replaces.
+// of a replay. It returns the blob key of the row that it read, so the caller
+// marks only that row. A write without a sequence number is the built
+// checkpoint of a journaled update: it replaces the row of its update without
+// a comparison, and the caller reads the row here for the blob that it
+// replaces.
 func checkSequence(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string,
 ) (sequenceCheck, error) {
@@ -933,47 +936,56 @@ func checkSequence(
 		UpdateID: cp.Update.String(),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return sequenceCheck{known: false, replaced: false}, nil
+		return sequenceCheck{known: false, replaced: false, readKey: ""}, nil
 	}
 
 	if err != nil {
-		return sequenceCheck{known: false, replaced: false}, fmt.Errorf("read last checkpoint: %w", err)
+		return sequenceCheck{known: false, replaced: false, readKey: ""}, fmt.Errorf("read last checkpoint: %w", err)
 	}
 
-	replaced := last.BlobKey != string(cp.BlobKey)
+	read := sequenceCheck{known: false, replaced: last.BlobKey != string(cp.BlobKey), readKey: blob.Key(last.BlobKey)}
 
 	if cp.Sequence == 0 {
-		return sequenceCheck{known: false, replaced: replaced}, nil
+		return read, nil
 	}
 
 	switch {
 	case cp.Sequence < last.Sequence:
-		return sequenceCheck{known: false, replaced: replaced}, stack.ErrStaleCheckpoint
+		return read, stack.ErrStaleCheckpoint
 	case cp.Sequence > last.Sequence:
-		return sequenceCheck{known: false, replaced: replaced}, nil
+		return read, nil
 	case bytes.Equal(last.Digest, cp.Digest[:]):
-		return sequenceCheck{known: true, replaced: replaced}, nil
+		read.known = true
+
+		return read, nil
 	default:
-		return sequenceCheck{known: false, replaced: replaced}, stack.ErrCheckpointConflict
+		return read, stack.ErrCheckpointConflict
 	}
 }
 
 // sequenceCheck is the answer of checkSequence: known is true for a replay,
 // and replaced is true when the row of the update names another blob key than
-// the write, so the caller marks the blob of that row.
+// the write, so the caller marks the blob of that row. readKey is the blob key
+// of the row that the read returned.
 type sequenceCheck struct {
+	readKey  blob.Key
 	known    bool
 	replaced bool
 }
 
 // markSuperseded marks the blob of the checkpoint row that the write
-// replaces, so that a sweep can delete it after the grace period of a mark. A
-// mark of an earlier save stays as it is.
-func markSuperseded(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) error {
+// replaces, so that a sweep can delete it after the grace period of a mark. It
+// marks only the row that still names readKey: the row is not locked, and a
+// concurrent attempt can replace it between the read of checkSequence and the
+// mark. A mark of an earlier save stays as it is.
+func markSuperseded(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, readKey blob.Key,
+) error {
 	params := db.MarkSupersededCheckpointParams{
 		StackID:  stackID,
 		UpdateID: cp.Update.String(),
 		BlobKey:  string(cp.BlobKey),
+		ReadKey:  string(readKey),
 	}
 
 	if err := q.MarkSupersededCheckpoint(ctx, params); err != nil {

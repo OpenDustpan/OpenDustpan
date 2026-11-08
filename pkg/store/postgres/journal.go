@@ -669,7 +669,7 @@ func (s *Store) PutBuiltCheckpoint(
 			return lockErr
 		}
 
-		if _, writeErr := writeBuiltCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
+		if _, writeErr := s.writeBuiltCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
 			return writeErr
 		}
 

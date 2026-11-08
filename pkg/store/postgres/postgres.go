@@ -83,6 +83,10 @@ type Store struct {
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
 	beforeLockDelete func(ctx context.Context, q *db.Queries) error
+	// afterSequenceCheck, when set, runs in sequenceWrite after checkSequence
+	// returns and before the mark of the replaced blob. Tests set it to hold a
+	// save across a concurrent replacement. Nil in production.
+	afterSequenceCheck func(stackID string)
 	// stateLockWait, when it is above zero, replaces stateLockTimeout. Tests
 	// set it to reach the timeout without a long wait. Zero in production.
 	stateLockWait time.Duration
@@ -242,6 +246,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		betweenProfileReads: atomic.Pointer[func()]{},
 		snapshotBegin:       snapshotBeginQuery(live),
 		beforeLockDelete:    nil,
+		afterSequenceCheck:  nil,
 		stateLockWait:       0,
 		binaryVersion:       "",
 		gate:                nil,

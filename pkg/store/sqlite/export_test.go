@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // RemoveInternalTemplates removes the white-box template directory built for
@@ -29,6 +32,17 @@ func RemoveInternalTemplates() error {
 // SetSetting makes before it opens a transaction.
 func CheckSettingFence(ns namespace.Name, fence namespace.Fence) error {
 	return settingFenceBinds(ns, fence)
+}
+
+// MarkSupersededCheckpointInTx runs the mark of the replaced checkpoint in its
+// own transaction. cp names the write, and readKey is the key that the sequence
+// check read.
+func MarkSupersededCheckpointInTx(
+	ctx context.Context, s *Store, stackID stack.ID, cp stack.Checkpoint, readKey blob.Key,
+) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return markSuperseded(ctx, q, cp, stackID.String(), readKey)
+	})
 }
 
 // SettingWrite is the input of WriteSettingInTx.
