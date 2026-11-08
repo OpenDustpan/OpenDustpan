@@ -2963,6 +2963,13 @@ FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind)
 ORDER BY id;
 
+-- name: ListGateObjectsOfKind :many
+-- Every object of one kind, of every scope, ordered by scope key and ID.
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = sqlc.arg(kind)
+ORDER BY scope_key, id;
+
 -- name: ListGateObjectsOfScope :many
 -- Every object and setting of one scope, ordered by kind and ID.
 SELECT kind, id, version, body

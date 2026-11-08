@@ -250,6 +250,12 @@ An action that no family classifies fails the check closed. A read that
 cannot check the group answers `500` with the code `server.internal`. It
 never answers `protected: false`.
 
+A rename moves the members from the old name to the new name, so it can lift
+an access limit that names either name. Such a rename needs a site
+administrator, a caller who holds every action of the installation (the
+site-administrator role on the installation). See
+[Manage group members](#manage-group-members).
+
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
 `mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
@@ -289,6 +295,28 @@ A member is a principal. The routes are these:
 | `GET /api/server/groups/{id}/members` | `server:read-principals` | `200`, a page ordered by subject |
 | `POST /api/server/groups/{id}/members` | `server:manage-groups`, with a fresh sign-in | `201` with the member |
 | `DELETE /api/server/groups/{id}/members/{principal}` | `server:manage-groups`, with a fresh sign-in | `204` |
+
+An access limit is one forbid policy. A membership change can lift the
+policy for the member, and then it needs a site administrator. The direction
+of the change decides:
+
+- An add of a member to a group that an `unless` clause names can lift the
+  policy for that member.
+- A delete of a member from a group that a `when` clause or the principal
+  scope names can lift the policy for that member.
+
+The delete of a group deletes all its members, so it counts as a delete of
+each member. A rename moves the members from the old name to the new name,
+so it can lift a policy that names either name. A rename runs the grants
+check of the group too, so the caller must hold every action that the grants
+of the group give. A caller who holds only
+`server:manage-groups` gets `403` for a change that can lift a policy. A
+change that can only add a policy, and a group that no access limit names,
+keep the `server:manage-groups` check. When the server cannot read the group
+or the limits, or a limit does not parse, only a site administrator can make
+the change. The refusal names the limit, its scope and the group. The refusal
+of a limit of a namespace that the caller cannot read does not name the
+limit, but it shows that some access limit names the group.
 
 Add a member:
 

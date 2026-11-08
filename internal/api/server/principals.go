@@ -977,7 +977,7 @@ func (h *Handler) getGroup(
 // combines those, and answers 200 with the stored group and its protected
 // flag.
 func (h *Handler) changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
@@ -991,7 +991,7 @@ func (h *Handler) changeGroup(
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
+	g, err := svc.UpdateGroup(r.Context(), e, caller, r.PathValue("id"), principal.GroupUpdate{
 		Name:                     req.Name,
 		Description:              req.Description,
 		ClosedToIdentityProvider: req.ClosedToIdentityProvider,

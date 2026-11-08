@@ -271,6 +271,7 @@ type kindOps interface {
 	putWith(e *env, w *write) (int64, error)
 	get(e *env, scope gate.Scope, id gate.ID) (gate.ObjectRef, error)
 	list(e *env, scope gate.Scope) ([]gate.ObjectRef, error)
+	listEveryScope(e *env) ([]gate.ObjectRef, error)
 	del(e *env, ref gate.ObjectRef, fence namespace.Fence, en audit.Entry) error
 	limit() int
 }
@@ -323,6 +324,20 @@ func (o ops[T]) list(e *env, scope gate.Scope) ([]gate.ObjectRef, error) {
 	objs, err := o.objs.List(e.t.Context(), scope)
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
+	}
+
+	out := make([]gate.ObjectRef, len(objs))
+	for i, obj := range objs {
+		out[i] = obj.Ref()
+	}
+
+	return out, nil
+}
+
+func (o ops[T]) listEveryScope(e *env) ([]gate.ObjectRef, error) {
+	objs, err := o.objs.ListEveryScope(e.t.Context())
+	if err != nil {
+		return nil, fmt.Errorf("list every scope: %w", err)
 	}
 
 	out := make([]gate.ObjectRef, len(objs))

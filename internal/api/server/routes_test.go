@@ -629,7 +629,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
