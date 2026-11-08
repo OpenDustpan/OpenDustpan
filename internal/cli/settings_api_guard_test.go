@@ -66,9 +66,11 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 // static-credential-host mark, so the settings registry refuses a database
 // layer for it, also for a declaration that an SDK user gives.
 //
-// public-url and issuer-base-url are URL settings that receive no credential:
-// the server builds external URLs and its own issuer URL from them, so no
-// credential goes to the host that they name, and neither carries the mark.
+// public-url and issuer-base-url are URL settings that receive no static
+// credential: the server builds external URLs and its own issuer URL from
+// them, so no static credential goes to the host that they name, and neither
+// carries the mark. A runner gets public-url as the server URL and sends a
+// credential there that the server makes at run time, not a static one.
 func TestStaticCredentialHostsAreStaticOnly(t *testing.T) {
 	t.Parallel()
 
