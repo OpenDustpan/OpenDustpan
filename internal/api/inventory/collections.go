@@ -444,10 +444,11 @@ const reasonMoveOutNeedsManage = "move out of a locked collection needs unit:man
 // the source collection refuses.
 func (h *Handler) recordMoveOutRefusal(r *http.Request, p identity.Principal, obj identity.Object, reason string) {
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionUnitManage,
-		Object: obj,
-		Reason: reason,
-		Window: 0,
+		Action:       identity.ActionUnitManage,
+		Object:       obj,
+		Reason:       reason,
+		ReasonWithin: nil,
+		Window:       0,
 	})
 }
 

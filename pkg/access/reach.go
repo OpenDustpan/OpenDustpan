@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -152,7 +153,20 @@ const MaxReachReasonItems = 20
 // actions and then the count of the rest, and it stays inside the limit of
 // an audit reason.
 func MissingActionsReason(missing []HeldAction) string {
+	return MissingActionsReasonWithin(missing, audit.MaxReasonLen)
+}
+
+// MissingActionsReasonWithin returns the text of MissingActionsReason inside
+// limit bytes. It names at most MaxReachReasonItems actions and then the
+// count of the rest, so a shorter text names fewer actions and grows that
+// count. A limit too small for the prefix and the count cuts the text to the
+// limit.
+func MissingActionsReasonWithin(missing []HeldAction, limit int) string {
 	const prefix = "outside the reach of the caller: "
+
+	if limit <= 0 {
+		return ""
+	}
 
 	parts := make([]string, 0, min(len(missing), MaxReachReasonItems))
 	total := len(prefix)
@@ -175,7 +189,7 @@ func MissingActionsReason(missing []HeldAction) string {
 			suffix = fmt.Sprintf(", and %d more", rest)
 		}
 
-		if total+len(sep)+len(part)+len(suffix) > audit.MaxReasonLen {
+		if total+len(sep)+len(part)+len(suffix) > limit {
 			break
 		}
 
@@ -183,11 +197,21 @@ func MissingActionsReason(missing []HeldAction) string {
 		total += len(sep) + len(part)
 	}
 
-	if len(parts) == len(missing) {
-		return prefix + strings.Join(parts, ", ")
+	text := prefix + strings.Join(parts, ", ")
+	if len(parts) < len(missing) {
+		text += fmt.Sprintf(", and %d more", len(missing)-len(parts))
 	}
 
-	return prefix + strings.Join(parts, ", ") + fmt.Sprintf(", and %d more", len(missing)-len(parts))
+	if len(text) <= limit {
+		return text
+	}
+
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+
+	return text[:cut]
 }
 
 // reasonObjectText names the object of an action in a reach reason, for

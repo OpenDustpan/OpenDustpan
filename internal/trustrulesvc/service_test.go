@@ -367,8 +367,8 @@ func TestCreateNeedsManageTokensOnThePrincipal(t *testing.T) {
 	f.authz.allow = nil
 
 	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
-	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("Create = %v, want ErrDenied", err)
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		t.Fatalf("Create = %v, want ErrDenied and ErrManageTokensDenied", err)
 	}
 
 	if len(f.store.created) != 0 {
@@ -388,6 +388,10 @@ func TestCreateNeedsTheReachOfThePrincipal(t *testing.T) {
 	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrReachExceeded) {
 		t.Fatalf("Create = %v, want ErrDenied and ErrReachExceeded", err)
+	}
+
+	if errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		t.Fatalf("Create = %v, want no ErrManageTokensDenied for a reach refusal", err)
 	}
 
 	if len(f.store.created) != 0 {
@@ -457,8 +461,9 @@ func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 		t.Fatalf("service: %v", err)
 	}
 
-	if _, err := svc.Create(t.Context(), person(), emptyEntry(), "acme", input()); !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("Create with no reach checker = %v, want ErrDenied", err)
+	_, err = svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	if !errors.Is(err, identity.ErrDenied) || errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		t.Fatalf("Create with no reach checker = %v, want ErrDenied without ErrManageTokensDenied", err)
 	}
 
 	if len(store.created) != 0 {

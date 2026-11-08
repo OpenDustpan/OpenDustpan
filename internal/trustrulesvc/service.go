@@ -35,6 +35,12 @@ const (
 // its own expiry and its revoke.
 var ErrSignInRequired = errors.New("sign in to create a trust rule: an access token cannot")
 
+// ErrManageTokensDenied marks the refusal of a create whose caller does not
+// hold principal:manage-tokens on the principal of the rule. The error that
+// carries it also wraps identity.ErrDenied. A denial of the reach check does
+// not carry it, so the audit entry of a refused create names the right cause.
+var ErrManageTokensDenied = errors.New("the caller does not hold principal:manage-tokens on the principal")
+
 // Namespaces gives the namespace of a read, and the namespace of a write
 // with its current fence. *namespace.Service meets it.
 type Namespaces interface {
@@ -378,6 +384,15 @@ func (s *Service) authorizeCreate(ctx context.Context, caller identity.Principal
 	}
 
 	if authzErr := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); authzErr != nil {
+		if errors.Is(authzErr, identity.ErrDenied) {
+			return fmt.Errorf(
+				"make a trust rule for principal %q: %w: %w",
+				principalID,
+				ErrManageTokensDenied,
+				authzErr,
+			)
+		}
+
 		return fmt.Errorf("make a trust rule for principal %q: %w", principalID, authzErr)
 	}
 

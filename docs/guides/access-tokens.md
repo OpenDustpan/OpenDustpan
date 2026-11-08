@@ -126,10 +126,11 @@ principal and each action that the caller does not hold, with its object:
 principal "prn-x" holds actions that you do not hold: server:backup on the installation
 ```
 
-The message names the object of an action only when the caller holds the read
-action of that object. Otherwise it writes `an object that you cannot read` in
-place of the object. The audit entry of the refusal names every missing
-action with its object.
+The message names an action and its object only when the caller holds the read
+action of that object. All the other actions go into one phrase at the end
+that says `objects that you cannot read`, so the message does not tell how many
+objects the caller cannot read. The audit entry of the refusal names
+every missing action with its object.
 
 A holder of `principal:manage-tokens` on the service principal itself is not
 compared. A site administrator holds every action, so it passes. A rotation

@@ -774,7 +774,23 @@ func TestReachRefusalNamesOnlyReadableObjects(t *testing.T) {
 	f.grant(t, "grt-writer-writer", access.Subject{Kind: access.SubjectPrincipal, ID: writer.ID},
 		access.RoleWriter, identity.NamespaceObject(ns.Name))
 
-	const hidden = "an object that you cannot read"
+	// The wide principal reaches the reads of two namespaces that the token
+	// manager cannot read. The refusal must not tell how many there are.
+	other := ns
+	other.ID = namespace.NewID()
+	other.Name = "globex"
+
+	if err := f.store.CreateNamespace(ctx, other); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	wide := f.serviceOf(t, "ci-wide")
+	f.grant(t, "grt-wide-viewer-acme", access.Subject{Kind: access.SubjectPrincipal, ID: wide.ID},
+		access.RoleViewer, identity.NamespaceObject(ns.Name))
+	f.grant(t, "grt-wide-viewer-globex", access.Subject{Kind: access.SubjectPrincipal, ID: wide.ID},
+		access.RoleViewer, identity.NamespaceObject(other.Name))
+
+	const hidden = "objects that you cannot read"
 
 	tests := []struct {
 		name    string
@@ -793,6 +809,11 @@ func TestReachRefusalNamesOnlyReadableObjects(t *testing.T) {
 			caller: reader, target: writer,
 			want: []string{fmt.Sprintf("namespace %q", ns.Name)}, notWant: []string{hidden},
 		},
+		{
+			name:   "a caller that cannot read two namespaces",
+			caller: f.tm, target: wide,
+			want: []string{hidden}, notWant: []string{ns.Name.String(), other.Name.String()},
+		},
 	}
 
 	for i := range tests {
@@ -806,6 +827,10 @@ func TestReachRefusalNamesOnlyReadableObjects(t *testing.T) {
 			}
 
 			checkRefusalText(t, err, tc.want, tc.notWant)
+
+			if n := strings.Count(err.Error(), hidden); n > 1 {
+				t.Errorf("refusal %q holds %q %d times, want at most once", err, hidden, n)
+			}
 		})
 	}
 }

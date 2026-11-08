@@ -104,7 +104,7 @@ func checkReachAuditReason(t *testing.T, reason string) {
 		}
 	}
 
-	if strings.Contains(reason, "an object that you cannot read") {
+	if strings.Contains(reason, "objects that you cannot read") {
 		t.Errorf("reason %q hides the object from the audit log", reason)
 	}
 }
@@ -153,7 +153,7 @@ func TestTokenReachRefusalAudit(t *testing.T) {
 			}
 
 			if strings.Contains(got.Message, "acme") ||
-				!strings.Contains(got.Message, "an object that you cannot read") {
+				!strings.Contains(got.Message, "objects that you cannot read") {
 				t.Fatalf("message = %q, want no readable object and the hidden object text", got.Message)
 			}
 

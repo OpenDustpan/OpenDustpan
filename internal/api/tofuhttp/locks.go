@@ -447,7 +447,9 @@ func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call
 		return
 	}
 
-	denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason, Window: 0}
+	denial := refusal.Denial{
+		Action: identity.ActionUnitLock, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+	}
 	h.guard.Record(ctx, r, c.principal, denial)
 }
 

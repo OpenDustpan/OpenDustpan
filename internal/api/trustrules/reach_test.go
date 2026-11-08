@@ -15,8 +15,8 @@ import (
 )
 
 // hiddenObject is what the refusal of the reach compare writes in place of
-// an object that the caller cannot read.
-const hiddenObject = "an object that you cannot read"
+// the objects that the caller cannot read.
+const hiddenObject = "objects that you cannot read"
 
 // grant stores a current grant of role on obj to subject.
 func (e *env) grant(subject access.Subject, role string, obj identity.Object) {

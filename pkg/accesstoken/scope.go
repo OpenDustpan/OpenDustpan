@@ -486,19 +486,14 @@ func (r *reachCheckError) Unwrap() []error {
 	return []error{identity.ErrDenied, ErrReachExceeded, r.cause}
 }
 
-// missingObjectText is what a refusal writes in place of the object of an
-// action that the caller cannot read.
-const missingObjectText = "an object that you cannot read"
-
 // reachExceededError reports a caller whose reach does not hold every
 // action of the principal principalID. It wraps identity.ErrDenied and
 // ErrReachExceeded. Its text names the principal and the actions that the
 // caller does not hold, sorted, with the object of each. It names the
-// object of an action only when the reach of the caller holds the read
+// action and the object only when the reach of the caller holds the read
 // action of that object, so the text never names an object that the caller
-// cannot read. It writes the actions of such an object in one part, with
-// missingObjectText, and it keeps the parts in the sorted order of the
-// actions.
+// cannot read. All the other actions go into one phrase at the end, so the
+// text does not tell how many objects the caller cannot read.
 type reachExceededError struct {
 	principalID string
 	missing     []access.HeldAction
@@ -510,28 +505,31 @@ type reachExceededError struct {
 // Error implements error.
 func (r *reachExceededError) Error() string {
 	parts := make([]string, 0, len(r.missing))
+	hidden := false
 
 	for i := range r.missing {
-		text := objectText(r.missing[i].Object)
 		if !r.readable[i] {
-			text = missingObjectText
-		}
-
-		// The actions of one object that the caller cannot read share one
-		// part when they are neighbors in the sorted list. Another object
-		// between them takes a part of its own, so the order stays sorted.
-		if i > 0 && !r.readable[i] && !r.readable[i-1] &&
-			r.missing[i].Object.String() == r.missing[i-1].Object.String() {
-			parts[len(parts)-1] += ", " + string(r.missing[i].Action)
+			hidden = true
 
 			continue
 		}
 
-		parts = append(parts, string(r.missing[i].Action)+" on "+text)
+		parts = append(parts, string(r.missing[i].Action)+" on "+objectText(r.missing[i].Object))
 	}
 
-	return fmt.Sprintf("principal %q holds actions that you do not hold: %s",
-		r.principalID, strings.Join(parts, ", "))
+	switch {
+	case !hidden:
+		return fmt.Sprintf("principal %q holds actions that you do not hold: %s",
+			r.principalID, strings.Join(parts, ", "))
+	case len(parts) == 0:
+		return fmt.Sprintf("principal %q holds actions that you do not hold on objects that you cannot read",
+			r.principalID)
+	default:
+		return fmt.Sprintf(
+			"principal %q holds actions that you do not hold: %s, and actions on other objects that you cannot read",
+			r.principalID, strings.Join(parts, ", "),
+		)
+	}
 }
 
 // Unwrap lets errors.Is match the two sentinels.

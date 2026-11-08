@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -79,6 +80,50 @@ func TestMissingActionsReason(t *testing.T) {
 
 			if n := strings.Count(got, " on namespace:"); tc.suffix != "" && n > access.MaxReachReasonItems {
 				t.Fatalf("reason names %d actions, want at most %d", n, access.MaxReachReasonItems)
+			}
+		})
+	}
+}
+
+// TestMissingActionsReasonWithin checks the audit reason of a reach refusal
+// inside a small limit: it names fewer actions, grows the count of the rest,
+// and stays inside the limit.
+func TestMissingActionsReasonWithin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		missing []access.HeldAction
+		limit   int
+	}{
+		{name: "one action", missing: heldActions(15, 60), limit: 200},
+		{name: "two actions", missing: heldActions(25, 0), limit: 150},
+		{name: "no action", missing: heldActions(25, 0), limit: 60},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := access.MissingActionsReasonWithin(tc.missing, tc.limit)
+			if len(got) > tc.limit {
+				t.Fatalf("reason has %d bytes, want at most %d", len(got), tc.limit)
+			}
+
+			idx := strings.LastIndex(got, ", and ")
+			if idx < 0 {
+				t.Fatalf("reason = %q, want the count of the rest", got)
+			}
+
+			var more int
+			if _, err := fmt.Sscanf(got[idx:], ", and %d more", &more); err != nil {
+				t.Fatalf("reason = %q, want the count of the rest: %v", got, err)
+			}
+
+			named := strings.Count(got[:idx], " on namespace:")
+			if named+more != len(tc.missing) {
+				t.Fatalf("reason names %d actions and %d more, want %d in all", named, more, len(tc.missing))
 			}
 		})
 	}
