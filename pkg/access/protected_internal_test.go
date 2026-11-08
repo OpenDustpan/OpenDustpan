@@ -114,9 +114,13 @@ func TestProtectedReadsTheObjectOfEachAction(t *testing.T) {
 			port: ports, want: false,
 		},
 		{
-			name: "a sensitive action on a disabled principal of the installation gives no protection", wantErr: nil,
+			name: "a sensitive action on a disabled principal of the installation protects the group", wantErr: nil,
 			obj: identity.PrincipalObject("prn-disabled"), act: identity.ActionPrincipalManageTokens,
-			port: ports, want: false,
+			port: ports, want: true,
+		},
+		{
+			name: "a read-only administration action on the installation gives no protection", wantErr: nil,
+			obj: identity.ServerObject(), act: identity.ActionServerReadAccess, port: ports, want: false,
 		},
 		{
 			name: "an unknown principal gives no protection", wantErr: nil,

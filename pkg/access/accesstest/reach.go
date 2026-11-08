@@ -714,9 +714,11 @@ func (f disabledAs) GetPrincipal(ctx context.Context, id string) (principal.Prin
 	return f.PrincipalNamespaces.GetPrincipal(ctx, id)
 }
 
-// testReachDisabled checks that a disabled principal is no act-as target: a
-// holder of principal:manage-tokens on it gets none of its grants. The
-// disabled principal itself keeps its own grants.
+// testReachDisabled checks that a disabled principal is no act-as target of
+// ReachOf: a holder of principal:manage-tokens on it gets none of its
+// grants. The disabled principal itself keeps its own grants. The protected
+// check counts an act-as right on a disabled principal of the installation:
+// the server can enable it again, and the right then works.
 func testReachDisabled(t *testing.T, s access.Store) {
 	t.Helper()
 
@@ -732,6 +734,18 @@ func testReachDisabled(t *testing.T, s access.Store) {
 		identity.PrincipalObject("prn-deploy"),
 	))
 	mustCreateGrant(t, rs, newGrant("grt-viewer", principalSubject("prn-deploy"), access.RoleViewer, acme))
+
+	// The group holds an act-as right on the disabled principal. The other
+	// group holds an act-as right on a principal that does not exist.
+	disabledGroup := mustCreateMemberGroup(t, rs, "grp-disabled", "grp-disabled", "prn-holder")
+	mustCreateGrant(t, rs, newGrant(
+		"grt-group-manage", disabledGroup, access.RoleTokenManager, identity.PrincipalObject("prn-deploy"),
+	))
+
+	goneGroup := mustCreateMemberGroup(t, rs, "grp-gone", "grp-gone", "prn-holder")
+	mustCreateGrant(t, rs, newGrant(
+		"grt-group-gone", goneGroup, access.RoleTokenManager, identity.PrincipalObject("prn-gone"),
+	))
 
 	rec, err := rs.GetPrincipal(ctx, "prn-deploy")
 	if err != nil {
@@ -771,6 +785,20 @@ func testReachDisabled(t *testing.T, s access.Store) {
 	if got := reachHas(t, target, identity.ActionNamespaceRead, acme); !got {
 		t.Errorf("reach of the disabled principal holds %s on %q = %t, want true",
 			identity.ActionNamespaceRead, acme.String(), got)
+	}
+
+	// The protected check counts an act-as right on a disabled principal of
+	// the installation: the server can enable it again, and the right then
+	// works.
+	if got := protectedOf(t, cfg, disabledGroup.ID); !got {
+		t.Errorf("protected of group %q with the act-as right on the disabled principal = %t, want true",
+			disabledGroup.ID, got)
+	}
+
+	// A principal that does not exist gives no protection.
+	if got := protectedOf(t, cfg, goneGroup.ID); got {
+		t.Errorf("protected of group %q with the act-as right on the deleted principal = %t, want false",
+			goneGroup.ID, got)
 	}
 }
 
@@ -1044,40 +1072,68 @@ func (f failingCollections) CollectionID(context.Context, identity.Object) (stri
 	return "", false, f.err
 }
 
-// sensitiveGroupCases stores one group per sensitive action of the three
-// sensitive families, with a custom role that holds only that action on the
-// installation, and returns the rows of the protected check. A new action of
-// one of the families joins the list with no other change.
+// sensitiveGroupCases stores one group per sensitive action, with a custom
+// role that holds only that action on the installation, and returns the rows
+// of the protected check. A new sensitive action joins the list with no other
+// change.
 func sensitiveGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
 	t.Helper()
 
-	families := []access.Family{access.FamilyOperator, access.FamilyAdministration, access.FamilyDelegation}
+	actions := access.SensitiveActions()
 
-	out := make([]protectedCase, 0, len(access.SensitiveActions()))
+	out := make([]protectedCase, 0, len(actions))
 
-	for _, family := range families {
-		actions := access.Actions(family)
-		if len(actions) == 0 {
-			t.Fatalf("family %q holds no action, want the actions of a sensitive family", family)
-		}
+	for i := range actions {
+		action := actions[i]
+		id := fmt.Sprintf("grp-sensitive-%d", i)
+		role := newRole("rol-"+id, "rol-"+id, action)
 
-		for i := range actions {
-			action := actions[i]
-			id := fmt.Sprintf("grp-%s-%d", family, i)
-			role := newRole("rol-"+id, "rol-"+id, action)
+		mustCreateRole(t, s, role)
+		mustCreateMemberGroup(t, s, id, id, "prn-member")
+		mustCreateGrant(
+			t,
+			s,
+			newGrant("grt-"+id, access.Subject{Kind: access.SubjectGroup, ID: id}, role.ID, server),
+		)
 
-			mustCreateRole(t, s, role)
-			mustCreateMemberGroup(t, s, id, id, "prn-member")
-			mustCreateGrant(
-				t,
-				s,
-				newGrant("grt-"+id, access.Subject{Kind: access.SubjectGroup, ID: id}, role.ID, server),
-			)
+		out = append(out, protectedCase{
+			name: "the group holds " + string(action) + " on the installation", group: id, want: true,
+		})
+	}
 
-			out = append(out, protectedCase{
-				name: "the group holds " + string(action) + " on the installation", group: id, want: true,
-			})
-		}
+	return out
+}
+
+// readOnlyAdministrationGroupCases stores one group per read-only action of
+// the administration family, with a custom role that holds only that action
+// on the installation, and returns the rows of the protected check. A
+// read-only action cannot raise a privilege, so the group is not protected.
+func readOnlyAdministrationGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
+	t.Helper()
+
+	actions := []identity.Action{
+		identity.ActionServerReadPrincipals,
+		identity.ActionServerReadAccess,
+		identity.ActionServerReadTokens,
+	}
+
+	out := make([]protectedCase, 0, len(actions))
+
+	for i := range actions {
+		id := fmt.Sprintf("grp-read-only-%d", i)
+		role := newRole("rol-"+id, "rol-"+id, actions[i])
+
+		mustCreateRole(t, s, role)
+		mustCreateMemberGroup(t, s, id, id, "prn-member")
+		mustCreateGrant(
+			t,
+			s,
+			newGrant("grt-"+id, access.Subject{Kind: access.SubjectGroup, ID: id}, role.ID, server),
+		)
+
+		out = append(out, protectedCase{
+			name: "the group holds " + string(actions[i]) + " on the installation", group: id, want: false,
+		})
 	}
 
 	return out
@@ -1129,8 +1185,9 @@ type protectedObjectCase struct {
 
 // checkGroupProtectedEdges proves that an act-as edge gives the group the
 // operator action of the service principal, that the same delegation on a
-// service principal with no grant does not, and that a disabled service
-// principal is no act-as target.
+// service principal with no grant does not, and that a delegation on a
+// disabled service principal of the installation still makes the group
+// protected: the server can enable the principal again.
 func checkGroupProtectedEdges(t *testing.T, s reachStore, server identity.Object) {
 	t.Helper()
 
@@ -1164,8 +1221,9 @@ func checkGroupProtectedEdges(t *testing.T, s reachStore, server identity.Object
 	disabled := reachConfig(s)
 	disabled.Principals = disabledAs{PrincipalNamespaces: s, id: "prn-other", rec: rec}
 
-	if got := protectedOf(t, disabled, actAs); got {
-		t.Errorf("protected of group %q with the service principal disabled = %t, want false", actAs, got)
+	if got := protectedOf(t, disabled, actAs); !got {
+		t.Errorf("protected of group %q with the service principal disabled = %t, want true: "+
+			"the server can enable the principal again", actAs, got)
 	}
 }
 
@@ -1304,12 +1362,15 @@ func testGroupProtected(t *testing.T, s access.Store) {
 		{name: "an unknown group is not protected", group: "grp-missing", want: false},
 	}
 
-	// One row per sensitive action of each sensitive family.
+	// One row per sensitive action, and one row per read-only
+	// administration action: a read-only action cannot raise a privilege.
 	actions := sensitiveGroupCases(t, rs, server)
+	readOnly := readOnlyAdministrationGroupCases(t, rs, server)
 
-	cases := make([]protectedCase, 0, len(named)+len(actions))
+	cases := make([]protectedCase, 0, len(named)+len(actions)+len(readOnly))
 	cases = append(cases, named...)
 	cases = append(cases, actions...)
+	cases = append(cases, readOnly...)
 
 	cfg := reachConfig(rs)
 

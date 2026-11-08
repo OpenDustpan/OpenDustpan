@@ -180,7 +180,7 @@ func (r Reach) protected(ctx context.Context) (bool, error) {
 				return false, fmt.Errorf("%w: %q", ErrUnknownAction, action)
 			}
 
-			if installWide && sensitiveFamily(family) {
+			if installWide && sensitiveFamily(family) && !readOnlyAdministration(action) {
 				protected = true
 			}
 		}
@@ -190,11 +190,11 @@ func (r Reach) protected(ctx context.Context) (bool, error) {
 }
 
 // protectedObject reports whether a sensitive action on obj makes a group
-// protected: the installation, or an enabled principal of the
-// installation. A namespace, a collection, a unit, and a principal of a
-// namespace are confined to one namespace. A disabled principal is no
-// act-as target: its tokens do not work, so an act-as right on it gives no
-// installation-wide power.
+// protected: the installation, or a principal of the installation. A
+// namespace, a collection, a unit, and a principal of a namespace are
+// confined to one namespace. A disabled principal of the installation
+// counts: the server can enable it again, so an act-as right on it is not
+// an action that one namespace confines.
 func (r Reach) protectedObject(ctx context.Context, obj identity.Object) (bool, error) {
 	kind, ok := KindOf(obj)
 	if !ok {
@@ -208,7 +208,9 @@ func (r Reach) protectedObject(ctx context.Context, obj identity.Object) (bool, 
 }
 
 // protectedKind reports whether a sensitive action on obj of the given kind
-// makes a group protected. KindOf is the source of the kind.
+// makes a group protected. KindOf is the source of the kind. A principal
+// that does not exist gives no protection: an unknown principal holds
+// nothing.
 func (r Reach) protectedKind(ctx context.Context, obj identity.Object, kind ObjectKind) (bool, error) {
 	switch kind {
 	case ObjectInstallation:
@@ -230,7 +232,7 @@ func (r Reach) protectedKind(ctx context.Context, obj identity.Object, kind Obje
 			return false, fmt.Errorf("read principal %q: %w", obj.PrincipalID(), err)
 		}
 
-		return rec.Namespace == "" && rec.DisabledAt.IsZero(), nil
+		return rec.Namespace == "", nil
 	case ObjectNamespace, ObjectCollection, ObjectUnit:
 		return false, nil
 	default:
@@ -356,11 +358,12 @@ func checkReachConfig(cfg ReachConfig) error {
 
 // Protected reports whether the group with the ID groupID is a protected
 // group: the reach of the group alone holds a sensitive action on the
-// installation or on an enabled principal of the installation. A sensitive
-// action is each action of the operator, the administration and the
-// delegation families. A namespace, a collection, a unit and a principal
-// of a namespace are confined to one namespace, so a sensitive action on
-// them does not make the group protected.
+// installation or on a principal of the installation. A sensitive action
+// is each action of the operator, the administration and the delegation
+// families, except the read-only actions of the administration family. A
+// namespace, a collection, a unit and a principal of a namespace are
+// confined to one namespace, so a sensitive action on them does not make
+// the group protected.
 //
 // A grant whose action no family classifies makes the check return an
 // error: a new action fails closed until it is classified. On an error the

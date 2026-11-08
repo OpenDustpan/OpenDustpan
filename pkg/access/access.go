@@ -248,12 +248,19 @@ func Actions(f Family) []identity.Action {
 }
 
 // SensitiveActions returns every sensitive action, sorted: each action of
-// the operator, the administration and the delegation families. The list
-// comes from the families, so a new action of one of them is in the list
-// with no other change.
+// the operator, the administration and the delegation families, except the
+// read-only actions of the administration family. The list comes from the
+// families, so a new action of one of them is in the list with no other
+// change.
 func SensitiveActions() []identity.Action {
 	out := Actions(FamilyOperator)
-	out = append(out, Actions(FamilyAdministration)...)
+
+	for _, action := range Actions(FamilyAdministration) {
+		if !readOnlyAdministration(action) {
+			out = append(out, action)
+		}
+	}
+
 	out = append(out, Actions(FamilyDelegation)...)
 
 	sortActions(out)
@@ -261,14 +268,16 @@ func SensitiveActions() []identity.Action {
 	return out
 }
 
-// IsSensitive reports whether action is a sensitive action. It returns
+// IsSensitive reports whether action is a sensitive action: its family is
+// the operator family, the administration family or the delegation family,
+// and it is not a read-only action of the administration family. It returns
 // false for an action that no family classifies: an unknown action is not
 // sensitive. A caller that must fail closed on an unknown action reads
 // FamilyOf itself, as the protected check of a group does.
 func IsSensitive(action identity.Action) bool {
 	family, ok := FamilyOf(action)
 
-	return ok && sensitiveFamily(family)
+	return ok && sensitiveFamily(family) && !readOnlyAdministration(action)
 }
 
 // sensitiveFamily reports whether a family holds sensitive actions: the
@@ -276,6 +285,19 @@ func IsSensitive(action identity.Action) bool {
 func sensitiveFamily(family Family) bool {
 	return family == FamilyOperator || family == FamilyAdministration ||
 		family == FamilyDelegation
+}
+
+// readOnlyAdministration reports whether action is a read-only action of
+// the administration family: it reads the principals, the access review or
+// the access tokens of the installation. A read-only action cannot raise a
+// privilege, so it is not sensitive: a group that holds one is not
+// protected, and the identity provider can still manage the group.
+func readOnlyAdministration(action identity.Action) bool {
+	return slices.Contains([]identity.Action{
+		identity.ActionServerReadPrincipals,
+		identity.ActionServerReadAccess,
+		identity.ActionServerReadTokens,
+	}, action)
 }
 
 // SubjectKind names what a grant subject is.
