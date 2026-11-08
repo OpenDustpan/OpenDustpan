@@ -902,7 +902,7 @@ func changeGroup(
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
+	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupUpdate{
 		Name:        req.Name,
 		Description: req.Description,
 	})

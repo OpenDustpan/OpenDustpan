@@ -188,6 +188,18 @@ type MemberStore interface {
 	ListGroupsOf(ctx context.Context, principalID string, q Query) ([]Group, int64, error)
 }
 
+// GroupChange is the change that a caller makes to the members of a group.
+type GroupChange int
+
+const (
+	// GroupChangeAddMember adds a member to the group.
+	GroupChangeAddMember GroupChange = iota
+	// GroupChangeRemoveMember removes a member from the group.
+	GroupChangeRemoveMember
+	// GroupChangeDelete deletes the group and removes each of its members.
+	GroupChangeDelete
+)
+
 // Guard checks that a caller may change who holds a set of grants.
 // A membership change gives or takes the grants of the group, the delete
 // of a principal or a group revokes its grants, and the enable of a principal
@@ -199,8 +211,9 @@ type MemberStore interface {
 // wraps the reason: access.ErrEscalation for an action that caller does not
 // hold.
 type Guard interface {
-	// CheckGroupGrants checks the current grants of the group groupID.
-	CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string) error
+	// CheckGroupGrants checks the current grants of the group groupID. The
+	// change says which change of the members of the group caller makes.
+	CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string, change GroupChange) error
 	// CheckPrincipalGrants checks the current grants of the principal
 	// principalID.
 	CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error
@@ -214,7 +227,9 @@ type AdminOnlyGuard struct{}
 var _ Guard = AdminOnlyGuard{}
 
 // CheckGroupGrants allows only an administrator.
-func (AdminOnlyGuard) CheckGroupGrants(_ context.Context, caller identity.Principal, _ string) error {
+func (AdminOnlyGuard) CheckGroupGrants(
+	_ context.Context, caller identity.Principal, _ string, _ GroupChange,
+) error {
 	return adminOnly(caller)
 }
 

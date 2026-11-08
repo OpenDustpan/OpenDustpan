@@ -13497,6 +13497,50 @@ func (q *Queries) ListGateObjects(ctx context.Context, arg ListGateObjectsParams
 	return items, nil
 }
 
+const listGateObjectsOfKind = `-- name: ListGateObjectsOfKind :many
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = $1
+ORDER BY scope_key COLLATE "C", id COLLATE "C"
+`
+
+type ListGateObjectsOfKindRow struct {
+	NamespaceID string
+	ScopeKey    string
+	UnitID      string
+	ID          string
+	Version     int64
+	Body        string
+}
+
+// Every object of one kind, of every scope, ordered by scope key and ID.
+func (q *Queries) ListGateObjectsOfKind(ctx context.Context, kind string) ([]ListGateObjectsOfKindRow, error) {
+	rows, err := q.db.Query(ctx, listGateObjectsOfKind, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGateObjectsOfKindRow
+	for rows.Next() {
+		var i ListGateObjectsOfKindRow
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ScopeKey,
+			&i.UnitID,
+			&i.ID,
+			&i.Version,
+			&i.Body,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGateObjectsOfScope = `-- name: ListGateObjectsOfScope :many
 SELECT kind, id, version, body
 FROM gate_objects

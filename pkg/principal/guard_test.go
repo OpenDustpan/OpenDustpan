@@ -3,6 +3,7 @@ package principal_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,14 +14,19 @@ import (
 // errRefused is what the fake guard answers for a refused record.
 var errRefused = errors.New("refused")
 
-// fakeGuard refuses the records in refuse and counts its checks.
+// fakeGuard refuses the records in refuse, counts its checks and records the
+// change of each group check.
 type fakeGuard struct {
-	refuse map[string]bool
-	checks *int
+	refuse  map[string]bool
+	checks  *int
+	changes *[]principal.GroupChange
 }
 
-func (g fakeGuard) CheckGroupGrants(_ context.Context, _ identity.Principal, groupID string) error {
+func (g fakeGuard) CheckGroupGrants(
+	_ context.Context, _ identity.Principal, groupID string, change principal.GroupChange,
+) error {
 	*g.checks++
+	*g.changes = append(*g.changes, change)
 
 	if g.refuse[groupID] {
 		return errRefused
@@ -46,7 +52,8 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
+	changes := []principal.GroupChange{}
+	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 
 	svc, err := principal.NewService(
 		principal.Config{
@@ -122,10 +129,25 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("guard checks = %d, want 5", checks)
 	}
 
+	checkGroupChanges(t, changes, []principal.GroupChange{
+		principal.GroupChangeAddMember,
+		principal.GroupChangeRemoveMember,
+		principal.GroupChangeDelete,
+	})
+
 	delete(guard.refuse, g.ID)
 
 	if _, err := svc.AddMember(ctx, e, caller, g.ID, p.ID); err != nil {
 		t.Fatalf("add member that the guard allows: %v", err)
+	}
+}
+
+// checkGroupChanges fails the test when the guard did not see the changes.
+func checkGroupChanges(t *testing.T, got, want []principal.GroupChange) {
+	t.Helper()
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("group changes = %v, want %v", got, want)
 	}
 }
 
@@ -135,7 +157,8 @@ func TestGuardChecksDisable(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
+	changes := []principal.GroupChange{}
+	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 
 	svc, err := principal.NewService(
 		principal.Config{

@@ -80,6 +80,10 @@ type ServiceConfig struct {
 	// 6). They hold every action with no grant, so an access-review export
 	// shows one row for each.
 	BootstrapAdmins []string
+	// LimitGroups reads the access limits that a change of the members of
+	// a group can lift. Nil keeps the check of a group to its grants: a
+	// setup that keeps no access limits names no group.
+	LimitGroups LimitGroups
 }
 
 // Service implements the role and grant use cases.
@@ -96,6 +100,7 @@ type Service struct {
 	now        func() time.Time
 	newID      func(prefix string) string
 	bootstrap  []string
+	limits     LimitGroups
 }
 
 // NewService returns a Service. Store, Directory, Namespaces and Authorizer
@@ -124,7 +129,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, directory: cfg.Directory, namespaces: cfg.Namespaces, authz: cfg.Authorizer,
-		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins),
+		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins), limits: cfg.LimitGroups,
 	}, nil
 }
 
@@ -619,8 +624,52 @@ func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object stri
 
 // CheckGroupGrants implements principal.Guard: caller must hold every action
 // that the current grants of the group give, on each of their objects.
-func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string) error {
-	return s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectGroup, ID: groupID})
+//
+// An access limit of a scope that names the group holds for the members of
+// the group, so the change can lift the limit for one member: an add to a
+// group of an unless clause, a remove from a group of a when clause or of
+// the principal scope. The caller must be a site administrator then. A
+// change that can only add a forbid keeps the grants check, and a read or a
+// parse that fails refuses the change.
+func (s *Service) CheckGroupGrants(
+	ctx context.Context, caller identity.Principal, groupID string, change principal.GroupChange,
+) error {
+	if err := s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectGroup, ID: groupID}); err != nil {
+		return err
+	}
+
+	if caller.Admin || s.limits == nil {
+		return nil
+	}
+
+	limit, lifted, err := s.limits.LimitLiftedBy(ctx, groupID, change)
+	if err != nil {
+		return fmt.Errorf("%w: read the access limits that name the group %q: %w", ErrEscalation, groupID, err)
+	}
+
+	if lifted {
+		return fmt.Errorf(
+			"%w: access limit %q of %s names the group %q: only a site administrator can %s",
+			ErrEscalation, limit.ID, limit.Scope, groupID, groupChangeText(change),
+		)
+	}
+
+	return nil
+}
+
+// groupChangeText returns the text of the change for the refusal of a group
+// that an access limit names.
+func groupChangeText(change principal.GroupChange) string {
+	switch change {
+	case principal.GroupChangeAddMember:
+		return "add a member"
+	case principal.GroupChangeRemoveMember:
+		return "remove a member"
+	case principal.GroupChangeDelete:
+		return "delete the group"
+	default:
+		return "change the members"
+	}
 }
 
 // CheckPrincipalGrants implements principal.Guard: caller must hold every

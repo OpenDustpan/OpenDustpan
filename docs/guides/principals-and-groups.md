@@ -208,6 +208,23 @@ A member is a principal. The routes are these:
 | `POST /api/server/groups/{id}/members` | `server:manage-groups`, with a fresh sign-in | `201` with the member |
 | `DELETE /api/server/groups/{id}/members/{principal}` | `server:manage-groups`, with a fresh sign-in | `204` |
 
+An access limit is one forbid policy. A membership change can lift the
+policy for the member, and then it needs a site administrator. The direction
+of the change decides:
+
+- An add of a member to a group that an `unless` clause names can lift the
+  policy for that member.
+- A remove of a member from a group that a `when` clause or the principal
+  scope names can lift the policy for that member.
+
+The delete of a group removes all its members, so it counts as a remove. A
+caller who holds only `server:manage-groups` gets `403` for a change that can
+lift a policy. A change that can only add a policy, and a group that no
+access limit names, keep the `server:manage-groups` check. When the server
+cannot read the group or the limits, or a limit does not parse, only a site
+administrator can make the change. The refusal names the limit, its scope
+and the group.
+
 Add a member:
 
 Add a member in the console. The add needs a fresh sign-in. The body holds the principal ID:

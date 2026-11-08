@@ -258,6 +258,17 @@ func objectCases(fx *fixtures) []StoreCase {
 			Checks: "List returns the objects of its scope only, ordered by ID, and none of a wider or narrower scope.",
 		},
 		{
+			Name:     "list-every-scope-by-id",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].ListEveryScope,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.installation, fx.acme, fx.globex},
+			Policies: nil,
+			Want:     nil,
+			Checks: "ListEveryScope returns the objects of its kind of every scope, with the objects of one scope " +
+				"ordered by ID, and none of another kind.",
+		},
+		{
 			Name: "delete-removes", Port: PortObjects, Method: gate.Objects[gate.Gate].Delete, Kinds: nil,
 			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
 			Checks: "Delete with the stored version removes the object, and Get then returns ErrNotFound.",

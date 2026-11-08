@@ -114,7 +114,7 @@ func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fix
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
