@@ -1320,6 +1320,7 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-membership",
           "gate.limited",
           "gate.not-found",
           "gate.rule-failed",
@@ -1443,6 +1444,9 @@
           "principal.no-working-break-glass",
           "principal.not-disabled",
           "principal.not-found",
+          "principal.removal-alert-failed",
+          "principal.removal-alert-marker-invalid",
+          "principal.removal-alert-unrecorded",
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
@@ -1572,6 +1576,7 @@
           "token.invalid",
           "token.kind-has-none",
           "token.not-found",
+          "token.outside-reach",
           "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",
@@ -2919,6 +2924,10 @@
       },
       "ListJobsResponse": {
         "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
           "jobs": {
             "items": {
               "$ref": "#/components/schemas/Job"
@@ -2930,6 +2939,7 @@
           }
         },
         "required": [
+          "damaged",
           "jobs"
         ],
         "type": "object"
@@ -5305,7 +5315,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"

@@ -82,6 +82,15 @@ func (f accessFixture) asSession(t *testing.T, subject string, authTime time.Tim
 
 	cookie, csrf := f.sessionOf(t, subject, authTime)
 
+	f.asSessionCookie(t, cookie, csrf, c, out)
+}
+
+// asSessionCookie sends one request in an existing console session, and fails
+// unless it answers c.want. It decodes a JSON answer into out when out is not
+// nil.
+func (f accessFixture) asSessionCookie(t *testing.T, cookie *http.Cookie, csrf string, c apiCall, out any) {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
 	req.AddCookie(cookie)
 	req.Header.Set(apiserver.CSRFHeader, csrf)
@@ -91,8 +100,7 @@ func (f accessFixture) asSession(t *testing.T, subject string, authTime time.Tim
 	f.handler.ServeHTTP(rec, req)
 
 	if rec.Code != c.want {
-		t.Fatalf("session of %s %s %s answers %d, want %d (%s)", subject, c.method, c.path, rec.Code, c.want,
-			rec.Body.String())
+		t.Fatalf("%s %s answers %d, want %d (%s)", c.method, c.path, rec.Code, c.want, rec.Body.String())
 	}
 
 	if out != nil {
@@ -151,7 +159,8 @@ func newStoreSessions(t *testing.T, st *sqlite.Store) storeSessions {
 	}
 
 	principals, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: st, Guard: allowAllGuard{}, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil, Store: st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: st,
+		Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

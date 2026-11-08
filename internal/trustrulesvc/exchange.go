@@ -110,6 +110,7 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 
 	own, err := NewService(Config{
 		Store: cfg.Rules, Namespaces: cfg.Namespaces, Principals: cfg.Principals, Authorizer: denyAll{},
+		Reach:            nil,
 		InstallationURLs: cfg.InstallationURLs, OwnIssuer: cfg.OwnIssuer, CheckURL: nil, Now: now,
 	})
 	if err != nil {

@@ -87,6 +87,7 @@ func warnServer(t *testing.T, kind installation.Kind, subjects ...string) (*Serv
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})

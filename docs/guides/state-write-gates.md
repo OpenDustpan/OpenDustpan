@@ -185,7 +185,17 @@ not a fact stops the write with the error `gate.rule-failed`.
 
 An access limit is one Cedar `forbid` policy over the principal, the action and
 the unit. The server checks it with the action of the route, for example
-`unit:write` for a lock.
+`unit:write` for a lock. The groups of the principal are the names of its
+groups. The server knows the time of the last authentication only for a
+session. A session of a break-glass account is outside the access limits, and
+an access token of that account is not.
+
+A limit can test the group of the principal: `principal in
+OpenDustpan::Group::"sre"`. The right side of that test must name a group: one
+group entity, or a set of group entities. The save refuses any other right side
+with `400` and the code `gate.limit-membership`, for example `principal in
+resource.owners`. The server cannot check a change of the members of a group
+against such a limit, so it refuses to store one.
 
 ## What a refusal looks like
 
@@ -380,8 +390,5 @@ the claim, and with the gates off, no gate covers a unit.
   access limits for a namespace, a collection and a unit. It has no route for
   ownership rules or path sets yet.
 - No route reads decision records yet.
-- The server knows no group of a principal and no time of the last
-  authentication. A gate or a limit that reads a group does not match. A limit
-  that asks for a recent authentication forbids the call.
 - A break-glass for a gate in error is not available.
 - An approval default does not apply at `state.write`.

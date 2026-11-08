@@ -678,7 +678,9 @@ func (s *Store) reopenDatabase(ctx context.Context) error {
 // checkRestoreFile opens the staged file, checks its integrity, reads its
 // summary, and compares the schema version and the row counts with the
 // manifest. It returns the summary of what the swap will load.
-func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (backup.Summary, error) {
+func checkRestoreFile(
+	ctx context.Context, path string, want backup.Summary, restoreAt time.Time,
+) (backup.Summary, error) {
 	conn, err := openSnapshot(ctx, path)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -706,7 +708,7 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
 	}
 
-	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
 	}
 
@@ -1241,9 +1243,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
+// break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedJobs(ctx, conn); err != nil {
 		return err
 	}
 
@@ -1276,6 +1283,10 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	}
 
 	if err := checkStagedTrustRules(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
 		return err
 	}
 

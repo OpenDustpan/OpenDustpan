@@ -2,14 +2,17 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/faultlog"
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -28,6 +31,23 @@ type serverChange struct {
 	action  identity.Action
 	object  string
 	outcome audit.Outcome
+}
+
+// reachReason returns the audit reason of a reach refusal: the missing
+// actions with their objects. It answers the empty string for any other
+// error, and for a reach check that failed before it compared the reaches.
+func reachReason(err error) string {
+	refusal, ok := errors.AsType[access.ReachRefusal](err)
+	if !ok {
+		return ""
+	}
+
+	missing := refusal.MissingActions()
+	if len(missing) == 0 {
+		return ""
+	}
+
+	return access.MissingActionsReason(missing)
 }
 
 // callerEntry returns the audit entry of the caller p for action: who acted,
@@ -100,12 +120,21 @@ func callerChannel(r *http.Request) audit.Channel {
 // does not change the answer: the server logs it and counts it on the
 // failure metric instead.
 func (h *Handler) appendServerChange(r *http.Request, p identity.Principal, c serverChange) {
+	h.appendServerChangeReason(r, p, c, "")
+}
+
+// appendServerChangeReason is appendServerChange with the reason of the
+// refusal. A reason is safe text that names why the change did not happen.
+func (h *Handler) appendServerChangeReason(
+	r *http.Request, p identity.Principal, c serverChange, reason string,
+) {
 	entry := callerEntry(r, p, c.action)
 	entry.At = c.at
 	entry.Namespace = audit.ServerScope
 	entry.Kind = audit.KindChange
 	entry.Outcome = c.outcome
 	entry.Object = c.object
+	entry.Reason = denials.Clean(reason, audit.MaxReasonLen)
 
 	if _, err := h.audit.AppendServer(r.Context(), entry); err != nil {
 		h.failAudit(r.Context())
@@ -123,16 +152,24 @@ type namespaceAppender interface {
 // @server for an object of the installation. When the namespace does not
 // exist, or the audit store keeps only @server, the entry goes to @server.
 func (h *Handler) appendObjectChange(r *http.Request, p identity.Principal, obj identity.Object, c serverChange) {
+	h.appendObjectChangeReason(r, p, obj, c, "")
+}
+
+// appendObjectChangeReason is appendObjectChange with the reason of the
+// refusal.
+func (h *Handler) appendObjectChangeReason(
+	r *http.Request, p identity.Principal, obj identity.Object, c serverChange, reason string,
+) {
 	entries, ok := h.audit.(namespaceAppender)
 	if !ok || obj.Namespace() == "" {
-		h.appendServerChange(r, p, c)
+		h.appendServerChangeReason(r, p, c, reason)
 
 		return
 	}
 
 	ns, err := h.namespaces.Get(r.Context(), obj.Namespace())
 	if err != nil {
-		h.appendServerChange(r, p, c)
+		h.appendServerChangeReason(r, p, c, reason)
 
 		return
 	}
@@ -143,6 +180,7 @@ func (h *Handler) appendObjectChange(r *http.Request, p identity.Principal, obj 
 	entry.Kind = audit.KindChange
 	entry.Outcome = c.outcome
 	entry.Object = c.object
+	entry.Reason = denials.Clean(reason, audit.MaxReasonLen)
 
 	if _, err := entries.Append(r.Context(), ns.Fence(), entry); err != nil {
 		h.failAudit(r.Context())

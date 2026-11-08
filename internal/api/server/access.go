@@ -227,7 +227,9 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 
 	res, err := op(w, r, h.access, c)
 	if err != nil {
-		refused := denials.Denial{Action: identity.Action(c.e.Action), Object: c.obj, Reason: "", Window: 0}
+		refused := denials.Denial{
+			Action: identity.Action(c.e.Action), Object: c.obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}
 		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
@@ -244,7 +246,8 @@ const reasonEscalation = "grant gives more than the granter holds"
 // recordEscalation writes the audit entry of a change that the access service
 // refused with access.ErrEscalation. The 403 alone leaves no trace, and the
 // check of the manage action above passed, so no other layer writes an entry.
-// It does nothing for any other error.
+// A reach refusal names the missing actions with their objects; any other
+// escalation keeps the fixed reason. It does nothing for any other error.
 func (h *Handler) recordEscalation(
 	ctx context.Context, r *http.Request, p identity.Principal, d denials.Denial, err error,
 ) {
@@ -253,6 +256,18 @@ func (h *Handler) recordEscalation(
 	}
 
 	d.Reason = reasonEscalation
+
+	if reason := reachReason(err); reason != "" {
+		d.Reason = reason
+
+		if refusal, ok := errors.AsType[access.ReachRefusal](err); ok {
+			missing := refusal.MissingActions()
+			d.ReasonWithin = func(limit int) string {
+				return access.MissingActionsReasonWithin(missing, limit)
+			}
+		}
+	}
+
 	h.guard.Record(ctx, r, p, d)
 }
 
@@ -778,7 +793,9 @@ func (h *Handler) serveRevokeGrantByID(
 
 	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
 	if err != nil {
-		h.recordEscalation(ctx, r, p, denials.Denial{Action: actions.manage, Object: obj, Reason: "", Window: 0}, err)
+		h.recordEscalation(ctx, r, p, denials.Denial{
+			Action: actions.manage, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}, err)
 		h.writeError(ctx, w, err)
 		h.appendObjectChange(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),

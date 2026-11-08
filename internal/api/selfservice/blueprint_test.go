@@ -82,11 +82,17 @@ func jsonFields(t reflect.Type) jsonFieldSet {
 	return jsonFieldSet{members: names, required: required}
 }
 
+// describedProperty is the part of a property schema that the drift test
+// compares.
+type describedProperty struct {
+	Type json.RawMessage `json:"type"`
+}
+
 // describedSchema is the part of a schema of the description that the drift
 // test compares.
 type describedSchema struct {
-	Properties map[string]json.RawMessage `json:"properties"`
-	Required   []string                   `json:"required"`
+	Properties map[string]describedProperty `json:"properties"`
+	Required   []string                     `json:"required"`
 }
 
 // describedDocument is the part of the description that the drift test reads.
@@ -99,10 +105,27 @@ type describedComponents struct {
 	Schemas map[string]describedSchema `json:"schemas"`
 }
 
+// blueprintTypeList names a property of a blueprint schema whose type is a
+// list that the declaration states, because the Go type alone does not give
+// it.
+type blueprintTypeList struct {
+	schema   string
+	property string
+	types    []string
+}
+
+// blueprintTypeLists lists the type lists of the blueprint schemas.
+func blueprintTypeLists() []blueprintTypeList {
+	return []blueprintTypeList{
+		{"SelfServiceOperand", "value", []string{"string", "number", "boolean"}},
+	}
+}
+
 // TestBlueprintSchemaMatchesTheStructs compares the members and the required
 // members of each schema of the committed description with the JSON tags of
 // the Go type that it describes. A field that is added to a struct, or renamed
-// in it, fails the test until the description is regenerated.
+// in it, fails the test until the description is regenerated. It compares the
+// type lists too, so that a declaration without one fails the test.
 func TestBlueprintSchemaMatchesTheStructs(t *testing.T) {
 	t.Parallel()
 
@@ -144,7 +167,39 @@ func TestBlueprintSchemaMatchesTheStructs(t *testing.T) {
 			if !slices.Equal(required, describedRequired) {
 				t.Errorf("required = %v, the description has %v", required, describedRequired)
 			}
+
+			checkTypeLists(t, pair.name, schema)
 		})
+	}
+}
+
+// checkTypeLists compares each type list that the declaration states with the
+// one in the description of the schema.
+func checkTypeLists(t *testing.T, schemaName string, schema describedSchema) {
+	t.Helper()
+
+	for _, want := range blueprintTypeLists() {
+		if want.schema != schemaName {
+			continue
+		}
+
+		property, ok := schema.Properties[want.property]
+		if !ok {
+			t.Errorf("the description has no property %s.%s", want.schema, want.property)
+
+			continue
+		}
+
+		var got []string
+		if err := json.Unmarshal(property.Type, &got); err != nil {
+			t.Errorf("%s.%s: type = %s, want %v", want.schema, want.property, property.Type, want.types)
+
+			continue
+		}
+
+		if !slices.Equal(got, want.types) {
+			t.Errorf("%s.%s: type = %v, want %v", want.schema, want.property, got, want.types)
+		}
 	}
 }
 

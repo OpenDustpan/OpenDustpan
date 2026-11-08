@@ -127,7 +127,10 @@ func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 	case parts.grantFails:
 		svc, err := access.NewService(access.ServiceConfig{
 			Store: failingGrants{Store: d.st}, Directory: d.st, Namespaces: d.st, Authorizer: d.grants.Authorizer(),
-			Now: nil, NewID: nil, BootstrapAdmins: nil,
+			Reach: access.ReachConfig{
+				Grants: d.st, Roles: d.st, Callers: d.st, Principals: d.st, Collections: nil, Units: d.st,
+			},
+			Now: nil, NewID: nil, BootstrapAdmins: nil, LimitGroups: nil,
 		})
 		if err != nil {
 			t.Fatalf("failing access service: %v", err)

@@ -584,7 +584,9 @@ func (s *RestoreService) stageInput(
 	// setting, only detect.
 	stage := RestoreStageInput{
 		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
-		Files: manifest.SQLFiles, Options: StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
+		Files: manifest.SQLFiles, Options: StageOptions{
+			BackupKind: pinned.kind, AllowDev: s.allowDev, RestoreAt: s.now().UTC(),
+		},
 		Strip: dev.production(), StripMode: DevStripDetect,
 	}
 

@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -52,9 +53,11 @@ var (
 	)
 	errPrincipalChangeBody = errors.New(`invalid principal change body: provide {"displayName":"..."}`)
 	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
-	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
-	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
-	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
+	errGroupChangeBody     = errors.New(
+		`invalid group change body: provide {"name":"..."}, {"description":"..."} or {"closedToIdentityProvider":true}`,
+	)
+	errMemberBody = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errPageQuery  = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
 // errNoPrincipalStore reports a server whose store keeps no principals.
@@ -117,7 +120,10 @@ type groupResponse struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	MemberCount int64  `json:"memberCount"`
-	Protected   bool   `json:"protected"`
+	// ClosedToIdentityProvider is true when the identity provider may not
+	// add members to the group.
+	ClosedToIdentityProvider bool `json:"closedToIdentityProvider"`
+	Protected                bool `json:"protected"`
 }
 
 // memberResponse is one member of a group on the wire.
@@ -169,10 +175,12 @@ type createGroupRequest struct {
 }
 
 // changeGroupRequest is the body of a group change. A missing field keeps
-// its value.
+// its value. ClosedToIdentityProvider sets the switch of the group: true
+// closes the group to the identity provider.
 type changeGroupRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
+	Name                     *string `json:"name"`
+	Description              *string `json:"description"`
+	ClosedToIdentityProvider *bool   `json:"closedToIdentityProvider"`
 }
 
 // addMemberRequest is the body of a member add.
@@ -298,14 +306,15 @@ func markTempAdminMembers(
 // groupOf returns one group on the wire with its protected flag.
 func groupOf(g principal.Group, protected bool) groupResponse {
 	return groupResponse{
-		ID:          g.ID,
-		Name:        g.Name,
-		Description: g.Description,
-		Source:      string(g.Source),
-		CreatedAt:   wireTime(g.CreatedAt),
-		UpdatedAt:   wireTime(g.UpdatedAt),
-		MemberCount: g.MemberCount,
-		Protected:   protected,
+		ID:                       g.ID,
+		Name:                     g.Name,
+		Description:              g.Description,
+		Source:                   string(g.Source),
+		CreatedAt:                wireTime(g.CreatedAt),
+		UpdatedAt:                wireTime(g.UpdatedAt),
+		MemberCount:              g.MemberCount,
+		ClosedToIdentityProvider: g.ClosedToIdentityProvider,
+		Protected:                protected,
 	}
 }
 
@@ -321,22 +330,61 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 	return groupOf(g, protected), nil
 }
 
+// storedGroupOf returns one stored group on the wire with its protected
+// flag. The write is stored, so the answer must match the stored state: a
+// failed check answers protected, the fail-closed value of access.Protected.
+func (h *Handler) storedGroupOf(ctx context.Context, g principal.Group) groupResponse {
+	body, err := h.protectedGroupOf(ctx, g)
+	if err != nil {
+		// The cause is the error type only: the text of a store error can hold
+		// driver text, and the log must not carry it.
+		h.logger.WarnContext(ctx, "the protected check of a stored group failed",
+			slog.String("group", g.ID), slog.String("cause", causeType(err)))
+
+		return groupOf(g, true)
+	}
+
+	return body
+}
+
 // protectedGroupsOf returns one page of groups on the wire with the
-// protected flag of each. A failed check of one group answers its error.
+// protected flag of each. It checks the whole page with one ProtectedGroups
+// call. A failed check of one group answers its error, so the route answers
+// an error, never a false flag.
 func (h *Handler) protectedGroupsOf(
 	ctx context.Context, page principal.Page[principal.Group],
 ) (groupListResponse, error) {
+	ids := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		ids = append(ids, page.Items[i].ID)
+	}
+
+	flags, err := access.ProtectedGroups(ctx, h.reach, ids)
+	if err != nil {
+		return groupListResponse{}, err
+	}
+
+	return groupsWithFlags(page, flags)
+}
+
+// groupsWithFlags returns page on the wire with the flag of each group from
+// flags. A group with no flag answers an error, never a false flag.
+func groupsWithFlags(page principal.Page[principal.Group], flags map[string]bool) (groupListResponse, error) {
 	out := groupListResponse{
 		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 
-	for _, g := range page.Items {
-		res, err := h.protectedGroupOf(ctx, g)
-		if err != nil {
-			return groupListResponse{}, err
+	for i := range page.Items {
+		// Defense in depth: ProtectedGroups answers a flag for each ID or an
+		// error. This check stays so that a missing flag never shows as false.
+		g := &page.Items[i]
+
+		protected, ok := flags[g.ID]
+		if !ok {
+			return groupListResponse{}, fmt.Errorf("protected flag of group %q: %w", g.ID, access.ErrInvalid)
 		}
 
-		out.Groups = append(out.Groups, res)
+		out.Groups = append(out.Groups, groupOf(*g, protected))
 	}
 
 	return out, nil
@@ -386,36 +434,38 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 
 // servePrincipalChange adapts a change to a route handler. The Service
 // writes the success entry in the transaction of the change. A refused
-// change writes one failure entry here, best effort. A refusal that leaves
-// too few working break-glass accounts writes one denied entry in its own
-// write before the answer, and no failure entry.
+// change writes one failure entry here, best effort, with the missing
+// actions of a reach refusal. A refusal that leaves too few working
+// break-glass accounts writes one denied entry in its own write before the
+// answer, and no failure entry.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
-		if err != nil {
-			if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
-				h.appendBreakGlassRefusal(r, p, action, res.object)
-				h.writeError(r.Context(), w, err)
-
-				return
-			}
-
-			h.writeError(r.Context(), w, err)
-
-			if res.object != "" && h.principals != nil {
-				h.appendServerChange(r, p, serverChange{
-					at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-				})
-			}
+		if err == nil {
+			h.writePrincipalResult(w, r, res)
 
 			return
 		}
 
-		h.writePrincipalResult(w, r, res)
+		if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+			h.appendBreakGlassRefusal(r, p, action, res.object)
+			h.writeError(r.Context(), w, err)
+
+			return
+		}
+
+		h.writeError(r.Context(), w, err)
+
+		if res.object != "" && h.principals != nil {
+			h.appendServerChangeReason(r, p, serverChange{
+				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
+			}, reachReason(err))
+		}
 	}
 }
 
-// runPrincipalOp runs op and answers its result and its error.
+// runPrincipalOp runs op and answers its result and its error. It writes
+// nothing, so that the caller can write an audit entry before the answer.
 func (h *Handler) runPrincipalOp(
 	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
 ) (principalResult, error) {
@@ -906,12 +956,7 @@ func (h *Handler) createGroup(
 		return failed("groups"), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(principal.GroupRef(g.ID)), err
-	}
-
-	return ok(http.StatusCreated, body, principal.GroupRef(g.ID)), nil
+	return ok(http.StatusCreated, h.storedGroupOf(r.Context(), g), principal.GroupRef(g.ID)), nil
 }
 
 // listGroups serves GET /api/server/groups: one page, ordered by name, with
@@ -956,35 +1001,34 @@ func (h *Handler) getGroup(
 }
 
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
-// changes its description or both, and answers 200 with the stored group
-// and its protected flag.
+// changes its description, closes or opens it to the identity provider, or
+// combines those, and answers 200 with the stored group and its protected
+// flag.
 func (h *Handler) changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
 	object := principal.GroupRef(r.PathValue("id"))
-	empty := func() bool { return req.Name == nil && req.Description == nil }
+	empty := func() bool {
+		return req.Name == nil && req.Description == nil && req.ClosedToIdentityProvider == nil
+	}
 
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
 	if err != nil {
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
-		Name:        req.Name,
-		Description: req.Description,
+	g, err := svc.UpdateGroup(r.Context(), e, caller, r.PathValue("id"), principal.GroupUpdate{
+		Name:                     req.Name,
+		Description:              req.Description,
+		ClosedToIdentityProvider: req.ClosedToIdentityProvider,
 	})
 	if err != nil {
 		return failed(object), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(object), err
-	}
-
-	return ok(http.StatusOK, body, object), nil
+	return ok(http.StatusOK, h.storedGroupOf(r.Context(), g), object), nil
 }
 
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and

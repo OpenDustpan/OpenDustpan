@@ -206,16 +206,22 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 
 ## Settings of the installation
 
-The server declares one setting that the database layer holds. Each other
+The server declares two settings that the database layer holds. Each other
 setting of the installation is static only.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
+| `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
 
 The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the
 key `branding.preset` of the configuration file set it from the static layer
 and lock it.
+
+The flag `--allow-plain-connections`, the variable
+`DUSTPAN_ALLOW_PLAIN_CONNECTIONS` and the key
+`egress.allowPlainConnections` of the configuration file set it from the
+static layer and lock it.
 
 A namespace has no declared setting yet.
 

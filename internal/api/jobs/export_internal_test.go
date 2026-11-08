@@ -43,3 +43,11 @@ var ErrNotFound = errNotFound
 // ErrBody is the error of a request body that is not valid, for a test of its
 // precedence.
 var ErrBody = errBody
+
+// MaxScanned is the largest number of jobs that one request reads from the
+// store, for a test of the scan limit.
+const MaxScanned = maxScanned
+
+// ScanBatch is the number of jobs that one read of the store gives, for a
+// test of the scan limit.
+const ScanBatch = scanBatch

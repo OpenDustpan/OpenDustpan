@@ -109,6 +109,8 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 		t.Fatalf("namespace service: %v", err)
 	}
 
+	createPrincipals(t, st, time.Unix(0, 0), "alice")
+
 	n, err := nss.Create(ctx, "acme")
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)

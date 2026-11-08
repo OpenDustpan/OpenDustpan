@@ -326,6 +326,31 @@ func (r grantReads) GrantsOf(ctx context.Context, subject access.Subject) ([]acc
 	return fromGrantRows(rows)
 }
 
+// GrantsOfSubjects implements access.GrantLookups. It reads the grants of
+// every subject of subjects with one query.
+func (s *Store) GrantsOfSubjects(ctx context.Context, subjects []access.Subject) ([]access.Grant, error) {
+	if len(subjects) == 0 {
+		return nil, nil
+	}
+
+	// Defense in depth: ProtectedGroups and the list routes refuse more than
+	// one page of IDs. This check stays so that a new caller cannot send an
+	// unbounded list, which would also pass the variable limit of SQLite.
+	if len(subjects) > principal.MaxLimit {
+		return nil, fmt.Errorf("%w: %d subjects, at most %d", access.ErrInvalid, len(subjects), principal.MaxLimit)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.GrantsOfSubjects(ctx, subjectStrings(subjects))
+	if err != nil {
+		return nil, fmt.Errorf("select grants of subjects: %w", err)
+	}
+
+	return fromGrantRows(rows)
+}
+
 // RoleGrantedBelowInstallation implements access.GrantStore.
 func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error) {
 	s.mu.RLock()
@@ -904,7 +929,7 @@ func subjectRevokeEntry(e audit.Entry, g access.Grant, endedBy string) audit.Ent
 // grantReadRow is each generated grant row. The grant reads select the same
 // columns, so sqlc generates one type for each of them.
 type grantReadRow interface {
-	db.GetGrantRow | db.GrantsOnRow | db.GrantsWithRolesRow | db.GrantsOfSubjectRow
+	db.GetGrantRow | db.GrantsOnRow | db.GrantsWithRolesRow | db.GrantsOfSubjectRow | db.GrantsOfSubjectsRow
 }
 
 // listedGrants maps the rows of a grant list, with their holders.

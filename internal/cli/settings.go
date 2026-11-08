@@ -27,17 +27,18 @@ const referenceNone = "(none)"
 // default, the --help text and the reference default.
 func stringSetting(flag, env, def, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   def,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindString,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              def,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindString,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -48,17 +49,18 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 // without an explicit flag or variable.
 func boolSetting(flag, env, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   defaultFalse,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindBool,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              defaultFalse,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindBool,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -68,17 +70,18 @@ func boolSetting(flag, env, help, reference string) *Setting {
 // the default, the --help text and the reference default.
 func intSetting(flag, env, def, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   def,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindInt,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              def,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindInt,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -89,17 +92,18 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 // never get one.
 func envSetting(env, doc string) *Setting {
 	return &Setting{
-		Flag:      "",
-		Env:       env,
-		Default:   "",
-		Help:      "",
-		Reference: "",
-		Doc:       doc,
-		File:      "",
-		Kind:      KindString,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 "",
+		Env:                  env,
+		Default:              "",
+		Help:                 "",
+		Reference:            "",
+		Doc:                  doc,
+		File:                 "",
+		Kind:                 KindString,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -128,7 +132,7 @@ var Settings = []*Setting{
 		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
 		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
-	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
+	).WithFile("database").WithStaticCredentialHost().WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
 		"name of this installation, the primary installation of the namespaces it creates (DUSTPAN_INSTALLATION)",
@@ -249,6 +253,13 @@ var Settings = []*Setting{
 			"has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and "+
 			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
+	boolSetting(
+		"allow-plain-connections", "DUSTPAN_ALLOW_PLAIN_CONNECTIONS",
+		"allow LDAP and SMTP connections with no TLS, except to loopback (DUSTPAN_ALLOW_PLAIN_CONNECTIONS)",
+		"(none: off). Set `true` only in a trusted network. An LDAP bind or an SMTP login then sends its "+
+			"password with no encryption. The settings resource also holds it, and a value from a flag, a "+
+			"variable or this file locks it",
+	).WithFile("egress.allowPlainConnections"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
 		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",
@@ -275,7 +286,7 @@ var Settings = []*Setting{
 		"blob-store", "DUSTPAN_BLOB_STORE", "fs",
 		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
 		"`fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]`",
-	).WithFile("blob-store").WithURL(),
+	).WithFile("blob-store").WithStaticCredentialHost().WithURL(),
 	intSetting(
 		"blob-cache-bytes", "DUSTPAN_BLOB_CACHE_BYTES", "0",
 		"bytes of OpenTofu state blobs to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
@@ -286,7 +297,7 @@ var Settings = []*Setting{
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",
 		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
 		"(none: AWS)",
-	).WithFile("s3-endpoint").WithURL(),
+	).WithFile("s3-endpoint").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"s3-region", "DUSTPAN_S3_REGION", "",
 		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
@@ -296,7 +307,7 @@ var Settings = []*Setting{
 		"backup-target", "DUSTPAN_BACKUP_TARGET", "",
 		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
 		"(none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]`",
-	).WithFile("backup-target").WithURL(),
+	).WithFile("backup-target").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"key-encryption-key-file", "DUSTPAN_KEY_ENCRYPTION_KEY_FILE", "",
 		"file holding the base64 key-encryption key, required without DUSTPAN_KEY_ENCRYPTION_KEY"+
@@ -397,14 +408,14 @@ var Settings = []*Setting{
 			"[<name>=]stderr, stdout, file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
 			"or webhook:<https URL> (DUSTPAN_LOG_SINK, targets separated by white space)",
 		"(none: stderr). For example `stderr syslog+tls://logs.example:6514`",
-	).WithFile("log-sink").WithSensitive(),
+	).WithFile("log-sink").WithStaticCredentialHost().WithSensitive(),
 	stringSetting(
 		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
 		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
 			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
 			"webhook:<https URL>, otlp:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
-	).WithFile("audit-sink").WithSensitive(),
+	).WithFile("audit-sink").WithStaticCredentialHost().WithSensitive(),
 	stringSetting(
 		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
 		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
@@ -426,7 +437,7 @@ var Settings = []*Setting{
 		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
 			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
 			"person of the old issuer with the same `sub`.",
-	).WithFile("oidc-issuer").WithURL().WithSensitive(),
+	).WithFile("oidc-issuer").WithStaticCredentialHost().WithURL().WithSensitive(),
 	stringSetting(
 		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
 		"ID of the OpenID Connect provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the "+

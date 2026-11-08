@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -73,7 +74,7 @@ func TestCheckStagedRefusesTheStagingIdentFirst(t *testing.T) {
 				return
 			}
 
-			err := checkStaged(t.Context(), failQuerier{t: t}, tt.staging)
+			err := checkStaged(t.Context(), failQuerier{t: t}, tt.staging, time.Time{})
 			if !errors.Is(err, backup.ErrCorrupt) {
 				t.Fatalf("checkStaged(%q) = %v, want ErrCorrupt", tt.staging, err)
 			}

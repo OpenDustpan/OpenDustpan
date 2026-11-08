@@ -43,6 +43,7 @@ const (
 	pgColCreatedBy   = "created_by"
 	pgColGroupID     = "group_id"
 	pgColSourceID    = "source_id"
+	pgColSourceKind  = "source_kind"
 	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColError       = "error"
@@ -136,6 +137,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopySelfServiceTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
+	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 
 	return tables
 }
@@ -602,7 +604,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "closed_to_identity_provider",
 			},
 			orderBy: []string{"id"},
 		},
@@ -620,6 +622,20 @@ func pgCopyPrincipalTables() []pgCopyTable {
 				pgColSource, pgColSourceID, "claim_value", pgColGroupID, pgColCreatedBy, pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColSource, pgColSourceID, "claim_value", pgColGroupID},
+		},
+		{
+			table: "member_removal_alerts",
+			columns: []string{
+				pgColSourceKind, pgColSourceID, "alerted_at_ms",
+			},
+			orderBy: []string{pgColSourceKind, pgColSourceID},
+		},
+		{
+			table: "member_removals",
+			columns: []string{
+				"id", pgColSourceKind, pgColSourceID, pgColGroupID, "removed", "members_before", pgColAtMs,
+			},
+			orderBy: []string{"id"},
 		},
 		{
 			table: backup.TableTempAdmins,
@@ -979,11 +995,12 @@ func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 const stagingSchemaPrefix = "restore_stage_"
 
 // stagingInput groups what buildStaging needs: the staging schema, the step that
-// loads its tables, and the manifest summary.
+// loads its tables, the manifest summary and the time of the restore.
 type stagingInput struct {
-	load    func(ctx context.Context, schema string) error
-	want    backup.Summary
-	staging string
+	load      func(ctx context.Context, schema string) error
+	want      backup.Summary
+	staging   string
+	restoreAt time.Time
 }
 
 // buildStaging creates the staging schema, loads and checks the dump, and keeps
@@ -1032,7 +1049,7 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 	}
 
 	checkErr := s.inLongTx(ctx, backupBound(), defaultTx(), func(tx pgx.Tx) error {
-		return checkStaged(ctx, tx, in.staging)
+		return checkStaged(ctx, tx, in.staging, in.restoreAt)
 	})
 	if checkErr != nil {
 		return backup.Summary{}, checkErr
@@ -1053,8 +1070,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows and the feature rows.
-func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
+// sealed state, the namespace IDs, the owned rows, the removal alert markers
+// and the feature rows.
+func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
 	}
@@ -1069,6 +1087,10 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if markerErr := checkStagedRemovalAlerts(ctx, q, staging, restoreAt); markerErr != nil {
+		return markerErr
 	}
 
 	return checkStagedFeatureRows(ctx, q, staging)
@@ -1953,9 +1975,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
+// break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedJobs(ctx, pool, staging); err != nil {
 		return err
 	}
 
@@ -1988,6 +2015,10 @@ func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string)
 	}
 
 	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
 		return err
 	}
 

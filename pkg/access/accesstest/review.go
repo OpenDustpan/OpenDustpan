@@ -402,7 +402,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 
 	grp := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 		t.Fatalf("create group: %v", err)

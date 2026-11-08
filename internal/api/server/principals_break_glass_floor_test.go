@@ -81,6 +81,7 @@ func floorStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 		Tokens:     nil,
 		Now:        floorClock,
 		NewID:      nil,
+		GroupReach: allowAllReach{},
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

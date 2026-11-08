@@ -2255,6 +2255,17 @@ func BenchmarkAuthorizer(b *testing.B) {
 	accesstest.Bench(b, open(b, base))
 }
 
+// BenchmarkProtectedGroups measures the protected flag of 1000 groups at the
+// scale of accesstest.Bench: one group at a time, and one page.
+func BenchmarkProtectedGroups(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	accesstest.BenchProtectedGroups(b, open(b, base))
+}
+
 // revocationStore adds to the store the two hooks of the revocation suite: the
 // runner pools of the store, and a write to the revocation journal that the
 // CHECK constraint of the table does not stop.

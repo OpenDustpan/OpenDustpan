@@ -33,8 +33,7 @@ const (
 	wantNoKeyTrialText = "no key-encryption key is set. For a trial, run: opendustpan dev"
 	wantNoDatabaseText = "no database is set: set --database (DUSTPAN_DATABASE), " +
 		"for example sqlite:/var/lib/opendustpan/dustpan.db"
-	wantNoDatabaseTrialText = "no database is set. For a trial, run: opendustpan dev"
-	wantDevEnvironmentText  = "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. " +
+	wantDevEnvironmentText = "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. " +
 		"Start serve in a new shell."
 )
 
@@ -169,11 +168,8 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 	}
 }
 
-// TestRefusalTextsOfTheDecision pins the texts of the four errors and of the
-// refusal of DUSTPAN_DEV word for word. The trial hint for a missing
-// database is only reachable when the key is set, and a key is a setting
-// that turns the hint off, so a start cannot show it today: this test keeps
-// its text as the decision records it.
+// TestRefusalTextsOfTheDecision pins the texts of the three errors and of the
+// refusal of DUSTPAN_DEV word for word.
 func TestRefusalTextsOfTheDecision(t *testing.T) {
 	t.Parallel()
 
@@ -185,7 +181,6 @@ func TestRefusalTextsOfTheDecision(t *testing.T) {
 		{"no key", errNoKey, wantNoKeyText},
 		{"no key, trial", errNoKeyTrial, wantNoKeyTrialText},
 		{"no database", errNoDatabase, wantNoDatabaseText},
-		{"no database, trial", errNoDatabaseTrial, wantNoDatabaseTrialText},
 		{"DUSTPAN_DEV", errDevEnvironment, wantDevEnvironmentText},
 	}
 
@@ -195,6 +190,58 @@ func TestRefusalTextsOfTheDecision(t *testing.T) {
 
 			if got := tc.err.Error(); got != tc.want {
 				t.Fatalf("error text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequireDecisions proves the four outcomes of requireDecisions: no key
+// with a trial hint, no key with the full message, no database, and OK. A
+// missing database always gives the full message, with or without a terminal
+// and with or without a setting, because the key check comes first and a key
+// is a setting of serve.
+func TestRequireDecisions(t *testing.T) {
+	t.Parallel()
+
+	withKey := map[string]string{keyEnvVar: testKeyBase64()}
+
+	cases := []struct {
+		name     string
+		terminal bool
+		env      map[string]string
+		keyFile  string
+		database string
+		want     error
+	}{
+		{"no key, trial", true, nil, "", "", errNoKeyTrial},
+		{"no key, no terminal", false, nil, "", "", errNoKey},
+		{"no key, no database, key reported first", true, nil, "", "", errNoKeyTrial},
+		{"no database, key in variable, terminal", true, withKey, "", "", errNoDatabase},
+		{"no database, key in variable, no terminal", false, withKey, "", "", errNoDatabase},
+		{"no database, key file, terminal", true, nil, "k.key", "", errNoDatabase},
+		{"no database, key file, no terminal", false, nil, "k.key", "", errNoDatabase},
+		{"no database, blank database", true, withKey, "", "  ", errNoDatabase},
+		{"ok, key in variable", true, withKey, "", "sqlite:/x.db", nil},
+		{"ok, key file", false, nil, "k.key", "sqlite:/x.db", nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var f serveFlags
+
+			f.keyFile = tc.keyFile
+			f.database = tc.database
+
+			lookup := func(name string) (string, bool) {
+				value, ok := tc.env[name]
+
+				return value, ok
+			}
+
+			if got := f.requireDecisions(tc.terminal, lookup); !errors.Is(got, tc.want) {
+				t.Fatalf("requireDecisions = %v, want %v", got, tc.want)
 			}
 		})
 	}

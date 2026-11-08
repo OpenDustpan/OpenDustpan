@@ -39,6 +39,17 @@ func ClassifyForTest(err error) (int, string) {
 	return f.status, f.message
 }
 
+// TokenCodeForTest returns the code of the catalog that the token classifier
+// gives for err, and false when the classifier maps no error.
+func TokenCodeForTest(err error) (string, bool) {
+	f, ok := classifyToken(err)
+	if !ok {
+		return "", false
+	}
+
+	return f.code, true
+}
+
 // WriteErrorForTest writes the error answer of err, as a handler of the
 // installation API does.
 func WriteErrorForTest(w http.ResponseWriter, r *http.Request, err error) {

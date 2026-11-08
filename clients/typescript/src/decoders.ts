@@ -19,6 +19,7 @@ import {
   union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
+import { invalidValue } from "./errors.js";
 import type {
   AccessLimit,
   AddRegistryKeyRequest,
@@ -343,6 +344,28 @@ import {
   TriggerKindValues,
   TrustRuleKeySourceValues,
 } from "./types.js";
+
+/**
+ * The validator of a value that is one of several types. It tries each
+ * validator in order and gives the first value that one of them accepts.
+ */
+function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {
+  return (value, path) => {
+    for (const decode of decoders) {
+      try {
+        return decode(value, path);
+      } catch {
+        // The value is not of this type. The next validator gets it.
+      }
+    }
+
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
+
+    throw invalidValue(path, `want ${want}, got ${got}`);
+  };
+}
 
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
@@ -1139,6 +1162,7 @@ export const decodeListGitHostLinksResponse: Decoder<ListGitHostLinksResponse> =
 
 /** The validator of ListJobsResponse. */
 export const decodeListJobsResponse: Decoder<ListJobsResponse> = object<ListJobsResponse>("ListJobsResponse", {
+  damaged: int64,
   jobs: array(ref(() => decodeJob)),
   nextPageToken: optional(string),
 });
@@ -1895,7 +1919,7 @@ export const decodeSelfServiceModule: Decoder<SelfServiceModule> = object<SelfSe
 /** The validator of SelfServiceOperand. */
 export const decodeSelfServiceOperand: Decoder<SelfServiceOperand> = object<SelfServiceOperand>("SelfServiceOperand", {
   input: optional(string),
-  value: optional(anyValue),
+  value: optional(oneOf<string | number | boolean>("a string, a number or a boolean", string, number, boolean)),
 });
 
 /** The validator of SelfServiceOutputRef. */

@@ -67,10 +67,13 @@ type memDB struct {
 	states map[string]string
 	// finals maps a unit ID to its last final state version, as
 	// ObserveStateVersion records it.
-	finals  map[string]job.StateVersion
-	jobs    map[job.ID]*job.Job
-	order   []job.ID
-	keys    map[string]job.ID
+	finals map[string]job.StateVersion
+	jobs   map[job.ID]*job.Job
+	order  []job.ID
+	keys   map[string]job.ID
+	// damaged maps the ID of a job whose stored body does not decode to the
+	// kind of the damage, as DamageJobBody marks it.
+	damaged map[job.ID]string
 	freezes map[string]*job.Freeze
 	audit   map[namespace.Name][]audit.Entry
 	// locks maps the String of a manual lock target to the lock.
@@ -92,6 +95,7 @@ func newMemDB() *memDB {
 		jobs:     map[job.ID]*job.Job{},
 		order:    nil,
 		keys:     map[string]job.ID{},
+		damaged:  map[job.ID]string{},
 		freezes:  map[string]*job.Freeze{},
 		audit:    map[namespace.Name][]audit.Entry{},
 		locks:    map[string]manuallock.Lock{},
@@ -347,10 +351,34 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	return copyJob(&stored), true, nil
 }
 
+// damagedBodyReason is the kind of the damage that DamageJobBody marks: the
+// SQL adapters store a body that is not JSON.
+const damagedBodyReason = "the body is not JSON"
+
+// DamageJobBody implements jobtest.Domain. It marks the job id as a row whose
+// stored body does not decode, as a restore or another version of the server
+// leaves one. The SQL adapters write a body that is not JSON.
+func (m *memDB) DamageJobBody(_ context.Context, id job.ID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.lookup(id); !ok {
+		return job.ErrNotFound
+	}
+
+	m.damaged[id] = damagedBodyReason
+
+	return nil
+}
+
 // Get implements job.Store.
 func (m *memDB) Get(_ context.Context, id job.ID) (job.Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, ok := m.damaged[id]; ok {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, id)
+	}
 
 	j, ok := m.lookup(id)
 	if !ok {
@@ -361,13 +389,16 @@ func (m *memDB) Get(_ context.Context, id job.ID) (job.Job, error) {
 }
 
 // List implements job.Store.
-func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+func (m *memDB) List(_ context.Context, f job.Filter) (job.Page, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []job.Job
+	var (
+		out  job.Page
+		read int
+	)
 
-	// After is the last job of the previous page: the page starts behind it.
+	// After is the last row of the previous page: the page starts behind it.
 	passed := f.After == ""
 
 	for _, id := range slices.Backward(m.order) {
@@ -386,8 +417,17 @@ func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 			continue
 		}
 
-		out = append(out, copyJob(j))
-		if f.Limit > 0 && len(out) == f.Limit {
+		read++
+
+		if reason, damaged := m.damaged[id]; damaged {
+			out.Damaged = append(out.Damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+		} else {
+			out.Jobs = append(out.Jobs, copyJob(j))
+		}
+
+		if f.Limit > 0 && read == f.Limit {
+			out.After = id
+
 			break
 		}
 	}
@@ -425,6 +465,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		return job.Job{}, job.ErrNotFound
 	}
 
+	if _, damaged := m.damaged[c.Job]; damaged {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, c.Job)
+	}
+
 	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
 		return job.Job{}, err
 	}
@@ -460,6 +504,49 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
 
 	return copyJob(&next), nil
+}
+
+// CancelDamaged implements job.Store. It reads no body: a row that a reader
+// cannot decode can still be canceled by its ID.
+func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	cur, ok := m.lookup(id)
+	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
+		return job.ErrNotFound
+	}
+
+	// A cancel through this path does not stop the durable operation of
+	// the job, so it is only for a row that no other path can read.
+	// Defense in depth: the caller checks that Get gives ErrDamaged;
+	// this check stays so that a new caller cannot cancel a readable
+	// job here.
+	if _, damaged := m.damaged[id]; !damaged {
+		return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+	}
+
+	if cur.State.Terminal() {
+		return fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
+	}
+
+	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
+		return err
+	}
+
+	next := copyJob(cur)
+	now := time.Now().UTC()
+	next.State, next.Wait, next.Version = job.StateCanceled, job.WaitNone, cur.Version+1
+	next.UpdatedAt, next.StateChangedAt = now, now
+
+	m.jobs[id] = &next
+	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
+
+	return nil
 }
 
 // settle sets the state, the version, the wait reason and the reason of next
@@ -528,6 +615,12 @@ func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 	var closed []job.Job
 
 	for _, id := range m.order {
+		// A damaged row stays where it is: the close loop cannot read it, so
+		// it never closes it.
+		if _, damaged := m.damaged[id]; damaged {
+			continue
+		}
+
 		j, ok := m.lookup(id)
 		if !ok || !j.ClosedBy(v) {
 			continue
@@ -584,38 +677,46 @@ func (m *memDB) SetVerification(_ context.Context, id job.ID, v job.Verification
 }
 
 // Orphans implements job.Store.
-func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
+func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.DamagedRow, error) {
+	if limit <= 0 {
+		return nil, nil, nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []job.Orphan
+	var (
+		out     []job.Orphan
+		damaged []job.DamagedRow
+	)
 
 	for _, id := range m.order {
 		j, ok := m.lookup(id)
-		if !ok {
+		if !ok || !j.State.HoldsUnit() || j.Current >= len(j.Phases) {
 			continue
 		}
 
-		if !j.State.HoldsUnit() || j.Current >= len(j.Phases) {
+		end, err := m.endedOperation(ctx, j)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !end.ended {
 			continue
 		}
 
-		op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
-		if err != nil && !errors.Is(err, durable.ErrNotFound) {
-			return nil, fmt.Errorf("get operation: %w", err)
+		if reason, isDamaged := m.damaged[id]; isDamaged {
+			damaged = append(damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+		} else {
+			out = append(out, job.Orphan{Job: copyJob(j), Missing: end.missing})
 		}
 
-		if err == nil && !op.State.Terminal() {
-			continue
-		}
-
-		out = append(out, job.Orphan{Job: copyJob(j), Missing: err != nil})
-		if len(out) == limit {
+		if len(out)+len(damaged) == limit {
 			break
 		}
 	}
 
-	return out, nil
+	return out, damaged, nil
 }
 
 // CreateFreeze implements job.FreezeStore.
@@ -678,6 +779,31 @@ func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Tim
 	slices.SortFunc(out, func(a, b job.Freeze) int { return a.StartsAt.Compare(b.StartsAt) })
 
 	return out, nil
+}
+
+// operationEnd is what Orphans reads of the durable operation of the current
+// phase of a job: whether it has ended, and whether the durable store does not
+// hold it.
+type operationEnd struct {
+	ended   bool
+	missing bool
+}
+
+// endedOperation returns the end of the durable operation of the current phase
+// of j.
+func (m *memDB) endedOperation(ctx context.Context, j *job.Job) (operationEnd, error) {
+	op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
+	if errors.Is(err, durable.ErrNotFound) {
+		// The operation of a job that a restore of the control tables left
+		// out is a missing orphan.
+		return operationEnd{ended: true, missing: true}, nil
+	}
+
+	if err != nil {
+		return operationEnd{ended: false, missing: false}, fmt.Errorf("get operation: %w", err)
+	}
+
+	return operationEnd{ended: op.State.Terminal(), missing: false}, nil
 }
 
 // namespaceLocked returns the namespace name. The caller holds m.mu.

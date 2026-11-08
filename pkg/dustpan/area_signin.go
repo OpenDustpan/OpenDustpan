@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/removalalertsvc"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -217,6 +218,9 @@ type signInServiceInputs struct {
 	// onAuditFailure is called when the audit entry of a refused sign-in is
 	// not written. nil means no call.
 	onAuditFailure func()
+	// removals records the removals of a group claim sync for the removal
+	// alert. nil records nothing.
+	removals *removalalertsvc.Service
 }
 
 // errSignInStore reports a store that cannot serve the sign-in service.
@@ -241,14 +245,27 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 		return nil, fmt.Errorf("%w: it keeps no session generations", errSignInStore)
 	}
 
+	var removals signinsvc.Removals
+	if in.removals != nil {
+		removals = in.removals
+	}
+
 	tempAdmins, ok := in.store.(principal.TempAdmins)
 	if !ok {
 		return nil, fmt.Errorf("%w: it keeps no temporary administrators", errSignInStore)
 	}
 
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
-		Audit: in.audit, TempAdmins: tempAdmins, Groups: nil, States: generations, Logger: in.logger,
+		Principals:     in.principals,
+		Disabler:       records,
+		Generations:    generations,
+		Sessions:       in.sessions,
+		Audit:          in.audit,
+		TempAdmins:     tempAdmins,
+		Groups:         nil,
+		Removals:       removals,
+		States:         generations,
+		Logger:         in.logger,
 		OnAuditFailure: in.onAuditFailure,
 	})
 	if err != nil {

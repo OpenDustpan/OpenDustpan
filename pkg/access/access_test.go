@@ -113,8 +113,10 @@ func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fix
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st},
+		Now:   nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
@@ -187,7 +189,7 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 
 	grp := principal.Group{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := f.store.CreateGroup(ctx, grp, storetest.ServerChange(time.Unix(0, 0), "group:"+id)); err != nil {
 		tb.Fatalf("create group %q: %v", name, err)

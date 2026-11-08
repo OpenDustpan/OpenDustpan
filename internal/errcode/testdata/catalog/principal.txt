@@ -5,5 +5,8 @@ principal.managed-by-directory
 principal.no-working-break-glass
 principal.not-disabled
 principal.not-found
+principal.removal-alert-failed
+principal.removal-alert-marker-invalid
+principal.removal-alert-unrecorded
 principal.reserved-subject
 principal.unsupported

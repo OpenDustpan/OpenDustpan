@@ -140,6 +140,8 @@ var Tables = []string{
 	TablePrincipalGroups,
 	TableGroupMembers,
 	TableGroupMappings,
+	"member_removal_alerts",
+	"member_removals",
 	TableTempAdmins,
 	TableAccessTokens,
 	TableSessions,
@@ -206,6 +208,7 @@ var Tables = []string{
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
 	TableTrustRules,
+	"break_glass_reviews",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list
