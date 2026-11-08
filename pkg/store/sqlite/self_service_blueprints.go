@@ -193,7 +193,7 @@ func (c SelfServiceBlueprintStore) Publish(
 
 	ns := fence.Namespace.String()
 	row := selfservicestore.VersionRow{
-		Namespace: ns, Name: p.Ref.Name, DocumentJSON: doc, ExprVersion: p.Blueprint.ExprVersion,
+		Namespace: ns, Name: p.Ref.Name, DocumentJSON: doc, ExprVersion: string(p.Blueprint.ExprVersion),
 		PublishedBy: p.By, PublishedAtMs: codec.Millis(p.At), Number: 0, DraftVersion: p.DraftVersion, Retired: 0,
 	}
 

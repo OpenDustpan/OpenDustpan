@@ -598,7 +598,7 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 	}
 
 	tok, err := t.next.Token(ctx, audience, lifetime)
-	late, closed := t.record(&tok, err)
+	late, refused := t.record(&tok, err)
 
 	if late != nil && t.late != nil {
 		// The issuer signed after the end of the block. The value never
@@ -610,7 +610,11 @@ func (t *recordingTokens) Token(ctx context.Context, audience string, lifetime t
 		return profile.Token{}, fmt.Errorf("token: %w", err)
 	}
 
-	if closed {
+	// The block can end while the issuer signs the token. The value does not
+	// reach the adapter. The entry of the signing stays with the block, or goes
+	// to late when the block closed. record reads the end of the block once, so the entry says Delivered only
+	// for a value that this check lets go.
+	if refused {
 		return profile.Token{}, fmt.Errorf("%w: %w", ErrUnavailable, errClosed)
 	}
 
@@ -632,19 +636,22 @@ func (t *recordingTokens) ended() bool {
 }
 
 // record keeps a token that the issuer signed. It returns the token for late
-// when the block closed while the issuer signed, and whether it closed.
+// when the block closed while the issuer signed, and whether the value must
+// not reach the adapter: the block closed or its context ended.
 func (t *recordingTokens) record(tok *profile.Token, err error) (*Issued, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	refused := t.closed || t.ended()
+
 	if tok == nil || tok.Value == "" {
-		return nil, t.closed
+		return nil, refused
 	}
 
 	t.values = append(t.values, tok.Value)
 	issued := Issued{
 		Entry: tok.Entry, Block: t.block, ID: tok.ID, Warnings: slices.Clone(tok.Warnings),
-		Delivered: err == nil && !t.closed,
+		Delivered: err == nil && !refused,
 	}
 
 	if t.closed {
@@ -653,7 +660,7 @@ func (t *recordingTokens) record(tok *profile.Token, err error) (*Issued, bool) 
 
 	t.issued = append(t.issued, issued)
 
-	return nil, false
+	return nil, refused
 }
 
 // close stops the source and returns the tokens that the issuer signed for

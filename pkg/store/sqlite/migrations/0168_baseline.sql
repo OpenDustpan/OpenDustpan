@@ -206,6 +206,16 @@ CREATE TABLE group_members (
     PRIMARY KEY (group_id, principal_id, added_at_ms)
 ) STRICT;
 
+CREATE TABLE group_mappings (
+    source        TEXT    NOT NULL,
+    source_id     TEXT    NOT NULL,
+    claim_value   TEXT    NOT NULL,
+    group_id      TEXT    NOT NULL REFERENCES principal_groups (id),
+    created_by    TEXT    NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (source, source_id, claim_value, group_id)
+) STRICT;
+
 CREATE TABLE "audit_entries" (
     namespace    TEXT    NOT NULL,
     sequence     INTEGER NOT NULL,

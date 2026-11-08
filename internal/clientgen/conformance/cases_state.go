@@ -12,6 +12,11 @@ import (
 // characters.
 func keyPattern() *regexp.Regexp { return regexp.MustCompile(`^[\x20-\x7e]{1,255}$`) }
 
+// codePreconditionFailed is the documented errorCode of a request whose
+// If-Match header names a version that is not current. The published
+// description lists it as an errorCode.
+const codePreconditionFailed = "request.precondition-failed"
+
 // stateCases returns the bodies of the cases of the groups idempotency,
 // concurrency, compatibility and version.
 func stateCases() map[string]caseFunc {
@@ -158,7 +163,18 @@ func staleIfMatchGives412(ctx context.Context, env Env) error {
 		return err
 	}
 
-	return wantStatus(res, http.StatusPreconditionFailed)
+	if err := wantStatus(res, http.StatusPreconditionFailed); err != nil {
+		return err
+	}
+
+	// wantStatus checks the error too. The check stays here so that the
+	// members below are always safe to read.
+	e := res.Error
+	if e == nil || e.ErrorCode != codePreconditionFailed || e.Message == "" {
+		return failf("want a 412 with errorCode %s and a message, got %+v", codePreconditionFailed, e)
+	}
+
+	return nil
 }
 
 // codeInvalidParams is the JSON-RPC code that an adapter uses for a call that
