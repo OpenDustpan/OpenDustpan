@@ -187,7 +187,11 @@ func TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach(t *testing.T) {
 	}{
 		{"the first slot after now", rowWithSlot(hourly(), first), nil},
 		{"a slot in 2100", rowWithSlot(hourly(), in2100), triggerstore.ErrCorrupt},
-		{"a time that is not a slot of the schedule", rowWithSlot(hourly(), first.Add(-30*time.Minute)), triggerstore.ErrCorrupt},
+		{
+			"a time that is not a slot of the schedule",
+			rowWithSlot(hourly(), first.Add(-30*time.Minute)),
+			triggerstore.ErrCorrupt,
+		},
 		{"a trigger that is off", triggerstore.RowOf(off, 1), nil},
 		{"a follows trigger", triggerstore.RowOf(follows("f1", unitA(), unitC()), 1), nil},
 	}

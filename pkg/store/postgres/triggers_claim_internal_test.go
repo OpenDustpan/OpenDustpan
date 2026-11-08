@@ -92,7 +92,7 @@ func openWithStatementLog(t *testing.T, log *statementLog) *Store {
 func TestTriggerWritesReadTheClockOfTheDatabase(t *testing.T) {
 	t.Parallel()
 
-	log := &statementLog{}
+	log := &statementLog{mu: sync.Mutex{}, sql: nil}
 	s := openWithStatementLog(t, log)
 	seedTriggers(t, s)
 
@@ -107,12 +107,22 @@ func TestTriggerWritesReadTheClockOfTheDatabase(t *testing.T) {
 	log.reset()
 
 	tr := trigger.Trigger{
-		ID: "h1", Unit: graph.Unit{Namespace: "acme", Tool: "opentofu", ID: "b"}, Kind: trigger.KindSchedule,
-		Frequency: trigger.Frequency{Preset: "", Cron: "0 * * * *"}, Source: graph.Unit{},
-		Enabled: true, LastSaver: "user:ada", LastSaverID: "prn-user:ada",
+		ID:   "h1",
+		Unit: graph.Unit{Namespace: "acme", Tool: "opentofu", ID: "b"},
+		Kind: trigger.KindSchedule,
+		Frequency: trigger.Frequency{
+			Preset: "",
+			Cron:   "0 * * * *",
+		},
+		Source:      graph.Unit{Namespace: "", Tool: "", ID: ""},
+		Enabled:     true,
+		LastSaver:   "user:ada",
+		LastSaverID: "prn-user:ada",
 	}
-	if err := s.Triggers().Put(t.Context(), tr, fence, triggerAuditEntry()); err != nil {
-		t.Fatalf("put trigger: %v", err)
+
+	putErr := s.Triggers().Put(t.Context(), tr, fence, triggerAuditEntry())
+	if putErr != nil {
+		t.Fatalf("put trigger: %v", putErr)
 	}
 
 	if !log.saw("DatabaseNowMs") {
@@ -127,15 +137,19 @@ func TestTriggerWritesReadTheClockOfTheDatabase(t *testing.T) {
 	}
 
 	past := time.UnixMilli(nowMs).UTC().Truncate(time.Hour).Add(-time.Hour)
-	if _, err := s.pool.Exec(t.Context(), `UPDATE triggers SET next_slot_ms = $1 WHERE id = 'h1'`, past.UnixMilli()); err != nil {
-		t.Fatalf("set the next slot: %v", err)
+
+	_, execErr := s.pool.Exec(t.Context(), `UPDATE triggers SET next_slot_ms = $1 WHERE id = 'h1'`, past.UnixMilli())
+	if execErr != nil {
+		t.Fatalf("set the next slot: %v", execErr)
 	}
 
 	log.reset()
 
 	claim := trigger.Claim{Namespace: "acme", Trigger: "h1", Slot: past}
-	if err := s.Triggers().ClaimDue(t.Context(), claim, fence, triggerAuditEntry()); err != nil {
-		t.Fatalf("claim: %v", err)
+
+	claimErr := s.Triggers().ClaimDue(t.Context(), claim, fence, triggerAuditEntry())
+	if claimErr != nil {
+		t.Fatalf("claim: %v", claimErr)
 	}
 
 	if !log.saw("DatabaseNowMs") {
