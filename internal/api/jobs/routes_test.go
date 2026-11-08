@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -79,7 +80,7 @@ type fakeJobs struct {
 	jobs   map[job.ID]job.Job
 	getErr error
 	// listed answers List. Nil makes List fail the test of a route that calls it.
-	listed func(job.Filter) []job.Job
+	listed func(job.Filter) job.Page
 	calls  []string
 	mu     sync.Mutex
 }
@@ -120,11 +121,11 @@ func (f *fakeJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	return j, nil
 }
 
-func (f *fakeJobs) List(_ context.Context, flt job.Filter) ([]job.Job, error) {
+func (f *fakeJobs) List(_ context.Context, flt job.Filter) (job.Page, error) {
 	f.note("List")
 
 	if f.listed == nil {
-		return nil, errUnexpected
+		return job.Page{Jobs: nil, Damaged: nil, After: ""}, errUnexpected
 	}
 
 	return f.listed(flt), nil
@@ -149,10 +150,16 @@ func (f *fakeJobs) SetVerification(context.Context, job.ID, job.Verification, na
 	return errUnexpected
 }
 
-func (f *fakeJobs) Orphans(context.Context, int) ([]job.Orphan, error) {
+func (f *fakeJobs) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, error) {
 	f.note("Orphans")
 
-	return nil, errUnexpected
+	return nil, nil, errUnexpected
+}
+
+func (f *fakeJobs) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
+	f.note("CancelDamaged")
+
+	return errUnexpected
 }
 
 // set stores j, so a running stream finds the new record at its next read.
@@ -262,7 +269,9 @@ func newStartHandler(
 	return newWorkerHandler(
 		t,
 		authz,
-		handlerDeps{jobs: jobs, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil},
+		handlerDeps{
+			jobs: jobs, units: nil, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil,
+		},
 		nil,
 	)
 }
@@ -270,6 +279,7 @@ func newStartHandler(
 // handlerDeps are the stores and services behind a test handler.
 type handlerDeps struct {
 	jobs      job.Store
+	units     coreinventory.Reader
 	starter   job.Starter
 	entries   audit.Store
 	artifacts job.ArtifactReader
@@ -297,6 +307,7 @@ func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps,
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
 		Jobs:           deps.jobs,
+		Units:          deps.units,
 		Artifacts:      deps.artifacts,
 		Logs:           deps.logs,
 		Cursors:        deps.cursors,
@@ -824,6 +835,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	_, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     nil,
 		Jobs:           nil,
+		Units:          nil,
 		Artifacts:      nil,
 		Logs:           nil,
 		Cursors:        nil,

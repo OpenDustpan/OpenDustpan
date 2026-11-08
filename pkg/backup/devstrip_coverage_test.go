@@ -95,6 +95,10 @@ var devColumnDecisions = map[string]devDecision{
 		strip:  false,
 		reason: "label of a principal that the strip removes with its row",
 	},
+	"principal_groups.closed_to_identity_provider": {
+		strip:  false,
+		reason: "a flag of the group; it names no principal",
+	},
 	"profile_revisions.author":   {strip: false, reason: "history text of who wrote the revision"},
 	"profiles.created_by":        {strip: false, reason: "history text of who made the profile"},
 	"issuer_settings.updated_by": {strip: false, reason: "history text of who changed the settings"},

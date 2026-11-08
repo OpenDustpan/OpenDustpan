@@ -954,7 +954,8 @@ CREATE TABLE principal_groups (
     source text DEFAULT 'local'::text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
-    deleted_at_ms bigint
+    deleted_at_ms bigint,
+    closed_to_identity_provider boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE principal_session_generations (

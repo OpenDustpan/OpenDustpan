@@ -2067,19 +2067,20 @@ func (q *Queries) CreateGrant(ctx context.Context, arg CreateGrantParams) (int64
 }
 
 const createGroup = `-- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type CreateGroupParams struct {
-	ID          string
-	Name        string
-	NameKey     string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
+	ID                       string
+	Name                     string
+	NameKey                  string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
 }
 
 func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64, error) {
@@ -2091,6 +2092,7 @@ func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64
 		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.ClosedToIdentityProvider,
 	)
 	if err != nil {
 		return 0, err
@@ -6165,19 +6167,20 @@ func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) 
 }
 
 const getGroup = `-- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL
 `
 
 type GetGroupRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
@@ -6190,6 +6193,7 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.ClosedToIdentityProvider,
 		&i.MemberCount,
 	)
 	return i, err
@@ -8943,6 +8947,35 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getUnitCollectionByName = `-- name: GetUnitCollectionByName :one
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ? AND i.tool = ? AND i.name = ?
+`
+
+type GetUnitCollectionByNameParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetUnitCollectionByNameRow struct {
+	UnitID         string
+	CollectionName sql.NullString
+}
+
+// The ID and the collection of one live unit by its name, in one statement.
+// The collection is NULL when the unit is in no collection. No row means that
+// the namespace holds no live unit with the name.
+func (q *Queries) GetUnitCollectionByName(ctx context.Context, arg GetUnitCollectionByNameParams) (GetUnitCollectionByNameRow, error) {
+	row := q.db.QueryRowContext(ctx, getUnitCollectionByName, arg.Namespace, arg.Tool, arg.Name)
+	var i GetUnitCollectionByNameRow
+	err := row.Scan(&i.UnitID, &i.CollectionName)
+	return i, err
 }
 
 const getUnitCollectionName = `-- name: GetUnitCollectionName :one
@@ -13720,7 +13753,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -13739,13 +13772,14 @@ type ListGroupsParams struct {
 }
 
 type ListGroupsRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListGroupsRow, error) {
@@ -13769,6 +13803,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -13785,7 +13820,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 }
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = ?1 AND m.removed_at_ms IS NULL
@@ -13805,13 +13840,14 @@ type ListGroupsOfPrincipalParams struct {
 }
 
 type ListGroupsOfPrincipalRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPrincipalParams) ([]ListGroupsOfPrincipalRow, error) {
@@ -13836,6 +13872,7 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -22001,16 +22038,17 @@ func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHo
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = ?, name_key = ?, description = ?, updated_at_ms = ?
+UPDATE principal_groups SET name = ?, name_key = ?, description = ?, closed_to_identity_provider = ?, updated_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL
 `
 
 type UpdateGroupParams struct {
-	Name        string
-	NameKey     string
-	Description string
-	UpdatedAtMs int64
-	ID          string
+	Name                     string
+	NameKey                  string
+	Description              string
+	ClosedToIdentityProvider bool
+	UpdatedAtMs              int64
+	ID                       string
 }
 
 func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64, error) {
@@ -22018,6 +22056,7 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64
 		arg.Name,
 		arg.NameKey,
 		arg.Description,
+		arg.ClosedToIdentityProvider,
 		arg.UpdatedAtMs,
 		arg.ID,
 	)
