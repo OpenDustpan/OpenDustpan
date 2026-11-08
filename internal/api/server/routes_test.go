@@ -277,6 +277,19 @@ func newServiceBackedHandler(
 	return handler
 }
 
+// routeReach returns the reach config of the group routes over st.
+func routeReach(st *sqlite.Store) access.ReachConfig {
+	return access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st}
+}
+
+// noReach returns the reach config of a handler whose test serves no group
+// route: the zero config makes each group read fail closed.
+func noReach() access.ReachConfig {
+	return access.ReachConfig{
+		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+	}
+}
+
 // newServiceBackedHandlerOf is newServiceBackedHandler that also returns the
 // store under the handler, so a test can change the installation state.
 func newServiceBackedHandlerOf(
@@ -346,6 +359,7 @@ func newServiceBackedHandlerOf(
 		Schema:           st,
 		Journal:          st,
 		Principals:       routePrincipals,
+		Reach:            routeReach(st),
 		Tokens:           seedRouteTokens(t, st),
 		Access:           seedRouteAccess(t, st),
 		Audit:            st,
@@ -1616,6 +1630,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,
@@ -1790,6 +1805,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,
@@ -1838,6 +1854,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
 		LocalUsers:       nil,

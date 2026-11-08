@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -385,4 +386,132 @@ func countSchemas(t *testing.T, base string, schemas []string) int {
 	}
 
 	return n
+}
+
+// errMigrate is the failure of the migrate function of the test below.
+var errMigrate = errors.New("the migration fails")
+
+// TestBuildTemplateDropsTheTemplateAfterAFailedMigrate checks that a build
+// that fails after CREATE DATABASE does not leave the template database
+// behind.
+func TestBuildTemplateDropsTheTemplateAfterAFailedMigrate(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("%s is not set", envURL)
+	}
+
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		t.Fatalf("random name: %v", err)
+	}
+
+	name := "dustpan_test_pgtest" + hex.EncodeToString(suffix)
+
+	// The build drops the database when it fails. This cleanup drops it when
+	// the build keeps it, so a failed run leaves nothing.
+	t.Cleanup(func() { dropDatabase(t, base, name) })
+
+	migrate := func(context.Context, string) error { return errMigrate }
+
+	if err := pgtest.BuildTemplate(t.Context(), base, name, migrate); err == nil {
+		t.Fatal("BuildTemplate with a failed migrate = nil, want an error")
+	}
+
+	if databaseExists(t, base, name) {
+		t.Fatalf("the template database %s stays after a failed build", name)
+	}
+}
+
+// databaseExists reports whether the database name exists on the server of
+// base.
+func databaseExists(t *testing.T, base, name string) bool {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), base)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var n int
+
+	query := "SELECT count(*) FROM pg_database WHERE datname = $1"
+	if err = conn.QueryRow(t.Context(), query, name).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	return n > 0
+}
+
+// dropDatabase drops the database name on the server of base. A failure is
+// only logged: a cleanup must not fail the test that it follows.
+func dropDatabase(t *testing.T, base, name string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(context.Background(), base)
+	if err != nil {
+		t.Logf("connect to drop %s: %v", name, err)
+
+		return
+	}
+
+	defer func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	}()
+
+	drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
+	if _, execErr := conn.Exec(context.Background(), drop); execErr != nil {
+		t.Logf("drop the database %s: %v", name, execErr)
+	}
+}
+
+// TestCloneNameRefusesANameOverTheLimit checks the byte limit of a clone
+// name: PostgreSQL keeps 63 bytes, so a longer name must not reach CREATE
+// DATABASE.
+func TestCloneNameRefusesANameOverTheLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		template string
+		want     int
+		wantErr  bool
+	}{
+		{"a name of 63 bytes", strings.Repeat("a", 49), 63, false},
+		{"a name of 64 bytes", strings.Repeat("a", 50), 64, true},
+		{"a multibyte name of 63 bytes", strings.Repeat("é", 24) + "a", 63, false},
+		{"a multibyte name of 64 bytes", strings.Repeat("é", 25), 64, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := pgtest.CloneName(tt.template)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("CloneName of a %d-byte template = %q, want an error", len(tt.template), got)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("CloneName = %v", err)
+			}
+
+			if len(got) != tt.want {
+				t.Fatalf("clone name length = %d, want %d", len(got), tt.want)
+			}
+		})
+	}
 }

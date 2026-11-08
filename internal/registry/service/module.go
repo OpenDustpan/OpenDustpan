@@ -263,26 +263,30 @@ func (s *Service) OpenModuleFile(
 	return file.Size, r, nil
 }
 
-// Modules returns the addresses of the modules in ns that have at least one
-// release, ordered by name and system. It returns an empty list for a
-// namespace with no module, and registry.ErrNotFound for a namespace that does
-// not exist.
-func (s *Service) Modules(ctx context.Context, ns namespace.Name) ([]registry.Address, error) {
+// Modules returns one page of the addresses of the modules in ns that have at
+// least one release, ordered by name and system, and the cursor of the next
+// page. The cursor after is the cursor of the page before, and it is empty
+// for the first page. The next cursor is empty when this page is the last
+// one. It returns an empty list for a namespace with no module, and
+// registry.ErrNotFound for a namespace that does not exist.
+func (s *Service) Modules(
+	ctx context.Context, ns namespace.Name, after string, limit int,
+) ([]registry.Address, string, error) {
 	// Defense in depth: the HTTP handler gets ns from a checked route and the
 	// namespace lookup below also refuses an unknown name; this check stays so
 	// that a new caller cannot reach the store with a name that is not valid.
 	if _, err := namespace.ParseName(string(ns)); err != nil {
-		return nil, fmt.Errorf("%w: %w", registry.ErrNotFound, err)
+		return nil, "", fmt.Errorf("%w: %w", registry.ErrNotFound, err)
 	}
 
 	if _, err := s.namespaces.GetNamespace(ctx, ns); err != nil {
-		return nil, notFound(err)
+		return nil, "", notFound(err)
 	}
 
-	addrs, err := s.store.Addresses(ctx, ns, registry.KindModule)
+	addrs, next, err := s.store.Addresses(ctx, ns, registry.KindModule, after, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list modules: %w", err)
+		return nil, "", fmt.Errorf("list modules: %w", err)
 	}
 
-	return addrs, nil
+	return addrs, next, nil
 }

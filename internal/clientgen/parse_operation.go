@@ -475,7 +475,7 @@ func checkParameterType(ptr string, t model.Type) error {
 	switch t.Kind {
 	case model.TypeString, model.TypeInteger, model.TypeNumber, model.TypeBoolean:
 		return nil
-	case model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny:
+	case model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny, model.TypeUnion:
 		return unsupported(ptrJoin(ptr, "schema"), "parameter that is not a scalar or a list of scalars")
 	default:
 		return unsupported(ptrJoin(ptr, "schema"), "parameter type")
