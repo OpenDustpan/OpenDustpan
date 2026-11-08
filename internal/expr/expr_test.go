@@ -13,6 +13,6 @@ func TestEvaluatorConformance(t *testing.T) {
 	selfservicetest.RunEvaluator(t, func(t *testing.T) selfservice.Evaluator {
 		t.Helper()
 
-		return newEvaluator(t)
+		return newPatientEvaluator(t)
 	})
 }

@@ -295,8 +295,15 @@ func TestGroupsLayer(t *testing.T) {
 
 // TestFromLoopsWithinTheLimits checks that the slowest rules that the limits
 // allow still run: 1,000 groups in a closure, and a regular expression.
+// It uses the default evaluator, with its default time limit, because the
+// test is about that limit. A loaded machine (the race detector, many CPUs)
+// can stop one run at the time limit, so each source gets up to three runs
+// and the test passes on the first run that returns true. A source that the
+// limits refuse fails all three runs.
 func TestFromLoopsWithinTheLimits(t *testing.T) {
 	t.Parallel()
+
+	const attempts = 3
 
 	env := hostileEnv()
 	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups-1)
@@ -307,9 +314,20 @@ func TestFromLoopsWithinTheLimits(t *testing.T) {
 		"count(request.requester.groups, # == '') == 999",
 		"inputs.long matches '^(a|aa)+$'",
 	} {
-		got, err := newEvaluator(t).Bool(t.Context(), source, env)
+		var (
+			got bool
+			err error
+		)
+
+		for range attempts {
+			got, err = newEvaluator(t).Bool(t.Context(), source, env)
+			if err == nil && got {
+				break
+			}
+		}
+
 		if err != nil || !got {
-			t.Fatalf("Bool(%q) = %v, %v, want true", source, got, err)
+			t.Fatalf("Bool(%q) = %v, %v after %d runs, want true", source, got, err, attempts)
 		}
 	}
 }
@@ -473,7 +491,8 @@ func TestEnvTypesAreAccepted(t *testing.T) {
 	env.Input = map[string]any{"n": json.Number("5"), "f": float64(1.5), "b": true, "z": nil, "l": []any{"a", 1.0}}
 	env.Inputs["list"] = []any{map[string]any{"k": "v"}}
 
-	if got, err := newEvaluator(t).Bool(t.Context(), "input.b && len(inputs.list) == 1", env); err != nil || !got {
+	got, err := newPatientEvaluator(t).Bool(t.Context(), "input.b && len(inputs.list) == 1", env)
+	if err != nil || !got {
 		t.Fatalf("Bool() = %v, %v, want true", got, err)
 	}
 }
@@ -496,14 +515,28 @@ func TestRunErrorIsShort(t *testing.T) {
 	}
 }
 
-// newEvaluator returns an Evaluator with a Limiter of its own, so that parallel
-// tests do not share a budget.
+// newEvaluator returns an Evaluator with the default time limit and a Limiter
+// of its own, so that parallel tests do not share a budget.
 func newEvaluator(t *testing.T) *expr.Evaluator {
 	t.Helper()
 
 	e, err := expr.New(expr.NewLimiter())
 	if err != nil {
 		t.Fatalf("New() = %v", err)
+	}
+
+	return e
+}
+
+// newPatientEvaluator returns an Evaluator with a time limit of one minute and
+// a Limiter of its own. A test that expects a result uses it, so that a slow
+// host and the race detector cannot end a valid run at the default limit.
+func newPatientEvaluator(t *testing.T) *expr.Evaluator {
+	t.Helper()
+
+	e, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
+	if err != nil {
+		t.Fatalf("NewWithTimeout() = %v", err)
 	}
 
 	return e

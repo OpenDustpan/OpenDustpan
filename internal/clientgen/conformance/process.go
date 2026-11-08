@@ -83,6 +83,11 @@ type ProcessAdapter struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	killed   atomic.Bool
+	// groupEnded says that the post-exit step has ended the process group.
+	// The wait that follows can then reap the adapter, so its process ID, and
+	// the ID of its group, can belong to another process: a later kill sends
+	// no signal.
+	groupEnded atomic.Bool
 	// killProcess stops the process group of the adapter. It is killGroup; a
 	// test replaces it to count the calls.
 	killProcess func(p *os.Process) error
@@ -93,14 +98,17 @@ type ProcessAdapter struct {
 
 // StartAdapter starts the adapter process.
 func StartAdapter(ctx context.Context, opts ProcessOptions) (*ProcessAdapter, error) {
+	a := new(ProcessAdapter)
+
 	cmd := exec.CommandContext(ctx, opts.Path, opts.Args...) //nolint:gosec // G204: the caller names the program.
 	cmd.Env = append([]string{}, opts.Env...)                // Never nil: nil would give the adapter our environment.
 	cmd.WaitDelay = closeTimeout
 
 	// The adapter runs in its own process group, and a stop ends the whole
 	// group. An adapter that starts through a shell, npx or uv leaves no
-	// grandchild behind.
-	prepareGroup(cmd)
+	// grandchild behind. A stop after the post-exit step has ended the group
+	// sends no signal.
+	prepareGroup(cmd, a)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -112,7 +120,6 @@ func StartAdapter(ctx context.Context, opts ProcessOptions) (*ProcessAdapter, er
 		return nil, fmt.Errorf("adapter stdout: %w", err)
 	}
 
-	a := new(ProcessAdapter)
 	a.cmd, a.stdin, a.stderr, a.timeout = cmd, stdin, new(tailBuffer), opts.CallTimeout
 	a.killProcess = killGroup
 	a.lines, a.done, a.stop = make(chan []byte), make(chan struct{}), make(chan struct{})
@@ -225,6 +232,15 @@ func (a *ProcessAdapter) read(stdout io.Reader) {
 		a.stderr.note(err)
 	}
 
+	// Stop the processes that the adapter left behind: an adapter that exits
+	// on its own does not stop them. Nothing reaps the adapter before the
+	// wait below, so its process ID stays reserved for the group kill. Where
+	// the platform supports it, the step waits for the exit, so that the kill
+	// cannot end a clean adapter while it exits.
+	if a.cmd.Process != nil {
+		endGroupAfterExit(a)
+	}
+
 	a.waitErr = a.cmd.Wait()
 }
 
@@ -261,7 +277,9 @@ func (a *ProcessAdapter) kill() {
 		// Wait reaped the adapter. Its process ID, and so the ID of its
 		// group, can now belong to another process: send no signal.
 	default:
-		if a.cmd.Process != nil {
+		// The post-exit step may have ended the group while Wait still runs.
+		// A signal then could reach a group ID that another process owns.
+		if a.cmd.Process != nil && !a.groupEnded.Load() {
 			if err := a.killProcess(a.cmd.Process); err != nil {
 				a.stderr.note(err)
 			}
