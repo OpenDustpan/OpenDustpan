@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // TestOnlyKnownSettingsTakeDatabaseValues pins the settings that the database
@@ -61,13 +62,19 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 // TestStaticCredentialHostsAreStaticOnly pins the settings that name a host, a
 // URL or an endpoint that receives a static credential: each one stays static,
 // because a change through the settings API could point it at another server
-// while the credential stays.
+// while the credential stays. Each declaration also carries the
+// static-credential-host mark, so the settings registry refuses a database
+// layer for it, also for a declaration that an SDK user gives.
+//
+// public-url and issuer-base-url are URL settings that receive no credential:
+// the server builds external URLs and its own issuer URL from them, so no
+// credential goes to the host that they name, and neither carries the mark.
 func TestStaticCredentialHostsAreStaticOnly(t *testing.T) {
 	t.Parallel()
 
-	declared := map[string]bool{}
+	declared := map[string]setting.Declaration{}
 	for _, d := range cli.SettingDeclarations() {
-		declared[d.Key] = d.Database
+		declared[d.Key] = d
 	}
 
 	rows := []struct {
@@ -87,14 +94,19 @@ func TestStaticCredentialHostsAreStaticOnly(t *testing.T) {
 		t.Run(row.key, func(t *testing.T) {
 			t.Parallel()
 
-			database, ok := declared[row.key]
+			d, ok := declared[row.key]
 			if !ok {
 				t.Fatalf("no declaration for %s", row.key)
 			}
 
-			if database {
+			if d.Database {
 				t.Fatalf("%s takes a database value: a holder of the manage-settings action could point it "+
 					"at another server and the server would send %s there", row.key, row.receives)
+			}
+
+			if !d.StaticCredentialHost {
+				t.Fatalf("%s: StaticCredentialHost = false, want true: the server sends %s to the host that "+
+					"this setting names, so a database value must never choose that host", row.key, row.receives)
 			}
 		})
 	}
