@@ -549,7 +549,7 @@ func TestGrantBelowInstallationGivesDataActionsOnly(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 {
 		t.Fatalf("scope of server:backup = %+v, want nothing", scope)
 	}
 }

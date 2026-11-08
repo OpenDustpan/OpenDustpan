@@ -295,22 +295,38 @@ func (h *Handler) tokenRoutes() []Route {
 
 	return append([]Route{
 		{
-			Method: http.MethodGet, Path: tokensPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(listTokens),
+			Method:       http.MethodGet,
+			Path:         tokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listTokens),
 		},
 		{
-			Method: http.MethodGet, Path: tokenPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(getToken),
+			Method:       http.MethodGet,
+			Path:         tokenPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(getToken),
 		},
 		{
 			// A service token needs principal:manage-tokens on its
 			// principal, a personal token server:manage-tokens on the
 			// installation.
 			Method: http.MethodDelete, Path: tokenPath, Scope: ScopeAuthorized,
-			Actions:    []identity.Action{identity.ActionServerManageTokens, identity.ActionPrincipalManageTokens},
-			Resolve:    h.resolveTokenOwner,
-			ActionsFor: revokeActions,
-			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
+			Actions:      []identity.Action{identity.ActionServerManageTokens, identity.ActionPrincipalManageTokens},
+			Resolve:      h.resolveTokenOwner,
+			ActionsFor:   revokeActions,
+			OpaqueDenial: true,
+			Serve: h.serveTokenChange(
+				identity.ActionServerManageTokens,
+				opaqueTokenState(revokeToken(accesstoken.ScopePersonal)),
+			),
 		},
 	}, h.serviceTokenRoutes()...)
 }
@@ -326,29 +342,47 @@ func (h *Handler) serviceTokenRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodPost, Path: serviceTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolveServiceTokenCreate, ActionsFor: nil, Serve: serve(createToken(accesstoken.ScopeService)),
+			Method:       http.MethodPost,
+			Path:         serviceTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      resolveServiceTokenCreate,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        serve(createToken(accesstoken.ScopeService)),
 		},
 		{
-			Method: http.MethodPost, Path: serviceTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
-			Resolve: h.resolveTokenOwner, ActionsFor: nil, Serve: serve(rotateToken(accesstoken.ScopeService)),
+			Method:       http.MethodPost,
+			Path:         serviceTokenPath + "/rotate",
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      h.resolveTokenOwner,
+			ActionsFor:   nil,
+			OpaqueDenial: true,
+			Serve:        serve(freshFirst(opaqueTokenState(rotateToken(accesstoken.ScopeService)))),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: serve(createPrincipalToken),
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false, Serve: serve(createPrincipalToken),
 		},
 		{
-			Method: http.MethodGet, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: h.serveTokenRead(listPrincipalTokens),
+			Method:       http.MethodGet,
+			Path:         principalTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      service,
+			Resolve:      resolvePrincipalPath,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listPrincipalTokens),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: serve(ofPathPrincipal(rotateToken(accesstoken.ScopeService))),
 		},
 		{
 			Method: http.MethodDelete, Path: principalTokenPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: serve(ofPathPrincipal(revokeToken(accesstoken.ScopeService))),
 		},
 	}
@@ -373,8 +407,11 @@ func resolvePrincipalPath(_ http.ResponseWriter, r *http.Request) (identity.Obje
 
 // resolveTokenOwner returns the object of a change of the token in the
 // path: the principal of a service token, else the installation. A token
-// that does not exist resolves to the installation, and the Service
-// answers 404 after the route check.
+// that does not exist, a malformed ID and a token of the wrong kind resolve
+// to the installation, so the route check runs. On DELETE
+// /api/server/tokens/{id} and POST /api/server/service-tokens/{id}/rotate,
+// the handler then answers the opaque 403, so a caller cannot learn whether
+// the token exists.
 func (h *Handler) resolveTokenOwner(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	if h.tokens == nil {
 		return identity.ServerObject(), nil
@@ -503,8 +540,14 @@ func (h *Handler) ownTokenRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: ownTokensPath, Scope: ScopeAuthorized,
-			Actions: own, Resolve: resolveCaller, ActionsFor: nil, Serve: h.serveTokenRead(listOwnTokens),
+			Method:       http.MethodGet,
+			Path:         ownTokensPath,
+			Scope:        ScopeAuthorized,
+			Actions:      own,
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveTokenRead(listOwnTokens),
 		},
 		{
 			Method:     http.MethodPost,
@@ -512,8 +555,8 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    own,
 			Resolve:    resolveCaller,
-			ActionsFor: nil,
-			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -521,12 +564,12 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    own,
 			Resolve:    resolveCaller,
-			ActionsFor: nil,
-			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
 		},
 		{
 			Method: http.MethodPost, Path: ownTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
 		},
 	}
@@ -774,6 +817,50 @@ func tokenObject(r *http.Request, svc *accesstoken.Service) string {
 	}
 
 	return accesstoken.TokenRef(t.PrincipalID, id)
+}
+
+// freshFirst runs the freshness check of a console session before op, so
+// that a caller without a recent session gets the same answer for each token
+// ID and learns nothing about which IDs exist. op keeps its own check.
+func freshFirst(op tokenOp) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		if err := requireFresh(r); err != nil {
+			return failed(accesstoken.Ref(r.PathValue("id"))), err
+		}
+
+		return op(w, r, svc, p, e)
+	}
+}
+
+// opaqueTokenState answers the opaque denial of the two routes whose object
+// comes from the stored token for a token that does not exist, a malformed
+// token ID and a token of the wrong kind. It keeps the full text for the log
+// and unwraps only to identity.ErrDenied. Only the read of the token in the
+// path decides about a malformed ID: an invalid request of op, for example
+// an end time of a rotation in the past, keeps its own answer.
+func opaqueTokenState(op tokenOp) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		id := r.PathValue("id")
+
+		// Defense in depth: the route check refuses a caller without the
+		// action; this layer stops a caller that holds the action from
+		// learning whether a token ID exists.
+		if _, err := svc.Get(r.Context(), id); errors.Is(err, accesstoken.ErrNotFound) ||
+			errors.Is(err, accesstoken.ErrInvalid) {
+			return failed(accesstoken.Ref(id)), opaqueDenialError{err: err}
+		}
+
+		res, err := op(w, r, svc, p, e)
+		if errors.Is(err, accesstoken.ErrNotFound) || errors.Is(err, accesstoken.ErrWrongKind) {
+			return res, opaqueDenialError{err: err}
+		}
+
+		return res, err
+	}
 }
 
 // classifyToken maps the access token errors to their status and message.
