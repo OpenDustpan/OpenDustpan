@@ -5306,7 +5306,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"

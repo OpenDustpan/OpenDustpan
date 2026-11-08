@@ -1616,6 +1616,14 @@ WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text);
 
+-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C";
+
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
@@ -1705,6 +1713,35 @@ SELECT group_id, source, source_id, state, pinned
 FROM group_members
 WHERE principal_id = $1 AND removed_at_ms IS NULL
 ORDER BY group_id COLLATE "C";
+
+-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: MemberRemovalTotals :one
+-- The totals of the removals of one source in one window: the members that
+-- the source removed from any group, the members that it removed from one
+-- group, and the largest group that it saw before a removal. The window
+-- holds the rows above low_ms and at most high_ms.
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = @group_id THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = @group_id THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = @source_kind AND source_id = @source_id
+  AND at_ms > @low_ms::bigint AND at_ms <= @high_ms::bigint;
+
+-- name: PruneMemberRemovals :execrows
+-- Deletes at most max_rows of the oldest rows of one source at or before
+-- cutoff_ms.
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = @source_kind AND m.source_id = @source_id
+      AND m.at_ms <= @cutoff_ms::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT @max_rows::bigint
+);
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)

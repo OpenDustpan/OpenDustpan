@@ -159,7 +159,8 @@ func TestDeleteRemovesARowThatFailsItsChecks(t *testing.T) {
 }
 
 // TestFireRefusesAReservedKeyPrefix proves: a key with the prefix of the drift
-// checks of the server fires nothing, and a key with another prefix fires.
+// checks of the server, in any case, fires nothing, and a key with the prefix
+// inside or no prefix fires.
 func TestFireRefusesAReservedKeyPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -168,11 +169,11 @@ func TestFireRefusesAReservedKeyPrefix(t *testing.T) {
 		key  string
 		want int
 	}{
-		{"prefix only", "drift-", http.StatusBadRequest},
-		{"prefix and text", "drift-unit-1-29000000", http.StatusBadRequest},
-		{"other case", "Drift-unit-1", http.StatusCreated},
-		{"inside", "my-drift-1", http.StatusCreated},
-		{"no hyphen", "drift", http.StatusCreated},
+		{"lowercase prefix", "drift-unit-1-29000000", http.StatusBadRequest},
+		{"mixed case prefix", "Drift-unit-1", http.StatusBadRequest},
+		{"uppercase prefix", "DRIFT-x", http.StatusBadRequest},
+		{"prefix inside", "my-drift-1", http.StatusCreated},
+		{"plain key", "click-1", http.StatusCreated},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -189,9 +190,12 @@ func TestFireRefusesAReservedKeyPrefix(t *testing.T) {
 				t.Fatalf("fire = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
 			}
 
-			if tc.want == http.StatusBadRequest &&
-				(!strings.Contains(rec.Body.String(), "request.idempotency-key-invalid") || r.disp.fires() != 0) {
-				t.Errorf("body = %s, fires = %d, want the key error and no fire", rec.Body.String(), r.disp.fires())
+			if tc.want == http.StatusBadRequest {
+				if !strings.Contains(rec.Body.String(), "request.idempotency-key-invalid") || r.disp.fires() != 0 {
+					t.Errorf("body = %s, fires = %d, want the key error and no fire", rec.Body.String(), r.disp.fires())
+				}
+			} else if r.disp.fires() != 1 {
+				t.Errorf("fires = %d, want the fire", r.disp.fires())
 			}
 		})
 	}
