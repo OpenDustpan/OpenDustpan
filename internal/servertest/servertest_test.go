@@ -269,9 +269,10 @@ func send(t *testing.T, c *servertest.Cluster, requests ...request) {
 	}
 }
 
-// seedPlacement makes a collection and a placement rule for Pulumi stacks of
-// any project and any name in the namespace that body creates. The server
-// refuses a new stack that no rule places.
+// seedPlacement makes a collection, a placement rule for Pulumi stacks of any
+// project and any name, and a placement rule for OpenTofu workspaces of any
+// name in the namespace that body creates. The server refuses a new stack or
+// workspace that no rule places.
 func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBody string) {
 	t.Helper()
 
@@ -281,6 +282,7 @@ func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBod
 	for _, step := range []struct{ path, body string }{
 		{base + "/collections", `{"name":"everything"}`},
 		{base + "/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`},
+		{base + "/placement-rules", `{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`},
 	} {
 		if status, body := c.Do(t, server, http.MethodPost, step.path, step.body); status != http.StatusCreated {
 			t.Fatalf("POST %s = %d %s, want %d", step.path, status, body, http.StatusCreated)

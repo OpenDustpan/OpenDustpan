@@ -48,8 +48,9 @@ func answerMessage(t *testing.T, body string) string {
 
 // TestWriteErrorWrappedCopy proves that every case of the protocol switch and
 // of the management switch answers the sentence of the sentinel and nothing
-// else, also when code wraps the sentinel once or twice: the wrap text stays in
-// the log. An error that no case knows answers "internal error".
+// else, also when code wraps the sentinel once or twice. The wrap text stays in
+// the log of a Warn refusal only: a Debug refusal logs no text. An error that no
+// case knows answers "internal error".
 func TestWriteErrorWrappedCopy(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +128,17 @@ func checkWrappedAnswer(t *testing.T, tc wrappedCase, err error, wrap string) {
 
 	if strings.Contains(rec.Body.String(), wrap) {
 		t.Fatalf("body = %q, must not hold the wrap text %q", rec.Body.String(), wrap)
+	}
+
+	// A refusal that an anonymous caller can cause logs its line at Debug without
+	// the wrap text. Defense in depth: this check stays so that a new Debug case
+	// cannot log the text of its error.
+	if refusedLevel(err) == slog.LevelDebug {
+		if strings.Contains(logged, wrap) {
+			t.Fatalf("log = %q, must not hold the wrap text %q", logged, wrap)
+		}
+
+		return
 	}
 
 	if !strings.Contains(logged, wrap) {
@@ -211,7 +223,7 @@ func TestRefusedLevel(t *testing.T) {
 			)
 
 			h.logger = slog.New(slog.NewTextHandler(&buf, nil))
-			h.logRefused(t.Context(), tc.err, "sent text")
+			h.logRefused(t.Context(), tc.err, http.StatusBadRequest, "test.code", "sent text")
 
 			if got := strings.Contains(buf.String(), "runner request refused"); got != (tc.want == slog.LevelWarn) {
 				t.Fatalf("log = %q, refused line at default level = %t", buf.String(), got)

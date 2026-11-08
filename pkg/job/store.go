@@ -71,7 +71,10 @@ const (
 	// durable.Store.Fail does.
 	EndFail EndKind = "fail"
 	// EndRelease returns the operation to pending, or ends it canceled
-	// while a cancel is requested, as durable.Store.Release does.
+	// while a cancel is requested, as durable.Store.Release does. A cancel
+	// can end the operation canceled while the job fails instead, when a
+	// step that changes resources began: the operation is canceled and the
+	// job is failed.
 	EndRelease EndKind = "release"
 )
 
