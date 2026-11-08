@@ -34,7 +34,11 @@ func (testAuthorizer) Authorize(
 func (testAuthorizer) ListObjects(
 	_ context.Context, p identity.Principal, _ identity.Action,
 ) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: p.Admin}, nil
+	if p.Admin {
+		return identity.Every(), nil
+	}
+
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 func mustName(t *testing.T, s string) namespace.Name {
@@ -840,7 +844,7 @@ func TestSelfAllowedListObjectsForwards(t *testing.T) {
 		t.Fatalf("list unit:read: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
 		t.Fatalf("list unit:read = %+v, want namespace acme only", scope)
 	}
 
@@ -1046,7 +1050,7 @@ func (scopeOnly) Authorize(context.Context, identity.Principal, identity.Action,
 }
 
 func (scopeOnly) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // TestExactScopeWithinAuthorize runs the conformance check of an exact scope

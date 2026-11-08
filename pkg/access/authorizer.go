@@ -252,7 +252,7 @@ func (a *Authorizer) ScopeExact() bool {
 // of the subjects with a role that holds action. An administrator has every
 // object.
 func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, action identity.Action) (Scope, error) {
-	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}
 
 	// The namespace service principal has no scope here: the rule of its one
 	// action is a decision on one object, not a list of grants.
@@ -261,7 +261,7 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	}
 
 	if p.Admin {
-		none.All = true
+		none = identity.Every()
 
 		return none, nil
 	}
@@ -276,7 +276,7 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 		return none, err
 	}
 
-	if action != identity.ActionPrincipalManageTokens || out.All {
+	if action != identity.ActionPrincipalManageTokens || out.CoversEveryObject() {
 		return out, nil
 	}
 
@@ -290,7 +290,7 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 
 // scopeFor returns the scope of the grants with a role that holds action.
 func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action identity.Action) (Scope, error) {
-	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}
 
 	roles, err := a.rolesWith(ctx, action)
 	if err != nil || len(roles) == 0 {
@@ -459,7 +459,12 @@ func addToScope(s *Scope, obj identity.Object) {
 
 	switch kind {
 	case ObjectInstallation:
-		s.All = true
+		every := identity.Every()
+		every.Namespaces = s.Namespaces
+		every.Collections = s.Collections
+		every.Units = s.Units
+		every.Principals = s.Principals
+		*s = every
 	case ObjectNamespace:
 		s.Namespaces = appendObject(s.Namespaces, obj)
 	case ObjectCollection:

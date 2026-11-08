@@ -66,14 +66,14 @@ func (g Gate) ScopeExact() bool {
 func (g Gate) ListObjects(
 	ctx context.Context, p identity.Principal, action identity.Action,
 ) (identity.Scope, error) {
-	none := identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
+	none := identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}
 
 	scope, err := g.Next.ListObjects(ctx, p, action)
 	if err != nil {
 		return none, fmt.Errorf("list objects: %w", err)
 	}
 
-	if !g.Enabled || scope.All || g.bootstrapExempt(p) {
+	if !g.Enabled || scope.CoversEveryObject() || g.bootstrapExempt(p) {
 		return scope, nil
 	}
 

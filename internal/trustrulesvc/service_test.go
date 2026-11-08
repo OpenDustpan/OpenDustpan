@@ -97,7 +97,7 @@ func (g *grants) Authorize(_ context.Context, _ identity.Principal, a identity.A
 }
 
 func (g *grants) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // fixture is a service over fakes, with the principals of the cases.

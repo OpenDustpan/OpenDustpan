@@ -96,7 +96,7 @@ func (s *Service) Objects(ctx context.Context, p identity.Principal, req Objects
 		return page, err
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		page.All = true
 
 		return page, nil

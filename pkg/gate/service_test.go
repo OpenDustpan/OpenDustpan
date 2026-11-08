@@ -201,7 +201,7 @@ func (g grants) Authorize(_ context.Context, p identity.Principal, _ identity.Ac
 }
 
 func (grants) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true}, nil
+	return identity.Every(), nil
 }
 
 // TestLimitedAuthorizerScopeNotExact proves that the decorator does not say
@@ -242,7 +242,7 @@ func TestLimitedAuthorizer(t *testing.T) {
 	}
 
 	scope, err := auth.ListObjects(t.Context(), principal("admin", true), identity.ActionNamespaceRead)
-	if err != nil || !scope.All {
+	if err != nil || !scope.CoversEveryObject() {
 		t.Fatalf("ListObjects() = %+v, %v, want the scope of the grants", scope, err)
 	}
 }

@@ -431,7 +431,7 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 		return false, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return true, nil
 	}
 

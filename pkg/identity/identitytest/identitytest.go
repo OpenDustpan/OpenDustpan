@@ -184,7 +184,7 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	}
 
 	listed := slices.Concat(scope.Namespaces, scope.Collections, scope.Units, scope.Principals)
-	if scope.All {
+	if scope.CoversEveryObject() {
 		listed = append(listed, every...)
 	}
 
@@ -306,7 +306,12 @@ func (a *PolicyAuthorizer) ListObjects(
 
 		switch {
 		case obj.IsServer():
-			out.All = true
+			every := identity.Every()
+			every.Namespaces = out.Namespaces
+			every.Collections = out.Collections
+			every.Units = out.Units
+			every.Principals = out.Principals
+			out = every
 		case obj.IsPrincipal():
 			out.Principals = append(out.Principals, obj)
 		case obj.IsUnit():
@@ -701,7 +706,7 @@ func testAdminListsAll(t *testing.T, authz identity.Authorizer) {
 			t.Fatalf("admin list %s: %v", action, err)
 		}
 
-		if !scope.All {
+		if !scope.CoversEveryObject() {
 			t.Fatalf("admin list %s: all = false, want true", action)
 		}
 	}
@@ -773,8 +778,9 @@ func testListUnitGrant(t *testing.T) {
 		t.Fatalf("alice list unit:read: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 || len(scope.Collections) != 0 || len(scope.Principals) != 0 ||
-		len(scope.Units) != 1 || scope.Units[0].String() != unitA.String() {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 || len(scope.Collections) != 0 ||
+		len(scope.Principals) != 0 || len(scope.Units) != 1 ||
+		scope.Units[0].String() != unitA.String() {
 		t.Fatalf("alice list unit:read = %+v, want unit %q only", scope, unitA.String())
 	}
 
@@ -819,7 +825,8 @@ func testListNamespaceGrant(t *testing.T) {
 		t.Fatalf("alice list unit:read: %v", err)
 	}
 
-	if scope.All || len(scope.Units) != 0 || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
+	if scope.CoversEveryObject() || len(scope.Units) != 0 || len(scope.Namespaces) != 1 ||
+		scope.Namespaces[0].Namespace() != acme {
 		t.Fatalf("alice list unit:read = %+v, want namespace %q only", scope, acme)
 	}
 
