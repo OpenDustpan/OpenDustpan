@@ -111,7 +111,9 @@ func (u Rules) RecordOverrideRefusal(
 		action = OverrideAction(override)
 	}
 
-	u.Guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: obj, Reason: "override refused", Window: 0})
+	u.Guard.Record(ctx, r, p, refusal.Denial{
+		Action: action, Object: obj, Reason: "override refused", ReasonWithin: nil, Window: 0,
+	})
 }
 
 // Detail is what one audit entry records beyond the request and the caller.

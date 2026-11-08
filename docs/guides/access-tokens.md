@@ -109,6 +109,41 @@ The principal token create uses the same fresh sign-in. The body is:
 
 Both routes answer `201` with the secret.
 
+### The reach of a service principal
+
+A caller that holds `principal:manage-tokens` on the installation makes or
+rotates a token of a service principal only when the reach of that principal
+is inside the reach of the caller. The reach of a principal is the union of
+its grants, the grants of its groups, and the grants of each service principal
+that it can act as.
+
+The server compares the two reaches. If the principal holds an action on an
+object that the caller does not hold, the server refuses the change. The
+answer is `403` with the code `token.outside-reach`. The message names the
+principal and each action that the caller does not hold, with its object:
+
+```
+principal "prn-x" holds actions that you do not hold: server:backup on the installation
+```
+
+The message names an action and its object only when the caller holds the read
+action of that object. All the other actions go into one phrase at the end
+that says `objects that you cannot read`, so the message does not tell how many
+objects the caller cannot read. The audit entry of the refusal names
+every missing action with its object.
+
+A holder of `principal:manage-tokens` on the service principal itself is not
+compared. A site administrator holds every action, so it passes. A rotation
+follows the same rule.
+
+The same compare protects the grant that lets its holder act as the principal.
+A grant of a delegation role, such as `token-manager`, on a service principal
+needs a granter that holds the reach of that principal. A membership add to a
+group that holds such a grant needs the same. Otherwise the answer is `403`,
+and the change does not happen. The refusal names the principal only when the
+caller holds `server:read-principals`. A revoke, and a removal of a member,
+take access away, so they never run this compare.
+
 ## Revoke a token
 
 A revoke answers `204`. The token stops working at once, and its record stays
@@ -253,6 +288,7 @@ change is 900 seconds by default. Set the window to `0` to turn the check off.
 | `auth.unauthenticated` | `401` | The token is unknown, expired, revoked, disabled or replaced. |
 | `mfa.fresh-step-required` | `403` | A create or a rotation of a token, or a change of the token policy, needs a fresh console sign-in. An access token gets this answer. |
 | `token.caller-not-person` | `403` | The caller has no person record. |
+| `token.outside-reach` | `403` | The reach of the service principal is not inside the reach of the caller. |
 | `token.not-found` | `404` | The token is unknown, or it belongs to another person. |
 | `token.ended` | `409` | The token is revoked, replaced or not active. |
 | `token.already-exists` | `409` | The name or the secret is already used. |

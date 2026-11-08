@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -47,6 +50,13 @@ var (
 	ErrNotOwnToken = errors.New(
 		"a person makes and rotates only its own personal tokens: the person signs in and uses /api/server/caller/tokens",
 	)
+	// ErrReachExceeded reports a caller that holds principal:manage-tokens
+	// on the installation and makes or rotates a token of a service
+	// principal that holds an action on an object outside the reach of the
+	// caller. A holder on the principal itself is not compared. A zero or
+	// incomplete reach config, and a read of the reach that fails, refuse
+	// the request too. It comes wrapped with identity.ErrDenied.
+	ErrReachExceeded = errors.New("the reach of the principal is not inside the reach of the caller")
 )
 
 // requireSignIn returns ErrSignInRequired when caller authenticated with a
@@ -202,14 +212,19 @@ func notOwnToken() error {
 // principalID. Only a service token reaches it: it needs
 // principal:manage-tokens on the principal, and its holder can act as the
 // principal, with every grant that the principal has now or gets later. A
-// personal token of another person never reaches it: the scope refuses it
-// first.
+// holder of the action on the installation also needs a reach that covers
+// the reach of the principal. A personal token of another person never
+// reaches it: the scope refuses it first.
 func (s *Service) mayActFor(ctx context.Context, caller identity.Principal, kind Kind, principalID string) error {
 	if kind != KindService {
 		return notOwnToken()
 	}
 
-	return s.requireManageTokens(ctx, caller, principalID, useMake)
+	if err := s.requireManageTokens(ctx, caller, principalID, useMake); err != nil {
+		return err
+	}
+
+	return s.requireReach(ctx, caller, principalID)
 }
 
 // Uses of principal:manage-tokens, as the text of a refusal names them.
@@ -246,4 +261,366 @@ func (s *Service) requireManageTokens(
 	}
 
 	return nil
+}
+
+// holds names where a caller holds principal:manage-tokens for one service
+// principal: on the installation, and on the principal itself. A hold
+// through a group counts for each. A hold through the namespace edge is
+// neither: that edge decides the change alone.
+type holds struct {
+	installation bool
+	principal    bool
+}
+
+// requireReach checks the reach rule of a token change for a service
+// principal: a caller that holds principal:manage-tokens on the
+// installation can make or rotate the token only when the reach of the
+// principal fits inside the reach of the caller. A holder on the principal
+// itself is not compared. An administrator holds every action and passes.
+// A zero or incomplete reach config, and a read that fails, refuse the
+// request: the check never skips.
+func (s *Service) requireReach(ctx context.Context, caller identity.Principal, principalID string) error {
+	if caller.Admin {
+		return nil
+	}
+
+	held, err := s.tokenHolds(ctx, caller, principalID)
+	if err != nil {
+		return refuseReach(principalID, err)
+	}
+
+	if !held.installation || held.principal {
+		return nil
+	}
+
+	holder, missing, err := s.missingActions(ctx, caller, principalID)
+	if err != nil {
+		return refuseReach(principalID, err)
+	}
+
+	if len(missing) > 0 {
+		return refuseMissing(ctx, holder, principalID, missing)
+	}
+
+	return nil
+}
+
+// CheckReach answers the reach check of a token change for the service
+// principal principalID: it refuses a caller that holds
+// principal:manage-tokens on the installation only and does not hold each
+// action of the reach of the principal, with the same error as the create
+// and the rotate paths of a token. A holder of the action on the principal
+// itself is not compared, as for a token.
+//
+// The check of the hold on the action stays with the caller: this method
+// compares the reaches alone.
+func (s *Service) CheckReach(ctx context.Context, caller identity.Principal, principalID string) error {
+	return s.requireReach(ctx, caller, principalID)
+}
+
+// missingActions returns the reach of the caller and the actions of the
+// reach of the principal principalID that it does not hold.
+func (s *Service) missingActions(
+	ctx context.Context, caller identity.Principal, principalID string,
+) (access.Reach, []access.HeldAction, error) {
+	holder, err := s.reachOf(ctx, caller)
+	if err != nil {
+		return access.Reach{}, nil, err
+	}
+
+	target, err := access.ReachOf(ctx, s.reach, principalID)
+	if err != nil {
+		return holder, nil, fmt.Errorf("read the reach of the principal: %w", err)
+	}
+
+	missing, err := holder.Missing(ctx, target)
+	if err != nil {
+		return holder, nil, fmt.Errorf("compare the reaches: %w", err)
+	}
+
+	return holder, missing, nil
+}
+
+// reachOf returns the reach of the caller: the reach of the principal
+// record that exists with its subject. A caller with no record has no
+// reach, so the request is refused.
+func (s *Service) reachOf(ctx context.Context, caller identity.Principal) (access.Reach, error) {
+	p, err := s.principals.GetPrincipalBySubject(ctx, caller.Subject)
+	if err != nil {
+		return access.Reach{}, fmt.Errorf("read the principal of the caller %q: %w", caller.Subject, err)
+	}
+
+	return access.ReachOf(ctx, s.reach, p.ID)
+}
+
+// tokenHolds reports where the caller holds principal:manage-tokens for
+// the service principal principalID, directly or through a group. It reads
+// the grants of the caller and its groups, and the role of each grant. A
+// port that the reach config does not hold, and a read that fails, answer
+// an error, so the caller refuses the request.
+func (s *Service) tokenHolds(ctx context.Context, caller identity.Principal, principalID string) (holds, error) {
+	var out holds
+
+	if err := s.reachReady(); err != nil {
+		return out, err
+	}
+
+	grants, err := s.grantsOf(ctx, caller.Subject)
+	if err != nil {
+		return out, err
+	}
+
+	roles, err := rolesOf(ctx, grants, s.reach.Roles)
+	if err != nil {
+		return out, err
+	}
+
+	for i := range grants {
+		role, ok := roles[grants[i].Role]
+		if !ok || !role.Has(identity.ActionPrincipalManageTokens) {
+			continue
+		}
+
+		if grants[i].Object.IsServer() {
+			out.installation = true
+		}
+
+		if grants[i].Object.IsPrincipal() && grants[i].Object.PrincipalID() == principalID {
+			out.principal = true
+		}
+	}
+
+	return out, nil
+}
+
+// reachReady returns an error when the reach config does not hold the ports
+// that the reach check reads. The caller then refuses the change: the check
+// never skips.
+func (s *Service) reachReady() error {
+	if s.reach.Grants == nil || s.reach.Roles == nil || s.reach.Callers == nil || s.reach.Principals == nil {
+		return fmt.Errorf("%w: the reach needs the grants, the roles, the callers and the principals",
+			access.ErrMissingDependency)
+	}
+
+	return nil
+}
+
+// grantsOf returns the grants of the caller and of its groups.
+func (s *Service) grantsOf(ctx context.Context, subject string) ([]access.Grant, error) {
+	subjects, err := s.reach.Callers.SubjectsOf(ctx, subject)
+	if err != nil {
+		return nil, fmt.Errorf("read the subjects of the caller: %w", err)
+	}
+
+	var out []access.Grant
+
+	for _, of := range subjects {
+		grants, err := s.reach.Grants.GrantsOf(ctx, of)
+		if err != nil {
+			return nil, fmt.Errorf("read the grants of %s: %w", of.String(), err)
+		}
+
+		out = append(out, grants...)
+	}
+
+	return out, nil
+}
+
+// rolesOf returns the roles that grants name, by ID: the built-in roles
+// from code and the custom roles in one query of store. A role that no
+// longer exists is left out, so its grants give nothing.
+func rolesOf(ctx context.Context, grants []access.Grant, store access.RoleStore) (map[string]access.Role, error) {
+	out := make(map[string]access.Role, len(grants))
+
+	var missing []string
+
+	for i := range grants {
+		id := grants[i].Role
+		if _, done := out[id]; done {
+			continue
+		}
+
+		if role, ok := access.BuiltInRole(id); ok {
+			out[id] = role
+
+			continue
+		}
+
+		if !slices.Contains(missing, id) {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	custom, err := store.GetRoles(ctx, missing)
+	if err != nil {
+		return nil, fmt.Errorf("read roles: %w", err)
+	}
+
+	for i := range custom {
+		out[custom[i].ID] = custom[i]
+	}
+
+	return out, nil
+}
+
+// reachCheckError reports a change that the reach check refused because the
+// server cannot compare the reaches. It wraps identity.ErrDenied and
+// ErrReachExceeded. Its text names the principal and not the cause, which
+// may hold driver detail.
+type reachCheckError struct {
+	principalID string
+	cause       error
+}
+
+// Error implements error.
+func (r *reachCheckError) Error() string {
+	return fmt.Sprintf("cannot check the reach of principal %q", r.principalID)
+}
+
+// Unwrap lets errors.Is match the two sentinels and the cause.
+func (r *reachCheckError) Unwrap() []error {
+	return []error{identity.ErrDenied, ErrReachExceeded, r.cause}
+}
+
+// reachExceededError reports a caller whose reach does not hold every
+// action of the principal principalID. It wraps identity.ErrDenied and
+// ErrReachExceeded. Its text names the principal and the actions that the
+// caller does not hold, sorted, with the object of each. It names the
+// action and the object only when the reach of the caller holds the read
+// action of that object, so the text never names an object that the caller
+// cannot read. All the other actions go into one phrase at the end, so the
+// text does not tell how many objects the caller cannot read.
+type reachExceededError struct {
+	principalID string
+	missing     []access.HeldAction
+	// readable tells, for each entry of missing, whether the reach of the
+	// caller holds the read action of its object.
+	readable []bool
+}
+
+// Error implements error.
+func (r *reachExceededError) Error() string {
+	parts := make([]string, 0, len(r.missing))
+	hidden := false
+
+	for i := range r.missing {
+		if !r.readable[i] {
+			hidden = true
+
+			continue
+		}
+
+		parts = append(parts, string(r.missing[i].Action)+" on "+objectText(r.missing[i].Object))
+	}
+
+	switch {
+	case !hidden:
+		return fmt.Sprintf("principal %q holds actions that you do not hold: %s",
+			r.principalID, strings.Join(parts, ", "))
+	case len(parts) == 0:
+		return fmt.Sprintf("principal %q holds actions that you do not hold on objects that you cannot read",
+			r.principalID)
+	default:
+		return fmt.Sprintf(
+			"principal %q holds actions that you do not hold: %s, and actions on other objects that you cannot read",
+			r.principalID, strings.Join(parts, ", "),
+		)
+	}
+}
+
+// Unwrap lets errors.Is match the two sentinels.
+func (r *reachExceededError) Unwrap() []error { return []error{identity.ErrDenied, ErrReachExceeded} }
+
+// MissingActions returns the actions of the reach of the principal that the
+// caller does not hold, with the object of each, sorted. The text of the
+// refusal hides an object that the caller cannot read; the audit entry of
+// the refusal names it.
+func (r *reachExceededError) MissingActions() []access.HeldAction {
+	return slices.Clone(r.missing)
+}
+
+// refuseReach returns the fail-closed refusal of the reach check: the
+// server cannot compare the reaches, so it refuses the request.
+func refuseReach(principalID string, err error) error {
+	return &reachCheckError{principalID: principalID, cause: err}
+}
+
+// refuseMissing returns the refusal of a caller whose reach does not hold
+// every action of the principal principalID. It reads, for each action, the
+// read action of its object with the reach of the caller, so the text names
+// no object that the caller cannot read.
+func refuseMissing(
+	ctx context.Context, holder access.Reach, principalID string, missing []access.HeldAction,
+) error {
+	readable := make([]bool, len(missing))
+	for i := range missing {
+		readable[i] = readsObject(ctx, holder, missing[i].Object)
+	}
+
+	return &reachExceededError{principalID: principalID, missing: missing, readable: readable}
+}
+
+// readsObject reports whether the reach of holder holds the read action of
+// obj, so a refusal may name it. The installation and the caller answer
+// true: a caller always reads them. A read that fails answers false, so the
+// refusal names no object that it cannot check.
+func readsObject(ctx context.Context, holder access.Reach, obj identity.Object) bool {
+	if obj.IsServer() || obj.IsCaller() {
+		return true
+	}
+
+	action, ok := readActionOf(obj)
+	if !ok {
+		return false
+	}
+
+	holds, err := holder.Has(ctx, action, obj)
+	if err != nil {
+		return false
+	}
+
+	return holds
+}
+
+// readActionOf returns the action that reads an object of the kind of obj.
+// A principal reads as the principals of the installation, which is an
+// action on the installation.
+func readActionOf(obj identity.Object) (identity.Action, bool) {
+	switch {
+	case obj.IsNamespace():
+		return identity.ActionNamespaceRead, true
+	case obj.IsCollection():
+		return identity.ActionCollectionRead, true
+	case obj.IsUnit():
+		return identity.ActionUnitRead, true
+	case obj.IsPrincipal():
+		return identity.ActionServerReadPrincipals, true
+	default:
+		return "", false
+	}
+}
+
+// objectText returns the object of an action for a refusal: "the
+// installation", "the caller", "namespace \"team\"", "principal
+// \"prn-x\"", "collection \"team/payments\"" and "unit
+// \"pulumi:team/web/prod\"".
+func objectText(obj identity.Object) string {
+	switch {
+	case obj.IsServer():
+		return "the installation"
+	case obj.IsCaller():
+		return "the caller"
+	case obj.IsPrincipal():
+		return fmt.Sprintf("principal %q", obj.PrincipalID())
+	case obj.IsCollection():
+		return fmt.Sprintf("collection %q", obj.String())
+	case obj.IsUnit():
+		return fmt.Sprintf("unit %q", obj.String())
+	default:
+		return fmt.Sprintf("namespace %q", obj.Namespace())
+	}
 }

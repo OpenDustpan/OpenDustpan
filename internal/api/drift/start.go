@@ -115,7 +115,7 @@ func (h *Handler) startCheck(w http.ResponseWriter, r *http.Request, p identity.
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
 			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionUnitRunPlan, Object: t.obj, Reason: reason, Window: 0,
+				Action: identity.ActionUnitRunPlan, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
 			})
 		}
 

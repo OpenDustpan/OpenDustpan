@@ -395,7 +395,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); ok {
+		if res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -403,44 +403,45 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 
 // servePrincipalChange adapts a change to a route handler. The Service
 // writes the success entry in the transaction of the change. A refused
-// change writes one failure entry here, best effort.
+// change writes one failure entry here, best effort, with the missing
+// actions of a reach refusal.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
-		if !ok && res.object != "" && h.principals != nil {
-			h.appendServerChange(r, p, serverChange{
+		if err != nil && res.object != "" && h.principals != nil {
+			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			}, reachReason(err))
 		}
 
-		if ok {
+		if err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// runPrincipalOp runs op and writes its error. It reports whether op
-// succeeded, with the result in both cases.
+// runPrincipalOp runs op and writes its error. It answers the result in both
+// cases, and the error of the operation.
 func (h *Handler) runPrincipalOp(
 	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
-) (principalResult, bool) {
+) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.principals == nil {
 		h.writeError(ctx, w, errNoPrincipalStore)
 
-		return principalResult{body: nil, object: "", status: 0}, false
+		return principalResult{body: nil, object: "", status: 0}, errNoPrincipalStore
 	}
 
 	res, err := op(w, r, h.principals, c.e, c.p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // writePrincipalResult writes the status and the body of a success. A body

@@ -127,7 +127,8 @@ func TestNewServiceNeedsStore(t *testing.T) {
 
 	_, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
@@ -237,7 +238,7 @@ func TestServiceEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -275,7 +276,7 @@ func TestUpdateGroupSwitchEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -403,6 +404,7 @@ func newServiceOverStore(t *testing.T) *principal.Service {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

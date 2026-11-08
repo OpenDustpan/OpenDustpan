@@ -333,6 +333,12 @@ Add a member in the console. The add needs a fresh sign-in. The body holds the p
 | The group or the principal does not exist | `404` | `principal.not-found` |
 | The group is managed by a directory | `409` | `principal.managed-by-directory` |
 
+A membership gives the grants of the group. A group that holds a delegation
+role, such as `token-manager`, on a service principal gives each member the
+right to act as that principal. The add needs a caller that holds the reach of
+that principal. Otherwise the answer is `403`. See
+[Access tokens](access-tokens.md) for the reach.
+
 A group that a directory manages does not take membership changes from this
 API. Change the membership in the directory.
 

@@ -271,7 +271,7 @@ func TestRecordWritesADomainRefusal(t *testing.T) {
 
 	rec.Record(t.Context(), request(t, "/api/inventory/unit-lock"), person("bo@example.com"), refusal.Denial{
 		Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"),
-		Reason: "not the holder of the lock\r\n", Window: 0,
+		Reason: "not the holder of the lock\r\n", ReasonWithin: nil, Window: 0,
 	})
 
 	if len(store.entries) != 1 {
@@ -611,10 +611,11 @@ func TestRecordWithNoRequest(t *testing.T) {
 	rec := newRecorder(t, store, nil, &failures)
 
 	rec.Record(t.Context(), nil, person("bo@example.com"), refusal.Denial{
-		Action: identity.ActionUnitManage,
-		Object: identity.NamespaceObject("team"),
-		Reason: "not the holder",
-		Window: 0,
+		Action:       identity.ActionUnitManage,
+		Object:       identity.NamespaceObject("team"),
+		Reason:       "not the holder",
+		ReasonWithin: nil,
+		Window:       0,
 	})
 
 	if len(store.entries) != 1 {
@@ -758,7 +759,8 @@ func TestChannelOfTheRequest(t *testing.T) {
 			}
 
 			rec.Record(t.Context(), req, person(fmt.Sprintf("p%d@example.com", i)), refusal.Denial{
-				Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"), Reason: "no", Window: 0,
+				Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"), Reason: "no",
+				ReasonWithin: nil, Window: 0,
 			})
 
 			if len(store.entries) != 1 || store.entries[0].Channel != tc.want {

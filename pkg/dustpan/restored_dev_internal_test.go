@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -187,7 +188,11 @@ func TestRestoredDevPeopleAreRefusedOnProduction(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: prod, Principals: prod, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
+		Store: prod, Principals: prod, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		TempAdmins: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {

@@ -53,6 +53,12 @@ func (g fakeGuard) CheckPrincipalGrants(_ context.Context, _ identity.Principal,
 	return nil
 }
 
+// fakeReach allows every membership add. The Guard tests wire it, so that a
+// Service without the access service lets the Guard decide.
+type fakeReach struct{}
+
+func (fakeReach) CheckGroupReach(context.Context, identity.Principal, string) error { return nil }
+
 // TestGuardChecksEveryChangeOfWhoHoldsGrants proves that a membership change,
 // a rename, a delete and an enable ask the Guard first, and that a refusal
 // changes nothing.
@@ -68,6 +74,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 			TempAdmins: nil,
 			Store:      openStore(t),
 			Guard:      guard,
+			GroupReach: fakeReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -196,6 +203,7 @@ func TestGuardChecksDisable(t *testing.T) {
 			Guard:      guard,
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

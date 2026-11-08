@@ -9,15 +9,21 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
@@ -111,6 +117,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	rule, err := h.rules.Create(ctx, p, h.entryOf(r, p), obj.Namespace(), in)
 	if err != nil {
+		h.appendCreateFailure(r, p, obj.Namespace(), in.PrincipalID, err)
 		h.writeError(ctx, w, err)
 
 		return
@@ -119,6 +126,118 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 	w.Header().Set("Location", "/api/dustpan/v1/namespaces/"+url.PathEscape(rule.Namespace.String())+
 		"/trust-rules/"+url.PathEscape(string(rule.ID)))
 	problem.WriteJSON(ctx, h.logger, w, http.StatusCreated, documentOf(&rule))
+}
+
+// namespaceAppender appends the entries of a namespace. Both SQL adapters
+// meet it with audit.Store.
+type namespaceAppender interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
+// createFailureReason returns the audit reason of a create that the service
+// refused for a missing action or for a check that could not run, and false
+// for any other error. A reach refusal names its missing actions. A denial of
+// principal:manage-tokens on the principal names that one action. An access
+// check or a reach check that could not run names itself.
+func createFailureReason(err error, principalID string) (string, bool) {
+	if refused, ok := errors.AsType[access.ReachRefusal](err); ok {
+		missing := refused.MissingActions()
+		if len(missing) == 0 {
+			return "", false
+		}
+
+		return access.MissingActionsReason(missing), true
+	}
+
+	switch {
+	case errors.Is(err, trustrulesvc.ErrAccessUnchecked):
+		return trustrulesvc.ErrAccessUnchecked.Error(), true
+	case errors.Is(err, trustrulesvc.ErrReachUnchecked):
+		return trustrulesvc.ErrReachUnchecked.Error(), true
+	}
+
+	// Only the denial of principal:manage-tokens carries this mark. Another
+	// denial names no action.
+	if !errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		return "", false
+	}
+
+	obj, parseErr := identity.ParsePrincipalObject(principalID)
+	if parseErr != nil {
+		return "", false
+	}
+
+	return access.MissingActionsReason([]access.HeldAction{{
+		Action: identity.ActionPrincipalManageTokens,
+		Object: obj,
+	}}), true
+}
+
+// appendCreateFailure writes one failure entry of a refused create: the
+// caller, the action of a create and the principal of the rule, in the
+// namespace of the path or in the installation scope when it cannot be read.
+// A lost entry does not change the answer: it logs one line and calls the
+// audit failure callback.
+func (h *Handler) appendCreateFailure(
+	r *http.Request, p identity.Principal, ns namespace.Name, principalID string, err error,
+) {
+	reason, ok := createFailureReason(err, principalID)
+	if !ok {
+		return
+	}
+
+	entry := h.entryOf(r, p)
+	entry.Action = trustrulesvc.ActionCreate
+	entry.Kind = audit.KindChange
+	entry.Outcome = audit.OutcomeFailure
+	entry.Object = principal.Ref(principalID)
+	entry.Reason = refusal.Clean(reason, audit.MaxReasonLen)
+
+	appender, ok := h.audit.(namespaceAppender)
+	if !ok || ns == "" {
+		h.appendServerFailure(r.Context(), entry)
+
+		return
+	}
+
+	n, getErr := h.namespaces.Get(r.Context(), ns)
+	if getErr != nil {
+		h.appendServerFailure(r.Context(), entry)
+
+		return
+	}
+
+	entry.Namespace = n.Name
+	if _, appendErr := appender.Append(r.Context(), n.Fence(), entry); appendErr != nil {
+		h.failAudit(r.Context())
+	}
+}
+
+// appendServerFailure writes entry in the installation scope. A lost entry
+// logs one line and calls the audit failure callback.
+func (h *Handler) appendServerFailure(ctx context.Context, entry audit.Entry) {
+	entry.Namespace = audit.ServerScope
+
+	store, ok := h.audit.(audit.ServerStore)
+	if !ok {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	if _, err := store.AppendServer(ctx, entry); err != nil {
+		h.failAudit(ctx)
+	}
+}
+
+// failAudit records a lost audit entry: one log line and one count on the
+// failure metric through the wired callback. The line never holds error text.
+func (h *Handler) failAudit(ctx context.Context) {
+	faultlog.LogFault(ctx, h.logger, "audit append failed", faultlog.CauseUnclassified, "audit.append")
+
+	if h.onAuditFailure != nil {
+		h.onAuditFailure()
+	}
 }
 
 // get serves GET on RulePath. An ID that is not a rule ID, and a rule of
@@ -225,7 +344,23 @@ func documentOf(rule *trustrule.Rule) ruleDocument {
 // writeError answers err through the shared error module of the tool-neutral
 // APIs, with the classes of the trust rules.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}.Write(ctx, w, err)
+}
+
+// keepDenied maps the classes of a denial that keep their own text, as
+// problem.Writer.KeepDenied does. A create of a rule runs the reach compare of
+// a token, so a refusal of that compare answers the same coded 403 with the
+// same text as the token route.
+func keepDenied(err error) (problem.Problem, bool) {
+	if errors.Is(err, accesstoken.ErrReachExceeded) {
+		// The trust rule service returns the refusal of the reach compare
+		// unwrapped, so this text is the text of the token route. It names
+		// the principal and the actions of the principal that the caller
+		// does not hold, and no object that the caller cannot read.
+		return problem.Built(http.StatusForbidden, err.Error(), errcode.Forbidden(err), errcode.Answer{}, nil), true
+	}
+
+	return problem.Internal(), false
 }
 
 // classify maps the errors of the trust rule routes to an answer that is safe

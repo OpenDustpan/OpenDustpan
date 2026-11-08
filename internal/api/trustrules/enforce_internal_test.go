@@ -79,16 +79,18 @@ func TestEnforceActions(t *testing.T) {
 
 			served := false
 			h := &Handler{
-				namespaces: nil,
-				rules:      nil,
-				exchanger:  nil,
-				authn:      enforceTokens{},
-				sessions:   nil,
-				guard:      refusals,
-				logger:     logger,
-				now:        nil,
-				mux:        nil,
-				routes:     nil,
+				namespaces:     nil,
+				rules:          nil,
+				exchanger:      nil,
+				authn:          enforceTokens{},
+				sessions:       nil,
+				guard:          refusals,
+				audit:          enforceAudit{Store: nil},
+				onAuditFailure: nil,
+				logger:         logger,
+				now:            nil,
+				mux:            nil,
+				routes:         nil,
 			}
 			rt := Route{
 				Method:  http.MethodGet,

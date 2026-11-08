@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -44,6 +45,7 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 			TempAdmins: nil,
 			Store:      first,
 			Guard:      principal.AdminOnlyGuard{},
+			GroupReach: nil,
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        clock,
@@ -131,8 +133,22 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
 		TempAdmins: nil,
-		Store:      s, Principals: s, Freshness: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
+		Store:      s,
+		Principals: s,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        now,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

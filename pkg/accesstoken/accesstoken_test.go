@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -99,6 +100,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        c.Now,
 			NewID:      nil,
 		},
@@ -109,7 +111,10 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
+		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		Logger: nil, Now: c.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -216,7 +221,10 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 
 	_, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
+		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		Logger: nil, Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -1015,14 +1023,19 @@ func (*recordAuthorizer) ListObjects(
 }
 
 // newCheckedService returns a token service over the store of f with the
-// authorizer authz.
+// authorizer authz. The reach config reads the store, so the reach check
+// finds no hold of alice and passes it: the authorizer decides alone.
 func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *accesstoken.Service {
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz, Logger: nil,
-		Now: f.clock.Now, NewID: nil,
+		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+		},
+		Logger: nil,
+		Now:    f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1558,8 +1571,10 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
 		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
-		Logger: nil,
-		Now:    f.clock.Now, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		}, Logger: nil,
+		Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -1793,8 +1808,11 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 		TempAdmins: nil,
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
-		Logger:     nil,
-		Now:        f.clock.Now, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+		},
+		Logger: nil,
+		Now:    f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1804,8 +1822,11 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 		TempAdmins: nil,
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
-		Logger:     nil,
-		Now:        f.clock.Now, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+		},
+		Logger: nil,
+		Now:    f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

@@ -329,7 +329,7 @@ func (h *Handler) manageError(r *http.Request, p identity.Principal, err error) 
 	}
 
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: denied.Action, Object: denied.Object, Reason: refusal.ReasonPolicy, Window: 0,
+		Action: denied.Action, Object: denied.Object, Reason: refusal.ReasonPolicy, ReasonWithin: nil, Window: 0,
 	})
 }
 

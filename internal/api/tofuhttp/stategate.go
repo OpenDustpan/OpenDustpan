@@ -44,7 +44,7 @@ func (h *Handler) guardStateWrite(ctx context.Context, w http.ResponseWriter, c 
 		State: nil, StateErr: nil,
 	}, func(ctx context.Context, reason string) {
 		h.guard.Record(ctx, c.request, c.principal, refusal.Denial{
-			Action: check.action, Object: obj, Reason: reason, Window: 0,
+			Action: check.action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
 		})
 	})
 

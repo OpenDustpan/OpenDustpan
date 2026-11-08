@@ -214,7 +214,12 @@ func TestReviewLastAccessReadsOncePerPage(t *testing.T) {
 	counted := lastAccessCounter{Store: f.store, calls: &calls}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: counted, Directory: counted, Namespaces: counted, Authorizer: f.authz, Now: nil, NewID: nil,
+		Store: counted, Directory: counted, Namespaces: counted, Authorizer: f.authz,
+		Reach: access.ReachConfig{
+			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
+			Collections: f.units, Units: f.store,
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {

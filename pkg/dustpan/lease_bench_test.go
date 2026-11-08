@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -217,6 +218,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        now,
 			NewID:      nil,
 		},
@@ -227,7 +229,11 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil, Logger: nil, Now: now,
+		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		Logger: nil, Now: now,
 		NewID: nil,
 	})
 	if err != nil {
