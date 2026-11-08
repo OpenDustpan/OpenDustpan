@@ -275,7 +275,7 @@ func TestUpdateGroupSwitchEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
