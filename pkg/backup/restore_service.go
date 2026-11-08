@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -90,6 +91,12 @@ type RestoreConfig struct {
 	Maintenance RestoreMaintenance
 	// Blobs is the live content store the restore copies into.
 	Blobs blob.Store
+	// Leases holds the leases of the blob deleters. The after-apply step
+	// waits for zero live leases before it checks the named blobs, so a
+	// deleter that read the guard of the blob deletes before the restore
+	// started holds the restore back until it releases its lease or the
+	// lease ends. Required: a restore without the port cannot wait.
+	Leases blobguard.Leases
 	// Target is the backup target that holds blobs/<key>,
 	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
 	Target blob.Store
@@ -152,6 +159,7 @@ type RestoreService struct {
 	backups      *Service
 	maintenance  RestoreMaintenance
 	blobs        blob.Store
+	leases       blobguard.Leases
 	target       blob.Store
 	key          secret.Wrapper
 	installation string
@@ -167,9 +175,9 @@ type RestoreService struct {
 }
 
 // NewRestoreService returns a RestoreService. Live, Operations, Backups,
-// Maintenance, Blobs and Target are required, and Operations must implement
-// durable.StepCanceler. A nil Now means time.Now; a nil Logger discards the
-// restore log lines.
+// Maintenance, Blobs, Leases and Target are required, and Operations must
+// implement durable.StepCanceler. A nil Now means time.Now; a nil Logger
+// discards the restore log lines.
 func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 	switch {
 	case cfg.Live == nil:
@@ -182,6 +190,8 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
 	case cfg.Blobs == nil:
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
+	case cfg.Leases == nil:
+		return nil, fmt.Errorf("%w: blob delete leases", ErrMissingDependency)
 	case cfg.Target == nil:
 		return nil, fmt.Errorf("%w: target", ErrMissingDependency)
 	}
@@ -203,6 +213,7 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		backups:      cfg.Backups,
 		maintenance:  cfg.Maintenance,
 		blobs:        cfg.Blobs,
+		leases:       cfg.Leases,
 		target:       cfg.Target,
 		key:          cfg.Key,
 		installation: cfg.Installation,
@@ -428,9 +439,11 @@ func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
 			Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase),
 			Max:  durable.DefaultBackoffMax,
 		},
-		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout:       0,
-		Deferred:           nil,
+		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout: 0,
+		// The after-apply step waits for zero live leases of the blob
+		// deleters. The operation then waits, and the wait counts no attempt.
+		Deferred:           func(err error) bool { return errors.Is(err, ErrLiveBlobDeletes) },
 		StopOnRenewalError: true,
 		Logger:             cfg.Logger,
 		Rand:               nil,

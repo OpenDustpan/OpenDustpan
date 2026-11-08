@@ -616,6 +616,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
 		},
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{backupColHolder, backupColExpiresAtMs},
+		},
 	}
 }
 

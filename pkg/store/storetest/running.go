@@ -39,6 +39,54 @@ func backupWork(id backup.ID) *blobguard.Work {
 	return &blobguard.Work{Kind: blobguard.Backup, ID: id.String()}
 }
 
+// requireTakeLease takes the lease of holder and checks the answer: want nil
+// when the store wrote the lease, or the running work when it refused it.
+func requireTakeLease(
+	t *testing.T,
+	leases blobguard.Leases,
+	holder string,
+	ttl time.Duration,
+	want *blobguard.Work,
+) {
+	t.Helper()
+
+	work, ok, err := leases.TakeLease(t.Context(), holder, ttl)
+	if err != nil {
+		t.Fatalf("take the lease of %q: %v", holder, err)
+	}
+
+	switch {
+	case want == nil && ok:
+		t.Fatalf("take the lease of %q = %v, want a written lease", holder, work)
+	case want != nil && (!ok || work != *want):
+		t.Fatalf("take the lease of %q = %v, %v, want %v", holder, work, ok, *want)
+	default:
+	}
+}
+
+// requireReleaseLease releases the lease of holder and checks the error.
+func requireReleaseLease(t *testing.T, leases blobguard.Leases, holder string) {
+	t.Helper()
+
+	if err := leases.ReleaseLease(t.Context(), holder); err != nil {
+		t.Fatalf("release the lease of %q: %v", holder, err)
+	}
+}
+
+// requireLiveLeases checks that the store counts want live leases.
+func requireLiveLeases(t *testing.T, leases blobguard.Leases, want int, when string) {
+	t.Helper()
+
+	got, err := leases.LiveLeases(t.Context())
+	if err != nil {
+		t.Fatalf("count live leases %s: %v", when, err)
+	}
+
+	if got != want {
+		t.Fatalf("live leases %s = %d, want %d", when, got, want)
+	}
+}
+
 // restoreWork returns the running work that a restore row gives.
 func restoreWork(id backup.RestoreID) *blobguard.Work {
 	return &blobguard.Work{Kind: blobguard.Restore, ID: id.String()}
@@ -185,6 +233,60 @@ func testRunningRestore(t *testing.T, newStore RestoreFactory) {
 	}
 
 	requireRunning(t, watch, nil, "after the restore ended")
+}
+
+// testRunningLease takes and releases the lease of a blob deleter: a take
+// with nothing running writes one live lease, a second take of the same
+// holder keeps one row, a release deletes it, a release of a holder with no
+// row is not an error, a lease that ended is not live, and a take while a
+// backup runs writes nothing and answers the backup.
+func testRunningLease(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	requireTakeLease(t, s, "dlt-1", blobguard.LeaseTTL, nil)
+	requireLiveLeases(t, s, 1, "after a take")
+
+	requireTakeLease(t, s, "dlt-1", blobguard.LeaseTTL, nil)
+	requireLiveLeases(t, s, 1, "after a second take of the same holder")
+
+	requireReleaseLease(t, s, "dlt-1")
+	requireLiveLeases(t, s, 0, "after the release")
+
+	requireReleaseLease(t, s, "dlt-2")
+	requireLiveLeases(t, s, 0, "after a release of a holder with no row")
+
+	requireTakeLease(t, s, "dlt-3", -time.Minute, nil)
+	requireLiveLeases(t, s, 0, "after a take of a lease that ended")
+
+	b := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	requireTakeLease(t, s, "dlt-4", blobguard.LeaseTTL, backupWork(b.ID))
+	requireLiveLeases(t, s, 0, "after a take while a backup runs")
+
+	mustFinishBackup(t, s, backupFinish{
+		ID: b.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute),
+	})
+	requireTakeLease(t, s, "dlt-5", blobguard.LeaseTTL, nil)
+	requireLiveLeases(t, s, 1, "after a take of the ended backup")
+}
+
+// testRunningLeaseRestore takes the lease of a blob deleter while a restore
+// checks and while it applies: the take writes nothing and answers the
+// restore.
+func testRunningLeaseRestore(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ops := restorePortsOf(t, s).ops
+
+	id := mustStartRestoreOp(t, ops)
+	requireTakeLease(t, s, "dlt-1", blobguard.LeaseTTL, restoreWork(id))
+	requireLiveLeases(t, s, 0, "after a take while a restore checks")
+
+	mustMarkApplying(t, s, id, backup.ID(ident.NewID("bkp-")))
+	requireTakeLease(t, s, "dlt-1", blobguard.LeaseTTL, restoreWork(id))
+	requireLiveLeases(t, s, 0, "after a take while a restore applies")
 }
 
 // testSharedRunning starts a backup and then a restore on one handle and

@@ -961,6 +961,34 @@ FROM (
 ORDER BY kind, id
 LIMIT 1;
 
+-- name: CountLiveBlobDeleteLeases :one
+-- The number of lease rows that end after the database clock. A restore waits
+-- for zero of them before it applies the data.
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER);
+
+-- name: ReleaseBlobDeleteLease :exec
+-- Deletes the lease row of one holder. A holder with no row is not an error.
+DELETE FROM blob_delete_leases
+WHERE holder = ?;
+
+-- name: TakeBlobDeleteLease :execrows
+-- Writes the lease of holder, ending at the database clock plus ttl_ms, in
+-- one statement, and reports one changed row. While a backup runs or a
+-- restore checks or applies, it writes nothing and reports no changed row:
+-- the caller then reads the running work in the same transaction. A take for
+-- a holder with a row replaces that row.
+INSERT INTO blob_delete_leases (holder, expires_at_ms)
+SELECT sqlc.arg('holder'),
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+           + CAST(sqlc.arg('ttl_ms') AS INTEGER)
+WHERE NOT EXISTS (
+    SELECT 1 FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT 1 FROM restores WHERE state IN ('checking', 'applying')
+)
+ON CONFLICT (holder) DO UPDATE SET expires_at_ms = excluded.expires_at_ms;
+
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups

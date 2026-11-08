@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -26,6 +27,30 @@ func stateBlobCount(t *testing.T, f fixture, prefix string) int {
 	return len(listed)
 }
 
+// requireWaitForWork fails the test unless err is a wait for work.
+func requireWaitForWork(t *testing.T, err error, name string, work blobguard.Work) {
+	t.Helper()
+
+	wait, isWait := errors.AsType[*blobguard.WaitError](err)
+	if !isWait || wait.Work != work || !errors.Is(err, blobguard.ErrWait) {
+		t.Fatalf("delete while %s runs: err = %v, want a WaitError for %v", name, err, work)
+	}
+}
+
+// requireLeaseReleased fails the test unless the delete asked for a lease and
+// no lease is live.
+func requireLeaseReleased(t *testing.T, guard *blobguardtest.Leases, when string) {
+	t.Helper()
+
+	if guard.Takes() == 0 {
+		t.Fatalf("the delete took no lease %s, want one take for each delete", when)
+	}
+
+	if live, err := guard.LiveLeases(t.Context()); err != nil || live != 0 {
+		t.Fatalf("live leases %s = %d, %v, want none", when, live, err)
+	}
+}
+
 // TestDeletePurgedBlobsWaitsForRunningWork proves that the delete of the
 // state blobs of a purged workspace keeps every blob while a backup or a
 // restore runs, answers an error that names the work, and deletes the blobs
@@ -40,18 +65,14 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
+			guard := blobguardtest.NewLeases(time.Now)
 			f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 			prefix := purgedWorkspace(t, f)
 
 			guard.Start(work)
 
-			err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
-
-			wait, isWait := errors.AsType[*blobguard.WaitError](err)
-			if !isWait || wait.Work != work || !errors.Is(err, blobguard.ErrWait) {
-				t.Fatalf("delete while %s runs: err = %v, want a WaitError for %v", name, err, work)
-			}
+			requireWaitForWork(t, f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID), name, work)
+			requireLeaseReleased(t, guard, "while "+name+" runs")
 
 			if stateBlobCount(t, f, prefix) == 0 {
 				t.Fatalf("state blobs while %s runs = 0, want them kept", name)
@@ -76,15 +97,15 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := blobguardtest.NewGuard()
+	failing := blobguardtest.NewLeases(time.Now)
 	failing.Fail(errGuardRead)
 
-	unknown := blobguardtest.NewGuard()
+	unknown := blobguardtest.NewLeases(time.Now)
 	unknown.Start(blobguard.Work{Kind: "other", ID: "x-1"})
 
 	tests := []struct {
 		name  string
-		guard blobguard.Watch
+		guard blobguard.Leases
 		want  error
 	}{
 		{name: "a failed read", guard: failing, want: errGuardRead},
@@ -116,13 +137,33 @@ func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 	}
 }
 
+// TestDeletePurgedBlobsReleasesTheLease proves that each delete takes a lease
+// and releases it: the blobs go, and no lease is live after the call.
+func TestDeletePurgedBlobsReleasesTheLease(t *testing.T) {
+	t.Parallel()
+
+	guard := blobguardtest.NewLeases(time.Now)
+	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
+	prefix := purgedWorkspace(t, f)
+
+	if err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if left := stateBlobCount(t, f, prefix); left != 0 {
+		t.Fatalf("state blobs after the delete = %d, want none", left)
+	}
+
+	requireLeaseReleased(t, guard, "after the delete")
+}
+
 // TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete proves that a restore
 // which starts between two deletes of one purge keeps the blob that is left:
 // the guard is read again before each delete.
 func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewGuard()
+	guard := blobguardtest.NewLeases(time.Now)
 	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 	prefix := purgedWorkspace(t, f)
 

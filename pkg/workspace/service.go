@@ -290,11 +290,11 @@ type Config struct {
 	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
-	// BlobGuard tells whether a backup or a restore runs. The delete of the
-	// state blobs of a purged workspace asks it after the commit of the purge
-	// and runs only when nothing runs. Nil is a guard that never lets a
+	// BlobGuard holds the leases of the blob deletes. The delete of the
+	// state blobs of a purged workspace takes a lease after the commit of the
+	// purge and runs only when nothing runs. Nil is a guard that never lets a
 	// delete run: the blobs stay for the retention sweep.
-	BlobGuard blobguard.Watch
+	BlobGuard blobguard.Leases
 	Now       func() time.Time
 	// MaxStateBytes bounds one state version; zero means DefaultMaxStateBytes.
 	MaxStateBytes int64
@@ -351,7 +351,7 @@ type Service struct {
 	namespaces *namespace.Service
 	sealer     Sealer
 	logger     *slog.Logger
-	guard      blobguard.Watch
+	guard      blobguard.Leases
 	now        func() time.Time
 	maxState   int64
 	maxPending int
@@ -626,18 +626,27 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 
 	err := s.blobs.walk(ctx, ns, id, func(page []blob.Object) error {
 		for _, obj := range page {
-			// The guard comes after the commit of the purge and before each
+			// The lease comes after the commit of the purge and before each
 			// delete: a restore that starts during the walk keeps the blobs
 			// that are left. A backup or a restore that runs, or a failed
 			// read, stops the walk. The error keeps the blob purge record,
-			// and the retention sweep tries again.
-			if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
+			// and the retention sweep tries again. The holder is new for each
+			// delete, so the lease row names the delete that holds it.
+			release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"))
+			if holdErr != nil {
 				guardErr = holdErr
 
 				return holdErr
 			}
 
-			if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
+			deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key)
+
+			if releaseErr := release(ctx); releaseErr != nil {
+				s.logger.WarnContext(ctx, "blob delete lease not released",
+					slog.String("workspace_id", id.String()), slog.String("error", releaseErr.Error()))
+			}
+
+			if deleteErr != nil {
 				failed++
 			}
 		}

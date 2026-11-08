@@ -1096,6 +1096,58 @@ FROM (
 ORDER BY kind, id
 LIMIT 1;
 
+-- name: CountLiveBlobDeleteLeases :one
+-- The number of lease rows that end after the database clock. A restore waits
+-- for zero of them before it applies the data.
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+
+-- name: LockBlobDeleteLeaseExclusive :exec
+-- Takes the exclusive form of the blob delete lease lock for this
+-- transaction. It waits for every take of a lease in flight and holds every
+-- later take back until this transaction ends, so the take of a lease and the
+-- write of a running backup or restore row cannot interleave.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: LockBlobDeleteLeaseShared :exec
+-- Takes the shared form of the blob delete lease lock for this transaction.
+-- The take of a lease runs as a later statement, so its READ COMMITTED
+-- snapshot is newer than the lock: a backup or a restore that committed its
+-- running row before the lock is visible to the take.
+SELECT pg_advisory_xact_lock_shared(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: ReleaseBlobDeleteLease :exec
+-- Deletes the lease row of one holder. A holder with no row is not an error.
+DELETE FROM blob_delete_leases
+WHERE holder = sqlc.arg(holder);
+
+-- name: TakeBlobDeleteLease :one
+-- Writes the lease of holder, ending at the database clock plus ttl_ms, in
+-- one statement. While a backup runs or a restore checks or applies, it
+-- writes nothing and answers that work instead, so a deleter that read the
+-- guard before a restore started cannot take a lease after it. A take for a
+-- holder with a row replaces that row. An empty kind and an empty ID are the
+-- answer of a written lease.
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT sqlc.arg(holder)::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + sqlc.arg(ttl_ms)::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id;
+
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups

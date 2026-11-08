@@ -115,6 +115,11 @@ CREATE TABLE audit_sink_leases (
     expires_at_ms bigint NOT NULL
 );
 
+CREATE TABLE blob_delete_leases (
+    holder text NOT NULL,
+    expires_at_ms bigint NOT NULL
+);
+
 CREATE TABLE blob_purges (
     tool text NOT NULL,
     unit_id text NOT NULL,
@@ -1460,6 +1465,9 @@ ALTER TABLE ONLY audit_sink_cursors
 
 ALTER TABLE ONLY audit_sink_leases
     ADD CONSTRAINT audit_sink_leases_pkey PRIMARY KEY (sink);
+
+ALTER TABLE ONLY blob_delete_leases
+    ADD CONSTRAINT blob_delete_leases_pkey PRIMARY KEY (holder);
 
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);

@@ -49,6 +49,7 @@ func TestItemKeyBackupRestore(t *testing.T) {
 			Backups:         backups,
 			Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
 			Blobs:           live,
+			Leases:          st,
 			Target:          in.Target,
 			Key:             in.Key,
 			Installation:    "test",

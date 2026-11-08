@@ -524,6 +524,11 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
 		},
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{pgColHolder, pgColExpiresAtMs},
+			orderBy: []string{pgColHolder},
+		},
 	}
 }
 
@@ -1583,9 +1588,32 @@ func (s *Store) schemaVersion(ctx context.Context) (int, error) {
 }
 
 // CreateBackup implements backup.Registry: it stores r as a running backup
-// and reports ErrAlreadyExists when the ID is taken.
+// and reports ErrAlreadyExists when the ID is taken. A running row is work
+// that a take of a blob delete lease must see, so the write of a running row
+// takes the exclusive form of the lease lock before it, like the start of a
+// backup. A row of any other state names no running work, so it needs no
+// lock.
 func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
-	n, err := s.queries.CreateBackup(ctx, db.CreateBackupParams{
+	if r.State != backup.StateRunning {
+		return insertBackup(ctx, s.queries, r)
+	}
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this write sees
+		// the row, and a later take waits for this write.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
+		return insertBackup(ctx, q, r)
+	})
+}
+
+// insertBackup stores r in the transaction of q and reports ErrAlreadyExists
+// when the ID is taken.
+func insertBackup(ctx context.Context, q *db.Queries, r backup.Record) error {
+	n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 		ID:          r.ID.String(),
 		State:       string(r.State),
 		StartedAtMs: codec.Millis(r.StartedAt),
@@ -1598,7 +1626,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return s.createBackupConflict(ctx, r.ID)
+		return backupConflict(ctx, q, r.ID)
 	}
 
 	return nil
@@ -1614,6 +1642,13 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 	}
 
 	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this start sees
+		// the row, and a later take waits for this start.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		_, err := startBackupTx(ctx, q, r, start)
 
 		return err
@@ -1637,6 +1672,13 @@ func (s *Store) StartBackupClaimed(
 	var op durable.Operation
 
 	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this start sees
+		// the row, and a later take waits for this start.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		started, err := startBackupTx(ctx, q, r, start)
 		if err != nil {
 			return err
@@ -1921,14 +1963,9 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// createBackupConflict answers why CreateBackup inserted no row: the ID is
-// taken (ErrAlreadyExists), or the unique index on running backups refused a
-// second running backup (ErrAlreadyRunning).
-func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
-	return backupConflict(ctx, s.queries, id)
-}
-
-// backupConflict is createBackupConflict for the queries of one transaction.
+// backupConflict answers why an insert of a backup row wrote no row: the ID
+// is taken (ErrAlreadyExists), or the unique index on running backups refused
+// a second running backup (ErrAlreadyRunning).
 func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 	_, err := q.GetBackup(ctx, id.String())
 	if err == nil {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Kind names the kind of work that holds blob deletes back.
@@ -44,6 +45,10 @@ var (
 	// ErrUnknown reports an answer of the guard that names a kind of work that
 	// this package does not know, or no ID. The deleter deletes nothing.
 	ErrUnknown = errors.New("unknown kind of running work")
+	// ErrNoHolder reports a lease take for a deleter that names no holder. A
+	// lease names the deleter that holds it, so a deleter without a name
+	// takes no lease and deletes nothing.
+	ErrNoHolder = errors.New("no holder for the blob delete lease")
 )
 
 // WaitError is the error of a blob delete that waits for Work. It matches
@@ -77,31 +82,78 @@ type Watch interface {
 	Running(ctx context.Context) (Work, bool, error)
 }
 
-// Hold calls w and returns nil only when nothing runs. It returns a
-// *WaitError when a backup or a restore runs, ErrNoWatch when w is nil, and
-// the error of the read, wrapped, when the read fails. An answer with an
-// unknown kind or an empty ID returns ErrUnknown. So every result but nil
-// means: delete nothing.
-func Hold(ctx context.Context, w Watch) error {
-	if w == nil {
-		return ErrNoWatch
+// LeaseTTL is the time that one lease of a blob deleter holds back a restore.
+// A deleter takes a lease around the delete of one blob, so this is the
+// longest time that one blob delete holds a restore back. A deleter that
+// stops leaves its row behind, and the row ends on its own, so a deleter that
+// stopped holds a restore back at most this long.
+const LeaseTTL = time.Minute
+
+// Leases is the lease of the blob deletes. The guard of Watch holds a deleter
+// back that reads it while a backup runs or a restore checks or applies. It
+// does not hold back a deleter that read the guard before the restore
+// started, and then stalls: the restore applies the data, checks the blobs
+// after the apply, and the deleter deletes after that check.
+//
+// A deleter takes a lease before each delete, and releases it after. A take
+// writes nothing and answers the running work while a backup runs or a
+// restore checks or applies. A restore that applies data waits for zero live
+// leases. So a deleter that stalls past the read of the guard holds the
+// restore back, and it deletes nothing after a refused take.
+type Leases interface {
+	// TakeLease writes the lease of holder, ending at the database clock plus
+	// ttl, in one statement. It writes nothing and returns the running work
+	// and true when a backup runs or a restore checks or applies. A take for
+	// a holder with a row replaces that row. It defines no sentinel error: a
+	// failed write is an error, and the deleter deletes nothing.
+	TakeLease(ctx context.Context, holder string, ttl time.Duration) (Work, bool, error)
+	// ReleaseLease deletes the lease row of holder. A holder with no row is
+	// not an error. It defines no sentinel error: a failed write is an error.
+	ReleaseLease(ctx context.Context, holder string) error
+	// LiveLeases returns the number of lease rows that end after the database
+	// clock. It defines no sentinel error: a failed read is an error.
+	LiveLeases(ctx context.Context) (int, error)
+}
+
+// HoldLease takes the lease of holder and returns the function that releases
+// it. It returns a *WaitError when a backup or a restore runs, ErrNoWatch
+// when l is nil, ErrNoHolder when holder is empty, and the error of the
+// write, wrapped, when the write fails. An answer with an unknown kind or an
+// empty ID returns ErrUnknown. So every result but a release function means:
+// delete nothing.
+func HoldLease(ctx context.Context, l Leases, holder string) (func(context.Context) error, error) {
+	if l == nil {
+		return nil, ErrNoWatch
 	}
 
-	work, ok, err := w.Running(ctx)
+	// A lease names the deleter that holds it. An empty holder takes no
+	// lease: its row would hold back every restore for the whole TTL, and no
+	// record would name who took it.
+	if holder == "" {
+		return nil, ErrNoHolder
+	}
+
+	work, ok, err := l.TakeLease(ctx, holder, LeaseTTL)
 	if err != nil {
-		return fmt.Errorf("read running backup or restore: %w", err)
+		return nil, fmt.Errorf("take the blob delete lease: %w", err)
 	}
 
 	if !ok {
-		return nil
+		return func(ctx context.Context) error {
+			if err := l.ReleaseLease(ctx, holder); err != nil {
+				return fmt.Errorf("release the blob delete lease: %w", err)
+			}
+
+			return nil
+		}, nil
 	}
 
 	// Defense in depth: the adapters return the two kinds only. This check
 	// stays so that a new adapter or a fake cannot turn an unknown answer
 	// into permission to delete.
 	if (work.Kind != Backup && work.Kind != Restore) || work.ID == "" {
-		return ErrUnknown
+		return nil, ErrUnknown
 	}
 
-	return &WaitError{Work: work}
+	return nil, &WaitError{Work: work}
 }

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -113,6 +114,7 @@ func restoreWorkerCases() []restoreCase {
 type restoreWorkerStore interface {
 	RestoreStore
 	backup.RestoreLive
+	blobguard.Leases
 	maintenance.Store
 	secret.KeyStore
 	secret.ItemKeyStore
@@ -266,7 +268,7 @@ func (r *workerRig) service(t *testing.T, w workerService) *backup.RestoreServic
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: w.live, Operations: w.ops, Backups: r.backups, Maintenance: w.maint, Blobs: w.blobs,
-		Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
+		Leases: r.st, Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
 		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: workerLease,
 		CleanupLockWait: w.lockWait, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})

@@ -686,7 +686,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 // newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
 // deletes.
 func newUpdatesGuarded(
-	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Watch,
+	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, guard blobguard.Leases,
 ) updatesFixture {
 	t.Helper()
 
@@ -707,7 +707,7 @@ func newUpdatesWrapped(
 // the guard of the blob deletes and the wrap of the checkpoint store. A nil
 // wrap uses the in-memory store itself.
 type updatesFixtureOptions struct {
-	guard blobguard.Watch
+	guard blobguard.Leases
 	wrap  func(*memUpdates) stack.CheckpointStore
 }
 
@@ -2213,7 +2213,7 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 
 // withKeepSetHookAndGuard is withKeepSetHook with guard as the guard of the
 // blob deletes.
-func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Watch, before func()) *stack.Updates {
+func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Leases, before func()) *stack.Updates {
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{

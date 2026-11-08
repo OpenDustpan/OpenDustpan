@@ -284,16 +284,25 @@ func (s *Updates) commitBuiltRow(
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	// The guard comes after the commit that removed the journal rows, and again
-	// before each delete. A running backup or restore keeps the batch blobs,
-	// and the next sweep deletes them.
+	// The lease comes after the commit that removed the journal rows, and
+	// again before each delete. A running backup or restore keeps the batch
+	// blobs, and the next sweep deletes them.
 	if s.journal != nil {
 		for _, key := range keys {
-			if s.deletesHeld(ctx, "journal build", save.ref) {
+			release, ok := s.takeDeleteLease(ctx, "journal build", save.ref)
+			if !ok {
 				break
 			}
 
-			if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, []blob.Key{key}); err != nil {
+			delErr := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, []blob.Key{key})
+
+			if releaseErr := release(ctx); releaseErr != nil {
+				s.logger.WarnContext(ctx, "blob delete lease not released",
+					slog.String("stack", save.ref.String()), slog.String("update", save.id.String()),
+					slog.String("error", releaseErr.Error()))
+			}
+
+			if delErr != nil {
 				s.logger.WarnContext(
 					ctx,
 					"delete journal blobs",

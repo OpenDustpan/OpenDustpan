@@ -1418,6 +1418,20 @@ func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerPa
 	return count, err
 }
 
+const countLiveBlobDeleteLeases = `-- name: CountLiveBlobDeleteLeases :one
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+`
+
+// The number of lease rows that end after the database clock. A restore waits
+// for zero of them before it applies the data.
+func (q *Queries) CountLiveBlobDeleteLeases(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLiveBlobDeleteLeases)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m
@@ -17986,6 +18000,32 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const lockBlobDeleteLeaseExclusive = `-- name: LockBlobDeleteLeaseExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the blob delete lease lock for this
+// transaction. It waits for every take of a lease in flight and holds every
+// later take back until this transaction ends, so the take of a lease and the
+// write of a running backup or restore row cannot interleave.
+func (q *Queries) LockBlobDeleteLeaseExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseExclusive, class)
+	return err
+}
+
+const lockBlobDeleteLeaseShared = `-- name: LockBlobDeleteLeaseShared :exec
+SELECT pg_advisory_xact_lock_shared($1::int, hashtext(current_schema()))
+`
+
+// Takes the shared form of the blob delete lease lock for this transaction.
+// The take of a lease runs as a later statement, so its READ COMMITTED
+// snapshot is newer than the lock: a backup or a restore that committed its
+// running row before the lock is visible to the take.
+func (q *Queries) LockBlobDeleteLeaseShared(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseShared, class)
+	return err
+}
+
 const lockDurableOperation = `-- name: LockDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
@@ -19534,6 +19574,17 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 		arg.LastSeenAtMs,
 		arg.ID,
 	)
+	return err
+}
+
+const releaseBlobDeleteLease = `-- name: ReleaseBlobDeleteLease :exec
+DELETE FROM blob_delete_leases
+WHERE holder = $1
+`
+
+// Deletes the lease row of one holder. A holder with no row is not an error.
+func (q *Queries) ReleaseBlobDeleteLease(ctx context.Context, holder string) error {
+	_, err := q.db.Exec(ctx, releaseBlobDeleteLease, holder)
 	return err
 }
 
@@ -21484,6 +21535,51 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const takeBlobDeleteLease = `-- name: TakeBlobDeleteLease :one
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT $1::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $2::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id
+`
+
+type TakeBlobDeleteLeaseParams struct {
+	Holder string
+	TtlMs  int64
+}
+
+type TakeBlobDeleteLeaseRow struct {
+	Kind string
+	ID   string
+}
+
+// Writes the lease of holder, ending at the database clock plus ttl_ms, in
+// one statement. While a backup runs or a restore checks or applies, it
+// writes nothing and answers that work instead, so a deleter that read the
+// guard before a restore started cannot take a lease after it. A take for a
+// holder with a row replaces that row. An empty kind and an empty ID are the
+// answer of a written lease.
+func (q *Queries) TakeBlobDeleteLease(ctx context.Context, arg TakeBlobDeleteLeaseParams) (TakeBlobDeleteLeaseRow, error) {
+	row := q.db.QueryRow(ctx, takeBlobDeleteLease, arg.Holder, arg.TtlMs)
+	var i TakeBlobDeleteLeaseRow
+	err := row.Scan(&i.Kind, &i.ID)
+	return i, err
 }
 
 const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one

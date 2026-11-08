@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -52,8 +54,9 @@ func (r *cancelLogRecorder) recordsOf() []slog.Record {
 // also proves that logCanceled uses nothing else.
 func cancelLogService(recorder *cancelLogRecorder) *RestoreService {
 	return &RestoreService{
-		live: nil, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil,
-		key: nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
+		live: nil, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, leases: nil,
+		target: nil,
+		key:    nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
 		lockWait: 0, now: nil, logger: slog.New(recorder), runner: nil,
 	}
 }
@@ -99,6 +102,47 @@ func (l *writerCheckLive) RecordRestoreEvent(_ context.Context, _ durable.StepFe
 	return nil
 }
 
+// TestGuardedDefersTheLiveBlobDeletes proves that a wait for the blob deletes
+// is a deferral on every attempt: the wrapper returns the error as it is, so
+// the runner releases the claim, and an operation that already failed the
+// attempts before does not end failed because of a wait. A service with no
+// ports proves that the wrapper reads none of them: a wrapper that mapped the
+// wait to a failure would panic on them.
+func TestGuardedDefersTheLiveBlobDeletes(t *testing.T) {
+	t.Parallel()
+
+	s := cancelLogService(&cancelLogRecorder{mu: sync.Mutex{}, records: nil})
+
+	step := s.guarded(func(context.Context, durable.StepContext, restoreInput) ([]byte, error) {
+		return nil, ErrLiveBlobDeletes
+	})
+
+	id, backupID := MintRestoreIDs()
+	_, preBackupID := MintRestoreIDs()
+
+	input, err := json.Marshal(restoreInput{
+		ID: id, BackupID: backupID, PreBackupID: preBackupID, CheckOnly: false, Force: false,
+		RequestedBy: "", KeepAccessTables: false,
+	})
+	if err != nil {
+		t.Fatalf("encode the input: %v", err)
+	}
+
+	_, err = step(t.Context(), durable.StepContext{
+		Operation: durable.Operation{
+			ID: "restore-op", Key: RestoreOperationKey(id), Kind: RestoreOperationKind,
+			Version: RestoreOperationVersion, Input: input, State: durable.StateRunning, Steps: nil, Attempt: 1,
+			Failures: durable.DefaultMaxAttempts - 1, Expiries: 0, LastError: "",
+			Claim:           durable.Claim{Operation: "restore-op", Owner: "", Token: 0, ExpiresAt: time.Time{}},
+			CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		},
+		Fence: durable.StepFence{Operation: "restore-op", Token: 1, Step: RestoreStepAfterApply},
+	})
+	if !errors.Is(err, ErrLiveBlobDeletes) {
+		t.Fatalf("the wait on the last attempt = %v, want ErrLiveBlobDeletes", err)
+	}
+}
+
 // TestRestoreWriterCheckLogsTheAttempt proves that the check that runs before
 // every cancel writes one attempt line with the restore ID, the claim token
 // and the unit name, and stores the audit event that names the attempt.
@@ -118,8 +162,9 @@ func TestRestoreWriterCheckLogsTheAttempt(t *testing.T) {
 			Claim:           durable.Claim{Operation: "restore-op", Owner: "", Token: 7, ExpiresAt: time.Time{}},
 			CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		}},
-		canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil, key: nil, installation: "",
-		afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
+		canceler: nil, backups: nil, maintenance: nil, blobs: nil, leases: nil, target: nil, key: nil,
+		installation: "",
+		afterApply:   nil, admit: nil, allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
 		logger: slog.New(recorder), runner: nil,
 	}
 

@@ -59,14 +59,15 @@ const (
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server
-// key of their fingerprints, and the heartbeats of the workers. See
-// EmptiedTables.
+// key of their fingerprints, the heartbeats of the workers, and the leases of
+// the blob deleters. See EmptiedTables.
 const (
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableDurableHeartbeats    = "durable_heartbeats"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
+	TableBlobDeleteLeases     = "blob_delete_leases"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
