@@ -1053,7 +1053,8 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the sealed state, the
-// namespace IDs, the owned rows and the feature rows.
+// namespace IDs, the owned rows, the grants of principals of a namespace and
+// the feature rows.
 func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
 	if sealedErr := checkStagedSealedState(ctx, q, staging); sealedErr != nil {
 		return sealedErr
@@ -1065,6 +1066,10 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
+		return grantErr
 	}
 
 	return checkStagedFeatureRows(ctx, q, staging)

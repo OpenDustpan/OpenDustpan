@@ -702,16 +702,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
 	}
 
-	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
-	}
-
-	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
-	}
-
-	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featureErr)
+	if rowsErr := checkStagedRows(ctx, conn); rowsErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", rowsErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -807,6 +799,25 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 	}
 
 	return nil
+}
+
+// checkStagedRows checks the rows of the staged database with the rules of
+// the store: the namespace IDs, the owned rows, the grants of principals of a
+// namespace and the feature rows.
+func checkStagedRows(ctx context.Context, conn *sql.DB) error {
+	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
+		return idsErr
+	}
+
+	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, conn); grantErr != nil {
+		return grantErr
+	}
+
+	return checkStagedFeatureRows(ctx, conn)
 }
 
 // checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is

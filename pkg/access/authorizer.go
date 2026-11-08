@@ -302,6 +302,11 @@ func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action id
 		return none, fmt.Errorf("read grants: %w", err)
 	}
 
+	grants, err = a.confineGrants(ctx, grants)
+	if err != nil {
+		return none, err
+	}
+
 	live, err := a.currentUnits(ctx, grants)
 	if err != nil {
 		return none, err
@@ -356,6 +361,11 @@ func (a *Authorizer) namespaceTokenPrincipals(ctx context.Context, subjects []Su
 	grants, err := a.store.GrantsWithRoles(ctx, subjects, roles)
 	if err != nil {
 		return out, fmt.Errorf("read grants: %w", err)
+	}
+
+	grants, err = a.confineGrants(ctx, grants)
+	if err != nil {
+		return out, err
 	}
 
 	seen := map[namespace.Name]bool{}
@@ -510,6 +520,11 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		return none, fmt.Errorf("read grants: %w", err)
 	}
 
+	grants, err = a.confineGrants(ctx, grants)
+	if err != nil {
+		return none, err
+	}
+
 	roles, err := a.rolesOf(ctx, grants)
 	if err != nil {
 		return none, err
@@ -518,6 +533,56 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 	targetNS := namespaceOfChain(chain, obj)
 
 	return heldFromGrants(grants, roles, targetNS), nil
+}
+
+// confineGrants drops every grant whose subject may not hold it: a grant of
+// a principal of a namespace is honored only on that namespace and on the
+// objects inside it. A failed read of the namespace of a subject honors no
+// grant: it returns the error.
+//
+// Defense in depth: the store refuses such a grant in the transaction of
+// its write, and the staged check of a restore refuses a backup that holds
+// one; this check stays so that a row from any other source gives no
+// power.
+func (a *Authorizer) confineGrants(ctx context.Context, grants []Grant) ([]Grant, error) {
+	out := make([]Grant, 0, len(grants))
+	scopes := map[string]subjectScope{}
+
+	for i := range grants {
+		g := grants[i]
+
+		if g.Subject.Kind != SubjectPrincipal {
+			out = append(out, g)
+
+			continue
+		}
+
+		scope, read := scopes[g.Subject.ID]
+		if !read {
+			ns, found, err := principalNamespaceOf(ctx, g.Subject.ID, a.principals)
+			if err != nil {
+				return nil, err
+			}
+
+			scope = subjectScope{namespace: ns, namespaced: found}
+			scopes[g.Subject.ID] = scope
+		}
+
+		if scope.namespaced && g.Object.Namespace() != scope.namespace {
+			continue
+		}
+
+		out = append(out, g)
+	}
+
+	return out, nil
+}
+
+// subjectScope is the namespace of the subject of a grant. namespaced is
+// false when the subject belongs to no namespace.
+type subjectScope struct {
+	namespace  namespace.Name
+	namespaced bool
 }
 
 // heldFromGrants returns the actions that grants give on their target: the
