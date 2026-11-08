@@ -171,6 +171,8 @@ jobs:
         run: sqlc diff
       - name: Generated TypeScript client is up to date
         run: make clients-check
+      - name: Generated files are current
+        run: make regen-check
       - name: No check reads a variable that a parallel subtest writes
         run: make subtestcheck
       - name: No release path uses the journal recording build

@@ -50,6 +50,9 @@ Consider a change done only when `make check` passes with zero findings:
   goroutine continues to run after the tests. Add this file to each new test
   package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
+  Run `make regen` after a merge of main. Use `scripts/merge-main.sh` to merge main.
+  `make regen` does not write the API description, because that step needs
+  PostgreSQL. Run `make regen-api-description` for it.
   Resolve a conflict in a generated file (the API description, the clients,
   the golden files, `internal/db`) with a new run of its generator on the
   merged code, never by hand.
