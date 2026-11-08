@@ -1232,7 +1232,7 @@ func (k NotificationStore) Redeliver(
 		}
 
 		n, err := q.RedeliverNotificationDelivery(ctx, db.RedeliverNotificationDeliveryParams{
-			ID: id, Scope: scope.String(),
+			ID: id, Scope: scope.String(), MaxRedeliveries: notify.MaxAttempts,
 		})
 		if err != nil {
 			return fmt.Errorf("redeliver: %w", err)

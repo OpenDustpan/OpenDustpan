@@ -4416,7 +4416,10 @@ UPDATE notification_deliveries
 SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
     last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
-  AND notification_deliveries.state <> 'pending';
+  AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < sqlc.arg(max_redeliveries);
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps

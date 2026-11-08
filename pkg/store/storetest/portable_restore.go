@@ -458,6 +458,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	}
 
 	requireTablesRestored(t, sink, again)
+	requireSeededDelivery(t, ps.dst, seed.acme.Name)
 }
 
 // requireTablesRestored proves that every table of the second export holds the

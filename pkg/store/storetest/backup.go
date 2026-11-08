@@ -303,6 +303,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupDrift(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
+	seedBackupDelivery(t, s, acme, seedDeliveryRedeliveries)
 	seedBackupTriggers(t, s, acme)
 	seedBackupItemKeys(t, s, acme)
 
@@ -530,6 +531,138 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 
 	chat.Version, chat.SecretRefs = 1, []string{"itm-seedchat2"}
 	put(chat, "https://hooks.slack.com/services/T0/B0/seed-two")
+}
+
+// The seeded notification delivery and its subscription, and the count of
+// manual redeliveries that the round trip carries.
+const (
+	seedDeliveryID           = "dlv-seed1"
+	seedSubscriptionID       = "sub-seed1"
+	seedDeliveryRedeliveries = 3
+)
+
+// seedBackupDelivery writes a subscription and a delivery with the given
+// count of manual redeliveries in the namespace acme, so the round trip
+// carries the count. A store with no notification port skips it: the fake of
+// this package's own tests is one.
+func seedBackupDelivery(t *testing.T, s BackupStore, acme namespace.Namespace, count int) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ NotificationSinks() notify.SinkStore })
+	if !ok {
+		return
+	}
+
+	notifications, ok := keeper.NotificationSinks().(notify.Subscriptions)
+	if !ok {
+		return
+	}
+
+	deliveries, ok := keeper.NotificationSinks().(notify.Deliveries)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	entry := func(action string, at time.Time) audit.Entry {
+		return audit.Entry{
+			At: at, Namespace: acme.Name, Subject: "alice", IDPSubject: "", TokenID: "", Action: action,
+			Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+			SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+			Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+			FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		}
+	}
+
+	sub := notify.Subscription{
+		ID: seedSubscriptionID, Scope: acme.Name, Sink: "snk-seedhook",
+		Filter: notify.Filter{Types: []string{"job.*"}, Objects: nil, MinSeverity: 0},
+		State:  notify.SubscriptionStateActive, Reason: "", CreatedBy: "alice", Version: 0,
+	}
+
+	if err := notifications.PutSubscription(ctx, sub, acme.Fence(), entry("subscription:create", now())); err != nil {
+		t.Fatalf("put subscription %s: %v", sub.ID, err)
+	}
+
+	d := notify.Delivery{
+		ID: seedDeliveryID, Notification: "ntf-seed1", Scope: acme.Name, Subscription: seedSubscriptionID,
+		Sink: "snk-seedhook", Contact: "", Principal: "alice", State: notify.DeliveryPending,
+		Attempts: 0, Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
+		Owner: "", LeaseUntil: time.Time{}, Version: 0,
+	}
+
+	if err := deliveries.Enqueue(ctx, acme.Fence(), []notify.Delivery{d}); err != nil {
+		t.Fatalf("enqueue delivery %s: %v", d.ID, err)
+	}
+
+	stop := func(at time.Time) {
+		t.Helper()
+
+		got, err := deliveries.Claim(ctx, acme.Fence(), notify.ClaimRequest{
+			Scope: acme.Name, Owner: "backup-seed", Now: at, Lease: time.Minute, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("claim delivery %s: %v", d.ID, err)
+		}
+
+		i := slices.IndexFunc(got, func(c notify.Delivery) bool { return c.ID == d.ID })
+		if i < 0 {
+			t.Fatalf("claim = %+v, want %s", got, d.ID)
+		}
+
+		a := notify.Attempt{
+			ID: got[i].ID, Owner: got[i].Owner, Version: got[i].Version, Now: at,
+			State: notify.DeliveryDone, Attempts: 1, NextAt: time.Time{}, LastError: "", DeliveredAt: at,
+		}
+
+		if err := deliveries.Record(ctx, acme.Fence(), a); err != nil {
+			t.Fatalf("record delivery %s: %v", d.ID, err)
+		}
+	}
+
+	at := now()
+
+	for n := 1; n <= count; n++ {
+		stop(at)
+
+		at = at.Add(notify.RetryWait(n))
+		if err := deliveries.Redeliver(ctx, d.ID, at, acme.Fence(), entry("notification:redeliver", at)); err != nil {
+			t.Fatalf("redeliver delivery %s: %v", d.ID, err)
+		}
+	}
+}
+
+// requireSeededDelivery checks that s holds the seeded delivery with the
+// number of manual redeliveries that it had before the backup. A store with
+// no delivery port skips it.
+func requireSeededDelivery(t *testing.T, s BackupStore, acme namespace.Name) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ NotificationSinks() notify.SinkStore })
+	if !ok {
+		return
+	}
+
+	deliveries, ok := keeper.NotificationSinks().(notify.Deliveries)
+	if !ok {
+		return
+	}
+
+	got, err := deliveries.History(t.Context(), acme, seedSubscriptionID, nil, 10)
+	if err != nil {
+		t.Fatalf("history of the seeded delivery: %v", err)
+	}
+
+	i := slices.IndexFunc(got, func(d notify.Delivery) bool { return d.ID == seedDeliveryID })
+	if i < 0 {
+		t.Fatalf("history of %s holds no delivery %s: %+v", seedSubscriptionID, seedDeliveryID, got)
+	}
+
+	if got[i].Redeliveries != seedDeliveryRedeliveries {
+		t.Fatalf("redeliveries of the restored delivery = %d, want %d",
+			got[i].Redeliveries, seedDeliveryRedeliveries)
+	}
 }
 
 // DriftSeeder is the capability of a backup store that can write a drift result

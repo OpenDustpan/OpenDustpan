@@ -19636,15 +19636,19 @@ SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.rede
     last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = $1 AND notification_deliveries.scope = $2
   AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < $3
 `
 
 type RedeliverNotificationDeliveryParams struct {
-	ID    string
-	Scope string
+	ID              string
+	Scope           string
+	MaxRedeliveries int64
 }
 
 func (q *Queries) RedeliverNotificationDelivery(ctx context.Context, arg RedeliverNotificationDeliveryParams) (int64, error) {
-	result, err := q.db.Exec(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope)
+	result, err := q.db.Exec(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope, arg.MaxRedeliveries)
 	if err != nil {
 		return 0, err
 	}
