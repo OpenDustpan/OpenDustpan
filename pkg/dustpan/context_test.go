@@ -210,7 +210,9 @@ func (w *contextWorld) seed(t *testing.T) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	ws, err := w.srv.Workspaces().Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := w.srv.Workspaces().Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, w.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

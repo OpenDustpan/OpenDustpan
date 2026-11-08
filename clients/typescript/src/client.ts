@@ -57,6 +57,8 @@ import type {
   GetApiDescriptionInput,
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
+  GetBlueprintDraftInput,
+  GetBlueprintVersionInput,
   GetCapabilitiesInput,
   GetCollectionInput,
   GetCollectionAccessLimitInput,
@@ -99,6 +101,7 @@ import type {
   GetViewInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
+  ListBlueprintsInput,
   ListCollectionAccessLimitsInput,
   ListCollectionGatesInput,
   ListCollectionsInput,
@@ -131,6 +134,7 @@ import type {
   LockCollectionInput,
   LockNamespaceInput,
   MakeGitHostConnectionDefaultInput,
+  PublishBlueprintInput,
   PublishModuleReleaseInput,
   PublishProviderReleaseInput,
   PutGitHostAppInput,
@@ -146,6 +150,7 @@ import type {
   ReplaceUnitSettingsInput,
   ResetLocalUserPasswordInput,
   ResetUnitSettingsInput,
+  RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
@@ -173,6 +178,7 @@ import type {
   UpdatePreferencesInput,
   UpdateSettingsInput,
   UpdateUnitContextInput,
+  WriteBlueprintDraftInput,
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
 import type {
@@ -184,6 +190,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -362,6 +370,33 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  SelfServiceBlueprint,
+  SelfServiceChoice,
+  SelfServiceComponent,
+  SelfServiceDelivery,
+  SelfServiceDraft,
+  SelfServiceDraftWrite,
+  SelfServiceFilter,
+  SelfServiceGitDelivery,
+  SelfServiceHomeKind,
+  SelfServiceInput,
+  SelfServiceInputType,
+  SelfServiceJobDelivery,
+  SelfServiceModule,
+  SelfServiceOperand,
+  SelfServiceOutputRef,
+  SelfServicePlatform,
+  SelfServicePolicyEffect,
+  SelfServicePolicyRule,
+  SelfServiceProgram,
+  SelfServicePublishRequest,
+  SelfServiceQuotaKind,
+  SelfServiceQuotaRule,
+  SelfServiceQuotaScope,
+  SelfServiceRule,
+  SelfServiceSource,
+  SelfServiceVersion,
+  SelfServiceVersionList,
   Setting,
   Settings,
   SettingsLockedError,
@@ -671,6 +706,14 @@ export class Client {
     return execute(this.transport, operations.getApprovalRule, input);
   }
 
+  getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
+    return execute(this.transport, operations.getBlueprintDraft, input);
+  }
+
+  getBlueprintVersion(input: GetBlueprintVersionInput): Promise<Answer<SelfServiceVersion>> {
+    return execute(this.transport, operations.getBlueprintVersion, input);
+  }
+
   getCapabilities(input: GetCapabilitiesInput = {}): Promise<Answer<Capabilities>> {
     return execute(this.transport, operations.getCapabilities, input);
   }
@@ -839,6 +882,10 @@ export class Client {
     return execute(this.transport, operations.listApprovalRules, input);
   }
 
+  listBlueprints(input: ListBlueprintsInput): Promise<Answer<SelfServiceVersionList>> {
+    return execute(this.transport, operations.listBlueprints, input);
+  }
+
   listCollectionAccessLimits(input: ListCollectionAccessLimitsInput): Promise<Answer<ListAccessLimitsResponse>> {
     return execute(this.transport, operations.listCollectionAccessLimits, input);
   }
@@ -967,6 +1014,10 @@ export class Client {
     return execute(this.transport, operations.makeGitHostConnectionDefault, input);
   }
 
+  publishBlueprint(input: PublishBlueprintInput): Promise<Answer<SelfServiceVersion>> {
+    return execute(this.transport, operations.publishBlueprint, input);
+  }
+
   publishModuleRelease(input: PublishModuleReleaseInput): Promise<Answer<ModuleRelease>> {
     return execute(this.transport, operations.publishModuleRelease, input);
   }
@@ -1025,6 +1076,10 @@ export class Client {
 
   resetUnitSettings(input: ResetUnitSettingsInput): Promise<Answer<void>> {
     return execute(this.transport, operations.resetUnitSettings, input);
+  }
+
+  retireBlueprintVersion(input: RetireBlueprintVersionInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.retireBlueprintVersion, input);
   }
 
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
@@ -1133,5 +1188,9 @@ export class Client {
 
   updateUnitContext(input: UpdateUnitContextInput): Promise<Answer<ContextEntry>> {
     return execute(this.transport, operations.updateUnitContext, input);
+  }
+
+  writeBlueprintDraft(input: WriteBlueprintDraftInput): Promise<Answer<SelfServiceDraftWrite>> {
+    return execute(this.transport, operations.writeBlueprintDraft, input);
   }
 }

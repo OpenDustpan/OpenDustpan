@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,10 @@ func restoreCrashCases() []restoreCase {
 		},
 		{name: "a takeover before the audit append writes the entries once", test: testCrashBeforeAuditAppend},
 		{name: "a takeover after the removals of the cleanup ends the restore once", test: testCrashInCleanup},
+		{
+			name: "a takeover after the over-limit event of the unverified keys keeps one event",
+			test: testCrashAfterUnverifiedEvent,
+		},
 		{name: "a failure after the swap writes the restore audit entry once", test: testFailureAfterSwapAudits},
 		{name: "a cancel in the check step fences no namespace", test: testCancelInCheckFencesNothing},
 		{name: "a canceled check-only restore fences no namespace", test: testCanceledCheckOnlyFencesNothing},
@@ -65,7 +70,16 @@ const (
 	// crashAfterCancelEvent stops the holder after it stored the audit event
 	// of a forced cancel, before its write of maintenance mode.
 	crashAfterCancelEvent
+	// crashAfterUnverifiedEvent stops the holder after it stored the audit
+	// event that names the unverified keys of the backup, before the record
+	// of the copy-blobs step.
+	crashAfterUnverifiedEvent
 )
+
+// unverifiedEventObjectPart is a fixed part of the object text of the audit
+// event that names the unverified keys of a backup over the bound. The crash
+// after that event matches only this object.
+const unverifiedEventObjectPart = "blobs without a size and an MD5"
 
 // crashingLive is the live store of one instance. It stops the holder at one
 // fenced write of the domain port, once: the write before it committed, the
@@ -105,6 +119,13 @@ func (c crashingLive) RecordRestoreEvent(
 	}
 
 	if c.at == crashAfterCancelEvent && c.fired.CompareAndSwap(false, true) {
+		c.gate.crash()
+
+		return durable.ErrClaimLost
+	}
+
+	if c.at == crashAfterUnverifiedEvent && strings.Contains(object, unverifiedEventObjectPart) &&
+		c.fired.CompareAndSwap(false, true) {
 		c.gate.crash()
 
 		return durable.ErrClaimLost
@@ -260,7 +281,7 @@ func (c *crashRig) canceledEntries(t *testing.T, token int64, unit string) int {
 	t.Helper()
 
 	return c.r.restoreEntries(t, "restore "+c.id.String()+" claim token "+strconv.FormatInt(token, 10)+
-		" canceled the active work: "+unit)
+		" attempted to cancel the active work: "+unit)
 }
 
 func testCrashAfterEnterWrite(t *testing.T, newStore RestoreFactory) {
@@ -376,6 +397,60 @@ func testCrashInCleanup(t *testing.T, newStore RestoreFactory) {
 	if areas := r.areasOf(t, first); len(areas) != 0 {
 		t.Fatalf("staging areas of the ended restore %s = %v, want none", first, areas)
 	}
+}
+
+// testCrashAfterUnverifiedEvent stops the holder after it stored the audit
+// event that names the unverified keys of a backup over the bound. The
+// takeover runs the copy-blobs step again, which stores the same object: the
+// restore keeps one such event.
+func testCrashAfterUnverifiedEvent(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+
+	// The manifest names one key more than the bound on the unverified keys,
+	// as the manifest of an earlier version of the server does.
+	fillUnverified(t, r.target, r.backupID, backup.MaxUnverifiedKeys+1)
+
+	c := newCrashRig(t, r, crashAfterUnverifiedEvent, nil)
+
+	// The holder stopped after it stored the event, before the record of its
+	// step: the event is on the row, and the takeover runs the step again.
+	if _, done := r.opOf(t, c.id).Step(backup.RestoreStepCopyBlobs); done {
+		t.Fatal("the copy-blobs step is recorded, want the holder stopped before the confirm")
+	}
+
+	if noted := r.unverifiedEvents(t, c.id); len(noted) != 1 {
+		t.Fatalf("audit events that name the unverified keys after the stop = %v, want one", noted)
+	}
+
+	r.driveToEnd(t, c.b, c.id)
+	r.mustRestoredOnce(t, c.id, restoredCheck{areas: true})
+
+	if noted := r.unverifiedEvents(t, c.id); len(noted) != 1 {
+		t.Fatalf("audit events that name the unverified keys after the takeover = %v, want one", noted)
+	}
+}
+
+// unverifiedEvents returns the audit events of restore id that name the
+// unverified keys of the backup.
+func (r *workerRig) unverifiedEvents(t *testing.T, id backup.RestoreID) []string {
+	t.Helper()
+
+	events, err := r.st.RestoreEvents(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read the restore events: %v", err)
+	}
+
+	var noted []string
+
+	for _, object := range events {
+		if strings.Contains(object, unverifiedEventObjectPart) {
+			noted = append(noted, object)
+		}
+	}
+
+	return noted
 }
 
 // errHookFailed is the error of the after-apply hook that fails.
