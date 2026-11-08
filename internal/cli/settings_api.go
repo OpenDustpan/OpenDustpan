@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
@@ -34,7 +35,8 @@ func (brandingPresetError) Error() string {
 // a change takes effect at the next start. A change through the API answers a
 // conflict for it. The settings that the database layer can hold are
 // declared here by key, and the static layer can lock each of them: the
-// branding preset and the settings of the password sign-in.
+// branding preset, the settings of the password sign-in and the cap of the
+// access-review export of a collection.
 func SettingDeclarations() []setting.Declaration {
 	var out []setting.Declaration
 
@@ -52,6 +54,7 @@ func SettingDeclarations() []setting.Declaration {
 
 	out = append(out, localuser.SettingDeclarations()...)
 	out = append(out, session.SettingDeclarations()...)
+	out = append(out, access.SettingDeclarations()...)
 
 	return append(out, setting.Declaration{
 		Key: brandingPresetKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",

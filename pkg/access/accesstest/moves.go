@@ -92,6 +92,7 @@ func authorizerOver(t *testing.T, s moveStore, port access.UnitCollections) (*ac
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: s, Directory: s, Namespaces: s, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
+		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

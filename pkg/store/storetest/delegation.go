@@ -121,7 +121,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

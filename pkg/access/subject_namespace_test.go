@@ -39,7 +39,7 @@ func TestGrantChecksSubjectNamespace(t *testing.T) {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: f.store, Directory: namespacedDirectory{Directory: f.store, id: "prn-bot"}, Namespaces: f.store,
-		Authorizer: f.authz, Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"},
+		Authorizer: f.authz, Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

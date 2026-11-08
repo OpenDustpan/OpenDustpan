@@ -94,6 +94,15 @@ func newFixture(tb testing.TB) *fixture {
 func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fixture {
 	tb.Helper()
 
+	return newFixtureWithSettings(tb, units, nil)
+}
+
+// newFixtureWithSettings returns a fixture whose authorizer reads units
+// through the collection port and whose service reads the installation
+// settings through settings.
+func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, settings access.Settings) *fixture {
+	tb.Helper()
+
 	st, err := sqlite.Open(tb.Context(), filepath.Join(tb.TempDir(), "dustpan.db"))
 	if err != nil {
 		tb.Fatalf("open store: %v", err)
@@ -114,7 +123,7 @@ func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fix
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, Settings: settings,
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)

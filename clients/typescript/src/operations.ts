@@ -2,6 +2,8 @@
 
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
+  decodeAccessCollectionUnitCapError,
+  decodeAccessCollectionUnitCapErrorArgs,
   decodeAccessLimit,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
@@ -305,6 +307,8 @@ import {
 } from "./decoders.js";
 import { operation } from "./execute.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,

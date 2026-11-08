@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 var _ principal.Guard = (*Service)(nil)
@@ -65,6 +66,14 @@ type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// Settings answers the effective value of an installation setting.
+// *setting.Service meets it.
+type Settings interface {
+	// Effective returns the setting key of scope with its effective value
+	// and its source.
+	Effective(ctx context.Context, scope setting.Scope, key string) (setting.Item, error)
+}
+
 // ServiceConfig holds the dependencies of a Service.
 type ServiceConfig struct {
 	Store      Store
@@ -80,6 +89,9 @@ type ServiceConfig struct {
 	// 6). They hold every action with no grant, so an access-review export
 	// shows one row for each.
 	BootstrapAdmins []string
+	// Settings reads the installation settings, for the cap of the export
+	// of a collection. Nil means DefaultCollectionUnitCap.
+	Settings Settings
 }
 
 // Service implements the role and grant use cases.
@@ -96,6 +108,7 @@ type Service struct {
 	now        func() time.Time
 	newID      func(prefix string) string
 	bootstrap  []string
+	settings   Settings
 }
 
 // NewService returns a Service. Store, Directory, Namespaces and Authorizer
@@ -124,7 +137,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, directory: cfg.Directory, namespaces: cfg.Namespaces, authz: cfg.Authorizer,
-		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins),
+		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins), settings: cfg.Settings,
 	}, nil
 }
 

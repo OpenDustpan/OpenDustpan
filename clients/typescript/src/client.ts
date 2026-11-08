@@ -182,6 +182,8 @@ import type {
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,

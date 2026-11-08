@@ -206,11 +206,12 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 
 ## Settings of the installation
 
-The server declares one setting that the database layer holds. Each other
+The server declares two settings that the database layer holds. Each other
 setting of the installation is static only.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
+| `accessReview.collectionUnitCap` | `int` | 10000 | `live` | The largest count of units that the export of a collection reads. The server refuses an export over it, and refuses a value below 1. |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
 
 The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the

@@ -215,7 +215,7 @@ func TestReviewLastAccessReadsOncePerPage(t *testing.T) {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: counted, Directory: counted, Namespaces: counted, Authorizer: f.authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		BootstrapAdmins: []string{"admin"}, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

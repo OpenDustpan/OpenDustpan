@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -39,6 +40,16 @@ type settingsEnv struct {
 func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action) settingsEnv {
 	t.Helper()
 
+	return newSettingsEnvRegistry(t, settingtest.Registry(), static, deny...)
+}
+
+// newSettingsEnvRegistry builds the handler of newSettingsEnv with the
+// declarations of registry.
+func newSettingsEnvRegistry(
+	t *testing.T, registry *setting.Registry, static setting.Static, deny ...identity.Action,
+) settingsEnv {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -57,7 +68,7 @@ func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action
 
 	handler, err := newCheckedHandler(t, settingsConfig(
 		st, namespaces, selectiveAuthorizer{deny: denied},
-		setting.NewService(st.SettingStore(), settingtest.Registry(), static, st, nil),
+		setting.NewService(st.SettingStore(), registry, static, st, nil),
 	))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -219,6 +230,29 @@ func checkSettingFields(t *testing.T, got map[string]map[string]any) {
 	enabled := got[settingtest.KeyEnabled]
 	if !isFalse(enabled["value"]) || !isTrue(enabled["mayReduceSecurity"]) || enabled["kind"] != "bool" {
 		t.Fatalf("enabled = %v", enabled)
+	}
+}
+
+// TestSettingsReadOfTheCollectionUnitCap proves that the settings read shows
+// the cap of the export of a collection as the server declares it: the
+// default value and the source default.
+func TestSettingsReadOfTheCollectionUnitCap(t *testing.T) {
+	t.Parallel()
+
+	registry, err := setting.NewRegistry(access.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newSettingsEnvRegistry(t, registry, nil)
+
+	r := e.do(t, getCall(settingsURL))
+	wantSettingsStatus(t, r, http.StatusOK)
+
+	item := decodeSettings(t, r)[access.SettingCollectionUnitCap]
+	if item["value"] != float64(access.DefaultCollectionUnitCap) || item["source"] != "default" ||
+		item["default"] != float64(access.DefaultCollectionUnitCap) || item["kind"] != "int" {
+		t.Fatalf("cap = %v, want the default value and the source default", item)
 	}
 }
 
