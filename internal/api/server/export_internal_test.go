@@ -16,6 +16,23 @@ func WithPrincipalForTest(ctx context.Context, p identity.Principal) context.Con
 	return withPrincipal(ctx, p)
 }
 
+// ServeAccessLimitSaveForTest calls the save of an access limit through the
+// route of h, with p as the caller and a console session whose sign-in is
+// now. The route table, the authentication and the policy check are not in
+// the way, so a test reaches the freshness check and the group reach check
+// with the caller that it names.
+func ServeAccessLimitSaveForTest(
+	h *Handler, w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	var caller sessionCaller
+
+	caller.Match.Session.AuthTime = h.signIn.sessions.Now()
+	caller.Match.Session.Provider = "corp"
+
+	ctx := context.WithValue(r.Context(), sessionKey{}, caller)
+	h.fresh(identity.ActionNamespaceManageGates, h.writeAccessLimit)(w, r.WithContext(ctx), p, obj)
+}
+
 // ErrInvalidBodyForTest is the error of a request body that is not valid JSON.
 var ErrInvalidBodyForTest = errInvalidBody
 

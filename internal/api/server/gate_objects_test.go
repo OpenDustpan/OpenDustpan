@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -811,6 +812,22 @@ type accessLimitGroupCase struct {
 	denied bool
 }
 
+// bootstrapAdminGates allows the gate actions on acme and denies the
+// management of the groups of the installation. The save of its case runs as
+// the bootstrap administrator, so only the administrator flag allows it.
+type bootstrapAdminGates struct {
+	gateAuthorizer
+}
+
+// caller returns the principal of the save of its case.
+func (bootstrapAdminGates) caller() identity.Principal { return bootstrapAdmin }
+
+// caseCaller is a case whose save runs as the caller that caller returns, not
+// as the console session of its handler.
+type caseCaller interface {
+	caller() identity.Principal
+}
+
 // TestAccessLimitNamesOnlyManagedGroups proves that a save refuses an access
 // limit that names a group when its author may not manage the groups of the
 // installation, in each position of the group, and that it stores the limit
@@ -834,7 +851,7 @@ func TestAccessLimitNamesOnlyManagedGroups(t *testing.T) {
 		{"the caller manages groups", groupManagerGates(), groupInPrincipal, http.StatusOK, true, false},
 		{
 			"the bootstrap administrator",
-			selectiveAuthorizer{deny: map[identity.Action]bool{}},
+			bootstrapAdminGates{gateAuthorizer: adminGates()},
 			groupInPrincipal, http.StatusOK, true, false,
 		},
 		{
@@ -861,7 +878,12 @@ func runAccessLimitGroupCase(t *testing.T, tt accessLimitGroupCase, reason strin
 	st, h := newGateHandler(t, tt.authz)
 	item := gateBase + "acme/access-limits/limit"
 
-	rec := serveGate(t, h, gateCall{http.MethodPut, item, tt.policy, ""})
+	p := noBootstrapAdmin
+	if c, ok := tt.authz.(caseCaller); ok {
+		p = c.caller()
+	}
+
+	rec := saveAccessLimit(t, h, item, tt.policy, p)
 	wantStatus(t, rec, tt.status)
 
 	if tt.status == http.StatusForbidden {
@@ -878,6 +900,30 @@ func runAccessLimitGroupCase(t *testing.T, tt accessLimitGroupCase, reason strin
 	} else {
 		wantStatus(t, read, http.StatusNotFound)
 	}
+}
+
+// saveAccessLimit sends the save of an access limit as p. A principal that is
+// not an administrator sends it as the console session of g.
+func saveAccessLimit(
+	t *testing.T, g gateEnv, item, policy string, p identity.Principal,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	if !p.Admin {
+		return serveGate(t, g, gateCall{http.MethodPut, item, policy, ""})
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, item, strings.NewReader(policy))
+	req.SetPathValue("namespace", "acme")
+	req.SetPathValue("id", "limit")
+	req.RemoteAddr = ipTestRemote
+
+	rec := httptest.NewRecorder()
+	apiserver.ServeAccessLimitSaveForTest(
+		g.env.handler.Handler, rec, req, p, identity.NamespaceObject("acme"),
+	)
+
+	return rec
 }
 
 // checkLimitGroupReachRefusal fails unless rec answers the code of a group
