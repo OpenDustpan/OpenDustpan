@@ -84,7 +84,7 @@ func seedNamespacePrincipalMembership(t *testing.T, s *Store) {
 
 	g := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-team", Name: "team", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	err := s.CreateGroup(ctx, g, stagedGrantEntry(audit.ServerScope, "server:manage-groups", "group:"+g.ID))
 	if err != nil {
