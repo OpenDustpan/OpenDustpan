@@ -41,6 +41,10 @@ func issueCases() []suiteCase {
 			name: "issue with a starter that has no principal row returns not live and writes nothing",
 			test: testMissingStarterRecord,
 		},
+		{
+			name: "issue of a duplicate digest with a starter that has no principal row returns not live",
+			test: testDuplicateMissingStarterRecord,
+		},
 		{name: "issue with a starter that is not the job starter returns invalid", test: testStarterMismatch},
 		{name: "issue for a job that does not exist returns not found", test: testMissingJob},
 		{name: "issue for a claim operation that does not exist returns not found", test: testMissingClaim},
@@ -408,6 +412,37 @@ func testMissingStarterRecord(t *testing.T, h Harness) {
 	}
 
 	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
+// testDuplicateMissingStarterRecord pins the error order of the port: a
+// starter with no principal row gives ErrNotLive before a duplicate digest
+// gives ErrAlreadyExists. The first record stays.
+func testDuplicateMissingStarterRecord(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-duplicate-missing-starter")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	mustIssue(t, h, tok, fence)
+
+	dup := tok
+	dup.StarterID = ident.NewID("prn-")
+
+	if err := tryIssue(t, h, dup, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue of a duplicate digest with a starter that has no principal row = %v, want ErrNotLive", err)
+	}
+
+	if m := mustRead(t, h, tok.Digest); m.Token.StarterID != starter.ID {
+		t.Fatalf("starter of the stored record = %q, want %q", m.Token.StarterID, starter.ID)
+	}
+
+	if got := len(h.Audit(t, fence.Namespace)); got != 1 {
+		t.Fatalf("audit entries = %d, want 1", got)
+	}
 }
 
 func testStarterMismatch(t *testing.T, h Harness) {
