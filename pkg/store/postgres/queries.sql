@@ -4865,9 +4865,9 @@ WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool 
 -- name: UpsertDriftResult :execrows
 -- The caller checks the fence, the job and the time in the same transaction.
 -- A row of the same unit ID in another namespace or of another tool is not
--- replaced: the count is 0. A stored row that is not older is not replaced
--- either (count 0), so that two writers cannot put an older result over a
--- newer one.
+-- replaced: the count is 0. A stored row of the same job is not replaced
+-- either (count 0). A stored row that is not older is not replaced either
+-- (count 0), so that two writers cannot put an older result over a newer one.
 INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
@@ -4877,6 +4877,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms;
 
 -- name: DeleteDriftResult :exec
