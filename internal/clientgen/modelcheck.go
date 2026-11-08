@@ -60,7 +60,9 @@ func checkSchema(s *model.Schema) error {
 		return err
 	}
 
-	for _, f := range s.Fields {
+	for i := range s.Fields {
+		f := &s.Fields[i]
+
 		if err := CheckName(NameField, f.Name); err != nil {
 			return err
 		}
@@ -112,10 +114,16 @@ func checkOperationTypes(op *model.Operation) error {
 	return nil
 }
 
-// checkType checks the schema names inside a type.
+// checkType checks the schema names and the type lists inside a type.
 func checkType(t model.Type) error {
 	if t.Kind == model.TypeRef {
 		if err := CheckName(NameSchema, t.Ref); err != nil {
+			return err
+		}
+	}
+
+	if t.Kind == model.TypeUnion {
+		if err := checkMembers(t.Members); err != nil {
 			return err
 		}
 	}
@@ -125,6 +133,49 @@ func checkType(t model.Type) error {
 	}
 
 	return nil
+}
+
+// checkMembers checks the members of a type list: two or more primitive kinds,
+// with no repeat.
+//
+// Defense in depth: the parser refuses the same forms. This check stays so
+// that a model that something else built cannot write a bad type list.
+func checkMembers(members []model.TypeKind) error {
+	if len(members) < typeListMinNames {
+		return fmt.Errorf("%w: a type list holds %d members", ErrInvalidDescription, len(members))
+	}
+
+	// A member is a primitive kind: JSON holds a string, a number and a
+	// boolean, and an integer is a number.
+	primitives := map[model.TypeKind]bool{
+		model.TypeString: true, model.TypeInteger: true, model.TypeNumber: true, model.TypeBoolean: true,
+	}
+
+	seen := make(map[model.TypeKind]bool, len(members))
+
+	for _, m := range members {
+		if !primitives[m] {
+			return fmt.Errorf("%w: a type list holds the kind %d", ErrInvalidDescription, m)
+		}
+
+		if seen[m] {
+			return fmt.Errorf("%w: a type list holds the kind %d two times", ErrInvalidDescription, m)
+		}
+
+		seen[m] = true
+	}
+
+	return nil
+}
+
+// HoldsTypeList reports whether the type is a type list, or holds one below
+// it, in the items of an array or the values of a map.
+func HoldsTypeList(t model.Type) bool {
+	if t.Kind == model.TypeUnion {
+		return true
+	}
+
+	return t.Elem != nil && HoldsTypeList(*t.Elem)
 }
 
 // CheckToken checks a version, a release or another token before a template

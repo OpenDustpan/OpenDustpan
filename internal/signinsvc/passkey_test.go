@@ -49,7 +49,7 @@ func passkeyService(t *testing.T, w *world, st *stateWorld) *signinsvc.Service {
 	t.Helper()
 
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: nil,
+		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: nil, Removals: nil,
 		States: st, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {

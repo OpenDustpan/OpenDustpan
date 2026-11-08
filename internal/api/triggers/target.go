@@ -94,8 +94,13 @@ func (h *Handler) resolveTrigger(r *http.Request) (target, error) {
 }
 
 // resolveStoredTrigger is resolveTrigger for a delete. It reads the row as the
-// store holds it, so that a row that fails its checks can still be removed.
-// Every other route reads with Get, which refuses such a row.
+// store holds it, so that a row that fails its checks can still be removed: a
+// stored kind, frequency, source, enabled flag, last saver or last saver ID
+// that is not valid does not stop a delete. The row must still name the live
+// unit of the path: this route answers not-found for a trigger whose unit
+// namespace or unit ID does not match the path, or whose ID is not valid, so
+// such a row is not reachable through it. Every other route reads with Get,
+// which refuses a row that fails its checks.
 func (h *Handler) resolveStoredTrigger(r *http.Request) (target, error) {
 	return h.resolveWith(r, h.store.Stored)
 }
