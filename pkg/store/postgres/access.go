@@ -311,6 +311,13 @@ func (s *Store) GrantsOfSubjects(ctx context.Context, subjects []access.Subject)
 		return nil, nil
 	}
 
+	// Defense in depth: ProtectedGroups and the list routes refuse more than
+	// one page of IDs. This check stays so that a new caller cannot send an
+	// unbounded list, which would also pass the variable limit of SQLite.
+	if len(subjects) > principal.MaxLimit {
+		return nil, fmt.Errorf("%w: %d subjects, at most %d", access.ErrInvalid, len(subjects), principal.MaxLimit)
+	}
+
 	rows, err := s.queries.GrantsOfSubjects(ctx, subjectStrings(subjects))
 	if err != nil {
 		return nil, fmt.Errorf("select grants of subjects: %w", err)

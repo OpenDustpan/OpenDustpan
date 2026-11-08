@@ -15,6 +15,7 @@ package accesstest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1132,6 +1133,36 @@ func testGrantsOfSubjects(t *testing.T, s access.Store) {
 	none, err := s.GrantsOfSubjects(ctx, nil)
 	if err != nil || len(none) != 0 {
 		t.Fatalf("grants of no subject = %v, %v; want none", grantIDs(none), err)
+	}
+
+	checkGrantsOfSubjectsBound(t, s)
+}
+
+// checkGrantsOfSubjectsBound reads the grants of one page of subjects, the
+// bound, and checks that one subject more is refused with ErrInvalid. The
+// caller stores grt-1 and grt-2 for the group opsGroup.
+func checkGrantsOfSubjectsBound(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	page := make([]access.Subject, 0, principal.MaxLimit+1)
+	for i := range principal.MaxLimit {
+		page = append(page, access.Subject{Kind: access.SubjectGroup, ID: fmt.Sprintf("grp-page-%04d", i)})
+	}
+
+	page[0] = opsGroup()
+
+	got, err := s.GrantsOfSubjects(ctx, page)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("grants of %d subjects = %v, %v; want grt-1 grt-2", len(page), grantIDs(got), err)
+	}
+
+	page = append(page, access.Subject{Kind: access.SubjectGroup, ID: "grp-page-over"})
+
+	over, err := s.GrantsOfSubjects(ctx, page)
+	if !errors.Is(err, access.ErrInvalid) || over != nil {
+		t.Fatalf("grants of %d subjects = %v, %v; want access.ErrInvalid", len(page), grantIDs(over), err)
 	}
 }
 

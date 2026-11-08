@@ -543,8 +543,9 @@ type GrantLookups interface {
 	// GrantsOfSubjects returns every current grant of each subject of
 	// subjects, on any object, in one query: for each subject, the grants
 	// that GrantsOf returns. It returns no grant of a subject that is not in
-	// subjects, and none for an empty list. It serves the protected flag of
-	// a page of groups.
+	// subjects, and none for an empty list. It returns ErrInvalid for more
+	// than principal.MaxLimit subjects, the size of one page of a list
+	// route. It serves the protected flag of a page of groups.
 	GrantsOfSubjects(ctx context.Context, subjects []Subject) ([]Grant, error)
 	// RoleGrantedBelowInstallation reports whether a current grant gives
 	// the role with the ID role on a namespace, a collection or a unit.
