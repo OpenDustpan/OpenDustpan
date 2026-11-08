@@ -152,6 +152,16 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+      # The checks of a pull request against main. They run only on
+      # pull_request, in this job, so a docs-only pull request runs them too.
+      # Each one needs the history back to the merge base, so this step
+      # fetches main with its history; the checkout of the job stays shallow.
+      - name: Fetch main for the pull request checks
+        if: ${{ github.event_name == 'pull_request' }}
+        run: git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
+      - name: The API description pin does not change before the first tag
+        if: ${{ github.event_name == 'pull_request' }}
+        run: make pin-frozen PIN_BASE=origin/main
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
