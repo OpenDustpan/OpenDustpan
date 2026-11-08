@@ -59,10 +59,11 @@ type Tool struct {
 
 // Pulumi describes the Pulumi CLI.
 //
-// The matrix is the newest release plus three older minors. Pulumi ships a minor
-// roughly weekly, so the older entries are spaced out (about two months, four
-// months and one year back) to cover genuinely different CLI behavior rather
-// than four near-identical builds.
+// The default matrix is the three pinned versions, each from a different older
+// minor. Pulumi ships a minor roughly weekly, so the pins are spaced out (about
+// two months, four months and one year back) to cover genuinely different CLI
+// behavior rather than three near-identical builds. The scheduled nightly run
+// sets E2E_PULUMI_VERSIONS to latest to run the newest release.
 func Pulumi() Tool {
 	return Tool{
 		parseLatest: func(body string) (string, error) { return strings.TrimSpace(body), nil },
@@ -76,6 +77,11 @@ func Pulumi() Tool {
 		checksums: func(version string) string { return "pulumi-" + version + "-checksums.txt" },
 		// sha256 sums copied from https://get.pulumi.com/releases/sdk/pulumi-<version>-checksums.txt.
 		pinned: map[string]string{
+			// The journal tests (make e2e-journal) run this version.
+			"pulumi-v3.268.0-darwin-arm64.tar.gz": "ef509a84f0ad8f4ed0ec04be957e6688f094eb9a1cdc676a4864103d66d8a4e9",
+			"pulumi-v3.268.0-darwin-x64.tar.gz":   "b0c4e37e9fd9573d3e09b65606124486ef2c2049db1237ca6037c4204c6a99a8",
+			"pulumi-v3.268.0-linux-arm64.tar.gz":  "47c1b9283b7997337b0a373d240f771a6aeb42ee5dd2e213c14604247c7ff15a",
+			"pulumi-v3.268.0-linux-x64.tar.gz":    "903cafeaa9f6327e4bf53a8b7b99ae660f26198acfa804a2f982bf5de3f1de0b",
 			"pulumi-v3.262.0-darwin-arm64.tar.gz": "a3c2ff50ef94962711649e234a28ed3803618cbb2f313505a88ca86c30da98e0",
 			"pulumi-v3.262.0-darwin-x64.tar.gz":   "7db45a6fb6f876e7181925861613b1aa2ae4eea7629f2fb495b221c67c0ec117",
 			"pulumi-v3.262.0-linux-arm64.tar.gz":  "224ffde7339807abca1ee8866372e37fcf23f27a1e31056326188f81823b69a4",
@@ -94,12 +100,13 @@ func Pulumi() Tool {
 		ReleaseURL:  "https://get.pulumi.com/releases/sdk/%[2]s",
 		versionsEnv: "E2E_PULUMI_VERSIONS",
 		binary:      "pulumi/pulumi",
-		defaults:    []string{Latest, "3.262.0", "3.250.0", "3.200.0"},
+		defaults:    []string{"3.262.0", "3.250.0", "3.200.0"},
 	}
 }
 
-// OpenTofu describes the OpenTofu CLI. The matrix is the newest release plus
-// the last patch of the three previous minors.
+// OpenTofu describes the OpenTofu CLI. The default matrix is the three pinned
+// versions: the last patch of each of the three previous minors. The scheduled
+// nightly run sets E2E_TOFU_VERSIONS to latest to run the newest release.
 func OpenTofu() Tool {
 	return Tool{
 		parseLatest: newestStable,
@@ -127,18 +134,20 @@ func OpenTofu() Tool {
 		ReleaseURL:  "https://github.com/opentofu/opentofu/releases/download/v%[1]s/%[2]s",
 		versionsEnv: "E2E_TOFU_VERSIONS",
 		binary:      "tofu",
-		defaults:    []string{Latest, "1.12.12", "1.11.14", "1.10.10"},
+		defaults:    []string{"1.12.12", "1.11.14", "1.10.10"},
 	}
 }
 
-// Pinned is the version label that stands for every pinned version of the
-// default matrix, which is the default matrix without Latest. The nightly run
-// uses it to run the pinned versions and Latest as two separate jobs.
+// Pinned is the version label that stands for the pinned versions of the
+// default matrix. The default matrix holds no Latest. The nightly run uses it
+// to run the pinned versions and Latest as two separate jobs.
 const Pinned = "pinned"
 
 // Versions returns the matrix from the tool's environment variable
-// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS), or its defaults. The label
-// Pinned in the variable stands for the pinned versions of the defaults.
+// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS). When the variable is not set it
+// returns the pinned versions of the default matrix. The label Pinned in the
+// variable stands for every pinned version. The scheduled nightly run sets the
+// variable to latest to run the newest release.
 func (t Tool) Versions() []string {
 	raw := os.Getenv(t.versionsEnv)
 	if raw == "" {
@@ -162,6 +171,27 @@ func (t Tool) Versions() []string {
 	}
 
 	return versions
+}
+
+// Single returns the version of a test that installs one version of the
+// tool: the first label of Versions that is not Latest. A pinned version has
+// its sha256 sum in this file, so a cached binary needs no network request.
+// When Versions holds Latest only, Single returns Latest: the scheduled run of
+// the newest releases sets the matrix to Latest. When Versions is empty, Single
+// returns "".
+func (t Tool) Single() string {
+	versions := t.Versions()
+	if len(versions) == 0 {
+		return ""
+	}
+
+	for _, label := range versions {
+		if label != Latest {
+			return label
+		}
+	}
+
+	return Latest
 }
 
 // IsMatrixEnd reports whether label is the newest or the oldest version in

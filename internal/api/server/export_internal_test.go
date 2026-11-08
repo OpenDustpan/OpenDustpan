@@ -87,6 +87,12 @@ func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
 	h.ServeHTTP(w, r)
 }
 
+// ServeRouteForTest serves r with route through the registration wrapper of h,
+// so a test can exercise the wrapper on a route that it builds.
+func (h *Handler) ServeRouteForTest(w http.ResponseWriter, r *http.Request, route Route) {
+	h.enforce(route)(w, r)
+}
+
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the
 // route table would, so a test sees what the handler alone does when its
 // route is not mounted.

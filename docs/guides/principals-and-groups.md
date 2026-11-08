@@ -203,7 +203,9 @@ read-only server actions: each `server:read-*` action. A grant inside one
 namespace, and a grant that a member holds as a person, do not make the
 group protected. A disabled principal of the installation counts: the group
 holds a grant on a principal of the installation, and the server can enable
-the principal again.
+the principal again. This classification is one of the
+[code rules](../reference/code-rules.md) that no grant, setting or
+administrator can change.
 
 The server stores a new group before it checks whether the group is
 protected. A new group holds no grant, so it is not protected.

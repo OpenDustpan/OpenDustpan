@@ -294,12 +294,24 @@ func (h *Handler) roleRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: rolesPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(listRoles),
+			Method:       http.MethodGet,
+			Path:         rolesPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(listRoles),
 		},
 		{
-			Method: http.MethodGet, Path: rolePath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(getRole),
+			Method:       http.MethodGet,
+			Path:         rolePath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(getRole),
 		},
 		{
 			Method:     http.MethodPost,
@@ -307,8 +319,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, createRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveFreshAccessChange(identity.ActionServerManageRoles, createRole),
 		},
 		{
 			Method:     http.MethodPatch,
@@ -316,8 +328,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, changeRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveFreshAccessChange(identity.ActionServerManageRoles, changeRole),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -325,8 +337,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
 		},
 	}
 }
@@ -364,19 +376,8 @@ func (h *Handler) grantRoutes() []Route {
 		}
 
 		out = append(out,
-			Route{
-				Method: http.MethodGet, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, ActionsFor: nil, Serve: h.serveAccessRead(listGrants),
-			},
-			Route{
-				Method:     http.MethodPost,
-				Path:       k.path,
-				Scope:      ScopeAuthorized,
-				Actions:    actions,
-				Resolve:    k.resolve,
-				ActionsFor: nil,
-				Serve:      grant,
-			},
+			authorizedRoute(http.MethodGet, k.path, actions, k.resolve, h.serveAccessRead(listGrants)),
+			authorizedRoute(http.MethodPost, k.path, actions, k.resolve, grant),
 		)
 
 		if k.path == serverGrantsPath {
@@ -384,11 +385,10 @@ func (h *Handler) grantRoutes() []Route {
 			continue
 		}
 
-		out = append(out, Route{
-			Method: http.MethodDelete, Path: k.path + grantIDSuffix, Scope: ScopeAuthorized,
-			Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve, ActionsFor: nil,
-			Serve: h.serveAccessChange(k.action, revokeGrant),
-		})
+		out = append(out, authorizedRoute(
+			http.MethodDelete, k.path+grantIDSuffix, append([]identity.Action(nil), actions...),
+			k.resolve, h.serveAccessChange(k.action, revokeGrant),
+		))
 	}
 
 	out = append(out, Route{
@@ -399,9 +399,10 @@ func (h *Handler) grantRoutes() []Route {
 			identity.ActionCollectionManageAccess,
 			identity.ActionUnitManageAccess,
 		},
-		Resolve:    h.resolveGrantObject,
-		ActionsFor: grantManageActionsFor,
-		Serve:      h.serveRevokeGrantByID,
+		Resolve:      h.resolveGrantObject,
+		ActionsFor:   grantManageActionsFor,
+		OpaqueDenial: false,
+		Serve:        h.serveRevokeGrantByID,
 	})
 
 	return out

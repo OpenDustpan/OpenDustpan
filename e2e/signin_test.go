@@ -42,27 +42,27 @@ func TestSignIn(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
-	tofuVersions := e2e.OpenTofu().Versions()
-	if len(tofuVersions) == 0 {
+	tofuVersion := e2e.OpenTofu().Single()
+	if tofuVersion == "" {
 		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
 	}
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersion, err)
 	}
 
 	for _, db := range databases {
@@ -71,6 +71,36 @@ func TestSignIn(t *testing.T) {
 			runSignInOnStore(t, cli, tofu, db)
 		})
 	}
+}
+
+// TestSignInSecretInVariable proves that the server takes the client secret
+// of the OpenID Connect provider from DUSTPAN_OIDC_CLIENT_SECRET. The test
+// provider refuses another secret at its token endpoint, so a server that
+// sends the fingerprint of the snapshot in place of the secret fails the
+// sign-in.
+func TestSignInSecretInVariable(t *testing.T) {
+	t.Parallel()
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	if len(databases) == 0 {
+		t.Fatal("no store")
+	}
+
+	store := databases[0]
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	env := e2e.NewEnvWithSignInSecretInVariable(t.Context(), t, e2e.NoCLI(), store)
+
+	checkReady(t.Context(), t, env)
+
+	b := newBrowser(t, env)
+	b.signIn(t)
 }
 
 // browser is the browser of one sign-in test: a client with a cookie jar

@@ -60,12 +60,12 @@ var (
 	// ErrLimit reports a write above a limit of its scope, a condition
 	// above its size limit, or a fact document that does not fit.
 	ErrLimit = errors.New("a gate limit is exceeded")
-	// ErrLimitMembership reports the text of an access limit whose
+	// ErrLimitMembership reports the text of an access limit or a gate whose
 	// membership test of principal names a value that is not a named group
 	// and not a set of named groups. The server cannot tell which group
-	// such a limit names, so it refuses the limit at save and refuses a
-	// change of the members of a group at check time.
-	ErrLimitMembership = errors.New("an access limit can test membership only of a named group")
+	// such a text names, so it refuses an access limit at save and refuses
+	// a change of the members of a group at check time.
+	ErrLimitMembership = errors.New("a membership test of principal can name only a group or a set of groups")
 	// ErrUnavailable reports a policy engine or a store that does not
 	// answer, or an external engine whose answer does not authenticate.
 	ErrUnavailable = errors.New("the policy engine is unavailable")

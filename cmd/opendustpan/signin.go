@@ -22,27 +22,13 @@ var (
 	errNoOIDCIssuer = errors.New("an OpenID Connect setting needs --oidc-issuer")
 )
 
-// signInOptions returns the sign-in options of the serve flags: the OpenID
-// Connect provider of oidcOptions and the LDAP provider of ldapOptions. The
-// LDAP password comes from the variables of the process.
-func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
-	oidc, err := f.oidcOptions()
-	if err != nil {
-		return nil, err
-	}
-
-	ldap, err := f.ldapOptions(os.LookupEnv, os.Unsetenv)
-	if err != nil {
-		return nil, err
-	}
-
-	return append(oidc, ldap...), nil
-}
-
-// oidcOptions returns the console sign-in option of the serve flags: one
-// OpenID Connect provider when --oidc-issuer is set, else none. A process
-// without the api component gets none.
-func (f *serveFlags) oidcOptions() ([]dustpan.Option, error) {
+// signInOptions returns the console sign-in options of the serve flags: one
+// OpenID Connect provider when --oidc-issuer is set, and the LDAP provider of
+// ldapOptions when --ldap-url is set. A process without the api component
+// gets none. The client secret and the LDAP password come from lookup, which
+// the start sets to the real environment: f.lookup is the snapshot of the
+// reloads and holds only a fingerprint of a sensitive variable.
+func (f *serveFlags) signInOptions(lookup func(string) (string, bool)) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -55,20 +41,56 @@ func (f *serveFlags) oidcOptions() ([]dustpan.Option, error) {
 		return nil, nil
 	}
 
-	if f.oidcIssuer == "" {
-		if f.oidcProvider != "" || f.oidcClientID != "" {
-			return nil, fmt.Errorf("%w: unset --oidc-provider and --oidc-client-id, or set the issuer", errNoOIDCIssuer)
-		}
+	var opts []dustpan.Option
 
-		return nil, nil
-	}
-
-	secret, err := secretFrom(f.lookup, oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+	provider, ok, err := f.oidcProviderOption(lookup)
 	if err != nil {
 		return nil, err
 	}
 
-	return []dustpan.Option{dustpan.WithOIDCProvider(dustpan.OIDCProvider{
+	if ok {
+		opts = append(opts, dustpan.WithOIDCProvider(provider))
+	}
+
+	// The LDAP password comes from lookup too, and the start clears its
+	// variable after the read.
+	ldap, err := f.ldapOptions(lookup, os.Unsetenv)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(opts, ldap...), nil
+}
+
+// oidcProviderOption returns the OpenID Connect provider of the serve flags,
+// and false when --oidc-issuer is not set.
+func (f *serveFlags) oidcProviderOption(lookup func(string) (string, bool)) (dustpan.OIDCProvider, bool, error) {
+	none := dustpan.OIDCProvider{
+		HTTPClient:   nil,
+		ID:           "",
+		DisplayName:  "",
+		Issuer:       "",
+		ClientID:     "",
+		ClientSecret: "",
+		Scopes:       nil,
+		AutoCreate:   false,
+	}
+
+	if f.oidcIssuer == "" {
+		if f.oidcProvider != "" || f.oidcClientID != "" {
+			return none, false,
+				fmt.Errorf("%w: unset --oidc-provider and --oidc-client-id, or set the issuer", errNoOIDCIssuer)
+		}
+
+		return none, false, nil
+	}
+
+	secret, err := secretFrom(lookup, oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+	if err != nil {
+		return none, false, err
+	}
+
+	return dustpan.OIDCProvider{
 		HTTPClient:   nil,
 		ID:           f.oidcProvider,
 		DisplayName:  f.oidcDisplayName,
@@ -77,5 +99,5 @@ func (f *serveFlags) oidcOptions() ([]dustpan.Option, error) {
 		ClientSecret: string(secret),
 		Scopes:       splitList(f.oidcScopes),
 		AutoCreate:   !f.oidcNoAutoCreate,
-	})}, nil
+	}, true, nil
 }

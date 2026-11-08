@@ -1069,7 +1069,7 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	signIn, signInErr := f.signInOptions()
+	signIn, signInErr := f.signInOptions(os.LookupEnv)
 	if signInErr != nil {
 		return nil, signInErr
 	}

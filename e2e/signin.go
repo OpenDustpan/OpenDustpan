@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -188,8 +190,10 @@ func noFaults() oauthtest.Faults {
 
 // writeBinarySignIn writes the client secret and the certificate of the
 // test provider into dir for a binary backend, and returns its sign-in.
-// The secret file is readable by its owner only, as serve needs.
-func writeBinarySignIn(tb testing.TB, dir string, s *signInSetup) *binarySignIn {
+// The secret file is readable by its owner only, as serve needs. With
+// secretInVariable, the sign-in passes the secret in the variable in place
+// of the file.
+func writeBinarySignIn(tb testing.TB, dir string, s *signInSetup, secretInVariable bool) *binarySignIn {
 	tb.Helper()
 
 	// One file trusts both test providers: the provider of the flags and
@@ -210,7 +214,19 @@ func writeBinarySignIn(tb testing.TB, dir string, s *signInSetup) *binarySignIn 
 		tb.Fatalf("write the client secret: %v", err)
 	}
 
-	return &binarySignIn{publicURL: s.publicURL, issuer: s.idp.Issuer(), caFile: caFile, secretFile: secretFile}
+	secret, err := fs.ReadFile(os.DirFS(dir), "oidc-client-secret")
+	if err != nil {
+		tb.Fatalf("read the client secret: %v", err)
+	}
+
+	return &binarySignIn{
+		publicURL:        s.publicURL,
+		issuer:           s.idp.Issuer(),
+		caFile:           caFile,
+		secretFile:       secretFile,
+		secret:           strings.TrimSpace(string(secret)),
+		secretInVariable: secretInVariable,
+	}
 }
 
 // NewEnvWithSignIn starts a server as NewEnv does, with the console sign-in
@@ -222,6 +238,17 @@ func NewEnvWithSignIn(ctx context.Context, tb testing.TB, cli Install, store Sto
 	tb.Helper()
 
 	return startSignInEnv(ctx, tb, cli, store, false)
+}
+
+// NewEnvWithSignInSecretInVariable starts a server as NewEnvWithSignIn does,
+// with the client secret in DUSTPAN_OIDC_CLIENT_SECRET in place of
+// DUSTPAN_OIDC_CLIENT_SECRET_FILE. It always runs the server binary.
+func NewEnvWithSignInSecretInVariable(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	return startSignInEnvWith(ctx, tb, cli, store, signInEnvOptions{
+		issuer: nil, realTime: false, ipAllowlists: false, secretInVariable: true,
+	})
 }
 
 // NewEnvWithRealTimeSignIn starts a server as NewEnvWithSignIn does, but the
@@ -246,7 +273,7 @@ func NewEnvWithIssuer(ctx context.Context, tb testing.TB, cli Install, store Sto
 		tb,
 		cli,
 		store,
-		signInEnvOptions{issuer: issuer, ldap: nil, realTime: true, ipAllowlists: false},
+		signInEnvOptions{issuer: issuer, ldap: nil, realTime: true, ipAllowlists: false, secretInVariable: false},
 	)
 }
 
@@ -261,16 +288,19 @@ func NewEnvWithIPAllowlistsAndSignIn(ctx context.Context, tb testing.TB, cli Ins
 		tb,
 		cli,
 		store,
-		signInEnvOptions{issuer: nil, ldap: nil, realTime: true, ipAllowlists: true},
+		signInEnvOptions{
+			issuer: nil, ldap: nil, realTime: true, ipAllowlists: true, secretInVariable: false,
+		},
 	)
 }
 
 // signInEnvOptions are the switches of a sign-in env.
 type signInEnvOptions struct {
-	issuer       *OIDCIssuerFake
+	issuer           *OIDCIssuerFake
 	ldap         *ldaptest.Server
-	realTime     bool
-	ipAllowlists bool
+	realTime         bool
+	ipAllowlists     bool
+	secretInVariable bool
 }
 
 // startSignInEnv starts a sign-in env. realTime runs the in-process
@@ -283,7 +313,7 @@ func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store
 		tb,
 		cli,
 		store,
-		signInEnvOptions{issuer: nil, ldap: nil, realTime: realTime, ipAllowlists: false},
+		signInEnvOptions{issuer: nil, ldap: nil, realTime: realTime, ipAllowlists: false, secretInVariable: false},
 	)
 }
 
@@ -294,27 +324,30 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 	realTime := opts.realTime
 
 	in := envInput{
-		deltaCutoff:       0,
-		sinkSenders:       nil,
-		disableJournaling: false,
-		ipAllowlists:      opts.ipAllowlists,
-		issuer:            opts.issuer,
+		deltaCutoff:            0,
+		sinkSenders:            nil,
+		disableJournaling:      false,
+		ipAllowlists:           opts.ipAllowlists,
+		issuer:                 opts.issuer,
 		ldap:              opts.ldap,
-		signIn:            true,
-		signInRealTime:    realTime,
-		passkeys:          false,
-		journalRefuser:    nil,
-		journalCap:        nil,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               tb.TempDir(),
-		token:             newToken(tb),
-		tokenB:            newToken(tb),
-		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
+		signIn:                 true,
+		signInSecretInVariable: opts.secretInVariable,
+		signInRealTime:         realTime,
+		passkeys:               false,
+		journalRefuser:         nil,
+		journalCap:             nil,
+		tb:                     tb,
+		cli:                    cli,
+		store:                  store,
+		dir:                    tb.TempDir(),
+		token:                  newToken(tb),
+		tokenB:                 newToken(tb),
+		rec:                    &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
 
-	if UseBinaryServer() {
+	// The variable reaches only the server binary, so a sign-in with the
+	// secret in the variable always runs the binary.
+	if UseBinaryServer() || opts.secretInVariable {
 		return newBinaryEnv(ctx, in)
 	}
 

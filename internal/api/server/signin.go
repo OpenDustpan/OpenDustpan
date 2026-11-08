@@ -275,19 +275,19 @@ func (h *Handler) signInRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: signInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.startSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.startSignIn,
 		},
 		{
 			Method: http.MethodGet, Path: callbackPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.finishSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.finishSignIn,
 		},
 		{
 			Method: http.MethodGet, Path: sessionPath, Scope: ScopeAuthorized, Actions: self, Resolve: resolveCaller,
-			ActionsFor: nil, Serve: h.readSession,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.readSession,
 		},
 		{
 			Method: http.MethodPost, Path: signOutPath, Scope: ScopeAuthorized, Actions: self, Resolve: resolveCaller,
-			ActionsFor: nil, Serve: h.signOut,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.signOut,
 		},
 	}
 }

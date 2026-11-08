@@ -86,7 +86,7 @@ func (a Authorizer) Authorize(context.Context, identity.Principal, identity.Acti
 
 // ListObjects returns Err.
 func (a Authorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, a.Err
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, a.Err
 }
 
 // ReadsThenRefuses lets the namespace read through and refuses every other

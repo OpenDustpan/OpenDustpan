@@ -103,6 +103,9 @@ type envInput struct {
 	// signIn turns on the console sign-in through a test OpenID provider,
 	// in process and with the server binary.
 	signIn bool
+	// signInSecretInVariable passes the client secret of the sign-in in
+	// DUSTPAN_OIDC_CLIENT_SECRET in place of DUSTPAN_OIDC_CLIENT_SECRET_FILE.
+	signInSecretInVariable bool
 	// signInRealTime runs the in-process server of a sign-in env on the
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
@@ -179,14 +182,17 @@ type backendConfig struct {
 const pemCertificate = "CERTIFICATE"
 
 // binarySignIn is the console sign-in of a binary backend. The server reads
-// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE) and
+// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE), or
+// from secret (DUSTPAN_OIDC_CLIENT_SECRET) when secretInVariable is set, and
 // trusts the provider through caFile (SSL_CERT_FILE), so a run proves the
 // flags and the environment variables of the sign-in.
 type binarySignIn struct {
-	publicURL  string
-	issuer     string
-	caFile     string
-	secretFile string
+	publicURL        string
+	issuer           string
+	caFile           string
+	secretFile       string
+	secret           string
+	secretInVariable bool
 }
 
 // args returns the serve arguments of the sign-in, or none for nil.
@@ -208,6 +214,10 @@ func (s *binarySignIn) args() []string {
 func (s *binarySignIn) env() []string {
 	if s == nil {
 		return nil
+	}
+
+	if s.secretInVariable {
+		return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET=" + s.secret}
 	}
 
 	return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET_FILE=" + s.secretFile}
@@ -1069,7 +1079,7 @@ func binarySignInSetup(tb testing.TB, in envInput, proxy *recordingProxy, cfg *b
 	}
 
 	s := newSignInSetup(tb, proxy.publicURL(), nil)
-	cfg.signIn = writeBinarySignIn(tb, in.dir, s)
+	cfg.signIn = writeBinarySignIn(tb, in.dir, s, in.signInSecretInVariable)
 
 	return s
 }

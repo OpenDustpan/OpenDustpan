@@ -878,7 +878,7 @@ func (a *recordAuthorizer) Authorize(_ context.Context, _ identity.Principal, ac
 }
 
 func (*recordAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true}, nil
+	return identity.Every(), nil
 }
 
 func adaPrincipal() identity.Principal {
