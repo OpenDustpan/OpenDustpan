@@ -114,6 +114,12 @@ type planBody struct {
 	CreatedAt    time.Time      `json:"createdAt"`
 	ExpiresAt    time.Time      `json:"expiresAt"`
 	RedactedAt   time.Time      `json:"redactedAt"`
+	// ReservePhase, ReserveOperation and ReserveToken name the phase and the
+	// claim that recorded a reserve. Only the claim that made the reserve
+	// fills it. A filled plan keeps no binding.
+	ReservePhase     int    `json:"reservePhase"`
+	ReserveOperation string `json:"reserveOperation"`
+	ReserveToken     int64  `json:"reserveToken"`
 }
 
 type gateBody struct {
@@ -319,6 +325,7 @@ func encodePlan(p *job.PlanRef) *planBody {
 	out := &planBody{
 		ID: p.ID, ItemKey: string(p.ItemKey), StateVersion: p.StateVersion, Parts: nil, CreatedAt: p.CreatedAt,
 		ExpiresAt: p.ExpiresAt, RedactedAt: p.RedactedAt,
+		ReservePhase: 0, ReserveOperation: "", ReserveToken: 0,
 	}
 
 	for _, part := range p.Parts {
@@ -327,6 +334,15 @@ func encodePlan(p *job.PlanRef) *planBody {
 			StoredSize: part.StoredSize, StoredMD5: part.StoredMD5,
 		})
 	}
+
+	return out
+}
+
+// encodeReservePlan returns the body of a reserve: the plan fields, and the
+// phase, the operation and the token of the claim that made the reserve.
+func encodeReservePlan(p *job.PlanRef, pc job.PhaseClaim) *planBody {
+	out := encodePlan(p)
+	out.ReservePhase, out.ReserveOperation, out.ReserveToken = pc.Phase, string(pc.Claim.Operation), pc.Claim.Token
 
 	return out
 }
