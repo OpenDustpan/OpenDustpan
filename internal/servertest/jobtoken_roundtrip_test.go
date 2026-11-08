@@ -22,9 +22,9 @@ import (
 // issueJobToken makes a live plan job of unit with a starter that holds
 // writer on the unit, and returns the secret of its job token.
 //
-// The server of the harness runs on the wall clock, so the times of the
-// records come from the wall clock too: the server checks the expiry of the
-// token against its own clock.
+// The server of the harness runs on its own clock, so the times of the
+// records come from the creation time of the namespace, which that clock
+// stamped: the server checks the expiry of the token against its own clock.
 func (h *rtHarness) issueJobToken(unit identity.Object) string {
 	h.t.Helper()
 
@@ -36,7 +36,7 @@ func (h *rtHarness) issueJobToken(unit identity.Object) string {
 		h.t.Fatalf("get namespace %s: %v", unit.Namespace(), err)
 	}
 
-	at := time.Now().UTC()
+	at := ns.CreatedAt.UTC()
 	starterID := ident.NewID("prn-")
 	starter := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: starterID, Subject: starterID,
