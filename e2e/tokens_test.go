@@ -405,8 +405,10 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("personal token = %+v, want a personal token of the person, made by the person, with days left", read)
 	}
 
+	// The service-token route answers the opaque 403 for a token of another
+	// kind, so a caller cannot learn whether the token exists.
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusBadRequest,
+		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusForbidden,
 	}, nil)
 
 	own := "/api/server/caller/tokens"
