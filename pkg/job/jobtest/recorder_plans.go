@@ -609,7 +609,9 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 
 // hostilePart returns a valid part of kind k, which the cases change.
 func hostilePart(k job.OutputKind) job.PlanPart {
-	return job.PlanPart{Kind: k, Size: 1, SHA256: emptySHA256, Secret: false, StoredSize: 0, StoredMD5: ""}
+	return job.PlanPart{
+		Kind: k, Size: 1, SHA256: emptySHA256, Secret: k == job.OutputPlanApply, StoredSize: 0, StoredMD5: "",
+	}
 }
 
 // hostilePartCases returns the lists of parts that the store refuses, by what
@@ -629,6 +631,12 @@ func hostilePartCases() map[string][]job.PlanPart {
 
 	unknown := hostilePart(valueOther)
 
+	notSecret := hostilePart(job.OutputPlanApply)
+	notSecret.Secret = false
+
+	secretDisplay := hostilePart(job.OutputPlanDisplay)
+	secretDisplay.Secret = true
+
 	cases := map[string][]job.PlanPart{
 		"no part": nil,
 		"three parts": {
@@ -636,12 +644,14 @@ func hostilePartCases() map[string][]job.PlanPart {
 			hostilePart(job.OutputPlanApply),
 			hostilePart(job.OutputPlanApply),
 		},
-		"an unknown kind":        {unknown},
-		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
-		"a hash in capitals":     {upper},
-		"a short hash":           {short},
-		"a negative size":        {negative},
-		"a size above the limit": {huge},
+		"an unknown kind":                  {unknown},
+		"a kind twice":                     {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"a hash in capitals":               {upper},
+		"a short hash":                     {short},
+		"a negative size":                  {negative},
+		"a size above the limit":           {huge},
+		"an apply part that is not secret": {notSecret},
+		"a display part that is secret":    {secretDisplay},
 	}
 
 	return cases

@@ -557,7 +557,7 @@ func TestDiffThroughServiceOtherWorkspace(t *testing.T) {
 		t.Fatalf("name: %v", err)
 	}
 
-	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create other workspace: %v", err)
 	}
@@ -591,12 +591,9 @@ func TestDiffThroughServiceClientEncrypted(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	encrypted := `{"version":4,"serial":1,"lineage":"l1",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
-
 	plain, _ := f.pushMasked(t, 1, diffFromState, diffRendering())
 	*f.now = f.now.Add(2 * time.Hour)
-	sealed, _ := f.pushMasked(t, 2, encrypted, "")
+	sealed, _ := f.pushMasked(t, 2, envelope, "")
 
 	if _, err := f.svc.DiffStates(ctx, sealed.ID, plain.ID, "", 0); !errors.Is(
 		err, workspace.ErrClientEncrypted,

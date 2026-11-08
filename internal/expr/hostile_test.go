@@ -1,6 +1,7 @@
 package expr_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -324,8 +325,9 @@ func reviewerEnv() *selfservice.Env {
 }
 
 // TestWorkLayerReviewerExpressions checks that an expression that reads a
-// long string in each turn of a loop over the groups ends at the work budget
-// and not after seconds. The first expression ran for 5.4 s before the budget.
+// long string in each turn of a loop over the groups ends at the work budget.
+// The time limit is a minute, so it cannot end the run first. The first
+// expression ran for 5.4 s before the budget.
 func TestWorkLayerReviewerExpressions(t *testing.T) {
 	t.Parallel()
 
@@ -345,17 +347,18 @@ func TestWorkLayerReviewerExpressions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			start := time.Now()
-
-			got, err := newEvaluator(t).Bool(t.Context(), tc.source, reviewerEnv())
-			if got || !errors.Is(err, selfservice.ErrRuleFailed) {
-				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
+			e, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
+			if err != nil {
+				t.Fatalf("NewWithTimeout() = %v", err)
 			}
 
-			// The bound is the time limit and the work of the calls that the
-			// budget allows, with room for a slow machine and the race detector.
-			if elapsed := time.Since(start); elapsed > time.Second {
-				t.Fatalf("Bool() took %v, want less than 1s", elapsed)
+			got, err := e.Bool(t.Context(), tc.source, reviewerEnv())
+			if got || !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, expr.ErrWork) {
+				t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed from the work budget", got, err)
+			}
+
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Bool() = %v, want the work budget and not the time limit", err)
 			}
 		})
 	}
