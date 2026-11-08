@@ -622,6 +622,13 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			orderBy: []string{pgColSource, pgColSourceID, "claim_value", pgColGroupID},
 		},
 		{
+			table: "member_removals",
+			columns: []string{
+				"id", "source_kind", pgColSourceID, pgColGroupID, "removed", "members_before", pgColAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
 			table: backup.TableTempAdmins,
 			columns: []string{
 				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy, pgColReason,
