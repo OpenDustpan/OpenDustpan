@@ -115,7 +115,7 @@ func TestRegistryModuleTofuInit(t *testing.T) {
 		t.Skipf("the OpenTofu suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

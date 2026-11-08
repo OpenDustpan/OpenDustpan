@@ -45,7 +45,7 @@ func TestBinaryCrash(t *testing.T) {
 			"so they need E2E_SERVER=binary; the in-process server cannot be killed")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

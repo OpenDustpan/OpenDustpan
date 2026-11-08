@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -52,6 +53,12 @@ type Fetcher struct {
 
 	mu      sync.Mutex
 	checked map[checkKey]bool
+
+	// checks counts the checks of cache entries. beforeLock, if set, runs
+	// after a call finds no record of a check and before it takes the lock
+	// of the entry. Only tests read checks and set beforeLock.
+	checks     atomic.Int64
+	beforeLock func()
 }
 
 // checkKey names one cache check: the archive and the sum it was checked
@@ -123,12 +130,18 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	// Many Fetchers and processes can share one cache directory. Without
 	// this lock, one call could see the directory of another call before its
 	// archive is published, refuse it and remove a CLI that is in use.
-	unlock, err := lockEntry(f.CacheDir, archive)
+	unlock, err := f.lockEntry(archive)
 	if err != nil {
 		return Install{}, err
 	}
 
 	defer unlock()
+
+	// Another call of this Fetcher can have checked the entry while this call
+	// waited for the lock. Do not check it again.
+	if f.cacheChecked(key) {
+		return inst, nil
+	}
 
 	rel := release{
 		url:     tool.releaseFile(version, archive),
@@ -140,7 +153,7 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 
 	// The cache comes from CI and is untrusted: an entry is used only when
 	// its archive and extracted files match the expected sum and the archive.
-	if checkCache(f.CacheDir, archive, rel.binary, want.sum) == nil {
+	if f.checkCache(archive, rel.binary, want.sum) == nil {
 		f.markCacheChecked(key)
 
 		return inst, nil
@@ -157,6 +170,24 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	f.markCacheChecked(key)
 
 	return inst, nil
+}
+
+// lockEntry runs the beforeLock function of f, if it is set, and then locks
+// the entry of archive in the cache directory of f.
+func (f *Fetcher) lockEntry(archive string) (func(), error) {
+	if f.beforeLock != nil {
+		f.beforeLock()
+	}
+
+	return lockEntry(f.CacheDir, archive)
+}
+
+// checkCache counts the check and checks the entry of archive in the cache
+// directory of f.
+func (f *Fetcher) checkCache(archive, wantBinary, wantSum string) error {
+	f.checks.Add(1)
+
+	return checkCache(f.CacheDir, archive, wantBinary, wantSum)
 }
 
 // lockEntry takes an exclusive lock on the lock file of archive in cacheDir

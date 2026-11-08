@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1242,5 +1243,79 @@ func TestFetchSerializesInstallsOfOneEntry(t *testing.T) {
 
 	if _, err := os.Stat(inst.Binary()); err != nil {
 		t.Errorf("binary missing after the second install: %v", err)
+	}
+}
+
+// TestFetchChecksEntryOnceUnderTheLock runs two Installs of one Fetcher at the
+// same time. Both find no record of a check before they take the lock of the
+// entry. The second one must use the check of the first one and not check the
+// entry again.
+func TestFetchChecksEntryOnceUnderTheLock(t *testing.T) {
+	t.Parallel()
+
+	tests := []entryOnceCase{
+		{name: "a filled cache", filled: true},
+		{name: "an empty cache", filled: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkEntryOnceCase(t, tc)
+		})
+	}
+}
+
+// entryOnceCase is a case of TestFetchChecksEntryOnceUnderTheLock. With
+// filled, another Fetcher fills the cache first.
+type entryOnceCase struct {
+	name   string
+	filled bool
+}
+
+// checkEntryOnceCase holds both Installs before the lock until each one has
+// found no record of a check.
+func checkEntryOnceCase(t *testing.T, tc entryOnceCase) {
+	t.Helper()
+
+	filler, tool, downloads := release(t, validArchive(t), "")
+
+	if tc.filled {
+		if _, err := filler.Install(t.Context(), tool, fakeVersion); err != nil {
+			t.Fatalf("fill the cache: %v", err)
+		}
+	}
+
+	fetcher := &e2e.Fetcher{Client: filler.Client, CacheDir: filler.CacheDir}
+
+	var arrived sync.WaitGroup
+
+	arrived.Add(2)
+	e2e.SetBeforeLock(fetcher, func() {
+		arrived.Done()
+		arrived.Wait()
+	})
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func(ctx context.Context) {
+			_, err := fetcher.Install(ctx, tool, fakeVersion)
+			errs <- err
+		}(t.Context())
+	}
+
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("install: %v", err)
+		}
+	}
+
+	if got := e2e.CacheChecks(fetcher); got != 1 {
+		t.Errorf("cache entry checked %d times, want 1", got)
+	}
+
+	if got := downloads.Load(); got != 1 {
+		t.Errorf("archive downloaded %d times, want 1", got)
 	}
 }

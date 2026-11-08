@@ -71,7 +71,7 @@ func TestOutputReadPaths(t *testing.T) {
 		t.Skipf("the output read paths need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -553,7 +553,7 @@ func TestOutputSharingRules(t *testing.T) {
 		t.Skipf("the sharing rules need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 	pulumiVersions := e2e.Pulumi().Versions()
 	tofuVersions := e2e.OpenTofu().Versions()
 
