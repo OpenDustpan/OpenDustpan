@@ -107,15 +107,16 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-      # The token is kept for the push. No step after this one runs pull
-      # request code.
+      # No credential stays on disk after this checkout. Only the push step
+      # gets the token of the GitHub App for git. No step after this one runs
+      # pull request code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ steps.result.outputs.status == 'ready' || steps.result.outputs.status == 'other-conflicts' }}
         with:
           ref: refs/heads/${{ steps.match.outputs.branch }}
           path: pr
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
       # The list of files comes from git here, not from the result file of
       # the resolve run. The marker keeps it to one comment for each head.
       - name: Comment on conflicts in files that are not generated
@@ -141,7 +142,15 @@ jobs:
             echo "$marker"
             echo "Main moved, and this pull request conflicts with main in files that are not generated. The auto-regen workflow resolves only generated files. Merge main and resolve these files by hand:"
             echo
-            while IFS= read -r f; do printf -- "- \`%s\`\n" "$f"; done <<< "$files"
+            # A file name comes from the branch. Show only a name of safe
+            # characters, so that a name cannot change the markdown.
+            while IFS= read -r f; do
+              if [[ "$f" =~ ^[A-Za-z0-9._/@+-]{1,300}$ ]]; then
+                printf -- "- \`%s\`\n" "$f"
+              else
+                echo "- (a file name with characters that this comment does not show; run git merge main to see it)"
+              fi
+            done <<< "$files"
             echo
             echo "Head: $HEAD_SHA. Main: $MAIN_SHA."
           } > "$RUNNER_TEMP/comment.md"
@@ -151,7 +160,9 @@ jobs:
         if: ${{ steps.result.outputs.status == 'ready' }}
         working-directory: pr
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Only a public read of the bot user; the token of the GitHub App
+          # is not needed here.
+          GH_TOKEN: ${{ github.token }}
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
           MAIN_SHA: ${{ steps.main.outputs.sha }}
           HEAD_SHA: ${{ steps.match.outputs.head }}
@@ -161,16 +172,23 @@ jobs:
           export BOT_EMAIL="${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           ../trusted/scripts/auto-regen.sh apply "$MAIN_SHA" "$HEAD_SHA" "$RUNNER_TEMP/in/regen.patch"
       # A plain push: it fails when the branch moved. Never main, never force.
+      # The token of the GitHub App reaches git only in this step, through a
+      # credential helper that reads it from the environment of the step.
       - name: Push to the pull request branch
         if: ${{ steps.result.outputs.status == 'ready' }}
         working-directory: pr
         env:
           BRANCH: ${{ steps.match.outputs.branch }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           case "$BRANCH" in
             main|gh-readonly-queue/*) echo "auto-regen: refuse to push to $BRANCH"; exit 1 ;;
           esac
-          git push origin "HEAD:refs/heads/$BRANCH"
+          # The helper expands APP_TOKEN when git runs it, so the token is not
+          # in the command line or in a file.
+          git -c credential.helper= \
+            -c "credential.helper=!f() { echo username=x-access-token; echo \"password=\$APP_TOKEN\"; }; f" \
+            push "https://github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$BRANCH"
           echo "auto-regen: #${{ steps.match.outputs.number }}: pushed $(git rev-parse HEAD) to $BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"
       # Auto-merge puts the pull request back in the merge queue after CI
       # passes. If auto-merge cannot be turned on, enqueue the pull request.

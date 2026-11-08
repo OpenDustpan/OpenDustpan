@@ -9,7 +9,10 @@ They are here because the tool that wrote them cannot push to
 Do these steps on the branch of this pull request, from the root of the
 repository:
 
-1. Move the three files. The first command replaces the current file.
+1. Move the three files. `git mv -f` overwrites the OLD
+   `.github/workflows/auto-regen.yml` that this pull request already adds.
+   Do not merge before the move: that old file is the unsafe design. Its
+   resolve job runs pull request code in the cache scope of main.
 
    ```sh
    git mv -f ci-draft/auto-regen.yml .github/workflows/auto-regen.yml
@@ -76,6 +79,12 @@ on main restores. So the resolve step moves to a separate workflow:
   symbolic links and submodules. `apply` checks the patch again and checks
   that the branch did not move.
 - The push is a plain push. It refuses `main` and `gh-readonly-queue/*`.
+- The checkout of the pull request branch keeps no credential on disk. Only
+  the push step gives the token of the GitHub App to git, through a
+  credential helper that reads it from the environment of that step.
+- The conflict comment shows only file names of safe characters. It shows
+  any other name as a placeholder, so that a name cannot change the
+  markdown.
 
 ## Trust assumptions
 
@@ -86,7 +95,7 @@ on main restores. So the resolve step moves to a separate workflow:
   and only through a patch of generated paths. The commit of the GitHub App
   then goes through CI and review, as every other commit does.
 - Code scanning can show an alert at the checkout of the pull request branch
-  with the token of the GitHub App. No pull request code runs after that
-  checkout: only git, the script of main and the GitHub API.
+  in the push workflow. No pull request code runs after that checkout: only
+  git, the script of main and the GitHub API.
 - The owner makes the GitHub App and the secrets `REGEN_APP_CLIENT_ID` and
   `REGEN_APP_PRIVATE_KEY`.

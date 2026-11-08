@@ -432,7 +432,7 @@ cmd_find() {
 # others.
 cmd_dispatch() {
 	local prs_json="$1" main_sha="$2" repo="${GITHUB_REPOSITORY:?}"
-	local number branch head_sha
+	local number branch head_sha err
 	[ -f "$prs_json" ] || die "no pull request list: $prs_json"
 	[[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || die "main is not a full commit SHA: $main_sha"
 	while IFS=$'\t' read -r number branch head_sha; do
@@ -443,12 +443,16 @@ cmd_dispatch() {
 			die "refuse to dispatch on $branch"
 			;;
 		esac
-		if gh api -X POST "repos/$repo/actions/workflows/auto-regen-resolve.yml/dispatches" \
+		if err="$(gh api -X POST "repos/$repo/actions/workflows/auto-regen-resolve.yml/dispatches" \
 			-f ref="$branch" \
 			-f "inputs[main]=$main_sha" \
 			-f "inputs[head]=$head_sha" \
-			-f "inputs[pr]=$number" >/dev/null; then
+			-f "inputs[pr]=$number" 2>&1 >/dev/null)"; then
 			log "#$number: dispatched the resolve run on $branch"
+		elif [[ "$err" == *"HTTP 422"* ]]; then
+			# GitHub answers 422 when the branch has no copy of the resolve
+			# workflow, for example a branch made before that file reached main.
+			log "#$number: dispatch refused with HTTP 422: the branch $branch may have no .github/workflows/auto-regen-resolve.yml; merge main into the branch; continue with the next candidate"
 		else
 			log "#$number: dispatch failed; continue with the next candidate"
 		fi
