@@ -4025,3 +4025,18 @@ decisions:
   accepted_artifact: "docs/adr/0361-a-scope-that-covers-every-object-names-the-namespaces-that-it-leaves-out.md"
   evidence:
   - "docs/adr/0361-a-scope-that-covers-every-object-names-the-namespaces-that-it-leaves-out.md"
+- id: "adr-0362"
+  title: "ADR 362: Owner decisions of 8 November 2026: stable IDs, store order, MySQL, baseline hashes and portable backups"
+  decision: "1. **Stable IDs (owner, 2026-11-08).** The owner said:\n```text \"I literally have no idea why we would ever use natural keys for any entity the user can rename or delete and recreate.\" ```\nEvery stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it. A name is a label for people only. A Cedar access policy therefore names a group by its stable ID.\n2. **RFC 103 step 8 first (owner, 2026-11-08).** The owner chose \"RFC 103 step 8 first\". RFC 103 step 8 (the move of the store adapters to `internal/store/`) comes before step 7 of ADR 274 (the central table list). This is the order of ADR 274 decision 2. ADR 274 states no other order.\n3. **MySQL waits (owner, 2026-11-08).** The owner chose \"MySQL waits\". MySQL waits for the end of the \"SQL logic once\" work of ADR 274. The owner also said:\n```text \"We are also not reducing the role of SQLite. It's a fully supported DB option for single-node installs and we ARE adding MySQL at a later stage.\" ```\nSQLite stays a fully supported database for single-node installations. MySQL is a planned dialect for a later stage.\n4. **Baseline checksums are absent until the tag (owner, 2026-11-08).** The owner chose \"Absent until the tag\". The `.sha256` files of the schema baselines (ADR 322) are absent until the first tag. The release generates them.\n5. **Portable backups only (owner, 2026-11-08).** The owner said:\n```text \"I'm rejecting database native backups. We had this before, I had it ripped out so they're portable/can be restored regardless of the user's chosen database driver.\" ```\nThis repeats ADR 42 decision 1. That decision makes the portable format the one format of the SQL part of a backup. This ADR does not change ADR 42."
+  reason: "The project manager (PM) asked the owner four questions on 8 November 2026. The owner also gave two directions without a question. This ADR records the five decisions that result. It records the owner's words and nothing else as a decision. Each decision has the tag \"(owner, 2026-11-08)\"."
+  scope:
+  - "docs/guides/state-write-gates.md"
+  - "internal/store"
+  - "pkg/gate/cedargo/request.go"
+  - "scripts/regenerate-baseline.sh"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-08"
+  accepted_artifact: "docs/adr/0362-owner-decisions-of-8-november-2026-stable-ids-store-order-mysql-baseline-hashes-and-portable-backups.md"
+  evidence:
+  - "docs/adr/0362-owner-decisions-of-8-november-2026-stable-ids-store-order-mysql-baseline-hashes-and-portable-backups.md"
