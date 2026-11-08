@@ -786,7 +786,7 @@ func TestNamespacePagingConformance(t *testing.T) {
 func TestUnitQueryConformance(t *testing.T) {
 	t.Parallel()
 
-	storetest.RunUnitQuery(t, func(t *testing.T) storetest.Store {
+	storetest.RunUnitQuery(t, func(t *testing.T) storetest.UnitQueryStore {
 		t.Helper()
 
 		return open(t)

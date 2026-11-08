@@ -54,14 +54,14 @@ func lockServer(t *testing.T, extra ...dustpan.Option) (*dustpan.Server, *sqlite
 	}
 
 	for _, name := range []namespace.Name{"acme", "other"} {
-		makeWeb(t, srv, name)
+		makeWeb(t, srv, st, name)
 	}
 
 	return srv, st
 }
 
 // makeWeb makes the workspace web in ns, so that a manual lock can name it.
-func makeWeb(t *testing.T, srv *dustpan.Server, ns namespace.Name) {
+func makeWeb(t *testing.T, srv *dustpan.Server, store any, ns namespace.Name) {
 	t.Helper()
 
 	if srv.ManualLocks() == nil {
@@ -73,7 +73,9 @@ func makeWeb(t *testing.T, srv *dustpan.Server, ns namespace.Name) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	if _, err := srv.Workspaces().Create(t.Context(), workspace.Ref{Namespace: ns, Name: name}); err != nil {
+	ref := workspace.Ref{Namespace: ns, Name: name}
+
+	if _, err := srv.Workspaces().Create(t.Context(), ref, placeWorkspace(t, store, ns)); err != nil {
 		t.Fatalf("create workspace in %s: %v", ns, err)
 	}
 }
@@ -84,8 +86,8 @@ func makeWeb(t *testing.T, srv *dustpan.Server, ns namespace.Name) {
 func allowlistLockServer(t *testing.T) *dustpan.Server {
 	t.Helper()
 
-	srv := newIPAllowlistServer(t, true)
-	makeWeb(t, srv, "acme")
+	srv, st := newIPAllowlistServerWith(t, true)
+	makeWeb(t, srv, st, "acme")
 
 	return srv
 }
@@ -156,6 +158,7 @@ func TestManualLockBlocksAToolLock(t *testing.T) {
 
 			f := newFixture(t)
 			f.createNamespace(t, "acme", installationName)
+			seedWebWorkspace(t, f)
 
 			if tc.manualLock {
 				lockNamespace(t, f)
