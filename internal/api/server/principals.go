@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -319,6 +320,23 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 	}
 
 	return groupOf(g, protected), nil
+}
+
+// storedGroupOf returns one stored group on the wire with its protected
+// flag. The write is stored, so the answer must match the stored state: a
+// failed check answers protected, the fail-closed value of access.Protected.
+func (h *Handler) storedGroupOf(ctx context.Context, g principal.Group) groupResponse {
+	body, err := h.protectedGroupOf(ctx, g)
+	if err != nil {
+		// The cause is the error type only: the text of a store error can hold
+		// driver text, and the log must not carry it.
+		h.logger.WarnContext(ctx, "the protected check of a stored group failed",
+			slog.String("group", g.ID), slog.String("cause", causeType(err)))
+
+		return groupOf(g, true)
+	}
+
+	return body
 }
 
 // protectedGroupsOf returns one page of groups on the wire with the
@@ -924,12 +942,7 @@ func (h *Handler) createGroup(
 		return failed("groups"), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(principal.GroupRef(g.ID)), err
-	}
-
-	return ok(http.StatusCreated, body, principal.GroupRef(g.ID)), nil
+	return ok(http.StatusCreated, h.storedGroupOf(r.Context(), g), principal.GroupRef(g.ID)), nil
 }
 
 // listGroups serves GET /api/server/groups: one page, ordered by name, with
@@ -1001,12 +1014,7 @@ func (h *Handler) changeGroup(
 		return failed(object), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(object), err
-	}
-
-	return ok(http.StatusOK, body, object), nil
+	return ok(http.StatusOK, h.storedGroupOf(r.Context(), g), object), nil
 }
 
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and
