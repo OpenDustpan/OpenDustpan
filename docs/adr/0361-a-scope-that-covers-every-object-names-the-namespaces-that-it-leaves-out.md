@@ -72,7 +72,8 @@ on #698.
 
 ## Consequences
 
-- A new field that each consumer of a scope must read.
+- A new case that each consumer reads through `Scope.Contains` or the shared
+  SQL filter.
 - (PM) Fail closed. A consumer that cannot apply the list refuses the
   request. A read error of the allowlist store gives a refusal, not a scope
   without the list. A test with a principal whose scope has `All` set, a
@@ -87,6 +88,8 @@ on #698.
   read only through `Scope.Contains` and one shared SQL filter helper, with
   no bare `All` field, so a consumer that ignores the exclusions is a compile
   error, not a silent leak. Each consumer has a hostile test.
+- (PM) The implementation carries the excluded namespaces inside the closed
+  every-object case. There is no bare `All` field.
 - The namespace list and the caller-access API change shape. This is allowed
   before 1.0.
 - The slice that implements it carries the user docs change of the IP
