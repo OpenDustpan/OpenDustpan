@@ -11,6 +11,10 @@ const (
 	SinkDeliveryNotFound = "sink.delivery-not-found"
 	// SinkDeliveryNotRedeliverable means that the delivery cannot be sent again now.
 	SinkDeliveryNotRedeliverable = "sink.delivery-not-redeliverable"
+	// SinkDeliveryRedeliverLimit means that the delivery has no redeliveries left.
+	SinkDeliveryRedeliverLimit = "sink.delivery-redeliver-limit"
+	// SinkDeliveryTooSoon means that the delivery stopped too recently to be sent again.
+	SinkDeliveryTooSoon = "sink.delivery-too-soon"
 	// SinkInvalid means that the notification destination is not valid.
 	SinkInvalid = "sink.invalid"
 	// SinkNoSender means that the server cannot send to this kind of notification destination.
@@ -49,6 +53,8 @@ func sinkSpecs() []Spec {
 		{Code: SinkConflict, Meaning: "the notification destination changed since the caller read it", Args: nil},
 		{Code: SinkDeliveryNotFound, Meaning: "the delivery does not exist in the namespace", Args: nil},
 		{Code: SinkDeliveryNotRedeliverable, Meaning: "the delivery cannot be sent again now", Args: nil},
+		{Code: SinkDeliveryRedeliverLimit, Meaning: "the delivery has no redeliveries left", Args: nil},
+		{Code: SinkDeliveryTooSoon, Meaning: "the delivery stopped too recently to be sent again", Args: nil},
 		{Code: SinkInvalid, Meaning: "the notification destination is not valid", Args: nil},
 		{Code: SinkNoSender, Meaning: "the server cannot send to this kind of notification destination", Args: nil},
 		{Code: SinkNoURL, Meaning: "the notification destination has no URL that the server can use", Args: nil},

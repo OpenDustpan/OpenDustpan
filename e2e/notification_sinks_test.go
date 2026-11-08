@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -499,27 +500,33 @@ func subscriptionMakeSteps(t *testing.T, env *e2e.Env, hook sinkDoc) subscriptio
 	return sub
 }
 
-// redeliverSteps stores a pending and a delivered delivery of sub, reads the
-// history in pages, and sends the delivered one again with a key. It returns
-// the ID of the delivery that it sent again.
+// redeliverSteps stores a pending delivery, a delivery that stopped long ago
+// and a delivery that stopped just now, reads the history in pages, and sends
+// the long-stopped delivery again with a key. It returns the ID of the
+// delivery that it sent again.
 func redeliverSteps(t *testing.T, env *e2e.Env, sub subscriptionDoc, history string) string {
 	t.Helper()
 
 	seed := e2e.DeliverySeed{
-		Subscription: sub.ID,
-		Sink:         sub.Sink,
-		Principal:    sub.CreatedBy,
-		State:        notify.DeliveryPending,
+		Subscription:  sub.ID,
+		Sink:          sub.Sink,
+		Principal:     sub.CreatedBy,
+		State:         notify.DeliveryPending,
+		StoppedBefore: 0,
 	}
 	pending := env.SeedDelivery(t.Context(), t, seed)
 
 	seed.State = notify.DeliveryDone
+	seed.StoppedBefore = notify.MaxRetryWait + time.Minute
 	delivered := env.SeedDelivery(t.Context(), t, seed)
+
+	seed.StoppedBefore = 0
+	stoppedNow := env.SeedDelivery(t.Context(), t, seed)
 
 	sinkStep(t, env, sinkCase("the history has a next page", http.MethodGet, history+"?pageSize=1", http.StatusOK).
 		checking(func(body string) error {
 			if !strings.Contains(body, `"nextPageToken":"`) || strings.Contains(body, `"nextPageToken":""`) {
-				return fmt.Errorf("%w: a page of 1 of 2 deliveries has a next page token: %s", errSinkAnswer, body)
+				return fmt.Errorf("%w: a page of 1 of 3 deliveries has a next page token: %s", errSinkAnswer, body)
 			}
 
 			return nil
@@ -534,6 +541,14 @@ func redeliverSteps(t *testing.T, env *e2e.Env, sub subscriptionDoc, history str
 	}))
 	sinkStep(t, env, sinkCase("an unknown delivery is not found", http.MethodPost,
 		deliveriesBase+"/dlv-doesnotexist/redeliver", http.StatusNotFound))
+	sinkStep(t, env, sinkCase("a delivery that stopped just now cannot be sent again yet", http.MethodPost,
+		deliveriesBase+"/"+stoppedNow+"/redeliver", http.StatusTooManyRequests).checking(func(body string) error {
+		if !strings.Contains(body, "sink.delivery-too-soon") {
+			return fmt.Errorf("%w: %s", errSinkAnswer, body)
+		}
+
+		return nil
+	}))
 	sinkStep(t, env, sinkCase("send the delivered delivery again", http.MethodPost,
 		deliveriesBase+"/"+delivered+"/redeliver", http.StatusNoContent).withKey("e2e-redeliver-key"))
 	sinkStep(t, env, sinkCase("the same redeliver with the same key answers the same", http.MethodPost,
@@ -541,7 +556,8 @@ func redeliverSteps(t *testing.T, env *e2e.Env, sub subscriptionDoc, history str
 	sinkStep(t, env, sinkCase("the delivery is pending again", http.MethodGet, history, http.StatusOK).
 		checking(func(body string) error {
 			states, err := deliveryStates(body)
-			if err != nil || states[delivered] != "pending" || states[pending] != "pending" {
+			if err != nil || states[delivered] != "pending" || states[pending] != "pending" ||
+				states[stoppedNow] != "delivered" {
 				return fmt.Errorf("%w: states %v: %w", errSinkAnswer, states, err)
 			}
 

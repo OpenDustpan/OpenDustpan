@@ -240,7 +240,10 @@ token for another subscription answers 400 `request.page-token-invalid`.
 | `attempts` | The number of attempts |
 | `nextAt` | When the next attempt is due |
 | `lastError` | `refused`, `permanent` or `temporary`. Absent when the last attempt did not fail. |
-| `deliveredAt` | Absent until the receiver accepts the delivery |
+| `deliveredAt` | When the receiver accepted the delivery, or when the server skipped it. Absent before that |
+| `redeliverableAt` | When a stopped delivery can be sent again. Absent for a pending delivery and when no redeliveries remain |
+| `redeliveryLimit` | The largest number of manual redeliveries of a delivery: 15 |
+| `redeliveriesRemaining` | The number of manual redeliveries that the delivery has left |
 | `version` | The version of the delivery row |
 
 A delivery holds no address, no secret and no text of an error.
@@ -256,6 +259,15 @@ delivery from before a change of the destination or of the subscription never
 goes to the new place. A delivery that is pending, or that fails these
 conditions, answers 409 `sink.delivery-not-redeliverable`. An unknown delivery,
 and a delivery of another namespace, answer 404 `sink.delivery-not-found`.
+
+A delivery allows at most 15 manual redeliveries. The wait after each
+redelivery follows the retry schedule: 30 seconds after the first, doubled for
+each further redelivery, up to 1 hour. A redelivery before `redeliverableAt`
+answers 429 `sink.delivery-too-soon`, and its `Retry-After` header gives the
+wait in seconds, at most 3600. The server writes no audit entry for this
+refusal. A redelivery with no redeliveries left answers 409
+`sink.delivery-redeliver-limit`, and the server writes an audit entry of the
+refusal.
 
 ## Error codes
 
@@ -274,6 +286,8 @@ and a delivery of another namespace, answer 404 `sink.delivery-not-found`.
 | 404 | `sink.delivery-not-found` | No delivery with this ID in the namespace |
 | 409 | `sink.subscription-conflict` | The subscription changed since you read it |
 | 409 | `sink.delivery-not-redeliverable` | The delivery is pending, or its subscription does not send it now |
+| 409 | `sink.delivery-redeliver-limit` | The delivery has no redeliveries left |
+| 429 | `sink.delivery-too-soon` | The delivery stopped too recently. Wait for `Retry-After` seconds |
 | 422 | `sink.subscription-sink-not-found` | The namespace holds no destination with the ID in `sink` |
 | 409 | `sink.conflict` | The destination changed since you read it |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |

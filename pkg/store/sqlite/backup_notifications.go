@@ -137,7 +137,7 @@ func checkStagedDeliveryRows(ctx context.Context, conn *sql.DB) error {
 		ctx,
 		conn,
 		"delivery",
-		"SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM notification_deliveries",
+		"SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version FROM notification_deliveries",
 	)
 }
 

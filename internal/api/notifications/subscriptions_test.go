@@ -39,13 +39,16 @@ type filterWire struct {
 }
 
 type deliveryWire struct {
-	ID           string `json:"id"`
-	Subscription string `json:"subscription"`
-	Sink         string `json:"sink"`
-	Principal    string `json:"principal"`
-	State        string `json:"state"`
-	Attempts     int    `json:"attempts"`
-	Version      int64  `json:"version"`
+	ID                    string     `json:"id"`
+	Subscription          string     `json:"subscription"`
+	Sink                  string     `json:"sink"`
+	Principal             string     `json:"principal"`
+	State                 string     `json:"state"`
+	Attempts              int        `json:"attempts"`
+	RedeliverableAt       *time.Time `json:"redeliverableAt"`
+	RedeliveryLimit       int        `json:"redeliveryLimit"`
+	RedeliveriesRemaining int        `json:"redeliveriesRemaining"`
+	Version               int64      `json:"version"`
 }
 
 type historyWire struct {
@@ -94,7 +97,7 @@ func (f fixture) seedDeliveryAt(
 	d := notify.Delivery{
 		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 		Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
-		Attempts: 0, NextAt: nextAt, LastError: "",
+		Attempts: 0, Redeliveries: 0, NextAt: nextAt, LastError: "",
 		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
@@ -171,7 +174,7 @@ func (f fixture) seedDeliveries(
 		ds = append(ds, notify.Delivery{
 			ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 			Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
-			Attempts: 0, NextAt: nextAt, LastError: "",
+			Attempts: 0, Redeliveries: 0, NextAt: nextAt, LastError: "",
 			DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 		})
 	}
@@ -623,6 +626,10 @@ func TestRedeliver(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f.clock.Set(base)
+
 	sub := f.makeSubscription(t)
 	pending := f.seedDelivery(t, "acme", sub, notify.DeliveryPending)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
@@ -638,6 +645,8 @@ func TestRedeliver(t *testing.T) {
 		CreatedBy: "admin",
 		Version:   1,
 	}, notify.DeliveryDone)
+
+	f.clock.Set(base.Add(notify.RetryWait(1)))
 
 	tests := []struct {
 		name   string
@@ -689,6 +698,208 @@ func TestRedeliver(t *testing.T) {
 	}
 }
 
+func TestRedeliverTooSoon(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		wait       time.Duration
+		retryAfter string
+	}{
+		{"the full wait", notify.RetryWait(1), "30"},
+		{"one millisecond left", time.Millisecond, "1"},
+		{"a wait above the cap", 2 * time.Hour, "3600"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			f.clock.Set(base)
+
+			done := f.seedDelivery(t, "acme", f.makeSubscription(t), notify.DeliveryDone)
+			f.clock.Set(base.Add(notify.RetryWait(1) - tc.wait))
+
+			got := f.do(t, send("admin", http.MethodPost, deliveriesBase+"/"+done.ID+"/redeliver", ""))
+			wantCode(t, tc.name, got, http.StatusTooManyRequests)
+
+			if header := got.header.Get("Retry-After"); header != tc.retryAfter {
+				t.Fatalf("Retry-After = %q, want %q", header, tc.retryAfter)
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
+				errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
+		})
+	}
+}
+
+// checkDeliveryLimits checks the redelivery fields of a delivery with no
+// manual redeliveries.
+func checkDeliveryLimits(t *testing.T, d deliveryWire) {
+	t.Helper()
+
+	if d.RedeliveryLimit != notify.MaxAttempts {
+		t.Errorf("redeliveryLimit = %d, want %d", d.RedeliveryLimit, notify.MaxAttempts)
+	}
+
+	if d.RedeliveriesRemaining != notify.MaxAttempts {
+		t.Errorf("redeliveriesRemaining = %d, want %d", d.RedeliveriesRemaining, notify.MaxAttempts)
+	}
+}
+
+func TestDeliveryRedeliverableAt(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.clock.Set(base)
+
+	sub := f.makeSubscription(t)
+	pending := f.seedDelivery(t, "acme", sub, notify.DeliveryPending)
+	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+
+	got := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+sub.ID+"/deliveries")))
+
+	seen := map[string]bool{}
+
+	for _, d := range got.Deliveries {
+		checkDeliveryLimits(t, d)
+
+		switch d.ID {
+		case pending.ID:
+			seen[d.ID] = true
+
+			if d.RedeliverableAt != nil {
+				t.Errorf("a pending delivery answers redeliverableAt = %s, want none", d.RedeliverableAt)
+			}
+		case done.ID:
+			seen[d.ID] = true
+
+			if d.RedeliverableAt == nil {
+				t.Fatal("a stopped delivery answers no redeliverableAt")
+			}
+
+			want := base.Add(notify.RetryWait(1))
+			if !d.RedeliverableAt.Equal(want) {
+				t.Errorf("redeliverableAt = %s, want %s", d.RedeliverableAt, want)
+			}
+		default:
+		}
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("history holds %d of the two deliveries", len(seen))
+	}
+}
+
+func TestDeliveryRedeliveryLimit(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.clock.Set(base)
+
+	sub := f.makeSubscription(t)
+	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+
+	ns, err := f.namespaces.Get(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	at := base
+
+	for n := range notify.MaxAttempts {
+		at = at.Add(notify.RetryWait(n + 1))
+		f.redeliverAndStop(t, ns, done, at)
+	}
+
+	f.clock.Set(at)
+	f.checkDeliveryAtLimit(t, sub, done)
+
+	got := f.do(t, send("admin", http.MethodPost, deliveriesBase+"/"+done.ID+"/redeliver", ""))
+	wantCode(t, "redeliver at the limit", got, http.StatusConflict)
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusConflict, []byte(got.body),
+		errcodetest.Want{Code: errcode.SinkDeliveryRedeliverLimit, Args: nil, RequestBody: nil})
+}
+
+// redeliverAndStop makes the delivery d pending again at the time at and
+// records it as delivered.
+func (f fixture) redeliverAndStop(t *testing.T, ns namespace.Namespace, d notify.Delivery, at time.Time) {
+	t.Helper()
+
+	store := f.store.Notifications()
+	entry := audit.Entry{
+		At: at, Namespace: "acme", Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "delivery:redeliver", Object: "acme", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		RequestID: "", ObjectID: d.ID, PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		PrincipalKind: "", JobID: "",
+	}
+
+	if err := store.Redeliver(t.Context(), d.ID, at, ns.Fence(), entry); err != nil {
+		t.Fatalf("Redeliver at %s: %v", at, err)
+	}
+
+	claimed, err := store.Claim(t.Context(), ns.Fence(), notify.ClaimRequest{
+		Scope: "acme", Owner: "test", Now: at, Lease: time.Minute, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Claim at %s: %v", at, err)
+	}
+
+	for i := range claimed {
+		if claimed[i].ID != d.ID {
+			continue
+		}
+
+		recordErr := store.Record(t.Context(), ns.Fence(), notify.Attempt{
+			ID: d.ID, Owner: "test", Version: claimed[i].Version, Now: at, State: notify.DeliveryDone,
+			Attempts: 1, NextAt: time.Time{}, LastError: "", DeliveredAt: at,
+		})
+		if recordErr != nil {
+			t.Fatalf("Record at %s: %v", at, recordErr)
+		}
+
+		return
+	}
+
+	t.Fatalf("Claim at %s returned no delivery %s", at, d.ID)
+}
+
+// checkDeliveryAtLimit checks the document of a delivery that has no manual
+// redeliveries left.
+func (f fixture) checkDeliveryAtLimit(t *testing.T, sub subscriptionWire, d notify.Delivery) {
+	t.Helper()
+
+	history := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+sub.ID+"/deliveries")))
+
+	for i := range history.Deliveries {
+		got := history.Deliveries[i]
+		if got.ID != d.ID {
+			continue
+		}
+
+		if got.RedeliveriesRemaining != 0 {
+			t.Errorf("redeliveriesRemaining = %d, want 0", got.RedeliveriesRemaining)
+		}
+
+		if got.RedeliveryLimit != notify.MaxAttempts {
+			t.Errorf("redeliveryLimit = %d, want %d", got.RedeliveryLimit, notify.MaxAttempts)
+		}
+
+		if got.RedeliverableAt != nil {
+			t.Errorf("redeliverableAt = %s, want none at the limit", got.RedeliverableAt)
+		}
+
+		return
+	}
+
+	t.Fatalf("history holds no delivery %s", d.ID)
+}
+
 func TestSubscriptionWritesAreIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -712,6 +923,7 @@ func TestSubscriptionWritesAreIdempotent(t *testing.T) {
 
 	sub := decode[subscriptionWire](t, first)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(f.clock.Now().Add(notify.RetryWait(1)))
 	target := deliveriesBase + "/" + done.ID + "/redeliver"
 
 	for range 2 {
@@ -737,6 +949,7 @@ func TestSubscriptionWritesAreAudited(t *testing.T) {
 	f := newFixture(t)
 	sub := f.makeSubscription(t)
 	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(f.clock.Now().Add(notify.RetryWait(1)))
 
 	wantCode(t, "replace", f.do(t, send("admin", http.MethodPut, subscriptionsBase+"/"+sub.ID,
 		`{"version":1,"sink":"`+sub.Sink+`","state":"active","filter":{"types":["lock.*"]}}`)), http.StatusOK)

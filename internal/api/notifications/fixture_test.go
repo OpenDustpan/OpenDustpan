@@ -203,6 +203,14 @@ func (c *testClock) Now() time.Time {
 	return c.now
 }
 
+// Set moves the clock to at. A test calls it while no request runs.
+func (c *testClock) Set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = at
+}
+
 // newFixture returns a handler over a real SQLite store, with the signed
 // webhook kind served by a recording sender.
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -342,7 +350,8 @@ func buildFixtureFull(
 	}
 
 	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Now: nil,
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Audit: store,
+		Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("subscription service: %v", err)

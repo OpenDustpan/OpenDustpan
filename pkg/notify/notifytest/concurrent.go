@@ -6,7 +6,9 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
 
@@ -142,5 +144,116 @@ func testConcurrentClaim(t *testing.T, h Harness) {
 	// of them are taken at once.
 	if len(claimed) != total {
 		t.Fatalf("concurrent Claim took %d deliveries, want %d", len(claimed), total)
+	}
+}
+
+// testConcurrentRedeliver leaves one redelivery on a stopped delivery and
+// redelivers it from many goroutines. Exactly one call wins, so the count
+// never passes MaxAttempts.
+func testConcurrentRedeliver(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	stopAt := now()
+	stopDelivery(t, h, fence, stopAt)
+
+	// Leave one redelivery: the calls below race for it.
+	for n := 1; n < notify.MaxAttempts; n++ {
+		at := stopAt.Add(notify.RetryWait(n))
+		checkRedeliverAccepted(t, h, fence, "dlv-1", at)
+
+		stopAt = at
+		stopDelivery(t, h, fence, stopAt)
+	}
+
+	at := stopAt.Add(notify.RetryWait(notify.MaxAttempts))
+
+	checkOneRedeliverWon(t, redeliverTogether(t, h, fence, at))
+
+	if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != notify.MaxAttempts {
+		t.Fatalf("Redeliveries after the concurrent redelivers = %d, want %d", d.Redeliveries, notify.MaxAttempts)
+	}
+
+	// The delivery is at the limit, and the wait after its last stop is
+	// over. A redeliver is still refused, so the count never passes
+	// MaxAttempts.
+	stopDelivery(t, h, fence, at)
+
+	later := at.Add(notify.RetryWait(notify.MaxAttempts + 1))
+	if err := h.Deliveries.Redeliver(t.Context(), "dlv-1", later, fence, manage()); !errors.Is(
+		err,
+		notify.ErrRedeliverLimit,
+	) {
+		t.Fatalf("Redeliver at the limit after the wait: err = %v, want ErrRedeliverLimit", err)
+	}
+
+	if d := mustDelivery(t, h, "dlv-1"); d.Redeliveries != notify.MaxAttempts {
+		t.Fatalf("Redeliveries after a refused redeliver at the limit = %d, want %d",
+			d.Redeliveries, notify.MaxAttempts)
+	}
+}
+
+// redeliverTogether calls Redeliver for dlv-1 from many goroutines at at,
+// all after the start barrier opens.
+func redeliverTogether(t *testing.T, h Harness, fence namespace.Fence, at time.Time) []error {
+	t.Helper()
+
+	var (
+		wg    sync.WaitGroup
+		ready sync.WaitGroup
+	)
+
+	start := make(chan struct{})
+	errs := make([]error, workers)
+
+	ready.Add(workers)
+
+	for i := range workers {
+		wg.Go(func() {
+			ready.Done()
+
+			<-start
+			errs[i] = h.Deliveries.Redeliver(t.Context(), "dlv-1", at, fence, manage())
+		})
+	}
+
+	ready.Wait()
+	close(start)
+	wg.Wait()
+
+	return errs
+}
+
+// checkOneRedeliverWon fails unless exactly one error is nil and each other
+// error is ErrConflict or ErrRedeliverLimit.
+func checkOneRedeliverWon(t *testing.T, errs []error) {
+	t.Helper()
+
+	won, conflict, limit := 0, 0, 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, notify.ErrConflict):
+			conflict++
+		case errors.Is(err, notify.ErrRedeliverLimit):
+			limit++
+		default:
+			t.Fatalf("concurrent Redeliver: err = %v, want nil, ErrConflict or ErrRedeliverLimit", err)
+		}
+	}
+
+	if won != 1 || conflict+limit != workers-1 {
+		t.Fatalf(
+			"concurrent Redeliver: %d won, %d got ErrConflict and %d got ErrRedeliverLimit, want 1 and %d together",
+			won,
+			conflict,
+			limit,
+			workers-1,
+		)
 	}
 }

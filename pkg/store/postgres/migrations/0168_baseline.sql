@@ -722,6 +722,7 @@ CREATE TABLE notification_deliveries (
     principal text NOT NULL,
     state text NOT NULL,
     attempts bigint NOT NULL,
+    redeliveries bigint NOT NULL CHECK (redeliveries >= 0),
     next_at_ms bigint NOT NULL,
     last_error text NOT NULL,
     delivered_at_ms bigint NOT NULL,
