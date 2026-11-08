@@ -25,6 +25,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	go test -count=1 ./internal/adrnumbers
 	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
@@ -319,7 +320,10 @@ pin-frozen: ## Refuse a branch that changes the API description pin or info.vers
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
+zones-generate: ## Regenerate pkg/preferences/zones_gen.go, the list of zone names, from the time zone archive of the Go toolchain. Run it after a Go upgrade.
+	go run ./cmd/zonegen -out pkg/preferences/zones_gen.go
+
+generate: zones-generate ## Regenerate sqlc query code after editing queries.sql or migrations, the zone list after a Go upgrade, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1

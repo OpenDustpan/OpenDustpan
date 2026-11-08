@@ -27,8 +27,8 @@ send the request from an allowed address. A person who gets `access.denied`
 needs a grant.
 
 When a request has more than one cause, the code follows this order:
-`sign-in.refused` and `access.no-action`, then `session.csrf`,
-`session.other-site`, `access.ip-not-allowed`, `gate.limited`,
+`sign-in.refused` and `access.no-action`, then `session.other-site`,
+`session.csrf`, `access.ip-not-allowed`, `gate.limited`,
 `gate.rule-failed`, `access.denied`. The `message` follows the same order.
 
 ## The body
