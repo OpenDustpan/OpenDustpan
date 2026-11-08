@@ -1,10 +1,14 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // signInOriginCase is one request to the password sign-in of a local user,
@@ -100,5 +104,95 @@ func TestPasswordSignInRefusesAnotherSite(t *testing.T) {
 			t.Fatalf("%s: the refusal set a cookie or spent the budget (%d to %d)", tc.name, before,
 				f.passwords.count())
 		}
+	}
+}
+
+// TestPasswordSignInOfAnotherSiteIsAudited proves that each refusal of the
+// check against login CSRF writes one denied audit entry of the installation:
+// the action of a sign-in, the sign-in route as the subject, and the reason.
+// Each row has a fresh handler, so the limiter of the denial recorder does not
+// count one row in the window of another. A sign-in of the console writes no
+// denied entry.
+func TestPasswordSignInOfAnotherSiteIsAudited(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range signInOriginCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			createRouteLocalUser(t, f)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/sign-in/password",
+				strings.NewReader(tc.body))
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+
+			f.handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			want := 0
+			if tc.want == http.StatusUnauthorized {
+				want = 1
+			}
+
+			if got := otherSiteEntries(t, f); got != want {
+				t.Fatalf("denied sign-in entries = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+// otherSiteEntries counts the denied entries of a sign-in of another site in
+// the installation scope of f, whatever their subject, and fails t for an
+// entry whose subject is not the fixed sign-in route.
+func otherSiteEntries(t *testing.T, f accessFixture) int {
+	t.Helper()
+
+	n := 0
+
+	entries := serverEntries(t, f.store)
+	for i := range entries {
+		e := &entries[i]
+		if e.Outcome == audit.OutcomeDenied && e.Action == session.ActionSignIn &&
+			strings.HasPrefix(e.Subject, "sign-in:") && strings.Contains(e.Reason, "another site") {
+			if e.Subject != "sign-in:local" {
+				t.Errorf("denied sign-in entry with the subject %q, want the fixed route sign-in:local", e.Subject)
+			}
+
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestPasswordSignInOfAnotherSiteHasABoundedAudit proves the bound of the
+// audit of the check against login CSRF: 50 refusals with 50 Origins and 50
+// source addresses on one handler write exactly one denied entry. The key of
+// the limiter holds only the fixed sign-in route, so nothing that the caller
+// sends can open a new key and a new entry.
+func TestPasswordSignInOfAnotherSiteHasABoundedAudit(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	for i := range 50 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/sign-in/password",
+			strings.NewReader(`{"userName":"carol","password":"`+routePassword+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", fmt.Sprintf("https://evil-%d.example", i))
+		req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", i+1)
+
+		rec := httptest.NewRecorder()
+		f.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("refusal %d = %d %s, want 401", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	if got := otherSiteEntries(t, f); got != 1 {
+		t.Fatalf("denied sign-in entries after 50 refusals = %d, want 1", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -743,4 +744,24 @@ func classifySignIn(err error) (failure, bool) {
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// reasonOtherSite is the reason of the audit entry of a sign-in that the check
+// against login CSRF refused.
+const reasonOtherSite = "sign-in request of another site: not JSON, a foreign Origin or cross-site"
+
+// recordOtherSiteSignIn writes the audit entry of a sign-in that the check
+// against login CSRF refused. The request has no principal yet, so the entry
+// names actor, the sign-in route. The limiter of the denial recorder bounds
+// the entries: under a burst it writes the first refusal of each window and
+// counts the others.
+func (h *Handler) recordOtherSiteSignIn(ctx context.Context, r *http.Request, actor string) {
+	var p identity.Principal
+
+	p.Subject = actor
+
+	h.guard.Record(ctx, r, p, denials.Denial{
+		Action: identity.Action(session.ActionSignIn), Object: identity.ServerObject(), Reason: reasonOtherSite,
+		ReasonWithin: nil, Window: 0,
+	})
 }
