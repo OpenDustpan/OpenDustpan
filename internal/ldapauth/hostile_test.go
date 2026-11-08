@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -686,6 +687,80 @@ func TestTheReadOfTheGroupsHasOneDeadline(t *testing.T) {
 
 	if took := time.Since(start); took > ldapauth.MaxTimeout/2 {
 		t.Fatalf("Verify took %v, want about %v", took, deadline)
+	}
+}
+
+// TestASlowRebindIsBoundedByTheGroupTimeout is layer 3 for the groups: the
+// deadline of the read of the groups starts before the rebind as the
+// service account, so a rebind that the directory holds ends at the
+// deadline.
+func TestASlowRebindIsBoundedByTheGroupTimeout(t *testing.T) {
+	t.Parallel()
+
+	const groupTimeout = 300 * time.Millisecond
+
+	s := newSetup(t)
+	p := testPerson("alice")
+	p.Groups, p.GroupsPresent = []string{"ops"}, true
+	s.addUser(t, p, goodPassword, nil)
+
+	release := make(chan struct{})
+	rebind := make(chan struct{})
+
+	var releaseOnce sync.Once
+
+	releaseBinds := func() { releaseOnce.Do(func() { close(release) }) }
+
+	t.Cleanup(releaseBinds)
+
+	var serviceBinds atomic.Int32
+
+	s.dir.SetBindHook(func(dn string) {
+		if !strings.EqualFold(dn, ldaptest.ServiceDN) {
+			return
+		}
+
+		if serviceBinds.Add(1) == 2 {
+			close(rebind)
+			<-release
+		}
+	})
+
+	m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
+		c.GroupTimeout = groupTimeout
+		c.Groups = ldapauth.Groups{
+			Source: ldapauth.GroupsSearch, BaseDN: ldaptest.GroupsDN, Filter: "(objectClass=groupOfNames)",
+			MemberAttribute: "member", MemberOfAttribute: "", NameAttribute: "cn",
+		}
+	}))
+
+	type outcome struct {
+		assertion session.Assertion
+		err       error
+	}
+
+	done := make(chan outcome, 1)
+
+	go func() {
+		a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
+		done <- outcome{assertion: a, err: err}
+	}()
+
+	select {
+	case <-rebind:
+	case <-time.After(ldapauth.MaxTimeout):
+		t.Fatal("the rebind as the service account did not reach the directory")
+	}
+
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, session.ErrMethodUnavailable) || got.assertion.Subject != "" {
+			t.Fatalf("Verify() = %+v, %v, want ErrMethodUnavailable", got.assertion, got.err)
+		}
+	case <-time.After(ldapauth.MaxTimeout / 2):
+		releaseBinds()
+		<-done
+		t.Fatal("Verify() did not return; the rebind is not bounded by the group timeout")
 	}
 }
 

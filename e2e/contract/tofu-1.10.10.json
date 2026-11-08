@@ -1,6 +1,6 @@
 {
   "tool": "tofu",
-  "version": "1.12.7",
+  "version": "1.10.10",
   "routes": [
     {
       "route": "DELETE /api/v2/organizations/{organization}/workspaces/{workspace}",
@@ -20,6 +20,7 @@
         {
           "status": 200,
           "responseKeys": [
+            "modules.v1",
             "providers.v1",
             "tfe.v2",
             "tfe.v2.1"

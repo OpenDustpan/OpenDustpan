@@ -116,6 +116,49 @@ func TestFailOnce(t *testing.T) {
 	}
 }
 
+// TestFailTryLockSweep fails the first TryLockSweep with the default sentinel
+// of the namespace port and takes no lock; the second call succeeds, takes the
+// lock and releases it at once.
+func TestFailTryLockSweep(t *testing.T) {
+	t.Parallel()
+
+	wrapped := wrap(t, storefault.Fault{
+		Method: "TryLockSweep",
+		Call:   1,
+		Kind:   storefault.KindFail,
+		Err:    nil,
+		Delay:  0,
+	})
+
+	unlock, err := wrapped.TryLockSweep(t.Context())
+	if err == nil {
+		t.Fatal("faulted try lock sweep: err = nil, want ErrUnavailable")
+	}
+
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("faulted try lock sweep: err = %v, want ErrUnavailable", err)
+	}
+
+	if unlock != nil {
+		t.Fatal("faulted try lock sweep returned an unlock function, want nil")
+	}
+
+	unlock, err = wrapped.TryLockSweep(t.Context())
+	if err != nil {
+		t.Fatalf("second try lock sweep: err = %v, want nil", err)
+	}
+
+	if unlock == nil {
+		t.Fatal("second try lock sweep returned no unlock function, want one")
+	}
+
+	unlock()
+
+	if n := wrapped.Calls("TryLockSweep"); n != 2 {
+		t.Fatalf("try lock sweep calls = %d, want 2", n)
+	}
+}
+
 // TestFailCustomError answers the configured sentinel, so tests model the
 // documented outcome they need.
 func TestFailCustomError(t *testing.T) {

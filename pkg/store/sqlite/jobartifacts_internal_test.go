@@ -33,7 +33,7 @@ func stagedPlanCases() []struct{ name, body string } {
 		{"a body of another plan", planBodyJSON("pln-other", part("plan-display", artifactHash, 1))},
 		{"a plan with three parts", planBodyJSON("pln-1", `[`+
 			strings.Repeat(`{"kind":"plan-display","size":1,"sha256":"`+artifactHash+`","secret":false},`, 2)+
-			`{"kind":"plan-apply","size":1,"sha256":"`+artifactHash+`","secret":false}]`)},
+			`{"kind":"plan-apply","size":1,"sha256":"`+artifactHash+`","secret":true}]`)},
 		{"a part of an unknown kind", planBodyJSON("pln-1", part("other", artifactHash, 1))},
 		{"a part with a hash that is not a SHA-256", planBodyJSON("pln-1", part("plan-display", "xyz", 1))},
 		{

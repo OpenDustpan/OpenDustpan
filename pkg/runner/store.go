@@ -127,7 +127,8 @@ type MemberStore interface {
 	// takeover, and it ends every job session of the runner:
 	// SessionStore.Session returns ErrRetired for them. It
 	// returns ErrNotFound for an unknown runner. A retire of a retired
-	// runner changes nothing.
+	// runner changes nothing. The runner management API accepts a retire
+	// in maintenance mode, because a retire reduces the work of the runners.
 	Retire(ctx context.Context, id string, now time.Time, fence namespace.Fence, e []audit.Entry) error
 }
 
