@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -118,6 +119,10 @@ func TestResultValidate(t *testing.T) {
 		return r
 	}
 
+	withAddress := func(address string) drift.Result {
+		return valid(func(r *drift.Result) { r.Resources = []drift.Resource{changed(address)} })
+	}
+
 	// Each case sends hostile input directly to Validate, as if no other
 	// layer had checked it (defense in depth).
 	tests := []struct {
@@ -161,6 +166,15 @@ func TestResultValidate(t *testing.T) {
 			false,
 		},
 		{"NUL in address", valid(func(r *drift.Result) { r.Resources = []drift.Resource{changed("a\x00b")} }), false},
+		{"line separator at the start of an address", withAddress("\u2028a"), false},
+		{"line separator in an address", withAddress("a\u2028b"), false},
+		{"line separator at the end of an address", withAddress("a\u2028"), false},
+		{"paragraph separator at the start of an address", withAddress("\u2029a"), false},
+		{"paragraph separator in an address", withAddress("a\u2029b"), false},
+		{"paragraph separator at the end of an address", withAddress("a\u2029"), false},
+		{"next line in an address", withAddress("a\u0085b"), false},
+		{"vertical tab in an address", withAddress("a\vb"), false},
+		{"form feed in an address", withAddress("a\fb"), false},
 		{
 			"bidirectional override",
 			valid(func(r *drift.Result) { r.Resources = []drift.Resource{changed("a\u202eb")} }),
@@ -194,6 +208,60 @@ func TestResultValidate(t *testing.T) {
 			t.Parallel()
 
 			err := tc.result.Validate()
+
+			if tc.ok {
+				mustValid(t, err)
+			} else {
+				mustInvalid(t, err)
+			}
+		})
+	}
+}
+
+func TestCheckRequestValidate(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("opentofu", "acme", "network")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	withReason := func(reason string) drift.CheckRequest {
+		return drift.CheckRequest{
+			Unit: unit, Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			Pool: "", Reason: reason, Channel: "", SourceIP: "", UserAgent: "", RequestID: "",
+		}
+	}
+
+	noUnit := withReason("")
+	noUnit.Unit = identity.Object{}
+
+	tests := []struct {
+		name string
+		req  drift.CheckRequest
+		ok   bool
+	}{
+		{"valid", withReason(""), true},
+		{"valid with a reason", withReason("after the incident"), true},
+		{"no unit", noUnit, false},
+		{"line separator at the start of a reason", withReason("\u2028a"), false},
+		{"line separator in a reason", withReason("a\u2028b"), false},
+		{"line separator at the end of a reason", withReason("a\u2028"), false},
+		{"paragraph separator at the start of a reason", withReason("\u2029a"), false},
+		{"paragraph separator in a reason", withReason("a\u2029b"), false},
+		{"paragraph separator at the end of a reason", withReason("a\u2029"), false},
+		{"next line in a reason", withReason("a\u0085b"), false},
+		{"vertical tab in a reason", withReason("a\vb"), false},
+		{"form feed in a reason", withReason("a\fb"), false},
+		{"control character in a reason", withReason("a\x00b"), false},
+		{"format character in a reason", withReason("a\u202eb"), false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.req.Validate()
 
 			if tc.ok {
 				mustValid(t, err)

@@ -662,6 +662,31 @@ CREATE TABLE manual_locks (
     CONSTRAINT manual_locks_reason_check CHECK (((reason <> ''::text) AND (char_length(reason) <= 500)))
 );
 
+CREATE TABLE member_removal_alerts (
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    alerted_at_ms bigint NOT NULL,
+    CONSTRAINT member_removal_alerts_alerted_at_ms_check CHECK ((alerted_at_ms > 0)),
+    CONSTRAINT member_removal_alerts_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removal_alerts_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
+CREATE TABLE member_removals (
+    id text NOT NULL,
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    group_id text NOT NULL,
+    removed bigint NOT NULL,
+    members_before bigint NOT NULL,
+    at_ms bigint NOT NULL,
+    CONSTRAINT member_removals_at_ms_check CHECK ((at_ms > 0)),
+    CONSTRAINT member_removals_group_id_check CHECK ((group_id <> ''::text)),
+    CONSTRAINT member_removals_members_before_check CHECK ((members_before >= removed)),
+    CONSTRAINT member_removals_removed_check CHECK ((removed >= 1)),
+    CONSTRAINT member_removals_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removals_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
 CREATE TABLE name_lock_key (
     id integer NOT NULL,
     key bytea NOT NULL,
@@ -1411,6 +1436,15 @@ CREATE TABLE updates (
     journal_records_changed boolean DEFAULT false NOT NULL
 );
 
+CREATE TABLE used_tickets (
+    provider_id text NOT NULL,
+    ticket_digest text NOT NULL,
+    until_ms bigint NOT NULL,
+    CONSTRAINT used_tickets_provider_id_check CHECK (((length(provider_id) >= 1) AND (length(provider_id) <= 256))),
+    CONSTRAINT used_tickets_ticket_digest_check CHECK ((ticket_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT used_tickets_until_ms_check CHECK ((until_ms > 0))
+);
+
 CREATE TABLE workspace_blame_cursors (
     workspace_id text NOT NULL,
     ordinal bigint NOT NULL,
@@ -1659,6 +1693,12 @@ ALTER TABLE ONLY local_users
 ALTER TABLE ONLY manual_locks
     ADD CONSTRAINT manual_locks_pkey PRIMARY KEY (kind, object_id);
 
+ALTER TABLE ONLY member_removal_alerts
+    ADD CONSTRAINT member_removal_alerts_pkey PRIMARY KEY (source_kind, source_id);
+
+ALTER TABLE ONLY member_removals
+    ADD CONSTRAINT member_removals_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY name_lock_key
     ADD CONSTRAINT name_lock_key_pkey PRIMARY KEY (id);
 
@@ -1872,6 +1912,9 @@ ALTER TABLE ONLY update_journal_sequences
 ALTER TABLE ONLY updates
     ADD CONSTRAINT updates_pkey PRIMARY KEY (stack_id, id);
 
+ALTER TABLE ONLY used_tickets
+    ADD CONSTRAINT used_tickets_pkey PRIMARY KEY (provider_id, ticket_digest);
+
 ALTER TABLE ONLY workspace_blame_cursors
     ADD CONSTRAINT workspace_blame_cursors_pkey PRIMARY KEY (workspace_id);
 
@@ -1998,6 +2041,8 @@ CREATE INDEX local_user_resets_expiry ON local_user_resets USING btree (expires_
 
 CREATE INDEX manual_locks_namespace ON manual_locks USING btree (namespace);
 
+CREATE INDEX member_removals_source ON member_removals USING btree (source_kind, source_id, at_ms);
+
 CREATE UNIQUE INDEX namespaces_id ON namespaces USING btree (id);
 
 CREATE INDEX notification_deliveries_due ON notification_deliveries USING btree (scope, next_at_ms, id) WHERE (state = 'pending'::text);
@@ -2077,6 +2122,8 @@ CREATE INDEX unit_settings_namespace ON unit_settings USING btree (namespace_id)
 CREATE INDEX updates_history ON updates USING btree (stack_id, version) WHERE ((status <> 'not started'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
 
 CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE ((status = 'running'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
+
+CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 

@@ -232,8 +232,9 @@ func testTakeover(t *testing.T, h Harness) {
 	shortenOp(t, h, first.Claim)
 
 	op := claimAfterExpiry(t, h, "runner-2", job.RunnerKind(j.Spec.Pool))
-	if string(op.ID) != operation || op.Claim.Token < 2 {
-		t.Fatalf("takeover claim = %s, token %d; want %s with a new token", op.ID, op.Claim.Token, operation)
+	if string(op.ID) != operation || op.Claim.Token != first.Claim.Token+1 {
+		t.Fatalf("takeover claim = %s, token %d; want %s with the token after %d", op.ID, op.Claim.Token, operation,
+			first.Claim.Token)
 	}
 
 	got := claimed(t, h, f, &j, "runner-2")

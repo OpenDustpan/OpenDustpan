@@ -221,6 +221,10 @@ devices. A passkey with a `suspendedAt` time is suspended because its
 signature counter went back. A suspended passkey is a sign of a copied key.
 Remove it and add a new one.
 
+A restore of a backup brings back the signature counter of each passkey as it
+was at the backup. A use with a counter that is not higher than the restored
+counter suspends the passkey.
+
 ## Remove a passkey
 
 `DELETE /api/dustpan/v1/me/passkeys/{id}` removes one passkey of the person and

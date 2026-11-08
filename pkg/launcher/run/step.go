@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -92,7 +93,7 @@ func (r *phaseRun) callFailed(what string, err error) stepResult {
 	if errors.Is(err, session.ErrClaimLost) {
 		r.markLost()
 
-		return stepResult{exitCode: -1, reason: "the claim is lost"}
+		return stepResult{exitCode: -1, reason: claimLostReason}
 	}
 
 	r.log.Warn("a call of the step failed", slog.String("call", what), slog.Any("error", err))
@@ -109,9 +110,86 @@ func (r *phaseRun) flushEvery() time.Duration {
 	return DefaultFlushEvery
 }
 
+// claimLostReason is the reason of a step whose claim is lost: the renewal
+// loop recorded the loss, and the launcher reports nothing more.
+const claimLostReason = "the claim is lost"
+
+// refuseStep returns the fail-closed result of a step that this release must
+// not start, and whether the step is refused. It starts no process.
+func (r *phaseRun) refuseStep(step *protocol.Step, log launcher.Masker) (stepResult, bool) {
+	// This release cannot deliver the credentials of a tool step that needs
+	// a profile, so the step fails closed before its program starts. A tool
+	// step with no profile needs no credentials, and it runs.
+	if step.Role == string(job.RoleTool) && r.profile != "" {
+		// The profile name comes from the assignment, so it may hold CR or
+		// LF: remove both before the name goes into the reason and the log.
+		name := strings.NewReplacer("\r", "", "\n", "").Replace(r.profile)
+		reason := fmt.Sprintf("this launcher release cannot deliver the credentials of profile %q", name)
+		r.note(log, reason)
+
+		return stepResult{exitCode: -1, reason: reason}, true
+	}
+
+	// This release cannot upload declared outputs. A step whose output a
+	// later phase of the job reads fails closed before its program starts;
+	// an output that no later phase reads does not stop the step.
+	for _, o := range step.Outputs {
+		if !o.Needed {
+			continue
+		}
+
+		// The kind comes from the assignment, so it may hold CR or LF:
+		// remove both before the kind goes into the reason and the log.
+		kind := strings.NewReplacer("\r", "", "\n", "").Replace(o.Kind)
+		reason := fmt.Sprintf("this launcher release cannot upload output %q that a later phase needs", kind)
+		r.note(log, reason)
+
+		return stepResult{exitCode: -1, reason: reason}, true
+	}
+
+	// Defense in depth: the renewal loop records a lost claim, and the wait
+	// loop kills the process group of a step that runs; this check stays so
+	// that a step whose claim is lost before its start never starts a
+	// process.
+	if r.isLost() {
+		return stepResult{exitCode: -1, reason: claimLostReason}, true
+	}
+
+	// Defense in depth: the renewal loop records a cancel, and the wait loop
+	// interrupts a step that runs; this check stays so that a canceled step
+	// never starts a process.
+	if r.isCanceled() {
+		return stepResult{exitCode: -1, reason: "the job was canceled"}, true
+	}
+
+	// Defense in depth: the wait loop interrupts a step that runs at a stop
+	// signal; this check stays so that a step after a stop never starts a
+	// process.
+	if stop := r.cfg.Stop; stop != nil {
+		select {
+		case <-stop:
+			return stepResult{exitCode: -1, reason: "the launcher got a stop signal"}, true
+		default:
+		}
+	}
+
+	return stepResult{exitCode: 0, reason: ""}, false
+}
+
 // execStep starts the process of the step and waits for its end, its
 // timeout, a cancel, a lost claim or a stop. The output goes to log.
 func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launcher.Masker) stepResult {
+	if res, refused := r.refuseStep(step, log); refused {
+		return res
+	}
+
+	// This release does not upload declared outputs. A step whose output a
+	// later phase reads was refused above, so a step that reaches this point
+	// declares outputs that no later phase reads.
+	if len(step.Outputs) > 0 {
+		r.note(log, "this launcher release does not upload declared outputs")
+	}
+
 	cmd, err := r.command(step)
 	if err != nil {
 		r.note(log, err.Error())
@@ -119,7 +197,12 @@ func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launch
 		return stepResult{exitCode: -1, reason: err.Error()}
 	}
 
-	r.notes(step, log)
+	// This release does not deliver credentials. A tool step whose
+	// assignment names a profile was refused above, so a tool step that
+	// reaches this point runs with no credentials.
+	if step.Role == string(job.RoleTool) {
+		r.note(log, "this launcher release gives no credentials to a tool step")
+	}
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -186,17 +269,6 @@ func (r *phaseRun) closeFile(f *os.File) {
 func (r *phaseRun) note(log launcher.Masker, text string) {
 	if err := log.Mask([]byte(notePrefix + text + "\n")); err != nil {
 		r.log.Warn("write to the log of a step", slog.Any("error", err))
-	}
-}
-
-// notes writes to the log what this release does not do for the step.
-func (r *phaseRun) notes(step *protocol.Step, log launcher.Masker) {
-	if step.Role == string(job.RoleTool) {
-		r.note(log, "this launcher release gives no credentials to a tool step")
-	}
-
-	for _, o := range step.Outputs {
-		r.note(log, fmt.Sprintf("this launcher release does not upload the output %s %s", o.Kind, o.Path))
 	}
 }
 

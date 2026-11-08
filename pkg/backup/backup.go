@@ -56,6 +56,10 @@ const (
 	TableAuditChainMark    = "audit_chain_mark"
 	TableNameLocks         = "name_locks"
 	TableNameLockKey       = "name_lock_key"
+	// TableUsedTickets holds the records of the CAS tickets that a server used.
+	// A restore keeps the live rows: a backup that brought back older rows
+	// would let a ticket that a server used after the backup work again.
+	TableUsedTickets = "used_tickets"
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server
@@ -136,6 +140,8 @@ var Tables = []string{
 	TablePrincipalGroups,
 	TableGroupMembers,
 	TableGroupMappings,
+	"member_removal_alerts",
+	"member_removals",
 	TableTempAdmins,
 	TableAccessTokens,
 	TableSessions,

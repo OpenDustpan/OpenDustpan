@@ -376,7 +376,8 @@ func checkErrorShape(ptr string, s *model.Schema, st *parseState) error {
 		return invalid(ptr, "the error schema must have the members code, message, errorCode and errorArgs")
 	}
 
-	for _, f := range s.Fields {
+	for i := range s.Fields {
+		f := &s.Fields[i]
 		fptr := ptrJoin(ptrJoin(ptr, "properties"), f.Name)
 
 		w, ok := want[f.Name]
@@ -384,7 +385,7 @@ func checkErrorShape(ptr string, s *model.Schema, st *parseState) error {
 			return invalid(fptr, "the error schema has a member that is not code, message, errorCode or errorArgs")
 		}
 
-		if err := checkErrorMember(fptr, f, w, st); err != nil {
+		if err := checkErrorMember(fptr, *f, w, st); err != nil {
 			return err
 		}
 	}

@@ -72,6 +72,12 @@ func (h *Handler) writeCoded(ctx context.Context, w http.ResponseWriter, f failu
 // token or state.
 func causeType(err error) string {
 	for e := err; e != nil; e = errors.Unwrap(e) {
+		// A redacted error only hides the text of the error it wraps. The type it
+		// reports is the wrapped one, so the log keeps the cause.
+		if _, redacted := e.(interface{ Redacted() }); redacted {
+			continue
+		}
+
 		switch t := fmt.Sprintf("%T", e); t {
 		case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.errorString":
 		default:

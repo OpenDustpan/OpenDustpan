@@ -254,36 +254,57 @@ type Page struct {
 	More       bool
 }
 
-// History returns at most size deliveries of the subscription id in ns,
-// newest first, after the first offset deliveries. It returns
-// notify.ErrNotFound for a subscription that ns does not hold. A page that
-// would reach past MaxHistory deliveries is cut at that count and has no next
-// page.
-func (s *Service) History(ctx context.Context, ns namespace.Name, id string, offset, size int) (Page, error) {
+// HistoryRequest names one page of the history of a subscription. After is
+// the last delivery of the page before, or nil for the first page. Size is
+// the largest number of deliveries on the page.
+type HistoryRequest struct {
+	After *notify.DeliveryCursor
+	Size  int
+}
+
+// History returns at most req.Size deliveries of the subscription id in ns,
+// newest first, after req.After. A nil cursor starts at the newest delivery.
+// It returns notify.ErrNotFound for a subscription that ns does not hold. A
+// page that would reach past MaxHistory deliveries is cut at that count and
+// has no next page. The position of the cursor comes from the store, never
+// from the caller, so a cursor cannot reach past MaxHistory.
+func (s *Service) History(
+	ctx context.Context, ns namespace.Name, id string, req HistoryRequest,
+) (Page, error) {
 	if _, err := s.Get(ctx, ns, id); err != nil {
 		return Page{}, err
 	}
 
-	if offset < 0 || size <= 0 || offset >= MaxHistory {
+	if req.Size <= 0 {
 		return Page{Deliveries: nil, More: false}, nil
 	}
 
-	size = min(size, MaxHistory-offset)
+	read := 0
+
+	if req.After != nil {
+		count, err := s.deliveries.CountBefore(ctx, ns, id, req.After, MaxHistory)
+		if err != nil {
+			return Page{}, fmt.Errorf("history of %s: %w", id, err)
+		}
+
+		if count >= MaxHistory {
+			return Page{Deliveries: nil, More: false}, nil
+		}
+
+		read = count
+	}
+
+	size := min(req.Size, MaxHistory-read)
 
 	// One more row than the page says whether a next page exists.
-	all, err := s.deliveries.History(ctx, ns, id, offset+size+1)
+	all, err := s.deliveries.History(ctx, ns, id, req.After, size+1)
 	if err != nil {
 		return Page{}, fmt.Errorf("history of %s: %w", id, err)
 	}
 
-	if offset >= len(all) {
-		return Page{Deliveries: nil, More: false}, nil
-	}
+	more := len(all) > size && read+size < MaxHistory
 
-	rest := all[offset:]
-	more := len(rest) > size && offset+size < MaxHistory
-
-	return Page{Deliveries: rest[:min(size, len(rest))], More: more}, nil
+	return Page{Deliveries: all[:min(size, len(all))], More: more}, nil
 }
 
 // Redeliver makes the stopped delivery id pending again. It returns

@@ -28,6 +28,7 @@ func TestEveryRouteDeclaresItsActions(t *testing.T) {
 		mux:            nil,
 		routes:         nil,
 		admit:          nil,
+		placer:         nil,
 	}
 	routes := h.buildRoutes()
 

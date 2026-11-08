@@ -582,7 +582,9 @@ func (s *RestoreService) stageInput(
 	// setting, only detect.
 	stage := RestoreStageInput{
 		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
-		Files: manifest.SQLFiles, Options: StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
+		Files: manifest.SQLFiles, Options: StageOptions{
+			BackupKind: pinned.kind, AllowDev: s.allowDev, RestoreAt: s.now().UTC(),
+		},
 		Strip: dev.production(), StripMode: DevStripDetect,
 	}
 
@@ -916,6 +918,17 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 	manifest, err := s.readPinnedManifest(ctx, in.BackupID, st.pinned())
 	if err != nil {
 		return nil, err
+	}
+
+	// The bound stops a new backup. A manifest above it stays restorable: an
+	// earlier version of the server wrote it, and the restore records the
+	// count and the bound in the audit log before it copies the first blob.
+	limit := s.unverifiedLimit()
+
+	if count := len(manifest.Unverified); count > limit {
+		if recErr := s.recordUnverifiedOverLimit(ctx, sc.Fence, in, count, limit); recErr != nil {
+			return nil, recErr
+		}
 	}
 
 	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)
