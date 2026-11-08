@@ -1,4 +1,4 @@
-package forgelink_test
+package forgelinksvc_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forgelink"
@@ -74,7 +75,7 @@ func (c *counter) Read(p []byte) (int, error) {
 }
 
 type fixture struct {
-	svc    *forgelink.Service
+	svc    *forgelinksvc.Service
 	store  *forgelinktest.Mem
 	people *people
 	clock  time.Time
@@ -90,7 +91,7 @@ func newFixture(t *testing.T) *fixture {
 		clock:  time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC),
 	}
 
-	f.svc = forgelink.NewService(f.store, f.people, func() time.Time { return f.clock }, &counter{n: 0})
+	f.svc = forgelinksvc.NewService(f.store, f.people, func() time.Time { return f.clock }, &counter{n: 0})
 
 	return f
 }
@@ -456,7 +457,7 @@ func TestAuditEntriesNameTheAccount(t *testing.T) {
 
 	for k, want := range map[string]string{
 		"forgeLink.kind": "github", "forgeLink.host": "github.com", "forgeLink.accountId": "42",
-		"forgeLink.principal": "prn-ana",
+		"forgeLink.principal": "prn-ana", "forgeLink.deliveryId": "d-42",
 	} {
 		if keys[k] != want {
 			t.Errorf("change %s = %q, want %q", k, keys[k], want)
@@ -509,7 +510,7 @@ func TestAcceptChecksBeforeItReachesTheStore(t *testing.T) {
 
 	f := newFixture(t)
 	counting := &countingStore{Store: f.store, accepts: 0}
-	svc := forgelink.NewService(counting, f.people, func() time.Time { return f.clock }, &counter{n: 0})
+	svc := forgelinksvc.NewService(counting, f.people, func() time.Time { return f.clock }, &counter{n: 0})
 
 	started, err := svc.Start(t.Context(), session("ana"))
 	if err != nil {

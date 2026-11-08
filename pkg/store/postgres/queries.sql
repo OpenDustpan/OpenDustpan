@@ -2598,6 +2598,16 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1;
 
+-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3;
+
+-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= $1;
+
 -- name: GetSessionPolicy :one
 SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
 
@@ -4322,13 +4332,19 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 ORDER BY r.version COLLATE "C";
 
 -- name: ListRegistryAddresses :many
+-- One page of the distinct addresses of a kind in a namespace, after the
+-- cursor (name, system). The caller reads one row more than the page size, so
+-- that the extra row tells whether a next page exists.
 SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind)
+  AND (r.name COLLATE "C" > sqlc.arg(after_name)
+    OR (r.name COLLATE "C" = sqlc.arg(after_name) AND r.system COLLATE "C" > sqlc.arg(after_system)))
 GROUP BY r.name, r.system
 -- The order is by code point, whatever the collation of the database.
-ORDER BY r.name COLLATE "C", r.system COLLATE "C";
+ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT sqlc.arg(lim);
 
 -- name: InsertRegistryKey :execrows
 -- The caller checks the fence in the same transaction. A key with the same
@@ -4811,11 +4827,41 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
+-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+-- The number of deliveries of the subscription at or before the cursor (next
+-- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+-- the deliveries that a page after the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
+-- the count; it stays so that the plan reads the index of the history in
+-- order and stops at max_rows.
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+      AND (next_at_ms > sqlc.arg(after_ms)
+        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
+    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+    LIMIT sqlc.arg(max_rows)
+) AS within_bound;
+
 -- name: ListNotificationDeliveriesOfSubscription :many
 SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+-- time, delivery ID): the rows with an older next time, or with the same next
+-- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+-- query. The bound on next_at_ms lets the index scan start at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+  AND (next_at_ms < sqlc.arg(after_ms)
+    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
 ORDER BY next_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
@@ -4894,9 +4940,9 @@ WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool 
 -- name: UpsertDriftResult :execrows
 -- The caller checks the fence, the job and the time in the same transaction.
 -- A row of the same unit ID in another namespace or of another tool is not
--- replaced: the count is 0. A stored row that is not older is not replaced
--- either (count 0), so that two writers cannot put an older result over a
--- newer one.
+-- replaced: the count is 0. A stored row of the same job is not replaced
+-- either (count 0). A stored row that is not older is not replaced either
+-- (count 0), so that two writers cannot put an older result over a newer one.
 INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
@@ -4906,6 +4952,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms;
 
 -- name: DeleteDriftResult :exec

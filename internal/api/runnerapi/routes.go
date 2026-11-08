@@ -85,7 +85,7 @@ const (
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return slices.Concat(h.managementRoutes(), h.runnerRoutes(), h.launcherRoutes())
+	return slices.Concat(h.managementRoutes(), h.runnerRoutes(), h.launcherRoutes(), h.planRoutes())
 }
 
 // managementRoutes returns the routes of the management API.

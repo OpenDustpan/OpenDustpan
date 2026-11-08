@@ -162,6 +162,9 @@ runner key cannot call them.
 | `POST /session/steps/{step}/begin` | none | 204 |
 | `POST /session/steps/{step}/end` | the exit code, the times, the number of chunks and the SHA-256 of the log | 204 |
 | `PUT /session/steps/{step}/logs/{seq}` | one chunk of the log, at most 1 MiB | 204 |
+| `PUT /session/plan/uploads/{part}` | one part of the plan, `plan-display` or `plan-apply` | 204 |
+| `POST /session/plan/commit` | the kind, the size and the SHA-256 of each part | 204 |
+| `GET /session/plan/parts/{part}` | none | the part, with its size and hash in the headers |
 | `POST /session/finish` | `succeeded` and a reason | 204 |
 
 The exchange has no proof of an existing key. The handoff token and the
@@ -198,8 +201,43 @@ when they differ. A step end that repeats the first one changes nothing. A
 finish ends the phase once. A second finish gets `claim-lost`, because the
 phase has no live claim.
 
-The paths for the source, the credentials, the plan and the report of a sweep
-are not part of this API yet. A session of a sweep has no steps, no logs and no
+A plan phase stores its plan in two kinds of call, as a multipart upload does.
+Each `PUT /session/plan/uploads/{part}` seals one part with the key of the plan
+and stores it. The header `Dustpan-Content-SHA256` has the SHA-256 of the part in
+hex, the proof signs that value, and the server deletes the part and answers
+`bad-proof` when the bytes that it received have another hash. A part has at
+most 256 MiB. The server holds the part in memory only while it streams it. It
+keeps no plaintext on disk, so any instance of the server can serve any call of
+the session. A part that the launcher sends again with the same content changes
+nothing.
+
+A part is not readable until the commit. `POST /session/plan/commit` names the
+parts of the plan (one or two). The server reads each stored part back and
+compares its size and its SHA-256 with the named ones. When one differs, the
+server answers `conflict` and stores no plan. The staged parts stay, and the
+launcher can send the right commit. When all match, the server stores the plan
+with the state version of the phase, in one transaction. A plan that read an
+old state version fails the phase, and the answer is `plan-stale`. A second
+commit with the same parts changes nothing and answers 204, so a launcher can
+send its commit again when it lost the answer. A commit with other parts, and
+an upload after the commit, get `conflict` and change nothing.
+
+A part that no plan names is not kept. The artifact sweep deletes the parts of
+a plan that never committed when the claim that uploaded them is no longer live,
+and it deletes each part that the committed plan does not name. It deletes only
+blobs that are older than one hour, and it keeps the parts of a claim that is
+live.
+
+`GET /session/plan/parts/{part}` is for an apply phase. It streams one part of
+the plan that the job stored in its plan phase. The plan comes from the job of
+the session, never from the request, so a launcher cannot read the plan of
+another job. The headers `Content-Length` and `Dustpan-Content-SHA256` have the
+size and the hash that the server stored, so the launcher checks the bytes
+that it received. A plan that a redaction deleted, and a part that the plan does
+not have, get `not-found`.
+
+The paths for the source, the credentials and the report of a sweep are not
+part of this API yet. A session of a sweep has no steps, no logs, no plan and no
 finish.
 
 ## Errors of the protocol
@@ -217,5 +255,6 @@ Each answer with a status of 400 or more has the body
 | `not-found` | 404 | The token, the pool or the claim is not known. |
 | `claim-lost` | 409 | The claim is not live. The runner stops the work. |
 | `conflict` | 409 | The request conflicts with the state of the server. |
+| `plan-stale` | 409 | The plan read an old state version. The phase failed. |
 | `version-unsupported`, `version-ahead` | 426 | The release of the runner is outside the skew. |
 | `rate-limited`, `unavailable` | 429, 503 | Wait for `Retry-After`. |
