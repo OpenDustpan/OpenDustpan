@@ -20,6 +20,10 @@ func TestRefuseUnverifiedIsTheSentinel(t *testing.T) {
 	}
 
 	err := refuseUnverified([]string{"a", "b", "c", "d"}, 3)
+	if err == nil {
+		t.Fatal("refuse above the bound = nil, want ErrTooManyUnverified")
+	}
+
 	if !errors.Is(err, ErrTooManyUnverified) {
 		t.Fatalf("refuse above the bound = %v, want ErrTooManyUnverified", err)
 	}
