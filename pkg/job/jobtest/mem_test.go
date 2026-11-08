@@ -420,7 +420,7 @@ func (m *memDB) List(_ context.Context, f job.Filter) (job.Page, error) {
 		read++
 
 		if reason, damaged := m.damaged[id]; damaged {
-			out.Damaged = append(out.Damaged, job.DamagedRow{ID: id, Reason: reason})
+			out.Damaged = append(out.Damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
 		} else {
 			out.Jobs = append(out.Jobs, copyJob(j))
 		}
@@ -706,7 +706,7 @@ func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 		}
 
 		if reason, isDamaged := m.damaged[id]; isDamaged {
-			damaged = append(damaged, job.DamagedRow{ID: id, Reason: reason})
+			damaged = append(damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
 		} else {
 			out = append(out, job.Orphan{Job: copyJob(j), Missing: end.missing})
 		}

@@ -262,7 +262,9 @@ func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 					return err
 				}
 
-				damaged = append(damaged, job.DamagedRow{ID: rows[i].Row.ID, Reason: DamageReason(err)})
+				damaged = append(damaged, job.DamagedRow{
+					ID: rows[i].Row.ID, UnitID: rows[i].Row.UnitID, Reason: DamageReason(err),
+				})
 
 				continue
 			}
@@ -635,7 +637,9 @@ func pageOf(rows []Row, limit int) job.Page {
 	for i := range rows {
 		j, err := jobOf(&rows[i])
 		if err != nil {
-			out.Damaged = append(out.Damaged, job.DamagedRow{ID: rows[i].ID, Reason: DamageReason(err)})
+			out.Damaged = append(out.Damaged, job.DamagedRow{
+				ID: rows[i].ID, UnitID: rows[i].UnitID, Reason: DamageReason(err),
+			})
 
 			continue
 		}

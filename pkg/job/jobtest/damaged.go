@@ -51,7 +51,14 @@ func testDamagedList(t *testing.T, h Harness) {
 		t.Fatalf("Get of a damaged job = %v, want ErrDamaged", err)
 	}
 
-	checkPage(t, listPage(t, h, stateFilter(f.fence.Namespace, job.StateQueued)), []job.ID{good.ID}, bad.ID)
+	page := listPage(t, h, stateFilter(f.fence.Namespace, job.StateQueued))
+	checkPage(t, page, []job.ID{good.ID}, bad.ID)
+
+	// The unit ID of a damaged row comes from the row, not from the body:
+	// the body did not decode.
+	if page.Damaged[0].UnitID != f.unit.UnitID() {
+		t.Fatalf("the damaged row has unit %q, want %q", page.Damaged[0].UnitID, f.unit.UnitID())
+	}
 
 	cancel := entry(f.unit, job.ActionJobCancel)
 	if err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel}); err != nil {

@@ -1282,9 +1282,13 @@ func backupModel() costModel {
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
+//
+// The fixed part also holds stagedJobCheckTrips: the staged check of the job
+// rows reads the job rows of the staging schema in one statement, once for
+// each restore.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + forgeStripClassTrips,
+		fixed:        344 + forgeStripClassTrips + stagedJobCheckTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1300,6 +1304,12 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// stagedJobCheckTrips is the number of round trips of the staged check of the
+// job rows: the check reads the job rows of the staging schema in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedJobCheckTrips = 1
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

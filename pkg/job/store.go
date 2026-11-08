@@ -153,6 +153,9 @@ type Filter struct {
 type DamagedRow struct {
 	// ID is the job ID of the row.
 	ID ID
+	// UnitID is the stable ID of the unit of the row, from its unit_id
+	// column. It never comes from the body: the body did not decode.
+	UnitID string
 	// Reason names the kind of the damage, for example "the body is not
 	// JSON". It never holds a value that the body stored.
 	Reason string
@@ -213,11 +216,11 @@ type Store interface {
 	// ErrDamaged for a row whose body does not decode.
 	Get(ctx context.Context, id ID) (Job, error)
 	// List returns the jobs that f selects, newest first, in a Page. A row
-	// that does not decode is in Page.Damaged, with its job ID and the kind
-	// of the damage, and is not in Page.Jobs: one damaged row never hides
-	// the jobs of a page, and Page.After continues behind it. A batch
-	// reader skips a damaged row: the server never dispatches, expires or
-	// closes it.
+	// that does not decode is in Page.Damaged, with its job ID, its unit ID
+	// and the kind of the damage, and is not in Page.Jobs: one damaged row
+	// never hides the jobs of a page, and Page.After continues behind it. A
+	// batch reader skips a damaged row: the server never dispatches, expires
+	// or closes it.
 	List(ctx context.Context, f Filter) (Page, error)
 	// CancelDamaged sets the state of the job id to canceled, with e, and
 	// reads no body: a row that a reader cannot decode can still be
@@ -321,8 +324,8 @@ type Store interface {
 	// Orphans returns at most limit jobs that are dispatched, running or
 	// canceling, but whose durable operation does not exist or ended with
 	// no Finish. A row that does not decode is in the damaged result, with
-	// its job ID and the kind of the damage, and is not in the jobs. A
-	// restore makes the first kind. A durable failure at the
+	// its job ID, its unit ID and the kind of the damage, and is not in the
+	// jobs. A restore makes the first kind. A durable failure at the
 	// limit of expired claims makes the second. A claim that expires during
 	// a cancel does not: the claimer takes such an operation and ends the
 	// phase (durable.ClaimRequest.TakeCanceled). The claimer never leaves a

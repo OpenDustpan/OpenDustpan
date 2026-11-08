@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -268,7 +269,9 @@ func newStartHandler(
 	return newWorkerHandler(
 		t,
 		authz,
-		handlerDeps{jobs: jobs, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil},
+		handlerDeps{
+			jobs: jobs, units: nil, starter: starter, entries: entries, artifacts: nil, logs: nil, cursors: nil,
+		},
 		nil,
 	)
 }
@@ -276,6 +279,7 @@ func newStartHandler(
 // handlerDeps are the stores and services behind a test handler.
 type handlerDeps struct {
 	jobs      job.Store
+	units     coreinventory.Reader
 	starter   job.Starter
 	entries   audit.Store
 	artifacts job.ArtifactReader
@@ -303,6 +307,7 @@ func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps,
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     namespaces,
 		Jobs:           deps.jobs,
+		Units:          deps.units,
 		Artifacts:      deps.artifacts,
 		Logs:           deps.logs,
 		Cursors:        deps.cursors,
@@ -830,6 +835,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	_, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces:     nil,
 		Jobs:           nil,
+		Units:          nil,
 		Artifacts:      nil,
 		Logs:           nil,
 		Cursors:        nil,

@@ -1,14 +1,17 @@
 package jobs_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"slices"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -123,6 +126,64 @@ func readsUnits(units ...string) []string {
 	}
 
 	return out
+}
+
+// fakeUnits resolves unit IDs to inventory entries for the damaged-row tests.
+// A missing ID is inventory.ErrUnitNotFound.
+type fakeUnits map[string]coreinventory.Entry
+
+// ListUnits implements inventory.Reader. No list test lists units.
+func (f fakeUnits) ListUnits(context.Context, namespace.Name) ([]coreinventory.Entry, error) {
+	return nil, errUnexpected
+}
+
+// QueryUnits implements inventory.Reader. No list test queries units.
+func (f fakeUnits) QueryUnits(context.Context, coreinventory.UnitQuery) ([]coreinventory.Entry, error) {
+	return nil, errUnexpected
+}
+
+// GetUnit implements inventory.Reader.
+func (f fakeUnits) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
+	e, ok := f[unitID]
+	if !ok {
+		return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
+	}
+
+	return e, nil
+}
+
+// unitsOf returns the inventory entries of the units with the given unit IDs,
+// named as listedJob names them.
+func unitsOf(ids ...string) fakeUnits {
+	out := fakeUnits{}
+
+	for _, id := range ids {
+		out[id] = coreinventory.Entry{
+			LastRelease: nil, ManualLock: nil, LastChanged: time.Unix(0, 0), Namespace: "acme", Tool: "opentofu",
+			Name: "net-" + id, UnitID: id, DisplayName: "", Status: "", ResourceCount: nil, Lock: nil,
+			Collection: "", Labels: nil,
+		}
+	}
+
+	return out
+}
+
+// unitFailAuthorizer fails the job:read check on the unit named by unit with
+// an error that is no refusal, so the check fails closed.
+type unitFailAuthorizer struct {
+	*recordingAuthorizer
+
+	unit string
+}
+
+func (a unitFailAuthorizer) Authorize(
+	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if action == identity.ActionJobRead && obj.String() == a.unit {
+		return errAuthorizerDown
+	}
+
+	return a.recordingAuthorizer.Authorize(ctx, p, action, obj)
 }
 
 func TestListJobsFilters(t *testing.T) {
@@ -249,18 +310,92 @@ func TestListJobsCountsDamagedRows(t *testing.T) {
 		return job.Page{
 			Jobs: []job.Job{good},
 			Damaged: []job.DamagedRow{
-				{ID: "job-bbbbbbbbbbbbbbbbbbbb", Reason: "the body is not JSON"},
-				{ID: "job-cccccccccccccccccccc", Reason: "the body names an unknown source"},
+				{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-a", Reason: "the body is not JSON"},
+				{ID: "job-cccccccccccccccccccc", UnitID: "unt-a", Reason: "the body names an unknown source"},
 			},
 			After: "",
 		}
 	}
 
-	h := newHandler(t, newAuthorizer(readsUnits("unt-a")...), jobs)
+	h := newWorkerHandler(t, newAuthorizer(readsUnits("unt-a")...), handlerDeps{
+		jobs: jobs, units: unitsOf("unt-a"), starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: nil,
+	}, nil)
 
 	code, got := getList(t, h, "")
 	if code != http.StatusOK || !slices.Equal(ids(got), []string{string(good.ID)}) || got.Damaged != 2 {
 		t.Fatalf("page = %d %v with %d damaged rows, want the good job and 2", code, ids(got), got.Damaged)
+	}
+}
+
+// TestListJobsDamagedRowsFollowTheReadableUnits proves that the damaged count
+// holds only the damaged rows of units that the caller may list.
+func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
+	t.Parallel()
+
+	rows := []job.DamagedRow{
+		{ID: "job-aaaaaaaaaaaaaaaaaaaa", UnitID: "unt-a", Reason: "the body is not JSON"},
+		{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-b", Reason: "the body is not JSON"},
+	}
+
+	read := func(job.Filter) job.Page {
+		return job.Page{Jobs: nil, Damaged: slices.Clone(rows), After: ""}
+	}
+
+	tests := []struct {
+		name  string
+		authz identity.Authorizer
+		units coreinventory.Reader
+		want  int
+	}{
+		{
+			"a caller that may list unit A only",
+			newAuthorizer(readsUnits("unt-a")...),
+			unitsOf("unt-a", "unt-b"),
+			1,
+		},
+		{
+			"a caller that may list both units",
+			newAuthorizer(readsUnits("unt-a", "unt-b")...),
+			unitsOf("unt-a", "unt-b"),
+			2,
+		},
+		{
+			"an authorizer that fails on unit B",
+			unitFailAuthorizer{
+				recordingAuthorizer: newAuthorizer(readsUnits("unt-a", "unt-b")...),
+				unit:                "opentofu:acme/net-unt-b",
+			},
+			unitsOf("unt-a", "unt-b"),
+			1,
+		},
+		{
+			"a unit that the inventory does not hold",
+			newAuthorizer(readsUnits("unt-a", "unt-b")...),
+			unitsOf("unt-a"),
+			1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			jobs := newFakeJobs()
+			jobs.listed = read
+
+			h := newWorkerHandler(t, tc.authz, handlerDeps{
+				jobs: jobs, units: tc.units, starter: nil, entries: nil, artifacts: nil, logs: nil, cursors: nil,
+			}, nil)
+
+			code, got := getList(t, h, "")
+			if code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", code)
+			}
+
+			if got.Damaged != tc.want {
+				t.Errorf("damaged = %d, want %d", got.Damaged, tc.want)
+			}
+		})
 	}
 }
 
