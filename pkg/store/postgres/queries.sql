@@ -5403,6 +5403,134 @@ SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
+-- name: AddQuotaSettled :exec
+-- Moves one unit of the key from reserved to settled, in the transaction of
+-- the settle of its reservation.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 1
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = quota_keys.settled_count + 1;
+
+-- name: CountQuotaRequests :one
+-- The requests of the key in the window that ends at at_ms: after
+-- at_ms - window_ms, and not after at_ms.
+SELECT COUNT(*) FROM quota_requests
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+  AND at_ms > sqlc.arg(after_ms) AND at_ms <= sqlc.arg(at_ms);
+
+-- name: CountQuotaReserved :one
+-- The open reservations of the key that end after at_ms.
+SELECT COUNT(*) FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
+  AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
+
+-- name: EnsureQuotaKey :exec
+-- Makes the row of a key, so that the counter can lock it. The row holds no
+-- unit yet.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING;
+
+-- name: GetQuotaReservation :one
+-- The state and the times of the reservation id of a namespace.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaReservationForUpdate :one
+-- The state and the times of the reservation id of a namespace, with the row
+-- locked until the commit, so two ends of one reservation wait for each
+-- other.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id)
+FOR UPDATE OF r;
+
+-- name: GetQuotaSettled :one
+-- The settled count of the key. No row means the counter does not know the key.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
+-- name: InsertQuotaRequest :exec
+-- One request of the key, recorded at at_ms.
+INSERT INTO quota_requests (id, namespace_id, blueprint, kind, scope, at_ms)
+VALUES (
+    sqlc.arg(id),
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(at_ms)
+);
+
+-- name: InsertQuotaReservation :exec
+-- One reservation of a namespace, open at at_ms.
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(id), sqlc.arg(state), sqlc.arg(at_ms), sqlc.arg(ends_at_ms)
+);
+
+-- name: InsertQuotaReservationKey :exec
+-- One key that the reservation holds.
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint, kind, scope)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(reservation_id), sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope)
+);
+
+-- name: ListQuotaReservationKeys :many
+-- Every key of the reservation, by name.
+SELECT blueprint, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND reservation_id = sqlc.arg(reservation_id)
+ORDER BY blueprint, kind, scope;
+
+-- name: LockQuotaKey :one
+-- Locks the row of the key until the commit, so the writes of one key wait
+-- for each other and two writes never both pass a limit.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+FOR UPDATE;
+
+-- name: SetQuotaReservationEnd :execrows
+-- Moves the end time of the open reservation id. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET ends_at_ms = sqlc.arg(ends_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaReservationState :execrows
+-- Ends the open reservation id, settled or released. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET state = sqlc.arg(state)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaSettled :exec
+-- Writes the settled count of the key, as the reconcile of the inventory
+-- counts it.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(settled_count)
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = excluded.settled_count;
+
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id

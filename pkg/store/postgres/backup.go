@@ -136,6 +136,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyItemKeyTables()...)
 	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopySelfServiceTables()...)
+	tables = append(tables, pgCopyQuotaTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 
 	return tables
