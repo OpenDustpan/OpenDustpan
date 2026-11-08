@@ -108,7 +108,7 @@ export interface ContextDocument {
   readonly deleted?: boolean;
   readonly object: ContextObject;
   readonly schemaVersion: number;
-  readonly sections: Readonly<Record<string, ContextAnswer>>;
+  readonly sections: Readonly<Record<string, ContextAnswer>> | null;
 }
 
 export interface ContextEntry {
@@ -445,7 +445,7 @@ export interface GitHostApp {
 export interface GitHostCheck {
   readonly account: GitHostAccount;
   readonly capabilities: ReadonlyArray<string>;
-  readonly missing: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly missing: Readonly<Record<string, ReadonlyArray<string>>> | null;
 }
 
 export interface GitHostConnection {
@@ -1844,7 +1844,7 @@ export interface UnitSettingsStep {
   readonly allowFailure: boolean;
   readonly args: ReadonlyArray<string>;
   readonly dir: string;
-  readonly env: Readonly<Record<string, string>>;
+  readonly env: Readonly<Record<string, string>> | null;
   readonly name: string;
   readonly outputs: ReadonlyArray<UnitSettingsStepOutput>;
   readonly phase: string;

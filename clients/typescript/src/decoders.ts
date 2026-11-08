@@ -431,7 +431,7 @@ export const decodeContextDocument: Decoder<ContextDocument> = object<ContextDoc
   deleted: optional(boolean),
   object: ref(() => decodeContextObject),
   schemaVersion: int64,
-  sections: record(ref(() => decodeContextAnswer)),
+  sections: nullable(record(ref(() => decodeContextAnswer))),
 });
 
 /** The validator of ContextEntry. */
@@ -770,7 +770,7 @@ export const decodeGitHostApp: Decoder<GitHostApp> = object<GitHostApp>("GitHost
 export const decodeGitHostCheck: Decoder<GitHostCheck> = object<GitHostCheck>("GitHostCheck", {
   account: ref(() => decodeGitHostAccount),
   capabilities: array(string),
-  missing: record(array(string)),
+  missing: nullable(record(array(string))),
 });
 
 /** The validator of GitHostConnection. */
@@ -2255,7 +2255,7 @@ export const decodeUnitSettingsStep: Decoder<UnitSettingsStep> = object<UnitSett
   allowFailure: boolean,
   args: array(string),
   dir: string,
-  env: record(string),
+  env: nullable(record(string)),
   name: string,
   outputs: array(ref(() => decodeUnitSettingsStepOutput)),
   phase: string,

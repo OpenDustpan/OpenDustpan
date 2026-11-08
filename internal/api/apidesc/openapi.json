@@ -427,7 +427,10 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ContextAnswer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1856,7 +1859,10 @@
               },
               "type": "array"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -6562,7 +6568,10 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
