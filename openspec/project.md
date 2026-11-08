@@ -21,6 +21,7 @@ A proposal starts from one of these people.
 | Developer | Run the Pulumi CLI or OpenTofu against the server, read history, and approve or review changes. |
 | Runner operator | Run a runner pool that executes jobs. |
 | Agent | A program that uses the REST API with an access token. |
+| Embedder | A Go developer who builds their own server binary with the SDK, or writes a third-party store. |
 
 Add a persona here when a proposal needs one that is not in this table.
 
