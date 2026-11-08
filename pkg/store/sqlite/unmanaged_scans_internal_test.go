@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/store/internal/unmanagedstore"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // seedUnmanaged makes the namespace acme with a pool of sweeps (sweepers), one
@@ -487,5 +488,55 @@ func TestSweepPoolOfRefusesAJobPool(t *testing.T) {
 		unmanagedEntry("acme", "namespace:start-sweep"))
 	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
 		t.Fatalf("start = %v, want ErrInvalidTarget", err)
+	}
+}
+
+// TestCheckTargetPool proves the checks of a start on the stored pool of a
+// target: the pool must belong to the namespace of the target and run sweeps.
+func TestCheckTargetPool(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		row  db.GetUnmanagedTargetRow
+		want error
+	}{
+		{
+			name: "a pool of this namespace that runs sweeps",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "ns-1",
+			},
+			want: nil,
+		},
+		{
+			name: "a pool of another namespace",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "ns-2",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+		{
+			name: "a pool that runs jobs",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeJobs), PoolNamespaceID: "ns-1",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+		{
+			name: "a pool with no namespace",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkTargetPool(tc.row, "ns-1", "aws")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("check = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

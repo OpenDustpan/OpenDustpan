@@ -183,7 +183,9 @@ func (u *UnmanagedScans) DeleteTarget(
 }
 
 // Targets implements unmanaged.ScanStore. A row that fails its checks fails
-// the read, so a damaged target never reads as a target that does not exist.
+// the read. A target whose pool belongs to another namespace is left out of
+// the result: the read query joins the pool by namespace, so StartScan gives
+// ErrNotFound for it, and CreateTarget of the same name gives ErrAlreadyExists.
 func (u *UnmanagedScans) Targets(ctx context.Context, ns namespace.Name) ([]unmanaged.Target, error) {
 	u.s.mu.RLock()
 	defer u.s.mu.RUnlock()
@@ -296,24 +298,34 @@ func sweepPoolOf(ctx context.Context, q *db.Queries, nsID string, s unmanaged.Sc
 		return "", err
 	}
 
+	if err := checkTargetPool(target, nsID, s.Target); err != nil {
+		return "", err
+	}
+
+	return target.PoolID, nil
+}
+
+// checkTargetPool returns ErrInvalidTarget when the pool of the target row
+// belongs to another namespace or does not run sweeps.
+func checkTargetPool(row db.GetUnmanagedTargetRow, nsID, target string) error {
 	// Defense in depth: the read query joins the pool by namespace too; this
 	// check stays so that a damaged row cannot start a sweep on a pool of
 	// another namespace.
-	if target.PoolNamespaceID != nsID {
-		return "", fmt.Errorf("%w: the pool of target %q belongs to another namespace",
-			unmanaged.ErrInvalidTarget, s.Target)
+	if row.PoolNamespaceID != nsID {
+		return fmt.Errorf("%w: the pool of target %q belongs to another namespace",
+			unmanaged.ErrInvalidTarget, target)
 	}
 
 	// Defense in depth: the purpose of a pool is set when the pool is made and
 	// never changes, so a stored target names a sweep pool. This check stays so
 	// that a row of a restore cannot start a sweep on a pool that applies
 	// changes.
-	if target.Purpose != string(runner.PurposeSweeps) {
-		return "", fmt.Errorf("%w: the pool of target %q runs %s, not sweeps",
-			unmanaged.ErrInvalidTarget, s.Target, target.Purpose)
+	if row.Purpose != string(runner.PurposeSweeps) {
+		return fmt.Errorf("%w: the pool of target %q runs %s, not sweeps",
+			unmanaged.ErrInvalidTarget, target, row.Purpose)
 	}
 
-	return target.PoolID, nil
+	return nil
 }
 
 // checkScanIdle refuses a start while the target of s has a sweep of the same

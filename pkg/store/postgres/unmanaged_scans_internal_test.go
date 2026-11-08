@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/store/internal/unmanagedstore"
 )
 
@@ -52,6 +54,18 @@ func seedUnmanaged(t *testing.T, s *Store) {
 		if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
 			t.Fatalf("seed a sweep row: %v", execErr)
 		}
+	}
+}
+
+// unmanagedEntry returns a valid audit entry of an action on the sweep rows
+// of ns.
+func unmanagedEntry(ns namespace.Name, action string) audit.Entry {
+	return audit.Entry{
+		At: time.UnixMilli(1_800_000_000_000).UTC(), Namespace: ns, Subject: "user:ada", IDPSubject: "",
+		TokenID: "", Action: action, Object: "namespace:" + ns.String(), Version: "", ValuePath: "",
+		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI,
+		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
+		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
 	}
 }
 
@@ -208,5 +222,31 @@ func TestCheckStagedUnmanagedRefusesAForeignPool(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "another namespace") {
 		t.Fatalf("check = %v, want the refusal of a target whose pool is of another namespace", err)
+	}
+}
+
+// TestUnmanagedDeletePoolOfATarget proves that a delete of a runner pool that
+// a sweep target names is refused as a pool in use, and that the pool stays.
+func TestUnmanagedDeletePoolOfATarget(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedUnmanaged(t, s)
+
+	ns, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	fence := ns.Fence()
+	entries := []audit.Entry{unmanagedEntry(fence.Namespace, "namespace:manage-runners")}
+
+	err = s.Runners().DeletePool(t.Context(), "rpl-1", fence, entries)
+	if !errors.Is(err, runner.ErrPoolInUse) {
+		t.Fatalf("delete the pool of a target = %v, want ErrPoolInUse", err)
+	}
+
+	if _, err = s.Runners().Pool(t.Context(), "rpl-1"); err != nil {
+		t.Fatalf("the pool after the refused delete: %v", err)
 	}
 }
