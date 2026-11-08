@@ -10,7 +10,7 @@ import (
 )
 
 // GroupDirections reports the changes of the members of a group that can
-// lift the forbid of one access limit.
+// lift the forbid of one access limit or the match of one gate.
 type GroupDirections struct {
 	// Add reports that an add of a member can lift the forbid.
 	Add bool
@@ -52,7 +52,7 @@ func LimitGroupDirections(text string) (map[string]GroupDirections, error) {
 
 	p := policies[0]
 
-	directions := &groupDirections{byName: map[string]GroupDirections{}}
+	directions := &groupDirections{byName: map[string]GroupDirections{}, gatePath: false}
 
 	// The scope of a policy is not a condition, so the walk below never
 	// sees it: read the scope of each of the three variables too.
@@ -69,14 +69,53 @@ func LimitGroupDirections(text string) (map[string]GroupDirections, error) {
 			pol = negative
 		}
 
-		// Defense in depth: walk refuses the membership tests that it
-		// visits. This pass stays so that a membership test inside a node
-		// type that the walk does not open is refused too.
-		if err := checkMemberships(c.Body); err != nil {
+		if err := directions.addClause(c.Body, pol); err != nil {
+			return nil, err
+		}
+	}
+
+	return directions.byName, nil
+}
+
+// GateGroupDirections returns, for each group name that the condition or the
+// unless of a gate names, the changes of its members that can lift the gate.
+//
+// A gate matches when its condition is true and its unless is false. So an
+// add of a member to a group that the unless names can lift the gate for that
+// member, and a remove of a member from a group that the condition names can
+// lift it too. A group in any other position is read as one that both changes
+// can lift: such a text is refused at save, and both directions are the safe
+// answer for a stored row that no save wrote.
+//
+// An empty clause names no group.
+//
+// A membership test of principal names a group or a set of groups, or it
+// names no group: a right side that holds no group literal names no group,
+// because the gate schema has no attribute of a group type, so no change of
+// the members of a group can change the answer of that test. A right side that
+// holds a group literal in another shape returns ErrLimitMembership: the
+// server cannot tell which group such a gate names, so a reader of a stored
+// row refuses the change, and the answer fails closed.
+//
+// It returns errPolicy for a clause that the engine refuses.
+func GateGroupDirections(condition, unless string) (map[string]GroupDirections, error) {
+	directions := &groupDirections{byName: map[string]GroupDirections{}, gatePath: true}
+
+	for _, clause := range []struct {
+		template string
+		body     string
+		kind     xast.Condition
+		pol      polarity
+	}{
+		{template: whenTemplate, body: condition, kind: xast.ConditionWhen, pol: positive},
+		{template: unlessTemplate, body: unless, kind: xast.ConditionUnless, pol: negative},
+	} {
+		body, err := clauseBody(clause.template, clause.body, clause.kind)
+		if err != nil {
 			return nil, err
 		}
 
-		if err := directions.walk(c.Body, pol); err != nil {
+		if err := directions.addClause(body.AsIsNode(), clause.pol); err != nil {
 			return nil, err
 		}
 	}
@@ -108,6 +147,22 @@ func (p polarity) flip() polarity {
 // policy for each group name that the policy names.
 type groupDirections struct {
 	byName map[string]GroupDirections
+	// gatePath reports whether the directions are for a gate. The gate
+	// schema has no attribute of a group type, so a membership test of
+	// principal whose right side holds no group literal cannot name a group.
+	gatePath bool
+}
+
+// addClause walks one clause with its polarity and adds its groups.
+func (d *groupDirections) addClause(body xast.IsNode, p polarity) error {
+	// Defense in depth: walk refuses the membership tests that it visits.
+	// This pass stays so that a membership test inside a node type that the
+	// walk does not open is refused too.
+	if err := d.checkMemberships(body); err != nil {
+		return err
+	}
+
+	return d.walk(body, p)
 }
 
 // addPrincipalScope adds the groups of the principal scope, which is a
@@ -201,10 +256,11 @@ func (d *groupDirections) walk(n xast.IsNode, p polarity) error {
 // addMembership adds the direction of the right side of a membership rule
 // principal in <groups>: in a positive node a remove of a member can lift
 // the forbid, and in a negative node an add can. It returns
-// ErrLimitMembership for a right side that is not a group and not a set of
-// groups.
+// ErrLimitMembership for a right side that holds a group literal in a shape
+// that is not a group and not a set of groups. In the gate path a right side
+// that holds no group literal names no group: see membershipUIDs.
 func (d *groupDirections) addMembership(n xast.IsNode, p polarity) error {
-	uids, err := membershipUIDs(n)
+	uids, err := d.membershipUIDs(n)
 	if err != nil {
 		return err
 	}
@@ -217,9 +273,11 @@ func (d *groupDirections) addMembership(n xast.IsNode, p polarity) error {
 }
 
 // checkMemberships returns ErrLimitMembership for a membership test of
-// principal whose right side is not a group and not a set of groups, also
-// inside a node type that the direction walk does not open.
-func checkMemberships(n xast.IsNode) error {
+// principal whose right side holds a group literal in a shape that is not a
+// group and not a set of groups, also inside a node type that the direction
+// walk does not open. In the gate path a right side that holds no group
+// literal names no group: see membershipUIDs.
+func (d *groupDirections) checkMemberships(n xast.IsNode) error {
 	var membership error
 
 	xast.Inspect(xast.NewNode(n), func(child xast.IsNode) bool {
@@ -227,7 +285,7 @@ func checkMemberships(n xast.IsNode) error {
 			return false
 		}
 
-		membership = checkMembership(child)
+		membership = d.checkMembership(child)
 
 		return membership == nil
 	})
@@ -236,16 +294,17 @@ func checkMemberships(n xast.IsNode) error {
 }
 
 // checkMembership returns ErrLimitMembership for a membership test of
-// principal in child whose right side is not a group and not a set of
-// groups.
-func checkMembership(child xast.IsNode) error {
+// principal in child whose right side holds a group literal in a shape that
+// is not a group and not a set of groups. In the gate path a right side that
+// holds no group literal names no group: see membershipUIDs.
+func (d *groupDirections) checkMembership(child xast.IsNode) error {
 	switch v := child.(type) {
 	case xast.NodeTypeIn:
 		if !isPrincipal(v.Left) {
 			return nil
 		}
 
-		_, err := membershipUIDs(v.Right)
+		_, err := d.membershipUIDs(v.Right)
 
 		return err
 	case xast.NodeTypeIsIn:
@@ -253,7 +312,7 @@ func checkMembership(child xast.IsNode) error {
 			return nil
 		}
 
-		_, err := membershipUIDs(v.Entity)
+		_, err := d.membershipUIDs(v.Entity)
 
 		return err
 	default:
@@ -263,15 +322,18 @@ func checkMembership(child xast.IsNode) error {
 
 // membershipUIDs returns the groups of the right side of a membership test
 // of principal. It returns ErrLimitMembership for a value that is not a
-// group and not a set of groups.
-func membershipUIDs(n xast.IsNode) ([]types.EntityUID, error) {
+// group and not a set of groups. In the gate path, a right side whose subtree
+// holds no group literal names no group: it returns no groups and no error,
+// because the gate schema has no attribute of a group type, so no change of
+// the members of a group can change the answer of that test.
+func (d *groupDirections) membershipUIDs(n xast.IsNode) ([]types.EntityUID, error) {
 	if set, ok := n.(xast.NodeTypeSet); ok {
 		uids := make([]types.EntityUID, 0, len(set.Elements))
 
 		for _, e := range set.Elements {
 			uid, ok := groupUID(e)
 			if !ok {
-				return nil, gate.ErrLimitMembership
+				return nil, d.membershipError(n)
 			}
 
 			uids = append(uids, uid)
@@ -282,10 +344,40 @@ func membershipUIDs(n xast.IsNode) ([]types.EntityUID, error) {
 
 	uid, ok := groupUID(n)
 	if !ok {
-		return nil, gate.ErrLimitMembership
+		return nil, d.membershipError(n)
 	}
 
 	return []types.EntityUID{uid}, nil
+}
+
+// membershipError returns ErrLimitMembership for the right side n of a
+// membership test. In the gate path it returns nil when the subtree of n
+// holds no group literal: the gate schema has no attribute of a group type,
+// so such a right side cannot be a group and names no group.
+func (d *groupDirections) membershipError(n xast.IsNode) error {
+	if d.gatePath && !holdsGroupLiteral(n) {
+		return nil
+	}
+
+	return gate.ErrLimitMembership
+}
+
+// holdsGroupLiteral reports whether n is a group or a node whose subtree
+// holds a group.
+func holdsGroupLiteral(n xast.IsNode) bool {
+	found := false
+
+	xast.Inspect(xast.NewNode(n), func(child xast.IsNode) bool {
+		if _, ok := groupUID(child); ok {
+			found = true
+
+			return false
+		}
+
+		return true
+	})
+
+	return found
 }
 
 // addMembershipEntity adds the direction of a membership rule that names

@@ -15,17 +15,29 @@ import (
 // errRead is the error of a read that fails.
 var errRead = errors.New("read failed")
 
-// fakeStore is the access limits of an installation, and the error of their
-// read.
+// fakeStore is the access limits, gates and approval rules of an
+// installation, and the error of their read.
 type fakeStore struct {
 	gate.Store
 
-	limits []gate.AccessLimit
-	err    error
+	limits   []gate.AccessLimit
+	gates    []gate.Gate
+	rules    []gate.ApprovalRule
+	err      error
+	gatesErr error
+	rulesErr error
 }
 
 func (s fakeStore) AccessLimits() gate.Objects[gate.AccessLimit] {
 	return fakeLimits{Objects: nil, store: s}
+}
+
+func (s fakeStore) Gates() gate.Objects[gate.Gate] {
+	return fakeGates{Objects: nil, store: s}
+}
+
+func (s fakeStore) ApprovalRules() gate.Objects[gate.ApprovalRule] {
+	return fakeRules{Objects: nil, store: s}
 }
 
 // fakeLimits is the port of the access limits of fakeStore.
@@ -41,6 +53,36 @@ func (l fakeLimits) ListEveryScope(context.Context) ([]gate.AccessLimit, error) 
 	}
 
 	return l.store.limits, nil
+}
+
+// fakeGates is the port of the gates of fakeStore.
+type fakeGates struct {
+	gate.Objects[gate.Gate]
+
+	store fakeStore
+}
+
+func (g fakeGates) ListEveryScope(context.Context) ([]gate.Gate, error) {
+	if g.store.gatesErr != nil {
+		return nil, g.store.gatesErr
+	}
+
+	return g.store.gates, nil
+}
+
+// fakeRules is the port of the approval rules of fakeStore.
+type fakeRules struct {
+	gate.Objects[gate.ApprovalRule]
+
+	store fakeStore
+}
+
+func (r fakeRules) ListEveryScope(context.Context) ([]gate.ApprovalRule, error) {
+	if r.store.rulesErr != nil {
+		return nil, r.store.rulesErr
+	}
+
+	return r.store.rules, nil
 }
 
 // fakeGroups reads the group of an ID from a table of names.
@@ -94,7 +136,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -104,7 +146,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -114,7 +156,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -124,7 +166,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -134,7 +176,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal in OpenDustpan::Group::"sre", action, resource);`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -145,7 +187,7 @@ func TestLimitLiftedBy(t *testing.T) {
 					`OpenDustpan::Group::"platform", OpenDustpan::Group::"sre"] };`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -155,7 +197,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeDelete,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -165,7 +207,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChange(99),
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -175,7 +217,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -185,7 +227,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -194,7 +236,7 @@ func TestLimitLiftedBy(t *testing.T) {
 			limits:  nil,
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -204,7 +246,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { context.principal.kind == "service" };`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -214,7 +256,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal == OpenDustpan::Principal::"sre", action, resource);`)},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -228,7 +270,7 @@ func TestLimitLiftedBy(t *testing.T) {
 			},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l2", Scope: "namespace/acme"},
+			want:    ref("l2", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -242,7 +284,7 @@ func TestLimitLiftedBy(t *testing.T) {
 			},
 			change:  principal.GroupChangeRemoveMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -256,7 +298,7 @@ func TestLimitLiftedBy(t *testing.T) {
 			},
 			change:  principal.GroupChangeAddMember,
 			newName: "",
-			want:    access.LimitRef{ID: "l2", Scope: "namespace/acme"},
+			want:    ref("l2", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -266,7 +308,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeRename,
 			newName: "sre-two",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -276,7 +318,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
 			change:  principal.GroupChangeRename,
 			newName: "platform",
-			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			want:    ref("l1", access.LimitKindAccessLimit),
 			lifted:  true,
 		},
 		{
@@ -286,7 +328,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
 			change:  principal.GroupChangeRename,
 			newName: "sre-two",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -296,7 +338,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"platform" };`)},
 			change:  principal.GroupChangeRename,
 			newName: "platform",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 		{
@@ -306,7 +348,7 @@ func TestLimitLiftedBy(t *testing.T) {
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"platform" };`)},
 			change:  principal.GroupChangeRename,
 			newName: "sre-two",
-			want:    access.LimitRef{ID: "", Scope: ""},
+			want:    noRef(),
 			lifted:  false,
 		},
 	}
@@ -316,7 +358,7 @@ func TestLimitLiftedBy(t *testing.T) {
 			t.Parallel()
 
 			groups := fakeGroups{names: map[string]string{"grp-1": "sre", "grp-2": "platform"}, err: nil}
-			reader := limitgroups.New(fakeStore{Store: nil, limits: tc.limits, err: nil}, groups)
+			reader := limitgroups.New(storeOf(tc.limits, nil, nil), groups)
 
 			got, lifted, err := reader.LimitLiftedBy(t.Context(), tc.group, tc.newName, tc.change)
 			if err != nil {
@@ -326,6 +368,290 @@ func TestLimitLiftedBy(t *testing.T) {
 			if lifted != tc.lifted || got != tc.want {
 				t.Fatalf("LimitLiftedBy(%s, %q) = %v, %t, want %v, %t",
 					tc.group, tc.newName, got, lifted, tc.want, tc.lifted)
+			}
+		})
+	}
+}
+
+// gateAt returns one gate of the namespace acme with the clauses condition
+// and unless.
+func gateAt(condition, unless string) gate.Gate {
+	return gate.Gate{
+		Scope: gate.NamespaceScope("acme"), ID: "g1", Version: 1, DecisionPoint: gate.PointChangePlanned,
+		Condition: condition, Unless: unless, Outcome: gate.OutcomeDeny, Message: "",
+		Mode: gate.ModeEnforce, OnError: gate.OnErrorFail, Final: false,
+		CheckedWith: gate.CheckedWith{
+			Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		},
+		State: "", Reads: nil,
+	}
+}
+
+// ruleAt returns one approval rule of the namespace acme with the approver
+// group IDs groupIDs.
+func ruleAt(groupIDs []string) gate.ApprovalRule {
+	return gate.ApprovalRule{
+		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 1,
+		Approvers: gate.Approvers{Groups: nil, GroupIDs: groupIDs, Users: nil, UnitOwners: false},
+		Count:     1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
+	}
+}
+
+// ruleNamed returns one approval rule of the namespace acme with the approver
+// group names groups and no group IDs.
+func ruleNamed(groups []string) gate.ApprovalRule {
+	return gate.ApprovalRule{
+		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 1,
+		Approvers: gate.Approvers{Groups: groups, GroupIDs: nil, Users: nil, UnitOwners: false},
+		Count:     1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
+	}
+}
+
+// noRef is the ref of no object.
+func noRef() access.LimitRef {
+	var none access.LimitRef
+
+	return none
+}
+
+// ref returns the ref of the object id of acme with the kind kind.
+func ref(id string, kind access.LimitKind) access.LimitRef {
+	return access.LimitRef{ID: id, Scope: "namespace/acme", Kind: kind}
+}
+
+// storeOf returns a fakeStore of the given objects.
+func storeOf(limits []gate.AccessLimit, gates []gate.Gate, rules []gate.ApprovalRule) fakeStore {
+	return fakeStore{
+		Store: nil, limits: limits, gates: gates, rules: rules,
+		err: nil, gatesErr: nil, rulesErr: nil,
+	}
+}
+
+// storeFailing returns a fakeStore whose reads fail with the given errors.
+func storeFailing(limitsErr, gatesErr, rulesErr error) fakeStore {
+	return fakeStore{
+		Store: nil, limits: nil, gates: nil, rules: nil,
+		err: limitsErr, gatesErr: gatesErr, rulesErr: rulesErr,
+	}
+}
+
+// TestGateAndRuleLiftedBy checks which gate and which approval rule each
+// change of the members of a group can widen access through.
+func TestGateAndRuleLiftedBy(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		group   string
+		newName string
+		store   fakeStore
+		change  principal.GroupChange
+		want    access.LimitRef
+		lifted  bool
+	}{
+		{
+			name:    "an unless clause of a gate makes an add lift the gate",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt("", `principal in OpenDustpan::Group::"ops"`)}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    ref("g1", access.LimitKindGate),
+			lifted:  true,
+		},
+		{
+			name:    "an unless clause of a gate makes no remove lift the gate",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt("", `principal in OpenDustpan::Group::"ops"`)}, nil),
+			change:  principal.GroupChangeRemoveMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a when clause of a gate makes a remove lift the gate",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in OpenDustpan::Group::"ops"`, "")}, nil),
+			change:  principal.GroupChangeRemoveMember,
+			want:    ref("g1", access.LimitKindGate),
+			lifted:  true,
+		},
+		{
+			name:    "a gate that names another group does not lift",
+			group:   "grp-1",
+			newName: "",
+			store: storeOf(nil, []gate.Gate{
+				gateAt("", `principal in OpenDustpan::Group::"platform"`),
+			}, nil),
+			change: principal.GroupChangeAddMember,
+			want:   noRef(),
+			lifted: false,
+		},
+		{
+			name:    "a gate whose condition is the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in principal`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is the resource variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in resource`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is a set of the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in [principal]`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose condition is a principal entity names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt(`principal in OpenDustpan::Principal::"olga"`, "")}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a gate whose unless is the principal variable names no group",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, []gate.Gate{gateAt("", `principal in principal`)}, nil),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "a rename to the new name of an unless clause of a gate lifts",
+			group:   "grp-1",
+			newName: "auditors",
+			store: storeOf(nil, []gate.Gate{
+				gateAt("", `principal in OpenDustpan::Group::"auditors"`),
+			}, nil),
+			change: principal.GroupChangeRename,
+			want:   ref("g1", access.LimitKindGate),
+			lifted: true,
+		},
+		{
+			name:    "an approval rule with the ID of the group makes an add lift it",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, nil, []gate.ApprovalRule{ruleAt([]string{"grp-1"})}),
+			change:  principal.GroupChangeAddMember,
+			want:    ref("r1", access.LimitKindApprovalRule),
+			lifted:  true,
+		},
+		{
+			name:    "an approval rule makes no remove lift it",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, nil, []gate.ApprovalRule{ruleAt([]string{"grp-1"})}),
+			change:  principal.GroupChangeRemoveMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "an approval rule makes no rename lift it",
+			group:   "grp-1",
+			newName: "ops-two",
+			store:   storeOf(nil, nil, []gate.ApprovalRule{ruleAt([]string{"grp-1"})}),
+			change:  principal.GroupChangeRename,
+			want:    noRef(),
+			lifted:  false,
+		},
+		{
+			name:    "an approval rule that names no group ID counts no one",
+			group:   "grp-1",
+			newName: "",
+			store:   storeOf(nil, nil, []gate.ApprovalRule{ruleNamed([]string{"ops"})}),
+			change:  principal.GroupChangeAddMember,
+			want:    noRef(),
+			lifted:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			groups := fakeGroups{names: map[string]string{"grp-1": "ops", "grp-2": "platform"}, err: nil}
+			reader := limitgroups.New(tc.store, groups)
+
+			got, lifted, err := reader.LimitLiftedBy(t.Context(), tc.group, tc.newName, tc.change)
+			if err != nil {
+				t.Fatalf("LimitLiftedBy(%s, %q) = %v, want nil", tc.group, tc.newName, err)
+			}
+
+			if lifted != tc.lifted || got != tc.want {
+				t.Fatalf("LimitLiftedBy(%s, %q) = %v, %t, want %v, %t",
+					tc.group, tc.newName, got, lifted, tc.want, tc.lifted)
+			}
+		})
+	}
+}
+
+// TestGateAndRuleLiftedByErrors checks that the reader fails closed for a
+// gate and an approval rule that it cannot read or parse.
+func TestGateAndRuleLiftedByErrors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		store fakeStore
+	}{
+		{
+			name:  "a gate clause that does not parse",
+			store: storeOf(nil, []gate.Gate{gateAt(`principal in`, "")}, nil),
+		},
+		{
+			name: "a gate whose membership test holds a group in another shape",
+			store: storeOf(nil, []gate.Gate{gateAt(
+				`principal in (if true then OpenDustpan::Group::"sre" else OpenDustpan::Group::"sre")`, "",
+			)}, nil),
+		},
+		{
+			name: "a gate whose membership test mixes a group and a principal",
+			store: storeOf(nil, []gate.Gate{gateAt(
+				`principal in [OpenDustpan::Group::"sre", OpenDustpan::Principal::"olga"]`, "",
+			)}, nil),
+		},
+		{
+			name:  "a read of the gates that fails",
+			store: storeFailing(nil, errRead, nil),
+		},
+		{
+			name:  "a read of the approval rules that fails on an add",
+			store: storeFailing(nil, nil, errRead),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			groups := fakeGroups{names: map[string]string{"grp-1": "ops"}, err: nil}
+			reader := limitgroups.New(tc.store, groups)
+
+			got, lifted, err := reader.LimitLiftedBy(
+				t.Context(), "grp-1", "", principal.GroupChangeAddMember,
+			)
+			if err == nil {
+				t.Fatalf("LimitLiftedBy(grp-1) = %v, %t, nil, want an error", got, lifted)
+			}
+
+			if lifted || got != noRef() {
+				t.Fatalf("LimitLiftedBy(grp-1) = %v, %t with the error %v, want no object", got, lifted, err)
 			}
 		})
 	}
@@ -346,27 +672,27 @@ func TestLimitLiftedByErrors(t *testing.T) {
 	}{
 		{
 			name:   "the group read fails",
-			store:  fakeStore{Store: nil, limits: nil, err: nil},
+			store:  storeOf(nil, nil, nil),
 			groups: fakeGroups{names: nil, err: errRead},
 		},
 		{
 			name:   "the limits read fails",
-			store:  fakeStore{Store: nil, limits: nil, err: errRead},
+			store:  storeFailing(errRead, nil, nil),
 			groups: groups,
 		},
 		{
 			name: "a limit does not parse",
-			store: fakeStore{Store: nil, err: nil, limits: []gate.AccessLimit{
+			store: storeOf([]gate.AccessLimit{
 				limit(gate.NamespaceScope("acme"), "l1", `forbid (principal, action, resource) unless { principal in`),
-			}},
+			}, nil, nil),
 			groups: groups,
 		},
 		{
 			name: "a limit holds a second policy",
-			store: fakeStore{Store: nil, err: nil, limits: []gate.AccessLimit{
+			store: storeOf([]gate.AccessLimit{
 				limit(gate.NamespaceScope("acme"), "l1",
 					`forbid (principal, action, resource); forbid (principal, action, resource);`),
-			}},
+			}, nil, nil),
 			groups: groups,
 		},
 	}
@@ -382,7 +708,7 @@ func TestLimitLiftedByErrors(t *testing.T) {
 				t.Fatalf("LimitLiftedBy(grp-1) = %v, %t, nil, want an error", got, lifted)
 			}
 
-			if lifted || got != (access.LimitRef{ID: "", Scope: ""}) {
+			if lifted || got != noRef() {
 				t.Fatalf("LimitLiftedBy(grp-1) = %v, %t with the error %v, want no limit", got, lifted, err)
 			}
 		})
@@ -396,7 +722,7 @@ func TestLimitLiftedByWithoutTheGroup(t *testing.T) {
 	t.Parallel()
 
 	reader := limitgroups.New(
-		fakeStore{Store: nil, limits: nil, err: nil},
+		storeOf(nil, nil, nil),
 		fakeGroups{names: map[string]string{}, err: nil},
 	)
 
@@ -405,7 +731,7 @@ func TestLimitLiftedByWithoutTheGroup(t *testing.T) {
 		t.Fatalf("LimitLiftedBy(grp-gone) = %v, want nil", err)
 	}
 
-	if lifted || got != (access.LimitRef{ID: "", Scope: ""}) {
+	if lifted || got != noRef() {
 		t.Fatal("LimitLiftedBy(grp-gone) = a limit, want none")
 	}
 }

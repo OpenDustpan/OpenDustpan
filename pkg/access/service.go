@@ -641,11 +641,13 @@ func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object stri
 // CheckGroupGrants implements principal.Guard: caller must hold every action
 // that the current grants of the group give, on each of their objects.
 //
-// An access limit of a scope that names the group holds for the members of
-// the group, so the change can lift the limit for one member: an add to a
-// group of an unless clause, a remove from a group of a when clause or of
+// An access limit or a gate of a scope that names the group holds for the
+// members of the group, so the change can lift it for one member: an add to
+// a group of an unless clause, a remove from a group of a when clause or of
 // the principal scope. A rename removes the members from the old name and
-// adds them to the new name, so it can lift a limit that names either name.
+// adds them to the new name, so it can lift an object that names either name.
+// An add to a group of an approval rule makes the member an approver, which
+// widens access.
 // The caller must be a site administrator then: the bootstrap administrator,
 // or a caller whom the access decision allows every action of the
 // site-administrator role on the installation. A change that can only add a
@@ -673,28 +675,48 @@ func (s *Service) CheckGroupGrants(
 
 	limit, lifted, err := s.limits.LimitLiftedBy(ctx, groupID, newName, change)
 	if err != nil {
-		return fmt.Errorf("%w: read the access limits that name the group %q: %w", ErrEscalation, groupID, err)
+		return fmt.Errorf(
+			"%w: read the access limits, gates and approval rules that name the group %q: %w",
+			ErrEscalation, groupID, err,
+		)
 	}
 
 	if !lifted {
 		return nil
 	}
 
+	kind := limitKindText(limit.Kind)
+
 	if !s.limitReadable(ctx, caller, limit) {
 		return fmt.Errorf(
-			"%w: an access limit that you cannot read names the group %q: only a site administrator can %s",
-			ErrEscalation, groupID, groupChangeText(change),
+			"%w: %s that you cannot read names the group %q: only a site administrator can %s",
+			ErrEscalation, kind, groupID, groupChangeText(change),
 		)
 	}
 
 	return fmt.Errorf(
-		"%w: access limit %q of %s names the group %q: only a site administrator can %s",
-		ErrEscalation, limit.ID, limit.Scope, groupID, groupChangeText(change),
+		"%w: %s %q of %s names the group %q: only a site administrator can %s",
+		ErrEscalation, kind, limit.ID, limit.Scope, groupID, groupChangeText(change),
 	)
 }
 
+// limitKindText returns the kind of ref with its article. A ref with no kind
+// counts as an access limit: defense in depth, because it comes from a reader
+// of another version.
+func limitKindText(kind LimitKind) string {
+	if kind == "" {
+		kind = LimitKindAccessLimit
+	}
+
+	if kind == LimitKindAccessLimit || kind == LimitKindApprovalRule {
+		return "an " + string(kind)
+	}
+
+	return "a " + string(kind)
+}
+
 // groupChangeText returns the text of the change for the refusal of a group
-// that an access limit names.
+// that an access limit, a gate or an approval rule names.
 func groupChangeText(change principal.GroupChange) string {
 	switch change {
 	case principal.GroupChangeAddMember:
