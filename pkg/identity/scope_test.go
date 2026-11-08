@@ -18,21 +18,39 @@ func scopePrincipal(admin bool) identity.Principal {
 	}
 }
 
-// TestEveryKeepsEachNameOnceInOrder checks Every sorts its names and removes
-// a duplicate.
+// TestEveryKeepsEachNameOnceInOrder checks Every sorts its names, removes a
+// duplicate, and copies the input slice.
 func TestEveryKeepsEachNameOnceInOrder(t *testing.T) {
 	t.Parallel()
 
-	scope := identity.Every("beta", "acme", "beta")
-
-	got, ok := scope.EveryObject()
-	if !ok {
-		t.Fatal("EveryObject ok = false, want true")
-	}
+	input := []namespace.Name{mustName(t, "beta"), mustName(t, "acme"), mustName(t, "beta")}
+	scope := identity.Every(input...)
 
 	want := []namespace.Name{mustName(t, "acme"), mustName(t, "beta")}
-	if !slices.Equal(got, want) {
-		t.Fatalf("EveryObject = %v, want %v", got, want)
+	if got := identity.LeftOutNamesForTest(scope); !slices.Equal(got, want) {
+		t.Fatalf("left-out names = %v, want %v", got, want)
+	}
+
+	for _, tc := range []struct {
+		ns   namespace.Name
+		want bool
+	}{
+		{ns: mustName(t, "acme"), want: false},
+		{ns: mustName(t, "beta"), want: false},
+		{ns: mustName(t, "gamma"), want: true},
+	} {
+		if got := scope.Contains(identity.NamespaceObject(tc.ns)); got != tc.want {
+			t.Fatalf("Contains(namespace %s) = %v, want %v", tc.ns, got, tc.want)
+		}
+	}
+
+	if scope.CoversEveryObject() {
+		t.Fatal("Every with a left-out namespace covers every object")
+	}
+
+	input[0] = mustName(t, "gamma")
+	if !scope.Contains(identity.NamespaceObject("gamma")) {
+		t.Fatal("a change to the input slice changed the left-out names")
 	}
 
 	if scope.Namespaces != nil || scope.Collections != nil || scope.Units != nil || scope.Principals != nil {
@@ -40,38 +58,17 @@ func TestEveryKeepsEachNameOnceInOrder(t *testing.T) {
 	}
 }
 
-// TestEveryObjectReturnsACopy checks a change to the returned names does not
-// change the scope.
-func TestEveryObjectReturnsACopy(t *testing.T) {
+// TestEveryWithoutExcept checks Every with no names covers every object.
+func TestEveryWithoutExcept(t *testing.T) {
 	t.Parallel()
 
-	scope := identity.Every("acme")
-
-	first, ok := scope.EveryObject()
-	if !ok || len(first) != 1 {
-		t.Fatalf("EveryObject = %v, %v, want one name", first, ok)
+	scope := identity.Every()
+	if !scope.CoversEveryObject() {
+		t.Fatal("Every() does not cover every object")
 	}
 
-	first[0] = mustName(t, "beta")
-
-	second, ok := scope.EveryObject()
-	if !ok {
-		t.Fatal("EveryObject ok = false, want true")
-	}
-
-	if want := []namespace.Name{mustName(t, "acme")}; !slices.Equal(second, want) {
-		t.Fatalf("EveryObject after a change to the result = %v, want %v", second, want)
-	}
-}
-
-// TestEveryObjectWithoutEvery checks a scope that does not cover every object
-// reports no names.
-func TestEveryObjectWithoutEvery(t *testing.T) {
-	t.Parallel()
-
-	got, ok := (identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}).EveryObject()
-	if ok || got != nil {
-		t.Fatalf("EveryObject of the zero scope = %v, %v, want nil, false", got, ok)
+	if !scope.Contains(identity.NamespaceObject("gamma")) {
+		t.Fatal("Every() does not hold a namespace")
 	}
 }
 

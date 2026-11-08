@@ -49,19 +49,21 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 }
 
 // ScopeExact reports that the scope is exact when the gate is off and the
-// scope of Next is exact. An enabled gate says no: it keeps a scope with All
-// set unchanged, and Authorize still refuses each object in a namespace whose
-// list does not hold the client address. A caller that needs an exact scope
-// checks each object instead.
+// scope of Next is exact. An enabled gate says no: it keeps a scope that
+// covers every object unchanged, and Authorize still refuses each object in a
+// namespace whose list does not hold the client address. A caller that needs
+// an exact scope checks each object instead.
 func (g Gate) ScopeExact() bool {
 	return !g.Enabled && identity.HasExactScope(g.Next)
 }
 
 // ListObjects asks Next, then leaves out each object in a namespace whose
 // list does not contain the client address in ctx, as Authorize refuses
-// them. A scope with All set stays unchanged: the gate cannot name the
-// namespaces that it leaves out of every object, so a caller of such a
-// list must Authorize the namespace of its list through the gate first. A
+// them. A scope that covers every object stays unchanged: it leaves out no
+// namespace, and the gate cannot name the namespaces of its lists, so a
+// caller of such a list must Authorize the namespace of its list through the
+// gate first. A scope of every object that leaves out namespaces does not
+// cover every object, so it passes with only its explicit sets filtered. A
 // store error fails the whole list.
 func (g Gate) ListObjects(
 	ctx context.Context, p identity.Principal, action identity.Action,

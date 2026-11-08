@@ -218,7 +218,7 @@ func (exactAll) ScopeExact() bool { return true }
 
 // TestGateScopeExact proves that the gate says its scope is exact only when
 // it is off and the scope of Next is exact: an enabled gate refuses objects
-// that a scope with All set holds.
+// that a scope that covers every object holds.
 func TestGateScopeExact(t *testing.T) {
 	t.Parallel()
 

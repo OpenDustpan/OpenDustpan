@@ -38,7 +38,8 @@ func (s *Store) NamespaceList(ctx context.Context, ns namespace.Name) (ipallow.L
 }
 
 // NamespacesWithList implements ipallow.Store. It returns the names of the
-// namespaces with a list, in name order.
+// namespaces with a list, in name order. It refuses a stored name that is not
+// a valid namespace name.
 func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -49,8 +50,16 @@ func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error
 	}
 
 	out := make([]namespace.Name, 0, len(names))
-	for _, name := range names {
-		out = append(out, namespace.Name(name))
+	for i, name := range names {
+		// Defense in depth: the namespace create path validates each name too;
+		// this check stays so that a row from a restored backup or another
+		// version of the schema cannot reach the scope as a namespace name.
+		parsed, parseErr := namespace.ParseName(name)
+		if parseErr != nil {
+			return nil, fmt.Errorf("row %d of the namespaces with an IP allowlist: %w", i+1, parseErr)
+		}
+
+		out = append(out, parsed)
 	}
 
 	return out, nil

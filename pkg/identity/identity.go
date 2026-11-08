@@ -1111,7 +1111,7 @@ func HasExactScope(a Authorizer) bool {
 
 // Scope is the set of objects of one kind where a principal may perform one
 // action. A scope covers every object through Every. A consumer reads that
-// case only through EveryObject, CoversEveryObject or Contains. Otherwise a
+// case only through CoversEveryObject or Contains. Otherwise a
 // unit is in the scope when it, its collection or its namespace is in a
 // set. A principal object is in the scope when it is in Principals.
 type Scope struct {
@@ -1141,17 +1141,6 @@ func Every(except ...namespace.Name) Scope {
 		Namespaces: nil, Collections: nil, Units: nil, Principals: nil,
 		every: everyObject{set: true, except: names},
 	}
-}
-
-// EveryObject reports whether s covers every object and returns the names of
-// the namespaces that it leaves out. The returned slice is a copy: a change
-// to it does not change s.
-func (s Scope) EveryObject() ([]namespace.Name, bool) {
-	if !s.every.set {
-		return nil, false
-	}
-
-	return slices.Clone(s.every.except), true
 }
 
 // CoversEveryObject reports whether s covers every object and leaves out no

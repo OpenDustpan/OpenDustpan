@@ -159,7 +159,7 @@ func RunObjectSensitive(t *testing.T) {
 
 // ListCheck is one case of CheckListWithinAuthorize: the authorizer, the
 // principal and the action, and Every, the objects that the test can name,
-// which a scope with All set must all allow.
+// which a scope that covers every object must all allow.
 type ListCheck struct {
 	Authorizer identity.Authorizer
 	Principal  identity.Principal
@@ -169,8 +169,8 @@ type ListCheck struct {
 
 // CheckListWithinAuthorize fails the test unless Authorize allows the
 // principal of c the action of c on each object that ListObjects lists for
-// them, both called with ctx. For a scope with All set, it checks each
-// object of c.Every. Run it against each Authorizer and each decorator,
+// them, both called with ctx. For a scope that covers every object, it checks
+// each object of c.Every. Run it against each Authorizer and each decorator,
 // with the grants of the test, so a list never shows an object that a
 // check of that object denies.
 func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
@@ -198,12 +198,12 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 
 // CheckExactScope fails the test when the authorizer of c says that its scope
 // is exact (identity.HasExactScope) and Authorize denies an object that its
-// scope holds. A scope with All set holds each object of c.Every. It passes
-// for an authorizer that does not say so: the callers of such an authorizer
-// check each object. Run it against each authorizer with a principal that is
-// not an administrator and, where the authorizer can give one, a scope with
-// All set, so that a decorator cannot claim an exact scope that it does not
-// have.
+// scope holds. A scope that covers every object holds each object of c.Every.
+// It passes for an authorizer that does not say so: the callers of such an
+// authorizer check each object. Run it against each authorizer with a
+// principal that is not an administrator and, where the authorizer can give
+// one, a scope that covers every object, so that a decorator cannot claim an
+// exact scope that it does not have.
 func CheckExactScope(ctx context.Context, t *testing.T, c ListCheck) {
 	t.Helper()
 
