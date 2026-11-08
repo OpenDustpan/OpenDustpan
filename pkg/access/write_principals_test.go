@@ -97,6 +97,9 @@ func serviceOver(t *testing.T, f *fixture, st access.Store) *access.Service {
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: f.store, Namespaces: f.store, Authorizer: authz, Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
