@@ -39,6 +39,9 @@ type DeliverySeed struct {
 	Sink         string
 	Principal    string
 	State        notify.DeliveryState
+	// StoppedBefore is how long before the current time the seeded delivery
+	// stopped. Zero stops it at the current time.
+	StoppedBefore time.Duration
 }
 
 // seedBatch is the most deliveries that one claim of SeedDelivery takes.
@@ -86,10 +89,11 @@ func (e *Env) storeDelivery(
 	}
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	at := now.Add(-seed.StoppedBefore)
 	d := notify.Delivery{
 		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 		Subscription: seed.Subscription, Sink: seed.Sink, Contact: "", Principal: seed.Principal,
-		State: notify.DeliveryPending, Attempts: 0, Redeliveries: 0, NextAt: now.Add(-time.Minute), LastError: "",
+		State: notify.DeliveryPending, Attempts: 0, Redeliveries: 0, NextAt: at.Add(-time.Minute), LastError: "",
 		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
@@ -98,17 +102,21 @@ func (e *Env) storeDelivery(
 	}
 
 	if seed.State != notify.DeliveryPending {
-		stopDelivery(ctx, tb, store, deliveryStop{fence: n.Fence(), id: d.ID, state: seed.State})
+		stopDelivery(ctx, tb, store, deliveryStop{
+			fence: n.Fence(), id: d.ID, state: seed.State, stoppedBefore: seed.StoppedBefore,
+		})
 	}
 
 	return d.ID
 }
 
-// deliveryStop names the delivery that stopDelivery ends and the state that it ends in.
+// deliveryStop names the delivery that stopDelivery ends, the state that it
+// ends in, and how long before the current time it stopped.
 type deliveryStop struct {
-	fence namespace.Fence
-	id    string
-	state notify.DeliveryState
+	fence         namespace.Fence
+	id            string
+	state         notify.DeliveryState
+	stoppedBefore time.Duration
 }
 
 // stopDelivery claims the pending delivery id and records an attempt that ends
@@ -119,9 +127,10 @@ func stopDelivery(ctx context.Context, tb testing.TB, store notificationDeliveri
 	fence, id, state := stop.fence, stop.id, stop.state
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	at := now.Add(-stop.stoppedBefore)
 
 	claimed, err := store.Claim(ctx, fence, notify.ClaimRequest{
-		Scope: namespace.Name(Namespace), Owner: "e2e", Now: now, Lease: time.Minute, Limit: seedBatch,
+		Scope: namespace.Name(Namespace), Owner: "e2e", Now: at, Lease: time.Minute, Limit: seedBatch,
 	})
 	if err != nil {
 		tb.Fatalf("claim the delivery: %v", err)
@@ -133,8 +142,8 @@ func stopDelivery(ctx context.Context, tb testing.TB, store notificationDeliveri
 		}
 
 		err = store.Record(ctx, fence, notify.Attempt{
-			ID: id, Owner: "e2e", Version: claimed[i].Version, Now: now, State: state, Attempts: 1, NextAt: now,
-			LastError: "", DeliveredAt: now,
+			ID: id, Owner: "e2e", Version: claimed[i].Version, Now: at, State: state, Attempts: 1, NextAt: at,
+			LastError: "", DeliveredAt: at,
 		})
 		if err != nil {
 			tb.Fatalf("record the attempt: %v", err)
