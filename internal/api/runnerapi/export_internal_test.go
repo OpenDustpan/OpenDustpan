@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
 // ErrBadBody is the error of a body that is not the JSON object of its path.
@@ -51,4 +53,11 @@ func JobPhaseWithoutReader(ctx context.Context, h *Handler, sess runner.Session)
 	defer func() { h.jobs = reader }()
 
 	return JobPhaseOf(ctx, h, sess)
+}
+
+// OutputStepsOf returns the steps of one phase kind of a job in the wire
+// form of the assignment, so that a test checks the outputs that a later
+// phase needs.
+func OutputStepsOf(steps []job.Step, kind job.PhaseKind, phases []job.Phase, current int) []protocol.Step {
+	return stepsOf(steps, kind, phases, current)
 }

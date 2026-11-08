@@ -157,11 +157,13 @@ A helper mode stops with 0 when it answered, and with 1 when it failed.
   and its log starts with the line `dustpan-launcher: this launcher release
   gives no credentials to a tool step`.
 - **Plans.** The launcher does not upload the outputs of a step. A step
-  with a declared output fails before its program starts, with the reason
-  "this launcher release does not upload declared outputs". Its log holds
-  the line `dustpan-launcher: this launcher release does not upload declared
-  outputs`. A phase with a plan to apply fails with the reason "this
-  launcher release cannot read the plan of an apply phase".
+  with an output that a later phase of the job needs fails before its
+  program starts, with the reason `this launcher release cannot upload
+  output "<kind>" that a later phase needs`, where `<kind>` is the kind of
+  the first such output. A step whose declared outputs no later phase reads
+  runs, and its log holds the line `dustpan-launcher: this launcher release
+  does not upload declared outputs`. A phase with a plan to apply fails with
+  the reason "this launcher release cannot read the plan of an apply phase".
 - **Sweeps.** The launcher does not run a sweep. It stops with the exit
   code 71.
 - **Handoffs.** The handoffs `kubernetes` and `vsock` stop the launcher with

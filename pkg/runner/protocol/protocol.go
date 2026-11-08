@@ -399,6 +399,8 @@ type Step struct {
 type Output struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`
+	// Needed is true when a later phase of the job reads the output.
+	Needed bool `json:"needed,omitempty"`
 }
 
 // Plan is the plan that an apply phase applies.

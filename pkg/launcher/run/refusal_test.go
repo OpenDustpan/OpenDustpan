@@ -174,32 +174,108 @@ func checkToolStepRan(t *testing.T, f *fakeServer, marker string) {
 	}
 }
 
-// TestUnsupportedStepFeaturesFailClosed checks that a step this release
-// cannot serve fails the phase before its program starts: a step with a
-// declared output (no upload).
+// TestUnsupportedStepFeaturesFailClosed checks the fail-closed rule for a
+// declared output: a step with an output that a later phase of the job
+// needs fails the phase before its program starts, because this release
+// uploads no output. A step whose declared outputs no later phase reads
+// runs, and its log holds the note that this release uploads no output.
 func TestUnsupportedStepFeaturesFailClosed(t *testing.T) {
 	t.Parallel()
 
-	marker := filepath.Join(t.TempDir(), "started")
+	cases := []struct {
+		name    string
+		outputs []protocol.Output
+		refused bool
+		reason  string
+	}{
+		{
+			"an output that a later phase needs",
+			[]protocol.Output{{Kind: "plan-apply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "plan-apply" that a later phase needs`,
+		},
+		{
+			"an output whose kind holds a line feed",
+			[]protocol.Output{{Kind: "plan\napply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "planapply" that a later phase needs`,
+		},
+		{
+			"an output whose kind holds a carriage return",
+			[]protocol.Output{{Kind: "plan\rapply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "planapply" that a later phase needs`,
+		},
+		{
+			"an output that no later phase needs",
+			[]protocol.Output{{Kind: "plan-display", Path: "tfplan.json", Needed: false}},
+			false,
+			"",
+		},
+	}
 
-	output := step("bad", "touch", marker)
-	output.Outputs = []protocol.Output{{Kind: "plan-display", Path: "tfplan.json"}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	f := newFake(output)
-	wantExit(t, config(t, f), launcher.ExitOK)
+			marker := filepath.Join(t.TempDir(), "started")
 
-	const reason = "this launcher release does not upload declared outputs"
+			s := step("bad", "touch", marker)
+			s.Outputs = tc.outputs
+
+			f := newFake(s)
+			wantExit(t, config(t, f), launcher.ExitOK)
+
+			if tc.refused {
+				checkRefusedOutputStep(t, f, marker, tc.reason)
+
+				return
+			}
+
+			checkOutputStepRan(t, f, marker)
+		})
+	}
+}
+
+// checkRefusedOutputStep checks the failed phase of a step that the
+// launcher refused because a later phase of the job needs one of its
+// outputs.
+func checkRefusedOutputStep(t *testing.T, f *fakeServer, marker, reason string) {
+	t.Helper()
 
 	if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step bad: "+reason {
 		t.Fatalf("finish = %+v, want failed with %q", f.finish, reason)
 	}
 
-	if !strings.Contains(f.log("bad"), reason) {
-		t.Fatalf("log = %q, want the note of the refusal", f.log("bad"))
+	if got := f.log("bad"); got != "dustpan-launcher: "+reason+"\n" {
+		t.Fatalf("log = %q, want the note of the refusal", got)
 	}
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the program of the refused step started")
+	}
+}
+
+// checkOutputStepRan checks that a step whose declared outputs no later
+// phase reads started, that the phase reports the exit code 0, and that the
+// log holds the note that the launcher uploads no output.
+func checkOutputStepRan(t *testing.T, f *fakeServer, marker string) {
+	t.Helper()
+
+	if f.finish == nil || !f.finish.Succeeded {
+		t.Fatalf("finish = %+v, want the phase of the step to succeed", f.finish)
+	}
+
+	if end := f.ends["bad"]; end.ExitCode != 0 {
+		t.Fatalf("end = %+v, want the exit code 0", end)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the program of the step did not start: %v", err)
+	}
+
+	if !strings.Contains(f.log("bad"), "this launcher release does not upload declared outputs") {
+		t.Fatalf("log = %q, want the note that the launcher uploads no output", f.log("bad"))
 	}
 }
 

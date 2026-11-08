@@ -130,12 +130,21 @@ func (r *phaseRun) refuseStep(step *protocol.Step, log launcher.Masker) (stepRes
 		return stepResult{exitCode: -1, reason: reason}, true
 	}
 
-	// This release cannot upload declared outputs, so a step with an output
-	// fails closed before its program starts.
-	if len(step.Outputs) > 0 {
-		r.note(log, "this launcher release does not upload declared outputs")
+	// This release cannot upload declared outputs. A step whose output a
+	// later phase of the job reads fails closed before its program starts;
+	// an output that no later phase reads does not stop the step.
+	for _, o := range step.Outputs {
+		if !o.Needed {
+			continue
+		}
 
-		return stepResult{exitCode: -1, reason: "this launcher release does not upload declared outputs"}, true
+		// The kind comes from the assignment, so it may hold CR or LF:
+		// remove both before the kind goes into the reason and the log.
+		kind := strings.NewReplacer("\r", "", "\n", "").Replace(o.Kind)
+		reason := fmt.Sprintf("this launcher release cannot upload output %q that a later phase needs", kind)
+		r.note(log, reason)
+
+		return stepResult{exitCode: -1, reason: reason}, true
 	}
 
 	// Defense in depth: the renewal loop records a lost claim, and the wait
@@ -172,6 +181,13 @@ func (r *phaseRun) refuseStep(step *protocol.Step, log launcher.Masker) (stepRes
 func (r *phaseRun) execStep(ctx context.Context, step *protocol.Step, log launcher.Masker) stepResult {
 	if res, refused := r.refuseStep(step, log); refused {
 		return res
+	}
+
+	// This release does not upload declared outputs. A step whose output a
+	// later phase reads was refused above, so a step that reaches this point
+	// declares outputs that no later phase reads.
+	if len(step.Outputs) > 0 {
+		r.note(log, "this launcher release does not upload declared outputs")
 	}
 
 	cmd, err := r.command(step)
