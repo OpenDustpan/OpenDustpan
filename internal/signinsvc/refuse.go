@@ -204,7 +204,15 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 	// This check does not rely on any of them: the raw store disables any
 	// principal that it gets, so a faulty lookup must never reach it with a
 	// principal of another subject or kind, or with a temporary administrator.
-	if !s.isTarget(ctx, &p, subject) {
+	target, targetErr := s.isTarget(ctx, &p, subject)
+	if targetErr != nil {
+		return s.refuse(ctx, req, &refusal{
+			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject,
+			cause: errors.Join(cause, targetErr),
+		})
+	}
+
+	if !target {
 		return s.refuse(ctx, req, &refusal{
 			reason: ReasonDisableNotTarget, answer: AnswerFailed, idpSubject: a.Subject, cause: cause,
 		})

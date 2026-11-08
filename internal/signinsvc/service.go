@@ -53,6 +53,7 @@ const (
 	ReasonNoPrincipal        = "no principal"
 	ReasonDisabled           = "principal is disabled"
 	ReasonNotTarget          = "principal cannot sign in through an identity provider"
+	ReasonTargetLookup       = "temporary administrator read failed"
 	ReasonSubject            = "subject is not valid"
 	ReasonSubjectLength      = "subject over 255 bytes"
 	ReasonOpenIDAnswer       = "ID token was refused"
@@ -340,7 +341,14 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	// and refuses a temporary administrator. This check does not rely on it, so
 	// that a faulty lookup can never start a session for another person, for a
 	// principal of another kind or for a temporary administrator.
-	if !s.isTarget(ctx, &p, subject) {
+	target, targetErr := s.isTarget(ctx, &p, subject)
+	if targetErr != nil {
+		return none, s.refuse(ctx, req, &refusal{
+			reason: ReasonTargetLookup, answer: AnswerRefused, idpSubject: a.Subject, cause: targetErr,
+		})
+	}
+
+	if !target {
 		return none, s.refuse(ctx, req, &refusal{
 			reason: ReasonNotTarget, answer: AnswerRefused, idpSubject: a.Subject, cause: nil,
 		})
@@ -470,11 +478,11 @@ func (s *Service) admit(ctx context.Context, req *Request) (principal.Source, *r
 // isTarget reports whether the principal p is the person of the subject that
 // an identity provider may sign in or disable: a person of exactly this
 // subject, in no namespace, not a break-glass account and not a temporary
-// administrator. An error of the read of the temporary administrators is not
-// a target: the caller fails closed.
-func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject string) bool {
+// administrator. A failed read of the temporary administrators returns
+// false and the error, and the caller fails closed.
+func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject string) (bool, error) {
 	if p.Subject != subject || p.Kind != principal.KindPerson || p.Namespace != "" || p.BreakGlass {
-		return false
+		return false, nil
 	}
 
 	// Defense in depth: SignInPrincipal refuses a temporary administrator too.
@@ -482,12 +490,12 @@ func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject 
 	// a session for, or disable, a temporary administrator.
 	temp, err := s.cfg.TempAdmins.IsTempAdmin(ctx, p.ID)
 	if err != nil {
-		// The read failed: fail closed. The caller refuses as for a principal
-		// that is not a target.
-		return false
+		// The read failed: fail closed. The caller refuses, and the refusal
+		// names the failed read.
+		return false, err
 	}
 
-	return !temp
+	return !temp, nil
 }
 
 // checkLocal returns the reason for which the Assertion of req is not the
