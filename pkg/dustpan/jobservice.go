@@ -358,7 +358,7 @@ type settingsPlanner struct {
 
 // Plan implements job.Planner.
 func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *job.StartRequest) (job.Spec, error) {
-	if req.Location.GivesLocation() && req.Pool != "" {
+	if !req.Location.IsZero() && req.Pool != "" {
 		return p.base.Plan(ctx, unit, req)
 	}
 
@@ -396,7 +396,7 @@ func (p settingsPlanner) effectiveFor(
 ) (unitsettings.Effective, error) {
 	var defaultConn string
 
-	if !loc.GivesLocation() {
+	if loc.IsZero() {
 		var err error
 
 		defaultConn, err = p.defaultConnection(ctx, unit.Namespace())
@@ -409,17 +409,16 @@ func (p settingsPlanner) effectiveFor(
 }
 
 // fillLocation sets the effective code location of req when the request names
-// none, keeps a revision that the request gave, and returns the source of the
-// location. A request that names the location gives the source request.
+// none, and returns the source of the location. A request that names the
+// location gives the source request.
 func fillLocation(req *job.StartRequest, eff unitsettings.Effective) job.LocationSource {
-	if req.Location.GivesLocation() || eff.Repository.Value == "" {
+	if !req.Location.IsZero() || eff.Repository.Value == "" {
 		return job.LocationSourceRequest
 	}
 
-	revision := req.Location.Revision
 	req.Location = job.Location{
 		Connection: eff.Connection.Value, Repository: eff.Repository.Value, Ref: eff.Ref.Value,
-		Directory: "", Revision: revision,
+		Directory: "", Revision: "",
 	}
 
 	if eff.Directory.Origin == unitsettings.OriginUnit {

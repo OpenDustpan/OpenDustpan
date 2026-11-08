@@ -24,18 +24,6 @@ func (l Location) IsZero() bool {
 	return l == Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}
 }
 
-// RevisionOnly reports whether l gives only a revision.
-func (l Location) RevisionOnly() bool {
-	return l.Revision != "" && l.Connection == "" && l.Repository == "" && l.Ref == "" && l.Directory == ""
-}
-
-// GivesLocation reports whether l names a code location. A location that
-// gives only a revision does not name one: the server takes the rest of the
-// location from the settings of the unit.
-func (l Location) GivesLocation() bool {
-	return !l.IsZero() && !l.RevisionOnly()
-}
-
 // Validate returns an error that wraps ErrInvalid for a code location that a
 // runner must not use. A runner job needs a repository and a ref. The
 // directory is relative and clean and stays in the checkout. The revision is

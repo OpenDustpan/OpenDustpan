@@ -105,9 +105,7 @@ func StartRequirements(spec Spec, bg *BreakGlass) ([]Requirement, error) {
 // request that names a code location needs ActionUnitDefineSteps on the unit:
 // choosing the hosts and choosing the code are choosing what runs where. A
 // request that names neither needs no extra action, and the server takes the
-// default pool and the code location of the unit. A request that gives only a
-// revision names no code location: the server takes the rest of the location
-// from the settings of the unit.
+// default pool and the code location of the unit.
 func RequestRequirements(req *StartRequest, unit identity.Object) []Requirement {
 	var reqs []Requirement
 
@@ -117,7 +115,7 @@ func RequestRequirements(req *StartRequest, unit identity.Object) []Requirement 
 		})
 	}
 
-	if req.Location.GivesLocation() {
+	if !req.Location.IsZero() {
 		reqs = append(reqs, Requirement{Action: ActionUnitDefineSteps, Object: unit})
 	}
 

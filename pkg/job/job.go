@@ -341,9 +341,7 @@ func (s LocationSource) Valid() bool {
 
 // DefaultedValues returns the names of the values of spec that req did not
 // give. A request has no profile, so a profile in the spec is always a
-// default. A request that gives only a revision does not give a code
-// location: the server takes the rest of the location from the settings of
-// the unit. It returns nil when req gave every value that the spec holds.
+// default. It returns nil when req gave every value that the spec holds.
 func DefaultedValues(req *StartRequest, spec *Spec) []string {
 	var out []string
 
@@ -351,7 +349,7 @@ func DefaultedValues(req *StartRequest, spec *Spec) []string {
 		out = append(out, DefaultedPool)
 	}
 
-	if !req.Location.GivesLocation() && !spec.Location.IsZero() {
+	if req.Location.IsZero() && !spec.Location.IsZero() {
 		out = append(out, DefaultedLocation)
 	}
 

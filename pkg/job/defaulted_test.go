@@ -32,8 +32,8 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 		{"names neither", "", emptyLocation(), "", nil, []string{"pool", "location"}, job.LocationSourceUnit},
 		{
 			"names only a revision", "", revisionOnly, "", nil,
-			[]string{"pool", "location"},
-			job.LocationSourceUnit,
+			[]string{"pool"},
+			job.LocationSourceRequest,
 		},
 		{
 			"a profile from the unit settings", "pool-1", named, "prf-1", nil,

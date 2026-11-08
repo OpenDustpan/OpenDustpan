@@ -1471,6 +1471,7 @@ type fieldCase struct {
 
 func fieldCases() []fieldCase {
 	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 	none := emptyLocation()
 
 	return []fieldCase{
@@ -1480,6 +1481,10 @@ func fieldCases() []fieldCase {
 		{"both with both actions", "ci", repo, "", nil},
 		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{
+			"a revision-only location without unit:define-steps", "", revisionOnly, job.ActionUnitDefineSteps,
+			identity.ErrDenied,
+		},
 		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
 		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},

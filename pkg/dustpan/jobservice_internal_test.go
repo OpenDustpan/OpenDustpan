@@ -1255,9 +1255,6 @@ func TestSettingsPlannerLocation(t *testing.T) {
 	zero := plannerLocation("", "", "", "")
 	cleared := func(q *job.StartRequest) { q.Location = zero }
 	unitLoc := plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")
-	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
-	unitLocAtRevision := unitLoc
-	unitLocAtRevision.Revision = revisionOnly.Revision
 
 	tests := []struct {
 		name       string
@@ -1283,12 +1280,6 @@ func TestSettingsPlannerLocation(t *testing.T) {
 			unitRecord("pool-2", unitLoc),
 			func(q *job.StartRequest) { q.Pool = "ci" },
 			plannerLocation("", "acme/infra", "main", "net"), "pool-1", job.LocationSourceRequest, nil,
-		},
-		{
-			"a request with only a revision takes the unit location",
-			unitRecord("pool-2", unitLoc),
-			func(q *job.StartRequest) { q.Location = revisionOnly },
-			unitLocAtRevision, "pool-2", job.LocationSourceUnit, nil,
 		},
 		{"no setting and no request location", nil, cleared, zero, "", "", job.ErrUnsupported},
 		{

@@ -286,7 +286,7 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 // connection of the namespace gave a value, and the source is the unit
 // otherwise.
 func locationSource(req *StartRequest, spec *Spec) LocationSource {
-	if req.Location.GivesLocation() {
+	if !req.Location.IsZero() {
 		return LocationSourceRequest
 	}
 
