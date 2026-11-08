@@ -383,12 +383,12 @@ func (h *Handler) writeItem(
 ) bulkResult {
 	completion := idempotency.NewCompletion(pending.ref, pending.token,
 		func(result any) (idempotency.Answer, error) {
-			stored, ok := result.(unitsettings.Settings)
+			out, ok := result.(unitsettings.PutResult)
 			if !ok {
 				return idempotency.Answer{}, errWritten
 			}
 
-			return itemAnswer(run.item.ID, stored.Version)
+			return itemAnswer(run.item.ID, out.Settings.Version)
 		})
 
 	keyed := r.WithContext(idempotency.WithCompletion(r.Context(), completion))

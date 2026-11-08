@@ -1,6 +1,7 @@
 package clientgen
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,8 +20,23 @@ func schemaKeys() []string {
 	}
 }
 
-// jsonString is the type string of a schema.
-const jsonString = "string"
+// The type names of the primitive values of JSON.
+const (
+	jsonString  = "string"
+	jsonInteger = "integer"
+	jsonNumber  = "number"
+	jsonBoolean = "boolean"
+)
+
+// typeNull is the type name of JSON null in a type list.
+const typeNull = "null"
+
+// The numbers of names of a type list. The shortest list holds two names, and
+// the nullable form [X, "null"] holds two as well.
+const (
+	typeListMinNames  = 2
+	typeListNullNames = 2
+)
 
 // schemaRefPrefix starts the one kind of $ref that the parser reads.
 const schemaRefPrefix = "#/components/schemas/"
@@ -202,7 +218,7 @@ func (st *parseState) field(ptr, name string, node any) (model.Field, error) {
 
 // anyType is the type of any JSON value.
 func anyType() model.Type {
-	return model.Type{Kind: model.TypeAny, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+	return model.Type{Kind: model.TypeAny, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
 }
 
 // extraType reads additionalProperties of an object: true for any value, or a
@@ -299,12 +315,20 @@ func localRef(ptr string, v any) (string, error) {
 	return name, nil
 }
 
-// refType reads a schema that is a $ref and nothing else.
+// refType reads a schema that is a $ref, with a description of the field
+// beside it and nothing else. The description wins over the description of the
+// type of the field.
 func (st *parseState) refType(ptr string, o object) (model.Type, error) {
 	var zero model.Type
 
-	if len(o) > 1 {
-		return zero, unsupported(ptr, "$ref beside other keys")
+	for _, k := range sortedKeys(o) {
+		if k != "$ref" && k != keyDescription {
+			return zero, unsupported(ptrJoin(ptr, k), "key beside $ref")
+		}
+	}
+
+	if _, err := optionalString(o, ptr, keyDescription); err != nil {
+		return zero, err
 	}
 
 	return st.namedType(ptr, o["$ref"], useClosed, false)
@@ -341,7 +365,15 @@ func (st *parseState) namedType(ptr string, ref any, use refUse, nullable bool) 
 		st.recordEnumUse(name, use)
 	}
 
-	return model.Type{Kind: model.TypeRef, Format: "", Elem: nil, Ref: name, Const: "", Nullable: nullable}, nil
+	return model.Type{
+		Kind:     model.TypeRef,
+		Format:   "",
+		Elem:     nil,
+		Ref:      name,
+		Const:    "",
+		Nullable: nullable,
+		Members:  nil,
+	}, nil
 }
 
 // recordEnumUse remembers how a field uses an enum, as an open enum or as a
@@ -452,7 +484,8 @@ func (st *parseState) nullableRefType(ptr string, o object) (model.Type, error) 
 	return st.namedType(ptrJoin(kptr, "0"), bs[0]["$ref"], useClosed, true)
 }
 
-// plainType reads a schema with a type: a scalar, an array or a map.
+// plainType reads a schema with a type: a scalar, an array, a map or a type
+// list.
 func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 	var zero model.Type
 
@@ -466,17 +499,23 @@ func (st *parseState) plainType(ptr string, o object) (model.Type, error) {
 		return anyType(), nil
 	}
 
-	base, nullable, err := baseType(ptr, o)
+	names, isList, err := typeNames(ptr, o)
 	if err != nil {
 		return zero, err
 	}
 
+	if isList && !isNullableList(names) {
+		return typeListType(ptr, o, names)
+	}
+
 	var t model.Type
 
-	t.Nullable = nullable
+	// The only list that reaches this point is [X, "null"], the nullable
+	// form of the type X.
+	t.Nullable = isList
 
-	switch base {
-	case "string", "integer", "number", "boolean":
+	switch base := names[0]; base {
+	case jsonString, jsonInteger, jsonNumber, jsonBoolean:
 		if o["enum"] != nil {
 			t.Const, err = constValue(ptr, base, o)
 			if err != nil {
@@ -544,36 +583,139 @@ func isAnyValue(o object) bool {
 // scalarKind maps the JSON type of a scalar to its kind.
 func scalarKind(base string) model.TypeKind {
 	switch base {
-	case "integer":
+	case jsonInteger:
 		return model.TypeInteger
-	case "number":
+	case jsonNumber:
 		return model.TypeNumber
-	case "boolean":
+	case jsonBoolean:
 		return model.TypeBoolean
 	default:
 		return model.TypeString
 	}
 }
 
-// baseType returns the type of a schema, and whether it is nullable. The type
-// is a name, or a list of a name and "null".
-func baseType(ptr string, o object) (string, bool, error) {
+// typeNames returns the names of the type of a schema: one name, or the names
+// of a type list. The second result is true for a type list.
+func typeNames(ptr string, o object) ([]string, bool, error) {
 	tptr := ptrJoin(ptr, "type")
 
 	switch v := o["type"].(type) {
 	case string:
-		return v, false, nil
+		return []string{v}, false, nil
 	case []any:
-		if len(v) == 2 && v[1] == "null" {
-			if name, ok := v[0].(string); ok && name != "null" {
-				return name, true, nil
+		names := make([]string, 0, len(v))
+
+		for i, item := range v {
+			name, isString := item.(string)
+			if !isString {
+				return nil, false, unsupported(
+					ptrJoin(tptr, strconv.Itoa(i)),
+					"type name "+valueText(item)+" that is not a string",
+				)
 			}
+
+			names = append(names, name)
 		}
 
-		return "", false, unsupported(tptr, "type list that is not [X, \"null\"]")
+		return names, true, nil
+	case nil:
+		return nil, false, unsupported(ptr, "schema with no type")
 	default:
-		return "", false, unsupported(ptr, "schema with no type")
+		return nil, false, unsupported(tptr, "type "+valueText(v))
 	}
+}
+
+// typeListType reads a schema whose type is a type list. A type list carries
+// no enum and no format: a client that drops them would accept a value that
+// the server refuses.
+func typeListType(ptr string, o object, names []string) (model.Type, error) {
+	var zero model.Type
+
+	for _, k := range []string{"enum", "format"} {
+		if o[k] != nil {
+			return zero, unsupported(ptrJoin(ptr, k), k+" beside a type list")
+		}
+	}
+
+	return primitiveType(ptr, names)
+}
+
+// isNullableList reports whether the names are the nullable form [X, "null"].
+func isNullableList(names []string) bool {
+	return len(names) == typeListNullNames && names[1] == typeNull
+}
+
+// primitiveType returns the type of a type list: two or more primitive type
+// names, with no repeat.
+func primitiveType(ptr string, names []string) (model.Type, error) {
+	var zero model.Type
+
+	tptr := ptrJoin(ptr, "type")
+
+	if len(names) < typeListMinNames {
+		return zero, unsupported(tptr, "type list "+nameListText(names)+" that holds fewer than two names")
+	}
+
+	members := make([]model.TypeKind, 0, len(names))
+	seen := make(map[string]bool, len(names))
+
+	for i, name := range names {
+		nptr := ptrJoin(tptr, strconv.Itoa(i))
+
+		if !isPrimitiveTypeName(name) {
+			return zero, unsupported(nptr, "type name "+strconv.Quote(name)+" that is not a primitive type name")
+		}
+
+		if seen[name] {
+			return zero, unsupported(nptr, "type name "+strconv.Quote(name)+" that is in the list two times")
+		}
+
+		seen[name] = true
+		members = append(members, scalarKind(name))
+	}
+
+	var t model.Type
+
+	t.Kind = model.TypeUnion
+	t.Members = members
+
+	return t, nil
+}
+
+// isPrimitiveTypeName reports whether the name is the type name of a primitive
+// value: string, integer, number or boolean.
+func isPrimitiveTypeName(name string) bool {
+	switch name {
+	case jsonString, jsonInteger, jsonNumber, jsonBoolean:
+		return true
+	default:
+		return false
+	}
+}
+
+// valueText writes a JSON value the way the description writes it, for an
+// error message.
+func valueText(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strconv.Quote(x)
+	case nil:
+		return typeNull
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+// nameListText writes a list of type names the way the description writes it,
+// for an error message.
+func nameListText(names []string) string {
+	out := make([]string, 0, len(names))
+
+	for _, name := range names {
+		out = append(out, strconv.Quote(name))
+	}
+
+	return "[" + strings.Join(out, ", ") + "]"
 }
 
 // elemType reads the items of an array.

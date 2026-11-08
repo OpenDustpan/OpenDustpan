@@ -48,6 +48,7 @@ type groupDoc struct {
 	Source                   string `json:"source"`
 	MemberCount              int64  `json:"memberCount"`
 	ClosedToIdentityProvider bool   `json:"closedToIdentityProvider"`
+	Protected                bool   `json:"protected"`
 }
 
 type memberDoc struct {
@@ -108,9 +109,41 @@ func newPrincipalHandler(t *testing.T, principals *principal.Service) testHandle
 }
 
 // newAuditedPrincipalHandler builds a Handler with principals as its
-// principal service and entries as its audit store of the scope @server.
+// principal service and entries as its audit store of the scope @server. The
+// reach config of the group routes reads the store of the sessions of
+// principals, when the test registered them.
 func newAuditedPrincipalHandler(
 	t *testing.T, principals *principal.Service, entries audit.ServerStore,
+) testHandler {
+	t.Helper()
+
+	return newReachPrincipalHandler(t, principals, entries, reachConfigOf(principals))
+}
+
+// reachConfigOf returns the reach config over the store of the sessions of
+// principals, or the zero config when the test registered no sessions for
+// it.
+func reachConfigOf(principals *principal.Service) access.ReachConfig {
+	sessions, hasSessions := principalSessions.Load(principals)
+	stored, isSessions := sessions.(storeSessions)
+
+	if !hasSessions || !isSessions {
+		return access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		}
+	}
+
+	return access.ReachConfig{
+		Grants: stored.st, Roles: stored.st, Callers: stored.st, Principals: stored.st,
+		Collections: nil, Units: stored.st,
+	}
+}
+
+// newReachPrincipalHandler builds a Handler like newAuditedPrincipalHandler
+// with reach as the reach config of the group routes, so a test can make the
+// check fail.
+func newReachPrincipalHandler(
+	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
 ) testHandler {
 	t.Helper()
 
@@ -150,6 +183,7 @@ func newAuditedPrincipalHandler(
 		Journal:          nil,
 		Principals:       principals,
 		Access:           nil,
+		Reach:            reach,
 		Tokens:           nil,
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
@@ -1108,6 +1142,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1203,6 +1238,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

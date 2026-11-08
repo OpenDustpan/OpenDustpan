@@ -29,6 +29,8 @@ type e2eGroup struct {
 	Name                     string `json:"name"`
 	Description              string `json:"description"`
 	ClosedToIdentityProvider bool   `json:"closedToIdentityProvider"`
+	// Protected is a pointer, so that a missing field is not a false flag.
+	Protected *bool `json:"protected"`
 }
 
 // TestPrincipalsAndGroups drives every principal and group route of the
