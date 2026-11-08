@@ -211,7 +211,7 @@ func TestFirstMatch(t *testing.T) {
 		{"general rule after", "pulumi", "payments", "dev", "payments", true},
 		{"third rule", "pulumi", "web", "dev", "sandbox", true},
 		{"no match", "pulumi", "web", "prod", "", false},
-		{"other tool", "opentofu", "payments", "prod", "", false},
+		{"other tool", "terraform", "payments", "prod", "", false},
 		{"project is case-sensitive", "pulumi", "Payments", "prod", "", false},
 		{"empty names", "pulumi", "", "", "", false},
 		{"name over the limit", "pulumi", strings.Repeat("a", collection.MaxNameLength+1), "dev", "", false},
@@ -265,7 +265,7 @@ func TestRuleValidate(t *testing.T) {
 		edit func(r *collection.Rule)
 		want error
 	}{
-		{"tool", func(r *collection.Rule) { r.Tool = "opentofu" }, collection.ErrInvalidPlacementTool},
+		{"tool", func(r *collection.Rule) { r.Tool = "terraform" }, collection.ErrInvalidPlacementTool},
 		{"empty tool", func(r *collection.Rule) { r.Tool = "" }, collection.ErrInvalidPlacementTool},
 		{"project", func(r *collection.Rule) { r.Project = "a b" }, collection.ErrInvalidPattern},
 		{"stack", func(r *collection.Rule) { r.Stack = "" }, collection.ErrInvalidPattern},

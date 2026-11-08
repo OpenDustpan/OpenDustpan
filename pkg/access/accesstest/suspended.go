@@ -75,10 +75,10 @@ func testSuspendedMembershipGivesNoRights(t *testing.T, s access.Store) {
 	}
 }
 
-// testReviewHidesSuspendedMember proves that the access review lists only
+// testReviewHistoryHidesSuspendedMember checks that a history lists only
 // the active member of a group: one suspended and one active member give
 // one expanded row, with a member count of one.
-func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
+func testReviewHistoryHidesSuspendedMember(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
@@ -131,6 +131,7 @@ func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
 
 	q := everyRow(allScope())
 	q.Expand = true
+	q.History, q.FromMs, q.ToMs = true, at(0).UnixMilli(), at(snapshotMinute).UnixMilli()
 
 	rows := review(t, rs, "expanded export without the suspended member", q, "grt-1")
 	if len(rows) != 1 || rows[0].Via == nil || rows[0].Via.PrincipalID != "prn-active" {

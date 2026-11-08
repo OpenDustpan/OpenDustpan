@@ -77,6 +77,8 @@ type Transport interface {
 type Error struct {
 	Status int
 	Body   protocol.Error
+	// RetryAfter is the value of the header Retry-After of the answer, or 0.
+	RetryAfter time.Duration
 }
 
 // Error returns the code and the message of the answer.
@@ -280,7 +282,7 @@ func check(resp *Response, want int) error {
 
 	var body protocol.Error
 	if resp.Status >= statusError && json.Unmarshal(resp.Body, &body) == nil && body.Code != "" {
-		return &Error{Status: resp.Status, Body: body}
+		return &Error{Status: resp.Status, Body: body, RetryAfter: resp.RetryAfter}
 	}
 
 	// A proxy or a load balancer in front of the server answers 429 and
@@ -291,9 +293,12 @@ func check(resp *Response, want int) error {
 		code = protocol.ErrorUnavailable
 	}
 
-	return &Error{Status: resp.Status, Body: protocol.Error{
-		Code: code, Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
-	}}
+	return &Error{
+		Status: resp.Status, Body: protocol.Error{
+			Code: code, Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
+		},
+		RetryAfter: resp.RetryAfter,
+	}
 }
 
 // Post sends a signed POST of the session with a JSON body (nil sends

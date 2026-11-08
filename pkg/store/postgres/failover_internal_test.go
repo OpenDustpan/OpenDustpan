@@ -317,6 +317,16 @@ func deadlineCases() []deadlineCase {
 	}
 }
 
+// warmFirstConn opens the first connection of pool, so that a statement
+// deadline measures only the call that follows and not the connect.
+func warmFirstConn(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+
+	if err := pool.Ping(t.Context()); err != nil {
+		t.Fatalf("warm the pool: %v", err)
+	}
+}
+
 // TestStatementDeadlineClosesStalledConnection proves that each method of
 // the guarded wrappers ends within the statement deadline when the connection
 // stops answering and does not close, and that the error is a lost
@@ -333,6 +343,7 @@ func TestStatementDeadlineClosesStalledConnection(t *testing.T) {
 
 			proxy, proxied := startHoldProxy(t, base)
 			pool := testPool(t, proxied, nil, withCheck)
+			warmFirstConn(t, pool)
 			g := guardedPool{pool: pool, rt: roundTrip{deadline: shortDeadline, watch: nil, readOnlyTx: false}}
 			ctx := context.WithoutCancel(t.Context())
 

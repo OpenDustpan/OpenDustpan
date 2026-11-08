@@ -104,15 +104,15 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 
 	p := modulePublishing(view, req, addr, rec)
 
-	// The check runs before promote, so a refused publish writes no content key.
+	// The check runs before move, so a refused publish writes no content key.
 	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
 		return registry.Release{}, refuseErr
 	}
 
 	f.bytes = nil
 
-	if promoteErr := s.promote(ctx, view, rec.ID, []measured{f}); promoteErr != nil {
-		return registry.Release{}, promoteErr
+	if moveErr := s.move(ctx, view, rec.ID, []measured{f}); moveErr != nil {
+		return registry.Release{}, moveErr
 	}
 
 	return s.record(ctx, c, p, rel)

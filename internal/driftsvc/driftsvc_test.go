@@ -224,6 +224,36 @@ func TestCheckRefusesWhatIsNoUnit(t *testing.T) {
 	}
 }
 
+// TestCheckRefusesAHiddenRuneInTheReason sends a reason that the route
+// refuses straight to the service, as if the route check had failed. The
+// service refuses it too and starts no job.
+func TestCheckRefusesAHiddenRuneInTheReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, reason string }{
+		{"line separator", "a\u2028b"},
+		{"paragraph separator", "a\u2029b"},
+		{"format character", "a\u200bb"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newStarter(nil)
+
+			req := requestFor(t, "network")
+			req.Reason = tt.reason
+
+			_, err := newChecker(t, starter, time.Now()).Check(t.Context(), actorAda(), req)
+			if !errors.Is(err, drift.ErrInvalid) || len(starter.requests) != 0 {
+				t.Fatalf("Check with reason %q = %v with %d starts, want ErrInvalid and none",
+					tt.reason, err, len(starter.requests))
+			}
+		})
+	}
+}
+
 func TestCheckPassesTheErrorsOfTheJobService(t *testing.T) {
 	t.Parallel()
 

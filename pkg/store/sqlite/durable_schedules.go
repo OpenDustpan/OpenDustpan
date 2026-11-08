@@ -39,9 +39,20 @@ func (o *DurableOperations) EnsureSchedule(ctx context.Context, spec durable.Sch
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// A new schedule is due at once.
-			err = q.InsertDurableSchedule(ctx, db.InsertDurableScheduleParams{
+			var rows int64
+
+			rows, err = q.InsertDurableSchedule(ctx, db.InsertDurableScheduleParams{
 				Name: spec.Name, IntervalMs: interval, NextRunAtMs: now,
 			})
+
+			// Two instances can start at the same time and both find no
+			// row. The insert then reports no row, because the other
+			// instance inserted the schedule first.
+			if err == nil && rows == 0 {
+				err = q.SetDurableScheduleInterval(ctx, db.SetDurableScheduleIntervalParams{
+					IntervalMs: interval, NowMs: now, Name: spec.Name,
+				})
+			}
 		case err == nil:
 			err = q.SetDurableScheduleInterval(ctx, db.SetDurableScheduleIntervalParams{
 				IntervalMs: interval, NowMs: now, Name: spec.Name,

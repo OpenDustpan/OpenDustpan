@@ -1,0 +1,6 @@
+self-service.blueprint-already-published
+self-service.blueprint-invalid
+self-service.blueprint-limit
+self-service.blueprint-not-found
+self-service.blueprint-stale
+self-service.blueprint-too-large
