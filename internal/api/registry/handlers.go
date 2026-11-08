@@ -3,13 +3,11 @@ package registry
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
@@ -258,18 +256,33 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request, p identity.Pri
 const (
 	// defaultProviderPage is the page size when the request has no pageSize.
 	defaultProviderPage = 100
-	// maxProviderPage is the largest page size a request may ask for.
-	maxProviderPage = 1000
+	// maxProviderPage is the largest page size a request may ask for. It stays
+	// at or below the largest limit of the store, which one page reads.
+	maxProviderPage = registry.MaxAddressPage
 )
 
 var (
 	errProviderPageSize = problem.BadRequest(
-		errcode.RequestPageSizeInvalid, "invalid page size: pageSize is a number from 1 to 1000",
+		errcode.RequestPageSizeInvalid,
+		fmt.Sprintf("invalid page size: pageSize is a number from 1 to %d", maxProviderPage),
 	)
 	errProviderPageToken = problem.BadRequest(
 		errcode.RequestPageTokenInvalid, "invalid page token: provide the nextPageToken of the page before",
 	)
+	// The causes of the four refusals of a provider page token. Each guard
+	// wraps its own cause, so the caller and a test can tell which guard
+	// refused.
+	errProviderTokenLength  = errors.New("provider page token is over the length limit")
+	errProviderTokenDecode  = errors.New("provider page token does not decode")
+	errProviderTokenEmpty   = errors.New("provider page token holds no name")
+	errProviderTokenAddress = errors.New("provider page token holds no provider name")
 )
+
+// providerToken is the opaque page token of the provider list: the name of
+// the last provider of the page before.
+type providerToken struct {
+	After string `json:"a"`
+}
 
 // providerQuery is one validated list request: the page size and the name
 // after which the page starts. After is empty for the first page.
@@ -278,8 +291,8 @@ type providerQuery struct {
 	after    string
 }
 
-// parseProviderQuery reads the pageSize and the pageToken. The token is the
-// base64url form of a provider name. It is untrusted input: it is checked
+// parseProviderQuery reads the pageSize and the pageToken. The token is
+// opaque JSON. It is untrusted input: the name that it holds is checked
 // against the same rules as the name of a provider, and a value that fails is
 // refused, never repaired.
 func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, error) {
@@ -296,26 +309,45 @@ func parseProviderQuery(r *http.Request, ns namespace.Name) (providerQuery, erro
 	}
 
 	if raw := q.Get("pageToken"); raw != "" {
-		// Defense in depth: the name check below refuses a long name too; this
-		// cap stays so that the decode never reads more than a token can hold.
-		if len(raw) > pagetoken.MaxLen {
-			return providerQuery{}, errProviderPageToken
-		}
-
-		decoded, err := base64.RawURLEncoding.DecodeString(raw)
+		after, err := parseProviderToken(raw, ns)
 		if err != nil {
-			return providerQuery{}, errProviderPageToken
+			return providerQuery{}, err
 		}
 
-		addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: string(decoded), System: ""}
-		if addr.Validate() != nil {
-			return providerQuery{}, errProviderPageToken
-		}
-
-		out.after = addr.Name
+		out.after = after
 	}
 
 	return out, nil
+}
+
+// parseProviderToken reads the cursor name of a provider page token. The
+// token is untrusted input: it is refused, never repaired.
+func parseProviderToken(raw string, ns namespace.Name) (string, error) {
+	// Defense in depth: pagetoken.Decode checks the length too; this cap
+	// stays so that the handler refuses a long token before the decode.
+	if len(raw) > pagetoken.MaxLen {
+		return "", fmt.Errorf("%w: %w", errProviderTokenLength, errProviderPageToken)
+	}
+
+	var token providerToken
+	if err := pagetoken.Decode(raw, &token); err != nil {
+		return "", fmt.Errorf("%w: %w", errProviderTokenDecode, errProviderPageToken)
+	}
+
+	// The first page carries no token: a token that holds no name is not a
+	// page token of this list.
+	if token.After == "" {
+		return "", fmt.Errorf("%w: %w", errProviderTokenEmpty, errProviderPageToken)
+	}
+
+	// Defense in depth: the store checks the cursor too; this check stays so
+	// that the handler refuses a bad token before the store call.
+	addr := registry.Address{Namespace: ns, Kind: registry.KindProvider, Name: token.After, System: ""}
+	if addr.Validate() != nil {
+		return "", fmt.Errorf("%w: %w", errProviderTokenAddress, errProviderPageToken)
+	}
+
+	return addr.Name, nil
 }
 
 // listProviders serves GET .../registry/providers: one page of the providers
@@ -331,26 +363,28 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request, _ identi
 		return
 	}
 
-	names, err := h.service.Providers(ctx, obj.Namespace())
+	names, next, err := h.service.Providers(ctx, obj.Namespace(), query.after, query.pageSize)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	// The names are in order, so the page starts at the first name after the
-	// token. A token that names no provider still pages from where the name
-	// would be.
-	start := sort.Search(len(names), func(i int) bool { return names[i] > query.after })
-	end := min(start+query.pageSize, len(names))
-	page := listProvidersResponse{Providers: make([]providerDocument, 0, end-start), NextPageToken: ""}
+	page := listProvidersResponse{Providers: make([]providerDocument, 0, len(names)), NextPageToken: ""}
 
-	for _, name := range names[start:end] {
+	for _, name := range names {
 		page.Providers = append(page.Providers, providerDocument{Namespace: obj.Namespace().String(), Name: name})
 	}
 
-	if end < len(names) {
-		page.NextPageToken = base64.RawURLEncoding.EncodeToString([]byte(names[end-1]))
+	if next != "" {
+		token, encodeErr := pagetoken.Encode(providerToken{After: next})
+		if encodeErr != nil {
+			h.writeError(ctx, w, encodeErr)
+
+			return
+		}
+
+		page.NextPageToken = token
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, page)

@@ -2903,6 +2903,24 @@ func (q *Queries) DeleteDriftResult(ctx context.Context, arg DeleteDriftResultPa
 	return err
 }
 
+const deleteEndedTicket = `-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = ? AND ticket_digest = ? AND until_ms <= ?
+`
+
+type DeleteEndedTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) DeleteEndedTicket(ctx context.Context, arg DeleteEndedTicketParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteEndedTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteEventsOfStack = `-- name: DeleteEventsOfStack :exec
 DELETE FROM update_events
 WHERE stack_id = ?
@@ -11372,6 +11390,25 @@ func (q *Queries) InsertSelfServiceBlueprintVersion(ctx context.Context, arg Ins
 	return err
 }
 
+const insertTicket = `-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
@@ -15792,12 +15829,18 @@ SELECT DISTINCT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = ?1 AND r.kind = ?2
+  AND (r.name > ?3
+    OR (r.name = ?3 AND r.system > ?4))
 ORDER BY r.name, r.system
+LIMIT ?5
 `
 
 type ListRegistryAddressesParams struct {
-	Namespace string
-	Kind      string
+	Namespace   string
+	Kind        string
+	AfterName   string
+	AfterSystem string
+	Lim         int64
 }
 
 type ListRegistryAddressesRow struct {
@@ -15805,8 +15848,17 @@ type ListRegistryAddressesRow struct {
 	System string
 }
 
+// One page of the distinct addresses of a kind in a namespace, after the
+// cursor (name, system). The caller reads one row more than the page size, so
+// that the extra row tells whether a next page exists.
 func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAddressesParams) ([]ListRegistryAddressesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listRegistryAddresses, arg.Namespace, arg.Kind)
+	rows, err := q.db.QueryContext(ctx, listRegistryAddresses,
+		arg.Namespace,
+		arg.Kind,
+		arg.AfterName,
+		arg.AfterSystem,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -18267,6 +18319,18 @@ DELETE FROM sign_in_requests WHERE expires_at_ms <= ?
 
 func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const pruneUsedTickets = `-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= ?
+`
+
+func (q *Queries) PruneUsedTickets(ctx context.Context, untilMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneUsedTickets, untilMs)
 	if err != nil {
 		return 0, err
 	}
