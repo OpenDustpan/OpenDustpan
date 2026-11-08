@@ -376,7 +376,8 @@ var (
 // other access. It answers no headers when neither variable holds a value.
 // The text is a list of Name=Value items, separated by commas or line
 // breaks, as OTEL_EXPORTER_OTLP_HEADERS writes it. A value is
-// percent-encoded, so it can hold a comma or an equals sign. The errors name
+// percent-encoded, so it can hold a comma or an equals sign. A name or a
+// decoded value with a control character is refused. The errors name
 // the position of an item, never its text, because a value can be a secret.
 func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (map[string]string, error) {
 	raw, _, err := secretTextFrom(lookup, env, fileEnv, errNoOTLPHeaders)
@@ -399,10 +400,22 @@ func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (m
 			return nil, fmt.Errorf("item %d: %w", i+1, errOTLPHeaderItem)
 		}
 
+		// Defense in depth, as for the value below. The error does not
+		// repeat the name, because the name holds the character.
+		if strings.ContainsFunc(name, isControlRune) {
+			return nil, fmt.Errorf("item %d: %w", i+1, errSecretControlChar)
+		}
+
 		decoded, decodeErr := url.PathUnescape(strings.TrimSpace(value))
 		if decodeErr != nil {
 			// The error of PathUnescape repeats a part of the value.
 			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errOTLPHeaderItem)
+		}
+
+		// Defense in depth: otlp.New refuses a control character too; this
+		// check stays so that a new caller of the headers cannot skip it.
+		if strings.ContainsFunc(decoded, isControlRune) {
+			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errSecretControlChar)
 		}
 
 		if _, dup := headers[strings.ToLower(name)]; dup {
