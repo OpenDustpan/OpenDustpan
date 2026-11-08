@@ -5335,12 +5335,32 @@ WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg
   AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
   AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
 
+-- name: EnsureQuotaKey :exec
+-- Makes the row of a key, so that the counter can lock it. The row holds no
+-- unit yet.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING;
+
 -- name: GetQuotaReservation :one
 -- The state and the times of the reservation id of a namespace.
 SELECT r.id, r.state, r.at_ms, r.ends_at_ms
 FROM quota_reservations AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaReservationForUpdate :one
+-- The state and the times of the reservation id of a namespace, with the row
+-- locked until the commit, so two ends of one reservation wait for each
+-- other.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id)
+FOR UPDATE OF r;
 
 -- name: GetQuotaSettled :one
 -- The settled count of the key. No row means the counter does not know the key.
@@ -5380,6 +5400,14 @@ FROM quota_reservation_keys
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND reservation_id = sqlc.arg(reservation_id)
 ORDER BY blueprint, kind, scope;
+
+-- name: LockQuotaKey :one
+-- Locks the row of the key until the commit, so the writes of one key wait
+-- for each other and two writes never both pass a limit.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+FOR UPDATE;
 
 -- name: SetQuotaReservationEnd :execrows
 -- Moves the end time of the open reservation id. A reservation that ended

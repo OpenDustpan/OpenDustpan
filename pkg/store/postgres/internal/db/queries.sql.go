@@ -5003,6 +5003,34 @@ func (q *Queries) EnsureNotificationSequence(ctx context.Context, scope string) 
 	return err
 }
 
+const ensureQuotaKey = `-- name: EnsureQuotaKey :exec
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING
+`
+
+type EnsureQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Makes the row of a key, so that the counter can lock it. The row holds no
+// unit yet.
+func (q *Queries) EnsureQuotaKey(ctx context.Context, arg EnsureQuotaKeyParams) error {
+	_, err := q.db.Exec(ctx, ensureQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	return err
+}
+
 const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
 UPDATE durable_operations
 SET claim_owner = NULL, claim_expires_at_ms = 0
@@ -8290,6 +8318,41 @@ type GetQuotaReservationRow struct {
 func (q *Queries) GetQuotaReservation(ctx context.Context, arg GetQuotaReservationParams) (GetQuotaReservationRow, error) {
 	row := q.db.QueryRow(ctx, getQuotaReservation, arg.Namespace, arg.ID)
 	var i GetQuotaReservationRow
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.AtMs,
+		&i.EndsAtMs,
+	)
+	return i, err
+}
+
+const getQuotaReservationForUpdate = `-- name: GetQuotaReservationForUpdate :one
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.id = $2
+FOR UPDATE OF r
+`
+
+type GetQuotaReservationForUpdateParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetQuotaReservationForUpdateRow struct {
+	ID       string
+	State    string
+	AtMs     int64
+	EndsAtMs int64
+}
+
+// The state and the times of the reservation id of a namespace, with the row
+// locked until the commit, so two ends of one reservation wait for each
+// other.
+func (q *Queries) GetQuotaReservationForUpdate(ctx context.Context, arg GetQuotaReservationForUpdateParams) (GetQuotaReservationForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getQuotaReservationForUpdate, arg.Namespace, arg.ID)
+	var i GetQuotaReservationForUpdateRow
 	err := row.Scan(
 		&i.ID,
 		&i.State,
@@ -18388,6 +18451,34 @@ func (q *Queries) LockPersonPreferences(ctx context.Context, id string) (LockPer
 	var i LockPersonPreferencesRow
 	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
 	return i, err
+}
+
+const lockQuotaKey = `-- name: LockQuotaKey :one
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND blueprint = $2 AND kind = $3 AND scope = $4
+FOR UPDATE
+`
+
+type LockQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Locks the row of the key until the commit, so the writes of one key wait
+// for each other and two writes never both pass a limit.
+func (q *Queries) LockQuotaKey(ctx context.Context, arg LockQuotaKeyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled_count int64
+	err := row.Scan(&settled_count)
+	return settled_count, err
 }
 
 const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one
