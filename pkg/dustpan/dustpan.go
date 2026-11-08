@@ -236,6 +236,12 @@ type settings struct {
 	// oidcProviders are the OpenID Connect providers of the console
 	// sign-in. See WithOIDCProvider.
 	oidcProviders []OIDCProvider
+	// ldapProviders are the LDAP providers of the sign-in. See
+	// WithLDAPProvider.
+	ldapProviders []LDAPProvider
+	// ldapLoopback lets the LDAP sign-in reach a loopback address. See
+	// WithLDAPLoopbackForTests.
+	ldapLoopback bool
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
@@ -718,6 +724,8 @@ func defaultSettings() *settings {
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
+		ldapProviders:           nil,
+		ldapLoopback:            false,
 		signInHTTPClient:        nil,
 		sessionCookies:          nil,
 		version:                 "",

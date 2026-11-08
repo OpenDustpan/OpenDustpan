@@ -165,6 +165,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		deltaCutoff:            0,
 		sinkSenders:            nil,
 		issuer:                 nil,
+		ldap:                   nil,
 		disableJournaling:      false,
 		ipAllowlists:           false,
 		signIn:                 false,

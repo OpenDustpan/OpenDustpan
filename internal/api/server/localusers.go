@@ -356,6 +356,15 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
+	// Login CSRF: refuse a request of another site before the budget and
+	// before any store call. It spends nothing.
+	if !h.signIn.checker.SignInFromBody(r) {
+		h.recordOtherSiteSignIn(ctx, r, passwordSignInAuditActor)
+		h.writeError(ctx, w, localUserError(localuser.ErrSignInFailed))
+
+		return
+	}
+
 	if err := h.admitPassword(ctx); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -774,7 +783,7 @@ func localUserErrors() []localUserMapping {
 				status:  http.StatusUnauthorized,
 				code:    errcode.LocalUserSignInFailed,
 				args:    nil,
-				message: "the user name or the password is wrong",
+				message: passwordWrongText,
 			},
 		},
 		{

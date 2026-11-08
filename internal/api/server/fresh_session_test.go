@@ -191,10 +191,22 @@ func (s storeSessions) seedTester(t *testing.T) {
 // signIn returns the sign-in configuration that reads these sessions.
 func (s storeSessions) signIn() *apiserver.SignIn {
 	return &apiserver.SignIn{
-		Service:      s.service,
-		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: s.svc, Limiter: nil,
-		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil,
-		Passkeys: nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+		Service:             s.service,
+		OnDevRefused:        nil,
+		DevCode:             nil,
+		DevAdmin:            noBootstrapAdmin,
+		Sessions:            s.svc,
+		Limiter:             nil,
+		Stored:              nil,
+		Admin:               nil,
+		PasswordProviders:   nil,
+		Origins:             []string{signInBase},
+		Providers:           nil,
+		PasswordLimiter:     nil,
+		Passkeys:            nil,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
 	}
 }
 

@@ -111,7 +111,11 @@ type SignIn struct {
 	Stored    StoredProviders
 	Admin     *session.ProviderAdmin
 	Providers []SignInProvider
-	Origins   []string
+	// PasswordProviders are the providers of the configuration that check a
+	// user name and a password at a directory. Their route needs
+	// PasswordLimiter too.
+	PasswordProviders []PasswordProvider
+	Origins           []string
 	// PasswordLimiter is the per-address budget of the routes that check a
 	// password or a one-time code of a local user: the password sign-in, the
 	// redeem of a code and the change of the own password. It is a budget of
@@ -169,9 +173,12 @@ type signInState struct {
 	stored          StoredProviders
 	admin           *session.ProviderAdmin
 	providers       map[string]SignInProvider
-	checker         *sessionauth.Checker
-	devCode         *devcode.Code
-	devAdmin        identity.Principal
+	// passwordProviders are the password providers of the configuration,
+	// by ID.
+	passwordProviders map[string]PasswordProvider
+	checker           *sessionauth.Checker
+	devCode           *devcode.Code
+	devAdmin          identity.Principal
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -223,6 +230,11 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		providers[p.ID] = p
 	}
 
+	passwordProviders, err := passwordProvidersOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	var opts []sessionauth.Option
 	if kind != installation.KindDev {
 		opts = append(opts, sessionauth.RefuseDevSubjects(), sessionauth.OnDevRefused(cfg.OnDevRefused))
@@ -240,13 +252,14 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		passwords:     cfg.PasswordLimiter,
 		passkeys:      cfg.Passkeys,
 		passkeySignIn: cfg.PasskeySignIn, passkeyBegins: cfg.PasskeyBeginLimiter,
-		passkeyFailures: cfg.PasskeyLimiter,
-		stored:          cfg.Stored,
-		admin:           cfg.Admin,
-		providers:       providers,
-		checker:         checker,
-		devCode:         cfg.DevCode,
-		devAdmin:        cfg.DevAdmin,
+		passkeyFailures:   cfg.PasskeyLimiter,
+		stored:            cfg.Stored,
+		admin:             cfg.Admin,
+		providers:         providers,
+		passwordProviders: passwordProviders,
+		checker:           checker,
+		devCode:           cfg.DevCode,
+		devAdmin:          cfg.DevAdmin,
 	}, nil
 }
 

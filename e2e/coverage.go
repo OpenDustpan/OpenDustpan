@@ -217,6 +217,7 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
 		signInAllowEntries(),
+		ldapSignInAllowEntries(),
 		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),

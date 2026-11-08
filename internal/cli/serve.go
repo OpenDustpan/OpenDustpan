@@ -7,7 +7,7 @@ const ServeSynopsis = "Run the server with the built-in adapters."
 // the configuration file, then the database, installation, network, storage, key
 // and limit settings.
 func ServeFlags() []*Setting {
-	return SettingsFor(
+	return SettingsFor(append([]string{
 		"config",
 		"database",
 		"installation",
@@ -62,7 +62,37 @@ func ServeFlags() []*Setting {
 		"oidc-client-id",
 		"oidc-scopes",
 		"oidc-no-auto-create",
-	)
+	}, ldapServeFlags()...)...)
+}
+
+// ldapServeFlags answers the flags of the static LDAP sign-in provider, in
+// reference order. They close the list of the serve flags.
+func ldapServeFlags() []string {
+	return []string{
+		"ldap-url",
+		"ldap-provider",
+		"ldap-display-name",
+		"ldap-start-tls",
+		"ldap-ca-file",
+		"ldap-allowed-ranges",
+		"ldap-bind-dn",
+		"ldap-base-dn",
+		"ldap-user-filter",
+		"ldap-user-name-attribute",
+		"ldap-email-attribute",
+		"ldap-name-attribute",
+		"ldap-subject",
+		"ldap-disabled-attribute",
+		"ldap-disabled-mask",
+		"ldap-disabled-values",
+		"ldap-groups",
+		"ldap-group-base-dn",
+		"ldap-group-filter",
+		"ldap-group-member-attribute",
+		"ldap-group-member-of-attribute",
+		"ldap-group-name-attribute",
+		"ldap-no-auto-create",
+	}
 }
 
 // ServeCommand answers the serve row of the command table with run: serve

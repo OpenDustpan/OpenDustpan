@@ -235,10 +235,22 @@ func newAccessFixtureAll(
 	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	signIn := &apiserver.SignIn{
-		Service:      newTestSignInService(t, st, sessions, principals),
-		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
-		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+		Service:             newTestSignInService(t, st, sessions, principals),
+		OnDevRefused:        nil,
+		DevCode:             nil,
+		DevAdmin:            noBootstrapAdmin,
+		Sessions:            sessions,
+		Limiter:             nil,
+		Stored:              nil,
+		Admin:               nil,
+		PasswordProviders:   nil,
+		Origins:             []string{signInBase},
+		Providers:           nil,
+		PasswordLimiter:     passwords,
+		Passkeys:            passkeys,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
 	}
 	if tweak != nil {
 		tweak(signIn, st)

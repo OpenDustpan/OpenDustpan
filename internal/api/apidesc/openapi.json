@@ -1526,7 +1526,9 @@
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
+          "sign-in.failed",
           "sign-in.refused",
+          "sign-in.unavailable",
           "sink.access-token",
           "sink.conflict",
           "sink.delivery-not-found",
@@ -17588,6 +17590,51 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/sign-in/providers/{provider}/password": {
+      "post": {
+        "operationId": "signInWithProviderPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "sign-in"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -17801,6 +17848,9 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "sign-in"
     },
     {
       "name": "source-filter"

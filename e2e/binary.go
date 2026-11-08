@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ldaptest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -127,6 +128,11 @@ type envInput struct {
 	// issuer is a fake OpenID provider of a CI platform whose keys the
 	// in-process server may read, on the loopback, or nil.
 	issuer *OIDCIssuerFake
+	// ldap is a test LDAP directory on the loopback, or nil. With a sign-in,
+	// the in-process server gets the LDAP providers LDAPTLSProvider and
+	// LDAPPlainProvider of it. The server binary cannot reach a loopback
+	// directory, so NewEnvWithLDAP refuses the binary.
+	ldap *ldaptest.Server
 }
 
 // backendConfig groups the settings of one backend process.

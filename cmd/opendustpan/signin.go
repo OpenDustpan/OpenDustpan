@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
@@ -21,11 +22,12 @@ var (
 	errNoOIDCIssuer = errors.New("an OpenID Connect setting needs --oidc-issuer")
 )
 
-// signInOptions returns the console sign-in option of the serve flags: one
-// OpenID Connect provider when --oidc-issuer is set, else none. A process
-// without the api component gets none. The client secret comes from lookup,
-// which the start sets to the real environment: f.lookup is the snapshot of
-// the reloads and holds only a fingerprint of a sensitive variable.
+// signInOptions returns the console sign-in options of the serve flags: one
+// OpenID Connect provider when --oidc-issuer is set, and the LDAP provider of
+// ldapOptions when --ldap-url is set. A process without the api component
+// gets none. The client secret and the LDAP password come from lookup, which
+// the start sets to the real environment: f.lookup is the snapshot of the
+// reloads and holds only a fingerprint of a sensitive variable.
 func (f *serveFlags) signInOptions(lookup func(string) (string, bool)) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
@@ -39,12 +41,25 @@ func (f *serveFlags) signInOptions(lookup func(string) (string, bool)) ([]dustpa
 		return nil, nil
 	}
 
+	var opts []dustpan.Option
+
 	provider, ok, err := f.oidcProviderOption(lookup)
-	if err != nil || !ok {
+	if err != nil {
 		return nil, err
 	}
 
-	return []dustpan.Option{dustpan.WithOIDCProvider(provider)}, nil
+	if ok {
+		opts = append(opts, dustpan.WithOIDCProvider(provider))
+	}
+
+	// The LDAP password comes from lookup too, and the start clears its
+	// variable after the read.
+	ldap, err := f.ldapOptions(lookup, os.Unsetenv)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(opts, ldap...), nil
 }
 
 // oidcProviderOption returns the OpenID Connect provider of the serve flags,

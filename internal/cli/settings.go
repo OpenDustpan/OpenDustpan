@@ -469,6 +469,149 @@ var Settings = []*Setting{
 		"false",
 	).WithFile("oidc-no-auto-create"),
 	stringSetting(
+		"ldap-url",
+		"DUSTPAN_LDAP_URL",
+		"",
+		"address of the LDAP directory of the sign-in: ldaps://host[:port], or ldap://host[:port] with --ldap-start-tls; no path, query or user information. The sign-in also needs --ldap-provider, --ldap-bind-dn, --ldap-base-dn and --ldap-user-filter (DUSTPAN_LDAP_URL)",
+		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`.",
+	).WithFile("ldap.url").WithStaticCredentialHost().WithURL(),
+	stringSetting(
+		"ldap-provider",
+		"DUSTPAN_LDAP_PROVIDER",
+		"",
+		"ID of the LDAP provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the identity of each person who signs in: the subject <provider ID>:<subject>. Never change the ID after the first sign-in (DUSTPAN_LDAP_PROVIDER)",
+		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID.",
+	).WithFile("ldap.provider"),
+	stringSetting(
+		"ldap-display-name", "DUSTPAN_LDAP_DISPLAY_NAME", "",
+		"name of the LDAP provider that the console shows (DUSTPAN_LDAP_DISPLAY_NAME)",
+		"(the provider ID)",
+	).WithFile("ldap.displayName"),
+	boolSetting(
+		"ldap-start-tls", "DUSTPAN_LDAP_START_TLS",
+		"start TLS on an ldap:// URL before the first bind; not allowed with ldaps:// (DUSTPAN_LDAP_START_TLS)",
+		"false",
+	).WithFile("ldap.startTLS"),
+	stringSetting(
+		"ldap-ca-file", "DUSTPAN_LDAP_CA_FILE", "",
+		"PEM bundle of the certificate authorities of the LDAP directory (DUSTPAN_LDAP_CA_FILE)",
+		"(none: the system roots)",
+	).WithFile("ldap.caFile"),
+	stringSetting(
+		"ldap-allowed-ranges", "DUSTPAN_LDAP_ALLOWED_RANGES", "",
+		"comma-separated CIDRs that a connection to the LDAP directory may reach, in addition to public addresses "+
+			"(DUSTPAN_LDAP_ALLOWED_RANGES)",
+		"(none: a connection reaches public addresses only). Set the range of a directory on a private network, "+
+			"for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and "+
+			"unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. "+
+			"The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, "+
+			"also inside a range. It checks the address at each connection.",
+	).WithFile("ldap.allowedRanges"),
+	stringSetting(
+		"ldap-bind-dn", "DUSTPAN_LDAP_BIND_DN", "",
+		"DN of the service account of the LDAP sign-in (DUSTPAN_LDAP_BIND_DN)",
+		referenceNone,
+	).WithFile("ldap.bindDN"),
+	stringSetting(
+		"ldap-base-dn", "DUSTPAN_LDAP_BASE_DN", "",
+		"base DN of the user search of the LDAP sign-in; the entry of a person must be below it (DUSTPAN_LDAP_BASE_DN)",
+		referenceNone,
+	).WithFile("ldap.baseDN"),
+	stringSetting(
+		"ldap-user-filter",
+		"DUSTPAN_LDAP_USER_FILTER",
+		"",
+		"filter of the user search of the LDAP sign-in; it holds {user} at least once, for example (&(objectClass=person)(uid={user})) (DUSTPAN_LDAP_USER_FILTER)",
+		"(none). The server escapes the user name before it puts it in place of `{user}`.",
+	).WithFile("ldap.userFilter"),
+	stringSetting(
+		"ldap-user-name-attribute", "DUSTPAN_LDAP_USER_NAME_ATTRIBUTE", "",
+		"attribute that gives the user name of a person, for example uid (DUSTPAN_LDAP_USER_NAME_ATTRIBUTE)",
+		"(none: the user name that the person typed)",
+	).WithFile("ldap.userNameAttribute"),
+	stringSetting(
+		"ldap-email-attribute", "DUSTPAN_LDAP_EMAIL_ATTRIBUTE", "",
+		"attribute that gives the email of a person, for example mail (DUSTPAN_LDAP_EMAIL_ATTRIBUTE)",
+		"(none: no email)",
+	).WithFile("ldap.emailAttribute"),
+	stringSetting(
+		"ldap-name-attribute", "DUSTPAN_LDAP_NAME_ATTRIBUTE", "",
+		"attribute that gives the display name of a person, for example cn (DUSTPAN_LDAP_NAME_ATTRIBUTE)",
+		"(none: no name)",
+	).WithFile("ldap.nameAttribute"),
+	stringSetting(
+		"ldap-subject",
+		"DUSTPAN_LDAP_SUBJECT",
+		"entryUUID",
+		"attribute that gives the subject of a person: entryUUID, objectGUID, or the name of another attribute; never the DN, uid or email (DUSTPAN_LDAP_SUBJECT)",
+		"`entryUUID`. Use `objectGUID` for Active Directory. The subject must not change when a person changes a name or an email.",
+	).WithFile("ldap.subject"),
+	stringSetting(
+		"ldap-disabled-attribute",
+		"DUSTPAN_LDAP_DISABLED_ATTRIBUTE",
+		"",
+		"attribute that marks a disabled person, for example userAccountControl or nsAccountLock (DUSTPAN_LDAP_DISABLED_ATTRIBUTE)",
+		"(none: the server reads no such value)",
+	).WithFile("ldap.disabledAttribute"),
+	stringSetting(
+		"ldap-disabled-mask",
+		"DUSTPAN_LDAP_DISABLED_MASK",
+		"",
+		"bit mask of the disabled attribute, as a decimal number, for example 2 for userAccountControl (DUSTPAN_LDAP_DISABLED_MASK)",
+		"(none: compare the values of `ldap.disabledValues`)",
+	).WithFile("ldap.disabledMask"),
+	stringSetting(
+		"ldap-disabled-values",
+		"DUSTPAN_LDAP_DISABLED_VALUES",
+		"",
+		"comma-separated values of the disabled attribute that mark a disabled person, for example true for nsAccountLock (DUSTPAN_LDAP_DISABLED_VALUES)",
+		"(none)",
+	).WithFile("ldap.disabledValues"),
+	stringSetting(
+		"ldap-groups",
+		"DUSTPAN_LDAP_GROUPS",
+		"off",
+		"where the LDAP sign-in reads the groups of a person: off, search or memberOf; this version reads the groups but applies no membership (DUSTPAN_LDAP_GROUPS)",
+		"`off`. With groups on, a person with no group cannot sign in. This version reads the groups and applies no membership.",
+	).WithFile("ldap.groups"),
+	stringSetting(
+		"ldap-group-base-dn", "DUSTPAN_LDAP_GROUP_BASE_DN", "",
+		"base DN of the groups of the LDAP sign-in (DUSTPAN_LDAP_GROUP_BASE_DN)",
+		referenceNone,
+	).WithFile("ldap.groupBaseDN"),
+	stringSetting(
+		"ldap-group-filter",
+		"DUSTPAN_LDAP_GROUP_FILTER",
+		"",
+		"filter of a group entry for ldap.groups search, for example (objectClass=groupOfNames) (DUSTPAN_LDAP_GROUP_FILTER)",
+		referenceNone,
+	).WithFile("ldap.groupFilter"),
+	stringSetting(
+		"ldap-group-member-attribute",
+		"DUSTPAN_LDAP_GROUP_MEMBER_ATTRIBUTE",
+		"",
+		"attribute of a group that holds the DN of a member, for ldap.groups search, for example member (DUSTPAN_LDAP_GROUP_MEMBER_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupMemberAttribute"),
+	stringSetting(
+		"ldap-group-member-of-attribute",
+		"DUSTPAN_LDAP_GROUP_MEMBER_OF_ATTRIBUTE",
+		"",
+		"attribute of an entry that holds the DN of its groups, for ldap.groups memberOf, for example memberOf (DUSTPAN_LDAP_GROUP_MEMBER_OF_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupMemberOfAttribute"),
+	stringSetting(
+		"ldap-group-name-attribute", "DUSTPAN_LDAP_GROUP_NAME_ATTRIBUTE", "",
+		"attribute of a group that gives the group name, for example cn (DUSTPAN_LDAP_GROUP_NAME_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupNameAttribute"),
+	boolSetting(
+		"ldap-no-auto-create",
+		"DUSTPAN_LDAP_NO_AUTO_CREATE",
+		"refuse the LDAP sign-in of a person who has no principal yet, instead of making one with no grant (DUSTPAN_LDAP_NO_AUTO_CREATE)",
+		"false",
+	).WithFile("ldap.noAutoCreate"),
+	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,
@@ -529,6 +672,16 @@ var Settings = []*Setting{
 			"and refuses a secret with a control character in it. "+
 			"When you set both, this variable wins over `DUSTPAN_OIDC_CLIENT_SECRET_FILE`.",
 	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LDAP_BIND_PASSWORD",
+		"The password of the service account of the LDAP sign-in. Required when you set `--ldap-url` and "+
+			"no password file. No flag and no configuration file key sets it.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LDAP_BIND_PASSWORD_FILE",
+		"A file that holds the password of the service account of the LDAP sign-in. Only its owner can "+
+			"read it. When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
+	),
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
 		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
