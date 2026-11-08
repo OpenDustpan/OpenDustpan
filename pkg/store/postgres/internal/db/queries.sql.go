@@ -10230,9 +10230,10 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 	return i, err
 }
 
-const insertDurableSchedule = `-- name: InsertDurableSchedule :exec
+const insertDurableSchedule = `-- name: InsertDurableSchedule :execrows
 INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
 VALUES ($1::text, $2::bigint, $3::bigint, NULL)
+ON CONFLICT (name) DO NOTHING
 `
 
 type InsertDurableScheduleParams struct {
@@ -10241,9 +10242,12 @@ type InsertDurableScheduleParams struct {
 	NowMs      int64
 }
 
-func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) error {
-	_, err := q.db.Exec(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NowMs)
-	return err
+func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NowMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertDurableStep = `-- name: InsertDurableStep :exec

@@ -2582,8 +2582,9 @@ VALUES (
 -- name: GetDurableSchedule :one
 SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?;
 
--- name: InsertDurableSchedule :exec
-INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL);
+-- name: InsertDurableSchedule :execrows
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL)
+ON CONFLICT (name) DO NOTHING;
 
 -- name: SetDurableScheduleInterval :exec
 -- Sets the interval, and moves the next run to now plus the interval when

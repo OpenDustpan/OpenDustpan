@@ -1645,9 +1645,22 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 	return nil
 }
 
+// maxManifestBytes bounds the manifest that readManifest reads from a target.
+// The write path sets no limit on the number of blob entries, so the bound is
+// a fixed size, not a count. A larger object is refused before it is parsed, so
+// a hostile or broken target cannot grow the read without bound.
+const maxManifestBytes = 64 << 20
+
 // readManifest reads and parses backups/<id>/manifest.json. A backup without
 // a readable manifest of the current format never counts as complete.
 func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, error) {
+	return readManifestLimit(ctx, target, id, maxManifestBytes)
+}
+
+// readManifestLimit is readManifest with the size bound as a parameter, so a
+// test can reach the bound with a small limit instead of maxManifestBytes.
+// readManifest passes maxManifestBytes.
+func readManifestLimit(ctx context.Context, target blob.Store, id ID, limit int64) (Manifest, error) {
 	key, err := blob.ParseKey("backups/" + id.String() + "/manifest.json")
 	if err != nil {
 		return Manifest{}, fmt.Errorf("check backup %s: %w", id, err)
@@ -1662,7 +1675,7 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 		return Manifest{}, fmt.Errorf("read manifest of backup %s: %w", id, err)
 	}
 
-	data, readErr := io.ReadAll(reader)
+	data, readErr := io.ReadAll(io.LimitReader(reader, limit+1))
 	closeErr := reader.Close()
 
 	if readErr != nil {
@@ -1671,6 +1684,10 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 
 	if closeErr != nil {
 		return Manifest{}, fmt.Errorf("close manifest of backup %s: %w", id, closeErr)
+	}
+
+	if int64(len(data)) > limit {
+		return Manifest{}, fmt.Errorf("manifest of backup %s is larger than %d bytes: %w", id, limit, ErrCorrupt)
 	}
 
 	return parseManifest(id, data)
