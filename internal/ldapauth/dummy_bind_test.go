@@ -48,10 +48,7 @@ func TestUnknownUserCostsTheBindsOfAWrongPassword(t *testing.T) {
 		t.Fatalf("binds: wrong password %q, unknown user %q; want 2 each", wrong, unknown)
 	}
 
-	if !errors.Is(wrongErr, session.ErrMethodRejected) || !errors.Is(unknownErr, session.ErrMethodRejected) ||
-		wrongErr.Error() != unknownErr.Error() {
-		t.Fatalf("errors: wrong password %v, unknown user %v; want the same ErrMethodRejected", wrongErr, unknownErr)
-	}
+	checkSameRejection(t, wrongErr, unknownErr)
 
 	dummy := unknown[1]
 
@@ -65,5 +62,16 @@ func TestUnknownUserCostsTheBindsOfAWrongPassword(t *testing.T) {
 		t.Fatalf("dummy bind = %q, want an entry below the base DN", dummy)
 	default:
 		// The dummy bind names an entry below the base DN that is no account.
+	}
+}
+
+// checkSameRejection fails unless wrong and unknown are both
+// ErrMethodRejected with the same text.
+func checkSameRejection(t *testing.T, wrong, unknown error) {
+	t.Helper()
+
+	if wrong == nil || unknown == nil || !errors.Is(wrong, session.ErrMethodRejected) ||
+		!errors.Is(unknown, session.ErrMethodRejected) || wrong.Error() != unknown.Error() {
+		t.Fatalf("errors: wrong password %v, unknown user %v; want the same ErrMethodRejected", wrong, unknown)
 	}
 }
