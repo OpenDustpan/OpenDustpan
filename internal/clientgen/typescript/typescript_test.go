@@ -314,6 +314,150 @@ func TestRuntimeExportsAreReserved(t *testing.T) {
 	}
 }
 
+// objectSchema is an object schema with only a name.
+func objectSchema(name string) model.Schema {
+	return model.Schema{
+		Name: name, Kind: model.KindObject, Description: "", Fields: nil, Values: nil, Open: false,
+		Extra: nil, Discriminator: "", Variants: nil, Base: "", Union: "",
+	}
+}
+
+// unionOf makes the type of a list of primitive type names.
+func unionOf(kinds ...model.TypeKind) model.Type {
+	return model.Type{
+		Kind: model.TypeUnion, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: kinds,
+	}
+}
+
+// refTo makes the type of a reference to a schema.
+func refTo(name string) model.Type {
+	return model.Type{Kind: model.TypeRef, Format: "", Elem: nil, Ref: name, Const: "", Nullable: false, Members: nil}
+}
+
+// schemaNamed returns the schema of a description by name.
+func schemaNamed(t *testing.T, api *model.API, name string) *model.Schema {
+	t.Helper()
+
+	for i := range api.Schemas {
+		if api.Schemas[i].Name == name {
+			return &api.Schemas[i]
+		}
+	}
+
+	t.Fatalf("the description has no schema %s", name)
+
+	return nil
+}
+
+// fileText returns the content of one rendered file.
+func fileText(t *testing.T, files []clientgen.File, path string) string {
+	t.Helper()
+
+	for _, f := range files {
+		if f.Path == path {
+			return string(f.Content)
+		}
+	}
+
+	t.Fatalf("the run gave no file %s", path)
+
+	return ""
+}
+
+// TestRenderTypeList checks that a type list becomes a union of the listed
+// types, in the order of the list, with a validator that tries each of them,
+// and that the description of a field is the doc comment of the member, in
+// place of the description of its type.
+func TestRenderTypeList(t *testing.T) {
+	t.Parallel()
+
+	api := synthetic(t)
+
+	value := model.Field{
+		Name: "value", Type: unionOf(model.TypeString, model.TypeNumber, model.TypeBoolean),
+		Required: true, Description: "The value.",
+	}
+	described := model.Field{
+		Name: "described", Type: refTo("Settings"), Required: false, Description: "The described settings.",
+	}
+
+	widget := schemaNamed(t, api, "Widget")
+	widget.Fields = append(widget.Fields, value, described)
+
+	files := render(t, api)
+	types, decoders := fileText(t, files, "src/types.ts"), fileText(t, files, "src/decoders.ts")
+
+	for _, want := range []string{
+		"/** The value. */\n  readonly value: string | number | boolean;",
+		"/** The described settings. */\n  readonly described?: Settings;",
+		"/** The settings. *\\/ */\nexport interface Settings {",
+	} {
+		if !strings.Contains(types, want) {
+			t.Errorf("types.ts does not hold %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {",
+		`value: oneOf<string | number | boolean>("a string, a number or a boolean", string, number, boolean),`,
+	} {
+		if !strings.Contains(decoders, want) {
+			t.Errorf("decoders.ts does not hold %q", want)
+		}
+	}
+}
+
+// enumSchema is a closed enum schema with one value.
+func enumSchema(name string) model.Schema {
+	return model.Schema{
+		Name: name, Kind: model.KindEnum, Description: "", Fields: nil, Values: []string{"a"}, Open: false,
+		Extra: nil, Discriminator: "", Variants: nil, Base: "", Union: "",
+	}
+}
+
+// TestRenderRefusesEmittedNameCollisions checks that a schema claims the
+// identifiers that the templates emit: its name, decode<Name> and, for an
+// enum, <Name>Values. A clash fails in either schema order.
+func TestRenderRefusesEmittedNameCollisions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		schemas []model.Schema
+	}{
+		{"Foo then decodeFoo", []model.Schema{objectSchema("Foo"), objectSchema("decodeFoo")}},
+		{"decodeFoo then Foo", []model.Schema{objectSchema("decodeFoo"), objectSchema("Foo")}},
+		{"enum Foo then FooValues", []model.Schema{enumSchema("Foo"), enumSchema("FooValues")}},
+		{"enum FooValues then Foo", []model.Schema{enumSchema("FooValues"), enumSchema("Foo")}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			api := synthetic(t)
+			api.Schemas = append(api.Schemas, tc.schemas...)
+
+			if _, err := typescript.New().Render(api, options(api.Version)); !errors.Is(err, clientgen.ErrInvalidName) {
+				t.Fatalf("want ErrInvalidName, got %v", err)
+			}
+		})
+	}
+}
+
+// TestRenderAllowsNamesThatDoNotCollide checks that the claims accept a
+// description whose emitted identifiers differ.
+func TestRenderAllowsNamesThatDoNotCollide(t *testing.T) {
+	t.Parallel()
+
+	api := synthetic(t)
+	api.Schemas = append(api.Schemas, enumSchema("Foo"), objectSchema("Bar"))
+
+	if files := render(t, api); len(files) == 0 {
+		t.Fatal("render gave no files")
+	}
+}
+
 // TestRenderRefusesHostileInput sends hostile input to the template set as a
 // model that the parser did not check.
 func TestRenderRefusesHostileInput(t *testing.T) {
@@ -405,7 +549,15 @@ func TestRenderRefusesHostileInput(t *testing.T) {
 			clientgen.ErrVersion,
 		},
 		{"members and additional properties", func(a *model.API, _ *clientgen.Options) {
-			extra := model.Type{Kind: model.TypeString, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+			extra := model.Type{
+				Kind:     model.TypeString,
+				Format:   "",
+				Elem:     nil,
+				Ref:      "",
+				Const:    "",
+				Nullable: false,
+				Members:  nil,
+			}
 			a.Schemas[0].Extra = &extra
 		}, clientgen.ErrUnsupported},
 		{
@@ -496,6 +648,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 					Ref:      "",
 					Const:    "",
 					Nullable: false,
+					Members:  nil,
 				}
 			},
 			clientgen.ErrUnsupported,
@@ -510,6 +663,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 					Ref:      "",
 					Const:    "",
 					Nullable: false,
+					Members:  nil,
 				}
 			},
 			clientgen.ErrUnsupported,
@@ -517,9 +671,9 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 		{
 			"unknown kind of an item type",
 			func(a *model.API, _ *clientgen.Options) {
-				elem := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+				elem := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
 				a.Schemas[0].Fields[0].Type = model.Type{
-					Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Const: "", Nullable: false,
+					Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Const: "", Nullable: false, Members: nil,
 				}
 			},
 			clientgen.ErrUnsupported,
@@ -527,7 +681,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 		{
 			"unknown kind of the type of an additional property",
 			func(a *model.API, _ *clientgen.Options) {
-				extra := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+				extra := model.Type{Kind: 99, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
 				a.Schemas[0].Fields = nil
 				a.Schemas[0].Extra = &extra
 			},
@@ -549,6 +703,18 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 			clientgen.ErrUnsupported,
 		},
 		{
+			"a type list with one member",
+			func(a *model.API, _ *clientgen.Options) { a.Schemas[0].Fields[0].Type = unionOf(model.TypeString) },
+			clientgen.ErrInvalidDescription,
+		},
+		{
+			"a type list with a member that is not a primitive",
+			func(a *model.API, _ *clientgen.Options) {
+				a.Schemas[0].Fields[0].Type = unionOf(model.TypeString, model.TypeRef)
+			},
+			clientgen.ErrInvalidDescription,
+		},
+		{
 			"format of an answer that the set does not check",
 			func(a *model.API, _ *clientgen.Options) {
 				onEachResult(a, func(t *model.Type) {
@@ -559,6 +725,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 						Ref:      "",
 						Const:    "",
 						Nullable: false,
+						Members:  nil,
 					}
 				})
 			},
@@ -575,6 +742,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 						Ref:      "",
 						Const:    "",
 						Nullable: false,
+						Members:  nil,
 					}
 				})
 			},
@@ -591,6 +759,7 @@ func TestRenderRefusesTypesThatItCannotCheck(t *testing.T) {
 						Ref:      "",
 						Const:    "",
 						Nullable: false,
+						Members:  nil,
 					}
 				})
 			},

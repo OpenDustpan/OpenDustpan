@@ -77,6 +77,8 @@ type Transport interface {
 type Error struct {
 	Status int
 	Body   protocol.Error
+	// RetryAfter is the value of the header Retry-After of the answer, or 0.
+	RetryAfter time.Duration
 }
 
 // Error returns the code and the message of the answer.
@@ -255,6 +257,7 @@ func Open(ctx context.Context, c *Client, handoff string) (*Session, error) {
 // HTTP methods and statuses that the protocol uses. The package names them
 // so that it links no HTTP package.
 const (
+	methodGet       = "GET"
 	methodPost      = "POST"
 	methodPut       = "PUT"
 	statusOK        = 200
@@ -280,7 +283,7 @@ func check(resp *Response, want int) error {
 
 	var body protocol.Error
 	if resp.Status >= statusError && json.Unmarshal(resp.Body, &body) == nil && body.Code != "" {
-		return &Error{Status: resp.Status, Body: body}
+		return &Error{Status: resp.Status, Body: body, RetryAfter: resp.RetryAfter}
 	}
 
 	// A proxy or a load balancer in front of the server answers 429 and
@@ -291,9 +294,12 @@ func check(resp *Response, want int) error {
 		code = protocol.ErrorUnavailable
 	}
 
-	return &Error{Status: resp.Status, Body: protocol.Error{
-		Code: code, Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
-	}}
+	return &Error{
+		Status: resp.Status, Body: protocol.Error{
+			Code: code, Message: "the answer has the status " + strconv.Itoa(resp.Status), Supported: "",
+		},
+		RetryAfter: resp.RetryAfter,
+	}
 }
 
 // Post sends a signed POST of the session with a JSON body (nil sends
@@ -311,6 +317,13 @@ func (s *Session) Post(ctx context.Context, path string, body any) (*Response, e
 
 	return s.client.Signed(ctx, s.key, s.ID, &Request{Method: methodPost, Path: path, Body: raw, Header: jsonHeader()},
 		nil)
+}
+
+// Get sends a signed GET of the session, for example the read of a plan part,
+// and returns the answer of any status. The proof signs the hash of the empty
+// body.
+func (s *Session) Get(ctx context.Context, path string) (*Response, error) {
+	return s.client.Signed(ctx, s.key, s.ID, &Request{Method: methodGet, Path: path, Body: nil, Header: nil}, nil)
 }
 
 // PutLogChunk uploads one chunk of a log and returns the answer of any

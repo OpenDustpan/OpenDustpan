@@ -19,6 +19,7 @@ import {
   union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
+import { invalidValue } from "./errors.js";
 import type {
   AccessLimit,
   AddRegistryKeyRequest,
@@ -28,6 +29,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -206,6 +209,33 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  SelfServiceBlueprint,
+  SelfServiceChoice,
+  SelfServiceComponent,
+  SelfServiceDelivery,
+  SelfServiceDraft,
+  SelfServiceDraftWrite,
+  SelfServiceFilter,
+  SelfServiceGitDelivery,
+  SelfServiceHomeKind,
+  SelfServiceInput,
+  SelfServiceInputType,
+  SelfServiceJobDelivery,
+  SelfServiceModule,
+  SelfServiceOperand,
+  SelfServiceOutputRef,
+  SelfServicePlatform,
+  SelfServicePolicyEffect,
+  SelfServicePolicyRule,
+  SelfServiceProgram,
+  SelfServicePublishRequest,
+  SelfServiceQuotaKind,
+  SelfServiceQuotaRule,
+  SelfServiceQuotaScope,
+  SelfServiceRule,
+  SelfServiceSource,
+  SelfServiceVersion,
+  SelfServiceVersionList,
   Setting,
   Settings,
   SettingsLockedError,
@@ -302,12 +332,40 @@ import {
   ContextStatusValues,
   DriftStatusValues,
   ErrorCodeValues,
+  SelfServiceHomeKindValues,
+  SelfServiceInputTypeValues,
+  SelfServiceJobDeliveryValues,
+  SelfServicePolicyEffectValues,
+  SelfServiceQuotaKindValues,
+  SelfServiceQuotaScopeValues,
   StateWriteGatesModeValues,
   StateWritePathValues,
   TriggerFrequencyPresetValues,
   TriggerKindValues,
   TrustRuleKeySourceValues,
 } from "./types.js";
+
+/**
+ * The validator of a value that is one of several types. It tries each
+ * validator in order and gives the first value that one of them accepts.
+ */
+function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {
+  return (value, path) => {
+    for (const decode of decoders) {
+      try {
+        return decode(value, path);
+      } catch {
+        // The value is not of this type. The next validator gets it.
+      }
+    }
+
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
+
+    throw invalidValue(path, `want ${want}, got ${got}`);
+  };
+}
 
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
@@ -361,6 +419,20 @@ export const decodeBackupCorruptError: Decoder<BackupCorruptError> = object<Back
 /** The validator of BackupCorruptErrorArgs. */
 export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = object<BackupCorruptErrorArgs>("BackupCorruptErrorArgs", {
   backup: string,
+});
+
+/** The validator of BackupTooManyUnverifiedError. */
+export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverifiedError> = object<BackupTooManyUnverifiedError>("BackupTooManyUnverifiedError", {
+  code: int64,
+  errorArgs: ref(() => decodeBackupTooManyUnverifiedErrorArgs),
+  errorCode: literal("backup.too-many-unverified"),
+  message: string,
+});
+
+/** The validator of BackupTooManyUnverifiedErrorArgs. */
+export const decodeBackupTooManyUnverifiedErrorArgs: Decoder<BackupTooManyUnverifiedErrorArgs> = object<BackupTooManyUnverifiedErrorArgs>("BackupTooManyUnverifiedErrorArgs", {
+  count: int64,
+  limit: int64,
 });
 
 /** The validator of BulkUnitSettingsError. */
@@ -649,6 +721,7 @@ export const decodeDriftUnit: Decoder<DriftUnit> = object<DriftUnit>("DriftUnit"
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
   "backup.corrupt": ref(() => decodeBackupCorruptError),
+  "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),
   "gate.approvers-count-above": ref(() => decodeGateApproversCountAboveError),
   "lock.locked": ref(() => decodeLockLockedError),
@@ -1746,6 +1819,190 @@ export const decodeSchemaBinaryBelowMinimumError: Decoder<SchemaBinaryBelowMinim
 export const decodeSchemaBinaryBelowMinimumErrorArgs: Decoder<SchemaBinaryBelowMinimumErrorArgs> = object<SchemaBinaryBelowMinimumErrorArgs>("SchemaBinaryBelowMinimumErrorArgs", {
   binaryVersion: string,
   minimumVersion: string,
+});
+
+/** The validator of SelfServiceBlueprint. */
+export const decodeSelfServiceBlueprint: Decoder<SelfServiceBlueprint> = object<SelfServiceBlueprint>("SelfServiceBlueprint", {
+  delivery: ref(() => decodeSelfServiceDelivery),
+  description: optional(string),
+  exprVersion: optional(string),
+  inputs: array(ref(() => decodeSelfServiceInput)),
+  name: string,
+  platform: ref(() => decodeSelfServicePlatform),
+  policy: optional(array(ref(() => decodeSelfServicePolicyRule))),
+  program: ref(() => decodeSelfServiceProgram),
+  quotas: optional(array(ref(() => decodeSelfServiceQuotaRule))),
+  schemaVersion: int64,
+  sourcePrincipal: optional(string),
+  title: string,
+  tool: string,
+  unitName: string,
+});
+
+/** The validator of SelfServiceChoice. */
+export const decodeSelfServiceChoice: Decoder<SelfServiceChoice> = object<SelfServiceChoice>("SelfServiceChoice", {
+  source: optional(ref(() => decodeSelfServiceSource)),
+  values: optional(array(string)),
+});
+
+/** The validator of SelfServiceComponent. */
+export const decodeSelfServiceComponent: Decoder<SelfServiceComponent> = object<SelfServiceComponent>("SelfServiceComponent", {
+  package: string,
+  type: string,
+  version: string,
+});
+
+/** The validator of SelfServiceDelivery. */
+export const decodeSelfServiceDelivery: Decoder<SelfServiceDelivery> = object<SelfServiceDelivery>("SelfServiceDelivery", {
+  default: ref(() => decodeSelfServiceHomeKind),
+  git: optional(ref(() => decodeSelfServiceGitDelivery)),
+  homes: array(ref(() => decodeSelfServiceHomeKind)),
+});
+
+/** The validator of SelfServiceDraft. */
+export const decodeSelfServiceDraft: Decoder<SelfServiceDraft> = object<SelfServiceDraft>("SelfServiceDraft", {
+  blueprint: ref(() => decodeSelfServiceBlueprint),
+  version: int64,
+});
+
+/** The validator of SelfServiceDraftWrite. */
+export const decodeSelfServiceDraftWrite: Decoder<SelfServiceDraftWrite> = object<SelfServiceDraftWrite>("SelfServiceDraftWrite", {
+  version: int64,
+});
+
+/** The validator of SelfServiceFilter. */
+export const decodeSelfServiceFilter: Decoder<SelfServiceFilter> = object<SelfServiceFilter>("SelfServiceFilter", {
+  equals: ref(() => decodeSelfServiceOperand),
+  output: string,
+  path: optional(string),
+});
+
+/** The validator of SelfServiceGitDelivery. */
+export const decodeSelfServiceGitDelivery: Decoder<SelfServiceGitDelivery> = object<SelfServiceGitDelivery>("SelfServiceGitDelivery", {
+  deliveries: optional(array(ref(() => decodeSelfServiceJobDelivery))),
+  repositories: optional(array(string)),
+});
+
+/** The validator of SelfServiceHomeKind. It keeps a value that is not in the list. */
+export const decodeSelfServiceHomeKind: Decoder<SelfServiceHomeKind> = openEnum<SelfServiceHomeKind>("SelfServiceHomeKind");
+
+/** The validator of SelfServiceInput. */
+export const decodeSelfServiceInput: Decoder<SelfServiceInput> = object<SelfServiceInput>("SelfServiceInput", {
+  choice: optional(ref(() => decodeSelfServiceChoice)),
+  default: optional(anyValue),
+  description: optional(string),
+  maps: string,
+  name: string,
+  required: optional(boolean),
+  title: optional(string),
+  type: ref(() => decodeSelfServiceInputType),
+  validate: optional(array(ref(() => decodeSelfServiceRule))),
+});
+
+/** The validator of SelfServiceInputType. It keeps a value that is not in the list. */
+export const decodeSelfServiceInputType: Decoder<SelfServiceInputType> = openEnum<SelfServiceInputType>("SelfServiceInputType");
+
+/** The validator of SelfServiceJobDelivery. It keeps a value that is not in the list. */
+export const decodeSelfServiceJobDelivery: Decoder<SelfServiceJobDelivery> = openEnum<SelfServiceJobDelivery>("SelfServiceJobDelivery");
+
+/** The validator of SelfServiceModule. */
+export const decodeSelfServiceModule: Decoder<SelfServiceModule> = object<SelfServiceModule>("SelfServiceModule", {
+  connection: optional(string),
+  directory: optional(string),
+  repository: optional(string),
+  revision: optional(string),
+  source: optional(string),
+  version: optional(string),
+});
+
+/** The validator of SelfServiceOperand. */
+export const decodeSelfServiceOperand: Decoder<SelfServiceOperand> = object<SelfServiceOperand>("SelfServiceOperand", {
+  input: optional(string),
+  value: optional(oneOf<string | number | boolean>("a string, a number or a boolean", string, number, boolean)),
+});
+
+/** The validator of SelfServiceOutputRef. */
+export const decodeSelfServiceOutputRef: Decoder<SelfServiceOutputRef> = object<SelfServiceOutputRef>("SelfServiceOutputRef", {
+  output: string,
+  path: optional(string),
+});
+
+/** The validator of SelfServicePlatform. */
+export const decodeSelfServicePlatform: Decoder<SelfServicePlatform> = object<SelfServicePlatform>("SelfServicePlatform", {
+  pool: optional(string),
+  profile: optional(string),
+  values: optional(record(anyValue)),
+});
+
+/** The validator of SelfServicePolicyEffect. It keeps a value that is not in the list. */
+export const decodeSelfServicePolicyEffect: Decoder<SelfServicePolicyEffect> = openEnum<SelfServicePolicyEffect>("SelfServicePolicyEffect");
+
+/** The validator of SelfServicePolicyRule. */
+export const decodeSelfServicePolicyRule: Decoder<SelfServicePolicyRule> = object<SelfServicePolicyRule>("SelfServicePolicyRule", {
+  approvals: optional(int64),
+  effect: ref(() => decodeSelfServicePolicyEffect),
+  groups: optional(array(string)),
+  message: optional(string),
+  when: string,
+});
+
+/** The validator of SelfServiceProgram. */
+export const decodeSelfServiceProgram: Decoder<SelfServiceProgram> = object<SelfServiceProgram>("SelfServiceProgram", {
+  component: optional(ref(() => decodeSelfServiceComponent)),
+  module: optional(ref(() => decodeSelfServiceModule)),
+});
+
+/** The validator of SelfServicePublishRequest. */
+export const decodeSelfServicePublishRequest: Decoder<SelfServicePublishRequest> = object<SelfServicePublishRequest>("SelfServicePublishRequest", {
+  draftVersion: int64,
+});
+
+/** The validator of SelfServiceQuotaKind. It keeps a value that is not in the list. */
+export const decodeSelfServiceQuotaKind: Decoder<SelfServiceQuotaKind> = openEnum<SelfServiceQuotaKind>("SelfServiceQuotaKind");
+
+/** The validator of SelfServiceQuotaRule. */
+export const decodeSelfServiceQuotaRule: Decoder<SelfServiceQuotaRule> = object<SelfServiceQuotaRule>("SelfServiceQuotaRule", {
+  kind: ref(() => decodeSelfServiceQuotaKind),
+  max: optional(int64),
+  message: optional(string),
+  rule: optional(string),
+  scope: optional(ref(() => decodeSelfServiceQuotaScope)),
+  window: optional(string),
+});
+
+/** The validator of SelfServiceQuotaScope. It keeps a value that is not in the list. */
+export const decodeSelfServiceQuotaScope: Decoder<SelfServiceQuotaScope> = openEnum<SelfServiceQuotaScope>("SelfServiceQuotaScope");
+
+/** The validator of SelfServiceRule. */
+export const decodeSelfServiceRule: Decoder<SelfServiceRule> = object<SelfServiceRule>("SelfServiceRule", {
+  message: string,
+  rule: string,
+});
+
+/** The validator of SelfServiceSource. */
+export const decodeSelfServiceSource: Decoder<SelfServiceSource> = object<SelfServiceSource>("SelfServiceSource", {
+  blueprint: optional(string),
+  collection: optional(string),
+  label: optional(ref(() => decodeSelfServiceOutputRef)),
+  value: ref(() => decodeSelfServiceOutputRef),
+  where: optional(array(ref(() => decodeSelfServiceFilter))),
+});
+
+/** The validator of SelfServiceVersion. */
+export const decodeSelfServiceVersion: Decoder<SelfServiceVersion> = object<SelfServiceVersion>("SelfServiceVersion", {
+  blueprint: string,
+  draftVersion: int64,
+  exprVersion: string,
+  namespace: string,
+  number: int64,
+  publishedAt: string,
+  publishedBy: string,
+  retired: boolean,
+});
+
+/** The validator of SelfServiceVersionList. */
+export const decodeSelfServiceVersionList: Decoder<SelfServiceVersionList> = object<SelfServiceVersionList>("SelfServiceVersionList", {
+  versions: array(ref(() => decodeSelfServiceVersion)),
 });
 
 /** The validator of Setting. */

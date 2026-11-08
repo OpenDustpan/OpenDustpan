@@ -262,6 +262,7 @@ linters:
             - "**/pkg/trustrule/**"
             - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
+            - "**/pkg/jobtoken/**"
             - "**/pkg/unitsettings/**"
             - "**/pkg/preferences/**"
             - "**/pkg/setting/**"
@@ -721,7 +722,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|server|settings|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|selfservice|server|settings|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

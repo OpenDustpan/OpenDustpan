@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -122,24 +123,136 @@ func decodeState(state []byte) (any, error) {
 	return doc, nil
 }
 
-// IsClientEncrypted reports whether state is a state file the client
-// encrypted: its resources hide inside the encrypted envelope, so the
-// resource routes cannot read it. The outputs list still works, because the
-// server keeps the outputs the client declared at creation.
+// IsClientEncrypted reports whether state is exactly the encryption envelope
+// of a state that the client encrypted: the members meta, encrypted_data and
+// encryption_version of OpenTofu, with the plain serial and lineage. The
+// resources hide inside the envelope, so the resource routes cannot read it.
+// The outputs list still works, because the server keeps the outputs the
+// client declared at creation.
+//
+// A state with no encrypted_data member is plaintext and gives false. The
+// check fails closed on an input that it cannot classify, and never answers
+// "not encrypted" for it: not valid JSON, a document that is not a JSON
+// object, a document that has encrypted_data and a member outside the
+// envelope, an envelope whose members have another kind of value, and an
+// envelope with a version value other than v0. Each of these fails with an
+// error that wraps ErrInvalidState. A document that has encrypted_data and any
+// other shape is a look-alike: the server must not read it as encrypted,
+// because that would hide its resources from the gates, and it must not read
+// it as plaintext, because the client may hold the key.
 func IsClientEncrypted(state []byte) (bool, error) {
-	doc, err := decodeState(state)
-	if err != nil {
-		return false, err
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(state, &doc); err != nil || doc == nil {
+		return false, fmt.Errorf("%w: state is not a JSON object", ErrInvalidState)
 	}
 
-	top, ok := doc.(map[string]any)
-	if !ok {
+	if _, has := doc[encryptedStateKey]; !has {
 		return false, nil
 	}
 
-	_, encrypted := top[encryptedStateKey]
+	if err := checkEnvelopeShape(doc); err != nil {
+		return false, fmt.Errorf("%w: state has %s and %w", ErrInvalidState, encryptedStateKey, err)
+	}
 
-	return encrypted, nil
+	return true, nil
+}
+
+// The top-level members of the state that OpenTofu encrypts on the client: the
+// envelope, and the plain serial and lineage that a backend needs to order
+// versions.
+const (
+	stateKeySerial  = "serial"
+	stateKeyLineage = "lineage"
+	stateKeyMeta    = "meta"
+	stateKeyVersion = "encryption_version"
+	// stateEncryptionVersion is the only encryption_version value the check
+	// knows. An envelope with another value may hold another shape, so the
+	// check refuses it.
+	stateEncryptionVersion = "v0"
+)
+
+// isEnvelopeKey reports whether k is a member of the encryption envelope.
+func isEnvelopeKey(k string) bool {
+	switch k {
+	case stateKeySerial, stateKeyLineage, stateKeyMeta, encryptedStateKey, stateKeyVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+// errNotEnvelope is the cause of a document that has encrypted_data and is not
+// the encryption envelope.
+var errNotEnvelope = errors.New("is not an encryption envelope")
+
+// checkEnvelopeShape checks the members of a document that has encrypted_data:
+// no member outside the envelope, the three members of the envelope with their
+// kinds, the known version value, and the plain serial and lineage with theirs.
+func checkEnvelopeShape(doc map[string]json.RawMessage) error {
+	if err := checkEnvelopeMembers(doc); err != nil {
+		return err
+	}
+
+	if err := checkEnvelopeVersion(doc); err != nil {
+		return err
+	}
+
+	return checkEnvelopePlainKeys(doc)
+}
+
+// checkEnvelopeMembers checks that no member sits outside the envelope and
+// that the three members of the envelope have their kinds.
+func checkEnvelopeMembers(doc map[string]json.RawMessage) error {
+	for k := range doc {
+		if !isEnvelopeKey(k) {
+			return fmt.Errorf("%w: the member %q", errNotEnvelope, k)
+		}
+	}
+
+	kinds := map[string]byte{encryptedStateKey: '"', stateKeyMeta: '{', stateKeyVersion: '"'}
+	for k, first := range kinds {
+		if !rawIsKind(doc[k], first) {
+			return fmt.Errorf("%w: the member %q has another kind of value", errNotEnvelope, k)
+		}
+	}
+
+	return nil
+}
+
+// checkEnvelopeVersion checks the version value of the envelope.
+func checkEnvelopeVersion(doc map[string]json.RawMessage) error {
+	// Defense in depth: the kind check of checkEnvelopeMembers already refuses
+	// a version that is not text. This check stays so that the value is
+	// compared only after it decoded, and a new member cannot reach the
+	// comparison unchecked.
+	var version string
+	if err := json.Unmarshal(doc[stateKeyVersion], &version); err != nil || version != stateEncryptionVersion {
+		return fmt.Errorf("%w: the encryption version is not %s", errNotEnvelope, stateEncryptionVersion)
+	}
+
+	return nil
+}
+
+// checkEnvelopePlainKeys checks the plain serial and lineage members of the
+// envelope.
+func checkEnvelopePlainKeys(doc map[string]json.RawMessage) error {
+	if raw, ok := doc[stateKeyLineage]; ok && !rawIsKind(raw, '"') {
+		return fmt.Errorf("%w: the lineage is not text", errNotEnvelope)
+	}
+
+	if raw, ok := doc[stateKeySerial]; ok && (len(raw) == 0 || raw[0] < '0' || raw[0] > '9') {
+		return fmt.Errorf("%w: the serial is not a number", errNotEnvelope)
+	}
+
+	return nil
+}
+
+// rawIsKind reports whether the JSON value raw starts with first: a quote for a
+// string, a brace for an object.
+func rawIsKind(raw json.RawMessage, first byte) bool {
+	t := bytes.TrimSpace(raw)
+
+	return len(t) > 0 && t[0] == first
 }
 
 // tofuResourceEntry is one parsed resource of a state file with its position.

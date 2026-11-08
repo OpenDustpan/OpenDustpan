@@ -135,6 +135,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected(), nil
 }
 
+const addMemberRemoval = `-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type AddMemberRemovalParams struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
+func (q *Queries) AddMemberRemoval(ctx context.Context, arg AddMemberRemovalParams) error {
+	_, err := q.db.Exec(ctx, addMemberRemoval,
+		arg.ID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.GroupID,
+		arg.Removed,
+		arg.MembersBefore,
+		arg.AtMs,
+	)
+	return err
+}
+
 const addSignInFailure = `-- name: AddSignInFailure :one
 
 WITH now_ms AS (
@@ -1533,6 +1561,44 @@ WHERE name = ANY($1::text[])
 
 func (q *Queries) CountNamespacesByNames(ctx context.Context, names []string) (int64, error) {
 	row := q.db.QueryRow(ctx, countNamespacesByNames, names)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = $1 AND subscription_id = $2
+      AND (next_at_ms > $3
+        OR (next_at_ms = $3 AND id COLLATE "C" >= $4))
+    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+    LIMIT $5
+) AS within_bound
+`
+
+type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int32
+}
+
+// The number of deliveries of the subscription at or before the cursor (next
+// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+// the deliveries that a page after the cursor leaves behind, in byte order
+// (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
+// the count; it stays so that the plan reads the index of the history in
+// order and stops at max_rows.
+func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countNotificationDeliveriesOfSubscriptionBefore,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -3270,6 +3336,24 @@ type DeleteDriftResultParams struct {
 func (q *Queries) DeleteDriftResult(ctx context.Context, arg DeleteDriftResultParams) error {
 	_, err := q.db.Exec(ctx, deleteDriftResult, arg.UnitID, arg.Namespace)
 	return err
+}
+
+const deleteEndedTicket = `-- name: DeleteEndedTicket :execrows
+DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3
+`
+
+type DeleteEndedTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) DeleteEndedTicket(ctx context.Context, arg DeleteEndedTicketParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteEventsOfStack = `-- name: DeleteEventsOfStack :exec
@@ -7278,7 +7362,7 @@ func (q *Queries) GetLatestCheckpointByRef(ctx context.Context, arg GetLatestChe
 
 const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
 SELECT owner, at_ms, lease_ms FROM durable_heartbeats
-ORDER BY at_ms + lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
+ORDER BY at_ms + 2 * lease_ms DESC, at_ms DESC, owner DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
@@ -10227,9 +10311,10 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 	return i, err
 }
 
-const insertDurableSchedule = `-- name: InsertDurableSchedule :exec
+const insertDurableSchedule = `-- name: InsertDurableSchedule :execrows
 INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
 VALUES ($1::text, $2::bigint, $3::bigint, NULL)
+ON CONFLICT (name) DO NOTHING
 `
 
 type InsertDurableScheduleParams struct {
@@ -10238,9 +10323,12 @@ type InsertDurableScheduleParams struct {
 	NowMs      int64
 }
 
-func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) error {
-	_, err := q.db.Exec(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NowMs)
-	return err
+func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NowMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertDurableStep = `-- name: InsertDurableStep :exec
@@ -11979,6 +12067,25 @@ func (q *Queries) InsertSelfServiceBlueprintVersion(ctx context.Context, arg Ins
 	return err
 }
 
+const insertTicket = `-- name: InsertTicket :execrows
+INSERT INTO used_tickets (provider_id, ticket_digest, until_ms) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTicketParams struct {
+	ProviderID   string
+	TicketDigest string
+	UntilMs      int64
+}
+
+func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertTicket, arg.ProviderID, arg.TicketDigest, arg.UntilMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
@@ -12485,6 +12592,35 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveGroupNamesOfPrincipal = `-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C"
+`
+
+func (q *Queries) ListActiveGroupNamesOfPrincipal(ctx context.Context, principalID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listActiveGroupNamesOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -15469,6 +15605,71 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 	return items, nil
 }
 
+const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = $1 AND subscription_id = $2
+  AND (next_at_ms < $3
+    OR (next_at_ms = $3 AND id COLLATE "C" < $4))
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT $5
+`
+
+type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int32
+}
+
+// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+// time, delivery ID): the rows with an older next time, or with the same next
+// time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+// query. The bound on next_at_ms lets the index scan start at the cursor.
+func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.Query(ctx, listNotificationDeliveriesOfSubscriptionAfter,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationDelivery
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.NotificationID,
+			&i.SubscriptionID,
+			&i.SinkID,
+			&i.Contact,
+			&i.Principal,
+			&i.State,
+			&i.Attempts,
+			&i.NextAtMs,
+			&i.LastError,
+			&i.DeliveredAtMs,
+			&i.Owner,
+			&i.LeaseUntilMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationScopesAbove = `-- name: ListNotificationScopesAbove :many
 SELECT s.scope
 FROM notification_sequences AS s
@@ -16215,13 +16416,19 @@ SELECT r.name, r.system
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = $1 AND r.kind = $2
+  AND (r.name COLLATE "C" > $3
+    OR (r.name COLLATE "C" = $3 AND r.system COLLATE "C" > $4))
 GROUP BY r.name, r.system
 ORDER BY r.name COLLATE "C", r.system COLLATE "C"
+LIMIT $5
 `
 
 type ListRegistryAddressesParams struct {
-	Namespace string
-	Kind      string
+	Namespace   string
+	Kind        string
+	AfterName   string
+	AfterSystem string
+	Lim         int32
 }
 
 type ListRegistryAddressesRow struct {
@@ -16229,9 +16436,18 @@ type ListRegistryAddressesRow struct {
 	System string
 }
 
+// One page of the distinct addresses of a kind in a namespace, after the
+// cursor (name, system). The caller reads one row more than the page size, so
+// that the extra row tells whether a next page exists.
 // The order is by code point, whatever the collation of the database.
 func (q *Queries) ListRegistryAddresses(ctx context.Context, arg ListRegistryAddressesParams) ([]ListRegistryAddressesRow, error) {
-	rows, err := q.db.Query(ctx, listRegistryAddresses, arg.Namespace, arg.Kind)
+	rows, err := q.db.Query(ctx, listRegistryAddresses,
+		arg.Namespace,
+		arg.Kind,
+		arg.AfterName,
+		arg.AfterSystem,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -18290,6 +18506,23 @@ func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
 	return err
 }
 
+const markMemberRemovalAlert = `-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms
+`
+
+type MarkMemberRemovalAlertParams struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
+}
+
+func (q *Queries) MarkMemberRemovalAlert(ctx context.Context, arg MarkMemberRemovalAlertParams) error {
+	_, err := q.db.Exec(ctx, markMemberRemovalAlert, arg.SourceKind, arg.SourceID, arg.AlertedAtMs)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -18360,6 +18593,66 @@ func (q *Queries) MarkTempAdminReviewOpened(ctx context.Context, arg MarkTempAdm
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const memberRemovalAlertedAt = `-- name: MemberRemovalAlertedAt :one
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = $1 AND source_id = $2), 0)::bigint
+    AS alerted_at_ms
+`
+
+type MemberRemovalAlertedAtParams struct {
+	SourceKind string
+	SourceID   string
+}
+
+// The time of the last alert of one source, or 0 when the source has none.
+func (q *Queries) MemberRemovalAlertedAt(ctx context.Context, arg MemberRemovalAlertedAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, memberRemovalAlertedAt, arg.SourceKind, arg.SourceID)
+	var alerted_at_ms int64
+	err := row.Scan(&alerted_at_ms)
+	return alerted_at_ms, err
+}
+
+const memberRemovalTotals = `-- name: MemberRemovalTotals :one
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = $1 THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = $1 THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = $2 AND source_id = $3
+  AND at_ms > $4::bigint AND at_ms <= $5::bigint
+`
+
+type MemberRemovalTotalsParams struct {
+	GroupID    string
+	SourceKind string
+	SourceID   string
+	LowMs      int64
+	HighMs     int64
+}
+
+type MemberRemovalTotalsRow struct {
+	SourceRemoved int64
+	GroupRemoved  int64
+	GroupMembers  int64
+}
+
+// The totals of the removals of one source in one window: the members that
+// the source removed from any group, the members that it removed from one
+// group, and the largest group that it saw before a removal. The window
+// holds the rows above low_ms and at most high_ms.
+func (q *Queries) MemberRemovalTotals(ctx context.Context, arg MemberRemovalTotalsParams) (MemberRemovalTotalsRow, error) {
+	row := q.db.QueryRow(ctx, memberRemovalTotals,
+		arg.GroupID,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.LowMs,
+		arg.HighMs,
+	)
+	var i MemberRemovalTotalsRow
+	err := row.Scan(&i.SourceRemoved, &i.GroupRemoved, &i.GroupMembers)
+	return i, err
 }
 
 const minAuditSequence = `-- name: MinAuditSequence :one
@@ -18808,6 +19101,39 @@ func (q *Queries) PruneLocalUserResets(ctx context.Context, expiresAtMs int64) (
 	return result.RowsAffected(), nil
 }
 
+const pruneMemberRemovals = `-- name: PruneMemberRemovals :execrows
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = $1 AND m.source_id = $2
+      AND m.at_ms <= $3::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT $4::bigint
+)
+`
+
+type PruneMemberRemovalsParams struct {
+	SourceKind string
+	SourceID   string
+	CutoffMs   int64
+	MaxRows    int64
+}
+
+// Deletes at most max_rows of the oldest rows of one source at or before
+// cutoff_ms.
+func (q *Queries) PruneMemberRemovals(ctx context.Context, arg PruneMemberRemovalsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneMemberRemovals,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.CutoffMs,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneNameLocks = `-- name: PruneNameLocks :execrows
 DELETE FROM name_locks
 WHERE (scope, name, sub) IN (
@@ -18880,6 +19206,18 @@ DELETE FROM sign_in_requests WHERE expires_at_ms <= $1
 
 func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneUsedTickets = `-- name: PruneUsedTickets :execrows
+DELETE FROM used_tickets WHERE until_ms <= $1
+`
+
+func (q *Queries) PruneUsedTickets(ctx context.Context, untilMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneUsedTickets, untilMs)
 	if err != nil {
 		return 0, err
 	}
@@ -22489,6 +22827,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms
 `
 
@@ -22505,9 +22844,9 @@ type UpsertDriftResultParams struct {
 
 // The caller checks the fence, the job and the time in the same transaction.
 // A row of the same unit ID in another namespace or of another tool is not
-// replaced: the count is 0. A stored row that is not older is not replaced
-// either (count 0), so that two writers cannot put an older result over a
-// newer one.
+// replaced: the count is 0. A stored row of the same job is not replaced
+// either (count 0). A stored row that is not older is not replaced either
+// (count 0), so that two writers cannot put an older result over a newer one.
 func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultParams) (int64, error) {
 	result, err := q.db.Exec(ctx, upsertDriftResult,
 		arg.UnitID,

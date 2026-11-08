@@ -216,6 +216,24 @@ CREATE TABLE group_mappings (
     PRIMARY KEY (source, source_id, claim_value, group_id)
 ) STRICT;
 
+CREATE TABLE member_removal_alerts (
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    alerted_at_ms  INTEGER NOT NULL CHECK (alerted_at_ms > 0),
+    PRIMARY KEY (source_kind, source_id)
+) STRICT;
+
+CREATE TABLE member_removals (
+    id             TEXT    NOT NULL PRIMARY KEY,
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    group_id       TEXT    NOT NULL CHECK (group_id <> ''),
+    removed        INTEGER NOT NULL CHECK (removed >= 1),
+    members_before INTEGER NOT NULL,
+    at_ms          INTEGER NOT NULL CHECK (at_ms > 0),
+    CHECK (members_before >= removed)
+) STRICT;
+
 CREATE TABLE "audit_entries" (
     namespace    TEXT    NOT NULL,
     sequence     INTEGER NOT NULL,
@@ -1363,6 +1381,19 @@ CREATE TABLE name_lock_key (
     key BLOB    NOT NULL CHECK (length(key) = 32)
 ) STRICT;
 
+-- Records of the CAS tickets that a server used. A ticket gives one sign-in
+-- only, at every server of the installation and after a restart. The table
+-- keeps the SHA-256 of a ticket in lower-case hex, never the ticket. A record
+-- ends at until_ms and refuses nothing at or after it.
+CREATE TABLE used_tickets (
+    provider_id   TEXT    NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 256),
+    ticket_digest TEXT    NOT NULL CHECK (length(ticket_digest) = 64 AND ticket_digest NOT GLOB '*[^0-9a-f]*'),
+    until_ms      INTEGER NOT NULL CHECK (until_ms > 0),
+    PRIMARY KEY (provider_id, ticket_digest)
+) STRICT;
+
+CREATE INDEX used_tickets_until ON used_tickets (until_ms);
+
 -- Links from an account of a Git host to a principal, and the one-time requests
 -- that make them. A link and a request belong to the installation, not to a
 -- namespace: a person has one principal for every namespace. An account is
@@ -1454,6 +1485,8 @@ CREATE UNIQUE INDEX principal_groups_name_key ON principal_groups (name_key) WHE
 CREATE UNIQUE INDEX group_members_current ON group_members (group_id, principal_id) WHERE removed_at_ms IS NULL;
 
 CREATE INDEX group_members_principal ON group_members (principal_id) WHERE removed_at_ms IS NULL;
+
+CREATE INDEX member_removals_source ON member_removals (source_kind, source_id, at_ms);
 
 CREATE INDEX audit_entries_ns_time ON audit_entries (namespace, at_ms DESC, sequence DESC);
 

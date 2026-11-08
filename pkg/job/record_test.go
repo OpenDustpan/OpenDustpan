@@ -552,6 +552,19 @@ func TestDeliveryResultSame(t *testing.T) {
 	}
 }
 
+func TestVerificationValid(t *testing.T) {
+	t.Parallel()
+
+	for result, want := range map[job.Verification]bool{
+		job.VerificationNone: true, job.VerificationPending: true, job.VerificationVerified: true,
+		job.VerificationUnverified: true, "done": false, "VERIFIED": false,
+	} {
+		if got := result.Valid(); got != want {
+			t.Errorf("Verification(%q).Valid() = %t, want %t", result, got, want)
+		}
+	}
+}
+
 func TestCheckDelivered(t *testing.T) {
 	t.Parallel()
 
