@@ -54,6 +54,7 @@ func TestSignInFromBodyRefusesAnotherSite(t *testing.T) {
 			"Content-Type": json, "Sec-Fetch-Site": "same-origin",
 		}, true},
 		{"JSON of a client that is not a browser", map[string]string{"Content-Type": json}, true},
+		{"JSON in upper case", map[string]string{"Content-Type": "APPLICATION/JSON"}, true},
 	}
 
 	var none session.Match
@@ -67,6 +68,41 @@ func TestSignInFromBodyRefusesAnotherSite(t *testing.T) {
 			r := request(t, http.MethodPost, "", tc.headers)
 			if got := c.SignInFromBody(r); got != tc.want {
 				t.Fatalf("SignInFromBody = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSignInFromBodyReadsTheFirstMediaType pins the result for a request with
+// two Content-Type headers: the check reads the first one. A browser cannot
+// send two, because fetch joins them into one value that does not parse, so
+// only a client that is not a browser can send this request.
+func TestSignInFromBodyReadsTheFirstMediaType(t *testing.T) {
+	t.Parallel()
+
+	var none session.Match
+
+	c := newChecker(t, &fakeSessions{err: nil, match: none, calls: 0})
+
+	for _, tc := range []struct {
+		name  string
+		types []string
+		want  bool
+	}{
+		{name: "JSON first", types: []string{"application/json", "text/plain"}, want: true},
+		{name: "text/plain first", types: []string{"text/plain", "application/json"}, want: false},
+		{name: "joined by fetch", types: []string{"application/json, text/plain"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := request(t, http.MethodPost, "", nil)
+			for _, v := range tc.types {
+				r.Header.Add("Content-Type", v)
+			}
+
+			if got := c.SignInFromBody(r); got != tc.want {
+				t.Fatalf("SignInFromBody with %q = %t, want %t", tc.types, got, tc.want)
 			}
 		})
 	}

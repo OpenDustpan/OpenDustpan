@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // signInOriginCase is one request to the password sign-in of a local user,
@@ -101,4 +104,59 @@ func TestPasswordSignInRefusesAnotherSite(t *testing.T) {
 				f.passwords.count())
 		}
 	}
+}
+
+// TestPasswordSignInOfAnotherSiteIsAudited proves that each refusal of the
+// check against login CSRF writes one denied audit entry of the installation:
+// the action of a sign-in, the sign-in route as the subject, and the reason.
+// Each row has a fresh handler, so the limiter of the denial recorder does not
+// count one row in the window of another. A sign-in of the console writes no
+// denied entry.
+func TestPasswordSignInOfAnotherSiteIsAudited(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range signInOriginCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			createRouteLocalUser(t, f)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/sign-in/password",
+				strings.NewReader(tc.body))
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+
+			f.handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			want := 0
+			if tc.want == http.StatusUnauthorized {
+				want = 1
+			}
+
+			if got := otherSiteEntries(t, f); got != want {
+				t.Fatalf("denied sign-in entries = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+// otherSiteEntries counts the denied entries of a sign-in of another site in
+// the installation scope of f.
+func otherSiteEntries(t *testing.T, f accessFixture) int {
+	t.Helper()
+
+	n := 0
+
+	entries := serverEntries(t, f.store)
+	for i := range entries {
+		e := &entries[i]
+		if e.Outcome == audit.OutcomeDenied && e.Action == session.ActionSignIn && e.Subject == "sign-in:local" &&
+			strings.Contains(e.Reason, "another site") {
+			n++
+		}
+	}
+
+	return n
 }
