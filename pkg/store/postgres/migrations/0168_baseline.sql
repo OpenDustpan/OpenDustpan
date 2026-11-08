@@ -692,6 +692,22 @@ CREATE TABLE manual_locks (
     CONSTRAINT manual_locks_reason_check CHECK (((reason <> ''::text) AND (char_length(reason) <= 500)))
 );
 
+CREATE TABLE member_removals (
+    id text NOT NULL,
+    source_kind text NOT NULL,
+    source_id text NOT NULL,
+    group_id text NOT NULL,
+    removed bigint NOT NULL,
+    members_before bigint NOT NULL,
+    at_ms bigint NOT NULL,
+    CONSTRAINT member_removals_at_ms_check CHECK ((at_ms > 0)),
+    CONSTRAINT member_removals_group_id_check CHECK ((group_id <> ''::text)),
+    CONSTRAINT member_removals_members_before_check CHECK ((members_before >= removed)),
+    CONSTRAINT member_removals_removed_check CHECK ((removed >= 1)),
+    CONSTRAINT member_removals_source_id_check CHECK ((source_id <> ''::text)),
+    CONSTRAINT member_removals_source_kind_check CHECK ((source_kind = ANY (ARRAY['identity-provider'::text, 'scim-token'::text])))
+);
+
 CREATE TABLE name_lock_key (
     id integer NOT NULL,
     key bytea NOT NULL,
@@ -1662,6 +1678,9 @@ ALTER TABLE ONLY local_users
 ALTER TABLE ONLY manual_locks
     ADD CONSTRAINT manual_locks_pkey PRIMARY KEY (kind, object_id);
 
+ALTER TABLE ONLY member_removals
+    ADD CONSTRAINT member_removals_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY name_lock_key
     ADD CONSTRAINT name_lock_key_pkey PRIMARY KEY (id);
 
@@ -1995,6 +2014,8 @@ CREATE INDEX jobs_unit ON jobs USING btree (unit_id, seq);
 CREATE INDEX local_user_resets_expiry ON local_user_resets USING btree (expires_at_ms);
 
 CREATE INDEX manual_locks_namespace ON manual_locks USING btree (namespace);
+
+CREATE INDEX member_removals_source ON member_removals USING btree (source_kind, source_id, at_ms);
 
 CREATE UNIQUE INDEX namespaces_id ON namespaces USING btree (id);
 

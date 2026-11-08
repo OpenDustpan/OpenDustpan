@@ -3949,3 +3949,15 @@ decisions:
   accepted_artifact: "docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md"
   evidence:
   - "docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md"
+- id: "adr-0359"
+  title: "ADR 359: Review requests: mirrored approvals, checks, comment commands and apply timing"
+  decision: "1. **Mirrored approvals (owner, 2026-10-18).** When the forge integration uses OAuth, the server mirrors approvals in both directions between the review request and the change order. An approval on the forge shows on the change order. An approval on the change order shows on the forge.\n2. **No OAuth: read-only change order (owner, 2026-10-18).** Without OAuth, the change-order page is read-only. This holds for units that come from a VCS.\n3. **Checks (owner, 2026-10-18).** A review request gets one required summary check with a fixed name. It also gets one check for each unit. The unit checks are not required.\n4. **The table in the plan comment (owner, 2026-10-18).** The server edits one comment in place (ADR 299 decision 25). It has a table with one row for each unit. A row shows the status, the `+ ~ -` counts and a link to the change order.\n5. **Comment commands follow Atlantis for apply before merge (owner, 2026-10-18).** For teams that apply before the merge, the comment commands follow the semantics of Atlantis.\n6. **Merge first: commands that do not apply (owner, 2026-10-18).** Some repositories merge first and apply after. There, the server accepts only commands that do not apply. `plan` and similar commands are in this group.\n7. **No state commands (owner, 2026-10-18).** A review request does not accept state commands.\n8. **Imports need research first (owner, 2026-10-18).** An import from a comment needs deep research first.\n9. **Apply timing at each level (owner, 2026-10-18).** The namespace and the collection each set a default for the apply timing. Each also allows or forbids an override at the levels below it, down to the unit. So an apply before the merge is possible.\n10. **Apply after the merge is the recommended default (owner, 2026-10-18).** An apply after the merge is the strong recommendation and the recommended default. The project researches this flow and writes it in the docs."
+  reason: "RFC 27 asks how a review request shows plans, takes approvals and starts work. ADR 299 records the review modes and the plan comment that the server edits in place (decision 25). ADR 271 decision 7 and ADR 300 decision 9 record the comment commands. On 18 October 2026 the owner answered four more questions of the RFC. No ADR records these answers. This ADR records them and nothing else."
+  scope:
+  - "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-07"
+  accepted_artifact: "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"
+  evidence:
+  - "docs/adr/0359-review-request-mirror-checks-commands-and-apply-timing.md"

@@ -19,6 +19,9 @@ import {
   union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
+{{- if .UsesOneOf}}
+import { invalidValue } from "./errors.js";
+{{- end}}
 import type {
 {{- range .Types}}
   {{.Name}},
@@ -29,6 +32,30 @@ import {
   {{.Name}}Values,
 {{- end}}{{end}}
 } from "./types.js";
+{{- if .UsesOneOf}}
+
+/**
+ * The validator of a value that is one of several types. It tries each
+ * validator in order and gives the first value that one of them accepts.
+ */
+function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {
+  return (value, path) => {
+    for (const decode of decoders) {
+      try {
+        return decode(value, path);
+      } catch {
+        // The value is not of this type. The next validator gets it.
+      }
+    }
+
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
+
+    throw invalidValue(path, `want ${want}, got ${got}`);
+  };
+}
+{{- end}}
 {{range $t := .Types}}
 {{if $t.IsInterface -}}
 /** The validator of {{$t.Name}}. */

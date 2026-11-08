@@ -658,6 +658,16 @@ type ManualLock struct {
 	SinceMs   int64
 }
 
+type MemberRemoval struct {
+	ID            string
+	SourceKind    string
+	SourceID      string
+	GroupID       string
+	Removed       int64
+	MembersBefore int64
+	AtMs          int64
+}
+
 type NameLock struct {
 	Scope         string
 	Name          string
