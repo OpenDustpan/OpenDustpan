@@ -35,6 +35,50 @@ some dangerous forms.
   source (`git push <url> :name`). Only the GitHub ruleset stops it.
 - `rtk` does not apply `Read()` deny rules to the commands that it allows.
   So the secret files have a `Read()` deny and a `Bash` deny on their path.
+- A `Bash` rule cannot protect a file on disk. A command can name the same
+  file in many forms (`~/.config/./gh`, `~/.config//gh`, a glob, a symbolic
+  link, a path that a program builds at run time), and an allowed command can
+  read a file that its arguments name (`gh api -F body=@<file>`,
+  `git diff --no-index`, `shellcheck`). Only the sandbox can protect a file:
+  the operating system refuses the read for each process of a sandboxed
+  command, whatever the text of the command is.
+
+## The sandbox
+
+The file turns on the Claude Code sandbox and hides the credential files
+from each sandboxed command with `sandbox.filesystem.denyRead`:
+`~/.config/gh`, `~/.git-credentials`, `~/.ssh`, `~/.netrc`,
+`~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc` and
+`~/.config/git/credentials`. The operating system enforces these entries.
+They do not depend on `rtk` or on the text of a command.
+
+- `failIfUnavailable: true`: when the sandbox cannot start, Claude Code does
+  not start. Without it, Claude Code runs each command without the sandbox,
+  and `denyRead` has no effect.
+- `allowUnsandboxedCommands: false`: Claude Code ignores
+  `dangerouslyDisableSandbox`, so a command that fails in the sandbox cannot
+  run again outside it.
+- `autoAllowBashIfSandboxed: false`: the `allow` and `deny` lists still
+  decide each command. A sandboxed command is not allowed only because it is
+  sandboxed.
+- No `excludedCommands`: each command runs in the sandbox.
+
+Before you install the file, read these points:
+
+- On Linux the sandbox needs `bubblewrap` and `socat`. The cloud container
+  of these sessions has neither today. With `failIfUnavailable`, a session
+  does not start until the setup script of the environment installs them
+  (`apt-get install -y bubblewrap socat`).
+- The GitHub CLI reads its token from `~/.config/gh/hosts.yml`. With that
+  directory hidden, `gh` must get its token in another way, for example
+  `GH_TOKEN` or the proxy of the environment. Otherwise each `gh api` call
+  fails. Test `gh api user` in a sandboxed session before you rely on `gh`.
+- The sandbox also limits the network of a sandboxed command. The file lists
+  no `sandbox.network.allowedDomains`, so the first request to each host asks
+  for a decision. An unattended session stops at that prompt. Add the hosts
+  that the sessions use (for example `github.com`, `api.github.com`,
+  `proxy.golang.org`, `sum.golang.org` and the hosts of the model providers)
+  after you see which hosts prompt.
 
 ## Base
 
@@ -80,8 +124,15 @@ Then delete the directory `claude-draft/`.
 
 - Reads of the environment: `env`, `printenv`, `set`, `export -p`, the
   `environ` files under `/proc`, and the Read tool under `/proc`.
-- Reads of the GitHub CLI configuration, `~/.git-credentials`, `~/.ssh` and
-  `~/.netrc`, with the Read tool and with any `Bash` command that names them.
+- Reads and edits of the credential files with the Read and Edit tools: the
+  GitHub CLI configuration, `~/.git-credentials`, `~/.ssh`, `~/.netrc`,
+  `~/.claude/.credentials.json`, `~/.aws`, `~/.npmrc` and
+  `~/.config/git/credentials`. A `Bash` command that names one of them is
+  denied too.
+- A `Bash` command that contains `/./`, or that contains `.config` and then
+  `gh`. These are a fallback layer for other spellings of a path. The
+  sandbox is the layer that holds.
+- `git diff --no-index`, which compares any two files on disk.
 - `psql` shell escapes (`\!`), and `go env -w` and `go env -u`.
 - `gh api` with any explicit method (`-X`, `--method`), `--input`, `graphql`,
   and the paths of collaborators, hooks, keys, branch protection, rulesets,
@@ -114,3 +165,6 @@ Then delete the directory `claude-draft/`.
   example `-fu` in `fix-fuzz` or `-f` in `x-fix`. Such a command needs a
   prompt. This is the safe side.
 - `sed` is not allowed: its `w` command writes files.
+- `Bash(* *.config*gh*)` and `Bash(*/./*)` also match a safe command, for
+  example a path with `.config` and a later word with `gh`. Such a command
+  needs a prompt. This is the safe side.

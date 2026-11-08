@@ -93,7 +93,26 @@
       "Read(~/.git-credentials)",
       "Read(~/.ssh/**)",
       "Read(~/.netrc)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.aws/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.config/git/credentials)",
+      "Edit(~/.config/gh/**)",
+      "Edit(~/.git-credentials)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.netrc)",
+      "Edit(~/.claude/.credentials.json)",
+      "Edit(~/.aws/**)",
+      "Edit(~/.npmrc)",
+      "Edit(~/.config/git/credentials)",
       "Bash(*.config/gh*)",
+      "Bash(* *.config*gh*)",
+      "Bash(*/./*)",
+      "Bash(git diff *--no-index*)",
+      "Bash(*.credentials.json*)",
+      "Bash(*/.aws/*)",
+      "Bash(*.npmrc*)",
+      "Bash(*git/credentials*)",
       "Bash(*git-credentials*)",
       "Bash(*/.ssh/*)",
       "Bash(*.netrc*)",
@@ -179,6 +198,24 @@
       "Write(.github/workflows/**)",
       "mcp__claude-code-remote__subscribe_pr_activity"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "denyRead": [
+        "~/.config/gh",
+        "~/.git-credentials",
+        "~/.ssh",
+        "~/.netrc",
+        "~/.claude/.credentials.json",
+        "~/.aws",
+        "~/.npmrc",
+        "~/.config/git/credentials"
+      ]
+    }
   },
   "hooks": {
     "PreToolUse": [
