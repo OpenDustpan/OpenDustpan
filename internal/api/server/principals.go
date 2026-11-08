@@ -322,21 +322,43 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 }
 
 // protectedGroupsOf returns one page of groups on the wire with the
-// protected flag of each. A failed check of one group answers its error.
+// protected flag of each. It checks the whole page with one ProtectedGroups
+// call. A failed check of one group answers its error, so the route answers
+// an error, never a false flag.
 func (h *Handler) protectedGroupsOf(
 	ctx context.Context, page principal.Page[principal.Group],
 ) (groupListResponse, error) {
+	ids := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		ids = append(ids, page.Items[i].ID)
+	}
+
+	flags, err := access.ProtectedGroups(ctx, h.reach, ids)
+	if err != nil {
+		return groupListResponse{}, err
+	}
+
+	return groupsWithFlags(page, flags)
+}
+
+// groupsWithFlags returns page on the wire with the flag of each group from
+// flags. A group with no flag answers an error, never a false flag.
+func groupsWithFlags(page principal.Page[principal.Group], flags map[string]bool) (groupListResponse, error) {
 	out := groupListResponse{
 		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 
 	for i := range page.Items {
-		res, err := h.protectedGroupOf(ctx, page.Items[i])
-		if err != nil {
-			return groupListResponse{}, err
+		// Defense in depth: ProtectedGroups answers a flag for each ID or an
+		// error. This check stays so that a missing flag never shows as false.
+		g := &page.Items[i]
+
+		protected, ok := flags[g.ID]
+		if !ok {
+			return groupListResponse{}, fmt.Errorf("protected flag of group %q: %w", g.ID, access.ErrInvalid)
 		}
 
-		out.Groups = append(out.Groups, res)
+		out.Groups = append(out.Groups, groupOf(*g, protected))
 	}
 
 	return out, nil

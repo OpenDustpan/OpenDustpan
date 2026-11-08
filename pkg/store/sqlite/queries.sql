@@ -1616,6 +1616,14 @@ FROM grants
 WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL
 ORDER BY target, role;
 
+-- name: GrantsOfSubjects :many
+-- The current grants of each subject of the list, in one query. The unique
+-- index grants_current starts with the subject, so each subject is one seek.
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (sqlc.slice('subjects')) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role;
+
 -- name: CountRoleGrantsBelowInstallation :one
 SELECT COUNT(*) FROM grants
 WHERE role = ? AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL;

@@ -9330,6 +9330,76 @@ func (q *Queries) GrantsOfSubject(ctx context.Context, arg GrantsOfSubjectParams
 	return items, nil
 }
 
+const grantsOfSubjects = `-- name: GrantsOfSubjects :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (/*SLICE:subjects*/?) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role
+`
+
+type GrantsOfSubjectsRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   sql.NullString
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+// The current grants of each subject of the list, in one query. The unique
+// index grants_current starts with the subject, so each subject is one seek.
+func (q *Queries) GrantsOfSubjects(ctx context.Context, subjects []string) ([]GrantsOfSubjectsRow, error) {
+	query := grantsOfSubjects
+	var queryParams []interface{}
+	if len(subjects) > 0 {
+		for _, v := range subjects {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:subjects*/?", strings.Repeat(",?", len(subjects))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:subjects*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GrantsOfSubjectsRow
+	for rows.Next() {
+		var i GrantsOfSubjectsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const grantsOn = `-- name: GrantsOn :many
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants
