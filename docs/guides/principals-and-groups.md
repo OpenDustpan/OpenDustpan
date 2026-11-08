@@ -308,6 +308,49 @@ Add a member in the console. The add needs a fresh sign-in. The body holds the p
 A group that a directory manages does not take membership changes from this
 API. Change the membership in the directory.
 
+## The mass removal alert
+
+The server counts the memberships that one source ends or suspends in a
+rolling window. The count is for each source and for each group.
+
+The server alerts the administrators when one source crosses a limit in the
+window:
+
+- the number of memberships that it ended or suspended:
+  `principal.removalAlertCount`, 1 to 10000, default 10,
+- the percent of the members of one group that it ended or suspended:
+  `principal.removalAlertPercent`, 1 to 100, default 20.
+
+`principal.removalAlertWindow` holds the window (1 minute to 24 hours, default
+15 minutes), as a duration, for example `15m`. The three settings are
+installation settings, see [The settings
+API](../reference/settings-api.md) for how to read and change them.
+
+A larger count or percent, and a shorter window, reduce security. Such a
+change needs a fresh sign-in.
+
+The alert writes three records:
+
+- a notification of the type `membership.mass-removal` for the administrators,
+- one audit entry with the action `principal:mass-removal-alert` in the scope
+  of the installation,
+- one warning log line.
+
+Each record names the source, the group, the count of members, the percent and
+the window. The server writes one alert for each source in each window, all
+groups included, or a repeat when a write stops after the notification or two
+writes race. The limits count the removals of each source on its own, so
+removals that are spread across providers do not add up. A marker with a time
+after the removal counts as no marker, and the server writes an audit entry
+with the code `principal.removal-alert-marker-invalid`.
+
+When the alert cannot be written, the sign-in goes on, the server writes an
+ERROR log line and an audit entry of the failed alert, and it tries the alert
+again at the next removal of the source.
+
+The server refuses a sign-in when it cannot store the membership changes of
+its group claims. No session starts then.
+
 ## Errors on these routes
 
 | Code | Status | Meaning |

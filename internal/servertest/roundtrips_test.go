@@ -1339,9 +1339,12 @@ func backupModel() costModel {
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
+//
+// The fixed part also holds removalAlertTrips for member_removal_alerts, a
+// table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips,
+		fixed:        342 + 1 + forgeStripClassTrips + removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1357,6 +1360,13 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// removalAlertTrips is the change in the fixed part for the table
+// member_removal_alerts. Like member_removals, it costs 2 round trips fewer
+// than a table in the model, because the dev strip counts no rows in it. The
+// restore reads the staged rows of the table once more, to refuse an alert
+// marker after the time of the restore, which adds 1 round trip.
+const removalAlertTrips = -2 + 1
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

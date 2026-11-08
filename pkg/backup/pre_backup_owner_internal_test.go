@@ -144,7 +144,7 @@ func TestCheckRestoreRefusesADamagedList(t *testing.T) {
 
 	_, _, err := CheckRestore(t.Context(), CheckInput{
 		Target: target, Live: checkLive{CheckStore: nil}, Key: nil, ID: preBackupID, Installation: "",
-		Stage: StageOptions{BackupKind: "", AllowDev: false}, AfterStage: nil,
+		Stage: StageOptions{BackupKind: "", AllowDev: false, RestoreAt: time.Time{}}, AfterStage: nil,
 	})
 	if !errors.Is(err, ErrDamagedListForeign) || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("CheckRestore = %v, want ErrDamagedListForeign and ErrCorrupt", err)
