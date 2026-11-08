@@ -1171,6 +1171,43 @@ func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{})
 	return count, err
 }
 
+const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = ?1 AND subscription_id = ?2
+      AND (next_at_ms > ?3
+        OR (next_at_ms = ?3 AND id >= ?4))
+    ORDER BY next_at_ms DESC, id DESC
+    LIMIT ?5
+) AS within_bound
+`
+
+type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int64
+}
+
+// The number of deliveries of the subscription at or before the cursor (next
+// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+// the deliveries that a page after the cursor leaves behind. The count stops
+// at max_rows. The ORDER BY does not change the count; it stays so that the
+// plan reads the index of the history in order and stops at max_rows.
+func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNotificationDeliveriesOfSubscriptionBefore,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countNotificationDeliveryRoute = `-- name: CountNotificationDeliveryRoute :one
 SELECT COUNT(*) FROM notification_deliveries
 WHERE scope = ?1 AND notification_id = ?2
@@ -15255,6 +15292,74 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 	return items, nil
 }
 
+const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = ?1 AND subscription_id = ?2
+  AND (next_at_ms < ?3
+    OR (next_at_ms = ?3 AND id < ?4))
+ORDER BY next_at_ms DESC, id DESC
+LIMIT ?5
+`
+
+type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
+	Scope          string
+	SubscriptionID string
+	AfterMs        int64
+	AfterID        string
+	MaxRows        int64
+}
+
+// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+// time, delivery ID): the rows with an older next time, or with the same next
+// time and a smaller ID. The bound on next_at_ms lets the index scan start at
+// the cursor.
+func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.QueryContext(ctx, listNotificationDeliveriesOfSubscriptionAfter,
+		arg.Scope,
+		arg.SubscriptionID,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationDelivery
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.NotificationID,
+			&i.SubscriptionID,
+			&i.SinkID,
+			&i.Contact,
+			&i.Principal,
+			&i.State,
+			&i.Attempts,
+			&i.NextAtMs,
+			&i.LastError,
+			&i.DeliveredAtMs,
+			&i.Owner,
+			&i.LeaseUntilMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationScopesAbove = `-- name: ListNotificationScopesAbove :many
 SELECT s.scope
 FROM notification_sequences AS s
@@ -22287,6 +22392,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms
 `
 
@@ -22303,9 +22409,9 @@ type UpsertDriftResultParams struct {
 
 // The caller checks the fence, the job and the time in the same transaction.
 // A row of the same unit ID in another namespace or of another tool is not
-// replaced: the count is 0. A stored row that is not older is not replaced
-// either (count 0), so that two writers cannot put an older result over a
-// newer one.
+// replaced: the count is 0. A stored row of the same job is not replaced
+// either (count 0). A stored row that is not older is not replaced either
+// (count 0), so that two writers cannot put an older result over a newer one.
 func (q *Queries) UpsertDriftResult(ctx context.Context, arg UpsertDriftResultParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, upsertDriftResult,
 		arg.UnitID,
