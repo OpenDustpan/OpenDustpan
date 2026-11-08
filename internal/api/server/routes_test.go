@@ -66,6 +66,10 @@ func wantPublicStatus(route apiserver.Route) int {
 		return http.StatusFound
 	case "/api/dustpan/v1/sign-in/dev-code":
 		return http.StatusForbidden
+	case "/api/dustpan/v1/sign-in/password":
+		// The request has no JSON media type, so the check against login
+		// CSRF refuses it with the answer of a failed sign-in.
+		return http.StatusUnauthorized
 	case "/api/dustpan/v1/capabilities", "/api/dustpan/v1/openapi.json":
 		return http.StatusOK
 	}

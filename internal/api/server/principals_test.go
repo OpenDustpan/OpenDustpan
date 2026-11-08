@@ -174,6 +174,29 @@ func seedNamingLimit(t *testing.T, st *sqlite.Store, name string) {
 	}
 }
 
+// seedNamingGate stores a gate of the namespace acme whose unless names the
+// group name: an add of a member can lift it.
+func seedNamingGate(t *testing.T, st *sqlite.Store, name string) {
+	t.Helper()
+
+	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject("acme"), time.Unix(0, 0), "gate:g1")
+
+	_, err := st.Gates().Put(t.Context(), gate.Gate{
+		Scope: gate.NamespaceScope("acme"), ID: "g1", Version: 0,
+		DecisionPoint: gate.PointChangePlanned, Condition: "",
+		Unless:  `principal in OpenDustpan::Group::"` + name + `"`,
+		Outcome: gate.OutcomeDeny, Message: "", Mode: gate.ModeEnforce, OnError: gate.OnErrorFail,
+		Final: false, Reads: nil,
+		CheckedWith: gate.CheckedWith{
+			Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		},
+		State: "",
+	}, 0, fence, e)
+	if err != nil {
+		t.Fatalf("put gate: %v", err)
+	}
+}
+
 // newPrincipalHandler builds a Handler with principals as its principal
 // service. Nil principals means a store that keeps none.
 func newPrincipalHandler(t *testing.T, principals *principal.Service) testHandler {
@@ -983,6 +1006,19 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		`{"principalID":"` + alice.ID + `"}`, http.StatusForbidden,
 	}, nil)
 
+	// A refusal by a gate writes one as well: the unless of the gate names
+	// the group, so an add of a member can lift the gate.
+	var bob principalDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"bob","kind":"person"}`,
+		http.StatusCreated,
+	}, &bob)
+	seedNamingGate(t, st, group.Name)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/" + group.ID + "/members",
+		`{"principalID":"` + bob.ID + `"}`, http.StatusForbidden,
+	}, nil)
+
 	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
@@ -992,6 +1028,8 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		action, object string
 		outcome        audit.Outcome
 	}{
+		{"server:manage-groups", "group:" + group.ID + "#member:" + bob.ID, audit.OutcomeFailure},
+		{"server:manage-principals", "principal:" + bob.ID, audit.OutcomeSuccess},
 		{"server:manage-groups", "group:" + group.ID + "#member:" + alice.ID, audit.OutcomeFailure},
 		{"server:manage-groups", "group:" + group.ID + "#member:" + alice.ID, audit.OutcomeSuccess},
 		{"server:manage-groups", "group:" + group.ID, audit.OutcomeSuccess},
