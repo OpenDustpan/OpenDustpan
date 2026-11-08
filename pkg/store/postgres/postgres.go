@@ -429,6 +429,13 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 func (s *Store) CreateStackPlaced(
 	ctx context.Context, st stack.Stack, p stack.Placement, fence namespace.Fence,
 ) error {
+	// Defense in depth: the service and the handler check the placement too.
+	// This check stays so that a new caller of the store cannot make a stack
+	// that no collection holds.
+	if !p.Complete(st.Ref.Namespace) {
+		return collection.ErrNoCollection
+	}
+
 	e := p.Entry
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {

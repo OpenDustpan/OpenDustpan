@@ -212,6 +212,51 @@
         ],
         "type": "object"
       },
+      "BackupTooManyUnverifiedError": {
+        "description": "The error answer with the code backup.too-many-unverified.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.too-many-unverified"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupTooManyUnverifiedErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.too-many-unverified.",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "limit"
+        ],
+        "type": "object"
+      },
       "BulkUnitSettingsError": {
         "properties": {
           "code": {
@@ -1186,6 +1231,7 @@
         "discriminator": {
           "mapping": {
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
             "lock.locked": "#/components/schemas/LockLockedError",
@@ -1216,6 +1262,9 @@
         "oneOf": [
           {
             "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedError"
           },
           {
             "$ref": "#/components/schemas/ContextFieldFromCodeError"
@@ -1307,6 +1356,7 @@
           "auth.rate-limited",
           "auth.unauthenticated",
           "backup.corrupt",
+          "backup.too-many-unverified",
           "collection.already-exists",
           "collection.changed",
           "collection.invalid-name",

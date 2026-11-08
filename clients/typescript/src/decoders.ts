@@ -28,6 +28,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -404,6 +406,20 @@ export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = obj
   backup: string,
 });
 
+/** The validator of BackupTooManyUnverifiedError. */
+export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverifiedError> = object<BackupTooManyUnverifiedError>("BackupTooManyUnverifiedError", {
+  code: int64,
+  errorArgs: ref(() => decodeBackupTooManyUnverifiedErrorArgs),
+  errorCode: literal("backup.too-many-unverified"),
+  message: string,
+});
+
+/** The validator of BackupTooManyUnverifiedErrorArgs. */
+export const decodeBackupTooManyUnverifiedErrorArgs: Decoder<BackupTooManyUnverifiedErrorArgs> = object<BackupTooManyUnverifiedErrorArgs>("BackupTooManyUnverifiedErrorArgs", {
+  count: int64,
+  limit: int64,
+});
+
 /** The validator of BulkUnitSettingsError. */
 export const decodeBulkUnitSettingsError: Decoder<BulkUnitSettingsError> = object<BulkUnitSettingsError>("BulkUnitSettingsError", {
   code: int64,
@@ -712,6 +728,7 @@ export const decodeEnterMaintenanceResponse: Decoder<EnterMaintenanceResponse> =
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
   "backup.corrupt": ref(() => decodeBackupCorruptError),
+  "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),
   "gate.approvers-count-above": ref(() => decodeGateApproversCountAboveError),
   "lock.locked": ref(() => decodeLockLockedError),
