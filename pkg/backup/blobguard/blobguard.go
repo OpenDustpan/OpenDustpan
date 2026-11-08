@@ -88,32 +88,56 @@ const (
 )
 
 // WaitCounter counts each refused take of a blob delete lease by reason. A
-// deleter calls it with ReasonOf(err) after HoldLease refuses the take. A nil
-// WaitCounter counts nothing: the caller tests it before the call.
+// deleter calls Count with the error of the refused take after HoldLease
+// refuses it. A nil WaitCounter counts nothing.
 type WaitCounter func(reason WaitReason)
 
+// Count counts the refused take that HoldLease answered with err, unless err
+// is a canceled context: a take that the cancellation of its caller stopped
+// is not a wait for work, and it counts nothing. A nil counter counts
+// nothing.
+func (c WaitCounter) Count(err error) {
+	if c == nil {
+		return
+	}
+
+	reason, ok := ReasonOf(err)
+	if !ok {
+		return
+	}
+
+	c(reason)
+}
+
 // ReasonOf returns the reason of the refused take that HoldLease answered
-// with err: the running work for a *WaitError, WaitNoGuard for ErrNoWatch,
-// and WaitGuardError for every other error, including a nil error and a
-// *WaitError with a kind that this package does not know. So an unknown
-// answer counts as a guard failure: fail closed.
-func ReasonOf(err error) WaitReason {
+// with err, and true: the running work for a *WaitError, WaitNoGuard for
+// ErrNoWatch, and WaitGuardError for every other error, including a nil
+// error and a *WaitError with a kind that this package does not know. So an
+// unknown answer counts as a guard failure: fail closed. It returns false,
+// and no reason, when err is a canceled context: a canceled take is not a
+// wait, so it counts nothing. A context that reached its deadline is not a
+// canceled context, so it gives WaitGuardError.
+func ReasonOf(err error) (WaitReason, bool) {
+	if errors.Is(err, context.Canceled) {
+		return "", false
+	}
+
 	if wait, ok := errors.AsType[*WaitError](err); ok {
 		switch wait.Work.Kind {
 		case Backup:
-			return WaitBackup
+			return WaitBackup, true
 		case Restore:
-			return WaitRestore
+			return WaitRestore, true
 		default:
-			return WaitGuardError
+			return WaitGuardError, true
 		}
 	}
 
 	if errors.Is(err, ErrNoWatch) {
-		return WaitNoGuard
+		return WaitNoGuard, true
 	}
 
-	return WaitGuardError
+	return WaitGuardError, true
 }
 
 // Watch is the guard of the blob deletes. A deleter of a blob that a backup

@@ -195,6 +195,12 @@ func (s *Server) ManualLocks() *manuallock.Service {
 	return s.manualLocks
 }
 
+// ArtifactSweeper returns the artifact sweeper that the server wired, or nil.
+// A test calls it to drive the sweep of a started server.
+func (s *Server) ArtifactSweeper() *job.ArtifactSweeper {
+	return s.artifactSweeper
+}
+
 // UngatedHandler returns the root handler before the start gate and the
 // component gate, so that a test can send a request to a server that did not
 // start.

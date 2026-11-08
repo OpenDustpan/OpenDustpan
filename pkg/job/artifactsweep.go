@@ -482,9 +482,7 @@ func (s *ArtifactSweeper) sweepPage(
 func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel string) error {
 	leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 	if holdErr != nil {
-		if s.onDeleteWait != nil {
-			s.onDeleteWait(blobguard.ReasonOf(holdErr))
-		}
+		s.onDeleteWait.Count(holdErr)
 
 		return fmt.Errorf("%w: %w", errHeld, holdErr)
 	}

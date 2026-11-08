@@ -662,7 +662,7 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 			// delete, so the lease row names the delete that holds it.
 			leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 			if holdErr != nil {
-				s.countDeleteWait(holdErr)
+				s.onDeleteWait.Count(holdErr)
 
 				guardErr = holdErr
 
@@ -1775,14 +1775,6 @@ func (s *Service) DiffStates(
 // needs the workspace unlocked or held by holder.
 func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holder string) (StateVersion, error) {
 	return s.restoreChecked(ctx, id, from, holder, nil)
-}
-
-// countDeleteWait reports a refused take of the blob delete lease to the
-// hook. A nil hook counts nothing.
-func (s *Service) countDeleteWait(err error) {
-	if s.onDeleteWait != nil {
-		s.onDeleteWait(blobguard.ReasonOf(err))
-	}
 }
 
 // restoreChecked is Restore with an optional expected current version. A nil expect

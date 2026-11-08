@@ -271,7 +271,7 @@ func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 
 // TestDeletePurgedBlobsCountsRefusedTakes proves that each refused take of
 // the purge counts once with its reason: the running work, the missing guard
-// and the failed take.
+// and the failed take. A canceled context counts nothing.
 func TestDeletePurgedBlobsCountsRefusedTakes(t *testing.T) {
 	t.Parallel()
 
@@ -299,6 +299,12 @@ func TestDeletePurgedBlobsCountsRefusedTakes(t *testing.T) {
 
 			return g
 		}},
+		{name: "a canceled context", reason: "", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Fail(context.Canceled)
+
+			return g
+		}},
 	}
 
 	for _, tc := range tests {
@@ -316,8 +322,13 @@ func TestDeletePurgedBlobsCountsRefusedTakes(t *testing.T) {
 				t.Fatal("delete with a refused take: want an error")
 			}
 
-			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
-				t.Fatalf("counted reasons = %v, want [%s]", got, tc.reason)
+			want := []blobguard.WaitReason(nil)
+			if tc.reason != "" {
+				want = []blobguard.WaitReason{tc.reason}
+			}
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("counted reasons = %v, want %v", got, want)
 			}
 		})
 	}

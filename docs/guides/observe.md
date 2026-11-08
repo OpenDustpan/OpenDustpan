@@ -183,6 +183,8 @@ because the take of their lease was refused, with the label `reason`.
 `no-guard` counts a delete of a deleter that has no guard.
 `guard-error` counts a delete that a failed take or an unknown answer kept
 back.
+A take that stops because its caller was canceled, for example at shutdown,
+counts nothing.
 A counter that rises for a long time while no backup or restore runs means
 the deletes do not drain.
 

@@ -615,9 +615,7 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		// row names the delete that holds it.
 		leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 		if holdErr != nil {
-			if s.onDeleteWait != nil {
-				s.onDeleteWait(blobguard.ReasonOf(holdErr))
-			}
+			s.onDeleteWait.Count(holdErr)
 
 			guardErr = holdErr
 
@@ -1345,9 +1343,7 @@ func (s *Updates) takeDeleteLease(
 		return leaseCtx, release, true
 	}
 
-	if s.onDeleteWait != nil {
-		s.onDeleteWait(blobguard.ReasonOf(err))
-	}
+	s.onDeleteWait.Count(err)
 
 	wait, isWait := errors.AsType[*blobguard.WaitError](err)
 	if !isWait {

@@ -865,7 +865,7 @@ func TestJournalBuildReadsTheGuardBeforeEachBatchDelete(t *testing.T) {
 
 // TestBlobDeleteWaitsAreCounted proves that each refused take of the stack
 // deletes counts once with its reason: the purge of a stack and the sweep
-// that a start runs.
+// that a start runs. A canceled context counts nothing.
 func TestBlobDeleteWaitsAreCounted(t *testing.T) {
 	t.Parallel()
 
@@ -895,6 +895,12 @@ func TestBlobDeleteWaitsAreCounted(t *testing.T) {
 
 			return g
 		}},
+		{name: "a canceled context", reason: "", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Fail(context.Canceled)
+
+			return g
+		}},
 	}
 
 	for _, tc := range tests {
@@ -902,6 +908,11 @@ func TestBlobDeleteWaitsAreCounted(t *testing.T) {
 			t.Parallel()
 
 			var got []blobguard.WaitReason
+
+			want := []blobguard.WaitReason(nil)
+			if tc.reason != "" {
+				want = []blobguard.WaitReason{tc.reason}
+			}
 
 			clk := newClock()
 			f := newUpdatesWaiting(t, clk, tc.guard(), func(reason blobguard.WaitReason) {
@@ -913,8 +924,8 @@ func TestBlobDeleteWaitsAreCounted(t *testing.T) {
 				t.Fatal("the purge with a refused take: want an error")
 			}
 
-			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
-				t.Fatalf("the purge counted %v, want [%s]", got, tc.reason)
+			if !slices.Equal(got, want) {
+				t.Fatalf("the purge counted %v, want %v", got, want)
 			}
 
 			// The sweep that a start runs reads the guard again, with the
@@ -923,8 +934,8 @@ func TestBlobDeleteWaitsAreCounted(t *testing.T) {
 			f.complete(t, orphan.update)
 			f.started(t, stack.KindPreview)
 
-			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
-				t.Fatalf("the sweep counted %v, want [%s]", got, tc.reason)
+			if !slices.Equal(got, want) {
+				t.Fatalf("the sweep counted %v, want %v", got, want)
 			}
 		})
 	}

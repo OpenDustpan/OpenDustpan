@@ -468,7 +468,7 @@ func TestSweepDeletesNothingWhenTheTakeIsRefused(t *testing.T) {
 
 // TestSweepCountsRefusedTakes proves that each refused take of the sweep
 // counts once with its reason: the running work, the missing guard and the
-// failed take.
+// failed take. A canceled context counts nothing.
 func TestSweepCountsRefusedTakes(t *testing.T) {
 	t.Parallel()
 
@@ -503,6 +503,12 @@ func TestSweepCountsRefusedTakes(t *testing.T) {
 
 			return g
 		}},
+		{name: "a canceled context", reason: "", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Fail(context.Canceled)
+
+			return g
+		}},
 	}
 
 	for _, tc := range tests {
@@ -522,8 +528,13 @@ func TestSweepCountsRefusedTakes(t *testing.T) {
 				t.Fatal("SweepJob with a refused take: want an error")
 			}
 
-			if !slices.Equal(got, []blobguard.WaitReason{tc.reason}) {
-				t.Fatalf("counted reasons = %v, want [%s]", got, tc.reason)
+			want := []blobguard.WaitReason(nil)
+			if tc.reason != "" {
+				want = []blobguard.WaitReason{tc.reason}
+			}
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("counted reasons = %v, want %v", got, want)
 			}
 		})
 	}
