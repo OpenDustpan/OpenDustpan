@@ -60,6 +60,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		Now:            nil,
 	})
 	if err != nil {
 		tb.Fatalf("sink handler: %v", err)
