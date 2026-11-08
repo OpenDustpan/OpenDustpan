@@ -18731,6 +18731,23 @@ func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
 	return err
 }
 
+const markMemberRemovalAlert = `-- name: MarkMemberRemovalAlert :exec
+INSERT INTO member_removal_alerts (source_kind, source_id, alerted_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (source_kind, source_id) DO UPDATE SET alerted_at_ms = excluded.alerted_at_ms
+`
+
+type MarkMemberRemovalAlertParams struct {
+	SourceKind  string
+	SourceID    string
+	AlertedAtMs int64
+}
+
+func (q *Queries) MarkMemberRemovalAlert(ctx context.Context, arg MarkMemberRemovalAlertParams) error {
+	_, err := q.db.Exec(ctx, markMemberRemovalAlert, arg.SourceKind, arg.SourceID, arg.AlertedAtMs)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -18801,6 +18818,25 @@ func (q *Queries) MarkTempAdminReviewOpened(ctx context.Context, arg MarkTempAdm
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const memberRemovalAlertedAt = `-- name: MemberRemovalAlertedAt :one
+SELECT COALESCE((SELECT alerted_at_ms FROM member_removal_alerts
+    WHERE source_kind = $1 AND source_id = $2), 0)::bigint
+    AS alerted_at_ms
+`
+
+type MemberRemovalAlertedAtParams struct {
+	SourceKind string
+	SourceID   string
+}
+
+// The time of the last alert of one source, or 0 when the source has none.
+func (q *Queries) MemberRemovalAlertedAt(ctx context.Context, arg MemberRemovalAlertedAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, memberRemovalAlertedAt, arg.SourceKind, arg.SourceID)
+	var alerted_at_ms int64
+	err := row.Scan(&alerted_at_ms)
+	return alerted_at_ms, err
 }
 
 const memberRemovalTotals = `-- name: MemberRemovalTotals :one

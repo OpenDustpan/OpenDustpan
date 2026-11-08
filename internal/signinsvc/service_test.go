@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -621,6 +623,130 @@ func TestCompleteNoGroupsInTheAssertion(t *testing.T) {
 	}
 }
 
+// TestCompleteGroupsRecordsTheRemovals checks that a sign-in whose claims
+// remove and suspend members records the IDs of both with the source of the
+// provider.
+func TestCompleteGroupsRecordsTheRemovals(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: []string{"grp-b"},
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 1 || w.removals[0].Kind != principal.RemovalSourceIdentityProvider ||
+		w.removals[0].ID != "corp" {
+		t.Fatalf("removals = %+v, want the removals of the provider corp", w.removals)
+	}
+
+	if len(w.removedIDs) != 1 || !slices.Equal(w.removedIDs[0], []string{"grp-a", "grp-b"}) {
+		t.Fatalf("groups = %v, want grp-a and grp-b", w.removedIDs)
+	}
+}
+
+// TestCompleteGroupsNoRemovalRecordsNothing checks that a sign-in that
+// removes no member calls no recorder.
+func TestCompleteGroupsNoRemovalRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: []string{"grp-a"}, Removed: nil, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 0 {
+		t.Fatalf("removals = %+v, want none", w.removals)
+	}
+}
+
+// TestCompleteGroupsRecordErrorGoesOn checks that a failure to record the
+// removals does not refuse the sign-in: the service writes one ERROR line and
+// one audit entry of the failed alert, then starts the session.
+func TestCompleteGroupsRecordErrorGoesOn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v, want the sign-in to go on", err)
+	}
+
+	if len(w.starts) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(w.starts))
+	}
+
+	if len(w.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(w.entries))
+	}
+
+	checkRemovalAlertFailureEntry(t, w.entries[0])
+
+	if !strings.Contains(w.logs.text(), errcode.PrincipalRemovalAlertFailed) ||
+		!strings.Contains(w.logs.text(), "identity-provider") {
+		t.Fatalf("log = %q, want the code and the source kind", w.logs.text())
+	}
+
+	if w.auditFailed != 0 {
+		t.Fatalf("audit failures = %d, want 0", w.auditFailed)
+	}
+}
+
+// checkRemovalAlertFailureEntry fails unless e is the audit entry of the
+// failed removal alert of the provider corp.
+func checkRemovalAlertFailureEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Action != principal.AuditActionMassRemovalAlert || e.Outcome != audit.OutcomeFailure ||
+		e.Kind != audit.KindSecurity || e.Namespace != audit.ServerScope ||
+		e.Subject != "identity-provider:corp" || e.Reason != errcode.PrincipalRemovalAlertFailed {
+		t.Fatalf("audit entry = %+v, want the failure of the removal alert", e)
+	}
+}
+
+// TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn checks that the
+// sign-in is refused when the audit entry of the failed alert fails too.
+func TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.auditErr = errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil))
+	if !errors.Is(err, signinsvc.ErrRemovalAlertUnrecorded) || !errors.Is(err, errStoreStopped) {
+		t.Fatalf("Complete() = %v, want the unrecorded alert and the audit error", err)
+	}
+
+	if len(w.starts) != 0 {
+		t.Fatalf("sessions = %d, want 0", len(w.starts))
+	}
+
+	if w.auditFailed != 1 {
+		t.Fatalf("audit failures = %d, want 1", w.auditFailed)
+	}
+}
+
 // TestRefusalSurvivesAnAuditFailure checks that a failed audit write still
 // refuses the sign-in and reports the failure.
 func TestRefusalSurvivesAnAuditFailure(t *testing.T) {
@@ -665,7 +791,7 @@ func TestNewRefusesAMissingPort(t *testing.T) {
 			w := newWorld()
 			cfg := signinsvc.Config{
 				Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w,
-				Groups: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+				Groups: nil, Removals: nil, States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
 			}
 			tc.clear(&cfg)
 
@@ -795,8 +921,8 @@ func TestCompleteChecksTheLookup(t *testing.T) {
 func checkCauseLogged(t *testing.T, w *world, cause error) {
 	t.Helper()
 
-	if cause != nil && !strings.Contains(w.logs.String(), cause.Error()) {
-		t.Fatalf("the log does not name the cause %q: %s", cause, w.logs.String())
+	if cause != nil && !strings.Contains(w.logs.text(), cause.Error()) {
+		t.Fatalf("the log does not name the cause %q: %s", cause, w.logs.text())
 	}
 }
 

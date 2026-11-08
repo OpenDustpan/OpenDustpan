@@ -38,6 +38,11 @@ func RunRemovalLog(t *testing.T, newStore func(t *testing.T) RemovalLogStore) {
 		{"AWindowThatFailsTheChecksIsErrInvalid", testRemovalInvalidWindow},
 		{"RowsOlderThanTheMaximumWindowAreDeleted", testRemovalPrune},
 		{"ThePruneDeletesAtMostItsLimit", testRemovalPruneLimit},
+		{"ARemovalWithNoAlertHasNoAlertedAt", testRemovalNoAlert},
+		{"AnAlertMarkerShowsInTheTotals", testRemovalAlertedAt},
+		{"ASecondAlertMarkerReplacesTheTime", testRemovalAlertReplaces},
+		{"TheMarkerOfOneSourceStaysOutOfAnother", testRemovalAlertApart},
+		{"AnAlertMarkerThatFailsTheChecksIsErrInvalid", testRemovalAlertInvalid},
 	}
 
 	for _, tc := range cases {
@@ -98,15 +103,28 @@ func addRemoval(t *testing.T, s RemovalLogStore, r principal.Removal) principal.
 // source members, group of them from the group, when the group held members
 // before the largest of those removals.
 func newTotals(source, group, members int) principal.RemovalTotals {
-	return principal.RemovalTotals{SourceRemoved: source, GroupRemoved: group, GroupMembers: members}
+	return principal.RemovalTotals{
+		SourceRemoved: source, GroupRemoved: group, GroupMembers: members, AlertedAt: time.Time{},
+	}
 }
 
 // wantTotals fails the test unless the totals are the wanted ones.
 func wantTotals(t *testing.T, what string, got, want principal.RemovalTotals) {
 	t.Helper()
 
-	if got != want {
+	if got.SourceRemoved != want.SourceRemoved || got.GroupRemoved != want.GroupRemoved ||
+		got.GroupMembers != want.GroupMembers || !got.AlertedAt.Equal(want.AlertedAt) {
 		t.Fatalf("%s: totals = %+v, want %+v", what, got, want)
+	}
+}
+
+// markAlert stores the alert time at of source and fails the test on an
+// error.
+func markAlert(t *testing.T, s RemovalLogStore, source principal.RemovalSource, at time.Time) {
+	t.Helper()
+
+	if err := s.Log.MarkRemovalAlert(t.Context(), source, at); err != nil {
+		t.Fatalf("mark an alert of the source at %s: %v", at, err)
 	}
 }
 
@@ -334,4 +352,112 @@ func testRemovalPruneLimit(t *testing.T, s RemovalLogStore) {
 		newRemoval("grp-eng", 1, rows, 0),
 		newRemoval("grp-eng", 1, 1, principal.MaxRemovalWindow+time.Hour),
 	)
+}
+
+// testRemovalNoAlert checks that a source without an alert has no alerted
+// time.
+func testRemovalNoAlert(t *testing.T, s RemovalLogStore) {
+	t.Helper()
+
+	totals := addRemoval(t, s, newRemoval("grp-eng", 1, 10, 0))
+	wantTotals(t, "a source without an alert", totals, newTotals(1, 1, 10))
+}
+
+// testRemovalAlertedAt checks that the totals hold the time of the last
+// alert of the source.
+func testRemovalAlertedAt(t *testing.T, s RemovalLogStore) {
+	t.Helper()
+
+	alertedAt := removalBase().Add(3*time.Minute + 123*time.Millisecond + 456*time.Microsecond)
+	markAlert(t, s, removalSource(), alertedAt)
+
+	totals := addRemoval(t, s, newRemoval("grp-eng", 1, 10, 5*time.Minute))
+
+	want := newTotals(1, 1, 10)
+	want.AlertedAt = time.UnixMilli(alertedAt.UnixMilli()).UTC()
+	wantTotals(t, "a source with an alert", totals, want)
+}
+
+// testRemovalAlertReplaces checks that a second marker replaces the time of
+// the first.
+func testRemovalAlertReplaces(t *testing.T, s RemovalLogStore) {
+	t.Helper()
+
+	markAlert(t, s, removalSource(), removalBase().Add(time.Minute))
+	alertedAt := removalBase().Add(2 * time.Minute)
+	markAlert(t, s, removalSource(), alertedAt)
+
+	totals := addRemoval(t, s, newRemoval("grp-eng", 1, 10, 4*time.Minute))
+
+	want := newTotals(1, 1, 10)
+	want.AlertedAt = alertedAt
+	wantTotals(t, "a second marker", totals, want)
+}
+
+// testRemovalAlertApart checks that the marker of another source does not
+// show in the totals: another kind with the same ID, and the same kind with
+// another ID.
+func testRemovalAlertApart(t *testing.T, s RemovalLogStore) {
+	t.Helper()
+
+	otherKind := principal.RemovalSource{Kind: principal.RemovalSourceSCIMToken, ID: removalSource().ID}
+	otherID := principal.RemovalSource{Kind: principal.RemovalSourceIdentityProvider, ID: "idp-2"}
+	otherKindAt := removalBase().Add(time.Minute)
+	otherIDAt := removalBase().Add(2 * time.Minute)
+
+	markAlert(t, s, otherKind, otherKindAt)
+	markAlert(t, s, otherID, otherIDAt)
+
+	totals := addRemoval(t, s, newRemoval("grp-eng", 1, 10, 3*time.Minute))
+	wantTotals(t, "another kind and another ID", totals, newTotals(1, 1, 10))
+
+	totals = addRemoval(t, s, removalOf(otherKind, "grp-eng", 1, 10, 4*time.Minute))
+	want := newTotals(1, 1, 10)
+	want.AlertedAt = otherKindAt
+	wantTotals(t, "the other kind", totals, want)
+
+	totals = addRemoval(t, s, removalOf(otherID, "grp-eng", 1, 10, 5*time.Minute))
+	want = newTotals(1, 1, 10)
+	want.AlertedAt = otherIDAt
+	wantTotals(t, "the other ID", totals, want)
+}
+
+// testRemovalAlertInvalid checks that each marker that fails the checks gives
+// ErrInvalid and stores nothing.
+func testRemovalAlertInvalid(t *testing.T, s RemovalLogStore) {
+	t.Helper()
+
+	cases := []struct {
+		name   string
+		source principal.RemovalSource
+		at     time.Time
+	}{
+		{
+			name:   "an unknown source kind",
+			source: principal.RemovalSource{Kind: "saml", ID: removalSource().ID},
+			at:     removalBase(),
+		},
+		{
+			name:   "an empty source ID",
+			source: principal.RemovalSource{Kind: principal.RemovalSourceIdentityProvider, ID: ""},
+			at:     removalBase(),
+		},
+		{
+			name:   "no time",
+			source: removalSource(),
+			at:     time.Time{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := s.Log.MarkRemovalAlert(t.Context(), tc.source, tc.at)
+			wantErr(t, "mark an invalid alert", err, principal.ErrInvalid)
+
+			totals := addRemoval(t, s, newRemoval("grp-eng", 1, 10, 0))
+			if !totals.AlertedAt.IsZero() {
+				t.Fatalf("an invalid marker stored the alert time %s", totals.AlertedAt)
+			}
+		})
+	}
 }

@@ -82,7 +82,8 @@ func (s *Store) portableStage(
 		load: func(ctx context.Context, schema string) error {
 			return s.loadPortableStaging(ctx, schema, open, index)
 		},
-		want: want,
+		want:      want,
+		restoreAt: opts.RestoreAt,
 	}, nil
 }
 

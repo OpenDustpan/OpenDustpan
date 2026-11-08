@@ -56,6 +56,11 @@ type Setting struct {
 	Kind      Kind
 	Sensitive bool
 	URL       bool
+	// StaticCredentialHost marks a setting that names a host to which the
+	// server sends a static credential: a password, a key or a token that
+	// the static layer holds. Such a setting is static only, and its
+	// declaration refuses a database layer.
+	StaticCredentialHost bool
 	// StepInput marks a variable that the launcher sets for the process of a
 	// step. The server does not read it, so it has no flag and no file key.
 	StepInput bool
@@ -164,6 +169,15 @@ func (s *Setting) WithStepInput() *Setting {
 // WithSensitive marks a setting as sensitive and answers it.
 func (s *Setting) WithSensitive() *Setting {
 	s.Sensitive = true
+
+	return s
+}
+
+// WithStaticCredentialHost marks a setting as one that names a host to which
+// the server sends a static credential, and answers it. Such a setting is
+// static only: its declaration refuses a database layer.
+func (s *Setting) WithStaticCredentialHost() *Setting {
+	s.StaticCredentialHost = true
 
 	return s
 }
