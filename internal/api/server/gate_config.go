@@ -267,7 +267,7 @@ func (h *Handler) gateConfigRoutes() []Route {
 	row := func(method, path string, actions []identity.Action, serve RouteHandler) Route {
 		return Route{
 			Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions,
-			Resolve: resolveNamespacePath, ActionsFor: nil, Serve: serve,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
 		}
 	}
 

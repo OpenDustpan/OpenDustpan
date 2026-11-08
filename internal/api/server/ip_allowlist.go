@@ -112,7 +112,7 @@ func (h *Handler) ipAllowlistRoutes() []Route {
 			Path:    ipAllowlistPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageIPAllowlist},
-			Resolve: resolveNamespacePath, ActionsFor: nil,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.readIPAllowlist,
 		},
 		{
@@ -120,7 +120,7 @@ func (h *Handler) ipAllowlistRoutes() []Route {
 			Path:    ipAllowlistPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageIPAllowlist},
-			Resolve: resolveNamespacePath, ActionsFor: nil,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(ipAllowlistSetAction, h.writeIPAllowlist),
 		},
 		{
@@ -128,7 +128,7 @@ func (h *Handler) ipAllowlistRoutes() []Route {
 			Path:    ipAllowlistPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceManageIPAllowlist},
-			Resolve: resolveNamespacePath, ActionsFor: nil,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(ipAllowlistRemoveAction, h.removeIPAllowlist),
 		},
 	}
