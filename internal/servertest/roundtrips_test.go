@@ -1279,12 +1279,17 @@ func backupModel() costModel {
 // counts no rows in it, and the other statements for it are the staging count
 // and the read of the backup.
 //
+// The fixed part takes 8 off for the 4 tables of the quota counter
+// (quota_keys, quota_reservations, quota_reservation_keys and quota_requests).
+// The dev strip counts no rows in them either, so each costs 5 round trips, as
+// group_mappings does.
+//
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + forgeStripClassTrips,
+		fixed:        336 + forgeStripClassTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
