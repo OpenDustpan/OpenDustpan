@@ -239,6 +239,84 @@ func TestWebhookSecretComesFromTheVariableOrAPrivateFile(t *testing.T) {
 	}
 }
 
+// TestSecretFromRefusesControlCharacters proves that a secret with a
+// control character is refused, and that the error names the variable,
+// never the value.
+func TestSecretFromRefusesControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	const value = "secret-value"
+
+	dir := t.TempDir()
+	nulFile := filepath.Join(dir, "nul")
+
+	if err := os.WriteFile(nulFile, []byte("before\x00after"), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		vars   map[string]string
+		source string
+	}{
+		{
+			name:   "fingerprint token",
+			vars:   map[string]string{oidcSecretEnvVar: "\x00fingerprint:00112233445566778899aabbccddeeff"},
+			source: oidcSecretEnvVar,
+		},
+		{
+			name:   "newline",
+			vars:   map[string]string{oidcSecretEnvVar: value + "\n" + value},
+			source: oidcSecretEnvVar,
+		},
+		{
+			name:   "DEL",
+			vars:   map[string]string{oidcSecretEnvVar: value + "\x7f"},
+			source: oidcSecretEnvVar,
+		},
+		{
+			name:   "NUL in the file",
+			vars:   map[string]string{oidcSecretFileEnvVar: nulFile},
+			source: oidcSecretFileEnvVar,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkSecretControlRefused(t, tc.vars, tc.source, value)
+		})
+	}
+
+	got, err := secretFrom(
+		envOf(map[string]string{oidcSecretEnvVar: value}), oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+	)
+	if err != nil || string(got) != value {
+		t.Fatalf("secretFrom of a normal secret = %q, %v; want %q", got, err, value)
+	}
+}
+
+// checkSecretControlRefused proves that secretFrom refuses vars with the
+// sentinel, names source in the error, and never repeats value or the text
+// of the file.
+func checkSecretControlRefused(t *testing.T, vars map[string]string, source, value string) {
+	t.Helper()
+
+	got, err := secretFrom(envOf(vars), oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+	if !errors.Is(err, errSecretControlChar) {
+		t.Fatalf("secretFrom = %q, %v; want %v", got, err, errSecretControlChar)
+	}
+
+	if !strings.Contains(err.Error(), source) {
+		t.Errorf("error %q does not name %s", err, source)
+	}
+
+	for _, text := range []string{value, "before", "after", "fingerprint"} {
+		if strings.Contains(err.Error(), text) {
+			t.Errorf("error %q holds %q", err, text)
+		}
+	}
+}
+
 func TestAWebhookSinkOpensWithASecret(t *testing.T) {
 	t.Parallel()
 

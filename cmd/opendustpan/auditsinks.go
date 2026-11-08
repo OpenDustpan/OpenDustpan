@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -320,6 +321,8 @@ var (
 	)
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
+	// errSecretControlChar reports a secret with a control character.
+	errSecretControlChar = errors.New("the secret holds a control character")
 )
 
 // openWebhookSink opens a webhook sink on rawURL with the secret of the
@@ -376,7 +379,7 @@ var (
 // percent-encoded, so it can hold a comma or an equals sign. The errors name
 // the position of an item, never its text, because a value can be a secret.
 func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (map[string]string, error) {
-	raw, err := secretFrom(lookup, env, fileEnv, errNoOTLPHeaders)
+	raw, _, err := secretTextFrom(lookup, env, fileEnv, errNoOTLPHeaders)
 	if errors.Is(err, errNoOTLPHeaders) {
 		return map[string]string{}, nil
 	}
@@ -429,38 +432,66 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 
 // secretFrom reads a secret from the variable env, else from the file that
 // the variable fileEnv names. The file must allow no group or other
-// access. A missing or empty secret answers errMissing.
+// access. A missing or empty secret answers errMissing. A secret with a
+// control character is refused.
 func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
+	secret, source, err := secretTextFrom(lookup, env, fileEnv, errMissing)
+	if err != nil {
+		return nil, err
+	}
+
+	// Defense in depth: the start reads the real environment; this check
+	// stays so that a snapshot value or a broken file cannot become a
+	// secret.
+	if bytes.IndexFunc(secret, isControlRune) >= 0 {
+		return nil, fmt.Errorf("%s: %w", source, errSecretControlChar)
+	}
+
+	return secret, nil
+}
+
+// secretTextFrom reads the text of a secret from the variable env, else
+// from the file that the variable fileEnv names. It answers the text and
+// the variable that gave it. The file must allow no group or other access.
+// A missing or empty secret answers errMissing.
+func secretTextFrom(
+	lookup func(string) (string, bool), env, fileEnv string, errMissing error,
+) ([]byte, string, error) {
 	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
-		return []byte(strings.TrimSpace(raw)), nil
+		return []byte(strings.TrimSpace(raw)), env, nil
 	}
 
 	path, ok := lookup(fileEnv)
 	if !ok || strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
+		return nil, "", fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: stat file: %w", fileEnv, err)
+		return nil, "", fmt.Errorf("%s: stat file: %w", fileEnv, err)
 	}
 
 	if perm := info.Mode().Perm(); perm&keyFilePrivateBits != 0 {
-		return nil, fmt.Errorf("%s: %w %q (mode %04o): run chmod 600 on the file",
+		return nil, "", fmt.Errorf("%s: %w %q (mode %04o): run chmod 600 on the file",
 			fileEnv, errSecretFilePermissions, path, perm)
 	}
 
 	raw, err := os.ReadFile(path) //nolint:gosec // The operator names the secret file through the environment.
 	if err != nil {
-		return nil, fmt.Errorf("%s: read file: %w", fileEnv, err)
+		return nil, "", fmt.Errorf("%s: read file: %w", fileEnv, err)
 	}
 
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
-		return nil, fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
+		return nil, "", fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
 
-	return []byte(secret), nil
+	return []byte(secret), fileEnv, nil
+}
+
+// isControlRune reports a control character: a rune below 0x20 or 0x7f.
+func isControlRune(r rune) bool {
+	return r < 0x20 || r == 0x7f
 }
 
 // close closes every opened sink and answers the joined errors.
