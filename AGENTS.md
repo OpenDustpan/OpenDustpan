@@ -147,6 +147,7 @@ clients/typescript/    the generated TypeScript client package; make clients-che
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
+openspec/              OpenSpec: project.md (rules for specs), config.yaml, specs/ and changes/ (one directory for each change)
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only; INDEX.md lists their change links
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
@@ -335,6 +336,7 @@ skill (ADR 14):
 - Keep changes small and reviewable, with one concern per change.
 - Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
+- Agent work starts from a change in `openspec/changes` with no open questions, and its pull request links the change and its issue.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
