@@ -48,7 +48,9 @@ function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder
       }
     }
 
-    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `a ${typeof value}`;
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
 
     throw invalidValue(path, `want ${want}, got ${got}`);
   };

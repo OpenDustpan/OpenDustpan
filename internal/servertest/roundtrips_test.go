@@ -162,6 +162,10 @@ type roundTripTracer struct {
 	mu    sync.Mutex
 	mode  traceMode
 	trips []roundTrip
+	// swapHook, when set, is the one-shot hook of the next statement that
+	// locks the durable control tables of a swap. The tracer runs the hook on
+	// the goroutine that sends the statement, before the statement goes out.
+	swapHook func()
 }
 
 var (
@@ -172,7 +176,7 @@ var (
 )
 
 func newRoundTripTracer() *roundTripTracer {
-	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil}
+	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil, swapHook: nil}
 }
 
 // statementLabel shortens a statement to its sqlc name or its first characters.
@@ -189,12 +193,18 @@ func statementLabel(sql string) string {
 	return flat
 }
 
-// TraceQueryStart implements pgx.QueryTracer.
+// TraceQueryStart implements pgx.QueryTracer. A swap hook runs before the
+// statement is recorded, so the hook adds no round trip of its own to the
+// count.
 func (r *roundTripTracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
+	if hook := r.takeSwapHook(data.SQL); hook != nil {
+		hook()
+	}
+
 	r.record("query", data.SQL)
 
 	return ctx
@@ -352,6 +362,33 @@ func (r *roundTripTracer) record(kind, sql string) {
 	r.mu.Lock()
 	r.trips = append(r.trips, roundTrip{kind: kind, sql: statementLabel(sql), frame: facts.caller})
 	r.mu.Unlock()
+}
+
+// setSwapHook sets hook as the one-shot hook of the next statement that locks
+// the durable control tables of a swap. The hook runs on the goroutine that
+// sends the statement, before the statement goes out.
+func (r *roundTripTracer) setSwapHook(hook func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.swapHook = hook
+}
+
+// takeSwapHook returns the hook of the first statement that locks the durable
+// control tables of a swap, and clears it. It returns nil for every other
+// statement and after the hook ran once, so the hook runs at most one time.
+func (r *roundTripTracer) takeSwapHook(sql string) func() {
+	if !strings.HasPrefix(sql, "LOCK TABLE ") || !strings.Contains(sql, ".durable_operations,") {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	hook := r.swapHook
+	r.swapHook = nil
+
+	return hook
 }
 
 // storeOptions returns the options that give the store of a cluster the tracer.
@@ -783,6 +820,11 @@ type requestFlow struct {
 // transaction: the begin, the read of the unit, the read of the membership and
 // the commit. So "lock" holds 5 round trips for it, "opentofu upload" holds 4,
 // and "lock, upload and unlock" holds both, 9.
+//
+// Each check of the state.write gates first reads the principal record of the
+// caller with one query, for its groups and its break-glass mark. So "lock",
+// "lock, upload and unlock" and each pulumi flow that meets the gates hold 1
+// round trip for that read.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 45, func(h *rtHarness) {
@@ -790,7 +832,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 36, func(h *rtHarness) {
+		{"lock", 37, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -798,7 +840,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 96, func(h *rtHarness) {
+		{"lock, upload and unlock", 97, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -844,28 +886,28 @@ func requestFlows() []requestFlow {
 		// its own fenced transaction are part of each budget. A stack is in a
 		// collection, so each of these flows also reads or deletes the
 		// membership of the unit: one more round trip in each budget.
-		{"pulumi stack rm", 38, func(h *rtHarness) {
+		{"pulumi stack rm", 39, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 65, func(h *rtHarness) {
+		{"pulumi stack import", 66, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 66, func(h *rtHarness) {
+		{"pulumi stack restore", 67, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 35, func(h *rtHarness) {
+		{"pulumi stack rename", 36, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 31, func(h *rtHarness) {
+		{"pulumi cancel", 32, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
