@@ -793,7 +793,7 @@ func newUpdatesFull(
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
 	t.Helper()
 
-	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""})
 }
 
 func (f updatesFixture) startedPlan(t *testing.T, plan stack.Plan) stack.Started {
@@ -940,7 +940,7 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 	running := f.started(t, stack.KindUpdate)
 
 	second, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1008,6 +1008,69 @@ func TestCancelTwiceWritesOnce(t *testing.T) {
 	}
 }
 
+// TestStartByKeepsTheJobOfTheUpdate proves that the update records the job
+// that created or started it, and that a start by another job is refused.
+func TestStartByKeepsTheJobOfTheUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	created, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.svc.StartBy(ctx, f.ref, created.ID, stack.StartedBy{TokenID: "", JobID: ""}, 0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if started.Update.JobID != "job-1" {
+		t.Errorf("started update job = %q, want %q", started.Update.JobID, "job-1")
+	}
+
+	if _, cancelErr := f.svc.Cancel(ctx, f.ref, created.ID); cancelErr != nil {
+		t.Fatalf("cancel: %v", cancelErr)
+	}
+
+	other, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err = f.svc.StartBy(ctx, f.ref, other.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
+	if err != nil {
+		t.Fatalf("start by the creating job: %v", err)
+	}
+
+	if started.Update.JobID != "job-1" {
+		t.Errorf("started update job = %q, want %q", started.Update.JobID, "job-1")
+	}
+
+	if _, cancelErr := f.svc.Cancel(ctx, f.ref, other.ID); cancelErr != nil {
+		t.Fatalf("cancel: %v", cancelErr)
+	}
+
+	held, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "job-1",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, startErr := f.svc.StartBy(
+		ctx, f.ref, held.ID, stack.StartedBy{TokenID: "", JobID: "job-2"}, 0,
+	)
+	if !errors.Is(startErr, stack.ErrInvalidUpdate) {
+		t.Fatalf("start by another job: err = %v, want ErrInvalidUpdate", startErr)
+	}
+}
+
 // The CLI renews its lease from a background loop; a renewal that wins the
 // race must not make a valid completion fail.
 func TestCompleteSurvivesAConcurrentRenewal(t *testing.T) {
@@ -1034,7 +1097,7 @@ func TestDryRunsDoNotMutate(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0})
+	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: ""})
 	if dry.Update.Mutates() || dry.Update.Version != 0 {
 		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
 	}
@@ -1303,7 +1366,7 @@ func TestCreateRecordsRequester(t *testing.T) {
 	u, err := f.svc.Create(
 		ctx,
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1693,7 +1756,7 @@ func TestStartSweepsOldOrphanBlobs(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1736,7 +1799,7 @@ func TestStartKeepsYoungBlobs(t *testing.T) {
 	}
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1783,7 +1846,7 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 	mem.ageAll(90 * time.Minute)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1832,7 +1895,7 @@ func TestStartSucceedsWhenSweepDeleteFails(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -2331,7 +2394,7 @@ func TestStartSweepKeepsBlobsWhenTheStackChanges(t *testing.T) {
 			svc := f.withKeepSetHook(t, func() { tc.change(f.store, f.ref) })
 
 			preview, createErr := f.svc.Create(t.Context(), f.ref, stack.Plan{
-				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0,
+				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: "",
 			})
 			if createErr != nil {
 				t.Fatalf("create preview: %v", createErr)

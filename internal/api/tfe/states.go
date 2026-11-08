@@ -437,6 +437,15 @@ func (h *Handler) restoreStateVersion(
 	ctx := r.Context()
 	from := workspace.StateVersionID(r.PathValue("state_version_id"))
 
+	// Defense in depth: the state guard and the gate refuse a job-token state
+	// write too. This guard does not rely on them.
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: true}
+	if err := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRef, guard); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	src, err := h.workspaces.ReadState(ctx, from)
 	if err != nil {
 		h.writeError(ctx, w, err)

@@ -282,19 +282,19 @@ func TestJobTokenUpdateGuardRefusesAStart(t *testing.T) {
 	cases := []guardStartCase{
 		{
 			name:       "a plan-only job may not start a mutating update",
-			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 			fact:       identity.JobFact{Unit: unit, Changes: false, Source: "api"},
 			wantStatus: http.StatusForbidden, wantRefusals: 1,
 		},
 		{
 			name:       "a plan-only job may start a preview",
-			plan:       stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			plan:       stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 			fact:       identity.JobFact{Unit: unit, Changes: false, Source: "api"},
 			wantStatus: http.StatusOK, wantRefusals: 0,
 		},
 		{
 			name:       "a changing job may start a mutating update",
-			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			plan:       stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 			fact:       identity.JobFact{Unit: unit, Changes: true, Source: "api"},
 			wantStatus: http.StatusOK, wantRefusals: 0,
 		},
@@ -420,5 +420,366 @@ func TestJobTokenUpdateGuardHidesWrappedErrors(t *testing.T) {
 				t.Errorf("body %q carries the text of a wrapped error", body)
 			}
 		})
+	}
+}
+
+// guardStateRouteCase is one row of the import and restore guard table.
+type guardStateRouteCase struct {
+	name         string
+	target       string
+	body         string
+	seed         bool
+	fact         identity.JobFact
+	factErr      error
+	credential   identity.Credential
+	wantStatus   int
+	wantReads    int
+	wantRefusals int
+	wantUpdates  int
+}
+
+// TestJobTokenUpdateGuardRefusesAnImportOrRestore proves a plan-only job token
+// cannot import or restore state, while a changing job passes the guard.
+func TestJobTokenUpdateGuardRefusesAnImportOrRestore(t *testing.T) {
+	t.Parallel()
+
+	unit := guardUnit(t)
+
+	cases := []guardStateRouteCase{
+		{
+			name: "a plan-only job may not import", target: "/api/stacks/acme/web/prod/import",
+			body: `{"version":3,"deployment":{"resources":[]}}`, seed: false,
+			fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusForbidden,
+			wantReads: 1, wantRefusals: 1, wantUpdates: 0,
+		},
+		{
+			name: "a changing job may import", target: "/api/stacks/acme/web/prod/import",
+			body: `{"version":3,"deployment":{"resources":[]}}`, seed: false,
+			fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusOK,
+			wantReads: 1, wantRefusals: 0, wantUpdates: 1,
+		},
+		{
+			name: "a principal with no job token imports without a read", target: "/api/stacks/acme/web/prod/import",
+			body: `{"version":3,"deployment":{"resources":[]}}`, seed: false,
+			fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"}, factErr: nil,
+			credential: identity.CredentialAccessToken, wantStatus: http.StatusOK,
+			wantReads: 0, wantRefusals: 0, wantUpdates: 1,
+		},
+		{
+			name: "a plan-only job may not restore", target: "/api/stacks/acme/web/prod/restore/1",
+			body: "", seed: true,
+			fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusForbidden,
+			wantReads: 1, wantRefusals: 1, wantUpdates: 1,
+		},
+		{
+			name: "a changing job may restore", target: "/api/stacks/acme/web/prod/restore/1",
+			body: "", seed: true,
+			fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusOK,
+			wantReads: 1, wantRefusals: 0, wantUpdates: 2,
+		},
+		{
+			name:         "a principal with no job token restores without a read",
+			target:       "/api/stacks/acme/web/prod/restore/1",
+			body:         "",
+			seed:         true,
+			fact:         identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+			factErr:      nil,
+			credential:   identity.CredentialAccessToken,
+			wantStatus:   http.StatusOK,
+			wantReads:    0,
+			wantRefusals: 0,
+			wantUpdates:  2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runGuardStateRouteCase(t, tc, unit)
+		})
+	}
+}
+
+// runGuardStateRouteCase runs one row of the import and restore guard table.
+func runGuardStateRouteCase(t *testing.T, tc guardStateRouteCase, unit identity.Object) {
+	t.Helper()
+
+	facts := &guardFacts{fact: tc.fact, err: tc.factErr, reads: 0}
+	refusals := &guardRefusals{recorded: nil}
+	jobID := "job-1"
+
+	callerUnit := unit
+	if tc.credential != identity.CredentialJobToken {
+		jobID = ""
+		callerUnit = identity.Object{}
+	}
+
+	f := newGuardFixture(t, facts, refusals, guardPrincipal(tc.credential, jobID, callerUnit))
+
+	if tc.seed {
+		seedAccessCheckpoint(t, f)
+	}
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, tc.target, tc.body))
+	if status != tc.wantStatus {
+		t.Fatalf("status = %d, want %d: %s", status, tc.wantStatus, body)
+	}
+
+	if facts.reads != tc.wantReads {
+		t.Errorf("the guard read the job %d times, want %d", facts.reads, tc.wantReads)
+	}
+
+	if len(refusals.recorded) != tc.wantRefusals {
+		t.Fatalf("the guard recorded %d refusals, want %d", len(refusals.recorded), tc.wantRefusals)
+	}
+
+	if tc.wantRefusals == 1 {
+		checkGuardRefusal(t, refusals.recorded[0], unit)
+	}
+
+	if tc.wantStatus == http.StatusForbidden {
+		answer := updateGuardError(t, body)
+		if answer.Code != http.StatusForbidden || answer.ErrorCode != "access.job-token-action" {
+			t.Errorf(
+				"error = code %d, errorCode %q, want 403 access.job-token-action",
+				answer.Code, answer.ErrorCode,
+			)
+		}
+	}
+
+	list, err := f.updates.History(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list history: %v", err)
+	}
+
+	if len(list) != tc.wantUpdates {
+		t.Fatalf("history holds %d updates, want %d", len(list), tc.wantUpdates)
+	}
+}
+
+// guardCancelCase is one row of the cancel guard table.
+type guardCancelCase struct {
+	name         string
+	updateJobID  string
+	fact         identity.JobFact
+	credential   identity.Credential
+	jobID        string
+	wantStatus   int
+	wantRefusals int
+}
+
+// TestJobTokenCancelGuard proves a job token may cancel only the update of its
+// own job, and that a principal with no job token cancels as before.
+func TestJobTokenCancelGuard(t *testing.T) {
+	t.Parallel()
+
+	unit := guardUnit(t)
+
+	cases := []guardCancelCase{
+		{
+			name:        "a plan-only job may not cancel the update of an apply job",
+			updateJobID: "job-b", fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+			credential: identity.CredentialJobToken, jobID: "job-a",
+			wantStatus: http.StatusForbidden, wantRefusals: 1,
+		},
+		{
+			name:        "an apply job may not cancel the update of another job",
+			updateJobID: "job-b", fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+			credential: identity.CredentialJobToken, jobID: "job-a",
+			wantStatus: http.StatusForbidden, wantRefusals: 1,
+		},
+		{
+			name:        "a job token may not cancel an update that no job created",
+			updateJobID: "", fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+			credential: identity.CredentialJobToken, jobID: "job-a",
+			wantStatus: http.StatusForbidden, wantRefusals: 1,
+		},
+		{
+			name:        "a job token may cancel the update of its own job",
+			updateJobID: "job-a", fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+			credential: identity.CredentialJobToken, jobID: "job-a",
+			wantStatus: http.StatusOK, wantRefusals: 0,
+		},
+		{
+			name:        "a principal with no job token may cancel any update",
+			updateJobID: "job-b", fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+			credential: identity.CredentialAccessToken, jobID: "",
+			wantStatus: http.StatusOK, wantRefusals: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runGuardCancelCase(t, tc, unit)
+		})
+	}
+}
+
+// runGuardCancelCase runs one row of the cancel guard table.
+func runGuardCancelCase(t *testing.T, tc guardCancelCase, unit identity.Object) {
+	t.Helper()
+
+	facts := &guardFacts{fact: tc.fact, err: nil, reads: 0}
+	refusals := &guardRefusals{recorded: nil}
+
+	callerUnit := unit
+	if tc.credential != identity.CredentialJobToken {
+		callerUnit = identity.Object{}
+	}
+
+	f := newGuardFixture(t, facts, refusals, guardPrincipal(tc.credential, tc.jobID, callerUnit))
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: tc.updateJobID,
+	})
+	if err != nil {
+		t.Fatalf("create update: %v", err)
+	}
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPost, "/api/stacks/acme/web/prod/update/"+u.ID.String()+"/cancel", "",
+	))
+	if status != tc.wantStatus {
+		t.Fatalf("status = %d, want %d: %s", status, tc.wantStatus, body)
+	}
+
+	if len(refusals.recorded) != tc.wantRefusals {
+		t.Fatalf("the guard recorded %d refusals, want %d", len(refusals.recorded), tc.wantRefusals)
+	}
+
+	got, err := f.updates.Get(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("read update: %v", err)
+	}
+
+	if tc.wantStatus == http.StatusForbidden {
+		answer := updateGuardError(t, body)
+		if answer.Code != http.StatusForbidden || answer.ErrorCode != "access.job-token-action" {
+			t.Errorf(
+				"error = code %d, errorCode %q, want 403 access.job-token-action",
+				answer.Code, answer.ErrorCode,
+			)
+		}
+
+		if !strings.Contains(answer.Message, "cancel the update of another job") {
+			t.Errorf("message %q does not name the cancel refusal", answer.Message)
+		}
+
+		if got.Status == stack.StatusCanceled {
+			t.Errorf("update status = %q, want it not canceled", got.Status)
+		}
+
+		return
+	}
+
+	if got.Status != stack.StatusCanceled {
+		t.Errorf("update status = %q, want %q", got.Status, stack.StatusCanceled)
+	}
+}
+
+// tagGuardCase is one row of the tag guard table.
+type tagGuardCase struct {
+	name         string
+	fact         identity.JobFact
+	credential   identity.Credential
+	jobID        string
+	wantStatus   int
+	wantRefusals int
+	wantTags     int
+}
+
+// TestJobTokenTagGuard proves no job token edits the tags of a unit, and that
+// a principal with no job token edits them as before.
+func TestJobTokenTagGuard(t *testing.T) {
+	t.Parallel()
+
+	unit := guardUnit(t)
+
+	cases := []tagGuardCase{
+		{
+			name:         "a plan-only job may not edit tags",
+			fact:         identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+			credential:   identity.CredentialJobToken,
+			jobID:        "job-1",
+			wantStatus:   http.StatusForbidden,
+			wantRefusals: 1,
+			wantTags:     0,
+		},
+		{
+			name: "an apply job may not edit tags", fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"},
+			credential: identity.CredentialJobToken, jobID: "job-1",
+			wantStatus: http.StatusForbidden, wantRefusals: 1, wantTags: 0,
+		},
+		{
+			name:         "a principal with no job token may edit tags",
+			fact:         identity.JobFact{Unit: unit, Changes: false, Source: "api"},
+			credential:   identity.CredentialAccessToken,
+			jobID:        "",
+			wantStatus:   http.StatusOK,
+			wantRefusals: 0,
+			wantTags:     1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runTagGuardCase(t, tc, unit)
+		})
+	}
+}
+
+// runTagGuardCase runs one row of the tag guard table.
+func runTagGuardCase(t *testing.T, tc tagGuardCase, unit identity.Object) {
+	t.Helper()
+
+	facts := &guardFacts{fact: tc.fact, err: nil, reads: 0}
+	refusals := &guardRefusals{recorded: nil}
+
+	callerUnit := unit
+	if tc.credential != identity.CredentialJobToken {
+		callerUnit = identity.Object{}
+	}
+
+	f := newGuardFixture(t, facts, refusals, guardPrincipal(tc.credential, tc.jobID, callerUnit))
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPatch, "/api/stacks/acme/web/prod/tags", `{"team":"e2e"}`,
+	))
+	if status != tc.wantStatus {
+		t.Fatalf("status = %d, want %d: %s", status, tc.wantStatus, body)
+	}
+
+	if facts.reads != 0 {
+		t.Errorf("the guard read the job %d times, want 0", facts.reads)
+	}
+
+	if len(refusals.recorded) != tc.wantRefusals {
+		t.Fatalf("the guard recorded %d refusals, want %d", len(refusals.recorded), tc.wantRefusals)
+	}
+
+	if len(f.stores.tags) != tc.wantTags {
+		t.Fatalf("updated tags %d times, want %d", len(f.stores.tags), tc.wantTags)
+	}
+
+	if tc.wantRefusals == 1 {
+		checkGuardRefusal(t, refusals.recorded[0], unit)
+
+		answer := updateGuardError(t, body)
+		if answer.Code != http.StatusForbidden || answer.ErrorCode != "access.job-token-action" {
+			t.Errorf(
+				"error = code %d, errorCode %q, want 403 access.job-token-action",
+				answer.Code, answer.ErrorCode,
+			)
+		}
+
+		if !strings.Contains(answer.Message, "edit the tags of a unit") {
+			t.Errorf("message %q does not name the tag refusal", answer.Message)
+		}
 	}
 }

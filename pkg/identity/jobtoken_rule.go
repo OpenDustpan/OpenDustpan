@@ -52,6 +52,14 @@ var ErrSecretsWithheld = fmt.Errorf("%w: a job token may not read secret values"
 // not start. It wraps ErrJobTokenAction.
 var errJobTokenUpdate = fmt.Errorf("%w: a job token may not start an update that saves state", ErrJobTokenAction)
 
+// errJobTokenCancel reports the cancel of the update of another job, which a
+// job token may not do. It wraps ErrJobTokenAction.
+var errJobTokenCancel = fmt.Errorf("%w: a job token may not cancel the update of another job", ErrJobTokenAction)
+
+// errJobTokenTags reports an edit of the tags of a unit, which a job token may
+// not do. It wraps ErrJobTokenAction.
+var errJobTokenTags = fmt.Errorf("%w: a job token may not edit the tags of a unit", ErrJobTokenAction)
+
 // jobTokenActionError is the refusal of an action outside the allowlist of a
 // job token.
 type jobTokenActionError struct {
@@ -93,10 +101,10 @@ func (p Principal) IsJobToken() bool {
 	return p.Credential == CredentialJobToken && p.JobID != "" && p.JobUnit.IsUnit()
 }
 
-// carriesJobToken reports whether p carries any part of a job token. A
-// principal that carries one part and not the others is inconsistent, so the
-// rule denies it every action.
-func (p Principal) carriesJobToken() bool {
+// CarriesJobToken reports whether p carries any part of a job token: the
+// credential, a job ID or a job unit. A route that must refuse every such
+// principal asks this before it reads the unit of the request.
+func (p Principal) CarriesJobToken() bool {
 	var zero Object
 
 	return p.Credential == CredentialJobToken || p.JobID != "" || p.JobUnit != zero
@@ -154,7 +162,7 @@ func jobTokenSourceAllowsSecrets(source string) bool {
 
 // Authorize implements Authorizer.
 func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
-	if !p.carriesJobToken() {
+	if !p.CarriesJobToken() {
 		if action == ActionJobWriteCost {
 			return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 		}
@@ -234,7 +242,7 @@ func sameUnitObject(obj, unit Object) bool {
 // own unit, and only when the scope of Next names that unit, its namespace
 // or every object. An inconsistent job token lists nothing.
 func (r JobTokenRule) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
-	if p.carriesJobToken() {
+	if p.CarriesJobToken() {
 		return r.listJobToken(ctx, p, action)
 	}
 
@@ -378,7 +386,7 @@ func CheckJobTokenUpdate(
 ) error {
 	p := update.Principal
 
-	if !p.carriesJobToken() {
+	if !p.CarriesJobToken() {
 		return nil
 	}
 
@@ -405,8 +413,13 @@ func CheckJobTokenUpdate(
 // adapter may send to the client. It names the update or the action, and
 // never the text of a wrapped error, such as a failed record of the refusal.
 func JobTokenRefusalText(err error) string {
-	if errors.Is(err, errJobTokenUpdate) {
+	switch {
+	case errors.Is(err, errJobTokenUpdate):
 		return "a job token may not start an update that saves state"
+	case errors.Is(err, errJobTokenCancel):
+		return "a job token may not cancel the update of another job"
+	case errors.Is(err, errJobTokenTags):
+		return "a job token may not edit the tags of a unit"
 	}
 
 	var actionErr jobTokenActionError
@@ -417,11 +430,53 @@ func JobTokenRefusalText(err error) string {
 	return "a job token may not ask for this action"
 }
 
+// CheckJobTokenCancel refuses a principal that carries any part of a job token
+// when updateJobID is not the job of the token. A principal that carries no
+// part of a job token passes. A consistent job token passes when the update
+// records its own job ID, which must not be empty. Every other answer refuses
+// and records one entry through refusals; a failed record still refuses.
+func CheckJobTokenCancel(
+	ctx context.Context, refusals JobTokenRefusals, p Principal, updateJobID string,
+) error {
+	if !p.CarriesJobToken() {
+		return nil
+	}
+
+	// Defense in depth: IsJobToken already needs a job ID, so an empty
+	// updateJobID never matches. The empty check stays so that a change to
+	// IsJobToken cannot let a job token cancel an update that no job created.
+	if p.IsJobToken() && updateJobID != "" && updateJobID == p.JobID {
+		return nil
+	}
+
+	return refuseJobTokenAction(ctx, refusals, p, errJobTokenCancel)
+}
+
+// CheckJobTokenTagEdit refuses a principal that carries any part of a job
+// token: a job token may not edit the tags of a unit. It records one entry
+// through refusals, and a failed record still refuses.
+func CheckJobTokenTagEdit(ctx context.Context, refusals JobTokenRefusals, p Principal) error {
+	if !p.CarriesJobToken() {
+		return nil
+	}
+
+	return refuseJobTokenAction(ctx, refusals, p, errJobTokenTags)
+}
+
 // refuseJobTokenUpdate records the refusal of the update guard and returns the
 // denial. A missing recorder or a failed record still refuses.
 func refuseJobTokenUpdate(ctx context.Context, refusals JobTokenRefusals, p Principal) error {
+	return refuseJobTokenAction(ctx, refusals, p, errJobTokenUpdate)
+}
+
+// refuseJobTokenAction records the refusal of an action that a job token may
+// not ask for, and returns denial. A missing recorder or a failed record still
+// refuses.
+func refuseJobTokenAction(
+	ctx context.Context, refusals JobTokenRefusals, p Principal, denial error,
+) error {
 	if refusals == nil {
-		return fmt.Errorf("%w: the job token rule has no refusal recorder", errJobTokenUpdate)
+		return fmt.Errorf("%w: the job token rule has no refusal recorder", denial)
 	}
 
 	err := refusals.RecordJobTokenRefusal(ctx, JobTokenRefusal{
@@ -429,10 +484,10 @@ func refuseJobTokenUpdate(ctx context.Context, refusals JobTokenRefusals, p Prin
 		Reason: jobTokenRefusalAction,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: record the refusal: %w", errJobTokenUpdate, err)
+		return fmt.Errorf("%w: record the refusal: %w", denial, err)
 	}
 
-	return errJobTokenUpdate
+	return denial
 }
 
 // listJobToken returns the scope of the list of a principal that carries a

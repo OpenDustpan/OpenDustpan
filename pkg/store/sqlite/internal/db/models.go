@@ -1288,6 +1288,7 @@ type Update struct {
 	JournalClosed         int64
 	TokenID               string
 	JournalRecordsChanged int64
+	JobID                 string
 }
 
 type UpdateEvent struct {

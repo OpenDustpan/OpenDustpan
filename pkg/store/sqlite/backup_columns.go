@@ -131,6 +131,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				"job_id",
 			},
 		},
 		{

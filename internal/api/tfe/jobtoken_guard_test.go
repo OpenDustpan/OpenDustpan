@@ -307,3 +307,103 @@ func TestStateVersionCreateJobTokenGuardKeepsTextShape(t *testing.T) {
 		t.Errorf("body %q holds the store detail", rec.Body.String())
 	}
 }
+
+// restoreGuardCase is one row of the state version restore guard table.
+type restoreGuardCase struct {
+	name         string
+	fact         identity.JobFact
+	factErr      error
+	credential   identity.Credential
+	wantStatus   int
+	wantReads    int
+	wantRefusals int
+}
+
+// TestRestoreStateVersionJobTokenGuard proves a plan-only job token cannot
+// restore state, while a changing job passes the guard.
+func TestRestoreStateVersionJobTokenGuard(t *testing.T) {
+	t.Parallel()
+
+	unit := stateGuardUnit(t)
+
+	cases := []restoreGuardCase{
+		{
+			name: "a plan-only job may not restore state",
+			fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusForbidden,
+			wantReads: 1, wantRefusals: 1,
+		},
+		{
+			name: "a changing job passes the guard",
+			fact: identity.JobFact{Unit: unit, Changes: true, Source: "api"}, factErr: nil,
+			credential: identity.CredentialJobToken, wantStatus: http.StatusOK,
+			wantReads: 1, wantRefusals: 0,
+		},
+		{
+			name: "a principal with no job token passes without a read",
+			fact: identity.JobFact{Unit: unit, Changes: false, Source: "api"}, factErr: nil,
+			credential: identity.CredentialAccessToken, wantStatus: http.StatusOK,
+			wantReads: 0, wantRefusals: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runRestoreGuardCase(t, tc, unit)
+		})
+	}
+}
+
+// runRestoreGuardCase runs one row of the state version restore guard table.
+func runRestoreGuardCase(t *testing.T, tc restoreGuardCase, unit identity.Object) {
+	t.Helper()
+
+	facts := &stateGuardFacts{fact: tc.fact, err: tc.factErr, reads: 0}
+	refusals := &stateGuardRefusals{recorded: nil}
+	jobID := "job-1"
+
+	callerUnit := unit
+	if tc.credential != identity.CredentialJobToken {
+		jobID = ""
+		callerUnit = identity.Object{}
+	}
+
+	handler := newStateGuardHandler(
+		t, facts, refusals, stateGuardPrincipal(tc.credential, jobID, callerUnit),
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, createStateRequest(
+		t, "/api/v2/state-versions/sv-test123/actions/restore", "",
+	))
+
+	if rec.Code != tc.wantStatus {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+	}
+
+	if facts.reads != tc.wantReads {
+		t.Errorf("the guard read the job %d times, want %d", facts.reads, tc.wantReads)
+	}
+
+	if len(refusals.recorded) != tc.wantRefusals {
+		t.Fatalf("the guard recorded %d refusals, want %d", len(refusals.recorded), tc.wantRefusals)
+	}
+
+	if tc.wantRefusals == 0 {
+		return
+	}
+
+	want := identity.JobTokenRefusal{
+		Subject: "tester", JobID: "job-1", Unit: unit, Action: identity.ActionUnitWrite,
+		Reason: "access.job-token-action",
+	}
+	if got := refusals.recorded[0]; got != want {
+		t.Errorf("refusal = %+v, want %+v", got, want)
+	}
+
+	answer := stateGuardError(t, rec)
+	if answer.Status != "403" || answer.Code != "access.job-token-action" {
+		t.Errorf("error = status %q code %q, want 403 access.job-token-action", answer.Status, answer.Code)
+	}
+}

@@ -72,6 +72,7 @@ func (s *Store) CreateUpdate(
 			CreatedBy:        row.CreatedBy,
 			RestoredFrom:     row.RestoredFrom,
 			TokenID:          row.TokenID,
+			JobID:            row.JobID,
 		})
 		if err != nil {
 			if isForeignKeyViolation(err) {
@@ -138,6 +139,7 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -260,6 +262,7 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -334,6 +337,7 @@ func listUpdatesWith(ctx context.Context, q *db.Queries, ref stack.Ref, page sta
 			CreatedBy:        rows[i].CreatedBy,
 			RestoredFrom:     rows[i].RestoredFrom,
 			TokenID:          rows[i].TokenID,
+			JobID:            rows[i].JobID,
 			JournalVersion:   rows[i].JournalVersion,
 			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
@@ -818,6 +822,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		EndedAtMs:        row.EndedAtMs,
 		JournalVersion:   row.JournalVersion,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,

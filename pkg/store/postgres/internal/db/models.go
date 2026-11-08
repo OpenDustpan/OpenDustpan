@@ -1288,6 +1288,7 @@ type Update struct {
 	JournalClosed         bool
 	TokenID               string
 	JournalRecordsChanged bool
+	JobID                 string
 }
 
 type UpdateEvent struct {

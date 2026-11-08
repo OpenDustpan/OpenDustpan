@@ -240,6 +240,17 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 		Invalid:       false,
 	}
 
+	// Defense in depth: the stack domain refuses a checkpoint and a journal
+	// write of an update that does not mutate, and the job token rule refuses
+	// unit:encrypt to a plan-only job. The state.write gates refuse a state
+	// import too. This guard does not rely on them.
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: true}
+	if guardErr := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); guardErr != nil {
+		h.writeError(ctx, w, guardErr)
+
+		return
+	}
+
 	if !h.guardStateWrite(w, r, p, obj, checkImport()) {
 		return
 	}
@@ -287,6 +298,17 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 		}
 
 		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// Defense in depth: the stack domain refuses a checkpoint and a journal
+	// write of an update that does not mutate, and the job token rule refuses
+	// unit:encrypt to a plan-only job. The state.write gates refuse a restore
+	// too. This guard does not rely on them.
+	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: true}
+	if guardErr := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); guardErr != nil {
+		h.writeError(ctx, w, guardErr)
 
 		return
 	}
@@ -408,7 +430,7 @@ func (h *Handler) createUpdate(
 	}
 
 	u, err := h.updates.Create(ctx, ref, stack.Plan{
-		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: p.Subject, RestoredFrom: 0,
+		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: p.Subject, RestoredFrom: 0, JobID: p.JobTokenID(),
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -435,21 +457,27 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	current, err := h.updates.Get(ctx, ref, id)
-	if err != nil {
-		h.writeError(ctx, w, err)
+	// Only a caller with a part of a job token pays the read of the update.
+	// The guard refuses a partial job token, so this test does not let one
+	// skip it.
+	if p.CarriesJobToken() {
+		current, err := h.updates.Get(ctx, ref, id)
+		if err != nil {
+			h.writeError(ctx, w, err)
 
-		return
-	}
+			return
+		}
 
-	// Defense in depth: the stack domain refuses a checkpoint and a journal
-	// write of an update that does not mutate, and the job token rule refuses
-	// unit:encrypt to a plan-only job. This guard does not rely on them.
-	guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: current.Mutates()}
-	if guardErr := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); guardErr != nil {
-		h.writeError(ctx, w, guardErr)
+		// Defense in depth: the stack domain refuses a checkpoint and a
+		// journal write of an update that does not mutate, and the job token
+		// rule refuses unit:encrypt to a plan-only job. This guard does not
+		// rely on them.
+		guard := identity.JobTokenUpdate{Principal: p, Unit: obj, Mutates: current.Mutates()}
+		if guardErr := identity.CheckJobTokenUpdate(ctx, h.jobs, h.jobRefusals, guard); guardErr != nil {
+			h.writeError(ctx, w, guardErr)
 
-		return
+			return
+		}
 	}
 
 	journal := h.journalVersionFor(r.UserAgent(), offer)
@@ -661,6 +689,25 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 	ref, id, ok := h.updateTarget(w, r)
 	if !ok {
 		return
+	}
+
+	if p.CarriesJobToken() {
+		current, err := h.updates.Get(ctx, ref, id)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		// Defense in depth: the update records the job that created or
+		// started it, and StartBy refuses a start by another job. The
+		// state.write gates refuse a cancel too. This guard does not rely on
+		// them.
+		if err := identity.CheckJobTokenCancel(ctx, h.jobRefusals, p, current.JobID); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
 	}
 
 	if !h.guardStateWrite(w, r, p, obj, checkCancel()) {

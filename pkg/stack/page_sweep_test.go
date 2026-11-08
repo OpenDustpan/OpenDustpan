@@ -150,7 +150,7 @@ func TestStartSweepDeletesPageByPage(t *testing.T) {
 	spy.reset()
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -293,7 +293,7 @@ func TestStartSweepRefreshesReferencesBetweenPages(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)

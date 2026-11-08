@@ -292,3 +292,214 @@ func TestJobTokenRefusalText(t *testing.T) {
 		})
 	}
 }
+
+// cancelGuardCase is one row of the cancel guard table.
+type cancelGuardCase struct {
+	name        string
+	p           identity.Principal
+	refusals    *fakeRefusals
+	noRefusals  bool
+	updateJobID string
+	wantRefused bool
+}
+
+// TestCheckJobTokenCancel proves that a job token may cancel only the update of
+// its own job, and that a principal without any part of a job token passes.
+func TestCheckJobTokenCancel(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	inconsistent := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "",
+		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind: identity.KindPerson, Credential: identity.Credential(""), JobID: "job-a", JobUnit: identity.Object{},
+	}
+
+	cases := []cancelGuardCase{
+		{
+			name: "a plan-only job may not cancel the update of an apply job", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-b",
+			wantRefused: true,
+		},
+		{
+			name: "an apply job may not cancel the update of another job", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-b",
+			wantRefused: true,
+		},
+		{
+			name: "a job token may not cancel an update that no job created", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "",
+			wantRefused: true,
+		},
+		{
+			name: "a job token may cancel the update of its own job", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-a",
+			wantRefused: false,
+		},
+		{
+			name: "no job token may cancel any update", p: plainPrincipal(identity.CredentialAccessToken),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-b",
+			wantRefused: false,
+		},
+		{
+			name: "an inconsistent token refuses", p: inconsistent,
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, updateJobID: "job-a",
+			wantRefused: true,
+		},
+		{
+			name: "no recorder refuses", p: jobToken(unit, "job-a"),
+			refusals: nil, noRefusals: true, updateJobID: "job-b", wantRefused: true,
+		},
+		{
+			name: "a failed record still refuses", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: errRecordRefused}, noRefusals: false,
+			updateJobID: "job-b", wantRefused: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runCancelGuardCase(t, tc)
+		})
+	}
+}
+
+// runCancelGuardCase runs one row of the cancel guard table.
+func runCancelGuardCase(t *testing.T, tc cancelGuardCase) {
+	t.Helper()
+
+	var refusals identity.JobTokenRefusals
+	if !tc.noRefusals {
+		refusals = tc.refusals
+	}
+
+	err := identity.CheckJobTokenCancel(t.Context(), refusals, tc.p, tc.updateJobID)
+
+	if !tc.wantRefused {
+		if err != nil {
+			t.Fatalf("CheckJobTokenCancel = %v, want allowed", err)
+		}
+
+		if tc.refusals != nil && len(tc.refusals.recorded) != 0 {
+			t.Errorf("the guard recorded %d refusals, want 0", len(tc.refusals.recorded))
+		}
+
+		return
+	}
+
+	if err == nil || !errors.Is(err, identity.ErrJobTokenAction) || !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("CheckJobTokenCancel = %v, want ErrJobTokenAction and ErrDenied", err)
+	}
+
+	if got := identity.JobTokenRefusalText(err); got != "a job token may not cancel the update of another job" {
+		t.Errorf("JobTokenRefusalText = %q, want the cancel refusal text", got)
+	}
+
+	if tc.refusals == nil {
+		return
+	}
+
+	assertOneRefusal(t, tc.refusals, identity.JobTokenRefusal{
+		Subject: tc.p.Subject, JobID: tc.p.JobID, Unit: tc.p.JobUnit, Action: identity.ActionUnitWrite,
+		Reason: "access.job-token-action",
+	})
+}
+
+// tagGuardCase is one row of the tag guard table.
+type tagGuardCase struct {
+	name        string
+	p           identity.Principal
+	refusals    *fakeRefusals
+	noRefusals  bool
+	wantRefused bool
+}
+
+// TestCheckJobTokenTagEdit proves that no job token may edit the tags of a
+// unit, and that a principal without any part of a job token passes.
+func TestCheckJobTokenTagEdit(t *testing.T) {
+	t.Parallel()
+
+	unit := jobTestUnit(t, "acme", "web/prod", "unt-1")
+	inconsistent := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "",
+		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind: identity.KindPerson, Credential: identity.CredentialJobToken, JobID: "", JobUnit: identity.Object{},
+	}
+
+	cases := []tagGuardCase{
+		{
+			name: "a plan-only job may not edit tags", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, wantRefused: true,
+		},
+		{
+			name: "an apply job may not edit tags", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, wantRefused: true,
+		},
+		{
+			name: "an inconsistent token refuses", p: inconsistent,
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, wantRefused: true,
+		},
+		{
+			name: "no recorder refuses", p: jobToken(unit, "job-a"),
+			refusals: nil, noRefusals: true, wantRefused: true,
+		},
+		{
+			name: "a failed record still refuses", p: jobToken(unit, "job-a"),
+			refusals: &fakeRefusals{recorded: nil, err: errRecordRefused}, noRefusals: false,
+			wantRefused: true,
+		},
+		{
+			name: "no job token passes", p: plainPrincipal(identity.CredentialAccessToken),
+			refusals: &fakeRefusals{recorded: nil, err: nil}, noRefusals: false, wantRefused: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runTagGuardCase(t, tc)
+		})
+	}
+}
+
+// runTagGuardCase runs one row of the tag guard table.
+func runTagGuardCase(t *testing.T, tc tagGuardCase) {
+	t.Helper()
+
+	var refusals identity.JobTokenRefusals
+	if !tc.noRefusals {
+		refusals = tc.refusals
+	}
+
+	err := identity.CheckJobTokenTagEdit(t.Context(), refusals, tc.p)
+
+	if !tc.wantRefused {
+		if err != nil {
+			t.Fatalf("CheckJobTokenTagEdit = %v, want allowed", err)
+		}
+
+		if tc.refusals != nil && len(tc.refusals.recorded) != 0 {
+			t.Errorf("the guard recorded %d refusals, want 0", len(tc.refusals.recorded))
+		}
+
+		return
+	}
+
+	if err == nil || !errors.Is(err, identity.ErrJobTokenAction) || !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("CheckJobTokenTagEdit = %v, want ErrJobTokenAction and ErrDenied", err)
+	}
+
+	if got := identity.JobTokenRefusalText(err); got != "a job token may not edit the tags of a unit" {
+		t.Errorf("JobTokenRefusalText = %q, want the tag refusal text", got)
+	}
+
+	if tc.refusals == nil {
+		return
+	}
+
+	assertOneRefusal(t, tc.refusals, identity.JobTokenRefusal{
+		Subject: tc.p.Subject, JobID: tc.p.JobID, Unit: tc.p.JobUnit, Action: identity.ActionUnitWrite,
+		Reason: "access.job-token-action",
+	})
+}

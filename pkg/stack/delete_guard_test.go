@@ -799,7 +799,7 @@ func saveSequencedVerbatimThenDelta(
 	ctx := t.Context()
 
 	u, err := f.updates.Create(
-		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -838,7 +838,7 @@ func savePlainCheckpoint(t *testing.T, f sequencedDeleteFixture, deployment stri
 	ctx := t.Context()
 
 	u, err := f.updates.Create(
-		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -986,7 +986,7 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 	f := newSequencedDeleteFixture(t)
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 
 	journaled, err := f.updates.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -1004,7 +1004,7 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 
 	// A dry run does not hold the stack lock, so it can start while the
 	// update above runs.
-	dryRun := stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+	dryRun := stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: ""}
 
 	plain, err := f.updates.Create(ctx, f.ref, dryRun)
 	if err != nil {

@@ -46,7 +46,7 @@ CREATE TABLE "updates" (
     lease_expires_at_ms INTEGER NOT NULL,
     created_at_ms       INTEGER NOT NULL,
     started_at_ms       INTEGER NOT NULL,
-    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0, job_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (stack_id, id),
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
 ) STRICT;

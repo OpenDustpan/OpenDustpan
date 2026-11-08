@@ -688,8 +688,17 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 
 type updateStackTagsResponse struct{}
 
-func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
+
+	// Defense in depth: the job token rule keeps a job token to the unit of
+	// its job, but it admits unit:write, and the tag store refuses only a
+	// stack that does not exist. This guard does not rely on them.
+	if err := identity.CheckJobTokenTagEdit(ctx, h.jobRefusals, p); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
 	if err != nil {

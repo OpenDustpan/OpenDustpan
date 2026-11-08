@@ -20,11 +20,11 @@ func TestAppendJournalRefusesAnUpdateThatDoesNotMutate(t *testing.T) {
 	}{
 		{
 			name: "preview",
-			plan: stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			plan: stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 		},
 		{
 			name: "dry run",
-			plan: stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0},
+			plan: stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 		},
 	}
 
@@ -129,7 +129,7 @@ func TestAppendJournalNeedsAWriterForAJournaledUpdate(t *testing.T) {
 	u, err := f.svc.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)

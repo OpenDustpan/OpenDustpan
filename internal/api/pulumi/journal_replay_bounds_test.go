@@ -43,7 +43,7 @@ func mintReplayBound(t *testing.T, f updateFixture) (stack.UpdateID, string) {
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)

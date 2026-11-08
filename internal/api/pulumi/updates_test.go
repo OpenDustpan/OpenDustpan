@@ -545,6 +545,9 @@ type updateFixture struct {
 	// or nil for a fixture that builds its own.
 	sealer *secrettest.MemorySealer
 	audit  *testAudit
+	// stores is the stack store of the fixture, for a test that checks the
+	// tags or the records that a stack route writes.
+	stores *recordingStackStore
 }
 
 // newUpdateFixture builds a Handler whose update routes work end to end.
@@ -703,7 +706,9 @@ func newUpdateFixtureWithAuthenticator(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updateFixture{handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog}
+	return updateFixture{
+		handler: handler, updates: updates, ref: ref, mem: mem, sealer: sealer, audit: auditLog, stores: stores,
+	}
 }
 
 // allowAll authorizes every action.
@@ -773,7 +778,7 @@ func (f updateFixture) mintStarted(t *testing.T) (stack.UpdateID, string) {
 	t.Helper()
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -795,7 +800,7 @@ func (f updateFixture) mintStartedMutating(t *testing.T) (stack.UpdateID, string
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1260,7 +1265,7 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 		u, err := f.updates.Create(
 			t.Context(),
 			f.ref,
-			stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 		)
 		if err != nil {
 			t.Fatalf("create: %v", err)
@@ -1273,7 +1278,7 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 		return accessTarget{Target: "/api/stacks/acme/web/prod/update/" + u.ID.String() + "/cancel", Body: ""}
 	case strings.HasSuffix(pattern, "/update/{update}"):
 		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-			Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+			Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 		})
 		if err != nil {
 			t.Fatalf("create: %v", err)
@@ -1540,7 +1545,7 @@ func TestHistoryShowsFinishedUpdates(t *testing.T) {
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1964,7 +1969,7 @@ func finishMutatingUpdate(t *testing.T, f updateFixture, deployment string, stat
 	u, createErr := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if createErr != nil {
 		t.Fatalf("create: %v", createErr)
@@ -2015,7 +2020,7 @@ func TestCancelUpdateCycle(t *testing.T) {
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -2114,7 +2119,7 @@ func TestGetStackShowsActiveUpdate(t *testing.T) {
 
 	// A preview alone never shows.
 	preview, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, JobID: "",
 	})
 	if err != nil {
 		t.Fatalf("create preview: %v", err)
@@ -2184,6 +2189,7 @@ func seedHistoryFields(t *testing.T, f updateFixture) historySeed {
 		DryRun:       false,
 		CreatedBy:    "tester",
 		RestoredFrom: 0,
+		JobID:        "",
 	})
 	if createErr != nil {
 		t.Fatalf("create: %v", createErr)
@@ -2221,6 +2227,7 @@ func seedHistoryFields(t *testing.T, f updateFixture) historySeed {
 		DryRun:       false,
 		CreatedBy:    "tester",
 		RestoredFrom: 0,
+		JobID:        "",
 	})
 	if heldErr != nil {
 		t.Fatalf("create running: %v", heldErr)
