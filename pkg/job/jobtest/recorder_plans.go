@@ -468,6 +468,10 @@ func planReadCases() []recorderCase {
 		{"plan reads: a shredded key is ErrShredded, also with no blob left", testPlanReadShredded},
 		{"plan reads: a damaged or moved part blob does not read as content", testPlanReadDamaged},
 		{"plan reads: a replan clears the phase and the old plan still reads", testPlanReadAfterReplan},
+		{
+			"plan reads: a second plan of the same job after a replan gets its own part keys, and both plans read back",
+			testPlanSecondPlanAfterReplan,
+		},
 	}
 }
 
@@ -653,6 +657,83 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 
 	// The old plan stays a history item until its retention ends.
 	assertPart(t, h, p.ID, job.OutputPlanDisplay, displayJSON)
+}
+
+// testPlanSecondPlanAfterReplan stores a plan in a plan phase, replans the
+// job and stores a second plan in the same phase of the same job. The phase
+// runs again under a second claim of its operation, so that both plans
+// belong to one job. The two plans must keep their own part keys, and both
+// must read back.
+func testPlanSecondPlanAfterReplan(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
+		t.Fatalf("SetStateVersion = %v", err)
+	}
+
+	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
+	a := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
+	p := putPlan(t, h, a)
+
+	// The phase ends without ending its operation: the replan below gives
+	// the phase back to a new claim of that operation, and a completed
+	// operation cannot be claimed again.
+	cur := jobOf(t, h.Harness, j.ID)
+	cur = apply(t, h.Harness, f, change(&cur, job.EventPhaseDone))
+
+	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
+		t.Fatalf("SetStateVersion = %v", err)
+	}
+
+	c := dispatch(&cur)
+	c.PlanNotBefore = time.Now().Add(-job.DefaultMaxPlanAge)
+
+	if _, err := h.Jobs.Apply(t.Context(), c, f.fence, nil); !errors.Is(err, job.ErrPlanStale) {
+		t.Fatalf("dispatch of the apply phase after a state write = %v, want ErrPlanStale", err)
+	}
+
+	back := apply(t, h.Harness, f, change(&cur, job.EventReplan))
+	if back.Phases[0].Plan != nil {
+		t.Fatalf("plan after a replan = %+v, want none", back.Phases[0].Plan)
+	}
+
+	lapse(t, h.Harness, a)
+
+	again := apply(t, h.Harness, f, dispatch(&back))
+	second := claimOf(t, h.Harness, runnerTwo, time.Minute, runnerKind(&again))
+
+	two, err := h.Recorder.PutPlan(t.Context(), second.Claim, planParts("other display", "other apply"))
+	if err != nil {
+		t.Fatalf("PutPlan = %v", err)
+	}
+
+	if a.Claim.Job != second.Claim.Job {
+		t.Fatalf("plan jobs = %s and %s, want one job", a.Claim.Job, second.Claim.Job)
+	}
+
+	if p.ID == two.ID {
+		t.Fatalf("plan IDs = %q and %q, want two IDs", p.ID, two.ID)
+	}
+
+	// No part key of one plan equals a part key of the other, because the
+	// key carries the plan ID.
+	kinds := []job.OutputKind{job.OutputPlanDisplay, job.OutputPlanApply}
+
+	for _, one := range kinds {
+		for _, other := range kinds {
+			firstKey := planKey(t, a.Claim.Job, p.ID, one)
+			secondKey := planKey(t, second.Claim.Job, two.ID, other)
+			if firstKey == secondKey {
+				t.Fatalf("part key %s of both plans of one job, want two sets of keys", firstKey)
+			}
+		}
+	}
+
+	assertPart(t, h, p.ID, job.OutputPlanDisplay, displayJSON)
+	assertPart(t, h, p.ID, job.OutputPlanApply, applyBinary)
+	assertPart(t, h, two.ID, job.OutputPlanDisplay, "other display")
+	assertPart(t, h, two.ID, job.OutputPlanApply, "other apply")
 }
 
 // hostilePart returns a valid part of kind k, which the cases change.
