@@ -183,7 +183,7 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 	}
 
 	starter, ok := m.principals[tok.StarterID]
-	if !ok || starter.deleted {
+	if !ok {
 		return jobtoken.ErrNotLive
 	}
 
@@ -201,7 +201,7 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return jobtoken.ErrNotFound
 	}
 
-	if starter.disabled {
+	if starter.deleted || starter.disabled {
 		return jobtoken.ErrNotLive
 	}
 

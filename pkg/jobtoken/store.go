@@ -27,7 +27,7 @@ type Store interface {
 	//     not running, the claim token differs, the lease ended at or before
 	//     e.At, the job state is not dispatched, running or canceling, the
 	//     current operation of the job differs, the unit ID differs, or the
-	//     starter is deleted or disabled;
+	//     starter has no principal record, is deleted or is disabled;
 	//   - ErrAlreadyExists when a record has the digest of t;
 	//   - namespace.ErrFenced when the fence is stale or names another
 	//     namespace than the unit;
@@ -36,8 +36,9 @@ type Store interface {
 	//
 	// When several errors apply, the first rule wins, in this order: ErrInvalid
 	// for a token that fails Validate, audit.ErrInvalidEntry, namespace.ErrFenced,
-	// ErrInvalid for an expiry not after e.At, ErrAlreadyExists, ErrNotFound,
-	// ErrNotLive for a starter that is deleted or disabled, ErrInvalid for a
+	// ErrInvalid for an expiry not after e.At, ErrNotLive for a starter that
+	// has no principal record, ErrAlreadyExists, ErrNotFound, ErrNotLive for a
+	// starter that is deleted or disabled, ErrInvalid for a
 	// starter that is not the job starter, then ErrNotLive for a claim or job
 	// that is not live.
 	Issue(ctx context.Context, t Token, fence namespace.Fence, e audit.Entry) error
