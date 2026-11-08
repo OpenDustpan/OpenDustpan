@@ -67,14 +67,17 @@ account. This applies to two requests:
 - `POST /api/server/principals/{id}/disable`
 - `DELETE /api/server/principals/{id}`
 
-Both answer 409 with the error code `principal.last-break-glass` and this
-message:
+Both answer 409 with the error code `principal.no-working-break-glass` and
+this message:
 
 ```text
-cannot remove the last enabled break-glass account: keep a second enabled break-glass account first
+The change leaves too few working break-glass accounts. Add a break-glass account or register a passkey for one, then try again. See the break-glass accounts guide.
 ```
 
-The request changes nothing. The account stays enabled.
+The request changes nothing. The account stays enabled. Before the answer,
+the server writes one audit entry in the scope `@server` with the outcome
+`denied` and the reason `principal.no-working-break-glass`. When the server
+cannot write this entry, it still answers 409 and logs the failure.
 
 A disabled account does not count as a second account, because it cannot
 sign in. The server checks the count in the same database transaction as the
@@ -112,6 +115,15 @@ add a third account after the backup and then disable the first two. The
 restore keeps the last enabled break-glass account of the restored data
 enabled. It skips the disable that would leave none, and it writes an audit
 entry in the scope `@server` with the action `maintenance:replay-revocation`,
-the outcome `denied` and the reason `principal.last-break-glass`. Read this
-entry after a restore, then disable the account again when a second account
-exists.
+the outcome `denied` and the reason `principal.no-working-break-glass`. Read
+this entry after a restore, then disable the account again when a second
+account exists.
+
+A restore also counts the working break-glass accounts before and after it.
+A working account is a local person of the installation that is enabled and
+not deleted, has a passkey that is not suspended, and holds a current grant
+without a condition of `site-administrator` or `account-administrator` on the
+installation, directly or through a group. The restore stops with the code
+`principal.no-working-break-glass` when it lowers this count and leaves fewer
+than two working accounts. A restore that does not lower the count continues,
+also when the count is below two.

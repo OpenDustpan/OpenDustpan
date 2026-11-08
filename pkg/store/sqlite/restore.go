@@ -321,8 +321,9 @@ func applyStagedFence(
 
 	// The staged access tables come from the backup. Apply again the
 	// revocations that ran in this stay in maintenance mode, so the swap does not
-	// bring back a session or a token that an operator ended.
-	if err := replayRevocations(ctx, tx); err != nil {
+	// bring back a session or a token that an operator ended. The swap must
+	// not lower the working break-glass count below the floor.
+	if err := replayStagedRevocations(ctx, tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 

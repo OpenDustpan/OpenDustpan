@@ -231,7 +231,7 @@ func endInstallationPrincipal(ctx context.Context, q *db.Queries, id string, at 
 		}
 
 		if enabledBreakGlass > 0 {
-			return 0, principal.ErrLastBreakGlass
+			return 0, principal.ErrNoWorkingBreakGlass
 		}
 
 		return 0, nil
@@ -302,7 +302,7 @@ func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) 
 		}
 
 		if enabledBreakGlass > 0 {
-			return principal.ErrLastBreakGlass
+			return principal.ErrNoWorkingBreakGlass
 		}
 
 		return principal.ErrDisabled

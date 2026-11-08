@@ -12,11 +12,11 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// TestLastBreakGlassIsKept drives the disable and the delete of break-glass
+// TestNoWorkingBreakGlassIsKept drives the disable and the delete of break-glass
 // accounts through the real binary, on each store. The disable of one of two
 // works. The disable and the delete of the last enabled one answer 409 with the
-// code principal.last-break-glass, and the account stays enabled.
-func TestLastBreakGlassIsKept(t *testing.T) {
+// code principal.no-working-break-glass, and the account stays enabled.
+func TestNoWorkingBreakGlassIsKept(t *testing.T) {
 	t.Parallel()
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
@@ -42,7 +42,7 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runLastBreakGlassOnStore(t, cli, db)
+			runNoWorkingBreakGlassOnStore(t, cli, db)
 		})
 	}
 }
@@ -59,8 +59,8 @@ type e2eRefusal struct {
 	Code      int    `json:"code"`
 }
 
-// runLastBreakGlassOnStore runs the steps on one store.
-func runLastBreakGlassOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+// runNoWorkingBreakGlassOnStore runs the steps on one store.
+func runNoWorkingBreakGlassOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -93,9 +93,9 @@ func runLastBreakGlassOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 			t.Fatalf("decode %s %s answer %q: %v", step.method, step.path, resp, err)
 		}
 
-		if refusal.ErrorCode != "principal.last-break-glass" ||
-			!strings.Contains(refusal.Message, "last enabled break-glass account") {
-			t.Fatalf("%s %s answers %+v, want the code principal.last-break-glass and its message",
+		if refusal.ErrorCode != "principal.no-working-break-glass" ||
+			!strings.Contains(refusal.Message, "The change leaves too few working break-glass accounts") {
+			t.Fatalf("%s %s answers %+v, want the code principal.no-working-break-glass and its message",
 				step.method, step.path, refusal)
 		}
 	}

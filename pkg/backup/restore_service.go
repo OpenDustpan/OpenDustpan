@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -780,6 +781,7 @@ var storedRestoreSentinels = []error{
 	ErrDevStripIncomplete,
 	ErrRestoreRunning,
 	ErrRestoreAccessMismatch,
+	principal.ErrNoWorkingBreakGlass,
 	ErrProtectedKey,
 	ErrConflictingBlob,
 	ErrCorrupt,

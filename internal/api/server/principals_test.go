@@ -146,8 +146,41 @@ func newReachPrincipalHandler(
 ) testHandler {
 	t.Helper()
 
+	return newReachPrincipalHandlerWith(t, principals, entries, reach, principalHandlerOptions{
+		now:            nil,
+		authenticator:  tokenAuthenticator{},
+		logger:         slog.New(slog.DiscardHandler),
+		onAuditFailure: nil,
+	})
+}
+
+// principalHandlerOptions holds the parts of a principal handler that a test
+// can set.
+type principalHandlerOptions struct {
+	now            func() time.Time
+	authenticator  identity.Authenticator
+	logger         *slog.Logger
+	onAuditFailure func()
+}
+
+// newReachPrincipalHandlerWith builds a Handler like newReachPrincipalHandler
+// with the options of the test.
+func newReachPrincipalHandlerWith(
+	t *testing.T, principals *principal.Service, entries audit.ServerStore, reach access.ReachConfig,
+	opts principalHandlerOptions,
+) testHandler {
+	t.Helper()
+
 	if entries == nil {
 		entries = newTestAudit()
+	}
+
+	if opts.authenticator == nil {
+		opts.authenticator = tokenAuthenticator{}
+	}
+
+	if opts.logger == nil {
+		opts.logger = slog.New(slog.DiscardHandler)
 	}
 
 	var signIn *apiserver.SignIn
@@ -167,11 +200,11 @@ func newReachPrincipalHandler(
 		Workers:          nil,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
+		Now:              opts.now,
 		TempAdmins:       nil,
-		Authenticator:    tokenAuthenticator{},
+		Authenticator:    opts.authenticator,
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
+		Logger:           opts.logger,
 		Namespaces:       newTestNamespaces(t),
 		Backups:          nil,
 		Restores:         nil,
@@ -184,7 +217,7 @@ func newReachPrincipalHandler(
 		Access:           nil,
 		Reach:            reach,
 		Tokens:           nil,
-		OnAuditFailure:   nil,
+		OnAuditFailure:   opts.onAuditFailure,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,

@@ -9,8 +9,8 @@ const (
 	PrincipalDisabled = "principal.disabled"
 	// PrincipalInvalid means that the principal or the group is not valid.
 	PrincipalInvalid = "principal.invalid"
-	// PrincipalLastBreakGlass means that the request would end or disable the last enabled break-glass account.
-	PrincipalLastBreakGlass = "principal.last-break-glass"
+	// PrincipalNoWorkingBreakGlass means that the change leaves too few working break-glass accounts.
+	PrincipalNoWorkingBreakGlass = "principal.no-working-break-glass"
 	// PrincipalManagedByDirectory means that a directory keeps the group, so the request cannot change it.
 	PrincipalManagedByDirectory = "principal.managed-by-directory"
 	// PrincipalNotDisabled means that the principal is not disabled, so the request cannot enable it.
@@ -33,7 +33,7 @@ func principalSpecs() []Spec {
 		},
 		{Code: PrincipalDisabled, Meaning: "the principal is disabled, so the request cannot change it", Args: nil},
 		{Code: PrincipalInvalid, Meaning: "the principal or the group is not valid", Args: nil},
-		lastBreakGlassSpec(),
+		noWorkingBreakGlassSpec(),
 		{
 			Code:    PrincipalManagedByDirectory,
 			Meaning: "a directory keeps the group, so the request cannot change it",
@@ -50,12 +50,12 @@ func principalSpecs() []Spec {
 	}
 }
 
-// lastBreakGlassSpec is the code of a request that would end or disable the
-// last enabled break-glass account.
-func lastBreakGlassSpec() Spec {
+// noWorkingBreakGlassSpec is the code of a change that leaves too few
+// working break-glass accounts.
+func noWorkingBreakGlassSpec() Spec {
 	return Spec{
-		Code:    PrincipalLastBreakGlass,
-		Meaning: "the request would end or disable the last enabled break-glass account of the installation",
+		Code:    PrincipalNoWorkingBreakGlass,
+		Meaning: "the change leaves too few working break-glass accounts",
 		Args:    nil,
 	}
 }

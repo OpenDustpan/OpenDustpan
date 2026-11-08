@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -148,12 +149,47 @@ func (h *Handler) appendObjectChange(r *http.Request, p identity.Principal, obj 
 	}
 }
 
+// appendBreakGlassRefusal writes the denied entry of a change that leaves
+// too few working break-glass accounts, before the answer. A lost entry does
+// not change the refusal: the server logs it and counts it on the failure
+// metric instead.
+func (h *Handler) appendBreakGlassRefusal(
+	r *http.Request, p identity.Principal, action identity.Action, object string,
+) {
+	entry := callerEntry(r, p, action)
+	entry.At = h.principals.Now()
+	entry.Namespace = audit.ServerScope
+	entry.Kind = audit.KindChange
+	entry.Outcome = audit.OutcomeDenied
+	entry.Object = object
+	entry.Reason = errcode.PrincipalNoWorkingBreakGlass
+
+	if _, err := h.audit.AppendServer(r.Context(), entry); err != nil {
+		h.failBreakGlassAudit(r.Context())
+	}
+}
+
+// failBreakGlassAudit records a lost denial entry of a break-glass refusal:
+// one log line and one count on the failure metric. It names no error text,
+// no principal and no request text.
+func (h *Handler) failBreakGlassAudit(ctx context.Context) {
+	faultlog.LogFault(ctx, h.logger, "audit write of a break-glass refusal failed",
+		faultlog.CauseUnclassified, "audit.append")
+
+	h.countAuditFailure()
+}
+
 // failAudit records a lost audit entry: one log line and one count on the
 // failure metric through the wired callback. It names no error text: the
 // text may hold driver detail (ADR 32 decision 7).
 func (h *Handler) failAudit(ctx context.Context) {
 	faultlog.LogFault(ctx, h.logger, "audit append failed", faultlog.CauseUnclassified, "audit.append")
 
+	h.countAuditFailure()
+}
+
+// countAuditFailure runs the wired audit-failure hook.
+func (h *Handler) countAuditFailure() {
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()
 	}

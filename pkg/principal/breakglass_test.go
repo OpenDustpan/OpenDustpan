@@ -26,11 +26,11 @@ func storeBreakGlass(t *testing.T, st *sqlite.Store, id, subject string) {
 	}
 }
 
-// TestLastBreakGlassIsKept proves that the Service passes the refusal of the
+// TestNoWorkingBreakGlassIsKept proves that the Service passes the refusal of the
 // store for the last enabled break-glass account, in a disable and in a
 // delete, and that the Guard answers first: a caller who fails the Guard gets
 // the refusal of the Guard, not the state of the break-glass accounts.
-func TestLastBreakGlassIsKept(t *testing.T) {
+func TestNoWorkingBreakGlassIsKept(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
@@ -57,13 +57,13 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 	}
 
 	disableErr := svc.DisablePrincipal(ctx, e, caller, "prn-bg2")
-	if !errors.Is(disableErr, principal.ErrLastBreakGlass) {
-		t.Fatalf("disable of the last break-glass account = %v, want ErrLastBreakGlass", disableErr)
+	if !errors.Is(disableErr, principal.ErrNoWorkingBreakGlass) {
+		t.Fatalf("disable of the last break-glass account = %v, want ErrNoWorkingBreakGlass", disableErr)
 	}
 
 	deleteErr := svc.DeletePrincipal(ctx, e, caller, "prn-bg2")
-	if !errors.Is(deleteErr, principal.ErrLastBreakGlass) {
-		t.Fatalf("delete of the last break-glass account = %v, want ErrLastBreakGlass", deleteErr)
+	if !errors.Is(deleteErr, principal.ErrNoWorkingBreakGlass) {
+		t.Fatalf("delete of the last break-glass account = %v, want ErrNoWorkingBreakGlass", deleteErr)
 	}
 
 	// A caller who lacks the grants of the target stops at the Guard.

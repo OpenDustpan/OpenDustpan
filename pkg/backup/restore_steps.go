@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -206,7 +207,8 @@ func permanentRestoreError(err error) bool {
 	for _, sentinel := range []error{
 		ErrCorrupt, ErrSchemaMismatch, ErrSchemaBeforeBaseline, ErrNotFound, ErrInvalidID, ErrFailed,
 		ErrDevBackupRefused, ErrDevStripIncomplete, ErrRestoreAccessMismatch, ErrManifestKindInvalid,
-		ErrInvalidRestoreID, ErrKeyUnchecked, ErrPreBackupForeign, maintenance.ErrActiveWork, secret.ErrKeyNotConfigured,
+		ErrInvalidRestoreID, ErrKeyUnchecked, ErrPreBackupForeign, maintenance.ErrActiveWork,
+		principal.ErrNoWorkingBreakGlass, secret.ErrKeyNotConfigured,
 		secret.ErrWrapperMismatch, secret.ErrDecrypt,
 	} {
 		if errors.Is(err, sentinel) {
