@@ -320,10 +320,6 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 func (h *Handler) protectedGroupsOf(
 	ctx context.Context, page principal.Page[principal.Group],
 ) (groupListResponse, error) {
-	out := groupListResponse{
-		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
-	}
-
 	ids := make([]string, 0, len(page.Items))
 	for i := range page.Items {
 		ids = append(ids, page.Items[i].ID)
@@ -332,6 +328,16 @@ func (h *Handler) protectedGroupsOf(
 	flags, err := access.ProtectedGroups(ctx, h.reach, ids)
 	if err != nil {
 		return groupListResponse{}, err
+	}
+
+	return groupsWithFlags(page, flags)
+}
+
+// groupsWithFlags returns page on the wire with the flag of each group from
+// flags. A group with no flag answers an error, never a false flag.
+func groupsWithFlags(page principal.Page[principal.Group], flags map[string]bool) (groupListResponse, error) {
+	out := groupListResponse{
+		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 
 	for _, g := range page.Items {
