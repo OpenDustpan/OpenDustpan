@@ -270,6 +270,7 @@ func checkLimiterEntries(t *testing.T, st chainStore) {
 		p := identity.Principal{
 			Subject: subject, TokenID: "", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		}
 
 		err := rec.Authorize(ctx, nil, p, identity.ActionUnitWrite, identity.NamespaceObject(namespace.Name(ns)))

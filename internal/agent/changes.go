@@ -177,7 +177,7 @@ type ChangePlan struct {
 // A direct change is never a default, and a destroy is never direct. It
 // returns ErrInvalid for an unknown operation, executor or mode,
 // ErrModeNotSupported and ErrDirectNotAllowed.
-func (p ChangePolicy) Plan(support UnitSupport, req ChangeRequest) (ChangePlan, error) {
+func (p ChangePolicy) Plan(support UnitSupport, req *ChangeRequest) (ChangePlan, error) {
 	var zero ChangePlan
 
 	if !req.Operation.Valid() {
@@ -213,7 +213,7 @@ func (p ChangePolicy) Plan(support UnitSupport, req ChangeRequest) (ChangePlan, 
 
 // executorFor returns the executor of req: the requested one, or the
 // default for the unit.
-func executorFor(support UnitSupport, req ChangeRequest) (Executor, error) {
+func executorFor(support UnitSupport, req *ChangeRequest) (Executor, error) {
 	exec := req.Executor
 	if exec == "" {
 		exec = ExecutorRunner
@@ -240,7 +240,7 @@ func executorFor(support UnitSupport, req ChangeRequest) (Executor, error) {
 
 // modeFor returns the mode of req on exec: the requested one, or the
 // default of the executor.
-func (p ChangePolicy) modeFor(exec Executor, req ChangeRequest) (ChangeMode, error) {
+func (p ChangePolicy) modeFor(exec Executor, req *ChangeRequest) (ChangeMode, error) {
 	switch req.Mode {
 	case "":
 		if exec == ExecutorWriteBack {
@@ -346,7 +346,7 @@ type Changes interface {
 	// them, with no break-glass. The Toolset checks each one for the person
 	// before Start, and the audit entry of the call names them. It returns
 	// ErrInvalid and ErrModeNotSupported.
-	StartActions(req ChangeRequest, plan ChangePlan) ([]identity.Action, error)
+	StartActions(req *ChangeRequest, plan ChangePlan) ([]identity.Action, error)
 	// Start resolves req with ChangePolicy.Plan, checks the actions of the
 	// start for the person, puts the confirmation gate in front of each
 	// phase of the plan, and starts the job. It returns the change that
@@ -358,7 +358,7 @@ type Changes interface {
 	// ErrDirectNotAllowed, ErrChangeFrozen, ErrChangePolicyDenied,
 	// ErrChangeKeyConflict, and an error that wraps identity.ErrDenied when
 	// the person does not hold an action of the start.
-	Start(ctx context.Context, req ChangeRequest) (Change, error)
+	Start(ctx context.Context, req *ChangeRequest) (Change, error)
 	// Get returns the change id. It returns ErrChangeNotFound, also for a
 	// change that the person of the actor cannot read.
 	Get(ctx context.Context, actor Actor, id ChangeID) (Change, error)

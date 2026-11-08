@@ -36,6 +36,7 @@ func person(s string) identity.Principal {
 		Subject: s, DisplayName: "", Admin: false, TokenID: "tok-" + s, TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 		Credential: identity.CredentialAccessToken, JobID: "",
+		JobUnit: identity.Object{},
 	}
 }
 

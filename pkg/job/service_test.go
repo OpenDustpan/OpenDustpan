@@ -423,6 +423,7 @@ func actorOf(subject string) job.Actor {
 			Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 			Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{},
 	}

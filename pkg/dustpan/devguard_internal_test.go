@@ -27,6 +27,7 @@ func (devPersonAuthenticator) AuthenticateToken(context.Context, string) (identi
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: principal.DevAdminSubject,
 		DisplayName: "Dev administrator", Admin: false, TokenID: "tok", TokenExpiresAt: time.Time{},
 		Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

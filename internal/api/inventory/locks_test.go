@@ -150,6 +150,7 @@ func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: subject, DisplayName: subject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 

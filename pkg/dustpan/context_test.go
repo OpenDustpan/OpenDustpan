@@ -138,6 +138,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		}
 	}
 
@@ -148,6 +149,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		},
 		ctxOwnerToken:  person("owen"),
 		ctxWriterToken: person("wanda"),
@@ -161,6 +163,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 			Kind:       identity.KindService,
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		},
 		ctxWorkloadToken: {
 			Subject: "wl-reader", DisplayName: "wl-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
@@ -168,6 +171,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 			Kind:       identity.KindWorkload,
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		},
 	}}
 

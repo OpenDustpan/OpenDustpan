@@ -95,6 +95,7 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 		Principal: identity.Principal{
 			TemporaryAdministrator: false, TemporaryExpiresAt: zeroTime(), Subject: "bo", DisplayName: "Bo",
 			Admin: false, TokenID: "", TokenExpiresAt: zeroTime(), Kind: "", Credential: "", JobID: "",
+			JobUnit: identity.Object{},
 		},
 		Agent: "", AgentMode: "", Source: job.SourceAPI, Keys: nil,
 		Spec: job.Spec{

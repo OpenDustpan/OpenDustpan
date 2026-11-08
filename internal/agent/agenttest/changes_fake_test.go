@@ -69,7 +69,7 @@ func (f *fakeChanges) Support(_ context.Context, a agent.Actor, unit identity.Ob
 	return agent.UnitSupport{WriteBack: unit.String() == f.writeBack, Runner: true}, nil
 }
 
-func (*fakeChanges) StartActions(req agent.ChangeRequest, plan agent.ChangePlan) ([]identity.Action, error) {
+func (*fakeChanges) StartActions(req *agent.ChangeRequest, plan agent.ChangePlan) ([]identity.Action, error) {
 	switch {
 	case plan.Executor == agent.ExecutorWriteBack && req.Operation == agent.OperationApply:
 		return []identity.Action{agent.ActionUnitWriteBack}, nil
@@ -90,7 +90,7 @@ func (*fakeChanges) StartActions(req agent.ChangeRequest, plan agent.ChangePlan)
 	return []identity.Action{action}, nil
 }
 
-func (f *fakeChanges) Start(ctx context.Context, req agent.ChangeRequest) (agent.Change, error) {
+func (f *fakeChanges) Start(ctx context.Context, req *agent.ChangeRequest) (agent.Change, error) {
 	var zero agent.Change
 
 	if req.Key == "" || req.Reason == "" || req.Actor.Agent.Validate() != nil {
@@ -138,7 +138,7 @@ func (f *fakeChanges) Start(ctx context.Context, req agent.ChangeRequest) (agent
 
 // newChange returns the job of req: at the confirmation gate when its first
 // phase that changes needs it, and queued for its plan phase otherwise.
-func newChange(req agent.ChangeRequest, plan agent.ChangePlan) agent.Change {
+func newChange(req *agent.ChangeRequest, plan agent.ChangePlan) agent.Change {
 	state, waiting := agent.ChangeQueued, false
 	if plan.Executor == agent.ExecutorWriteBack && slices.Contains(plan.Confirm, agent.PhaseDeliver) {
 		state, waiting = agent.ChangeAwaitingApproval, true

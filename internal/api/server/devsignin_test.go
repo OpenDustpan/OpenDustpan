@@ -65,12 +65,14 @@ type devEnvOptions struct {
 var bootstrapAdmin = identity.Principal{ //nolint:gochecknoglobals // A frozen test value.
 	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
 	Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	JobUnit: identity.Object{},
 }
 
 // noBootstrapAdmin is the zero principal of a sign-in with no administrator.
 var noBootstrapAdmin = identity.Principal{ //nolint:gochecknoglobals // A frozen test value.
 	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
 	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	JobUnit: identity.Object{},
 }
 
 // devParts are the parts of a handler that rebuild changes: a test builds a

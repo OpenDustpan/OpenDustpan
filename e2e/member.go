@@ -36,6 +36,7 @@ func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (iden
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		}, nil
 	}
 

@@ -885,7 +885,8 @@ func adaPrincipal() identity.Principal {
 	return identity.Principal{
 		Subject: "ada", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson, Credential: "",
-		JobID: "",
+		JobID:   "",
+		JobUnit: identity.Object{},
 	}
 }
 

@@ -63,6 +63,8 @@ func NamespaceService(ns namespace.Name) (Principal, error) {
 		return Principal{}, fmt.Errorf("%w: namespace service principal: %w", ErrInvalidObject, err)
 	}
 
+	var noJobUnit Object
+
 	return Principal{
 		Subject:                NamespaceServiceSubject(ns),
 		DisplayName:            "Namespace service principal of " + ns.String(),
@@ -74,6 +76,7 @@ func NamespaceService(ns namespace.Name) (Principal, error) {
 		Kind:                   KindService,
 		Credential:             CredentialServer,
 		JobID:                  "",
+		JobUnit:                noJobUnit,
 	}, nil
 }
 

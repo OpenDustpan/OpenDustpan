@@ -656,6 +656,7 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		},
 	)
 	if err != nil {

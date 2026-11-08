@@ -105,6 +105,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 			Kind:                   "",
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		},
 		deletedViewerToken: {
 			TemporaryAdministrator: false,
@@ -113,6 +114,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		},
 		deletedReaderToken: {
 			TemporaryAdministrator: false,
@@ -121,6 +123,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 			Kind:       "",
 			Credential: "",
 			JobID:      "",
+			JobUnit:    identity.Object{},
 		},
 	}}
 

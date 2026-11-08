@@ -255,6 +255,7 @@ func (concurrentAuthenticator) AuthenticateToken(
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}, nil
 	case "test-token-b":
 		return identity.Principal{
@@ -267,6 +268,7 @@ func (concurrentAuthenticator) AuthenticateToken(
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+			JobUnit:        identity.Object{},
 		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated

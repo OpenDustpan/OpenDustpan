@@ -53,6 +53,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 	entry := audit.Entry{
 		At: now, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",

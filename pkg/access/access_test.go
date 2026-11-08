@@ -175,6 +175,7 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 
@@ -295,6 +296,7 @@ func admin() identity.Principal {
 		Kind:                   "",
 		Credential:             "",
 		JobID:                  "",
+		JobUnit:                identity.Object{},
 	}
 }
 
@@ -425,6 +427,7 @@ func TestUnknownAndDeletedPrincipals(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	web := unitObject(t, "acme", "web/prod")
 
@@ -471,6 +474,7 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
@@ -792,6 +796,7 @@ func TestGrantChecksSubjectAndNamespace(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	f.person(t, "target")
 
@@ -1001,6 +1006,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 
 	ns := namespace.Namespace{
@@ -1097,6 +1103,7 @@ func TestRevokeChecksTheObject(t *testing.T) {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 	f.person(t, "target")
 

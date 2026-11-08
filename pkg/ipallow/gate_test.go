@@ -84,6 +84,7 @@ func adminPrincipal(subject string) identity.Principal {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 }
 
@@ -99,6 +100,7 @@ func userPrincipal(subject string) identity.Principal {
 		Kind:           "",
 		Credential:     "",
 		JobID:          "",
+		JobUnit:        identity.Object{},
 	}
 }
 

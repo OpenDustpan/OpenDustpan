@@ -121,6 +121,7 @@ func alice() identity.Principal {
 	return identity.Principal{
 		TemporaryExpiresAt: time.Time{}, TokenExpiresAt: time.Time{}, Subject: "alice", DisplayName: "alice",
 		TokenID: "", Kind: "", Credential: "", JobID: "", Admin: false, TemporaryAdministrator: false,
+		JobUnit: identity.Object{},
 	}
 }
 

@@ -101,6 +101,7 @@ func (a recordingAuthenticator) AuthenticateToken(_ context.Context, token strin
 	return identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}, nil
 }
 
@@ -179,6 +180,7 @@ func TestNewServerAuthenticatorChain(t *testing.T) {
 	admin := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
 		Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		JobUnit: identity.Object{},
 	}
 
 	locks := w.srv.ManualLocks()

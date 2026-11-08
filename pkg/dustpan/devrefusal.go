@@ -86,6 +86,7 @@ func devRefusalAudit(cfg *settings) func(ctx context.Context, subject string) {
 			Kind:                   identity.KindPerson,
 			Credential:             "",
 			JobID:                  "",
+			JobUnit:                identity.Object{},
 		}
 
 		// Defense in depth: the recorder detaches its write from the context

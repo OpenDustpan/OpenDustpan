@@ -152,6 +152,7 @@ func personRequest(latest string, secrets bool) outputshare.ReadRequest {
 			Subject: "alice", DisplayName: "", Admin: false, TokenID: "tok-1", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
 			Credential: identity.CredentialAccessToken, JobID: "",
+			JobUnit: identity.Object{},
 		},
 		Producer:   producerAcme(),
 		Attachment: outputshare.AttachmentRef{Attachment: "", Profile: "", Block: "", Revision: 0},
