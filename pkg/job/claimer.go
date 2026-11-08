@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,11 @@ const reasonNoPhase = "the operation does not belong to the current phase of a j
 // reasonNotRunnable is the reason of an operation whose job cannot take a
 // claim, for example a job that expired while it was dispatched.
 const reasonNotRunnable = "the job cannot take a claim on its current phase"
+
+// ReasonNamespaceMissing is the reason of an operation whose job is in a
+// namespace that does not exist. The claimer ends such an operation failed,
+// so it never blocks a kind.
+const ReasonNamespaceMissing = "the namespace of the job does not exist, so its phase cannot run"
 
 // DurableClaimer is the Claimer over a durable.Store and a Store. A phase is
 // a durable operation: the claim, its expiry and its cancel are the rules of
@@ -81,6 +87,7 @@ type DurableClaimer struct {
 	namespaces NamespaceReader
 	gates      GateGuard
 	now        func() time.Time
+	log        *slog.Logger
 }
 
 var _ Claimer = (*DurableClaimer)(nil)
@@ -94,14 +101,30 @@ func WithClaimerClock(now func() time.Time) ClaimerOption {
 	return func(c *DurableClaimer) { c.now = now }
 }
 
+// WithClaimerLogger sets the logger that records the end of a phase whose
+// namespace does not exist. The default is a discard logger, so the claimer
+// stays silent unless the caller passes a logger.
+func WithClaimerLogger(logger *slog.Logger) ClaimerOption {
+	return func(c *DurableClaimer) {
+		if logger != nil {
+			c.log = logger
+		}
+	}
+}
+
 // NewClaimer returns the claimer of the phases of jobs. namespaces gives the
 // current fence of the namespace of a unit. gates tells which enforced gates
 // cover the unit of a job at each claim. It is required: a claimer with a nil
 // guard refuses every claim, so no phase runs past a gate that nobody checks.
+// The logger of WithClaimerLogger records the end of a phase whose namespace
+// does not exist.
 func NewClaimer(
 	jobs Store, operations durable.Store, namespaces NamespaceReader, gates GateGuard, opts ...ClaimerOption,
 ) *DurableClaimer {
-	c := &DurableClaimer{jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now}
+	c := &DurableClaimer{
+		jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now,
+		log: slog.New(slog.DiscardHandler),
+	}
 
 	for _, o := range opts {
 		o(c)
@@ -369,7 +392,7 @@ func (c *DurableClaimer) claimOnce(
 
 	fence, err := c.fence(ctx, &j)
 	if err != nil {
-		return none, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBackOrEnd(ctx, &j, op.Claim, err)
 	}
 
 	if ev == EventPhaseFailed {
@@ -469,7 +492,7 @@ func (c *DurableClaimer) endUnrunnable(ctx context.Context, op *durable.Operatio
 
 	fence, err := c.fence(ctx, j)
 	if err != nil {
-		return none, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBackOrEnd(ctx, j, op.Claim, err)
 	}
 
 	return none, false, c.endPhase(ctx, op.Claim, j, fence, releaseEnd(j, j.Current, op.Claim))
@@ -572,6 +595,30 @@ func (c *DurableClaimer) endOperation(ctx context.Context, claim durable.Claim, 
 	}
 
 	return nil
+}
+
+// giveBackOrEnd gives back the claim of an operation whose namespace read
+// failed, and ends it failed when the namespace does not exist. A namespace
+// ID is random and is never given again, so the namespace of the job does
+// not come back. Its name can come back, but a namespace that is created
+// again under that name is another namespace, and the job must not run in
+// it. Giving the operation back would make every poll claim it again and
+// hold the kind of the operation.
+//
+// The end of the job record cannot carry this reason: every write of a job
+// carries the fence of its namespace, and a missing namespace fails that
+// check. So the failed operation is the record of the end, and the log line
+// names it.
+func (c *DurableClaimer) giveBackOrEnd(ctx context.Context, j *Job, claim durable.Claim, cause error) error {
+	if !errors.Is(cause, namespace.ErrNotFound) {
+		return c.giveBack(ctx, claim, cause)
+	}
+
+	c.log.WarnContext(ctx, "the phase ends failed: the namespace of the job does not exist",
+		slog.String("job", string(j.ID)), slog.String("namespace", j.Spec.Unit.Namespace().String()),
+		slog.String("operation", string(claim.Operation)), slog.String("reason", ReasonNamespaceMissing))
+
+	return c.endOperation(ctx, claim, ReasonNamespaceMissing)
 }
 
 // giveBack gives back the claim of an operation that the claimer cannot run
