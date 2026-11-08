@@ -9510,6 +9510,35 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	return name, err
 }
 
+const getUnitCollectionByName = `-- name: GetUnitCollectionByName :one
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GetUnitCollectionByNameParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetUnitCollectionByNameRow struct {
+	UnitID         string
+	CollectionName pgtype.Text
+}
+
+// The ID and the collection of one live unit by its name, in one statement.
+// The collection is NULL when the unit is in no collection. No row means that
+// the namespace holds no live unit with the name.
+func (q *Queries) GetUnitCollectionByName(ctx context.Context, arg GetUnitCollectionByNameParams) (GetUnitCollectionByNameRow, error) {
+	row := q.db.QueryRow(ctx, getUnitCollectionByName, arg.Namespace, arg.Tool, arg.Name)
+	var i GetUnitCollectionByNameRow
+	err := row.Scan(&i.UnitID, &i.CollectionName)
+	return i, err
+}
+
 const getUnitDefaults = `-- name: GetUnitDefaults :one
 SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
 FROM unit_defaults AS d

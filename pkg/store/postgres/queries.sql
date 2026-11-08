@@ -2232,6 +2232,16 @@ FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = $1;
 
+-- name: GetUnitCollectionByName :one
+-- The ID and the collection of one live unit by its name, in one statement.
+-- The collection is NULL when the unit is in no collection. No row means that
+-- the namespace holds no live unit with the name.
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
+
 -- name: UnitCollectionID :one
 -- The stable ID of the collection of one unit by its ID.
 SELECT c.id

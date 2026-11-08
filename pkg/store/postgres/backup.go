@@ -1980,6 +1980,10 @@ func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string)
 		return err
 	}
 
+	if err := checkStagedJobs(ctx, pool, staging); err != nil {
+		return err
+	}
+
 	if err := checkStagedUnitSettings(ctx, pool, staging); err != nil {
 		return err
 	}
