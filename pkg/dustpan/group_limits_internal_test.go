@@ -20,7 +20,10 @@ import (
 // groups, the member, and a caller who holds server:manage-groups and
 // nothing else.
 type groupLimitFixture struct {
-	svc    *principal.Service
+	svc *principal.Service
+	// store holds the access limits, so a test writes one that the save
+	// refuses, as a restore writes it.
+	store  *sqlite.Store
 	caller identity.Principal
 	// member is a member of each group, so a remove and a delete find it.
 	member principal.Principal
@@ -90,6 +93,7 @@ func newGroupLimitFixture(t *testing.T) groupLimitFixture {
 
 	return groupLimitFixture{
 		svc:    svc,
+		store:  st,
 		caller: caller,
 		member: member,
 		added:  createPerson(t, svc, "peter"),
@@ -118,6 +122,20 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 
 	del := func(f groupLimitFixture, group principal.Group) error {
 		return f.svc.DeleteGroup(t.Context(), adminEntry(), f.caller, group.ID)
+	}
+
+	rename := func(f groupLimitFixture, caller identity.Principal, group principal.Group, name string) error {
+		_, err := f.svc.UpdateGroup(t.Context(), adminEntry(), caller, group.ID,
+			principal.GroupUpdate{Name: &name, Description: nil})
+
+		return err
+	}
+
+	describe := func(f groupLimitFixture, group principal.Group, description string) error {
+		_, err := f.svc.UpdateGroup(t.Context(), adminEntry(), f.caller, group.ID,
+			principal.GroupUpdate{Name: nil, Description: &description})
+
+		return err
 	}
 
 	cases := []struct {
@@ -161,6 +179,36 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "a rename to the name of a group of an unless clause is refused",
+			run:  func(f groupLimitFixture) error { return rename(f, f.caller, f.free, f.named.Name) },
+			want: access.ErrEscalation,
+		},
+		{
+			name: "a rename to the name of a group that no group holds is refused",
+			run:  func(f groupLimitFixture) error { return rename(f, f.caller, f.free, "auditors") },
+			want: access.ErrEscalation,
+		},
+		{
+			name: "a rename from the name of a group of a when clause is refused",
+			run:  func(f groupLimitFixture) error { return rename(f, f.caller, f.other, "platform-two") },
+			want: access.ErrEscalation,
+		},
+		{
+			name: "a rename that no limit names keeps the grants check",
+			run:  func(f groupLimitFixture) error { return rename(f, f.caller, f.free, "readers-two") },
+			want: nil,
+		},
+		{
+			name: "a description of a group of a when clause keeps the grants check",
+			run:  func(f groupLimitFixture) error { return describe(f, f.other, "the platform group") },
+			want: nil,
+		},
+		{
+			name: "an administrator renames a group to a name of an unless clause",
+			run:  func(f groupLimitFixture) error { return rename(f, admin(), f.free, "auditors") },
+			want: nil,
+		},
+		{
 			name: "an administrator adds to a group of an unless clause",
 			run: func(f groupLimitFixture) error {
 				_, err := f.svc.AddMember(t.Context(), adminEntry(), admin(), f.named.ID, f.added.ID)
@@ -191,9 +239,64 @@ func TestGroupGuardReadsTheAccessLimits(t *testing.T) {
 	}
 }
 
+// TestGroupGuardRefusesALimitThatTheAPIWouldRefuse proves that the guard
+// fails closed for an access limit that the save of the installation API
+// refuses, written straight in the store as a restore writes it: one whose
+// membership test of principal names no group, and one that does not parse.
+// A caller who is not a site administrator cannot change the members of the
+// group then, because the guard cannot tell whether the limit lifts for the
+// member.
+func TestGroupGuardRefusesALimitThatTheAPIWouldRefuse(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		policy string
+	}{
+		{
+			name:   "a membership test of an attribute of the resource",
+			policy: `forbid (principal, action, resource) unless { principal in resource.owners };`,
+		},
+		{
+			name: "a membership test of an attribute of the resource inside an if",
+			policy: `forbid (principal, action, resource) unless { if principal in resource.owners ` +
+				`then true else false };`,
+		},
+		{
+			name: "a membership test of a set that holds a principal",
+			policy: `forbid (principal, action, resource) unless { principal in [` +
+				`OpenDustpan::Group::"sre", OpenDustpan::Principal::"olga"] };`,
+		},
+		{
+			name:   "a policy that does not parse",
+			policy: `forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGroupLimitFixture(t)
+			putLimit(t, f.store, gate.AccessLimit{
+				Scope: gate.NamespaceScope("acme"), ID: "l9", Version: 0, Policy: tc.policy,
+			})
+
+			// No limit names the group readers, so only the limit that the
+			// save refuses stops the add.
+			_, err := f.svc.AddMember(t.Context(), adminEntry(), f.caller, f.free.ID, f.added.ID)
+			if !errors.Is(err, access.ErrEscalation) {
+				t.Fatalf("the add = %v, want ErrEscalation", err)
+			}
+		})
+	}
+}
+
 // seedNamingLimits stores the namespace acme and the access limits of it:
-// one that names the group sre in an unless clause, and one that names the
-// group platform in a when clause.
+// one that names the group sre in an unless clause, one that names the
+// group platform in a when clause, and one that names the group auditors in
+// an unless clause. No group holds the name auditors, so a group takes it
+// only through a rename.
 func seedNamingLimits(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
@@ -216,12 +319,25 @@ func seedNamingLimits(t *testing.T, st *sqlite.Store) {
 			Scope: gate.NamespaceScope("acme"), ID: "l2", Version: 0,
 			Policy: `forbid (principal, action, resource) when { principal in OpenDustpan::Group::"platform" };`,
 		},
+		{
+			Scope: gate.NamespaceScope("acme"), ID: "l3", Version: 0,
+			Policy: `forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"auditors" };`,
+		},
 	} {
-		_, err := st.AccessLimits().Put(ctx, limit, 0, namespace.Fence{Namespace: "acme", FailoverVersion: 1},
-			namespaceChange("acme"))
-		if err != nil {
-			t.Fatalf("put access limit %s: %v", limit.ID, err)
-		}
+		putLimit(t, st, limit)
+	}
+}
+
+// putLimit stores one access limit of the namespace acme straight in the
+// store, as a restore writes it. The store does not parse the policy: only
+// the save of the installation API does.
+func putLimit(t *testing.T, st *sqlite.Store, limit gate.AccessLimit) {
+	t.Helper()
+
+	_, err := st.AccessLimits().Put(t.Context(), limit, 0,
+		namespace.Fence{Namespace: "acme", FailoverVersion: 1}, namespaceChange("acme"))
+	if err != nil {
+		t.Fatalf("put access limit %s: %v", limit.ID, err)
 	}
 }
 

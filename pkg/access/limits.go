@@ -14,18 +14,23 @@ type LimitRef struct {
 	Scope string
 }
 
-// LimitGroups reads the access limits that a change of the members of a
-// group can lift. An access limit that names a group holds for the members
-// of that group, so a change of its members can change the access that the
-// limit gives or takes away.
+// LimitGroups reads the access limits that a change of a group can lift. An
+// access limit that names a group holds for the members of that group, so a
+// change of the group can change the access that the limit gives or takes
+// away.
 type LimitGroups interface {
 	// LimitLiftedBy returns the access limit that the change can lift for
-	// the members of the group with the ID groupID. It reports false and
-	// nil when no access limit of the installation can lift for the
-	// change.
+	// the members of the group with the ID groupID. newName is the name
+	// that the group takes in a rename, and "" for another change: a rename
+	// removes the members from the old name and adds them to the new name,
+	// so a limit that names either name can lift.
+	//
+	// It reports false and nil when no access limit of the installation
+	// can lift for the change.
 	//
 	// It returns an error when it cannot read the group, when it cannot
-	// read the access limits, or when a limit does not parse. A caller
-	// refuses the change then.
-	LimitLiftedBy(ctx context.Context, groupID string, change principal.GroupChange) (LimitRef, bool, error)
+	// read the access limits, or when a limit does not parse or holds a
+	// membership test of principal that names no group. A caller refuses
+	// the change then.
+	LimitLiftedBy(ctx context.Context, groupID, newName string, change principal.GroupChange) (LimitRef, bool, error)
 }

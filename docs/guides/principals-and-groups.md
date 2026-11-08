@@ -194,6 +194,10 @@ the same name, without regard to case, gets `409` with the code
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
 `createdAt`, `updatedAt` and `memberCount`.
 
+A rename removes the members from the old name and adds them to the new name,
+so it can lift an access limit that names either name. Such a rename needs a
+site administrator, see [Manage group members](#manage-group-members).
+
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
 `mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
@@ -218,12 +222,15 @@ of the change decides:
   scope names can lift the policy for that member.
 
 The delete of a group removes all its members, so it counts as a remove. A
-caller who holds only `server:manage-groups` gets `403` for a change that can
-lift a policy. A change that can only add a policy, and a group that no
-access limit names, keep the `server:manage-groups` check. When the server
-cannot read the group or the limits, or a limit does not parse, only a site
-administrator can make the change. The refusal names the limit, its scope
-and the group.
+rename removes the members from the old name and adds them to the new name,
+so it can lift a policy that names either name. A caller who holds only
+`server:manage-groups` gets `403` for a change that can lift a policy. A
+change that can only add a policy, and a group that no access limit names,
+keep the `server:manage-groups` check. When the server cannot read the group
+or the limits, or a limit does not parse, only a site administrator can make
+the change. The refusal names the limit, its scope and the group. A limit of
+a namespace that the caller cannot read is named as an access limit that the
+caller cannot read, so the refusal tells nothing about it.
 
 Add a member:
 

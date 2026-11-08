@@ -34,7 +34,7 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	changes := []principal.GroupChange{}
+	changes := []groupCheck{}
 	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 	st := openStore(t)
 

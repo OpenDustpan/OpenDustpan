@@ -1,9 +1,11 @@
 package cedargo_test
 
 import (
+	"errors"
 	"maps"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 )
 
@@ -35,6 +37,11 @@ func TestLimitGroupDirections(t *testing.T) {
 		{
 			name: "the is-in principal scope makes a remove lift the forbid",
 			text: `forbid (principal is Principal in OpenDustpan::Group::"sre", action, resource);`,
+			want: map[string]cedargo.GroupDirections{"sre": {Add: false, Remove: true}},
+		},
+		{
+			name: "an is-in clause makes a remove lift the forbid",
+			text: `forbid (principal, action, resource) when { principal is Principal in OpenDustpan::Group::"sre" };`,
 			want: map[string]cedargo.GroupDirections{"sre": {Add: false, Remove: true}},
 		},
 		{
@@ -117,30 +124,13 @@ func TestLimitGroupDirections(t *testing.T) {
 			},
 		},
 		{
-			name: "a set that mixes a group and a principal counts both changes",
-			text: `forbid (principal, action, resource) when { principal in [` +
-				`OpenDustpan::Group::"sre", OpenDustpan::Principal::"x"] };`,
-			want: map[string]cedargo.GroupDirections{"sre": {Add: true, Remove: true}},
-		},
-		{
-			name: "a right side that is no group counts both changes",
-			text: `forbid (principal, action, resource) when { principal in ` +
-				`(if true then OpenDustpan::Group::"sre" else OpenDustpan::Group::"sre") };`,
-			want: map[string]cedargo.GroupDirections{"sre": {Add: true, Remove: true}},
-		},
-		{
-			name: "a principal entity in the principal scope is not a group",
-			text: `forbid (principal == OpenDustpan::Principal::"sre", action, resource);`,
-			want: map[string]cedargo.GroupDirections{},
-		},
-		{
 			name: "a group of another name is not the group sre",
 			text: `forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`,
 			want: map[string]cedargo.GroupDirections{"platform": {Add: true, Remove: false}},
 		},
 		{
-			name: "a principal entity is not a group",
-			text: `forbid (principal, action, resource) when { principal in OpenDustpan::Principal::"sre" };`,
+			name: "a principal entity in the principal scope is not a group",
+			text: `forbid (principal == OpenDustpan::Principal::"sre", action, resource);`,
 			want: map[string]cedargo.GroupDirections{},
 		},
 		{
@@ -167,22 +157,62 @@ func TestLimitGroupDirections(t *testing.T) {
 }
 
 // TestLimitGroupDirectionsErrors checks the refusal of a text that the
-// engine does not parse, and of a text that holds a count of policies other
-// than one.
+// engine does not parse, of a text that holds a count of policies other
+// than one, and of a membership test of principal that names a value that
+// is not a group and not a set of groups. Only the last one wraps
+// gate.ErrLimitMembership, which the save and the group guard answer with
+// their own code.
 func TestLimitGroupDirectionsErrors(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
 		text string
+		// membership reports whether the text fails the membership rule
+		// rather than a check of the text itself.
+		membership bool
 	}{
 		{
-			name: "a parse error",
-			text: `forbid (principal, action, resource) unless { principal in`,
+			name:       "a parse error",
+			text:       `forbid (principal, action, resource) unless { principal in`,
+			membership: false,
 		},
 		{
-			name: "two policies",
-			text: `forbid (principal, action, resource); forbid (principal, action, resource);`,
+			name:       "two policies",
+			text:       `forbid (principal, action, resource); forbid (principal, action, resource);`,
+			membership: false,
+		},
+		{
+			name:       "a principal entity in a clause",
+			text:       `forbid (principal, action, resource) when { principal in OpenDustpan::Principal::"sre" };`,
+			membership: true,
+		},
+		{
+			name:       "a principal entity in the principal scope",
+			text:       `forbid (principal in OpenDustpan::Principal::"sre", action, resource);`,
+			membership: true,
+		},
+		{
+			name:       "an attribute of the resource",
+			text:       `forbid (principal, action, resource) when { principal in resource.owners };`,
+			membership: true,
+		},
+		{
+			name:       "an attribute of the resource inside an if",
+			text:       `forbid (principal, action, resource) when { if principal in resource.owners then true else false };`,
+			membership: true,
+		},
+		{
+			name: "a set that mixes a group and a principal",
+			text: `forbid (principal, action, resource) when { principal in [` +
+				`OpenDustpan::Group::"sre", OpenDustpan::Principal::"x"] };`,
+			membership: true,
+		},
+		{
+			name: "a right side that is no group",
+			text: `forbid (principal, action, resource) when { principal in ` +
+				`(if true then OpenDustpan::Group::"sre" else OpenDustpan::Group::"sre") };`,
+			membership: true,
 		},
 	}
 
@@ -197,6 +227,10 @@ func TestLimitGroupDirectionsErrors(t *testing.T) {
 
 			if got != nil {
 				t.Fatalf("LimitGroupDirections() = %v with the error %v, want nil", got, err)
+			}
+
+			if errors.Is(err, gate.ErrLimitMembership) != tc.membership {
+				t.Fatalf("LimitGroupDirections() = %v, want the membership rule %t", err, tc.membership)
 			}
 		})
 	}

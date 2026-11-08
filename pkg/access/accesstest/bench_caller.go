@@ -134,6 +134,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: s, Directory: s, Namespaces: s, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
+		LimitGroups: nil,
 	})
 	if err != nil {
 		b.Fatalf("access service: %v", err)

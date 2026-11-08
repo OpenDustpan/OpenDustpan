@@ -188,7 +188,7 @@ type MemberStore interface {
 	ListGroupsOf(ctx context.Context, principalID string, q Query) ([]Group, int64, error)
 }
 
-// GroupChange is the change that a caller makes to the members of a group.
+// GroupChange is the change that a caller makes to a group.
 type GroupChange int
 
 const (
@@ -198,6 +198,9 @@ const (
 	GroupChangeRemoveMember
 	// GroupChangeDelete deletes the group and removes each of its members.
 	GroupChangeDelete
+	// GroupChangeRename renames the group: it removes its members from the
+	// old name and adds them to the new name.
+	GroupChangeRename
 )
 
 // Guard checks that a caller may change who holds a set of grants.
@@ -205,15 +208,18 @@ const (
 // of a principal or a group revokes its grants, and the enable of a principal
 // restores its grants. So the caller must hold, on
 // the object of each grant, every action that the grant gives there, as it
-// must to make or revoke the grant itself. access.Service meets it.
+// must to make or revoke the grant itself. A rename moves the members of a
+// group from its old name to its new name, which can lift an access limit
+// that names either name. access.Service meets it.
 //
 // Each method returns nil when caller may make the change, or an error that
 // wraps the reason: access.ErrEscalation for an action that caller does not
 // hold.
 type Guard interface {
 	// CheckGroupGrants checks the current grants of the group groupID. The
-	// change says which change of the members of the group caller makes.
-	CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string, change GroupChange) error
+	// change says which change of the group caller makes. newName is the
+	// name that the group takes in a rename, and "" for another change.
+	CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID, newName string, change GroupChange) error
 	// CheckPrincipalGrants checks the current grants of the principal
 	// principalID.
 	CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error
@@ -228,7 +234,7 @@ var _ Guard = AdminOnlyGuard{}
 
 // CheckGroupGrants allows only an administrator.
 func (AdminOnlyGuard) CheckGroupGrants(
-	_ context.Context, caller identity.Principal, _ string, _ GroupChange,
+	_ context.Context, caller identity.Principal, _, _ string, _ GroupChange,
 ) error {
 	return adminOnly(caller)
 }

@@ -837,6 +837,42 @@ func withoutSessionEntries(entries []audit.Entry) []audit.Entry {
 	})
 }
 
+// TestGroupRenameThatCanLiftALimitIsRefused proves that the route of a group
+// change passes the caller to the service: a rename to a name that no access
+// limit names goes through, and a rename to the name of a group in an unless
+// clause of a limit answers 403 and keeps the name.
+func TestGroupRenameThatCanLiftALimitIsRefused(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newLimitedPrincipalStore(t)
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	var group groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated,
+	}, &group)
+
+	// The limit names the group auditors in an unless clause: a rename to
+	// that name can lift it for every member.
+	seedNamingLimit(t, st, "auditors")
+
+	mustCall(t, h, apiCall{
+		http.MethodPatch, "/api/server/groups/" + group.ID, `{"name":"ops2"}`, http.StatusOK,
+	}, nil)
+
+	status, body := call(t, h, apiCall{
+		http.MethodPatch, "/api/server/groups/" + group.ID, `{"name":"auditors"}`, http.StatusForbidden,
+	})
+	if status != http.StatusForbidden || !strings.Contains(body, "rename the group") {
+		t.Fatalf("the rename to auditors answers %d (%s), want 403 that names the change", status, body)
+	}
+
+	stored, err := svc.GetGroup(t.Context(), group.ID)
+	if err != nil || stored.Name != "ops2" {
+		t.Fatalf("the group after the refused rename = %+v, %v, want the name ops2", stored, err)
+	}
+}
+
 // failingStore is a principal store whose principal create fails the way a
 // lost audit append fails: inside the transaction, so nothing is stored.
 type failingStore struct {
@@ -1262,7 +1298,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 type allowAllGuard struct{}
 
 func (allowAllGuard) CheckGroupGrants(
-	context.Context, identity.Principal, string, principal.GroupChange,
+	context.Context, identity.Principal, string, string, principal.GroupChange,
 ) error {
 	return nil
 }

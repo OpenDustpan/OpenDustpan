@@ -1,6 +1,6 @@
-// Package limitgroups reads the access limits that a change of the members
-// of a group can lift. An access limit that names a group holds for the
-// members of that group, so such a change needs a site administrator.
+// Package limitgroups reads the access limits that a change of a group can
+// lift. An access limit that names a group holds for the members of that
+// group, so such a change needs a site administrator.
 package limitgroups
 
 import (
@@ -35,15 +35,17 @@ func New(store gate.Store, groups Directory) *Reader {
 }
 
 // LimitLiftedBy implements access.LimitGroups. The schema names a group in
-// a policy by its name, so the reader compares the name of the group. It
+// a policy by its name, so the reader compares the name of the group. A
+// rename removes the members of the group from its old name and adds them
+// to the name newName, so a limit that names either name can lift. It
 // reports false and nil for a group that does not exist, and for a change
 // that no access limit of any scope can lift.
 //
 // It returns an error when it cannot read the group, when it cannot read the
-// access limits, or when a limit does not parse. A caller refuses the change
-// then.
+// access limits, or when a limit does not parse or names no group in a
+// membership test of principal. A caller refuses the change then.
 func (r *Reader) LimitLiftedBy(
-	ctx context.Context, groupID string, change principal.GroupChange,
+	ctx context.Context, groupID, newName string, change principal.GroupChange,
 ) (access.LimitRef, bool, error) {
 	group, err := r.groups.GetGroup(ctx, groupID)
 	if errors.Is(err, principal.ErrNotFound) {
@@ -67,7 +69,7 @@ func (r *Reader) LimitLiftedBy(
 			)
 		}
 
-		if !lifts(directions[group.Name], change) {
+		if !liftsNames(directions, group.Name, newName, change) {
 			continue
 		}
 
@@ -75,6 +77,21 @@ func (r *Reader) LimitLiftedBy(
 	}
 
 	return access.LimitRef{ID: "", Scope: ""}, false, nil
+}
+
+// liftsNames reports whether change can lift the forbid that directions
+// names for the group that is named name. A rename removes the members from
+// the old name and adds them to newName, so it can lift a limit that names
+// either name.
+func liftsNames(
+	directions map[string]cedargo.GroupDirections, name, newName string, change principal.GroupChange,
+) bool {
+	if change == principal.GroupChangeRename {
+		return lifts(directions[name], principal.GroupChangeRemoveMember) ||
+			lifts(directions[newName], principal.GroupChangeAddMember)
+	}
+
+	return lifts(directions[name], change)
 }
 
 // lifts reports whether the change can lift the forbid that directions
@@ -87,8 +104,13 @@ func lifts(directions cedargo.GroupDirections, change principal.GroupChange) boo
 		return directions.Add
 	case principal.GroupChangeRemoveMember, principal.GroupChangeDelete:
 		return directions.Remove
+	case principal.GroupChangeRename:
+		// A rename removes the members from the name and adds them to
+		// another, so either direction can lift the forbid.
+		return lifts(directions, principal.GroupChangeRemoveMember) ||
+			lifts(directions, principal.GroupChangeAddMember)
 	default:
-		// Defense in depth: the service passes one of the three changes.
+		// Defense in depth: the service passes one of the four changes.
 		// An unknown change counts as one that can lift a limit that names
 		// the group, so a new change kind is refused until its rule lands.
 		return directions.Add || directions.Remove

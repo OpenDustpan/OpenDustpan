@@ -79,57 +79,63 @@ func TestLimitLiftedBy(t *testing.T) {
 	acme := gate.NamespaceScope("acme")
 
 	cases := []struct {
-		name   string
-		group  string
-		limits []gate.AccessLimit
-		change principal.GroupChange
-		want   access.LimitRef
-		lifted bool
+		name    string
+		group   string
+		newName string
+		limits  []gate.AccessLimit
+		change  principal.GroupChange
+		want    access.LimitRef
+		lifted  bool
 	}{
 		{
 			name:  "an unless clause makes an add lift the forbid",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "an unless clause makes no remove lift the forbid",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "a when clause makes a remove lift the forbid",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "a when clause makes no add lift the forbid",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "the principal scope makes a remove lift the forbid",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal in OpenDustpan::Group::"sre", action, resource);`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "a set in a clause makes a remove lift the forbid",
@@ -137,71 +143,79 @@ func TestLimitLiftedBy(t *testing.T) {
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { principal in [`+
 					`OpenDustpan::Group::"platform", OpenDustpan::Group::"sre"] };`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "the delete of a group counts as a remove",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChangeDelete,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeDelete,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "an unknown change refuses a limit that names the group",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
-			change: principal.GroupChange(99),
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChange(99),
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "the limit of another group does not lift",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "the limit of the group lifts",
 			group: "grp-2",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
-			name:   "an installation with no limit lifts nothing",
-			group:  "grp-1",
-			limits: nil,
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			name:    "an installation with no limit lifts nothing",
+			group:   "grp-1",
+			limits:  nil,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "a limit that names no group lifts nothing",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal, action, resource) when { context.principal.kind == "service" };`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "a name of a principal is not a group",
 			group: "grp-1",
 			limits: []gate.AccessLimit{limit(acme, "l1",
 				`forbid (principal == OpenDustpan::Principal::"sre", action, resource);`)},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "", Scope: ""},
-			lifted: false,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 		{
 			name:  "the limits of two scopes are both read",
@@ -212,9 +226,10 @@ func TestLimitLiftedBy(t *testing.T) {
 				limit(acme, "l2",
 					`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`),
 			},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "l2", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l2", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "the first limit that lifts decides",
@@ -225,9 +240,10 @@ func TestLimitLiftedBy(t *testing.T) {
 				limit(acme, "l2",
 					`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`),
 			},
-			change: principal.GroupChangeRemoveMember,
-			want:   access.LimitRef{ID: "l1", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeRemoveMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
 		},
 		{
 			name:  "a limit that cannot lift is skipped",
@@ -238,9 +254,60 @@ func TestLimitLiftedBy(t *testing.T) {
 				limit(acme, "l2",
 					`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`),
 			},
-			change: principal.GroupChangeAddMember,
-			want:   access.LimitRef{ID: "l2", Scope: "namespace/acme"},
-			lifted: true,
+			change:  principal.GroupChangeAddMember,
+			newName: "",
+			want:    access.LimitRef{ID: "l2", Scope: "namespace/acme"},
+			lifted:  true,
+		},
+		{
+			name:  "a rename from the name of a group of a when clause lifts the forbid",
+			group: "grp-1",
+			limits: []gate.AccessLimit{limit(acme, "l1",
+				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"sre" };`)},
+			change:  principal.GroupChangeRename,
+			newName: "sre-two",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
+		},
+		{
+			name:  "a rename to the name of a group of an unless clause lifts the forbid",
+			group: "grp-1",
+			limits: []gate.AccessLimit{limit(acme, "l1",
+				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"platform" };`)},
+			change:  principal.GroupChangeRename,
+			newName: "platform",
+			want:    access.LimitRef{ID: "l1", Scope: "namespace/acme"},
+			lifted:  true,
+		},
+		{
+			name:  "a rename from the name of a group of an unless clause lifts nothing",
+			group: "grp-1",
+			limits: []gate.AccessLimit{limit(acme, "l1",
+				`forbid (principal, action, resource) unless { principal in OpenDustpan::Group::"sre" };`)},
+			change:  principal.GroupChangeRename,
+			newName: "sre-two",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
+		},
+		{
+			name:  "a rename to the name of a group of a when clause lifts nothing",
+			group: "grp-1",
+			limits: []gate.AccessLimit{limit(acme, "l1",
+				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"platform" };`)},
+			change:  principal.GroupChangeRename,
+			newName: "platform",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
+		},
+		{
+			name:  "a rename that no limit names lifts nothing",
+			group: "grp-1",
+			limits: []gate.AccessLimit{limit(acme, "l1",
+				`forbid (principal, action, resource) when { principal in OpenDustpan::Group::"platform" };`)},
+			change:  principal.GroupChangeRename,
+			newName: "sre-two",
+			want:    access.LimitRef{ID: "", Scope: ""},
+			lifted:  false,
 		},
 	}
 
@@ -251,13 +318,14 @@ func TestLimitLiftedBy(t *testing.T) {
 			groups := fakeGroups{names: map[string]string{"grp-1": "sre", "grp-2": "platform"}, err: nil}
 			reader := limitgroups.New(fakeStore{Store: nil, limits: tc.limits, err: nil}, groups)
 
-			got, lifted, err := reader.LimitLiftedBy(t.Context(), tc.group, tc.change)
+			got, lifted, err := reader.LimitLiftedBy(t.Context(), tc.group, tc.newName, tc.change)
 			if err != nil {
-				t.Fatalf("LimitLiftedBy(%s) = %v, want nil", tc.group, err)
+				t.Fatalf("LimitLiftedBy(%s, %q) = %v, want nil", tc.group, tc.newName, err)
 			}
 
 			if lifted != tc.lifted || got != tc.want {
-				t.Fatalf("LimitLiftedBy(%s) = %v, %t, want %v, %t", tc.group, got, lifted, tc.want, tc.lifted)
+				t.Fatalf("LimitLiftedBy(%s, %q) = %v, %t, want %v, %t",
+					tc.group, tc.newName, got, lifted, tc.want, tc.lifted)
 			}
 		})
 	}
@@ -309,7 +377,7 @@ func TestLimitLiftedByErrors(t *testing.T) {
 
 			reader := limitgroups.New(tc.store, tc.groups)
 
-			got, lifted, err := reader.LimitLiftedBy(t.Context(), "grp-1", principal.GroupChangeAddMember)
+			got, lifted, err := reader.LimitLiftedBy(t.Context(), "grp-1", "", principal.GroupChangeAddMember)
 			if err == nil {
 				t.Fatalf("LimitLiftedBy(grp-1) = %v, %t, nil, want an error", got, lifted)
 			}
@@ -332,7 +400,7 @@ func TestLimitLiftedByWithoutTheGroup(t *testing.T) {
 		fakeGroups{names: map[string]string{}, err: nil},
 	)
 
-	got, lifted, err := reader.LimitLiftedBy(t.Context(), "grp-gone", principal.GroupChangeAddMember)
+	got, lifted, err := reader.LimitLiftedBy(t.Context(), "grp-gone", "", principal.GroupChangeAddMember)
 	if err != nil {
 		t.Fatalf("LimitLiftedBy(grp-gone) = %v, want nil", err)
 	}

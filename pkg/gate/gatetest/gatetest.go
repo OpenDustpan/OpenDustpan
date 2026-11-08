@@ -813,6 +813,11 @@ func recordCases(fx *fixtures) []StoreCase {
 func EngineCases() []EngineCase {
 	fx := newFixtures()
 
+	return append(engineEvaluateCases(&fx), engineCheckCases(&fx)...)
+}
+
+// engineEvaluateCases returns the conformance cases of Version and Evaluate.
+func engineEvaluateCases(fx *fixtures) []EngineCase {
 	return []EngineCase{
 		{
 			Name: "version-names-engine", Method: gate.Engine.Version, Scopes: nil, Policies: nil, Want: nil,
@@ -970,6 +975,13 @@ func EngineCases() []EngineCase {
 			Want:     gate.ErrUnavailable,
 			Checks:   "For the external adapter: an answer that does not authenticate, that does not echo the request ID or the set version, or that names acme/unknown, which is not in the set, returns ErrUnavailable.",
 		},
+	}
+}
+
+// engineCheckCases returns the conformance cases of Check and
+// CheckLimitMembership.
+func engineCheckCases(fx *fixtures) []EngineCase {
+	return []EngineCase{
 		{
 			Name:     "check-accepts-valid",
 			Method:   gate.Engine.Check,
@@ -1057,6 +1069,14 @@ func EngineCases() []EngineCase {
 			Policies: []gate.PolicyID{pid(fx.acme, "risk"), pid(fx.acme, "type-error"), pid(fx.acme, "cost-cap")},
 			Want:     nil,
 			Checks:   "Check of two refused policies and one valid policy returns one diagnostic for each refused policy, by policy ID, in the order of the policies.",
+		},
+		{
+			Name:     "check-limit-membership-needs-a-group",
+			Method:   gate.Engine.CheckLimitMembership,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-agent-destroy"), pid(fx.acme, "membership-no-group")},
+			Want:     gate.ErrLimitMembership,
+			Checks:   "CheckLimitMembership returns nil for a limit whose membership test of principal names a group, and an error that wraps ErrLimitMembership for one that names another value.",
 		},
 		{
 			Name:     "check-unusable-schema",

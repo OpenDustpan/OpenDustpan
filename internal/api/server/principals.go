@@ -890,7 +890,7 @@ func getGroup(
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
 // changes its description or both, and answers 200 with the stored group.
 func changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
@@ -902,7 +902,7 @@ func changeGroup(
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupUpdate{
+	g, err := svc.UpdateGroup(r.Context(), e, caller, r.PathValue("id"), principal.GroupUpdate{
 		Name:        req.Name,
 		Description: req.Description,
 	})

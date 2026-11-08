@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -628,11 +629,13 @@ func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object stri
 // An access limit of a scope that names the group holds for the members of
 // the group, so the change can lift the limit for one member: an add to a
 // group of an unless clause, a remove from a group of a when clause or of
-// the principal scope. The caller must be a site administrator then. A
-// change that can only add a forbid keeps the grants check, and a read or a
-// parse that fails refuses the change.
+// the principal scope. A rename removes the members from the old name and
+// adds them to the new name, so it can lift a limit that names either name.
+// The caller must be a site administrator then. A change that can only add
+// a forbid keeps the grants check, and a read or a parse that fails refuses
+// the change.
 func (s *Service) CheckGroupGrants(
-	ctx context.Context, caller identity.Principal, groupID string, change principal.GroupChange,
+	ctx context.Context, caller identity.Principal, groupID, newName string, change principal.GroupChange,
 ) error {
 	if err := s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectGroup, ID: groupID}); err != nil {
 		return err
@@ -642,19 +645,26 @@ func (s *Service) CheckGroupGrants(
 		return nil
 	}
 
-	limit, lifted, err := s.limits.LimitLiftedBy(ctx, groupID, change)
+	limit, lifted, err := s.limits.LimitLiftedBy(ctx, groupID, newName, change)
 	if err != nil {
 		return fmt.Errorf("%w: read the access limits that name the group %q: %w", ErrEscalation, groupID, err)
 	}
 
-	if lifted {
+	if !lifted {
+		return nil
+	}
+
+	if !s.limitReadable(ctx, caller, limit) {
 		return fmt.Errorf(
-			"%w: access limit %q of %s names the group %q: only a site administrator can %s",
-			ErrEscalation, limit.ID, limit.Scope, groupID, groupChangeText(change),
+			"%w: an access limit that you cannot read names the group %q: only a site administrator can %s",
+			ErrEscalation, groupID, groupChangeText(change),
 		)
 	}
 
-	return nil
+	return fmt.Errorf(
+		"%w: access limit %q of %s names the group %q: only a site administrator can %s",
+		ErrEscalation, limit.ID, limit.Scope, groupID, groupChangeText(change),
+	)
 }
 
 // groupChangeText returns the text of the change for the refusal of a group
@@ -667,6 +677,8 @@ func groupChangeText(change principal.GroupChange) string {
 		return "remove a member"
 	case principal.GroupChangeDelete:
 		return "delete the group"
+	case principal.GroupChangeRename:
+		return "rename the group"
 	default:
 		return "change the members"
 	}
@@ -769,6 +781,25 @@ func (s *Service) CheckMove(
 
 		cursor = page.NextCursor
 	}
+}
+
+// limitReadable reports whether caller may read the gate configuration of
+// the namespace of limit. The refusal of a change that can lift a limit
+// names the limit, so it names it only when caller may read it. A scope
+// that does not parse, and a scope with no namespace, name none that caller
+// may read, so the text stays hidden.
+func (s *Service) limitReadable(ctx context.Context, caller identity.Principal, limit LimitRef) bool {
+	scope, err := gate.ParseScopeKey(limit.Scope)
+	if err != nil {
+		return false
+	}
+
+	ns := scope.Namespace()
+	if ns == "" {
+		return false
+	}
+
+	return s.authz.Authorize(ctx, caller, identity.ActionNamespaceReadGates, identity.NamespaceObject(ns)) == nil
 }
 
 // checkMoveGrant checks one grant of a move target against the unit it would
