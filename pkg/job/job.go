@@ -329,16 +329,6 @@ const (
 	LocationSourceNamespace LocationSource = "namespace"
 )
 
-// Valid reports whether s is one of the location sources of this package.
-func (s LocationSource) Valid() bool {
-	switch s {
-	case LocationSourceRequest, LocationSourceUnit, LocationSourceNamespace:
-		return true
-	default:
-		return false
-	}
-}
-
 // DefaultedValues returns the names of the values of spec that req did not
 // give. A request has no profile, so a profile in the spec is always a
 // default. It returns nil when req gave every value that the spec holds.

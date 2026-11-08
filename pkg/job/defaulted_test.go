@@ -24,30 +24,45 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 		profile string
 		// plannerList is a list that the planner sets by itself.
 		plannerList []string
-		want        []string
-		wantSource  job.LocationSource
+		// plannerSource is the source that the planner sets by itself.
+		plannerSource job.LocationSource
+		want          []string
+		wantSource    job.LocationSource
 	}{
-		{"names pool and location", "pool-1", named, "", nil, nil, job.LocationSourceRequest},
-		{"names no pool", "", named, "", nil, []string{"pool"}, job.LocationSourceRequest},
-		{"names neither", "", emptyLocation(), "", nil, []string{"pool", "location"}, job.LocationSourceUnit},
+		{"names pool and location", "pool-1", named, "", nil, "", nil, job.LocationSourceRequest},
+		{"names no pool", "", named, "", nil, "", []string{"pool"}, job.LocationSourceRequest},
+		{"names neither", "", emptyLocation(), "", nil, "", []string{"pool", "location"}, job.LocationSourceUnit},
 		{
-			"names only a revision", "", revisionOnly, "", nil,
+			"the planner names the namespace and the request gives no location",
+			"", emptyLocation(), "", nil, job.LocationSourceNamespace,
+			[]string{"pool", "location"},
+			job.LocationSourceNamespace,
+		},
+		{
+			"the request location wins over the namespace of the planner",
+			"", named, "", nil, job.LocationSourceNamespace,
 			[]string{"pool"},
 			job.LocationSourceRequest,
 		},
 		{
-			"a profile from the unit settings", "pool-1", named, "prf-1", nil,
+			"names only a revision", "", revisionOnly, "", nil, "",
+			[]string{"pool"},
+			job.LocationSourceRequest,
+		},
+		{
+			"a profile from the unit settings", "pool-1", named, "prf-1", nil, "",
 			[]string{"profile"},
 			job.LocationSourceRequest,
 		},
 		{
-			"all three", "", emptyLocation(), "prf-1", nil,
+			"all three", "", emptyLocation(), "prf-1", nil, "",
 			[]string{"pool", "location", "profile"},
 			job.LocationSourceUnit,
 		},
 		{
 			"the service ignores a list of the planner", "pool-1", named, "",
 			[]string{"pool"},
+			"",
 			nil,
 			job.LocationSourceRequest,
 		},
@@ -61,8 +76,8 @@ func TestStartRecordsTheDefaultedValues(t *testing.T) {
 			r.planner.spec = func(u identity.Object, req *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
-					Location: named, LocationSource: "", Steps: nil, Pool: "pool-1", Profile: tt.profile, Edits: nil,
-					Delivery: "", Defaulted: tt.plannerList,
+					Location: named, LocationSource: tt.plannerSource, Steps: nil, Pool: "pool-1",
+					Profile: tt.profile, Edits: nil, Delivery: "", Defaulted: tt.plannerList,
 				}
 			}
 

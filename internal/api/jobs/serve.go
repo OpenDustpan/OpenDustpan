@@ -278,24 +278,24 @@ func answerLocation(s *job.Spec) locationResponse {
 // job that a server did not record a source for gets the source that its list
 // of defaulted values gives.
 func locationSourceOf(s *job.Spec) string {
-	switch s.LocationSource {
-	case job.LocationSourceRequest:
-		return locationSourceRequest
-	case job.LocationSourceUnit:
-		return locationSourceUnit
-	case job.LocationSourceNamespace:
-		return locationSourceNamespace
-	default:
-		// A source that this server does not know names no source.
-		if s.LocationSource != "" {
-			return ""
-		}
-
+	if s.LocationSource == "" {
 		if slices.Contains(s.Defaulted, job.DefaultedLocation) {
 			return locationSourceUnit
 		}
 
 		return locationSourceRequest
+	}
+
+	switch s.LocationSource {
+	case job.LocationSourceUnit:
+		return locationSourceUnit
+	case job.LocationSourceNamespace:
+		return locationSourceNamespace
+	case job.LocationSourceRequest:
+		return locationSourceRequest
+	default:
+		// A source that this server does not know names no source.
+		return ""
 	}
 }
 

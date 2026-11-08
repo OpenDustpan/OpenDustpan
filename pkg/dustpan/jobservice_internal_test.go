@@ -1281,6 +1281,14 @@ func TestSettingsPlannerLocation(t *testing.T) {
 			func(q *job.StartRequest) { q.Pool = "ci" },
 			plannerLocation("", "acme/infra", "main", "net"), "pool-1", job.LocationSourceRequest, nil,
 		},
+		{
+			"a request with only a revision",
+			unitRecord("pool-2", unitLoc),
+			func(q *job.StartRequest) {
+				q.Location = job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
+			},
+			zero, "", "", job.ErrInvalid,
+		},
 		{"no setting and no request location", nil, cleared, zero, "", "", job.ErrUnsupported},
 		{
 			"a request connection of another namespace", nil,
