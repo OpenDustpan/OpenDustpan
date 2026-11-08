@@ -70,8 +70,8 @@ const (
 	// MinTokenLen is the minimum length of the one-time token of a link request.
 	// The server makes it from at least 32 random bytes.
 	MinTokenLen = 43
-	// maxTokenLen caps a token, so that a hash input stays small.
-	maxTokenLen = 512
+	// MaxTokenLen caps a token, so that a hash input stays small.
+	MaxTokenLen = 512
 	// MaxOpenRequests is the most link requests of one principal that can still
 	// be accepted at one time.
 	MaxOpenRequests = 10
@@ -243,7 +243,7 @@ func HashToken(token string) string {
 
 // ValidToken reports whether token has a length that the server makes.
 func ValidToken(token string) bool {
-	return len(token) >= MinTokenLen && len(token) <= maxTokenLen
+	return len(token) >= MinTokenLen && len(token) <= MaxTokenLen
 }
 
 // NewRequest returns the request of token for principal at now. It returns an
@@ -251,7 +251,7 @@ func ValidToken(token string) bool {
 // make, or a principal that is not valid.
 func NewRequest(token, principal string, now time.Time) (Request, error) {
 	if !ValidToken(token) {
-		return Request{}, fmt.Errorf("%w: a link token has %d to %d characters", ErrInvalid, MinTokenLen, maxTokenLen)
+		return Request{}, fmt.Errorf("%w: a link token has %d to %d characters", ErrInvalid, MinTokenLen, MaxTokenLen)
 	}
 
 	r := Request{
@@ -332,4 +332,21 @@ func (r Request) CheckAccept(principal string, now time.Time) error {
 // for a request that no account proved.
 func (r Request) LinkOf(now time.Time) Link {
 	return Link{Account: r.Proved.Account, Login: r.Proved.Login, Principal: r.Principal, LinkedAt: now}
+}
+
+// Started is a link request that a person started. Token is the one-time token.
+// It is shown once and never stored.
+type Started struct {
+	Token   string
+	Request Request
+}
+
+// View is what the accept page shows: the request, and the link that the
+// account that proved itself has now. HasCurrent is false when the account has
+// no link. CurrentName is the display name of the principal of that link.
+type View struct {
+	Request     Request
+	Current     Link
+	HasCurrent  bool
+	CurrentName string
 }

@@ -81,15 +81,9 @@ Use `ldaps://`, or `ldap://` with StartTLS. The server checks the
 certificate of the directory against the CA bundle and the host name of
 the URL. It uses TLS 1.2 or later.
 
-The server refuses a connection with no TLS. It allows such a connection
-only in these cases:
-
-- The host of the URL is a loopback IP address, for example `127.0.0.1` or
-  `[::1]`. A host name, also `localhost`, is not enough, because its
-  address can change.
-- An operator allows plain connections for the installation. The setting is
-  off by default. It sends the bind password and the password of each
-  person over the network with no encryption.
+The server refuses a connection with no TLS, unless the host of the URL is
+a loopback IP address, for example `127.0.0.1` or `[::1]`. A host name,
+also `localhost`, is not enough, because its address can change.
 
 The server checks the address of each connection when the connection opens,
 after the name lookup. Each connection also goes through the egress rules

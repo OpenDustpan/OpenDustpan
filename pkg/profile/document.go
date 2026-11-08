@@ -268,11 +268,12 @@ func RoutingChanges(before, after *Document) []string {
 		maps.Copy(tainted, reads)
 	}
 
-	// A value that exports.proxy reads goes to the job proxy, so a change of
+	// A value that exports.proxy reads goes to the job proxy, and a value
+	// that exports.files reads goes to a file of the launcher. A change of
 	// such a value changes where a secret goes.
 	for _, doc := range []*Document{b, a} {
-		if p := exportsProxy(doc); p != nil {
-			maps.Copy(tainted, doc.taint(p))
+		for _, n := range routedExports(doc) {
+			maps.Copy(tainted, doc.taint(n))
 		}
 	}
 
@@ -525,13 +526,29 @@ func mapGet(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// exportsProxy returns the node of exports.proxy, or nil.
-func exportsProxy(d *Document) *yaml.Node {
-	if exports := mapGet(d.root, topExports); exports != nil && exports.Kind == yaml.MappingNode {
-		return mapGet(exports, exportProxy)
+// routedExportKeys returns the keys of exports whose reads RoutingChanges
+// follows: exports.proxy sends a value to the job proxy, and exports.files
+// writes a value to a file.
+func routedExportKeys() []string {
+	return []string{exportProxy, exportFiles}
+}
+
+// routedExports returns the nodes of the keys of routedExportKeys that d has.
+func routedExports(d *Document) []*yaml.Node {
+	exports := mapGet(d.root, topExports)
+	if exports == nil || exports.Kind != yaml.MappingNode {
+		return nil
 	}
 
-	return nil
+	var out []*yaml.Node
+
+	for _, key := range routedExportKeys() {
+		if n := mapGet(exports, key); n != nil {
+			out = append(out, n)
+		}
+	}
+
+	return out
 }
 
 func blockOf(d *Document, group, name string) *yaml.Node {
