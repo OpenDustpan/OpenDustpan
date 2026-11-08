@@ -201,6 +201,10 @@ var Tables = []string{
 	"settings_state",
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
+	"quota_keys",
+	"quota_reservations",
+	"quota_reservation_keys",
+	"quota_requests",
 	TableTrustRules,
 }
 
