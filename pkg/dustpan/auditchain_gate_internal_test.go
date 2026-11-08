@@ -139,6 +139,9 @@ func gateRefused() []gateRoute {
 		{method: http.MethodGet, path: "/api/inventory/deleted-units/pulumi/unit-1"},
 		{method: http.MethodPost, path: "/runner/v1/claim"},
 		{method: http.MethodPut, path: "/api/dustpan/v1/audit/chain"},
+		{method: http.MethodGet, path: "/api/server/audit/chain"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/audit/entries"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/audit/chainx"},
 		{method: http.MethodGet, path: "/api/server/maintenancex"},
 	}
 }
