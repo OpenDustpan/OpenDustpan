@@ -154,16 +154,24 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	resp, doc := settingsRead(ctx, t, env, settingsRoute)
 	first := resp.Header.Get("ETag")
 
+	settingsDefaults(t, doc)
+	settingsChange(ctx, t, env, first)
+	settingsRefusals(ctx, t, env)
+	settingsNamespace(ctx, t, env)
+	settingsAudit(ctx, t, env)
+}
+
+// settingsDefaults checks the settings of the first read: the defaults, the
+// locks, the layers and a secret that shows no value.
+func settingsDefaults(t *testing.T, doc settingsDoc) {
+	t.Helper()
+
 	preset := settingFor(t, doc, "branding.preset")
 	if preset.Source != "default" || preset.Locked || !preset.DatabaseLayer || preset.Value != "" {
 		t.Fatalf("branding.preset = %+v, want the default, unlocked, with a database layer", preset)
 	}
 
-	plain := settingFor(t, doc, "egress.allowPlainConnections")
-	if plain.Source != "default" || plain.Locked || !plain.DatabaseLayer || plain.Value != false ||
-		plain.Apply != "live" {
-		t.Fatalf("egress.allowPlainConnections = %+v, want the default, unlocked, with a database layer", plain)
-	}
+	settingsPlainDefault(t, doc)
 
 	if listen := settingFor(t, doc, "listen"); !listen.Locked || listen.DatabaseLayer || listen.Apply != "restart" {
 		t.Fatalf("listen = %+v, want a setting that only the static layer sets", listen)
@@ -173,11 +181,20 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	if !database.Secret || database.Value != nil || database.DatabaseValue != nil || database.DatabaseLayer {
 		t.Fatalf("database = %+v, want a secret that shows no value", database)
 	}
+}
 
-	settingsChange(ctx, t, env, first)
-	settingsRefusals(ctx, t, env)
-	settingsNamespace(ctx, t, env)
-	settingsAudit(ctx, t, env)
+// settingsPlainDefault checks that the first read shows plain connections as
+// refused by default, unlocked, with a database layer, and applied live.
+func settingsPlainDefault(t *testing.T, doc settingsDoc) {
+	t.Helper()
+
+	plain := settingFor(t, doc, "egress.allowPlainConnections")
+	allowed, isBool := plain.Value.(bool)
+
+	if plain.Source != "default" || plain.Locked || !plain.DatabaseLayer || !isBool || allowed ||
+		plain.Apply != "live" {
+		t.Fatalf("egress.allowPlainConnections = %+v, want the default, unlocked, with a database layer", plain)
+	}
 }
 
 // settingFor returns the setting key of doc.
