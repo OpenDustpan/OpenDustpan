@@ -3,6 +3,7 @@ package signinsvc_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -602,6 +603,72 @@ func TestCompleteNoGroupsInTheAssertion(t *testing.T) {
 
 	if len(w.claims) != 0 {
 		t.Fatalf("claims = %+v, want none", w.claims)
+	}
+}
+
+// TestCompleteGroupsRecordsTheRemovals checks that a sign-in whose claims
+// remove and suspend members records the IDs of both with the source of the
+// provider.
+func TestCompleteGroupsRecordsTheRemovals(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: []string{"grp-b"},
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 1 || w.removals[0].Kind != principal.RemovalSourceIdentityProvider ||
+		w.removals[0].ID != "corp" {
+		t.Fatalf("removals = %+v, want the removals of the provider corp", w.removals)
+	}
+
+	if len(w.removedIDs) != 1 || !slices.Equal(w.removedIDs[0], []string{"grp-a", "grp-b"}) {
+		t.Fatalf("groups = %v, want grp-a and grp-b", w.removedIDs)
+	}
+}
+
+// TestCompleteGroupsNoRemovalRecordsNothing checks that a sign-in that
+// removes no member calls no recorder.
+func TestCompleteGroupsNoRemovalRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: []string{"grp-a"}, Removed: nil, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 0 {
+		t.Fatalf("removals = %+v, want none", w.removals)
+	}
+}
+
+// TestCompleteGroupsRecordErrorRefusesTheSignIn checks that a failure to
+// record the removals refuses the sign-in and starts no session.
+func TestCompleteGroupsRecordErrorRefusesTheSignIn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil))
+	if !errors.Is(err, errStoreStopped) || len(w.starts) != 0 {
+		t.Fatalf("Complete() = %v with %d sessions, want the error and no session", err, len(w.starts))
 	}
 }
 

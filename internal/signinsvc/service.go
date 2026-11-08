@@ -215,6 +215,15 @@ type Audit interface {
 	AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
 }
 
+// Removals records the members that a group claim sync removed, for the
+// removal alert. Nil records nothing.
+type Removals interface {
+	// Record stores one removal of each group in groupIDs for source, and
+	// alerts the administrators when the removals cross a limit. An error
+	// refuses the sign-in.
+	Record(ctx context.Context, source principal.RemovalSource, groupIDs []string) error
+}
+
 // Config holds the ports of a Service. Groups may be nil: the service then
 // applies no group claim, and the audit entry of the session says so.
 type Config struct {
@@ -226,6 +235,9 @@ type Config struct {
 	// Groups applies the group claims of an Assertion. Nil means that no
 	// mapping exists, so no sign-in joins a group.
 	Groups principal.GroupClaimApplier
+	// Removals records the removals of a group claim sync for the removal
+	// alert. Nil records nothing.
+	Removals Removals
 	// States reads the state of a person for the passkey sign-in. Nil means
 	// that the passkey sign-in refuses every request.
 	States States
@@ -555,6 +567,16 @@ func (s *Service) applyGroups(
 	})
 	if err != nil {
 		return "", fmt.Errorf("apply the group claims of a sign-in: %w", err)
+	}
+
+	removed := slices.Concat(res.Removed, res.Suspended)
+
+	if s.cfg.Removals != nil && len(removed) > 0 {
+		source := principal.RemovalSource{Kind: principal.RemovalSourceIdentityProvider, ID: p.ID}
+
+		if err := s.cfg.Removals.Record(ctx, source, removed); err != nil {
+			return "", fmt.Errorf("record the removals of a sign-in: %w", err)
+		}
 	}
 
 	if res.NoMapping {

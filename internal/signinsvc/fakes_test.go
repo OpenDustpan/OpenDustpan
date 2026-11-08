@@ -35,7 +35,9 @@ type world struct {
 	auditErr       error
 	groupsErr      error
 	groupsResult   principal.GroupClaimResult
+	removalsErr    error
 	withGroupsPort bool
+	withRemovals   bool
 
 	// What the ports saw.
 	signInInputs []principal.SignInInput
@@ -45,6 +47,8 @@ type world struct {
 	startEntries []audit.Entry
 	entries      []audit.Entry
 	claims       []principal.GroupClaims
+	removals     []principal.RemovalSource
+	removedIDs   [][]string
 	auditFailed  int
 }
 
@@ -146,6 +150,21 @@ func (w *world) ApplyGroupClaims(
 	return w.groupsResult, w.groupsErr
 }
 
+// Record implements signinsvc.Removals.
+func (w *world) Record(_ context.Context, source principal.RemovalSource, groupIDs []string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.removalsErr != nil {
+		return w.removalsErr
+	}
+
+	w.removals = append(w.removals, source)
+	w.removedIDs = append(w.removedIDs, groupIDs)
+
+	return nil
+}
+
 // service returns a Service over the fakes of w.
 func (w *world) service(t *testing.T) *signinsvc.Service {
 	t.Helper()
@@ -155,9 +174,15 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 		groups = w
 	}
 
+	var removals signinsvc.Removals
+	if w.withRemovals {
+		removals = w
+	}
+
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, Groups: groups,
-		States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
+		Removals: removals, States: nil, Logger: slog.New(slog.DiscardHandler),
+		OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)
