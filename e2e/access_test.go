@@ -101,6 +101,13 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated,
 	}, &ops)
+
+	if groupProtected(t, ops) {
+		t.Fatal("the new group is protected, want false: it holds no grant")
+	}
+
+	checkGroupBecomesProtected(ctx, t, env, ops)
+
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces", `{"name":"grants"}`, http.StatusCreated,
 	}, nil)
@@ -131,6 +138,61 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkSubjectDeleteRevokes(ctx, t, env, bob)
 	checkLastSiteAdministratorKept(ctx, t, env)
 	checkMemberSignsIn(ctx, t, env)
+}
+
+// groupProtected returns the protected flag of a group answer, and fails t
+// when the answer holds no flag.
+func groupProtected(t *testing.T, g e2eGroup) bool {
+	t.Helper()
+
+	if g.Protected == nil {
+		t.Fatal("the group answer has no protected field")
+	}
+
+	return *g.Protected
+}
+
+// checkGroupBecomesProtected gives the group a custom role with a sensitive
+// action on the installation, reads the group again, and checks that the
+// group is protected. The grant goes back at the end, so that the later
+// grant steps read the installation grants alone, and the group is not
+// protected again.
+func checkGroupBecomesProtected(ctx context.Context, t *testing.T, env *e2e.Env, g e2eGroup) {
+	t.Helper()
+
+	var role e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"access-manager","actions":["server:manage-access"]}`, http.StatusCreated,
+	}, &role)
+
+	var grant e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"group:` + g.ID + `#member","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, &grant)
+
+	var protected e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + g.ID, "", http.StatusOK,
+	}, &protected)
+
+	if !groupProtected(t, protected) {
+		t.Fatal("the group with a sensitive grant on the installation is not protected, want true")
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + grant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var revoked e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + g.ID, "", http.StatusOK,
+	}, &revoked)
+
+	if groupProtected(t, revoked) {
+		t.Fatal("the group after the revoke of its sensitive grant is protected, want false")
+	}
 }
 
 // TestRevokeGrantByID revokes a namespace grant and a unit grant through
