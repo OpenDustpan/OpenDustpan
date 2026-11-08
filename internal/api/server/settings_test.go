@@ -12,7 +12,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -426,7 +426,7 @@ func TestSettingsLockedAnswerNamesTheKeyAndItsSource(t *testing.T) {
 func egressRegistry(t *testing.T) *setting.Registry {
 	t.Helper()
 
-	reg, err := setting.NewRegistry(egress.SettingDeclarations())
+	reg, err := setting.NewRegistry(plainconn.SettingDeclarations())
 	if err != nil {
 		t.Fatalf("egress registry: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestSettingsPlainConnectionsLockedByTheStaticLayer(t *testing.T) {
 	t.Parallel()
 
 	static := settingtest.StaticMap{
-		egress.SettingAllowPlainConnections: {
+		plainconn.SettingAllowPlainConnections: {
 			Source: setting.SourceEnv, Value: "false",
 			By: "the environment variable DUSTPAN_ALLOW_PLAIN_CONNECTIONS",
 		},
@@ -451,7 +451,7 @@ func TestSettingsPlainConnectionsLockedByTheStaticLayer(t *testing.T) {
 
 	read := e.do(t, getCall(settingsURL))
 	wantSettingsStatus(t, read, http.StatusOK)
-	checkPlainSetting(t, decodeSettings(t, read)[egress.SettingAllowPlainConnections])
+	checkPlainSetting(t, decodeSettings(t, read)[plainconn.SettingAllowPlainConnections])
 
 	r := e.patch(t, settingsURL, `"0"`, `{"egress.allowPlainConnections":true}`)
 	wantSettingsStatus(t, r, http.StatusConflict)
@@ -466,7 +466,7 @@ func TestSettingsPlainConnectionsLockedByTheStaticLayer(t *testing.T) {
 		t.Fatalf("ETag = %q, want \"0\": the refused change stored a value", after.header.Get("ETag"))
 	}
 
-	checkPlainSetting(t, decodeSettings(t, after)[egress.SettingAllowPlainConnections])
+	checkPlainSetting(t, decodeSettings(t, after)[plainconn.SettingAllowPlainConnections])
 	checkOneFailureEntry(t, serverEntries(t, e.st))
 }
 

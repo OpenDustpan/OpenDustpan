@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
-	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -22,8 +22,8 @@ func TestSettingDeclarationsAreValidAndCoverTheFileKeys(t *testing.T) {
 
 	// Only the settings that the API can change have a database layer.
 	databaseKeys := map[string]bool{
-		"branding.preset":                   true,
-		egress.SettingAllowPlainConnections: true,
+		"branding.preset":                      true,
+		plainconn.SettingAllowPlainConnections: true,
 	}
 
 	for _, s := range cli.ServeSettings() {
@@ -61,7 +61,7 @@ func TestAllowPlainConnectionsIsDeclaredAndLockedByTheStaticLayer(t *testing.T) 
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	d, ok := registry.Lookup(setting.LevelInstallation, egress.SettingAllowPlainConnections)
+	d, ok := registry.Lookup(setting.LevelInstallation, plainconn.SettingAllowPlainConnections)
 	if !ok || d.Kind != setting.KindBool || d.Default != "false" || !d.Database || d.Apply != setting.ApplyLive {
 		t.Fatalf("declaration = %+v, %v; want a bool with the database layer, false by default", d, ok)
 	}
@@ -74,7 +74,7 @@ func TestAllowPlainConnectionsIsDeclaredAndLockedByTheStaticLayer(t *testing.T) 
 	}
 
 	layer := cli.NewStaticLayer(resolved)
-	checkStatic(t, layer, egress.SettingAllowPlainConnections,
+	checkStatic(t, layer, plainconn.SettingAllowPlainConnections,
 		staticWant{setting.SourceEnv, "false", "DUSTPAN_ALLOW_PLAIN_CONNECTIONS"})
 }
 

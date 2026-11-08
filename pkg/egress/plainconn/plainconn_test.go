@@ -1,11 +1,11 @@
-package egress_test
+package plainconn_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -19,7 +19,7 @@ type plainReader struct {
 	err  error
 }
 
-// Effective implements egress.PlainRead.
+// Effective implements plainconn.PlainRead.
 func (r plainReader) Effective(_ context.Context, _ setting.Scope, _ string) (setting.Item, error) {
 	return r.item, r.err
 }
@@ -37,13 +37,13 @@ func plainReaderError(err error) plainReader {
 // plainDeclaration returns the declaration of the setting of the tests. The
 // declarations always hold it, so the panic fails fast.
 func plainDeclaration() setting.Declaration {
-	for _, d := range egress.SettingDeclarations() {
-		if d.Key == egress.SettingAllowPlainConnections {
+	for _, d := range plainconn.SettingDeclarations() {
+		if d.Key == plainconn.SettingAllowPlainConnections {
 			return d
 		}
 	}
 
-	panic("egress: no declaration for " + egress.SettingAllowPlainConnections)
+	panic("plainconn: no declaration for " + plainconn.SettingAllowPlainConnections)
 }
 
 // plainItem returns the effective item of the setting with the value.
@@ -57,7 +57,7 @@ func plainItem(value string) setting.Item {
 func TestAllowPlainConnectionsDefaultsOff(t *testing.T) {
 	t.Parallel()
 
-	registry, err := setting.NewRegistry(egress.SettingDeclarations())
+	registry, err := setting.NewRegistry(plainconn.SettingDeclarations())
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAllowPlainConnectionsDefaultsOff(t *testing.T) {
 	item := res.Items[0]
 	checkDefaultItem(t, item)
 
-	if egress.PlainAllowed(t.Context(), plainReaderOf(item)) {
+	if plainconn.PlainAllowed(t.Context(), plainReaderOf(item)) {
 		t.Fatal("PlainAllowed of the default item = true, want false")
 	}
 }
@@ -83,7 +83,7 @@ func TestAllowPlainConnectionsDefaultsOff(t *testing.T) {
 func checkDefaultItem(t *testing.T, item setting.Item) {
 	t.Helper()
 
-	if item.Key != egress.SettingAllowPlainConnections || item.Kind != setting.KindBool || !item.Database {
+	if item.Key != plainconn.SettingAllowPlainConnections || item.Kind != setting.KindBool || !item.Database {
 		t.Fatalf("item = %+v, want a bool with the database layer", item)
 	}
 
@@ -123,7 +123,7 @@ func TestPlainAllowedFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := egress.PlainAllowed(t.Context(), plainReaderOf(plainItem(tc.value))); got != tc.want {
+			if got := plainconn.PlainAllowed(t.Context(), plainReaderOf(plainItem(tc.value))); got != tc.want {
 				t.Errorf("PlainAllowed(%q) = %v, want %v", tc.value, got, tc.want)
 			}
 
@@ -141,7 +141,7 @@ func TestPlainAllowedRefusesAReadThatFails(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		reader egress.PlainRead
+		reader plainconn.PlainRead
 		name   string
 	}{
 		{name: "a read error", reader: plainReaderError(errRead)},
@@ -154,7 +154,7 @@ func TestPlainAllowedRefusesAReadThatFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if egress.PlainAllowed(t.Context(), tc.reader) {
+			if plainconn.PlainAllowed(t.Context(), tc.reader) {
 				t.Fatal("PlainAllowed = true, want false")
 			}
 		})

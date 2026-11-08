@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -29,7 +30,7 @@ var ErrPlainRefused = errors.New("a connection with no TLS to the directory is n
 func plainRefused(address string) error {
 	return fmt.Errorf(`%w: %w: %s: use ldaps:// or StartTLS, or send PATCH /api/dustpan/v1/settings `+
 		`with {"%s": true}`, session.ErrMethodUnavailable, ErrPlainRefused, address,
-		egress.SettingAllowPlainConnections)
+		plainconn.SettingAllowPlainConnections)
 }
 
 // plainRule is the rule of the dial guard for a connection with no TLS.

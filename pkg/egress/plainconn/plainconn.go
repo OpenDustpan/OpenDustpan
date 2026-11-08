@@ -1,4 +1,8 @@
-package egress
+// Package plainconn holds the installation setting that allows a connection
+// with no TLS, and the read of it that fails closed. It is apart from
+// package egress so that the packages that link egress do not link the
+// settings service.
+package plainconn
 
 import (
 	"context"

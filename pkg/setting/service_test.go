@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
@@ -111,7 +111,7 @@ func TestServicePatchStampsTheEntry(t *testing.T) {
 func TestServicePatchOfThePlainConnectionSettingNeedsAFreshStep(t *testing.T) {
 	t.Parallel()
 
-	reg, err := setting.NewRegistry(egress.SettingDeclarations())
+	reg, err := setting.NewRegistry(plainconn.SettingDeclarations())
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestServicePatchOfThePlainConnectionSettingNeedsAFreshStep(t *testing.T) {
 	m := newMemStore()
 	now := func() time.Time { return time.UnixMilli(1_700_000_000_123) }
 	svc := setting.NewService(m, reg, nil, nil, now)
-	patch := setting.Patch{{Key: egress.SettingAllowPlainConnections, Value: "true", Delete: false}}
+	patch := setting.Patch{{Key: plainconn.SettingAllowPlainConnections, Value: "true", Delete: false}}
 
 	_, err = svc.Patch(t.Context(), setting.InstallationScope(), patch, request("@server"))
 	if !errors.Is(err, setting.ErrFreshStepRequired) {
@@ -159,7 +159,7 @@ func checkNothingWritten(t *testing.T, m *memStore) {
 func checkPlainConnectionChange(t *testing.T, res setting.Result, m *memStore) {
 	t.Helper()
 
-	if res.Resource.Revision != 1 || !slices.Equal(res.Changed, []string{egress.SettingAllowPlainConnections}) {
+	if res.Resource.Revision != 1 || !slices.Equal(res.Changed, []string{plainconn.SettingAllowPlainConnections}) {
 		t.Fatalf("result = %+v, want the key changed", res)
 	}
 
@@ -169,7 +169,7 @@ func checkPlainConnectionChange(t *testing.T, res setting.Result, m *memStore) {
 	}
 
 	change := entries[0].Changes[0]
-	if change.Key != egress.SettingAllowPlainConnections || change.New != "true" {
+	if change.Key != plainconn.SettingAllowPlainConnections || change.New != "true" {
 		t.Fatalf("change = %+v, want the key set to true", change)
 	}
 }

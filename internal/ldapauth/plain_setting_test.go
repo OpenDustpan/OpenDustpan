@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -20,7 +21,7 @@ type plainSettings struct {
 	err  error
 }
 
-// Effective implements egress.PlainRead.
+// Effective implements plainconn.PlainRead.
 func (s plainSettings) Effective(_ context.Context, _ setting.Scope, _ string) (setting.Item, error) {
 	return s.item, s.err
 }
@@ -38,13 +39,13 @@ func plainSettingsError(err error) plainSettings {
 // plainSettingItem returns the effective item of the plain-connection
 // setting with the value.
 func plainSettingItem(value string) setting.Item {
-	for _, d := range egress.SettingDeclarations() {
-		if d.Key == egress.SettingAllowPlainConnections {
+	for _, d := range plainconn.SettingDeclarations() {
+		if d.Key == plainconn.SettingAllowPlainConnections {
 			return setting.Effective(d, &value, nil)
 		}
 	}
 
-	panic("ldapauth: no declaration for " + egress.SettingAllowPlainConnections)
+	panic("ldapauth: no declaration for " + plainconn.SettingAllowPlainConnections)
 }
 
 // checkPlainRefusal fails the test unless err is the refusal of a plain
@@ -59,7 +60,7 @@ func checkPlainRefusal(t *testing.T, err error, address string) {
 
 	text := err.Error()
 	for _, want := range []string{
-		address, egress.SettingAllowPlainConnections, "PATCH /api/dustpan/v1/settings",
+		address, plainconn.SettingAllowPlainConnections, "PATCH /api/dustpan/v1/settings",
 		`{"egress.allowPlainConnections": true}`,
 	} {
 		if !strings.Contains(text, want) {
@@ -69,7 +70,7 @@ func checkPlainRefusal(t *testing.T, err error, address string) {
 }
 
 // TestAPlainConnectionNeedsTheInstallationSetting is layer 2 for the
-// connection: a reader built on egress.PlainAllowed drives Method.open and
+// connection: a reader built on plainconn.PlainAllowed drives Method.open and
 // the dial guard, each called directly as if the other layer had failed. A
 // plain connection to a host name needs the setting; a plain connection to
 // a loopback IP address does not.
@@ -77,7 +78,7 @@ func TestAPlainConnectionNeedsTheInstallationSetting(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		reader egress.PlainRead
+		reader plainconn.PlainRead
 		want   error
 		name   string
 		rule   ldapauth.PlainRuleForTest
@@ -135,7 +136,7 @@ func checkDialGuard(t *testing.T, rule ldapauth.PlainRuleForTest, want error) {
 // checkPlainOpen calls Method.open directly with a plain URL of the test
 // directory, as if the dial guard had passed. want is the error that open
 // answers, nil when it opens the connection.
-func checkPlainOpen(t *testing.T, s setup, read egress.PlainRead, want error) {
+func checkPlainOpen(t *testing.T, s setup, read plainconn.PlainRead, want error) {
 	t.Helper()
 
 	url := s.dir.PlainNameURL()
@@ -143,7 +144,7 @@ func checkPlainOpen(t *testing.T, s setup, read egress.PlainRead, want error) {
 	cfg := s.configWith(func(c *ldapauth.Config) {
 		c.URL = url
 		c.AllowPlain = func(ctx context.Context) (bool, error) {
-			return egress.PlainAllowed(ctx, read), nil
+			return plainconn.PlainAllowed(ctx, read), nil
 		}
 	})
 
