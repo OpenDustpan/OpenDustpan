@@ -118,18 +118,15 @@ func (f accessFixture) linkAlice(t *testing.T, id string) {
 	f.asPerson(t, "alice", apiCall{http.MethodPost, linksURL, `{"token":"` + token + `"}`, http.StatusCreated}, nil)
 }
 
-// staleLinkSession starts a console session of subject, moves the clock past
-// the token freshness window, and uses the session once on the way, so that
-// the session is active but its sign-in is older than the window. It returns
-// the cookie and the CSRF value of the session.
+// staleLinkSession starts a console session of subject whose sign-in is one
+// minute older than the token freshness window. The session is active: a read
+// works. It returns the cookie and the CSRF value of the session.
 func (f accessFixture) staleLinkSession(t *testing.T, subject string) (*http.Cookie, string) {
 	t.Helper()
 
-	cookie, csrf := f.sessionOf(t, subject, f.sessions.Now())
+	cookie, csrf := f.sessionOf(t, subject, f.sessions.Now().Add(-session.DefaultTokenFreshness-time.Minute))
 
-	f.clock.Add(10 * time.Minute)
 	f.asSessionCookie(t, cookie, csrf, apiCall{http.MethodGet, linksURL, "", http.StatusOK}, nil)
-	f.clock.Add(session.DefaultTokenFreshness - 10*time.Minute + time.Minute)
 
 	return cookie, csrf
 }

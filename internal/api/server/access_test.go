@@ -81,10 +81,7 @@ type accessFixture struct {
 	path string
 
 	sessions *session.Sessions
-	// clock is the clock of the sessions. A test moves it to make the sign-in
-	// of a session older than the token freshness window.
-	clock   *envClock
-	handler testHandler
+	handler  testHandler
 	// passwords is the password budget of the handler: it counts each
 	// failure of a password or code check.
 	passwords *fakeLimiter
@@ -221,11 +218,7 @@ func newAccessFixtureAll(
 		t.Fatalf("token service: %v", err)
 	}
 
-	clock := &envClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
-
-	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: clock.Now},
-	)
+	sessions, err := session.NewSessions(session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: nil})
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
@@ -286,9 +279,7 @@ func newAccessFixtureAll(
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{
-		store: st, path: path, sessions: sessions, clock: clock, handler: handler, passwords: passwords,
-	}
+	f := accessFixture{store: st, path: path, sessions: sessions, handler: handler, passwords: passwords}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())
