@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/unmanaged"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -23,7 +24,10 @@ func scanCases() []suiteCase {
 		{"sweeps: a delete cancels the sweep that did not end", testDeleteTargetCancelsScan},
 		{"sweeps: the state table holds", testScanTable},
 		{"sweeps: a page size outside the bound is refused", testScansPageSize},
-		{"sweeps: a fence of another namespace or a stale fence refuses each write", testScansFenced},
+		{
+			"sweeps: a fence of another namespace, a stale fence or an entry of another namespace refuses each write",
+			testScansFenced,
+		},
 	}
 }
 
@@ -579,13 +583,16 @@ func testScansPageSize(t *testing.T, h Harness) {
 }
 
 // testScansFenced proves that every write of the sweep store refuses a fence
-// that names another namespace and a fence that a failover made stale, and
-// that the refused write changes nothing.
+// that names another namespace, a fence that a failover made stale, and an
+// entry that names another namespace, and that the refused write changes
+// nothing.
 func testScansFenced(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := h.Namespace(t, "acme")
+	other := h.Namespace(t, "other")
 	e := auditOf("acme", "namespace:manage-sweeps")
+	foreign := auditOf("other", "namespace:manage-sweeps")
 
 	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
 
@@ -596,18 +603,18 @@ func testScansFenced(t *testing.T, h Harness) {
 		name  string
 		fence namespace.Fence
 	}{
-		{"a fence of another namespace", namespace.Fence{Namespace: "other", FailoverVersion: 1}},
+		{"a fence of another namespace", other},
 		{"a stale fence", stale(f)},
 	}
 
-	for _, tc := range []struct {
+	writes := []struct {
 		name  string
-		call  func(fence namespace.Fence) error
+		call  func(fence namespace.Fence, e audit.Entry) error
 		check func(t *testing.T, what string)
 	}{
 		{
 			name: "create a target",
-			call: func(fence namespace.Fence) error {
+			call: func(fence namespace.Fence, e audit.Entry) error {
 				return h.Scans.CreateTarget(t.Context(), targetOf("acme", "second"), fence, e)
 			},
 			check: func(t *testing.T, what string) {
@@ -618,7 +625,7 @@ func testScansFenced(t *testing.T, h Harness) {
 		},
 		{
 			name: "update a target",
-			call: func(fence namespace.Fence) error {
+			call: func(fence namespace.Fence, e audit.Entry) error {
 				changed := targetOf("acme", "aws")
 				changed.Every = 0
 
@@ -632,7 +639,7 @@ func testScansFenced(t *testing.T, h Harness) {
 		},
 		{
 			name: "delete a target",
-			call: func(fence namespace.Fence) error {
+			call: func(fence namespace.Fence, e audit.Entry) error {
 				return h.Scans.DeleteTarget(t.Context(), "acme", "aws", fence, e)
 			},
 			check: func(t *testing.T, what string) {
@@ -643,7 +650,7 @@ func testScansFenced(t *testing.T, h Harness) {
 		},
 		{
 			name: "start a sweep",
-			call: func(fence namespace.Fence) error {
+			call: func(fence namespace.Fence, e audit.Entry) error {
 				_, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), fence, e)
 
 				return err
@@ -656,7 +663,7 @@ func testScansFenced(t *testing.T, h Harness) {
 		},
 		{
 			name: "advance a sweep",
-			call: func(fence namespace.Fence) error {
+			call: func(fence namespace.Fence, e audit.Entry) error {
 				_, err := h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
 					Namespace: "acme",
 					ID:        scan.ID,
@@ -672,13 +679,22 @@ func testScansFenced(t *testing.T, h Harness) {
 				wantScanStatus(t, h, what, scan.ID, unmanaged.ScanQueued)
 			},
 		},
-	} {
+	}
+
+	for _, tc := range writes {
 		for _, b := range bad {
 			what := tc.name + " under " + b.name
 
-			wantErr(t, what, tc.call(b.fence), namespace.ErrFenced)
+			wantErr(t, what, tc.call(b.fence, e), namespace.ErrFenced)
 			tc.check(t, what)
 		}
+	}
+
+	for _, tc := range writes {
+		what := tc.name + " with an entry of another namespace"
+
+		wantErr(t, what, tc.call(f, foreign), audit.ErrInvalidEntry)
+		tc.check(t, what)
 	}
 }
 

@@ -562,6 +562,14 @@ func (m *mem) CreateTarget(_ context.Context, t unmanaged.Target, fence namespac
 		return err
 	}
 
+	if t.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: target names %q, fence names %q", namespace.ErrFenced, t.Namespace, fence.Namespace)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -593,6 +601,14 @@ func (m *mem) UpdateTarget(_ context.Context, t unmanaged.Target, fence namespac
 		return err
 	}
 
+	if t.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: target names %q, fence names %q", namespace.ErrFenced, t.Namespace, fence.Namespace)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -621,6 +637,14 @@ func (m *mem) DeleteTarget(
 	fence namespace.Fence,
 	e audit.Entry,
 ) error {
+	if ns != fence.Namespace {
+		return fmt.Errorf("%w: target names %q, fence names %q", namespace.ErrFenced, ns, fence.Namespace)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -665,6 +689,16 @@ func (m *mem) StartScan(
 	fence namespace.Fence,
 	e audit.Entry,
 ) (unmanaged.Scan, error) {
+	if s.Namespace != fence.Namespace {
+		return unmanaged.Scan{}, fmt.Errorf("%w: sweep names %q, fence names %q",
+			namespace.ErrFenced, s.Namespace, fence.Namespace)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return unmanaged.Scan{}, fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -695,6 +729,16 @@ func (m *mem) StartScan(
 func (m *mem) AdvanceScan(
 	_ context.Context, a unmanaged.ScanAdvance, fence namespace.Fence, e audit.Entry,
 ) (unmanaged.Scan, error) {
+	if a.Namespace != fence.Namespace {
+		return unmanaged.Scan{}, fmt.Errorf("%w: sweep names %q, fence names %q",
+			namespace.ErrFenced, a.Namespace, fence.Namespace)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return unmanaged.Scan{}, fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
