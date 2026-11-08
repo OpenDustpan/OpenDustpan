@@ -219,13 +219,13 @@ func TestTheDialGuardChecksTheResolvedAddress(t *testing.T) {
 			"",
 		},
 		{
-			"the refusal of a plain connection names the transports to use",
+			"the refusal of a plain connection names the setting",
 			"10.0.0.5:389",
 			ldapauth.ErrPlainRefused,
 			private,
 			ldapauth.PlainLoopbackOnlyForTest,
-			"use ldaps:// or StartTLS",
-			"setting",
+			"egress.allowPlainConnections",
+			"",
 		},
 		{
 			"plain to a private address with the setting",
@@ -239,6 +239,15 @@ func TestTheDialGuardChecksTheResolvedAddress(t *testing.T) {
 		{"plain to loopback", "127.0.0.1:389", nil, private, ldapauth.PlainLoopbackOnlyForTest, "", ""},
 		{"plain to the IPv6 loopback", "[::1]:389", nil, private, ldapauth.PlainLoopbackOnlyForTest, "", ""},
 		{"TLS to a private address", "10.0.0.5:636", nil, private, ldapauth.PlainNotUsedForTest, "", ""},
+		{
+			"the refusal of a plain connection names the transports to use",
+			"10.0.0.5:389",
+			ldapauth.ErrPlainRefused,
+			private,
+			ldapauth.PlainLoopbackOnlyForTest,
+			"use ldaps:// or StartTLS",
+			"",
+		},
 	}
 
 	for _, tc := range cases {

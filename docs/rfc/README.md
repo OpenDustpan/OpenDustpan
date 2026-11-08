@@ -164,10 +164,14 @@ both together.
 | [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
 | [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
 | [116](0116-background-blob-families-are-measured-by-total-job-time.md) | Background blob families are measured by total job time | draft; proposal of 2026-11-01 |
+| [117](0117-the-first-administrator-of-an-installation.md) | The first administrator of an installation with no person who can make a grant | discussing |
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
 | [121](0121-agent-principals.md) | Agent principals, delegation and the kind agent | accepted |
 | [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | accepted |
+| [123](0123-pluggable-sweepers.md) | Pluggable sweepers: a protocol, an SDK and a repository for sweep plugins | discussing |
 | [124](0124-codegen-for-discovered-resources.md) | Code for unmanaged resources: a verified floor in each language, and a placement engine | discussing |
+| [125](0125-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
 | [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |
+| [128](0128-reach-growth-and-token-managers.md) | Reach growth and token managers | discussing |

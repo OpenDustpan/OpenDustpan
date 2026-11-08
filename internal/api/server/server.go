@@ -94,6 +94,10 @@ type Config struct {
 	// the store keeps none: the token routes answer 501. Both SQL adapters
 	// keep them.
 	Tokens *accesstoken.Service
+	// Reach reads the reach of a group for the protected flag of the group
+	// routes. A zero config makes each of those routes fail closed: the
+	// check answers an error, never a false flag.
+	Reach access.ReachConfig
 	// Audit appends the entries of the scope @server: each change of a
 	// principal or a group writes one (ADR 60, decision 7). With Access set,
 	// it is required and must also keep the entries of each namespace
@@ -221,6 +225,7 @@ type Handler struct {
 	journal        JournalReporter
 	principals     *principal.Service
 	access         *access.Service
+	reach          access.ReachConfig
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
@@ -305,6 +310,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		journal:        cfg.Journal,
 		principals:     cfg.Principals,
 		access:         cfg.Access,
+		reach:          cfg.Reach,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
 		tempAdmins:     cfg.TempAdmins,
@@ -740,7 +746,8 @@ func classifyRegistry(err error) failure {
 // classifyBackup maps the backup errors to their status and a fixed
 // message: registry and target failures may hold driver text, so only the
 // sentinel decides the status and the message. A missing backup answers 404,
-// a second start 409, and a server with no backup target 503 that names the
+// a second start 409, a backup that the bound on the unverified keys refused
+// answers the coded 422, and a server with no backup target 503 that names the
 // setting.
 func classifyBackup(err error) (failure, bool) {
 	if text, ok := backup.RefusalText(err); ok {
@@ -750,6 +757,10 @@ func classifyBackup(err error) (failure, bool) {
 	}
 
 	switch {
+	case errors.Is(err, backup.ErrTooManyUnverified):
+		text, args := unverifiedRefusal(err)
+
+		return failCoded(http.StatusUnprocessableEntity, text, errcode.BackupTooManyUnverified, args...), true
 	case errors.Is(err, backup.ErrDevBackupRefused):
 		return fail(http.StatusConflict, backup.ErrDevBackupRefused.Error()), true
 	case errors.Is(err, backup.ErrManifestKindInvalid):
@@ -870,6 +881,27 @@ func activeWorkArgs(err error) []errcode.Value {
 	return []errcode.Value{
 		errcode.Quantity("workCount", int64(work)),
 		errcode.Quantity("canceledCount", int64(canceled)),
+	}
+}
+
+// unverifiedRefusal returns the text and the arguments of the answer to a
+// backup that the bound on the unverified keys refused: the count of the keys
+// and the bound. An error that carries no count gives zero for both.
+func unverifiedRefusal(err error) (string, []errcode.Value) {
+	refused, ok := errors.AsType[*backup.TooManyUnverifiedError](err)
+	if !ok {
+		return backup.ErrTooManyUnverified.Error(), []errcode.Value{
+			errcode.Quantity("count", 0),
+			errcode.Quantity("limit", 0),
+		}
+	}
+
+	// Defense in depth: the refusal text holds a count and a bound and no
+	// value of a request. Clean stays so that no control character reaches the
+	// answer, also when a later change puts a name in the text.
+	return denials.Clean(refused.Error(), maxCauseBytes), []errcode.Value{
+		errcode.Quantity("count", int64(refused.Count)),
+		errcode.Quantity("limit", int64(refused.Limit)),
 	}
 }
 

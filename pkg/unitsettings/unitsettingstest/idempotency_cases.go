@@ -89,12 +89,12 @@ func replayOf(t *testing.T, h Harness, ref idempotency.Ref) idempotency.Answer {
 }
 
 func settingsText(result any) (string, bool) {
-	s, ok := result.(unitsettings.Settings)
+	out, ok := result.(unitsettings.PutResult)
 	if !ok {
 		return "", false
 	}
 
-	return s.Unit.UnitID() + "/" + strconv.FormatInt(s.Version, decimal), true
+	return out.Settings.Unit.UnitID() + "/" + strconv.FormatInt(out.Settings.Version, decimal), true
 }
 
 func testCompletionPut(t *testing.T, h Harness) {
@@ -104,7 +104,7 @@ func testCompletionPut(t *testing.T, h Harness) {
 	s := settingsFor(h.Unit(t, "acme", "pulumi", "web/prod"))
 	ctx, c, ref := pending(t, h, "put", answerOf(statusOK, settingsText))
 
-	if _, err := putIn(ctx, h, &s, 0, fence); err != nil {
+	if err := putIn(ctx, h, &s, 0, fence); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func testCompletionPutNoChange(t *testing.T, h Harness) {
 
 	ctx, c, ref := pending(t, h, "same", answerOf(statusOK, settingsText))
 
-	if _, err := putIn(ctx, h, &s, 1, fence); err != nil {
+	if err := putIn(ctx, h, &s, 1, fence); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func testCompletionKeptPending(t *testing.T, h Harness) {
 
 	ctx, c, ref := pending(t, h, "conflict", answerOf(statusOK, settingsText))
 
-	if _, err := putIn(ctx, h, &s, wrongVersion, fence); !errors.Is(
+	if err := putIn(ctx, h, &s, wrongVersion, fence); !errors.Is(
 		err,
 		unitsettings.ErrConflict,
 	) {
@@ -218,7 +218,7 @@ func testCompletionPutLost(t *testing.T, h Harness) {
 	ctx, c, ref := pending(t, h, "lost", answerOf(statusOK, settingsText))
 	lose(t, h, ref)
 
-	if _, err := putIn(ctx, h, &s, 0, fence); !errors.Is(err, idempotency.ErrLost) {
+	if err := putIn(ctx, h, &s, 0, fence); !errors.Is(err, idempotency.ErrLost) {
 		t.Fatalf("Put = %v, want ErrLost", err)
 	}
 

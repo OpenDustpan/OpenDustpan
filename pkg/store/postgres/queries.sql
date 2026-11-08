@@ -1668,6 +1668,14 @@ WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text);
 
+-- name: ListActiveGroupNamesOfPrincipal :many
+SELECT g.name
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
+  AND m.state = 'active' AND g.deleted_at_ms IS NULL
+GROUP BY g.name, g.name_key
+ORDER BY g.name_key COLLATE "C";
+
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
@@ -1757,6 +1765,35 @@ SELECT group_id, source, source_id, state, pinned
 FROM group_members
 WHERE principal_id = $1 AND removed_at_ms IS NULL
 ORDER BY group_id COLLATE "C";
+
+-- name: AddMemberRemoval :exec
+INSERT INTO member_removals (id, source_kind, source_id, group_id, removed, members_before, at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: MemberRemovalTotals :one
+-- The totals of the removals of one source in one window: the members that
+-- the source removed from any group, the members that it removed from one
+-- group, and the largest group that it saw before a removal. The window
+-- holds the rows above low_ms and at most high_ms.
+SELECT
+    COALESCE(SUM(removed), 0)::bigint AS source_removed,
+    COALESCE(SUM(CASE WHEN group_id = @group_id THEN removed ELSE 0 END), 0)::bigint AS group_removed,
+    COALESCE(MAX(CASE WHEN group_id = @group_id THEN members_before ELSE 0 END), 0)::bigint AS group_members
+FROM member_removals
+WHERE source_kind = @source_kind AND source_id = @source_id
+  AND at_ms > @low_ms::bigint AND at_ms <= @high_ms::bigint;
+
+-- name: PruneMemberRemovals :execrows
+-- Deletes at most max_rows of the oldest rows of one source at or before
+-- cutoff_ms.
+DELETE FROM member_removals
+WHERE id IN (
+    SELECT m.id FROM member_removals AS m
+    WHERE m.source_kind = @source_kind AND m.source_id = @source_id
+      AND m.at_ms <= @cutoff_ms::bigint
+    ORDER BY m.at_ms, m.id
+    LIMIT @max_rows::bigint
+);
 
 -- name: CreateRole :execrows
 INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
@@ -4850,11 +4887,41 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
+-- name: CountNotificationDeliveriesOfSubscriptionBefore :one
+-- The number of deliveries of the subscription at or before the cursor (next
+-- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
+-- the deliveries that a page after the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
+-- the count; it stays so that the plan reads the index of the history in
+-- order and stops at max_rows.
+SELECT COUNT(*) FROM (
+    SELECT 1 FROM notification_deliveries
+    WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+      AND (next_at_ms > sqlc.arg(after_ms)
+        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
+    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+    LIMIT sqlc.arg(max_rows)
+) AS within_bound;
+
 -- name: ListNotificationDeliveriesOfSubscription :many
 SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
+-- time, delivery ID): the rows with an older next time, or with the same next
+-- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
+-- query. The bound on next_at_ms lets the index scan start at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+       last_error, delivered_at_ms, owner, lease_until_ms, version
+FROM notification_deliveries
+WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
+  AND (next_at_ms < sqlc.arg(after_ms)
+    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
 ORDER BY next_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
@@ -4933,9 +5000,9 @@ WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool 
 -- name: UpsertDriftResult :execrows
 -- The caller checks the fence, the job and the time in the same transaction.
 -- A row of the same unit ID in another namespace or of another tool is not
--- replaced: the count is 0. A stored row that is not older is not replaced
--- either (count 0), so that two writers cannot put an older result over a
--- newer one.
+-- replaced: the count is 0. A stored row of the same job is not replaced
+-- either (count 0). A stored row that is not older is not replaced either
+-- (count 0), so that two writers cannot put an older result over a newer one.
 INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
@@ -4945,6 +5012,7 @@ ON CONFLICT (unit_id) DO UPDATE SET
     job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
     truncated = excluded.truncated, resources_json = excluded.resources_json
 WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool
+  AND drift_results.job_id <> excluded.job_id
   AND drift_results.checked_at_ms < excluded.checked_at_ms;
 
 -- name: DeleteDriftResult :exec

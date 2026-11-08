@@ -853,7 +853,7 @@ func TestUnitQueryConformance(t *testing.T) {
 		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
 	}
 
-	storetest.RunUnitQuery(t, func(t *testing.T) storetest.Store {
+	storetest.RunUnitQuery(t, func(t *testing.T) storetest.UnitQueryStore {
 		t.Helper()
 
 		return open(t, base)
