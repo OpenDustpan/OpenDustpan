@@ -281,6 +281,22 @@ func (h *capturedLog) text() string {
 	return b.String()
 }
 
+// warnings returns the WARN records whose message holds text.
+func (h *capturedLog) warnings(text string) []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var out []slog.Record
+
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn && strings.Contains(h.records[i].Message, text) {
+			out = append(out, h.records[i].Clone())
+		}
+	}
+
+	return out
+}
+
 // fixture holds the fakes and the clock of one test.
 type fixture struct {
 	log       *fakeLog
@@ -331,6 +347,14 @@ func (f *fixture) service(t *testing.T) *removalalertsvc.Service {
 	}
 
 	return svc
+}
+
+// setMarker stores at as the alert marker of source.
+func (f *fixture) setMarker(source principal.RemovalSource, at time.Time) {
+	f.log.mu.Lock()
+	defer f.log.mu.Unlock()
+
+	f.log.alerts[source] = at
 }
 
 // record calls Record calls times with the source and one group.

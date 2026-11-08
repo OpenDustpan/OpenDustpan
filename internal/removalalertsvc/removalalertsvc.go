@@ -3,9 +3,11 @@
 // alert: a count of members that one source removed in a rolling window, or
 // a percent of the members of one group that it removed in that window,
 // whichever comes first. The server counts members, not requests. One source
-// gets at most one alert in each window, for all its groups. An alert that
-// fails to write leaves no marker, so the next removal of the source tries
-// the alert again. The limits are installation settings, and the service
+// gets one alert in each window, for all its groups, or a repeat when a write
+// stops after the notification or two writes race. A marker time after the
+// time of the removal counts as no marker and writes an audit entry. An alert
+// that fails to write leaves no marker, so the next removal of the source
+// tries the alert again. The limits are installation settings, and the service
 // reads them at each record. A reader that fails gives the default limits,
 // never no limit.
 package removalalertsvc
@@ -19,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
@@ -34,6 +37,12 @@ var ErrMissingDependency = errors.New("removal alert service needs a dependency"
 const (
 	limitCount   = "count"
 	limitPercent = "percent"
+)
+
+// The keys of the source of an alert in an attribute and in an audit change.
+const (
+	keySourceKind = "source.kind"
+	keySourceID   = "source.id"
 )
 
 // MemberCounter counts the members of one group. The principal store
@@ -142,14 +151,61 @@ func (s *Service) recordOne(ctx context.Context, source principal.RemovalSource,
 		return nil
 	}
 
-	if !totals.AlertedAt.IsZero() && totals.AlertedAt.After(at.Add(-limits.Window)) {
-		return nil
+	if !totals.AlertedAt.IsZero() {
+		switch {
+		case totals.AlertedAt.After(at):
+			if err := s.invalidMarker(ctx, source, groupID, totals.AlertedAt, at); err != nil {
+				return err
+			}
+		case totals.AlertedAt.After(at.Add(-limits.Window)):
+			return nil
+		default:
+		}
 	}
 
 	return s.alert(ctx, alertInput{
 		source: source, groupID: groupID, totals: totals, percent: percent, limit: limit,
 		limits: limits, at: at,
 	})
+}
+
+// invalidMarker writes the WARN line and the server audit entry of an alert
+// marker whose time is after the time of the removal. It fails closed: an
+// error of the audit log returns an error that wraps the error, and the alert
+// is not written.
+func (s *Service) invalidMarker(
+	ctx context.Context, source principal.RemovalSource, groupID string, marker, at time.Time,
+) error {
+	markerText := marker.UTC().Format(time.RFC3339Nano)
+	atText := at.UTC().Format(time.RFC3339Nano)
+
+	s.cfg.Logger.LogAttrs(ctx, slog.LevelWarn,
+		"removal alert: the alert marker of one source is after the time of the removal",
+		slog.String("code", errcode.PrincipalRemovalAlertMarkerInvalid),
+		slog.String("source_kind", string(source.Kind)), slog.String("source_id", source.ID),
+		slog.String("alerted_at", markerText), slog.String("at", atText))
+
+	entry := audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: string(source.Kind) + ":" + source.ID,
+		IDPSubject: "", TokenID: "", Action: principal.AuditActionMassRemovalAlert,
+		Object: principal.GroupRef(groupID), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: []audit.Change{
+			{Key: keySourceKind, Old: nil, New: string(source.Kind), Layer: "", TakesEffect: ""},
+			{Key: keySourceID, Old: nil, New: source.ID, Layer: "", TakesEffect: ""},
+			{Key: "alerted_at", Old: nil, New: markerText, Layer: "", TakesEffect: ""},
+			{Key: "at", Old: nil, New: atText, Layer: "", TakesEffect: ""},
+		},
+		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
+		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: "", ObjectID: "",
+		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+		Reason: errcode.PrincipalRemovalAlertMarkerInvalid,
+	}
+
+	if _, err := s.cfg.Audit.AppendServer(ctx, entry); err != nil {
+		return fmt.Errorf("append the invalid alert marker entry of group %q: %w", groupID, err)
+	}
+
+	return nil
 }
 
 // alertInput holds the fields of one alert.
@@ -174,8 +230,8 @@ func (s *Service) alert(ctx context.Context, in alertInput) error {
 	// The keys of a notification attribute are lowercase letters, digits,
 	// dots and dashes, so the source and the group use a dotted name.
 	attrs := map[string]string{
-		"source.kind": string(source.Kind),
-		"source.id":   source.ID,
+		keySourceKind: string(source.Kind),
+		keySourceID:   source.ID,
 		"group.id":    groupID,
 		"removed":     strconv.Itoa(totals.SourceRemoved),
 		"percent":     strconv.Itoa(in.percent),
@@ -291,7 +347,7 @@ func removalAlertSummary(
 // alertChanges returns the audit changes of an alert, one for each
 // attribute of its notification.
 func alertChanges(attrs map[string]string) []audit.Change {
-	keys := []string{"source.kind", "source.id", "group.id", "removed", "percent", "window", "limit"}
+	keys := []string{keySourceKind, keySourceID, "group.id", "removed", "percent", "window", "limit"}
 	out := make([]audit.Change, 0, len(keys))
 
 	for _, key := range keys {

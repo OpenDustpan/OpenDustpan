@@ -125,7 +125,10 @@ func restoreIntoProductionDatabase(t *testing.T, rows map[string][]map[string]an
 	dstPath := filepath.Join(t.TempDir(), "dst.db")
 	dst := openKindStore(t, dstPath, installation.KindDev)
 
-	opts := backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}
+	opts := backup.StageOptions{
+		BackupKind: installation.KindDev, AllowDev: false,
+		RestoreAt: time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}
 	if _, err := dst.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, opts); err != nil {
 		t.Fatalf("stage the backup: %v", err)
 	}

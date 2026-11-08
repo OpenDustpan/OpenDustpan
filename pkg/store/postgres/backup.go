@@ -994,11 +994,12 @@ func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 const stagingSchemaPrefix = "restore_stage_"
 
 // stagingInput groups what buildStaging needs: the staging schema, the step that
-// loads its tables, and the manifest summary.
+// loads its tables, the manifest summary and the time of the restore.
 type stagingInput struct {
-	load    func(ctx context.Context, schema string) error
-	want    backup.Summary
-	staging string
+	load      func(ctx context.Context, schema string) error
+	want      backup.Summary
+	staging   string
+	restoreAt time.Time
 }
 
 // buildStaging creates the staging schema, loads and checks the dump, and keeps
@@ -1047,7 +1048,7 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 	}
 
 	checkErr := s.inLongTx(ctx, backupBound(), defaultTx(), func(tx pgx.Tx) error {
-		return checkStaged(ctx, tx, in.staging)
+		return checkStaged(ctx, tx, in.staging, in.restoreAt)
 	})
 	if checkErr != nil {
 		return backup.Summary{}, checkErr
@@ -1068,8 +1069,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows and the feature rows.
-func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
+// sealed state, the namespace IDs, the owned rows, the removal alert markers
+// and the feature rows.
+func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
 	}
@@ -1084,6 +1086,10 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string) error {
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if markerErr := checkStagedRemovalAlerts(ctx, q, staging, restoreAt); markerErr != nil {
+		return markerErr
 	}
 
 	return checkStagedFeatureRows(ctx, q, staging)

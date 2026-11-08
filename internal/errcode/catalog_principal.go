@@ -20,6 +20,9 @@ const (
 	// PrincipalRemovalAlertFailed means that the removal alert of a group claim sync could not be written; the sign-in
 	// went on.
 	PrincipalRemovalAlertFailed = "principal.removal-alert-failed"
+	// PrincipalRemovalAlertMarkerInvalid means that the removal alert marker of a source was after the time of the
+	// removal, so the server counted it as no marker.
+	PrincipalRemovalAlertMarkerInvalid = "principal.removal-alert-marker-invalid"
 	// PrincipalRemovalAlertUnrecorded means that the removal alert and the audit entry of its failure could not be
 	// written, so the sign-in was refused.
 	PrincipalRemovalAlertUnrecorded = "principal.removal-alert-unrecorded"
@@ -55,6 +58,12 @@ func principalSpecs() []Spec {
 			Code:    PrincipalRemovalAlertFailed,
 			Meaning: "the removal alert of a group claim sync could not be written; the sign-in went on",
 			Args:    nil,
+		},
+		{
+			Code: PrincipalRemovalAlertMarkerInvalid,
+			Meaning: "the removal alert marker of a source was after the time of the removal, so the server counted it " +
+				"as no marker",
+			Args: nil,
 		},
 		{
 			Code:    PrincipalRemovalAlertUnrecorded,

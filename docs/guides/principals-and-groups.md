@@ -310,9 +310,12 @@ The alert writes three records:
 - one warning log line.
 
 Each record names the source, the group, the count of members, the percent and
-the window. The server writes at most one alert for each source in each
-window, all groups included. The limits count the removals of each source on
-its own, so removals that are spread across providers do not add up.
+the window. The server writes one alert for each source in each window, all
+groups included, or a repeat when a write stops after the notification or two
+writes race. The limits count the removals of each source on its own, so
+removals that are spread across providers do not add up. A marker with a time
+after the removal counts as no marker, and the server writes an audit entry
+with the code `principal.removal-alert-marker-invalid`.
 
 When the alert cannot be written, the sign-in goes on, the server writes an
 ERROR log line and an audit entry of the failed alert, and it tries the alert

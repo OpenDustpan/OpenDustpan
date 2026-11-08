@@ -256,8 +256,16 @@ func newSignInService(in signInServiceInputs) (*signinsvc.Service, error) {
 	}
 
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: in.principals, Disabler: records, Generations: generations, Sessions: in.sessions,
-		Audit: in.audit, TempAdmins: tempAdmins, Groups: nil, Removals: removals, States: generations, Logger: in.logger,
+		Principals:     in.principals,
+		Disabler:       records,
+		Generations:    generations,
+		Sessions:       in.sessions,
+		Audit:          in.audit,
+		TempAdmins:     tempAdmins,
+		Groups:         nil,
+		Removals:       removals,
+		States:         generations,
+		Logger:         in.logger,
 		OnAuditFailure: in.onAuditFailure,
 	})
 	if err != nil {

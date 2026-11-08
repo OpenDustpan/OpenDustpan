@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/removalalertsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -536,6 +537,196 @@ func TestRecordNoSecondAlertInTheWindow(t *testing.T) {
 
 	if got := len(f.outbox.stored()); got != 1 {
 		t.Fatalf("alerts above the limit in the same window = %d, want 1", got)
+	}
+}
+
+// TestRecordFutureMarkerDoesNotSilenceTheAlert proves that a marker one year
+// after the removal counts as no marker: the source alerts once, the server
+// writes the entry of the bad marker and the WARN line, and the alert writes
+// its own marker at the time of the removal.
+func TestRecordFutureMarkerDoesNotSilenceTheAlert(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+
+	future := testAt().Add(365 * 24 * time.Hour)
+	f.setMarker(idpSource(), future)
+
+	f.record(t, f.service(t), idpSource(), "grp-a", 3)
+
+	notes := f.outbox.stored()
+	if len(notes) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(notes))
+	}
+
+	if notes[0].Type != notify.MembershipMassRemoval {
+		t.Fatalf("alert type = %q, want the mass removal alert", notes[0].Type)
+	}
+
+	var invalid, alerts []audit.Entry
+
+	for _, entry := range f.audit.stored() {
+		if entry.Reason == errcode.PrincipalRemovalAlertMarkerInvalid {
+			invalid = append(invalid, entry)
+		} else {
+			alerts = append(alerts, entry)
+		}
+	}
+
+	if len(invalid) != 1 {
+		t.Fatalf("entries of the invalid marker = %d, want 1", len(invalid))
+	}
+
+	if len(alerts) != 1 {
+		t.Fatalf("entries of the alert = %d, want 1", len(alerts))
+	}
+
+	checkInvalidMarkerEntry(t, invalid[0], future, testAt())
+	checkInvalidMarkerWarning(t, f, future, testAt())
+
+	if marker := f.log.alerted(idpSource()); !marker.Equal(testAt()) {
+		t.Fatalf("alert marker = %s, want %s", marker, testAt())
+	}
+}
+
+// checkInvalidMarkerEntry fails unless e is the security entry of the bad
+// marker of idp-1, with the source, the marker time and the removal time.
+func checkInvalidMarkerEntry(t *testing.T, e audit.Entry, marker, at time.Time) {
+	t.Helper()
+
+	if e.Namespace != audit.ServerScope || e.Subject != "identity-provider:idp-1" ||
+		e.Action != principal.AuditActionMassRemovalAlert || e.Object != "group:grp-a" {
+		t.Fatalf("audit entry = %+v, want the bad marker of the source and the group", e)
+	}
+
+	if e.Kind != audit.KindSecurity || e.Outcome != audit.OutcomeFailure {
+		t.Fatalf("audit entry kind, outcome = %q, %q, want security, failure", e.Kind, e.Outcome)
+	}
+
+	changes := make(map[string]string, len(e.Changes))
+	for _, change := range e.Changes {
+		changes[change.Key] = change.New
+	}
+
+	want := map[string]string{
+		"source.kind": "identity-provider", "source.id": "idp-1",
+		"alerted_at": marker.UTC().Format(time.RFC3339Nano), "at": at.UTC().Format(time.RFC3339Nano),
+	}
+	if len(changes) != len(want) {
+		t.Fatalf("audit changes = %+v, want the source and the two times", e.Changes)
+	}
+
+	for key, value := range want {
+		if changes[key] != value {
+			t.Fatalf("audit change %s = %q, want %q", key, changes[key], value)
+		}
+	}
+}
+
+// checkInvalidMarkerWarning fails unless the log holds the one WARN line of
+// the bad marker, with the source, the marker time and the removal time.
+func checkInvalidMarkerWarning(t *testing.T, f *fixture, marker, at time.Time) {
+	t.Helper()
+
+	warnings := f.logs.warnings("after the time of the removal")
+	if len(warnings) != 1 {
+		t.Fatalf("WARN lines of the bad marker = %d, want 1", len(warnings))
+	}
+
+	attrs := make(map[string]string, warnings[0].NumAttrs())
+	warnings[0].Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+
+		return true
+	})
+
+	want := map[string]string{
+		"code": errcode.PrincipalRemovalAlertMarkerInvalid, "source_kind": "identity-provider", "source_id": "idp-1",
+		"alerted_at": marker.UTC().Format(time.RFC3339Nano), "at": at.UTC().Format(time.RFC3339Nano),
+	}
+
+	for key, value := range want {
+		if attrs[key] != value {
+			t.Fatalf("WARN attribute %s = %q, want %q", key, attrs[key], value)
+		}
+	}
+}
+
+// TestRecordMarkerAtTheRemovalTimeSilencesTheWindow proves that a marker equal
+// to the time of the removal is a marker of this window: no alert and no entry
+// of a bad marker.
+func TestRecordMarkerAtTheRemovalTimeSilencesTheWindow(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+	f.setMarker(idpSource(), testAt())
+
+	f.record(t, f.service(t), idpSource(), "grp-a", 2)
+
+	if got := len(f.outbox.stored()); got != 0 {
+		t.Fatalf("alerts = %d, want 0", got)
+	}
+
+	if got := len(f.audit.stored()); got != 0 {
+		t.Fatalf("audit entries = %d, want 0", got)
+	}
+
+	if marker := f.log.alerted(idpSource()); !marker.Equal(testAt()) {
+		t.Fatalf("alert marker = %s, want %s", marker, testAt())
+	}
+}
+
+// TestRecordFutureMarkerBelowTheLimitWritesNoEntry proves that the service
+// reads the marker only when a limit is reached: a removal below the limit
+// writes no entry of a bad marker.
+func TestRecordFutureMarkerBelowTheLimitWritesNoEntry(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+	f.setMarker(idpSource(), testAt().Add(365*24*time.Hour))
+
+	f.record(t, f.service(t), idpSource(), "grp-a", 1)
+
+	if got := len(f.audit.stored()); got != 0 {
+		t.Fatalf("audit entries = %d, want 0", got)
+	}
+
+	if got := len(f.logs.warnings("after the time of the removal")); got != 0 {
+		t.Fatalf("WARN lines of the bad marker = %d, want 0", got)
+	}
+}
+
+// TestRecordFutureMarkerAuditFailureWritesNoAlert proves that the service
+// fails closed when the entry of the bad marker cannot be written: Record
+// returns the error, and no alert and no marker are written.
+func TestRecordFutureMarkerAuditFailureWritesNoAlert(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture()
+	f.limits = principal.RemovalAlertLimits{Count: 2, Percent: 20, Window: 15 * time.Minute}
+
+	future := testAt().Add(365 * 24 * time.Hour)
+	f.setMarker(idpSource(), future)
+	svc := f.service(t)
+
+	f.record(t, svc, idpSource(), "grp-a", 1)
+
+	f.audit.err = errAudit
+
+	err := svc.Record(t.Context(), idpSource(), []string{"grp-a"})
+	if !errors.Is(err, errAudit) {
+		t.Fatalf("Record() = %v, want the audit error", err)
+	}
+
+	if got := len(f.outbox.stored()); got != 0 {
+		t.Fatalf("alerts = %d, want 0", got)
+	}
+
+	if marker := f.log.alerted(idpSource()); !marker.Equal(future) {
+		t.Fatalf("alert marker = %s, want the unchanged %s", marker, future)
 	}
 }
 
