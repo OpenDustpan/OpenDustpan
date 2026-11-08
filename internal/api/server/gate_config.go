@@ -641,6 +641,8 @@ func classifyGateConfig(err error) (failure, bool) {
 		return classifyApprovers(err)
 	case errors.Is(err, gate.ErrLimit):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimit), true
+	case errors.Is(err, gate.ErrLimitMembership):
+		return failCoded(http.StatusBadRequest, gate.ErrLimitMembership.Error(), errcode.GateLimitMembership), true
 	case errors.Is(err, gate.ErrInvalid):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateInvalid), true
 	case errors.Is(err, gate.ErrUnavailable):

@@ -1346,6 +1346,8 @@ func backupModel() costModel {
 // The fixed part also holds blobDeleteLeaseTrips: the waits for the blob
 // deleters.
 //
+// The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
+//
 // The fixed part also holds stagedJobCheckTrips: the staged check of the job
 // rows reads the job rows of the staging schema in one statement, once for
 // each restore.
@@ -1354,7 +1356,8 @@ func backupModel() costModel {
 // table of Tables that the dev strip never counts either.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips + stagedJobCheckTrips + removalAlertTrips,
+		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+			removalAlertTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1378,6 +1381,12 @@ const forgeStripClassTrips = 2
 // empties, and it costs 1 round trip, not the 2 of perOther, so the model takes
 // 1 off.
 const blobDeleteLeaseTrips = 3 - 1
+
+// breakGlassReviewTrips is the number of round trips that the restore of the
+// table break_glass_reviews makes fewer than perTable gives. The measured run
+// makes 6 round trips for that table, not 7, at 3 and at 30 units, so the
+// difference does not grow with the units.
+const breakGlassReviewTrips = 1
 
 // stagedJobCheckTrips is the number of round trips of the staged check of the
 // job rows: the check reads the job rows of the staging schema in one

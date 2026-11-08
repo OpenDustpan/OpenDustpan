@@ -362,10 +362,10 @@ func (s *Service) ListGroups(ctx context.Context, req PageRequest) (Page[Group],
 	return pageOf(rows, total, limit, groupKey), nil
 }
 
-// GroupChange names the fields of a group that a change sets. A nil field
+// GroupUpdate names the fields of a group that a change sets. A nil field
 // keeps its value. A change that sets ClosedToIdentityProvider to its
 // current value is not an error.
-type GroupChange struct {
+type GroupUpdate struct {
 	Name        *string
 	Description *string
 	// ClosedToIdentityProvider sets the switch of the group: true closes
@@ -377,11 +377,20 @@ type GroupChange struct {
 // returns the stored group. A change of the switch ClosedToIdentityProvider
 // records the new value in the reason of the entry. A change of the name or
 // the description keeps its entry.
-func (s *Service) UpdateGroup(ctx context.Context, e audit.Entry, id string, c GroupChange) (Group, error) {
+//
+// A rename moves the members of the group from its old name to its new
+// name, so an access limit that names either name can lift for them: the
+// Guard checks the rename. A change of another field names the group as it
+// is, so it keeps the grants check.
+func (s *Service) UpdateGroup(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string, c GroupUpdate,
+) (Group, error) {
 	g, err := s.store.GetGroup(ctx, id)
 	if err != nil {
 		return Group{}, fmt.Errorf("update group %q: %w", id, err)
 	}
+
+	old := g.Name
 
 	if c.Name != nil {
 		g.Name = *c.Name
@@ -408,6 +417,12 @@ func (s *Service) UpdateGroup(ctx context.Context, e audit.Entry, id string, c G
 		return Group{}, err
 	}
 
+	if g.Name != old {
+		if err := s.checkGroup(ctx, caller, id, g.Name, GroupChangeRename); err != nil {
+			return Group{}, fmt.Errorf("update group %q: %w", id, err)
+		}
+	}
+
 	if err := s.store.UpdateGroup(ctx, g, entry); err != nil {
 		return Group{}, fmt.Errorf("update group %q: %w", id, err)
 	}
@@ -427,7 +442,7 @@ const (
 // entry e. The store revokes its grants in the same transaction, so the
 // Guard checks that caller holds every action that they give.
 func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
-	if err := s.checkGroup(ctx, caller, id); err != nil {
+	if err := s.checkGroup(ctx, caller, id, "", GroupChangeDelete); err != nil {
 		return fmt.Errorf("delete group %q: %w", id, err)
 	}
 
@@ -457,7 +472,7 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
-	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+	if err := s.checkGroup(ctx, caller, groupID, "", GroupChangeAddMember); err != nil {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}
 
@@ -513,7 +528,7 @@ func (s *Service) AddMember(
 func (s *Service) RemoveMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) error {
-	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+	if err := s.checkGroup(ctx, caller, groupID, "", GroupChangeRemoveMember); err != nil {
 		return fmt.Errorf("remove principal %q from group %q: %w", principalID, groupID, err)
 	}
 
@@ -784,16 +799,19 @@ func (s *Service) refuseServiceRecord(ctx context.Context, id string) error {
 	return refuseNamespaceServiceSubject(p.Subject)
 }
 
-// checkGroup asks the Guard whether caller may change who holds the grants
-// of the group groupID.
-func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
+// checkGroup asks the Guard whether caller may make the change of the group
+// groupID. newName is the name that the group takes in a rename, and "" for
+// another change.
+func (s *Service) checkGroup(
+	ctx context.Context, caller identity.Principal, groupID, newName string, change GroupChange,
+) error {
 	// Defense in depth: NewService refuses a missing Guard. This check stays so
 	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID)
+		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID, newName, change)
 	}
 
-	return s.guard.CheckGroupGrants(ctx, caller, groupID)
+	return s.guard.CheckGroupGrants(ctx, caller, groupID, newName, change)
 }
 
 // checkPrincipal asks the Guard whether caller may revoke the grants of the
