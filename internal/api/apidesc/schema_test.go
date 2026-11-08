@@ -800,6 +800,11 @@ func TestBuildChecksDeclaredTypeAndRequired(t *testing.T) {
 			declare(map[string]any{"type": []any{"string", 3}}),
 			true,
 		},
+		{
+			"a type list with a name that is not in the subset",
+			declare(map[string]any{"type": []any{"string", "text"}}),
+			true,
+		},
 		{"a misspelled type in a property", declare(property(map[string]any{"type": "strnig"})), true},
 		{"a type that is not a string in a property", declare(property(map[string]any{"type": 5})), true},
 		{
