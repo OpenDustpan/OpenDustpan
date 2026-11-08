@@ -121,7 +121,7 @@ type limitDoc struct {
 	PercentAbove int `json:"percentAbove"`
 }
 
-// restoreDoc is the part of the answer of GET /api/server/restores/{id} that
+// restoreDoc is the part of the answer of GET /api/dustpan/v1/restores/{id} that
 // these tests read.
 type restoreDoc struct {
 	ID               string              `json:"id"`
@@ -137,7 +137,7 @@ type restoreDoc struct {
 func startRestore(t *testing.T, c *servertest.Cluster, backupID string) string {
 	t.Helper()
 
-	status, body := c.Do(t, 0, http.MethodPost, "/api/server/restores", `{"backupID":"`+backupID+`"}`)
+	status, body := c.Do(t, 0, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID+`"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("start restore: status %d, body %s", status, body)
 	}
@@ -158,7 +158,7 @@ func runRestore(t *testing.T, c *servertest.Cluster, backupID string) restoreDoc
 	deadline := time.Now().Add(restoreLimit)
 
 	for time.Now().Before(deadline) {
-		status, body := c.Do(t, 0, http.MethodGet, "/api/server/restores/"+id, "")
+		status, body := c.Do(t, 0, http.MethodGet, "/api/dustpan/v1/restores/"+id, "")
 		if status != http.StatusOK {
 			t.Fatalf("read restore %s: status %d, body %s", id, status, body)
 		}

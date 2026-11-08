@@ -16,7 +16,7 @@ import (
 
 // cancelPath returns the cancel route of the restore id.
 func cancelPath(id string) string {
-	return "/api/server/restores/" + id + "/cancel"
+	return "/api/dustpan/v1/restores/" + id + "/cancel"
 }
 
 // TestCancelRestoreBeforeTheSwap proves that a cancel before the swap answers

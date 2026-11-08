@@ -302,7 +302,7 @@ type startBackupDoc struct {
 func startBackup(t *testing.T, handler testHandler) string {
 	t.Helper()
 
-	status, body := serveBackup(t, handler, http.MethodPost, "/api/server/backups")
+	status, body := serveBackup(t, handler, http.MethodPost, "/api/dustpan/v1/backups")
 	if status != http.StatusAccepted {
 		t.Fatalf("POST backups answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
@@ -344,7 +344,7 @@ type backupManifest struct {
 func readBackup(t *testing.T, handler testHandler, id string) getBackupDoc {
 	t.Helper()
 
-	status, body := serveBackup(t, handler, http.MethodGet, "/api/server/backups/"+id)
+	status, body := serveBackup(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+id)
 	if status != http.StatusOK {
 		t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
 	}
@@ -410,7 +410,7 @@ func TestBackupRoutesDeclareServerBackup(t *testing.T) {
 	var routes []apiserver.Route
 
 	for _, route := range handler.Routes() {
-		if strings.HasPrefix(route.Path, "/api/server/backups") {
+		if strings.HasPrefix(route.Path, "/api/dustpan/v1/backups") {
 			routes = append(routes, route)
 		}
 	}
@@ -502,7 +502,7 @@ func TestBackupSecondStartConflicts(t *testing.T) {
 	id := startBackup(t, fix.handler)
 	waitGateEntered(t, gate)
 
-	status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/server/backups")
+	status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups")
 	if status != http.StatusConflict {
 		t.Fatalf("second POST answers %d, want %d (%s)", status, http.StatusConflict, body)
 	}
@@ -528,10 +528,10 @@ func TestBackupNeedsToken(t *testing.T) {
 	paths := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups/" + string(testBackupID)},
-		{http.MethodGet, "/api/server/backups/" + string(testBackupID) + "/check"},
+		{http.MethodPost, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups/" + string(testBackupID)},
+		{http.MethodGet, "/api/dustpan/v1/backups/" + string(testBackupID) + "/check"},
 	}
 
 	for _, tc := range paths {
@@ -554,7 +554,7 @@ func TestBackupGetMissing(t *testing.T) {
 
 	fix := quickBackupFixture(t, nil)
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups/bkp-missing000000000001")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001")
 	if status != http.StatusNotFound {
 		t.Fatalf("GET missing backup answers %d, want %d (%s)", status, http.StatusNotFound, body)
 	}
@@ -591,7 +591,7 @@ func TestBackupListNewestFirst(t *testing.T) {
 	second := startBackup(t, fix.handler)
 	pollBackupSucceeded(t, fix.handler, second)
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups")
 	if status != http.StatusOK {
 		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -668,10 +668,10 @@ func TestBackupWithoutTarget(t *testing.T) {
 	paths := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups/bkp-missing000000000001"},
-		{http.MethodGet, "/api/server/backups/bkp-missing000000000001/check"},
+		{http.MethodPost, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001"},
+		{http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001/check"},
 	}
 
 	for _, tc := range paths {

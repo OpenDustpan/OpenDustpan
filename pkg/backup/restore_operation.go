@@ -160,7 +160,7 @@ package backup
 // error as permanent. Any other error of a step is a retry with backoff, as
 // for every durable operation.
 //
-// RestoreService.Cancel, and the route POST /api/server/restores/{id}/cancel,
+// RestoreService.Cancel, and the route POST /api/dustpan/v1/restores/{id}/cancel,
 // go through durable.StepCanceler.CancelBefore with the swap step: before the
 // swap it stops the operation, and the swap transaction refuses to commit
 // after it. After the swap it changes nothing, and the answer is

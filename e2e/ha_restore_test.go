@@ -74,7 +74,7 @@ func haWaitRestoreClaim(ctx context.Context, t *testing.T, conn *pgx.Conn) haRes
 func haStartRestore(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/restores", `{"backupID":"`+id+`"}`)
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`)
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("POST restores answers %d: %v (%s)", status, err, body)
 	}
@@ -95,7 +95,7 @@ func haWaitRestoreSucceeded(ctx context.Context, t *testing.T, env *e2e.Env, id 
 	t.Helper()
 
 	for time.Now().Before(deadline) {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/restores/"+id, "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/restores/"+id, "")
 		if err == nil && status == http.StatusOK {
 			var doc restoreStateDoc
 

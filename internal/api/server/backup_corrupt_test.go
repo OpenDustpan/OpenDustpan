@@ -78,7 +78,7 @@ func TestGetBackupCorruptManifest(t *testing.T) {
 
 			_, check := readBackupCheck(t, held.fixture, id)
 
-			status, body := serveBackup(t, held.fixture.handler, http.MethodGet, "/api/server/backups/"+id)
+			status, body := serveBackup(t, held.fixture.handler, http.MethodGet, "/api/dustpan/v1/backups/"+id)
 			if status != http.StatusConflict {
 				t.Fatalf("GET backup %s answers %d, want %d: %s", id, status, http.StatusConflict, body)
 			}
@@ -124,7 +124,7 @@ func TestInternalErrorLogNamesTheCause(t *testing.T) {
 
 			var buf bytes.Buffer
 
-			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/backups/x", http.NoBody)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/backups/x", http.NoBody)
 			rec := httptest.NewRecorder()
 			apiserver.WriteErrorLogForTest(rec, r, tc.err, slog.New(slog.NewTextHandler(&buf, nil)))
 

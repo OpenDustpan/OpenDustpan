@@ -8,7 +8,9 @@ import type {
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
+  CancelRestoreInput,
   ChangeOwnPasswordInput,
+  CheckBackupInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
   CreateCollectionInput,
@@ -57,6 +59,7 @@ import type {
   GetApiDescriptionInput,
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
+  GetBackupInput,
   GetBlueprintDraftInput,
   GetBlueprintVersionInput,
   GetCapabilitiesInput,
@@ -85,6 +88,7 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetRestoreInput,
   GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
@@ -101,6 +105,7 @@ import type {
   GetViewInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
+  ListBackupsInput,
   ListBlueprintsInput,
   ListCollectionAccessLimitsInput,
   ListCollectionGatesInput,
@@ -123,6 +128,7 @@ import type {
   ListRegistryKeysInput,
   ListRegistryModulesInput,
   ListRegistryProvidersInput,
+  ListRestoresInput,
   ListStoreChecksInput,
   ListTrustRulesInput,
   ListUnitAccessLimitsInput,
@@ -164,8 +170,10 @@ import type {
   SetUnitGateInput,
   SignInWithPasswordInput,
   StageRegistryUploadInput,
+  StartBackupInput,
   StartDriftCheckInput,
   StartJobInput,
+  StartRestoreInput,
   StartStoreCheckInput,
   TestNotificationSinkInput,
   UnlockCollectionInput,
@@ -190,13 +198,18 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupManifest,
+  BackupSummary,
+  BlobFindings,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
+  CheckBackupResponse,
   Collection,
   ContextAnswer,
   ContextDocument,
@@ -223,7 +236,9 @@ import type {
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  DamagedBlob,
   DeletedUnit,
+  DevData,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -240,6 +255,8 @@ import type {
   GateApproversCountAboveError,
   GateApproversCountAboveErrorArgs,
   GateCheckedWith,
+  GetBackupResponse,
+  GetRestoreResponse,
   GitHostAccount,
   GitHostApp,
   GitHostCheck,
@@ -273,6 +290,7 @@ import type {
   JobUnitRequest,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
+  ListBackupsResponse,
   ListCollectionsResponse,
   ListDeletedUnitsResponse,
   ListGatesResponse,
@@ -292,6 +310,7 @@ import type {
   ListRegistryKeysResponse,
   ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
+  ListRestoresResponse,
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -307,9 +326,11 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  ManifestBlob,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
+  MissingBlobLimit,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -333,6 +354,7 @@ import type {
   PasswordTooShortErrorArgs,
   PlacementRule,
   PlacementRuleRequest,
+  PortableFile,
   Preferences,
   PreferencesFieldInvalidError,
   PreferencesFieldInvalidErrorArgs,
@@ -362,8 +384,10 @@ import type {
   ResetLocalUserPasswordResponse,
   RestoreEndedError,
   RestoreEndedErrorArgs,
+  RestoreSummary,
   RestoreSwappedError,
   RestoreSwappedErrorArgs,
+  RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -414,8 +438,11 @@ import type {
   StackRevealPathTooLongError,
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
+  StartBackupResponse,
   StartDriftCheckRequest,
   StartJobRequest,
+  StartRestoreRequest,
+  StartRestoreResponse,
   StartStoreCheckRequest,
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
@@ -508,8 +535,16 @@ export class Client {
     return execute(this.transport, operations.bulkReplaceUnitSettings, input);
   }
 
+  cancelRestore(input: CancelRestoreInput): Promise<Answer<CancelRestoreResponse>> {
+    return execute(this.transport, operations.cancelRestore, input);
+  }
+
   changeOwnPassword(input: ChangeOwnPasswordInput): Promise<Answer<void>> {
     return execute(this.transport, operations.changeOwnPassword, input);
+  }
+
+  checkBackup(input: CheckBackupInput): Promise<Answer<CheckBackupResponse>> {
+    return execute(this.transport, operations.checkBackup, input);
   }
 
   checkGitHostConnection(input: CheckGitHostConnectionInput): Promise<Answer<GitHostCheck>> {
@@ -704,6 +739,10 @@ export class Client {
     return execute(this.transport, operations.getApprovalRule, input);
   }
 
+  getBackup(input: GetBackupInput): Promise<Answer<GetBackupResponse>> {
+    return execute(this.transport, operations.getBackup, input);
+  }
+
   getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
     return execute(this.transport, operations.getBlueprintDraft, input);
   }
@@ -816,6 +855,10 @@ export class Client {
     return execute(this.transport, operations.getProviderRelease, input);
   }
 
+  getRestore(input: GetRestoreInput): Promise<Answer<GetRestoreResponse>> {
+    return execute(this.transport, operations.getRestore, input);
+  }
+
   getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getSettings, input);
   }
@@ -878,6 +921,10 @@ export class Client {
 
   listApprovalRules(input: ListApprovalRulesInput): Promise<Answer<ListApprovalRulesResponse>> {
     return execute(this.transport, operations.listApprovalRules, input);
+  }
+
+  listBackups(input: ListBackupsInput = {}): Promise<Answer<ListBackupsResponse>> {
+    return execute(this.transport, operations.listBackups, input);
   }
 
   listBlueprints(input: ListBlueprintsInput): Promise<Answer<SelfServiceVersionList>> {
@@ -966,6 +1013,10 @@ export class Client {
 
   listRegistryProviders(input: ListRegistryProvidersInput): Promise<Answer<ListRegistryProvidersResponse>> {
     return execute(this.transport, operations.listRegistryProviders, input);
+  }
+
+  listRestores(input: ListRestoresInput = {}): Promise<Answer<ListRestoresResponse>> {
+    return execute(this.transport, operations.listRestores, input);
   }
 
   listStoreChecks(input: ListStoreChecksInput = {}): Promise<Answer<ListStoreChecksResponse>> {
@@ -1132,12 +1183,20 @@ export class Client {
     return execute(this.transport, operations.stageRegistryUpload, input);
   }
 
+  startBackup(input: StartBackupInput = {}): Promise<Answer<StartBackupResponse>> {
+    return execute(this.transport, operations.startBackup, input);
+  }
+
   startDriftCheck(input: StartDriftCheckInput): Promise<Answer<DriftCheck>> {
     return execute(this.transport, operations.startDriftCheck, input);
   }
 
   startJob(input: StartJobInput): Promise<Answer<Job>> {
     return execute(this.transport, operations.startJob, input);
+  }
+
+  startRestore(input: StartRestoreInput): Promise<Answer<StartRestoreResponse>> {
+    return execute(this.transport, operations.startRestore, input);
   }
 
   startStoreCheck(input: StartStoreCheckInput): Promise<Answer<StartStoreCheckResponse>> {

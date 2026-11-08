@@ -233,7 +233,7 @@ type startRestoreDoc struct {
 func startRestore(t *testing.T, handler testHandler, body string) startRestoreDoc {
 	t.Helper()
 
-	status, resp := serveRestore(t, handler, http.MethodPost, "/api/server/restores", body)
+	status, resp := serveRestore(t, handler, http.MethodPost, "/api/dustpan/v1/restores", body)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusAccepted, resp)
 	}
@@ -271,7 +271,7 @@ func waitRestoreState(t *testing.T, handler testHandler, id, want string) getRes
 	defer cancel()
 
 	for ctx.Err() == nil {
-		status, body := serveRestore(t, handler, http.MethodGet, "/api/server/restores/"+id, "")
+		status, body := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores/"+id, "")
 
 		if status != http.StatusOK {
 			select {
@@ -323,9 +323,9 @@ func TestRestoreRoutesDeclareRestoreAction(t *testing.T) {
 	handler := newTestHandler(t)
 
 	paths := map[string]bool{
-		"POST /api/server/restores":     false,
-		"GET /api/server/restores":      false,
-		"GET /api/server/restores/{id}": false,
+		"POST /api/dustpan/v1/restores":     false,
+		"GET /api/dustpan/v1/restores":      false,
+		"GET /api/dustpan/v1/restores/{id}": false,
 	}
 
 	for _, route := range handler.Routes() {
@@ -419,7 +419,7 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	)
 
 	status, startBody := serveRestore(
-		t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
 	)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusAccepted, startBody)
@@ -439,7 +439,7 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 		t,
 		fix.handler,
 		http.MethodPost,
-		"/api/server/restores",
+		"/api/dustpan/v1/restores",
 		`{"backupID":"bkp-other00000000000002"}`,
 	)
 	if status != http.StatusConflict {
@@ -478,7 +478,7 @@ func TestStartRestoreCheckOnlyAnswersAccepted(t *testing.T) {
 		t,
 		fix.handler,
 		http.MethodPost,
-		"/api/server/restores",
+		"/api/dustpan/v1/restores",
 		`{"backupID":"bkp-missing000000000001","checkOnly":true}`,
 	)
 	if status != http.StatusAccepted {
@@ -509,7 +509,7 @@ func TestStartRestoreBadBodyAnswers400(t *testing.T) {
 	fix := newRestoreFixture(t)
 
 	for _, body := range []string{"", "{}", `{"backupID":""}`} {
-		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", body)
+		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", body)
 		if status != http.StatusBadRequest {
 			t.Fatalf("POST restores with %q answers %d, want %d (%s)", body, status, http.StatusBadRequest, resp)
 		}
@@ -529,14 +529,14 @@ func TestStartRestoreUnknownFieldAnswers400(t *testing.T) {
 		t,
 		fix.handler,
 		http.MethodPost,
-		"/api/server/restores",
+		"/api/dustpan/v1/restores",
 		`{"backupID":"bkp-missing000000000001","target":"dir:/evil"}`,
 	)
 	if status != http.StatusBadRequest {
 		t.Fatalf("POST restores with a target field answers %d, want %d (%s)", status, http.StatusBadRequest, resp)
 	}
 
-	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if listStatus != http.StatusOK {
 		t.Fatalf("GET restores answers %d, want %d (%s)", listStatus, http.StatusOK, listBody)
 	}
@@ -560,7 +560,7 @@ func TestGetRestoreMissingAnswers404(t *testing.T) {
 
 	fix := newRestoreFixture(t)
 
-	status, body := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores/rst-missing000000000001", "")
+	status, body := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores/rst-missing000000000001", "")
 	if status != http.StatusNotFound {
 		t.Fatalf("GET missing restore answers %d, want %d (%s)", status, http.StatusNotFound, body)
 	}
@@ -606,7 +606,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	t.Parallel()
 
 	fix := newRestoreFixture(t)
-	unknown := "/api/server/restores/rst-missing000000000001"
+	unknown := "/api/dustpan/v1/restores/rst-missing000000000001"
 
 	status, body := serveRestoreNoAuth(t, fix.handler, http.MethodGet, unknown, "")
 	if status != http.StatusUnauthorized {
@@ -696,7 +696,7 @@ func TestListRestoresAnswersNewestFirst(t *testing.T) {
 
 	doc := startRestore(t, fix.handler, `{"backupID":"bkp-missing000000000001"}`)
 
-	status, body := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	status, body := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if status != http.StatusOK {
 		t.Fatalf("GET restores answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -778,7 +778,7 @@ type listBackupIDsDoc struct {
 func assertPreBackupSurvivesRestore(t *testing.T, handler testHandler, preBackupID string) {
 	t.Helper()
 
-	preStatus, preBody := serveRestore(t, handler, http.MethodGet, "/api/server/backups/"+preBackupID, "")
+	preStatus, preBody := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+preBackupID, "")
 	if preStatus != http.StatusOK {
 		t.Fatalf("GET pre-backup %s answers %d, want %d (%s)",
 			preBackupID, preStatus, http.StatusOK, preBody)
@@ -798,7 +798,7 @@ func assertPreBackupSurvivesRestore(t *testing.T, handler testHandler, preBackup
 		t.Fatalf("pre-backup state = %q, want succeeded", pre.State)
 	}
 
-	listStatus, listBody := serveRestore(t, handler, http.MethodGet, "/api/server/backups", "")
+	listStatus, listBody := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/backups", "")
 	if listStatus != http.StatusOK {
 		t.Fatalf("GET backups answers %d, want %d (%s)", listStatus, http.StatusOK, listBody)
 	}
@@ -881,9 +881,9 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	for _, target := range []struct{ method, path, body string }{
-		{http.MethodPost, "/api/server/restores", `{"backupID":"bkp-x"}`},
-		{http.MethodGet, "/api/server/restores", ""},
-		{http.MethodGet, "/api/server/restores/rst-x", ""},
+		{http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-x"}`},
+		{http.MethodGet, "/api/dustpan/v1/restores", ""},
+		{http.MethodGet, "/api/dustpan/v1/restores/rst-x", ""},
 	} {
 		status, body := serveRestore(t, handler, target.method, target.path, target.body)
 		if status != http.StatusServiceUnavailable {
@@ -1262,7 +1262,7 @@ func TestStartRestoreRefusesADevBackupWith409(t *testing.T) {
 		`{"backupID":"` + backupID.String() + `"}`,
 		`{"backupID":"` + backupID.String() + `","checkOnly":true}`,
 	} {
-		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", body)
+		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", body)
 		if status != http.StatusConflict {
 			t.Fatalf("POST restores %s answers %d, want 409 (%s)", body, status, resp)
 		}
@@ -1274,7 +1274,7 @@ func TestStartRestoreRefusesADevBackupWith409(t *testing.T) {
 		}
 	}
 
-	status, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	status, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if status != http.StatusOK || strings.Contains(listBody, backupID.String()) {
 		t.Fatalf("restores list = %d %s, want no row for the refused backup", status, listBody)
 	}
@@ -1294,7 +1294,7 @@ func TestRestoreAnswersCarryWarnings(t *testing.T) {
 	}
 
 	status, resp := serveRestore(
-		t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"`+backupID.String()+`"}`,
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID.String()+`"}`,
 	)
 	if status != http.StatusAccepted || !strings.Contains(resp, `"warnings":[]`) {
 		t.Fatalf("POST restores = %d %s, want 202 with an empty warnings list", status, resp)
@@ -1307,12 +1307,12 @@ func TestRestoreAnswersCarryWarnings(t *testing.T) {
 
 	waitRestoreState(t, fix.handler, doc.ID, "succeeded")
 
-	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores/"+doc.ID, "")
+	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores/"+doc.ID, "")
 	if status != http.StatusOK || !strings.Contains(resp, `"warnings":[]`) || strings.Contains(resp, "devData") {
 		t.Fatalf("GET restore = %d %s, want an empty warnings list and no dev data", status, resp)
 	}
 
-	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if status != http.StatusOK || !strings.Contains(resp, `"warnings":[]`) {
 		t.Fatalf("GET restores = %d %s, want a warnings list in each row", status, resp)
 	}
@@ -1351,13 +1351,15 @@ func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
 	const want = "invalid backup ID: use an ID that opendustpan backup printed"
 
 	for _, id := range []string{"../x", "bkp-a/b", "x"} {
-		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"`+id+`"}`)
+		status, resp := serveRestore(
+			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+		)
 		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
 			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
 		}
 	}
 
-	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
 		t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
 	}
@@ -1378,14 +1380,14 @@ func TestStartRestoreBodyTooLarge(t *testing.T) {
 	const head = `{"backupID":"bkp-missing000000000001"}`
 
 	exact := head + strings.Repeat(" ", limit-len(head))
-	status, body := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", exact)
+	status, body := serveRestore(t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", exact)
 	if status == http.StatusRequestEntityTooLarge {
 		t.Fatalf("body of %d bytes = %d %s, want it read", limit, status, body)
 	}
 
 	over := head + strings.Repeat(" ", limit-len(head)+1)
 
-	status, body = serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", over)
+	status, body = serveRestore(t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", over)
 	if status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("body of %d bytes = %d %s, want 413", limit+1, status, body)
 	}

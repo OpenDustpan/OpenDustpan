@@ -4,11 +4,11 @@ package server
 // list the backups this installation made, read one backup with its
 // manifest, and check a backup in the configured target.
 //
-// POST /api/server/backups starts a backup in the background and answers 202
-// with the ID. Only one backup runs at a time; a second start answers 409.
-// GET /api/server/backups lists the rows of the backups table, newest first.
-// GET /api/server/backups/{id} answers the state (running, succeeded or
-// failed) and, when the backup succeeded, the manifest.
+// POST /api/dustpan/v1/backups starts a backup in the background and answers
+// 202 with the ID. Only one backup runs at a time; a second start answers 409.
+// GET /api/dustpan/v1/backups lists the rows of the backups table, newest
+// first. GET /api/dustpan/v1/backups/{id} answers the state (running,
+// succeeded or failed) and, when the backup succeeded, the manifest.
 //
 // All four need the action server:backup on the installation (@server). The
 // target comes only from the backup service the server was wired with: no
@@ -26,6 +26,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// The paths of the backup routes.
+const (
+	backupsPath     = "/api/dustpan/v1/backups"
+	backupPath      = "/api/dustpan/v1/backups/{id}"
+	backupCheckPath = "/api/dustpan/v1/backups/{id}/check"
+)
+
 // errNoBackupTarget reports a backup route on a server with no backup target.
 // The target is a server setting (--backup-target), so without it no backup
 // can run.
@@ -35,7 +42,8 @@ var errNoBackupTarget = errors.New("no backup target is configured")
 const backupIDPrefix = "bkp-"
 
 // startBackupResponse answers a started backup: its ID. The backup runs in
-// the background; poll GET /api/server/backups/{id} until it leaves running.
+// the background; poll GET /api/dustpan/v1/backups/{id} until it leaves
+// running.
 type startBackupResponse struct {
 	ID string `json:"id"`
 }
@@ -224,8 +232,8 @@ type checkBackupResponse struct {
 // backup answers 200 with complete true. A backup the target holds
 // incompletely answers 200 with complete false and the first missing or
 // short object by key, so the command prints it and exits 1. An ID with no
-// backup row answers 404 like GET /api/server/backups/{id}: callers can tell
-// unknown from corrupt. A malformed ID answers 400. A storage failure
+// backup row answers 404 like GET /api/dustpan/v1/backups/{id}: callers can
+// tell unknown from corrupt. A malformed ID answers 400. A storage failure
 // answers 500.
 func (h *Handler) checkBackup(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()

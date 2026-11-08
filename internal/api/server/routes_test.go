@@ -734,7 +734,7 @@ var routeBodies = map[string]string{
 	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
 	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
 	"POST /api/dustpan/v1/local-users/unlock":                  `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
-	"POST /api/server/restores": `{"backupID":"` + string(
+	"POST /api/dustpan/v1/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
 	"POST /api/server/principals":                                             `{"subject":"bob","kind":"person"}`,
@@ -1074,7 +1074,7 @@ func probeRoute(t *testing.T, handler testHandler, route apiserver.Route) {
 // check for a route of that family, and an empty text for any other route.
 func seededOperationID(path string) string {
 	switch {
-	case strings.HasPrefix(path, "/api/server/restores"):
+	case strings.HasPrefix(path, "/api/dustpan/v1/restores"):
 		return string(testRestoreID)
 	case strings.HasPrefix(path, "/api/dustpan/v1/store-checks"):
 		return string(testStoreCheckID)
@@ -1282,10 +1282,11 @@ func freshAuthRoutes() []string {
 
 // wantSuccessStatus answers the success status of route: a route in
 // freshAuthRoutes answers 403 to an access token, POST
-// /api/server/backups and POST /api/server/restores start work in the
-// background and answer 202, POST /api/server/restores/{id}/cancel answers 202
-// for the seed restore that a cancel already stopped, POST /api/server/namespaces creates a namespace
-// and answers 201, every other route answers 200.
+// /api/dustpan/v1/backups and POST /api/dustpan/v1/restores start work in the
+// background and answer 202, POST /api/dustpan/v1/restores/{id}/cancel
+// answers 202 for the seed restore that a cancel already stopped, POST
+// /api/server/namespaces creates a namespace and answers 201, every other
+// route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if slices.Contains(freshAuthRoutes(), route.Method+" "+route.Path) {
 		// An access token never gives a fresh authentication.
@@ -1299,7 +1300,7 @@ func wantSuccessStatus(route apiserver.Route) int {
 // the background and answers 202.
 func startsInBackground(path string) bool {
 	return slices.Contains([]string{
-		"/api/server/backups", "/api/server/restores", "/api/server/restores/{id}/cancel",
+		"/api/dustpan/v1/backups", "/api/dustpan/v1/restores", "/api/dustpan/v1/restores/{id}/cancel",
 		"/api/dustpan/v1/store-checks",
 	}, path)
 }

@@ -1,12 +1,17 @@
 package server_test
 
 import (
+	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // checkHeaderFlags runs the check of the header flags for each operation. An
@@ -49,6 +54,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	maps.Copy(scenarios, preferenceScenarios())
 	maps.Copy(scenarios, settingsScenarios())
 	maps.Copy(scenarios, gateObjectScenarios())
+	maps.Copy(scenarios, backupScenarios())
 
 	_, h := newGateHandler(t, adminGates())
 
@@ -199,4 +205,100 @@ func gateObjectScenarios() map[string]headertest.Scenario {
 	}
 
 	return out
+}
+
+// backupScenarios returns the scenarios of the backup and restore write
+// operations for the check of the header flags.
+func backupScenarios() map[string]headertest.Scenario {
+	// send sends one request of a scenario with the extra headers of the
+	// check.
+	send := func(
+		t *testing.T, handler testHandler, method, path, body string, headers map[string]string,
+	) headertest.Answer {
+		t.Helper()
+
+		var reader io.Reader = http.NoBody
+
+		if body != "" {
+			reader = strings.NewReader(body)
+		}
+
+		req := httptest.NewRequestWithContext(t.Context(), method, path, reader)
+		req.Header.Set("Authorization", "Bearer test-token")
+
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+	}
+
+	return map[string]headertest.Scenario{
+		"startBackup": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			fix := quickBackupFixture(t, nil)
+
+			return headertest.Probe{
+				ETag: "",
+				Send: func(headers map[string]string) headertest.Answer {
+					return send(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups", "", headers)
+				},
+				Replayed: nil,
+			}
+		},
+		"startRestore": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			fix := newRestoreFixture(t)
+
+			return headertest.Probe{
+				ETag: "",
+				Send: func(headers map[string]string) headertest.Answer {
+					return send(
+						t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores",
+						`{"backupID":"bkp-missing000000000001"}`, headers,
+					)
+				},
+				Replayed: nil,
+			}
+		},
+		"cancelRestore": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			stores := openBackupDeps(t)
+
+			// The backup runs over the plain target, so the gate of the
+			// restore target only holds the restore: the start of the
+			// restore reads the manifest once, and the restore worker then
+			// waits at the gate before its swap.
+			plain := newRestoreFixtureOver(t, stores, stores.target)
+
+			backupID := backup.ID("bkp-header0000000000001")
+			if _, err := plain.backups.Run(t.Context(), backupID); err != nil {
+				t.Fatalf("run backup %s: %v", backupID, err)
+			}
+
+			gate := make(chan struct{})
+
+			t.Cleanup(func() { close(gate) })
+
+			fix := newRestoreFixtureOver(t, stores, &gatedRestoreTarget{
+				inner: stores.target, gate: gate, reads: atomic.Int32{},
+			})
+
+			doc := startRestore(t, fix.handler, `{"backupID":"`+backupID.String()+`"}`)
+
+			return headertest.Probe{
+				ETag: "",
+				Send: func(headers map[string]string) headertest.Answer {
+					return send(t, fix.handler, http.MethodPost, cancelPath(doc.ID), "", headers)
+				},
+				Replayed: nil,
+			}
+		},
+	}
 }

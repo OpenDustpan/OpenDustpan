@@ -210,6 +210,9 @@ var legacyFieldNames = map[string]string{
 		"because the tagliatelle goCamel rule of the linter demands it.",
 	"objectID": "The error argument of the answer for a replayed secret spells the ID of the object objectID, " +
 		"as the catalog of error codes declares it, and the console reads it.",
+	"backupID": "The backup and restore API spells the ID of a backup backupID, and the CLI and the console read it.",
+	"preBackupID": "The restore API spells the ID of the backup taken before the restore preBackupID, " +
+		"and the CLI and the console read it.",
 }
 
 // LegacyFieldNames returns a copy of the list of wire names that break the

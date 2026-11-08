@@ -461,7 +461,7 @@ func backupCheckBody(t *testing.T, id string, complete bool, checkErr string) st
 func TestBackupCheckComplete(t *testing.T) {
 	const id = "bkp-test00000000000001"
 
-	fake := newCheckFakeServer(t, "/api/server/backups/"+id+"/check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/backups/"+id+"/check",
 		http.StatusOK, backupCheckBody(t, id, true, ""))
 
 	out, err := runBackupCheckCommand(t, fake.server.URL, id)
@@ -483,7 +483,7 @@ func TestBackupCheckCorrupt(t *testing.T) {
 	const id = "bkp-test00000000000001"
 	const missing = "blobs/tofu/ws1/sv1/a1"
 
-	fake := newCheckFakeServer(t, "/api/server/backups/"+id+"/check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/backups/"+id+"/check",
 		http.StatusOK, backupCheckBody(t, id, false, "object "+missing+" is missing"))
 
 	_, err := runBackupCheckCommand(t, fake.server.URL, id)
@@ -504,7 +504,7 @@ func TestBackupCheckCorrupt(t *testing.T) {
 func TestBackupCheckUnknown(t *testing.T) {
 	const id = "bkp-missing000000000001"
 
-	fake := newCheckFakeServer(t, "/api/server/backups/"+id+"/check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/backups/"+id+"/check",
 		http.StatusNotFound, `{"code":404,"message":"backup not found"}`)
 
 	_, err := runBackupCheckCommand(t, fake.server.URL, id)
@@ -521,7 +521,7 @@ func TestBackupCheckUnknown(t *testing.T) {
 func TestBackupCheckOversizedBody(t *testing.T) {
 	const id = "bkp-test00000000000001"
 
-	fake := newCheckFakeServer(t, "/api/server/backups/"+id+"/check",
+	fake := newCheckFakeServer(t, "/api/dustpan/v1/backups/"+id+"/check",
 		http.StatusOK, strings.Repeat("x", maxClientBodyBytes+10))
 
 	_, err := runBackupCheckCommand(t, fake.server.URL, id)

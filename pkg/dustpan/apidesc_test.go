@@ -477,7 +477,6 @@ func TestClassesOfKnownRoutes(t *testing.T) {
 		{"GET /api/v2/ping", classOutside},
 		{"GET /tofu/state/{namespace}/{workspace}", classOutside},
 		{"POST /runner/v1/poll", classOutside},
-		{"GET /api/server/backups", classNotMoved},
 		{"GET /api/server/sign-in/{provider}/callback", classNotMoved},
 		{"GET /api/server/token-policy", classNotMoved},
 		{"GET /api/audit/entries", classNotMoved},

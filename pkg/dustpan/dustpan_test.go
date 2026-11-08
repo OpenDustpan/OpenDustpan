@@ -1307,7 +1307,7 @@ func sendEvilTarget(t *testing.T, base, evil string) {
 	req, err := http.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
-		base+"/api/server/backups?target="+evil,
+		base+"/api/dustpan/v1/backups?target="+evil,
 		strings.NewReader(`{"target":"dir:`+evil+`"}`),
 	)
 	if err != nil {

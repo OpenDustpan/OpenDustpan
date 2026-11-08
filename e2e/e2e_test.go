@@ -11583,7 +11583,7 @@ type backupCheckDoc struct {
 func startBackupForCheck(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if err != nil {
 		t.Fatalf("POST backups: %v", err)
 	}
@@ -11612,7 +11612,7 @@ func startBackupForCheck(ctx context.Context, t *testing.T, env *e2e.Env) string
 func corruptServerBackupTarget(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups/"+id, "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/backups/"+id, "")
 	if err != nil {
 		t.Fatalf("GET backup %s: %v", id, err)
 	}
@@ -11839,7 +11839,7 @@ type backupManifestBlob struct {
 func startBackupAndConflict(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if err != nil {
 		t.Fatalf("POST backups: %v", err)
 	}
@@ -11860,7 +11860,7 @@ func startBackupAndConflict(ctx context.Context, t *testing.T, env *e2e.Env) str
 		t.Fatalf("backup id = %q, want the bkp- prefix", started.ID)
 	}
 
-	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if err != nil {
 		t.Fatalf("second POST backups: %v", err)
 	}
@@ -11897,7 +11897,7 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string)
 	defer timer.Stop()
 
 	for {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups/"+id, "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/backups/"+id, "")
 		if err != nil {
 			t.Fatalf("GET backup %s: %v", id, err)
 		}
@@ -12035,7 +12035,7 @@ func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupS
 func checkBackupList(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/backups", "")
 	if err != nil {
 		t.Fatalf("GET backups: %v", err)
 	}
@@ -12101,9 +12101,9 @@ func checkBackupUnauthorized(ctx context.Context, t *testing.T, env *e2e.Env, id
 	for _, target := range []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups/" + id},
+		{http.MethodPost, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups/" + id},
 	} {
 		status, body, err := env.ServerAPIStatusBare(ctx, target.method, target.path)
 		if err != nil {
@@ -12163,7 +12163,7 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 func checkBackupRestartResumes(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if err != nil {
 		t.Fatalf("POST backups before the restart: %v", err)
 	}
@@ -13361,7 +13361,7 @@ type restoreListDoc struct {
 func restorePreBackupID(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/restores", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if err != nil {
 		t.Fatalf("list restores: %v", err)
 	}

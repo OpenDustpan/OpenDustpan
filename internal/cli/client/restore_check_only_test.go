@@ -24,10 +24,10 @@ func serveRestoreState(t *testing.T, state string) *httptest.Server {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/server/restores":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/dustpan/v1/restores":
 			w.WriteHeader(http.StatusAccepted)
 			write(w, `{"id":"rst-test"}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/server/restores/rst-test":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/dustpan/v1/restores/rst-test":
 			errText := ""
 			if state == "failed" {
 				errText = "backup data is corrupt"
