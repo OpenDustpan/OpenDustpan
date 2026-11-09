@@ -7,7 +7,7 @@ import (
 )
 
 //go:embed queries.sql
-var unitStateQueries []byte
+var unitStateQueries string
 
 // unitStateWritePattern matches a statement that writes to the unit_state
 // table, in any case and with any spacing.
@@ -29,7 +29,7 @@ func TestQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
 func checkQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
 	t.Helper()
 
-	names := queryNamePattern.FindAllSubmatchIndex(unitStateQueries, -1)
+	names := queryNamePattern.FindAllStringSubmatchIndex(unitStateQueries, -1)
 	if len(names) == 0 {
 		t.Fatal("queries.sql holds no query")
 	}
@@ -42,20 +42,20 @@ func checkQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
 			end = names[i+1][0]
 		}
 
-		name := string(unitStateQueries[loc[2]:loc[3]])
+		name := unitStateQueries[loc[2]:loc[3]]
 		query := unitStateQueries[loc[0]:end]
 
 		if name == "PublishUnitState" {
 			published = true
 
-			if !unitStateWritePattern.Match(query) {
+			if !unitStateWritePattern.MatchString(query) {
 				t.Fatal("PublishUnitState does not write unit_state")
 			}
 
 			continue
 		}
 
-		if unitStateWritePattern.Match(query) {
+		if unitStateWritePattern.MatchString(query) {
 			t.Fatalf("query %s writes unit_state, want PublishUnitState only", name)
 		}
 	}
