@@ -1001,15 +1001,19 @@ func writeFinalize(
 
 	// The finalized version is the current state version of the unit. A write
 	// that the workspace allows without a lock is final: it has no release
-	// that marks it, and a write-back job of the unit would never close.
-	atMs, err := storeNow(ctx, q)
-	if err != nil {
-		return err
-	}
+	// that marks it, and a write-back job of the unit would never close. A
+	// write that is not final keeps no time and no origin, so it reads neither.
+	atMs, origin := int64(0), identity.StateOrigin{Job: "", Commit: ""}
+	if row.UnlockedWrite {
+		atMs, err = storeNow(ctx, q)
+		if err != nil {
+			return err
+		}
 
-	origin, err := stateVersionOrigin(ctx, q, row.ID)
-	if err != nil {
-		return err
+		origin, err = stateVersionOrigin(ctx, q, row.ID)
+		if err != nil {
+			return err
+		}
 	}
 
 	pubErr := publishUnitState(ctx, q, unitStateWrite{
