@@ -44,13 +44,8 @@ type unitStateWrite struct {
 // The upsert keeps the stored final fields when w.final is false, and a new
 // row of a write that is not final holds no final version.
 func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) error {
-	if w.origin.Job != "" && w.origin.Commit == "" {
-		commit, err := jobSpecCommit(ctx, q, w.origin.Job)
-		if err != nil {
-			return err
-		}
-
-		w.origin.Commit = commit
+	if err := resolveOriginCommit(ctx, q, &w.origin); err != nil {
+		return err
 	}
 
 	// The first write of a unit inserts its row, and the upsert keeps the
@@ -79,15 +74,10 @@ func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) erro
 		return nil
 	}
 
-	_, err = jobstore.CloseAwaiting(ctx, stateCloseTx{q: q}, namespace.Name(w.nsName), jobstore.FinalVersion{
+	return closeAwaitingState(ctx, q, w.nsName, jobstore.FinalVersion{
 		UnitID: w.unitID, VersionID: w.version, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
 		At: time.UnixMilli(w.atMs).UTC(),
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("close the jobs that wait for the state version: %w", err)
-	}
-
-	return nil
+	})
 }
 
 // jobSpecCommit returns the commit that the spec of the job jobID names, or
@@ -121,19 +111,23 @@ func jobSpecCommit(ctx context.Context, q *db.Queries, jobID string) (string, er
 func publishFinalState(
 	ctx context.Context, q *db.Queries, nsName, unitID string, origin identity.StateOrigin,
 ) error {
-	stored, ok, err := unitState(ctx, q, nsName, unitID)
+	w := unitStateWrite{nsName: nsName, unitID: unitID, version: "", final: true, origin: origin, atMs: 0}
+
+	ok, err := publishFinalStateAt(ctx, q, w)
+	if err != nil || ok {
+		return err
+	}
+
+	// The unit has no state version row. Publish the empty version as final,
+	// as the first write of the unit does.
+	atMs, err := storeNow(ctx, q)
 	if err != nil {
 		return err
 	}
 
-	version := ""
-	if ok {
-		version = stored.VersionID
-	}
+	w.atMs = atMs
 
-	return publishFinalStateAt(ctx, q, unitStateWrite{
-		nsName: nsName, unitID: unitID, version: version, final: true, origin: origin, atMs: 0,
-	})
+	return publishUnitState(ctx, q, w)
 }
 
 // publishReleasedState records the current state version of the unit as final,
@@ -145,32 +139,78 @@ func publishFinalState(
 func publishReleasedState(
 	ctx context.Context, q *db.Queries, nsName, unitID string, origin identity.StateOrigin,
 ) error {
-	stored, ok, err := unitState(ctx, q, nsName, unitID)
-	if err != nil {
+	if err := resolveOriginCommit(ctx, q, &origin); err != nil {
 		return err
 	}
 
-	if !ok || stored.VersionID == stored.FinalVersionID {
+	row, err := q.FinalizeReleasedUnitState(ctx, db.FinalizeReleasedUnitStateParams{
+		Namespace: nsName, UnitID: unitID, FinalCommit: origin.Commit, FinalJob: origin.Job,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 
-	return publishFinalStateAt(ctx, q, unitStateWrite{
-		nsName: nsName, unitID: unitID, version: stored.VersionID, final: true, origin: origin, atMs: 0,
+	if err != nil {
+		return fmt.Errorf("finalize released unit state: %w", err)
+	}
+
+	return closeAwaitingState(ctx, q, nsName, jobstore.FinalVersion{
+		UnitID: unitID, VersionID: row.VersionID, Commit: origin.Commit, Job: job.ID(origin.Job),
+		At: time.UnixMilli(row.FinalAtMs).UTC(),
 	})
 }
 
-// publishFinalStateAt records w.version as the last final state version of the
-// unit, at the clock of the database.
-func publishFinalStateAt(ctx context.Context, q *db.Queries, w unitStateWrite) error {
-	atMs, err := storeNow(ctx, q)
+// publishFinalStateAt records the current state version of the unit as final,
+// at the clock of the database, and reports false when the unit has no state
+// version row.
+func publishFinalStateAt(ctx context.Context, q *db.Queries, w unitStateWrite) (bool, error) {
+	if err := resolveOriginCommit(ctx, q, &w.origin); err != nil {
+		return false, err
+	}
+
+	row, err := q.FinalizeUnitState(ctx, db.FinalizeUnitStateParams{
+		Namespace: w.nsName, UnitID: w.unitID, FinalCommit: w.origin.Commit, FinalJob: w.origin.Job,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("finalize unit state: %w", err)
+	}
+
+	return true, closeAwaitingState(ctx, q, w.nsName, jobstore.FinalVersion{
+		UnitID: w.unitID, VersionID: row.VersionID, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
+		At: time.UnixMilli(row.FinalAtMs).UTC(),
+	})
+}
+
+// resolveOriginCommit fills the commit of the spec of the job that the origin
+// names, when the origin has no commit.
+func resolveOriginCommit(ctx context.Context, q *db.Queries, origin *identity.StateOrigin) error {
+	if origin.Job == "" || origin.Commit != "" {
+		return nil
+	}
+
+	commit, err := jobSpecCommit(ctx, q, origin.Job)
 	if err != nil {
 		return err
 	}
 
-	w.final = true
-	w.atMs = atMs
+	origin.Commit = commit
 
-	return publishUnitState(ctx, q, w)
+	return nil
+}
+
+// closeAwaitingState closes the jobs of the unit of the namespace nsName that
+// wait for the final state version v.
+func closeAwaitingState(ctx context.Context, q *db.Queries, nsName string, v jobstore.FinalVersion) error {
+	_, err := jobstore.CloseAwaiting(ctx, stateCloseTx{q: q}, namespace.Name(nsName), v, nil)
+	if err != nil {
+		return fmt.Errorf("close the jobs that wait for the state version: %w", err)
+	}
+
+	return nil
 }
 
 // unitState returns the stored row of the unit, and false when it has none.

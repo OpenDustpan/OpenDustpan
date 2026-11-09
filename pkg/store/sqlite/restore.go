@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -388,12 +390,14 @@ func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// unitVersion names the unit of the restored installation and the state
-// version that the restore derives for it.
+// unitVersion names the unit of the restored installation, the state version
+// that the restore derives for it, and the time that the restore gave the
+// version.
 type unitVersion struct {
 	namespace string
 	id        string
 	version   string
+	atMs      int64
 }
 
 // deriveUnitState records the state version of every unit of the staged file
@@ -402,125 +406,99 @@ type unitVersion struct {
 // its row makes current, a stack the digest of its last checkpoint. Every
 // derived version is final: the state that the restore brings is the state of
 // the installation.
+//
+// The write is one statement for the workspaces and one for the stacks, and
+// the close of the jobs that wait for a state version reads its units in one
+// statement. Neither count grows with the number of units.
 func deriveUnitState(ctx context.Context, tx *sql.Tx) error {
+	if err := upsertStagedUnitState(ctx, tx); err != nil {
+		return err
+	}
+
+	awaiting, err := stagedAwaitingUnits(ctx, tx)
+	if err != nil {
+		return err
+	}
+
 	q := db.New(tx)
 
-	atMs, err := storeNow(ctx, q)
-	if err != nil {
-		return err
-	}
-
-	workspaces, err := restoredWorkspaceVersions(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	for _, unit := range workspaces {
-		err = publishUnitState(ctx, q, unitStateWrite{
-			nsName:  unit.namespace,
-			unitID:  unit.id,
-			version: unit.version,
-			final:   true,
-			origin:  identity.StateOrigin{Job: "", Commit: ""},
-			atMs:    atMs,
-		})
+	for _, unit := range awaiting {
+		_, err = jobstore.CloseAwaiting(ctx, stateCloseTx{q: q}, namespace.Name(unit.namespace), jobstore.FinalVersion{
+			UnitID: unit.id, VersionID: unit.version, Commit: "", Job: "",
+			At: time.UnixMilli(unit.atMs).UTC(),
+		}, nil)
 		if err != nil {
-			return err
-		}
-	}
-
-	stacks, err := restoredStackVersions(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	for _, unit := range stacks {
-		err = publishUnitState(ctx, q, unitStateWrite{
-			nsName:  unit.namespace,
-			unitID:  unit.id,
-			version: unit.version,
-			final:   true,
-			origin:  identity.StateOrigin{Job: "", Commit: ""},
-			atMs:    atMs,
-		})
-		if err != nil {
-			return err
+			return fmt.Errorf("close the jobs that wait for the state version: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// restoredWorkspaceVersions reads the state version that the row of each
-// workspace of the staged file makes current.
-func restoredWorkspaceVersions(ctx context.Context, tx *sql.Tx) ([]unitVersion, error) {
+// upsertStagedUnitState writes the state version of every unit of the staged
+// file in unit_state, in tx, with one statement for the workspaces and one for
+// the stacks. The final fields are the version, the origin is empty, and the
+// time comes from the clock of the database.
+func upsertStagedUnitState(ctx context.Context, tx *sql.Tx) error {
 	const (
-		query = `SELECT namespace, id, current_state_version_id FROM main.workspaces`
-		what  = "read staged workspaces"
+		now     = "CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)"
+		columns = "unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms"
+		update  = " ON CONFLICT (unit_id) DO UPDATE SET namespace_id = excluded.namespace_id," +
+			" version_id = excluded.version_id, final_version_id = excluded.final_version_id," +
+			" final_commit = excluded.final_commit, final_job = excluded.final_job," +
+			" final_at_ms = excluded.final_at_ms"
 	)
 
-	scan := func(rows *sql.Rows) (unitVersion, error) {
-		var unit unitVersion
+	workspaceVersion := "w.current_state_version_id"
 
-		if err := rows.Scan(&unit.namespace, &unit.id, &unit.version); err != nil {
-			return unitVersion{}, fmt.Errorf("%s: %w", what, err)
+	// The WHERE true keeps the parser from reading ON CONFLICT as the ON
+	// clause of the join.
+	workspaces := "INSERT INTO main.unit_state (" + columns + ")" +
+		" SELECT w.id, n.id, " + workspaceVersion + ", " + workspaceVersion + ", '', '', " + now +
+		" FROM main.workspaces AS w" +
+		" JOIN main.namespaces AS n ON n.name = w.namespace" +
+		" WHERE true" + update
+
+	version := "lower(hex(c.digest)) || CASE WHEN c.invalid <> 0 THEN ':invalid' ELSE '' END"
+
+	stacks := "INSERT INTO main.unit_state (" + columns + ")" +
+		" SELECT c.stack_id, n.id, " + version + ", " + version + ", '', '', " + now +
+		" FROM main.checkpoints AS c" +
+		" JOIN main.updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id" +
+		" JOIN main.stacks AS st ON st.id = c.stack_id" +
+		" JOIN main.namespaces AS n ON n.name = st.namespace" +
+		" WHERE u.version = (SELECT MAX(v.version) FROM main.updates AS v" +
+		" JOIN main.checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id" +
+		" WHERE v.stack_id = c.stack_id)" + update
+
+	for _, stmt := range []string{workspaces, stacks} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("derive unit state: %w", err)
 		}
-
-		return unit, nil
 	}
 
-	return readUnitVersions(ctx, tx, query, what, scan)
+	return nil
 }
 
-// restoredStackVersions reads the state version of each stack of the staged
-// file: the digest of the last checkpoint that its updates wrote, as
-// GetLatestCheckpoint reads it.
-func restoredStackVersions(ctx context.Context, tx *sql.Tx) ([]unitVersion, error) {
-	const (
-		query = `SELECT st.namespace, c.stack_id, c.digest, c.invalid
-FROM main.checkpoints AS c
-JOIN main.updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id
-JOIN main.stacks AS st ON st.id = c.stack_id
-WHERE u.version = (
-    SELECT MAX(v.version) FROM main.updates AS v
-    JOIN main.checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id
-    WHERE v.stack_id = c.stack_id
-)`
-		what = "read staged stacks"
-	)
+// stagedAwaitingUnits reads the units of the staged file that have jobs that
+// wait for a state version, with the final version and the time that the
+// restore gave each unit. It reads them in one statement.
+func stagedAwaitingUnits(ctx context.Context, tx *sql.Tx) ([]unitVersion, error) {
+	const what = "read staged units that wait for a state version"
 
-	scan := func(rows *sql.Rows) (unitVersion, error) {
-		var (
-			unit    unitVersion
-			digest  []byte
-			invalid bool
-		)
+	const query = `SELECT DISTINCT n.name, j.unit_id, u.version_id, u.final_at_ms
+FROM main.jobs AS j
+JOIN main.namespaces AS n ON n.id = j.namespace_id
+JOIN main.unit_state AS u ON u.unit_id = j.unit_id
+WHERE j.state = 'awaiting-state'
+ORDER BY n.name, j.unit_id`
 
-		if err := rows.Scan(&unit.namespace, &unit.id, &digest, &invalid); err != nil {
-			return unitVersion{}, fmt.Errorf("%s: %w", what, err)
-		}
-
-		unit.version = checkpointDigest{digest: digest, invalid: invalid}.stateVersion()
-
-		return unit, nil
-	}
-
-	return readUnitVersions(ctx, tx, query, what, scan)
-}
-
-// readUnitVersions runs a query that names the namespace, the unit ID and the
-// state version of each unit of the restored installation, and reads each row
-// with scan. It reads every row before the caller writes: the staged
-// connection holds one open statement at a time.
-func readUnitVersions(
-	ctx context.Context, tx *sql.Tx, query, what string, scan func(*sql.Rows) (unitVersion, error),
-) ([]unitVersion, error) {
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 
-	out, err := scanUnitVersions(rows, scan)
+	out, err := scanAwaitingUnits(rows)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
@@ -528,24 +506,23 @@ func readUnitVersions(
 	return out, nil
 }
 
-// scanUnitVersions reads each row of rows with scan and closes the rows.
-func scanUnitVersions(rows *sql.Rows, scan func(*sql.Rows) (unitVersion, error)) ([]unitVersion, error) {
+// scanAwaitingUnits reads each row of rows and closes it.
+func scanAwaitingUnits(rows *sql.Rows) ([]unitVersion, error) {
 	var out []unitVersion
 
 	for rows.Next() {
-		unit, scanErr := scan(rows)
-		if scanErr != nil {
+		var unit unitVersion
+
+		if err := rows.Scan(&unit.namespace, &unit.id, &unit.version, &unit.atMs); err != nil {
 			closeErr := rows.Close()
 
-			return nil, errors.Join(scanErr, closeErr)
+			return nil, errors.Join(err, closeErr)
 		}
 
 		out = append(out, unit)
 	}
 
-	closeErr := rows.Close()
-
-	if err := errors.Join(rows.Err(), closeErr); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
 

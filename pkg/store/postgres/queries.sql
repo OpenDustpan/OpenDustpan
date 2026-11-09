@@ -4306,6 +4306,29 @@ JOIN namespaces AS n ON n.id = f.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND (f.ends_at_ms = 0 OR f.ends_at_ms > sqlc.arg(since_ms))
 ORDER BY f.starts_at_ms, f.id;
 
+-- name: FinalizeReleasedUnitState :one
+-- Make the current state version of the unit final, with the origin of a
+-- release, and do nothing when the unit has no state version row or its
+-- current version is final already. It returns the version and the time that
+-- the database clock gives it.
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = sqlc.arg(final_commit), final_job = sqlc.arg(final_job),
+    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND unit_id = sqlc.arg(unit_id) AND version_id <> final_version_id
+RETURNING version_id, final_at_ms;
+
+-- name: FinalizeUnitState :one
+-- Make the current state version of the unit final, with the origin of the
+-- write that ends it. It returns the version and the time that the database
+-- clock gives it, or no row when the unit has no state version row.
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = sqlc.arg(final_commit), final_job = sqlc.arg(final_job),
+    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND unit_id = sqlc.arg(unit_id)
+RETURNING version_id, final_at_ms;
+
 -- name: GetUnitState :one
 SELECT version_id, final_version_id, final_commit, final_job, final_at_ms FROM unit_state
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);

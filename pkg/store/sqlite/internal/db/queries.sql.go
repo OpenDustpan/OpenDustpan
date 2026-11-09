@@ -4731,6 +4731,43 @@ func (q *Queries) FailEndedStoreChecks(ctx context.Context, arg FailEndedStoreCh
 	return result.RowsAffected()
 }
 
+const finalizeReleasedUnitState = `-- name: FinalizeReleasedUnitState :one
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = ?1, final_job = ?2,
+    final_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+  AND unit_id = ?4 AND version_id <> final_version_id
+RETURNING version_id, final_at_ms
+`
+
+type FinalizeReleasedUnitStateParams struct {
+	FinalCommit string
+	FinalJob    string
+	Namespace   string
+	UnitID      string
+}
+
+type FinalizeReleasedUnitStateRow struct {
+	VersionID string
+	FinalAtMs int64
+}
+
+// Make the current state version of the unit final, with the origin of a
+// release, and do nothing when the unit has no state version row or its
+// current version is final already. It returns the version and the time that
+// the database clock gives it.
+func (q *Queries) FinalizeReleasedUnitState(ctx context.Context, arg FinalizeReleasedUnitStateParams) (FinalizeReleasedUnitStateRow, error) {
+	row := q.db.QueryRowContext(ctx, finalizeReleasedUnitState,
+		arg.FinalCommit,
+		arg.FinalJob,
+		arg.Namespace,
+		arg.UnitID,
+	)
+	var i FinalizeReleasedUnitStateRow
+	err := row.Scan(&i.VersionID, &i.FinalAtMs)
+	return i, err
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET serial = ?1, lineage = ?2, md5 = ?3, outputs = ?4, status = ?5, finalized_at_ms = ?6, size = ?7
@@ -4772,6 +4809,42 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const finalizeUnitState = `-- name: FinalizeUnitState :one
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = ?1, final_job = ?2,
+    final_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+  AND unit_id = ?4
+RETURNING version_id, final_at_ms
+`
+
+type FinalizeUnitStateParams struct {
+	FinalCommit string
+	FinalJob    string
+	Namespace   string
+	UnitID      string
+}
+
+type FinalizeUnitStateRow struct {
+	VersionID string
+	FinalAtMs int64
+}
+
+// Make the current state version of the unit final, with the origin of the
+// write that ends it. It returns the version and the time that the database
+// clock gives it, or no row when the unit has no state version row.
+func (q *Queries) FinalizeUnitState(ctx context.Context, arg FinalizeUnitStateParams) (FinalizeUnitStateRow, error) {
+	row := q.db.QueryRowContext(ctx, finalizeUnitState,
+		arg.FinalCommit,
+		arg.FinalJob,
+		arg.Namespace,
+		arg.UnitID,
+	)
+	var i FinalizeUnitStateRow
+	err := row.Scan(&i.VersionID, &i.FinalAtMs)
+	return i, err
 }
 
 const findGateRefusal = `-- name: FindGateRefusal :one

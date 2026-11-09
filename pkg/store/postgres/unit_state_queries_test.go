@@ -16,17 +16,17 @@ var unitStateWritePattern = regexp.MustCompile(`(?i)\b(?:INSERT\s+INTO|UPDATE|DE
 // queryNamePattern matches the name line that starts a query of queries.sql.
 var queryNamePattern = regexp.MustCompile(`(?m)^-- name: ([A-Za-z0-9_]+)`)
 
-// TestQueriesWriteUnitStateOnlyInPublish proves that PublishUnitState is the
-// only query that writes the unit_state table.
-func TestQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
+// TestQueriesWriteUnitStateOnlyInStateWriters proves that the state writers
+// are the only queries that write the unit_state table.
+func TestQueriesWriteUnitStateOnlyInStateWriters(t *testing.T) {
 	t.Parallel()
 
-	checkQueriesWriteUnitStateOnlyInPublish(t)
+	checkQueriesWriteUnitStateOnlyInStateWriters(t)
 }
 
-// checkQueriesWriteUnitStateOnlyInPublish reads the queries of the dialect
-// and fails when a query other than PublishUnitState writes unit_state.
-func checkQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
+// checkQueriesWriteUnitStateOnlyInStateWriters reads the queries of the
+// dialect and fails when a query other than a state writer writes unit_state.
+func checkQueriesWriteUnitStateOnlyInStateWriters(t *testing.T) {
 	t.Helper()
 
 	names := queryNamePattern.FindAllStringSubmatchIndex(unitStateQueries, -1)
@@ -34,7 +34,12 @@ func checkQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
 		t.Fatal("queries.sql holds no query")
 	}
 
-	published := false
+	writers := map[string]bool{
+		"FinalizeReleasedUnitState": true,
+		"FinalizeUnitState":         true,
+		"PublishUnitState":          true,
+	}
+	wrote := make(map[string]bool, len(writers))
 
 	for i, loc := range names {
 		end := len(unitStateQueries)
@@ -45,22 +50,24 @@ func checkQueriesWriteUnitStateOnlyInPublish(t *testing.T) {
 		name := unitStateQueries[loc[2]:loc[3]]
 		query := unitStateQueries[loc[0]:end]
 
-		if name == "PublishUnitState" {
-			published = true
+		if writers[name] {
+			wrote[name] = true
 
 			if !unitStateWritePattern.MatchString(query) {
-				t.Fatal("PublishUnitState does not write unit_state")
+				t.Fatalf("%s does not write unit_state", name)
 			}
 
 			continue
 		}
 
 		if unitStateWritePattern.MatchString(query) {
-			t.Fatalf("query %s writes unit_state, want PublishUnitState only", name)
+			t.Fatalf("query %s writes unit_state, want one of the state writers", name)
 		}
 	}
 
-	if !published {
-		t.Fatal("queries.sql holds no PublishUnitState query")
+	for name := range writers {
+		if !wrote[name] {
+			t.Fatalf("queries.sql holds no %s query", name)
+		}
 	}
 }
