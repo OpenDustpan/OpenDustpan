@@ -290,8 +290,8 @@ holds a commit, so `git.head` is new work in task 2.3.
    empty origin, and still closes a waiting write-back job, unverified.
 3c. Restore conformance: plan, then a portable restore of another state,
    then dispatch: `ErrPlanStale`.
-4. Server test: a final write of unit A starts the `follows` plan of unit B
-   through the real dispatcher (`pkg/dustpan/triggers.go`).
+4. Server test: a final write of unit A makes the real dispatcher
+   (`pkg/dustpan/triggers.go`) fire the `follows` trigger of unit B.
 5. e2e (OpenTofu, Pulumi CLI): Priya's path with the real CLI. The second
    apply from a "laptop" uses the CLI against the state backend directly.
 6. A store test reads `queries.sql` of each dialect and fails when a query
@@ -302,6 +302,8 @@ each dialect. Test 4 runs on a real server, but it gives the final version to
 the dispatcher itself: the server does not call the dispatcher of the
 `follows` trigger after a state write yet. That wiring is a separate change.
 Test 5 has no new e2e step in this change.
+
+The plan start of a follows trigger through the gate is tracked in #3007; this change covers the final version and the trigger decision.
 
 ## Notes on the code
 
