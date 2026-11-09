@@ -41,7 +41,8 @@ type unitStateWrite struct {
 // store holds no such job: a write outlives the job that made it, for example
 // after a purge.
 //
-// The upsert keeps the stored final fields when w.final is false.
+// The upsert keeps the stored final fields when w.final is false, and a new
+// row of a write that is not final holds no final version.
 func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) error {
 	if w.origin.Job != "" && w.origin.Commit == "" {
 		commit, err := jobSpecCommit(ctx, q, w.origin.Job)
@@ -52,14 +53,22 @@ func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) erro
 		w.origin.Commit = commit
 	}
 
+	// The first write of a unit inserts its row, and the upsert keeps the
+	// stored final fields only on a conflict. So a write that is not final
+	// gives empty final fields: the new row then holds no final version.
+	finalVersionID, finalCommit, finalJob, finalAtMs := "", "", "", int64(0)
+	if w.final {
+		finalVersionID, finalCommit, finalJob, finalAtMs = w.version, w.origin.Commit, w.origin.Job, w.atMs
+	}
+
 	err := q.PublishUnitState(ctx, db.PublishUnitStateParams{
 		UnitID:         w.unitID,
 		Namespace:      w.nsName,
 		VersionID:      w.version,
-		FinalVersionID: w.version,
-		FinalCommit:    w.origin.Commit,
-		FinalJob:       w.origin.Job,
-		FinalAtMs:      w.atMs,
+		FinalVersionID: finalVersionID,
+		FinalCommit:    finalCommit,
+		FinalJob:       finalJob,
+		FinalAtMs:      finalAtMs,
 		Final:          w.final,
 	})
 	if err != nil {
