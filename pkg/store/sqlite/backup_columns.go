@@ -134,6 +134,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				backupColJobID,
+				"git_head",
 			},
 		},
 		{
@@ -420,6 +422,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"sensitive_marks",
 				"fenced_by",
 				"unlocked_write",
+				"origin_job",
 			},
 		},
 	}

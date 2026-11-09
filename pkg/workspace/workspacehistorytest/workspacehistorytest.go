@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/history"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -128,7 +129,7 @@ func makeWorkspace(t *testing.T, s Store, f namespace.Fence, id workspace.ID) {
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: f.Namespace, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:    1,
+		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, f)
 	if err != nil {
 		t.Fatalf("create workspace %q: %v", id, err)

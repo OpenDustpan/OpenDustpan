@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -73,6 +72,8 @@ func (s *Store) CreateUpdate(
 			CreatedBy:        row.CreatedBy,
 			RestoredFrom:     row.RestoredFrom,
 			TokenID:          row.TokenID,
+			JobID:            row.JobID,
+			GitHead:          row.GitHead,
 		})
 		if err != nil {
 			if isForeignKeyViolation(err) {
@@ -139,6 +140,8 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
+		GitHead:          row.GitHead,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -228,7 +231,9 @@ func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stack
 
 	// The end of a mutating update is final, whatever its result: the current
 	// state version of the unit closes the write-back jobs that wait for it.
-	if pubErr := publishFinalState(ctx, q, u.Ref.Namespace.String(), stackID); pubErr != nil {
+	// The origin is the one of the update: the job whose token started it and
+	// the commit it reported.
+	if pubErr := publishFinalState(ctx, q, u.Ref.Namespace.String(), stackID, u.Origin()); pubErr != nil {
 		return pubErr
 	}
 
@@ -267,6 +272,8 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
+		GitHead:          row.GitHead,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -341,6 +348,8 @@ func listUpdatesWith(ctx context.Context, q *db.Queries, ref stack.Ref, page sta
 			CreatedBy:        rows[i].CreatedBy,
 			RestoredFrom:     rows[i].RestoredFrom,
 			TokenID:          rows[i].TokenID,
+			JobID:            rows[i].JobID,
+			GitHead:          rows[i].GitHead,
 			JournalVersion:   rows[i].JournalVersion,
 			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
@@ -511,12 +520,12 @@ func publishCheckpointState(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, row codec.CheckpointRow, atMs int64,
 ) error {
 	return publishUnitState(ctx, q, unitStateWrite{
-		namespace: cp.Ref.Namespace.String(),
-		unitID:    row.StackID,
-		version:   checkpointDigest{digest: row.Digest, invalid: row.Invalid}.stateVersion(),
-		final:     false,
-		origin:    identity.StateOrigin{Job: "", Commit: ""},
-		atMs:      atMs,
+		nsName:  cp.Ref.Namespace.String(),
+		unitID:  row.StackID,
+		version: checkpointDigest{digest: row.Digest, invalid: row.Invalid}.stateVersion(),
+		final:   false,
+		origin:  cp.Origin,
+		atMs:    atMs,
 	})
 }
 
@@ -849,6 +858,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		EndedAtMs:        row.EndedAtMs,
 		JournalVersion:   row.JournalVersion,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,

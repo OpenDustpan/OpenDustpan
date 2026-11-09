@@ -417,12 +417,12 @@ func deriveUnitState(ctx context.Context, tx *sql.Tx) error {
 
 	for _, unit := range workspaces {
 		err = publishUnitState(ctx, q, unitStateWrite{
-			namespace: unit.namespace,
-			unitID:    unit.id,
-			version:   unit.version,
-			final:     true,
-			origin:    identity.StateOrigin{Job: "", Commit: ""},
-			atMs:      atMs,
+			nsName:  unit.namespace,
+			unitID:  unit.id,
+			version: unit.version,
+			final:   true,
+			origin:  identity.StateOrigin{Job: "", Commit: ""},
+			atMs:    atMs,
 		})
 		if err != nil {
 			return err
@@ -436,12 +436,12 @@ func deriveUnitState(ctx context.Context, tx *sql.Tx) error {
 
 	for _, unit := range stacks {
 		err = publishUnitState(ctx, q, unitStateWrite{
-			namespace: unit.namespace,
-			unitID:    unit.id,
-			version:   unit.version,
-			final:     true,
-			origin:    identity.StateOrigin{Job: "", Commit: ""},
-			atMs:      atMs,
+			nsName:  unit.namespace,
+			unitID:  unit.id,
+			version: unit.version,
+			final:   true,
+			origin:  identity.StateOrigin{Job: "", Commit: ""},
+			atMs:    atMs,
 		})
 		if err != nil {
 			return err

@@ -394,7 +394,8 @@ type Job struct {
 	// the job is not queued, or when nothing holds it.
 	Wait WaitReason
 	// Reason tells why a terminal job ended, for example the reason of a
-	// failure.
+	// failure. A job that stays queued keeps the reason of its last replan,
+	// which names the state versions that made its plan stale.
 	Reason string
 	// Phases are the phases of the job, in order. Executor.Phases fixes
 	// them at start.

@@ -1212,6 +1212,7 @@ type StateVersion struct {
 	SensitiveMarks    []byte
 	FencedBy          string
 	UnlockedWrite     bool
+	OriginJob         string
 }
 
 type StoreCheck struct {
@@ -1312,6 +1313,8 @@ type Update struct {
 	JournalClosed         int64
 	TokenID               string
 	JournalRecordsChanged int64
+	JobID                 string
+	GitHead               string
 }
 
 type UpdateEvent struct {

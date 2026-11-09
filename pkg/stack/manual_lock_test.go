@@ -95,7 +95,7 @@ func failing(err error) *fakeManualLocks {
 
 // planOf returns a plan of the kind, as a dry run or not.
 func planOf(kind stack.UpdateKind, dryRun bool) stack.Plan {
-	return stack.Plan{Kind: kind, DryRun: dryRun, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: kind, DryRun: dryRun, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 }
 
 // withManualLocks returns the update service of f with the manual lock port locks.

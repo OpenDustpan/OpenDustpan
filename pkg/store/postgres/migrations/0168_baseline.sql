@@ -1287,7 +1287,8 @@ CREATE TABLE state_versions (
     sealed boolean DEFAULT false NOT NULL,
     sensitive_marks bytea,
     fenced_by text DEFAULT ''::text NOT NULL,
-    unlocked_write boolean DEFAULT false NOT NULL
+    unlocked_write boolean DEFAULT false NOT NULL,
+    origin_job text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE temp_admins (
@@ -1419,7 +1420,9 @@ CREATE TABLE updates (
     journal_version bigint DEFAULT 0 NOT NULL,
     journal_closed boolean DEFAULT false NOT NULL,
     token_id text DEFAULT ''::text NOT NULL,
-    journal_records_changed boolean DEFAULT false NOT NULL
+    journal_records_changed boolean DEFAULT false NOT NULL,
+    job_id text DEFAULT ''::text NOT NULL,
+    git_head text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE used_tickets (

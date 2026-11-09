@@ -80,12 +80,19 @@ func makeUnit(t *testing.T, s *postgres.Store, ns, tool, name string) identity.O
 		}
 	case "opentofu":
 		w := workspace.Workspace{
-			NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+			NamespaceID: "",
+			CreatedAt:   now,
+			UpdatedAt:   now,
 			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 			LastRelease: workspace.NoRelease(),
-			ID:          workspace.ID(ident.NewID("ws-")), Revision: 1,
-			Ref:       workspace.Ref{Namespace: namespace.Name(ns), Name: workspace.Name(name)},
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			ID:          workspace.ID(ident.NewID("ws-")),
+			Revision:    1,
+			Ref:         workspace.Ref{Namespace: namespace.Name(ns), Name: workspace.Name(name)},
+			Overrides: namespace.Overrides{
+				Forced:   false,
+				Unlocked: false,
+			},
+			Origin: identity.StateOrigin{Job: "", Commit: ""},
 		}
 		if err := s.CreateWorkspace(t.Context(), w, fence); err != nil {
 			t.Fatalf("create workspace: %v", err)

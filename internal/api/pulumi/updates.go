@@ -28,7 +28,17 @@ const (
 	// maxEventBatchBytes bounds one engine event batch. The CLI streams small
 	// batches, so this is generous; larger bodies answer 413.
 	maxEventBatchBytes = 8 << 20
+	// gitHeadKey is the key of the create body environment that holds the
+	// commit the CLI reports. The CLI omits it outside a Git working tree.
+	gitHeadKey = "git.head"
 )
+
+// updateProgramMetadata holds the part of the create body metadata this
+// server reads: the environment the CLI reports, which names the code the
+// update runs.
+type updateProgramMetadata struct {
+	Environment map[string]string `json:"environment"`
+}
 
 // updateProgramOptions holds the create body option this server reads:
 // whether the update is a dry run.
@@ -37,12 +47,13 @@ type updateProgramOptions struct {
 }
 
 // updateProgramRequest is the part of the CLI's create body this server
-// reads: whether the update is a dry run. The CLI runs the preview phase of
-// `up`, `refresh` and `destroy` with the real kind and dry run set, so the
-// kind alone does not say whether an update changes state. Every other field
-// is ignored.
+// reads: whether the update is a dry run, and the commit the CLI reports in
+// its metadata. The CLI runs the preview phase of `up`, `refresh` and
+// `destroy` with the real kind and dry run set, so the kind alone does not
+// say whether an update changes state. Every other field is ignored.
 type updateProgramRequest struct {
-	Options updateProgramOptions `json:"options"`
+	Metadata updateProgramMetadata `json:"metadata"`
+	Options  updateProgramOptions  `json:"options"`
 }
 
 // updateProgramResponse answers a create: the opaque ID of the update.
@@ -396,6 +407,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 
 	u, err := h.updates.Create(ctx, ref, stack.Plan{
 		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: subject, RestoredFrom: 0,
+		GitHead: req.Metadata.Environment[gitHeadKey],
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

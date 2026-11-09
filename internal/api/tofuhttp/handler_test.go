@@ -77,7 +77,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 			Lock:        unlockedLock(),
 			LastRelease: workspace.NoRelease(),
 			Revision:    0,
-			Overrides:   on,
+			Overrides:   on, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 		exists:    exists,
 		hideOnce:  false,

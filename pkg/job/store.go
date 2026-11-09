@@ -19,7 +19,8 @@ type Change struct {
 	Event   Event
 	// Wait is the new wait reason of a job that stays queued.
 	Wait WaitReason
-	// Reason is the reason of a terminal state.
+	// Reason is the reason of a terminal state, or the reason of a replan
+	// that keeps the job queued.
 	Reason string
 	// Dispatch is set on EventDispatch: the store starts the durable
 	// operation in the transaction of the change. Its key is PhaseKey.

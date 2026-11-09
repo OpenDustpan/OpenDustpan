@@ -235,7 +235,9 @@ func settle(next *job.Job, to job.State, c *job.Change, prev int64, updated time
 		next.Wait = c.Wait
 	}
 
-	if to.Terminal() {
+	// A terminal state records why the job ended, and a replan records why the
+	// job plans again while it stays queued.
+	if to.Terminal() || c.Event == job.EventReplan {
 		next.Reason = c.Reason
 	}
 }

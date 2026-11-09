@@ -33,6 +33,7 @@ func reconcileCases() []suiteCase {
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
 		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
+		{"the reason of a replan names the state version of the plan and the current one", testReconcileReplanReason},
 		{"the reconcile fails a queued job whose plan phase stored no plan, and never replans it", testReconcileNoPlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
@@ -315,6 +316,64 @@ func testReconcileStalePlan(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, fresh.ID, job.StateDispatched)
+}
+
+// testReconcileReplanReason proves that the replan of a stale plan names the
+// state version that the plan read and the current one, in the reason of the
+// job and in the reason of the audit entry of the replan.
+func testReconcileReplanReason(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
+		t.Fatalf("SetStateVersion = %v", err)
+	}
+
+	// The plan read svOne while the unit is at svTwo. The plan time is the
+	// zero time, so the plan is stale by its age too: the stale check reads
+	// the version first, so the reason names the two versions.
+	stale := planned(t, h, f, svOne, time.Time{})
+
+	if res := runReconcile(t, h, 0); res.Replanned != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile of a job with a stale plan = %+v; want one replan", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), stale.ID)
+	if err != nil {
+		t.Fatalf("Get = %v", err)
+	}
+
+	if !strings.Contains(got.Reason, svOne) || !strings.Contains(got.Reason, svTwo) {
+		t.Fatalf("reason after the replan = %q; want it to name %s and %s", got.Reason, svOne, svTwo)
+	}
+
+	if reason := replanReason(t, h, f, stale.ID); !strings.Contains(reason, svOne) ||
+		!strings.Contains(reason, svTwo) {
+		t.Fatalf("audit reason of the replan = %q; want it to name %s and %s", reason, svOne, svTwo)
+	}
+}
+
+// replanReason returns the reason of the audit entry that the reconcile wrote
+// for the job id, and fails t when the run wrote none.
+func replanReason(t *testing.T, h Harness, f fixture, id job.ID) string {
+	t.Helper()
+
+	entries, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	for i := range entries {
+		e := &entries[i]
+		if e.JobID == string(id) && strings.HasPrefix(e.Reason, job.ReconcileName+": ") {
+			return e.Reason
+		}
+	}
+
+	t.Fatalf("no audit entry of the reconcile for job %s", id)
+
+	return ""
 }
 
 // testReconcileNoPlan proves that a job whose plan phase stored no plan ends

@@ -58,12 +58,12 @@ func (s *Store) PutUnitStateVersion(ctx context.Context, fence namespace.Fence, 
 		}
 
 		return publishUnitState(ctx, q, unitStateWrite{
-			namespace: fence.Namespace.String(),
-			unitID:    unitID,
-			version:   version,
-			final:     false,
-			origin:    identity.StateOrigin{Job: "", Commit: ""},
-			atMs:      now,
+			nsName:  fence.Namespace.String(),
+			unitID:  unitID,
+			version: version,
+			final:   false,
+			origin:  identity.StateOrigin{Job: "", Commit: ""},
+			atMs:    now,
 		})
 	})
 }
@@ -439,12 +439,12 @@ func (t *jobTx) FinalVersion(
 // PutFinalVersion implements jobstore.Tx.
 func (t *jobTx) PutFinalVersion(ctx context.Context, ns namespace.Name, v jobstore.FinalVersion) error {
 	return publishUnitState(ctx, t.q, unitStateWrite{
-		namespace: ns.String(),
-		unitID:    v.UnitID,
-		version:   v.VersionID,
-		final:     true,
-		origin:    identity.StateOrigin{Job: string(v.Job), Commit: v.Commit},
-		atMs:      v.At.UnixMilli(),
+		nsName:  ns.String(),
+		unitID:  v.UnitID,
+		version: v.VersionID,
+		final:   true,
+		origin:  identity.StateOrigin{Job: string(v.Job), Commit: v.Commit},
+		atMs:    v.At.UnixMilli(),
 	})
 }
 

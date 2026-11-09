@@ -37,11 +37,19 @@ func seedStagedJobRow(t *testing.T, s *Store) job.ID {
 	}
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: workspace.ID("ws-1"),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: "network"},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID("ws-1"),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: "network"},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

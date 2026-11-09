@@ -364,7 +364,7 @@ func (s *Store) CreateStateVersion(
 			)
 		}
 
-		return insertStateVersion(ctx, q, row)
+		return insertStateVersion(ctx, q, row, sv.Origin.Job)
 	})
 }
 
@@ -796,13 +796,18 @@ func publishFencedState(
 		return err
 	}
 
+	origin, err := stateVersionOrigin(ctx, q, row.ID)
+	if err != nil {
+		return err
+	}
+
 	pubErr := publishUnitState(ctx, q, unitStateWrite{
-		namespace: w.Ref.Namespace.String(),
-		unitID:    id,
-		version:   row.ID,
-		final:     true,
-		origin:    identity.StateOrigin{Job: "", Commit: ""},
-		atMs:      atMs,
+		nsName:  w.Ref.Namespace.String(),
+		unitID:  id,
+		version: row.ID,
+		final:   true,
+		origin:  origin,
+		atMs:    atMs,
 	})
 	if pubErr != nil {
 		return pubErr
@@ -1002,13 +1007,18 @@ func writeFinalize(
 		return err
 	}
 
+	origin, err := stateVersionOrigin(ctx, q, row.ID)
+	if err != nil {
+		return err
+	}
+
 	pubErr := publishUnitState(ctx, q, unitStateWrite{
-		namespace: wrow.Namespace,
-		unitID:    wrow.ID,
-		version:   row.ID,
-		final:     row.UnlockedWrite,
-		origin:    identity.StateOrigin{Job: "", Commit: ""},
-		atMs:      atMs,
+		nsName:  wrow.Namespace,
+		unitID:  wrow.ID,
+		version: row.ID,
+		final:   row.UnlockedWrite,
+		origin:  origin,
+		atMs:    atMs,
 	})
 	if pubErr != nil {
 		return pubErr
@@ -1053,6 +1063,23 @@ func checkFinalizePending(ctx context.Context, q *db.Queries, id string) error {
 	}
 
 	return nil
+}
+
+// stateVersionOrigin returns the origin of the write that declared the state
+// version id: the job whose token declared it, or an empty origin when the
+// declare named none. The commit stays empty: a job write takes it from the
+// spec of the job when it publishes the version.
+func stateVersionOrigin(ctx context.Context, q *db.Queries, id string) (identity.StateOrigin, error) {
+	stored, err := q.GetStateVersion(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.StateOrigin{Job: "", Commit: ""}, workspace.ErrStateVersionNotFound
+	}
+
+	if err != nil {
+		return identity.StateOrigin{Job: "", Commit: ""}, fmt.Errorf("read the origin of state version %s: %w", id, err)
+	}
+
+	return identity.StateOrigin{Job: stored.OriginJob, Commit: ""}, nil
 }
 
 // checkForcedSwitches refuses the release of a client-encrypted state unless
@@ -1275,7 +1302,7 @@ func lockOperation(reason string) string {
 }
 
 // insertStateVersion writes one state version row in the caller's transaction.
-func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersionRow, originJob string) error {
 	err := q.CreateStateVersion(ctx, db.CreateStateVersionParams{
 		ID:                row.ID,
 		WorkspaceID:       row.WorkspaceID,
@@ -1298,6 +1325,7 @@ func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersi
 		RestoredFrom:      row.RestoredFrom,
 		FencedBy:          row.FencedBy,
 		UnlockedWrite:     row.UnlockedWrite,
+		OriginJob:         originJob,
 	})
 	if err != nil {
 		return fmt.Errorf("insert state version: %w", err)
@@ -1420,7 +1448,7 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 	}
 
 	if released {
-		return publishReleasedState(ctx, q, w.Ref.Namespace.String(), row.ID)
+		return publishReleasedState(ctx, q, w.Ref.Namespace.String(), row.ID, w.Origin)
 	}
 
 	return nil
