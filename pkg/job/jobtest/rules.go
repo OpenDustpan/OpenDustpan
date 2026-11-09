@@ -11,35 +11,33 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
-// laterWrite is the time from the merge to a state write after the final
-// state version of the lost webhook case.
-const laterWrite = 2 * time.Second
-
 func testLostWebhook(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
 	j := deliver(t, h, f, f.unit, job.DeliveryReviewRequest)
 
+	if !followUp(t, h, j.ID, job.KindReviewWatch) {
+		t.Fatalf("the delivery of a review request started no %s operation", job.KindReviewWatch)
+	}
+
 	// The merge happens on the forge, and its webhook does not arrive. The
 	// team's CI then writes the state.
-	mergedAt := time.Now().UTC()
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"a final version before the poll sees the merge": version(f.unit, "sv-ci", mergedAt.Add(time.Second), true),
-	})
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"a later intermediate version": version(f.unit, "sv-mid", mergedAt.Add(laterWrite), false),
-	})
+	closedBy := writeState(t, h, f, true)
+	if fv := finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()); fv.VersionID != closedBy {
+		t.Fatalf("final version = %s, want the write %s", fv.VersionID, closedBy)
+	}
 
-	// The review watch operation polls the forge and sees the merge.
+	// The review watch operation polls the forge and sees the merge at the
+	// time of the state write.
 	merged := change(&j, job.EventMerged)
-	merged.MergedAt = mergedAt
+	merged.MergedAt = finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()).At
 
 	got := apply(t, h, f, merged)
-	if got.State != job.StateSucceeded || got.Closed == nil || got.Closed.VersionID != "sv-ci" ||
+	if got.State != job.StateSucceeded || got.Closed == nil || got.Closed.VersionID != closedBy ||
 		got.Verification != job.VerificationPending {
-		t.Fatalf("merge after the state version = %s, %+v, %q; want succeeded, closed by sv-ci, pending",
-			got.State, got.Closed, got.Verification)
+		t.Fatalf("merge after the state version = %s, %+v, %q; want succeeded, closed by %s, pending",
+			got.State, got.Closed, got.Verification, closedBy)
 	}
 
 	if !followUp(t, h, j.ID, job.KindVerify) {
@@ -54,14 +52,12 @@ func testMergeBeforeOldVersion(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := deliver(t, h, f, f.unit, job.DeliveryReviewRequest)
-	early := time.Now().UTC()
 
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"a final version before the merge": version(f.unit, "sv-old", early, true),
-	})
+	writeState(t, h, f, true)
 
+	// The merge is after the last final version of the unit.
 	merged := change(&j, job.EventMerged)
-	merged.MergedAt = early.Add(time.Second)
+	merged.MergedAt = finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()).At.Add(time.Second)
 
 	if got := apply(t, h, f, merged); got.State != job.StateAwaitingState || got.Closed != nil {
 		t.Fatalf("merge after the last final version = %s, %+v; want awaiting-state, not closed", got.State,
@@ -86,10 +82,8 @@ func testLateTrailer(t *testing.T, h Harness) {
 
 	// The commit lands, and instance-a stops before it records it. The
 	// team's CI applies the commit and writes the state.
-	committedAt := time.Now().UTC()
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"a final version before the delivery is known": version(f.unit, "sv-ci", committedAt.Add(time.Second), true),
-	})
+	closedBy := writeState(t, h, f, true)
+	committedAt := finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()).At
 
 	shortenOp(t, h, first.Claim)
 	claimAfterExpiry(t, h, "instance-b", job.KindWriteBack)
@@ -108,8 +102,8 @@ func testLateTrailer(t *testing.T, h Harness) {
 	}
 
 	got := apply(t, h, f, found)
-	if got.State != job.StateSucceeded || got.Closed == nil || got.Closed.VersionID != "sv-ci" {
-		t.Fatalf("late delivery = %s, %+v; want succeeded, closed by sv-ci", got.State, got.Closed)
+	if got.State != job.StateSucceeded || got.Closed == nil || got.Closed.VersionID != closedBy {
+		t.Fatalf("late delivery = %s, %+v; want succeeded, closed by %s", got.State, got.Closed, closedBy)
 	}
 
 	if !followUp(t, h, j.ID, job.KindVerify) {
@@ -121,36 +115,27 @@ func testPlanClaimRecordsVersion(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
-	setVersion(t, h, f, svOne)
+	first := writeState(t, h, f, false)
 
 	j := newJob(f.unit, job.OperationApply, "")
 	stored := create(t, h, f, j, dispatchOf(j))
 
-	first := claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), longRenew)
+	claimedOp := claimOp(t, h, "runner-1", job.RunnerKind(j.Spec.Pool), longRenew)
 	stored = claimed(t, h, f, &stored, "runner-1")
 
-	if stored.Phases[0].StateVersion != svOne {
-		t.Fatalf("claim of the plan phase recorded %q, want sv-1", stored.Phases[0].StateVersion)
+	if stored.Phases[0].StateVersion != first {
+		t.Fatalf("claim of the plan phase recorded %q, want %s", stored.Phases[0].StateVersion, first)
 	}
 
 	// A state write lands while the claim is lost. The takeover plans again
 	// on the new version.
-	setVersion(t, h, f, svTwo)
-	shortenOp(t, h, first.Claim)
+	second := writeState(t, h, f, false)
+	shortenOp(t, h, claimedOp.Claim)
 	claimAfterExpiry(t, h, "runner-2", job.RunnerKind(j.Spec.Pool))
 
 	stored = claimed(t, h, f, &stored, "runner-2")
-	if stored.Phases[0].StateVersion != svTwo {
-		t.Fatalf("takeover of the plan phase recorded %q, want sv-2", stored.Phases[0].StateVersion)
-	}
-}
-
-// setVersion makes v the current state version of the unit of f.
-func setVersion(t *testing.T, h Harness, f fixture, v string) {
-	t.Helper()
-
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, v); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
+	if stored.Phases[0].StateVersion != second {
+		t.Fatalf("takeover of the plan phase recorded %q, want %s", stored.Phases[0].StateVersion, second)
 	}
 }
 

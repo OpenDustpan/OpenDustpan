@@ -320,6 +320,7 @@ func TestRecorderPutPlanCommitError(t *testing.T) {
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		},
 		Records:  commitThenFail{RecordStore: db},
 		ItemKeys: keys,

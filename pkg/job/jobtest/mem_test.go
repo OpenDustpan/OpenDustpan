@@ -37,6 +37,7 @@ func TestMemConformance(t *testing.T) {
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		}
 	})
 }
@@ -63,8 +64,6 @@ type memDB struct {
 	records memRecords
 	// itemKeys holds the item keys that the recorder makes in a write.
 	itemKeys *memKeyIndex
-	// states maps a unit ID to its current state version.
-	states map[string]string
 	// finals maps a unit ID to its last final state version, as
 	// ObserveStateVersion records it.
 	finals map[string]job.StateVersion
@@ -90,7 +89,6 @@ func newMemDB() *memDB {
 		itemKeys: nil,
 		nsIDs:    map[namespace.Name]namespace.ID{},
 		records:  newMemRecords(),
-		states:   map[string]string{},
 		finals:   map[string]job.StateVersion{},
 		jobs:     map[job.ID]*job.Job{},
 		order:    nil,
@@ -218,20 +216,6 @@ func (m *memDB) BumpFence(_ context.Context, fence namespace.Fence) (namespace.F
 	m.fences[fence.Namespace]++
 
 	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
-}
-
-// SetStateVersion implements jobtest.Domain.
-func (m *memDB) SetStateVersion(_ context.Context, fence namespace.Fence, unit identity.Object, v string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.checkFence(fence); err != nil {
-		return err
-	}
-
-	m.states[unit.UnitID()] = v
-
-	return nil
 }
 
 // GetNamespace implements job.NamespaceReader: it answers the name and the
@@ -989,7 +973,7 @@ func (m *memDB) checkPlans(j *job.Job, notBefore time.Time) error {
 	}
 
 	plan := j.Phases[j.Current-1].Plan
-	current := m.states[j.Spec.Unit.UnitID()]
+	current := ""
 	bindings := []*job.PlanBinding{nil}
 
 	approvals := j.Phases[j.Current].Approvals
@@ -1037,7 +1021,7 @@ func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now ti
 	}
 
 	if c.Event == job.EventClaim && next.Current < len(next.Phases) && next.Phases[next.Current].Kind == job.PhasePlan {
-		next.Phases[next.Current].StateVersion = m.states[next.Spec.Unit.UnitID()]
+		next.Phases[next.Current].StateVersion = ""
 	}
 
 	if f, ok := changes[c.Event]; ok {
