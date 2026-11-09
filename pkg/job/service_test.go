@@ -137,10 +137,6 @@ func (*svcStore) List(context.Context, job.Filter) (job.Page, error) {
 	return job.Page{Jobs: nil, Damaged: nil, After: ""}, nil
 }
 
-func (*svcStore) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
-	return nil, nil
-}
-
 func (*svcStore) SetVerification(context.Context, job.ID, job.Verification, namespace.Fence, []audit.Entry,
 ) error {
 	return nil

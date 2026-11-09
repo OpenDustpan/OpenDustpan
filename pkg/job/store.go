@@ -290,33 +290,17 @@ type Store interface {
 	//   - EventCancel of a job with a live durable operation: it applies
 	//     durable.Store.Cancel to the operation.
 	//   - EventMerged and EventDelivered: when the last final state version
-	//     of the unit that ObserveStateVersion recorded closes the job
-	//     (Job.ClosedBy), it also applies EventStateObserved with that
-	//     version, sets the Verification to pending and starts the
-	//     operation of KindVerify, as ObserveStateVersion does. So a merge
-	//     that the review watcher sees after the state version, or a
-	//     commit that a takeover finds by its trailer after the state
-	//     version, still closes the job.
+	//     of the unit closes the job (Job.ClosedBy), it also applies
+	//     EventStateObserved with that version, sets the Verification to
+	//     pending and starts the operation of KindVerify. So a merge that
+	//     the review watcher sees after the state version, or a commit that
+	//     a takeover finds by its trailer after the state version, still
+	//     closes the job.
 	//   - EventDelivered of a review request that stays in awaiting-state:
 	//     it starts the operation of KindReviewWatch.
 	//   - EventCancel, EventRejected or EventExpire of a job that delivered:
 	//     it starts the operation of KindAbandon.
 	Apply(ctx context.Context, c Change, fence namespace.Fence, e []audit.Entry) (Job, error)
-	// ObserveStateVersion records v as the last final state version of
-	// v.Unit when v.Final is true, also when no job waits, and closes each
-	// write-back job of the unit that v closes (Job.ClosedBy): a direct
-	// push must deliver at or before v.At, and a review request must have
-	// a known merge at or before v.At. With no merge yet, the job waits,
-	// and EventMerged closes it later on the recorded version. It applies
-	// EventStateObserved with v as the closing version, sets the
-	// Verification to pending, and starts the operation of KindVerify for
-	// each closed job. It returns the closed jobs, none when v is not final
-	// or no job waits. A tool package never
-	// calls it: the store adapter applies its rule in the transaction of
-	// each state write of any tool, so a state write and the close commit
-	// together. The verify operation asks the forge later, outside that
-	// transaction.
-	ObserveStateVersion(ctx context.Context, v StateVersion, fence namespace.Fence) ([]Job, error)
 	// SetVerification records the result of the verify operation of the
 	// closed job id, with e. It returns ErrNotFound for an unknown job,
 	// ErrInvalid for a job with no closing state version or for v pending,
@@ -338,8 +322,8 @@ type Store interface {
 	Orphans(ctx context.Context, limit int) ([]Orphan, []DamagedRow, error)
 }
 
-// FinalVersion is the last final state version of one unit, as
-// Store.ObserveStateVersion recorded it.
+// FinalVersion is the last final state version of one unit, as the state
+// write of the unit recorded it.
 type FinalVersion struct {
 	UnitID    string
 	VersionID string

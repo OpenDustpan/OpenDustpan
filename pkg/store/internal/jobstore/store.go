@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -731,15 +730,4 @@ func noJob() job.Job {
 // the job store would refuse.
 func Decode(r *Row) (job.Job, error) {
 	return jobOf(r)
-}
-
-// logger returns the logger of the runner, which records a damaged row that a
-// reader skips, for example the close loop of ObserveStateVersion. A nil
-// logger discards.
-func (s *Store) logger() *slog.Logger {
-	if log := s.run.Logger(); log != nil {
-		return log
-	}
-
-	return slog.New(slog.DiscardHandler)
 }

@@ -137,12 +137,6 @@ func (f *fakeJobs) Apply(context.Context, job.Change, namespace.Fence, []audit.E
 	return job.Job{}, errUnexpected
 }
 
-func (f *fakeJobs) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
-	f.note("ObserveStateVersion")
-
-	return nil, errUnexpected
-}
-
 func (f *fakeJobs) SetVerification(context.Context, job.ID, job.Verification, namespace.Fence, []audit.Entry,
 ) error {
 	f.note("SetVerification")

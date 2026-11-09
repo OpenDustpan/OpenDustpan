@@ -183,9 +183,16 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases(), reconcileCases(), damagedCases(), claimerCases(), missingNamespaceCases(), endClaimCases(),
-		claimBoundCases(), claimGateCases(), finalVersionCases())
+		claimBoundCases(), claimGateCases())
 
 	runCases(t, newHarness, cases)
+
+	// The in-memory job store fakes no state version, so it also implements
+	// no reader of one. A harness whose store reads final versions runs the
+	// cases of that port.
+	if _, ok := newHarness(t).Jobs.(job.FinalVersionReader); ok {
+		runCases(t, newHarness, finalVersionCases())
+	}
 
 	// A state version comes from the store of a tool. A harness without one
 	// runs no case that reads a version.

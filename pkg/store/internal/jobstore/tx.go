@@ -162,9 +162,6 @@ type Tx interface {
 	// FinalVersion returns the last final state version of the unit of the
 	// namespace ns, and false when none was recorded.
 	FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (FinalVersion, bool, error)
-	// PutFinalVersion records v as the last final state version of the unit
-	// of the namespace ns.
-	PutFinalVersion(ctx context.Context, ns namespace.Name, v FinalVersion) error
 
 	// InsertFreeze stores a freeze. It returns job.ErrConflict for an ID
 	// that exists.

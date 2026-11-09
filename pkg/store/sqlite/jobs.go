@@ -11,7 +11,6 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -37,35 +36,6 @@ type JobStore interface {
 //nolint:ireturn // Store-agnostic wiring takes the ports.
 func (s *Store) Jobs() JobStore {
 	return jobstore.New(jobRunner{s: s})
-}
-
-// PutUnitStateVersion records version as the current state version of the unit
-// unitID of the fence namespace, as the state write of its tool does. A plan
-// phase reads it at its claim, and an apply phase dispatches only while it is
-// the same.
-func (s *Store) PutUnitStateVersion(ctx context.Context, fence namespace.Fence, unitID, version string) error {
-	if unitID == "" {
-		return fmt.Errorf("%w: a state version needs a unit ID", job.ErrInvalid)
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		now, err := storeNow(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		return publishUnitState(ctx, q, unitStateWrite{
-			nsName:  fence.Namespace.String(),
-			unitID:  unitID,
-			version: version,
-			final:   false,
-			origin:  identity.StateOrigin{Job: "", Commit: ""},
-			atMs:    now,
-		})
-	})
 }
 
 // jobRunner opens the transactions of the job stores.
@@ -453,18 +423,6 @@ func (t *jobTx) FinalVersion(
 		UnitID: unitID, VersionID: row.FinalVersionID, Commit: row.FinalCommit, Job: job.ID(row.FinalJob),
 		At: time.UnixMilli(row.FinalAtMs).UTC(),
 	}, true, nil
-}
-
-// PutFinalVersion implements jobstore.Tx.
-func (t *jobTx) PutFinalVersion(ctx context.Context, ns namespace.Name, v jobstore.FinalVersion) error {
-	return publishUnitState(ctx, t.q, unitStateWrite{
-		nsName:  ns.String(),
-		unitID:  v.UnitID,
-		version: v.VersionID,
-		final:   true,
-		origin:  identity.StateOrigin{Job: string(v.Job), Commit: v.Commit},
-		atMs:    v.At.UnixMilli(),
-	})
 }
 
 // InsertFreeze implements jobstore.Tx.

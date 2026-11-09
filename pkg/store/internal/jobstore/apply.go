@@ -242,30 +242,6 @@ func settle(next *job.Job, to job.State, c *job.Change, prev int64, updated time
 	}
 }
 
-// ObserveStateVersion implements job.Store.
-func (s *Store) ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) ([]job.Job,
-	error,
-) {
-	if !v.Unit.IsUnit() || v.Unit.UnitID() == "" || v.Unit.Namespace() != fence.Namespace {
-		return nil, fmt.Errorf("%w: a state version names a unit of the namespace of the fence", job.ErrInvalid)
-	}
-
-	var closed []job.Job
-
-	err := s.run.Write(ctx, fence, func(tx Tx) error {
-		var err error
-
-		closed, err = observeIn(ctx, tx, &v, fence.Namespace, s.logger())
-
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return closed, nil
-}
-
 // CloseAwaiting closes the jobs of the unit v.UnitID of the namespace ns that
 // wait for a state version, when the final version v closes them, in the
 // transaction tx, and returns them. A store that publishes a final state
@@ -296,28 +272,6 @@ type closeVersion struct {
 	Commit    string
 	Job       job.ID
 	At        time.Time
-}
-
-// observeIn closes the jobs that the final state version v closes, and
-// records v as the last final version of its unit. It does nothing for a
-// version that is not final.
-func observeIn(
-	ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Name, log *slog.Logger,
-) ([]job.Job, error) {
-	if !v.Final {
-		return nil, nil
-	}
-
-	final := FinalVersion{
-		UnitID: v.Unit.UnitID(), VersionID: v.VersionID, Commit: v.Commit, Job: v.Job, At: v.At,
-	}
-
-	closed, err := CloseAwaiting(ctx, tx, ns, final, log)
-	if err != nil {
-		return nil, err
-	}
-
-	return closed, tx.PutFinalVersion(ctx, ns, final)
 }
 
 // closeRun carries what the close of a state version reads with: the
