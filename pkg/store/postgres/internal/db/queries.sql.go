@@ -5266,19 +5266,21 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 }
 
 const finalizeUnitState = `-- name: FinalizeUnitState :one
-UPDATE unit_state
-SET final_version_id = version_id, final_commit = $1, final_job = $2,
-    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
-  AND unit_id = $4
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    '', '', $3, $4, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+)
+ON CONFLICT (unit_id) DO UPDATE SET final_version_id = unit_state.version_id,
+    final_commit = excluded.final_commit, final_job = excluded.final_job, final_at_ms = excluded.final_at_ms
 RETURNING version_id, final_at_ms
 `
 
 type FinalizeUnitStateParams struct {
+	UnitID      string
+	Namespace   string
 	FinalCommit string
 	FinalJob    string
-	Namespace   string
-	UnitID      string
 }
 
 type FinalizeUnitStateRow struct {
@@ -5287,14 +5289,15 @@ type FinalizeUnitStateRow struct {
 }
 
 // Make the current state version of the unit final, with the origin of the
-// write that ends it. It returns the version and the time that the database
-// clock gives it, or no row when the unit has no state version row.
+// write that ends it, at the time of the database clock. A unit with no state
+// version row gets a row with the empty version as final. It returns the final
+// version and its time.
 func (q *Queries) FinalizeUnitState(ctx context.Context, arg FinalizeUnitStateParams) (FinalizeUnitStateRow, error) {
 	row := q.db.QueryRow(ctx, finalizeUnitState,
+		arg.UnitID,
+		arg.Namespace,
 		arg.FinalCommit,
 		arg.FinalJob,
-		arg.Namespace,
-		arg.UnitID,
 	)
 	var i FinalizeUnitStateRow
 	err := row.Scan(&i.VersionID, &i.FinalAtMs)

@@ -3914,13 +3914,17 @@ RETURNING version_id, final_at_ms;
 
 -- name: FinalizeUnitState :one
 -- Make the current state version of the unit final, with the origin of the
--- write that ends it. It returns the version and the time that the database
--- clock gives it, or no row when the unit has no state version row.
-UPDATE unit_state
-SET final_version_id = version_id, final_commit = sqlc.arg(final_commit), final_job = sqlc.arg(final_job),
-    final_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
-  AND unit_id = sqlc.arg(unit_id)
+-- write that ends it, at the time of the database clock. A unit with no state
+-- version row gets a row with the empty version as final. It returns the final
+-- version and its time.
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    '', '', sqlc.arg(final_commit), sqlc.arg(final_job),
+    CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+)
+ON CONFLICT (unit_id) DO UPDATE SET final_version_id = unit_state.version_id,
+    final_commit = excluded.final_commit, final_job = excluded.final_job, final_at_ms = excluded.final_at_ms
 RETURNING version_id, final_at_ms;
 
 -- name: GetUnitState :one

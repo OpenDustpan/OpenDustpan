@@ -107,27 +107,25 @@ func jobSpecCommit(ctx context.Context, q *db.Queries, jobID string) (string, er
 // publishFinalState records the current state version of the unit as final,
 // with the origin of the write that ends it. A unit with no state version row
 // records the empty version: it holds no state, and the end of its update is
-// still final.
+// still final. One statement writes the row, at the clock of the database.
 func publishFinalState(
 	ctx context.Context, q *db.Queries, nsName, unitID string, origin identity.StateOrigin,
 ) error {
-	w := unitStateWrite{nsName: nsName, unitID: unitID, version: "", final: true, origin: origin, atMs: 0}
-
-	ok, err := publishFinalStateAt(ctx, q, w)
-	if err != nil || ok {
+	if err := resolveOriginCommit(ctx, q, &origin); err != nil {
 		return err
 	}
 
-	// The unit has no state version row. Publish the empty version as final,
-	// as the first write of the unit does.
-	atMs, err := storeNow(ctx, q)
+	row, err := q.FinalizeUnitState(ctx, db.FinalizeUnitStateParams{
+		Namespace: nsName, UnitID: unitID, FinalCommit: origin.Commit, FinalJob: origin.Job,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("finalize unit state: %w", err)
 	}
 
-	w.atMs = atMs
-
-	return publishUnitState(ctx, q, w)
+	return closeAwaitingState(ctx, q, nsName, jobstore.FinalVersion{
+		UnitID: unitID, VersionID: row.VersionID, Commit: origin.Commit, Job: job.ID(origin.Job),
+		At: time.UnixMilli(row.FinalAtMs).UTC(),
+	})
 }
 
 // publishReleasedState records the current state version of the unit as final,
@@ -156,31 +154,6 @@ func publishReleasedState(
 
 	return closeAwaitingState(ctx, q, nsName, jobstore.FinalVersion{
 		UnitID: unitID, VersionID: row.VersionID, Commit: origin.Commit, Job: job.ID(origin.Job),
-		At: time.UnixMilli(row.FinalAtMs).UTC(),
-	})
-}
-
-// publishFinalStateAt records the current state version of the unit as final,
-// at the clock of the database, and reports false when the unit has no state
-// version row.
-func publishFinalStateAt(ctx context.Context, q *db.Queries, w unitStateWrite) (bool, error) {
-	if err := resolveOriginCommit(ctx, q, &w.origin); err != nil {
-		return false, err
-	}
-
-	row, err := q.FinalizeUnitState(ctx, db.FinalizeUnitStateParams{
-		Namespace: w.nsName, UnitID: w.unitID, FinalCommit: w.origin.Commit, FinalJob: w.origin.Job,
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("finalize unit state: %w", err)
-	}
-
-	return true, closeAwaitingState(ctx, q, w.nsName, jobstore.FinalVersion{
-		UnitID: w.unitID, VersionID: row.VersionID, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
 		At: time.UnixMilli(row.FinalAtMs).UTC(),
 	})
 }
