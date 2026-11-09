@@ -913,20 +913,14 @@ CREATE TABLE job_freezes (
     ended_by      TEXT    NOT NULL
 ) STRICT;
 
-CREATE TABLE unit_state_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE unit_final_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    commit_id     TEXT    NOT NULL,
-    job_id        TEXT    NOT NULL,
-    at_ms         INTEGER NOT NULL
+CREATE TABLE unit_state (
+    unit_id          TEXT    NOT NULL PRIMARY KEY,
+    namespace_id     TEXT    NOT NULL REFERENCES namespaces (id),
+    version_id       TEXT    NOT NULL DEFAULT '',
+    final_version_id TEXT    NOT NULL DEFAULT '',
+    final_commit     TEXT    NOT NULL DEFAULT '',
+    final_job        TEXT    NOT NULL DEFAULT '',
+    final_at_ms      INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TABLE saved_views (

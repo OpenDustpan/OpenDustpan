@@ -43,16 +43,6 @@ func pgCopyJobTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table:   "unit_state_versions",
-			columns: []string{pgColUnitID, pgColNamespaceID, "version_id", pgColUpdatedAtMs},
-			orderBy: []string{pgColUnitID},
-		},
-		{
-			table:   "unit_final_versions",
-			columns: []string{pgColUnitID, pgColNamespaceID, "version_id", "commit_id", pgColJobID, pgColAtMs},
-			orderBy: []string{pgColUnitID},
-		},
-		{
 			table:   "job_plans",
 			columns: []string{"id", pgColNamespaceID, pgColJobID, "body", pgColCreatedAtMs},
 			orderBy: []string{"id"},

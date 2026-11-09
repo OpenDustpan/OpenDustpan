@@ -1275,15 +1275,6 @@ type UnitDefault struct {
 	UpdatedAtMs int64
 }
 
-type UnitFinalVersion struct {
-	UnitID      string
-	NamespaceID string
-	VersionID   string
-	CommitID    string
-	JobID       string
-	AtMs        int64
-}
-
 type UnitSetting struct {
 	UnitID      string
 	NamespaceID string
@@ -1292,11 +1283,14 @@ type UnitSetting struct {
 	UpdatedAtMs int64
 }
 
-type UnitStateVersion struct {
-	UnitID      string
-	NamespaceID string
-	VersionID   string
-	UpdatedAtMs int64
+type UnitState struct {
+	UnitID         string
+	NamespaceID    string
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
 }
 
 type Update struct {

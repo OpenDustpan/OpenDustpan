@@ -9715,37 +9715,6 @@ func (q *Queries) GetUnitDefaults(ctx context.Context, namespace string) (GetUni
 	return i, err
 }
 
-const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
-SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
-`
-
-type GetUnitFinalVersionParams struct {
-	Namespace string
-	UnitID    string
-}
-
-type GetUnitFinalVersionRow struct {
-	UnitID    string
-	VersionID string
-	CommitID  string
-	JobID     string
-	AtMs      int64
-}
-
-func (q *Queries) GetUnitFinalVersion(ctx context.Context, arg GetUnitFinalVersionParams) (GetUnitFinalVersionRow, error) {
-	row := q.db.QueryRow(ctx, getUnitFinalVersion, arg.Namespace, arg.UnitID)
-	var i GetUnitFinalVersionRow
-	err := row.Scan(
-		&i.UnitID,
-		&i.VersionID,
-		&i.CommitID,
-		&i.JobID,
-		&i.AtMs,
-	)
-	return i, err
-}
-
 const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
 SELECT item_seq
 FROM object_context
@@ -9800,21 +9769,35 @@ func (q *Queries) GetUnitSettings(ctx context.Context, arg GetUnitSettingsParams
 	return i, err
 }
 
-const getUnitStateVersion = `-- name: GetUnitStateVersion :one
-SELECT version_id FROM unit_state_versions
+const getUnitState = `-- name: GetUnitState :one
+SELECT version_id, final_version_id, final_commit, final_job, final_at_ms FROM unit_state
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
 `
 
-type GetUnitStateVersionParams struct {
+type GetUnitStateParams struct {
 	Namespace string
 	UnitID    string
 }
 
-func (q *Queries) GetUnitStateVersion(ctx context.Context, arg GetUnitStateVersionParams) (string, error) {
-	row := q.db.QueryRow(ctx, getUnitStateVersion, arg.Namespace, arg.UnitID)
-	var version_id string
-	err := row.Scan(&version_id)
-	return version_id, err
+type GetUnitStateRow struct {
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
+}
+
+func (q *Queries) GetUnitState(ctx context.Context, arg GetUnitStateParams) (GetUnitStateRow, error) {
+	row := q.db.QueryRow(ctx, getUnitState, arg.Namespace, arg.UnitID)
+	var i GetUnitStateRow
+	err := row.Scan(
+		&i.VersionID,
+		&i.FinalVersionID,
+		&i.FinalCommit,
+		&i.FinalJob,
+		&i.FinalAtMs,
+	)
+	return i, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -19615,6 +19598,44 @@ func (q *Queries) PruneUsedTickets(ctx context.Context, untilMs int64) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const publishUnitState = `-- name: PublishUnitState :exec
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id,
+    final_version_id = CASE WHEN $8::boolean THEN excluded.final_version_id ELSE unit_state.final_version_id END,
+    final_commit = CASE WHEN $8::boolean THEN excluded.final_commit ELSE unit_state.final_commit END,
+    final_job = CASE WHEN $8::boolean THEN excluded.final_job ELSE unit_state.final_job END,
+    final_at_ms = CASE WHEN $8::boolean THEN excluded.final_at_ms ELSE unit_state.final_at_ms END
+`
+
+type PublishUnitStateParams struct {
+	UnitID         string
+	Namespace      string
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
+	Final          bool
+}
+
+func (q *Queries) PublishUnitState(ctx context.Context, arg PublishUnitStateParams) error {
+	_, err := q.db.Exec(ctx, publishUnitState,
+		arg.UnitID,
+		arg.Namespace,
+		arg.VersionID,
+		arg.FinalVersionID,
+		arg.FinalCommit,
+		arg.FinalJob,
+		arg.FinalAtMs,
+		arg.Final,
+	)
+	return err
+}
+
 const purgeStack = `-- name: PurgeStack :execrows
 DELETE FROM stacks
 WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL
@@ -19749,63 +19770,6 @@ func (q *Queries) PutGroupMapping(ctx context.Context, arg PutGroupMappingParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
-INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
-VALUES (
-    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
-    $3, $4, $5, $6
-)
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
-    job_id = excluded.job_id, at_ms = excluded.at_ms
-`
-
-type PutUnitFinalVersionParams struct {
-	UnitID    string
-	Namespace string
-	VersionID string
-	CommitID  string
-	JobID     string
-	AtMs      int64
-}
-
-func (q *Queries) PutUnitFinalVersion(ctx context.Context, arg PutUnitFinalVersionParams) error {
-	_, err := q.db.Exec(ctx, putUnitFinalVersion,
-		arg.UnitID,
-		arg.Namespace,
-		arg.VersionID,
-		arg.CommitID,
-		arg.JobID,
-		arg.AtMs,
-	)
-	return err
-}
-
-const putUnitStateVersion = `-- name: PutUnitStateVersion :exec
-INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
-VALUES (
-    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
-    $3, $4
-)
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms
-`
-
-type PutUnitStateVersionParams struct {
-	UnitID      string
-	Namespace   string
-	VersionID   string
-	UpdatedAtMs int64
-}
-
-func (q *Queries) PutUnitStateVersion(ctx context.Context, arg PutUnitStateVersionParams) error {
-	_, err := q.db.Exec(ctx, putUnitStateVersion,
-		arg.UnitID,
-		arg.Namespace,
-		arg.VersionID,
-		arg.UpdatedAtMs,
-	)
-	return err
 }
 
 const queryGateRecords = `-- name: QueryGateRecords :many

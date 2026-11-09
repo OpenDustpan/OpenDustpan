@@ -137,7 +137,7 @@ func afterChange(ctx context.Context, tx Tx, cur, next *job.Job, ev job.Event) e
 }
 
 // followUp starts the follow-up operation of kind k of the job id.
-func followUp(ctx context.Context, tx Tx, id job.ID, k durable.Kind) error {
+func followUp(ctx context.Context, tx CloseTx, id job.ID, k durable.Kind) error {
 	req := durable.StartRequest{Key: job.FollowUpKey(id, k), Kind: k, Version: 1, Input: nil}
 
 	if _, err := tx.StartOperation(ctx, &req); err != nil {
@@ -165,7 +165,7 @@ func followUpOf(next *job.Job, ev job.Event) (durable.Kind, bool) {
 
 // closeJob applies EventStateObserved with the closing version v to next,
 // sets its verification to pending and starts its verify operation.
-func closeJob(ctx context.Context, tx Tx, next *job.Job, v job.StateVersion) error {
+func closeJob(ctx context.Context, tx CloseTx, next *job.Job, v job.StateVersion) error {
 	to, err := job.Next(next.State, job.EventStateObserved)
 	if err != nil {
 		return err

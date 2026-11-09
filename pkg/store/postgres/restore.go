@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -307,7 +308,168 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) erro
 		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
-	return fenceRestored(ctx, tx, live)
+	if err := fenceRestored(ctx, tx, live); err != nil {
+		return err
+	}
+
+	return deriveUnitState(ctx, tx, live)
+}
+
+// unitVersion names the unit of the restored installation and the state
+// version that the restore derives for it.
+type unitVersion struct {
+	namespace string
+	id        string
+	version   string
+}
+
+// deriveUnitState records the state version of every unit of the restored
+// schema live in unit_state, in tx: a restore derives the version from the
+// restored rows and brings no stored version back. A workspace takes the state
+// version that its row makes current, a stack the digest of its last
+// checkpoint. Every derived version is final: the state that the restore
+// brings is the state of the installation.
+func deriveUnitState(ctx context.Context, tx pgx.Tx, live string) error {
+	q := db.New(tx)
+
+	atMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	workspaces, err := restoredWorkspaceVersions(ctx, tx, live)
+	if err != nil {
+		return err
+	}
+
+	for _, unit := range workspaces {
+		err = publishUnitState(ctx, q, unitStateWrite{
+			namespace: unit.namespace,
+			unitID:    unit.id,
+			version:   unit.version,
+			final:     true,
+			origin:    identity.StateOrigin{Job: "", Commit: ""},
+			atMs:      atMs,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	stacks, err := restoredStackVersions(ctx, tx, live)
+	if err != nil {
+		return err
+	}
+
+	for _, unit := range stacks {
+		err = publishUnitState(ctx, q, unitStateWrite{
+			namespace: unit.namespace,
+			unitID:    unit.id,
+			version:   unit.version,
+			final:     true,
+			origin:    identity.StateOrigin{Job: "", Commit: ""},
+			atMs:      atMs,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// restoredWorkspaceVersions reads the state version that the row of each
+// workspace of the restored schema live makes current.
+func restoredWorkspaceVersions(ctx context.Context, tx pgx.Tx, live string) ([]unitVersion, error) {
+	const what = "read restored workspaces"
+
+	query := "SELECT namespace, id, current_state_version_id FROM " + pgIdent(live) + ".workspaces"
+
+	scan := func(rows pgx.Rows) (unitVersion, error) {
+		var unit unitVersion
+
+		if err := rows.Scan(&unit.namespace, &unit.id, &unit.version); err != nil {
+			return unitVersion{}, fmt.Errorf("%s: %w", what, err)
+		}
+
+		return unit, nil
+	}
+
+	return readUnitVersions(ctx, tx, query, what, scan)
+}
+
+// restoredStackVersions reads the state version of each stack of the restored
+// schema live: the digest of the last checkpoint that its updates wrote, as
+// GetLatestCheckpoint reads it.
+func restoredStackVersions(ctx context.Context, tx pgx.Tx, live string) ([]unitVersion, error) {
+	const what = "read restored stacks"
+
+	query := "SELECT st.namespace, c.stack_id, c.digest, c.invalid" +
+		" FROM " + pgIdent(live) + ".checkpoints AS c" +
+		" JOIN " + pgIdent(live) + ".updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id" +
+		" JOIN " + pgIdent(live) + ".stacks AS st ON st.id = c.stack_id" +
+		" WHERE u.version = (SELECT MAX(v.version) FROM " + pgIdent(live) + ".updates AS v" +
+		" JOIN " + pgIdent(live) + ".checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id" +
+		" WHERE v.stack_id = c.stack_id)"
+
+	scan := func(rows pgx.Rows) (unitVersion, error) {
+		var (
+			unit    unitVersion
+			digest  []byte
+			invalid bool
+		)
+
+		if err := rows.Scan(&unit.namespace, &unit.id, &digest, &invalid); err != nil {
+			return unitVersion{}, fmt.Errorf("%s: %w", what, err)
+		}
+
+		unit.version = checkpointDigest{digest: digest, invalid: invalid}.stateVersion()
+
+		return unit, nil
+	}
+
+	return readUnitVersions(ctx, tx, query, what, scan)
+}
+
+// readUnitVersions runs a query that names the namespace, the unit ID and the
+// state version of each unit of the restored installation, and reads each row
+// with scan.
+func readUnitVersions(
+	ctx context.Context, tx pgx.Tx, query, what string, scan func(pgx.Rows) (unitVersion, error),
+) ([]unitVersion, error) {
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+
+	out, err := scanUnitVersions(rows, scan)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+
+	return out, nil
+}
+
+// scanUnitVersions reads each row of rows with scan and closes the rows.
+func scanUnitVersions(rows pgx.Rows, scan func(pgx.Rows) (unitVersion, error)) ([]unitVersion, error) {
+	var out []unitVersion
+
+	for rows.Next() {
+		unit, scanErr := scan(rows)
+		if scanErr != nil {
+			rows.Close()
+
+			return nil, scanErr
+		}
+
+		out = append(out, unit)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read rows: %w", err)
+	}
+
+	return out, nil
 }
 
 // fenceRestored increments the failover version of every namespace of the

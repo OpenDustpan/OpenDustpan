@@ -560,7 +560,7 @@ func insert(ctx context.Context, tx Tx, j *job.Job) error {
 }
 
 // update replaces the row of version prev with j.
-func update(ctx context.Context, tx Tx, j *job.Job, prev int64) error {
+func update(ctx context.Context, tx CloseTx, j *job.Job, prev int64) error {
 	r, err := rowOf(j)
 	if err != nil {
 		return err

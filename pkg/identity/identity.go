@@ -139,6 +139,18 @@ func (p Principal) ActsAsPerson() bool {
 	return p.Kind == "" || p.Kind == KindPerson
 }
 
+// StateOrigin names the writer of a state version: the job whose token made
+// the write, and the commit that the tool reported with it. Both are empty
+// for a write that no job made, for example from a laptop or from a restore.
+type StateOrigin struct {
+	// Job is the job whose token made the write. It is empty for every
+	// other credential.
+	Job string
+	// Commit is the commit that the tool reported with the write. It is
+	// empty when the tool reported none.
+	Commit string
+}
+
 // Action is something a principal wants to do.
 type Action string
 

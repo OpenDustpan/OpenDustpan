@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -223,6 +224,12 @@ func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stack
 
 	if lockErr := writeInventoryLock(ctx, q, stackInventoryKey(u), nil); lockErr != nil {
 		return lockErr
+	}
+
+	// The end of a mutating update is final, whatever its result: the current
+	// state version of the unit closes the write-back jobs that wait for it.
+	if pubErr := publishFinalState(ctx, q, u.Ref.Namespace.String(), stackID); pubErr != nil {
+		return pubErr
 	}
 
 	return appendStackChange(ctx, q, u.Ref, unitWrite{unitID: stackID, atMs: endedMs, kind: inventory.ChangeChanged})
@@ -486,7 +493,31 @@ func writeCheckpointRows(
 		return checkpointWrite{known: false, checked: false}, attemptErr
 	}
 
+	// The digest of the stored row is the state version of the unit: a plan of
+	// the state that this checkpoint replaced is stale. The write pays no
+	// round trip for the time: it is the clock that the upsert returned.
+	if pubErr := publishCheckpointState(ctx, q, cp, row, nowMs); pubErr != nil {
+		return checkpointWrite{known: false, checked: false}, pubErr
+	}
+
 	return checkpointWrite{known: false, checked: true}, nil
+}
+
+// publishCheckpointState records the digest of the stored checkpoint row as
+// the current state version of its stack, at the time atMs of the write. A
+// checkpoint that the row marks invalid carries a version of its own, so it
+// changes the version of a valid write that the same update replaced.
+func publishCheckpointState(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, row codec.CheckpointRow, atMs int64,
+) error {
+	return publishUnitState(ctx, q, unitStateWrite{
+		namespace: cp.Ref.Namespace.String(),
+		unitID:    row.StackID,
+		version:   checkpointDigest{digest: row.Digest, invalid: row.Invalid}.stateVersion(),
+		final:     false,
+		origin:    identity.StateOrigin{Job: "", Commit: ""},
+		atMs:      atMs,
+	})
 }
 
 // lostCheckpointRace answers an upsert that wrote no row: a write of the same

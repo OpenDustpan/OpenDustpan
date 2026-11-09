@@ -531,6 +531,14 @@ func pgEmptiedTables() []pgCopyTable {
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
 		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
+				"final_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
+		},
 	}
 }
 

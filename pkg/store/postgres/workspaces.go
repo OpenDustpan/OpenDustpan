@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -788,6 +789,25 @@ func publishFencedState(
 		return releaseErr
 	}
 
+	// The forced release finalizes the state version that becomes current: a
+	// write-back job of the unit closes on it.
+	atMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		namespace: w.Ref.Namespace.String(),
+		unitID:    id,
+		version:   row.ID,
+		final:     true,
+		origin:    identity.StateOrigin{Job: "", Commit: ""},
+		atMs:      atMs,
+	})
+	if pubErr != nil {
+		return pubErr
+	}
+
 	// The change log row comes last, after every other lock.
 	return appendWorkspaceChange(
 		ctx,
@@ -972,6 +992,26 @@ func writeFinalize(
 
 	if setErr := q.SetWorkspaceCurrent(ctx, setParams); setErr != nil {
 		return fmt.Errorf("set current state: %w", setErr)
+	}
+
+	// The finalized version is the current state version of the unit. A write
+	// that the workspace allows without a lock is final: it has no release
+	// that marks it, and a write-back job of the unit would never close.
+	atMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		namespace: wrow.Namespace,
+		unitID:    wrow.ID,
+		version:   row.ID,
+		final:     row.UnlockedWrite,
+		origin:    identity.StateOrigin{Job: "", Commit: ""},
+		atMs:      atMs,
+	})
+	if pubErr != nil {
+		return pubErr
 	}
 
 	return publishWorkspaceInventory(
@@ -1299,10 +1339,39 @@ func checkFenceCurrent(
 	return nil
 }
 
+// releasesLock reports whether the save of w releases the lock of its stored
+// workspace: the stored row holds a lock and w holds none. A release is the
+// lock that ends, not the record of a release: a write that carries the record
+// of an earlier release releases nothing.
+func releasesLock(ctx context.Context, q *db.Queries, w workspace.Workspace) (bool, error) {
+	if w.Lock.Locked() {
+		return false, nil
+	}
+
+	stored, err := q.LockWorkspaceForFinalize(ctx, w.ID.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The update reports the row that does not exist.
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("lock workspace: %w", err)
+	}
+
+	return stored.LockHolder != "", nil
+}
+
 // saveWorkspaceRow writes the workspace row in the caller's transaction, with
-// its inventory entry and lock. It is the compare-and-swap of SaveWorkspace.
+// its inventory entry and lock. It is the compare-and-swap of SaveWorkspace. A
+// write that releases the lock also marks the current state version of the
+// unit final.
 func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
 	row := codec.ToWorkspaceRow(w)
+
+	released, err := releasesLock(ctx, q, w)
+	if err != nil {
+		return err
+	}
 
 	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
 		Revision:            row.Revision,
@@ -1325,28 +1394,42 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 		return fmt.Errorf("update workspace: %w", err)
 	}
 
-	if n > 0 {
-		if pubErr := upsertWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
-			return pubErr
-		}
-
-		// The lock moves with the write in the same transaction: lock,
-		// unlock and force-unlock all save here.
-		lockErr := writeInventoryLock(
-			ctx, q, inventoryLockKey{
-				namespace: w.Ref.Namespace.String(),
-				tool:      inventoryToolOpenTofu,
-				name:      w.Ref.Name.String(),
-			}, workspaceLock(w.Lock),
-		)
-		if lockErr != nil {
-			return lockErr
-		}
-
-		return writeWorkspaceLastRelease(ctx, q, w)
+	if n == 0 {
+		return lostWorkspaceSave(ctx, q, row.ID)
 	}
 
-	exists, err := q.WorkspaceExists(ctx, row.ID)
+	if invErr := upsertWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); invErr != nil {
+		return invErr
+	}
+
+	// The lock moves with the write in the same transaction: lock, unlock and
+	// force-unlock all save here.
+	lockErr := writeInventoryLock(
+		ctx, q, inventoryLockKey{
+			namespace: w.Ref.Namespace.String(),
+			tool:      inventoryToolOpenTofu,
+			name:      w.Ref.Name.String(),
+		}, workspaceLock(w.Lock),
+	)
+	if lockErr != nil {
+		return lockErr
+	}
+
+	if releaseErr := writeWorkspaceLastRelease(ctx, q, w); releaseErr != nil {
+		return releaseErr
+	}
+
+	if released {
+		return publishReleasedState(ctx, q, w.Ref.Namespace.String(), row.ID)
+	}
+
+	return nil
+}
+
+// lostWorkspaceSave answers a compare-and-swap of a workspace row that wrote
+// no row: the row does not exist, or another write moved its revision.
+func lostWorkspaceSave(ctx context.Context, q *db.Queries, id string) error {
+	exists, err := q.WorkspaceExists(ctx, id)
 	if err != nil {
 		return fmt.Errorf("check workspace: %w", err)
 	}
