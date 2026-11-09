@@ -233,7 +233,11 @@ func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stack
 	// state version of the unit closes the write-back jobs that wait for it.
 	// The origin is the one of the update: the job whose token started it and
 	// the commit it reported.
-	if pubErr := publishFinalState(ctx, q, u.Ref.Namespace.String(), stackID, u.Origin()); pubErr != nil {
+	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		kind: unitStateWriteEnd, nsName: u.Ref.Namespace.String(), unitID: stackID,
+		version: "", final: false, origin: u.Origin(), atMs: 0,
+	})
+	if pubErr != nil {
 		return pubErr
 	}
 
@@ -520,6 +524,7 @@ func publishCheckpointState(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, row codec.CheckpointRow, atMs int64,
 ) error {
 	return publishUnitState(ctx, q, unitStateWrite{
+		kind:    unitStateWriteState,
 		nsName:  cp.Ref.Namespace.String(),
 		unitID:  row.StackID,
 		version: checkpointDigest{digest: row.Digest, invalid: row.Invalid}.stateVersion(),

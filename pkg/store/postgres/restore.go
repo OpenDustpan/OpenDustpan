@@ -363,8 +363,11 @@ func deriveUnitState(ctx context.Context, tx pgx.Tx, live string) error {
 
 // upsertRestoredUnitState writes the state version of every unit of the
 // restored schema live in unit_state, in tx, with one statement for the
-// workspaces and one for the stacks. The final fields are the version, the
-// origin is empty, and the time comes from the database clock.
+// workspaces and one for the stacks. It is the one writer of unit_state
+// outside publishUnitState: a portable restore derives the versions of all
+// restored units at once, so one call per unit would not scale. The final
+// fields are the version, the origin is empty, and the time comes from the
+// database clock.
 func upsertRestoredUnitState(ctx context.Context, tx pgx.Tx, live string) error {
 	const (
 		now     = "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint"

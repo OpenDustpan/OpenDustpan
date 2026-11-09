@@ -802,6 +802,7 @@ func publishFencedState(
 	}
 
 	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		kind:    unitStateWriteState,
 		nsName:  w.Ref.Namespace.String(),
 		unitID:  id,
 		version: row.ID,
@@ -1017,6 +1018,7 @@ func writeFinalize(
 	}
 
 	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		kind:    unitStateWriteState,
 		nsName:  wrow.Namespace,
 		unitID:  wrow.ID,
 		version: row.ID,
@@ -1452,7 +1454,10 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 	}
 
 	if released {
-		return publishReleasedState(ctx, q, w.Ref.Namespace.String(), row.ID, w.Origin)
+		return publishUnitState(ctx, q, unitStateWrite{
+			kind: unitStateWriteRelease, nsName: w.Ref.Namespace.String(), unitID: row.ID,
+			version: "", final: false, origin: w.Origin, atMs: 0,
+		})
 	}
 
 	return nil

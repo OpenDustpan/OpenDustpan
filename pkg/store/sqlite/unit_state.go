@@ -15,11 +15,34 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-// unitStateWrite is the state version that one write of a unit publishes: the
-// unit, the version that the write makes current, whether the write also
-// makes it the last final version of the unit, the origin of the write and
-// its time on the clock of the store.
+// unitStateKind is the kind of a write of unit_state: a state write that
+// publishes a version, the end of an update that marks the current version
+// final, or a lock release that marks the current version final.
+type unitStateKind int
+
+const (
+	// unitStateWriteState publishes a version as the current state version.
+	unitStateWriteState unitStateKind = iota + 1
+	// unitStateWriteEnd marks the current version final at the end of an update.
+	unitStateWriteEnd
+	// unitStateWriteRelease marks the current version final at a lock release.
+	unitStateWriteRelease
+)
+
+// errUnitStateKind reports a write of a kind that the store does not know.
+var errUnitStateKind = errors.New("unit state write kind is unknown")
+
+// valid reports whether k is one of the write kinds.
+func (k unitStateKind) valid() bool {
+	return k >= unitStateWriteState && k <= unitStateWriteRelease
+}
+
+// unitStateWrite is one write of unit_state: its kind, the unit, the version
+// that a state write makes current, whether that write also makes it the last
+// final version, the origin of the write and its time on the clock of the
+// store.
 type unitStateWrite struct {
+	kind    unitStateKind
 	nsName  string
 	unitID  string
 	version string
@@ -28,57 +51,85 @@ type unitStateWrite struct {
 	atMs    int64
 }
 
-// publishUnitState records the version of w as the current state version of
-// its unit, and, when w.final is true, as the last final state version of the
-// unit, with the origin and the time of w. It is the only writer of
-// unit_state: every point that moves the state of a unit calls it in the
-// transaction of the write, so the version and the state commit together. A
-// final version closes the jobs that wait for one, in the same transaction.
+// publishUnitState records the write of w in unit_state. It is the only writer
+// of unit_state except the restore derive in restore.go, which writes the
+// versions of all restored units with one statement.
+//
+// A state write records the version of w as the current state version of its
+// unit, and, when w.final is true, as the last final state version of the
+// unit, with the origin and the time of w. The end of an update marks the
+// current version final, at the clock of the store. A lock release marks the
+// current version final, at the clock of the store, and does nothing when it
+// is final already. A final version closes the jobs that wait for one, in the
+// same transaction.
 //
 // An origin that names a job and no commit takes the commit of the spec of
 // that job, read in the same transaction. The commit stays empty when the
 // store holds no such job: a write outlives the job that made it, for example
 // after a purge.
 //
-// The stored final fields stay as they are when w.final is false. sqlc
-// rewrites no query parameter in the DO UPDATE SET clause of this dialect, so
-// this function reads the stored row and gives its final fields to the
-// upsert. The write transaction of the store is IMMEDIATE, so no other write
-// runs between the read and the upsert.
+// The stored final fields stay as they are when a state write is not final.
+// sqlc rewrites no query parameter in the DO UPDATE SET clause of this
+// dialect, so stateWriteParams reads the stored row and gives its final fields
+// to the upsert. The write transaction of the store is IMMEDIATE, so no other
+// write runs between the read and the upsert.
 func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) error {
+	if !w.kind.valid() {
+		return fmt.Errorf("%w: %d", errUnitStateKind, w.kind)
+	}
+
 	if err := resolveOriginCommit(ctx, q, &w.origin); err != nil {
 		return err
 	}
 
-	finalVersionID, finalCommit, finalJob, finalAtMs := "", "", "", int64(0)
-
-	if w.final {
-		finalVersionID, finalCommit, finalJob, finalAtMs = w.version, w.origin.Commit, w.origin.Job, w.atMs
-	} else {
-		stored, ok, err := unitState(ctx, q, w.nsName, w.unitID)
+	switch w.kind {
+	case unitStateWriteState:
+		params, err := stateWriteParams(ctx, q, w)
 		if err != nil {
 			return err
 		}
 
-		if ok {
-			finalVersionID, finalCommit, finalJob, finalAtMs = stored.FinalVersionID, stored.FinalCommit,
-				stored.FinalJob, stored.FinalAtMs
+		if err := q.PublishUnitState(ctx, params); err != nil {
+			return fmt.Errorf("publish unit state: %w", err)
 		}
-	}
 
-	err := q.PublishUnitState(ctx, db.PublishUnitStateParams{
-		UnitID:         w.unitID,
-		Namespace:      w.nsName,
-		VersionID:      w.version,
-		FinalVersionID: finalVersionID,
-		FinalCommit:    finalCommit,
-		FinalJob:       finalJob,
-		FinalAtMs:      finalAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("publish unit state: %w", err)
-	}
+		return closePublishedState(ctx, q, w)
+	case unitStateWriteEnd:
+		row, err := q.FinalizeUnitState(ctx, db.FinalizeUnitStateParams{
+			Namespace: w.nsName, UnitID: w.unitID, FinalCommit: w.origin.Commit, FinalJob: w.origin.Job,
+		})
+		if err != nil {
+			return fmt.Errorf("finalize unit state: %w", err)
+		}
 
+		return closeAwaitingState(ctx, q, w.nsName, jobstore.FinalVersion{
+			UnitID: w.unitID, VersionID: row.VersionID, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
+			At: time.UnixMilli(row.FinalAtMs).UTC(),
+		})
+	case unitStateWriteRelease:
+		row, err := q.FinalizeReleasedUnitState(ctx, db.FinalizeReleasedUnitStateParams{
+			Namespace: w.nsName, UnitID: w.unitID, FinalCommit: w.origin.Commit, FinalJob: w.origin.Job,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+
+		if err != nil {
+			return fmt.Errorf("finalize released unit state: %w", err)
+		}
+
+		return closeAwaitingState(ctx, q, w.nsName, jobstore.FinalVersion{
+			UnitID: w.unitID, VersionID: row.VersionID, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
+			At: time.UnixMilli(row.FinalAtMs).UTC(),
+		})
+	default:
+		return fmt.Errorf("%w: %d", errUnitStateKind, w.kind)
+	}
+}
+
+// closePublishedState closes the jobs that wait for the version of a state
+// write, when the write makes it final.
+func closePublishedState(ctx context.Context, q *db.Queries, w unitStateWrite) error {
 	if !w.final {
 		return nil
 	}
@@ -87,6 +138,39 @@ func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) erro
 		UnitID: w.unitID, VersionID: w.version, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
 		At: time.UnixMilli(w.atMs).UTC(),
 	})
+}
+
+// stateWriteParams returns the parameters of the upsert of a state write. The
+// stored final fields stay as they are when w.final is false: this dialect
+// reads the stored row and gives its final fields to the upsert.
+func stateWriteParams(
+	ctx context.Context, q *db.Queries, w unitStateWrite,
+) (db.PublishUnitStateParams, error) {
+	finalVersionID, finalCommit, finalJob, finalAtMs := "", "", "", int64(0)
+
+	if w.final {
+		finalVersionID, finalCommit, finalJob, finalAtMs = w.version, w.origin.Commit, w.origin.Job, w.atMs
+	} else {
+		stored, ok, err := unitState(ctx, q, w.nsName, w.unitID)
+		if err != nil {
+			return db.PublishUnitStateParams{}, err
+		}
+
+		if ok {
+			finalVersionID, finalCommit, finalJob, finalAtMs = stored.FinalVersionID, stored.FinalCommit,
+				stored.FinalJob, stored.FinalAtMs
+		}
+	}
+
+	return db.PublishUnitStateParams{
+		UnitID:         w.unitID,
+		Namespace:      w.nsName,
+		VersionID:      w.version,
+		FinalVersionID: finalVersionID,
+		FinalCommit:    finalCommit,
+		FinalJob:       finalJob,
+		FinalAtMs:      finalAtMs,
+	}, nil
 }
 
 // jobSpecCommit returns the commit that the spec of the job jobID names, or
@@ -111,60 +195,6 @@ func jobSpecCommit(ctx context.Context, q *db.Queries, jobID string) (string, er
 	}
 
 	return j.Spec.Location.Revision, nil
-}
-
-// publishFinalState records the current state version of the unit as final,
-// with the origin of the write that ends it. A unit with no state version row
-// records the empty version: it holds no state, and the end of its update is
-// still final. One statement writes the row, at the clock of the store.
-func publishFinalState(
-	ctx context.Context, q *db.Queries, nsName, unitID string, origin identity.StateOrigin,
-) error {
-	if err := resolveOriginCommit(ctx, q, &origin); err != nil {
-		return err
-	}
-
-	row, err := q.FinalizeUnitState(ctx, db.FinalizeUnitStateParams{
-		Namespace: nsName, UnitID: unitID, FinalCommit: origin.Commit, FinalJob: origin.Job,
-	})
-	if err != nil {
-		return fmt.Errorf("finalize unit state: %w", err)
-	}
-
-	return closeAwaitingState(ctx, q, nsName, jobstore.FinalVersion{
-		UnitID: unitID, VersionID: row.VersionID, Commit: origin.Commit, Job: job.ID(origin.Job),
-		At: time.UnixMilli(row.FinalAtMs).UTC(),
-	})
-}
-
-// publishReleasedState records the current state version of the unit as final,
-// with the origin of the releasing request, and does nothing when it is final
-// already: the release of a lock marks the state final for the write-back and
-// the triggers, and a release with no state write since the last final version
-// makes no new final version. A unit with no state version row holds no
-// version that a release can make final.
-func publishReleasedState(
-	ctx context.Context, q *db.Queries, nsName, unitID string, origin identity.StateOrigin,
-) error {
-	if err := resolveOriginCommit(ctx, q, &origin); err != nil {
-		return err
-	}
-
-	row, err := q.FinalizeReleasedUnitState(ctx, db.FinalizeReleasedUnitStateParams{
-		Namespace: nsName, UnitID: unitID, FinalCommit: origin.Commit, FinalJob: origin.Job,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("finalize released unit state: %w", err)
-	}
-
-	return closeAwaitingState(ctx, q, nsName, jobstore.FinalVersion{
-		UnitID: unitID, VersionID: row.VersionID, Commit: origin.Commit, Job: job.ID(origin.Job),
-		At: time.UnixMilli(row.FinalAtMs).UTC(),
-	})
 }
 
 // resolveOriginCommit fills the commit of the spec of the job that the origin

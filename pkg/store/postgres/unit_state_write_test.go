@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -57,6 +58,10 @@ func TestUnitStateWritePoints(t *testing.T) {
 		{
 			name: "OpenTofu rollback", unit: unitStateTofuUnit,
 			write: unitStateTofuRollback, final: unitStateTofuRelease,
+		},
+		{
+			name: "OpenTofu force unlock with state", unit: unitStateTofuUnit,
+			write: unitStateTofuFinalize, final: unitStateTofuForceUnlock,
 		},
 		{
 			name: "Pulumi PutCheckpoint", unit: unitStatePulumiUnit,
@@ -232,6 +237,88 @@ func unitStateTofuRelease(
 	}
 
 	return current.ID.String()
+}
+
+// unitStateTofuForceUnlock releases the lock of the workspace with a new state
+// version, as a force unlock with state does: the version becomes current and
+// final with the origin of the write-back job that waits for it, and the
+// release closes that job.
+func unitStateTofuForceUnlock(
+	t *testing.T, s *postgres.Store, fence namespace.Fence, unit identity.Object,
+) string {
+	t.Helper()
+
+	w, err := s.GetWorkspaceByID(t.Context(), workspace.ID(unit.UnitID()))
+	if err != nil {
+		t.Fatalf("get workspace = %v", err)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state version = %v", err)
+	}
+
+	delivered := awaitingWriteBackJob(t, s, fence, unit)
+	origin := identity.StateOrigin{Job: string(delivered.ID), Commit: ""}
+
+	at := time.UnixMilli(unitStateWriteAtMs + 2000).UTC()
+	lock := w.Lock
+
+	released := w
+	released.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	released.LastRelease = workspace.Release{
+		At: at, LockID: lock.ID, Holder: lock.Holder, By: writeStateHolder, Kind: workspace.ReleaseNormal,
+	}
+	released.Revision++
+	released.UpdatedAt = at
+
+	fenceVersion := unitStatePending(t, w)
+	fenceVersion.Holder = w.Lock.Holder
+	fenceVersion.LockID = w.Lock.ID
+	fenceVersion.UnlockedWrite = false
+	fenceVersion.Lineage = "l2"
+	fenceVersion.Serial = current.Serial + 1
+	fenceVersion.Origin = origin
+
+	if createErr := s.CreateStateVersion(t.Context(), fenceVersion, fence, unitStatePendingCap); createErr != nil {
+		t.Fatalf("CreateStateVersion = %v", createErr)
+	}
+
+	err = s.FenceAndUnlock(t.Context(), released, fenceVersion, current.ID, fence, stateOriginEntry(unit))
+	if err != nil {
+		t.Fatalf("FenceAndUnlock = %v", err)
+	}
+
+	got, ok, err := s.Jobs().FinalVersion(t.Context(), fence.Namespace, unit.UnitID())
+	if err != nil || !ok {
+		t.Fatalf("final version after the force unlock = %+v, %v, %v; want one", got, ok, err)
+	}
+
+	if got.Job != delivered.ID || got.Commit != unitStateWriteRevision {
+		t.Fatalf("origin of the force unlock = job %q, commit %q; want job %q, commit %q",
+			got.Job, got.Commit, delivered.ID, unitStateWriteRevision)
+	}
+
+	assertWriteBackClosed(t, s, delivered.ID, fenceVersion.ID)
+
+	return fenceVersion.ID.String()
+}
+
+// assertWriteBackClosed checks that the delivered write-back job is closed by
+// the state version version.
+func assertWriteBackClosed(
+	t *testing.T, s *postgres.Store, deliveredID job.ID, version workspace.StateVersionID,
+) {
+	t.Helper()
+
+	closed, err := s.Jobs().Get(t.Context(), deliveredID)
+	if err != nil {
+		t.Fatalf("Get = %v", err)
+	}
+
+	if closed.State != job.StateSucceeded || closed.Closed == nil || closed.Closed.VersionID != version.String() {
+		t.Fatalf("closed job = %s, %+v; want succeeded, closed by %s", closed.State, closed.Closed, version)
+	}
 }
 
 // unitStateTofuLock locks the workspace of unit at the fixed clock.

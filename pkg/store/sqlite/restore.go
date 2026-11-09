@@ -437,8 +437,10 @@ func deriveUnitState(ctx context.Context, tx *sql.Tx) error {
 
 // upsertStagedUnitState writes the state version of every unit of the staged
 // file in unit_state, in tx, with one statement for the workspaces and one for
-// the stacks. The final fields are the version, the origin is empty, and the
-// time comes from the clock of the database.
+// the stacks. It is the one writer of unit_state outside publishUnitState: a
+// portable restore derives the versions of all restored units at once, so one
+// call per unit would not scale. The final fields are the version, the origin
+// is empty, and the time comes from the clock of the database.
 func upsertStagedUnitState(ctx context.Context, tx *sql.Tx) error {
 	const (
 		now     = "CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)"
