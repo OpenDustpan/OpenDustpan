@@ -489,12 +489,16 @@ func (w followsWorld) writeState(t *testing.T) string {
 		t.Fatalf("decode state version ID %s: %v", answer, err)
 	}
 
-	var attributes map[string]string
+	var attributes map[string]json.RawMessage
 	if err := json.Unmarshal(doc.Data["attributes"], &attributes); err != nil {
 		t.Fatalf("decode state version attributes %s: %v", answer, err)
 	}
 
-	uploadURL := attributes["hosted-state-upload-url"]
+	var uploadURL string
+	if err := json.Unmarshal(attributes["hosted-state-upload-url"], &uploadURL); err != nil {
+		t.Fatalf("decode state upload URL %s: %v", answer, err)
+	}
+
 	if versionID == "" || uploadURL == "" {
 		t.Fatalf("state version answer %s holds no ID or upload URL", answer)
 	}
