@@ -296,3 +296,199 @@ holds a commit, so `git.head` is new work in task 2.3.
    apply from a "laptop" uses the CLI against the state backend directly.
 6. A store test reads `queries.sql` of each dialect and fails when a query
    other than `PublishUnitState` writes the version columns.
+
+Status in the code: tests 1, 2, 3, 3b, 3c and 6 are store and suite tests in
+each dialect. Test 4 runs on a real server, but it gives the final version to
+the dispatcher itself: the server does not call the dispatcher of the
+`follows` trigger after a state write yet. That wiring is a separate change.
+Test 5 has no new e2e step in this change.
+
+## Notes on the code
+
+Each point below is a place where the code does not match the text above, or
+a decision that the text leaves open, and what the code does.
+### The signature of `publishUnitState`
+
+`design.md` writes `publishUnitState(ctx, q, unitID, version, final)`. The
+write also needs the namespace, the origin and the time of the write, so the
+function would take eight arguments. The lint rule for the count of arguments
+allows five, and this change adds no lint exception. The function therefore
+takes one `unitStateWrite` value: the namespace, the unit ID, the version, the
+final flag, the origin and the time.
+
+Nothing else changed. The function is unexported in each dialect. It is the
+only caller of `PublishUnitState`, and every write point calls it in the
+transaction of its own write.
+
+### The close of the jobs that wait for a state version
+
+`design.md` says that a final version runs the close of the waiting write-back
+jobs in the same transaction, as `observeIn` does today. The close is
+reachable from the workspace and the stack transaction, so this step needed no
+substitute. `jobstore.CloseAwaiting` takes the narrow `CloseTx` interface
+(`Now`, `Awaiting`, `UpdateJob`, `StartOperation`), and each dialect gives it
+a `stateCloseTx` over the queries of its transaction, as the item keys do.
+
+Two consequences:
+
+- The closing record names the unit as the job itself names it
+  (`job.Spec.Unit`). The caller knows the unit by its stable ID only, and the
+  job's own unit object stays valid after a rename. An inventory lookup by
+  unit ID would add a read to the write path.
+- The close reads the clock only when a job waits. A write that publishes a
+  final version and closes no job pays no extra query.
+
+### The SQLite `PublishUnitState` carries the final fields
+
+sqlc does not rewrite a query parameter inside the `DO UPDATE SET` clause for
+the SQLite engine. The PostgreSQL engine does. The SQLite query therefore
+takes the four final fields as parameters, and the caller reads the stored row
+with `GetUnitState` and passes its values when it publishes no final version.
+The write transaction of the SQLite store is IMMEDIATE, so no other write runs
+between that read and the upsert. The PostgreSQL query keeps the conditional
+update, so it needs no read.
+
+### `unit_state` in the portable backup
+
+`design.md` says that `unit_state` is not in the portable table list and that
+a restore derives it. A backup leaves the table out too, so the table is in
+`EmptiedTables` and in the emptied-table list of each dialect, next to the
+other tables that a restore leaves empty and makes again.
+
+### The place of `unit_state` in the SQLite baseline
+
+The SQLite baseline holds the objects in the order in which they were
+created, not in name order. `unit_state` replaces the two removed tables in
+their slot, between `job_freezes` and `saved_views`. The PostgreSQL baseline
+is in name order, and `unit_state` sits between `unit_settings` and
+`update_events` there.
+
+### Decisions the design leaves open
+
+- The release of a lock. The store decides whether a save releases the lock
+  with a read of the stored row before the compare-and-swap (SQLite:
+  `GetWorkspaceByID`, PostgreSQL: `LockWorkspaceForFinalize`). The written row
+  carries the record of an earlier release as well, so the new row alone
+  cannot tell a release from the record of one. A stored row that is not there
+  holds no lock, so a save that creates a workspace releases nothing.
+- The version of an invalid checkpoint. The version of a checkpoint is the
+  digest of its deployment. A checkpoint whose row is marked invalid carries
+  the digest with the fixed suffix `:invalid`, so it never equals the version
+  of a valid write, and a plan of the state that it replaced is stale.
+- The derived versions of a restore. A restore takes the version of each
+  workspace from its current state version ID, and the version of each stack
+  from the digest of the last checkpoint of its last update that has one, as
+  `GetLatestCheckpoint` reads it. A stack with no checkpoint holds no state
+  and gets no row: the job store reads the empty version for it, as it does
+  for a unit with no row. A workspace with no current state version gets a row
+  with the empty version.
+- The time of a checkpoint write. That write pays no round trip for the time
+  of the version: it uses the clock that the upsert returned, as the check of
+  the attempt window does.
+
+### Points where `design.md` and the task list differ
+
+`design.md` says that the end of a Pulumi update is final, and it records that
+the list of publish points and the task list do not name it. The code
+publishes it in `SaveUpdate`, next to `endMutatingUpdate`, as `design.md`
+says.
+
+### Shapes that the lint rules required
+
+- The pair (digest, invalid) of a checkpoint comes to its version through the
+  method `checkpointDigest.stateVersion`. The lint rule against a flag
+  parameter refuses a function that takes the two values.
+- The publish helpers name their namespace parameter `namespaceID`. The lint
+  rules against shadowing an import refuse the name `namespace`, and these
+  files import the `namespace` package.
+- `saveWorkspaceRow`, the close of a waiting job and the read of the derived
+  versions are split into small helpers (`lostWorkspaceSave`, `closeRow`,
+  `scanUnitVersions`). The lint rules against deep nesting and high complexity
+  refused the longer bodies. The behavior did not change.
+
+### The origin of a write (step 3)
+
+- The domain service carries the job of a job token in the context
+  (`workspace.WithJob`), and `originFrom` turns it into a `StateOrigin` with
+  an empty commit. The store takes the commit from the spec of the job in the
+  transaction of the publish.
+- The TFE declare stores the job in the new column `state_versions.origin_job`.
+  The finalize reads it back (`stateVersionOrigin`).
+- A release reads the origin from the new field `Workspace.Origin`. The store
+  does not keep it: a read gives it as zero. The field exists only so that the
+  store method keeps its signature.
+- The Pulumi update row has two new columns, `job_id` (set at the start) and
+  `git_head` (from `metadata.environment["git.head"]` of the create body).
+  Every checkpoint write, the delta save included, and the end of the update
+  publish `Update.Origin()`.
+- `updates` and `state_versions` add their columns at the end. Neither table
+  keeps its columns in name order.
+- A restore passes an empty origin, and so does the release that ends it.
+- The replan reason is the text of the `CheckPlan` error, in the job and in
+  the audit entry.
+
+### The conformance suite writes state (step 3, first half)
+
+- The harness gives the write through the new field `Harness.WriteState` of
+  the function type `StateWriter`. The `Domain` interface no longer has
+  `SetStateVersion`. The in-memory harness leaves the field nil, and the suite
+  runs the cases that need a state version only when the field is not nil. No
+  case skips.
+- The SQL harnesses implement the OpenTofu path: the write locks the
+  workspace, declares a state version, records the upload attempt, finalizes
+  the version, and, for a final write, releases the lock. The version is the
+  ID of the state version, so the suite cannot choose its text. A Pulumi unit
+  returns `identity.ErrInvalidObject`: no case of the suite writes the state
+  of a Pulumi unit.
+- The suite cannot choose the time of a version. The cases of a merge, a late
+  delivery and the final version take the time of the final version that the
+  store records.
+- The final-version round-trip case writes with no origin, because the
+  harness has no job token. It checks an empty job and commit and a time that
+  is not zero. The origin of a job-token write stays in the store tests.
+- The fence-of-another-namespace case no longer calls
+  `ObserveStateVersion`: a state write is a write of the store of the tool.
+  The stale-fence case proves that the write is refused.
+- The first write of a unit uses the lineage `lineage-1` and serial 1. A later
+  write takes the serial after the current state version and its lineage.
+- The in-memory job store no longer keeps a current state version. Task 2.4
+  removed its final version map too (see below).
+
+### The old writers of state versions (task 2.4)
+
+Deleted:
+
+- `job.Store.ObserveStateVersion`, with the close loop that it ran.
+  `jobstore.CloseAwaiting` stays: every state write that publishes a final
+  version calls it in its own transaction.
+- `PutUnitStateVersion` on the SQLite and the PostgreSQL store.
+- `PutFinalVersion` on `jobstore.Tx` and on both dialects. `observeIn` went
+  with it, because only `ObserveStateVersion` called it.
+- The final version map of the in-memory store in `pkg/job/jobtest/mem_test.go`,
+  its `ObserveStateVersion`, and its `close` and `closeLate` helpers.
+- `Store.logger` in `pkg/store/internal/jobstore/store.go`, because only
+  `ObserveStateVersion` read it.
+- The matching fakes in `pkg/job/service_test.go` and
+  `internal/api/jobs/routes_test.go`.
+
+No sqlc query block was left to remove. The old queries for
+`unit_state_versions` and `unit_final_versions` were already gone, and
+`make generate` produced no change.
+
+The job store already reads both versions from `unit_state`:
+`jobTx.StateVersion` and `jobTx.FinalVersion` call `GetUnitState`, and
+`store.FinalVersion` reads through `jobTx.FinalVersion`. No read used another
+source.
+
+Points where the code did not match `design.md`:
+
+- `design.md` does not say that the in-memory store stops implementing
+  `job.FinalVersionReader`. With its final version map gone, it has no source
+  for a final version, and a method that always answers "none" trips the lint
+  rule against a constant result. The method is deleted. The suite runs its
+  three reader-only cases only for a harness whose job store implements the
+  reader. The SQLite and PostgreSQL harnesses still run them.
+- `design.md` says that the close of the waiting jobs stays reachable in the
+  state write transaction. It is: `publishUnitState` calls
+  `jobstore.CloseAwaiting`. The update-time test called the old store method,
+  so it now calls `jobstore.CloseAwaiting` with its fake transaction.
