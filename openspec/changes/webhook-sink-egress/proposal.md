@@ -1,3 +1,5 @@
+Issue: #2984.
+
 ## Problem
 
 **Persona: an operator who sends the audit log to a SIEM.** The operator sets
@@ -46,6 +48,13 @@ IN:
   that a loopback sink URL fails the start.
 - `docs/guides/audit-log.md`: the Webhook and OTLP sections state the egress
   rules, the refusal, and the sink status that shows it.
+- A static setting for the allowed private ranges of the audit and log sinks
+  (`--audit-sink-allowed-ranges`, the matching `DUSTPAN_*` variable and file
+  key), parsed by `egress.ParseAllowedRanges`. Empty by default: no private
+  range. It follows the same pattern as the LDAP and Git host allowed ranges.
+  An invalid or too wide range stops the start and names the setting. The
+  effective value shows in the settings API. The guide gives the setting for
+  a receiver on a private network.
 
 OUT:
 
@@ -116,9 +125,13 @@ No conflict with an owner-tagged decision.
 
 ## Open questions
 
-1. A receiver on a private network. An audit receiver (a SIEM or an OTLP
-   collector) is often on a private network. With this change, the egress
-   rules refuse it, and an installation that sends to a private address today
-   stops at start. Does this change add an operator setting for the allowed
-   ranges of a sink, or does it ship without one (OUT above)? This needs a
-   decision before the change is implemented.
+none
+
+Decided by the PM on 2026-11-09 (owner mandate for the week; rule 16):
+1. A receiver on a private network: the change adds the static setting for
+   the allowed private ranges of the sinks (IN above), empty by default. It
+   reuses `egress.Rules` and `egress.ParseAllowedRanges`, the same mechanism
+   as the LDAP and Git host settings, so no new egress logic. Benchmark: deny
+   by default with an explicit operator allowlist; the escape hatch keeps a
+   private SIEM or collector working. The setting never opens loopback,
+   link-local, cloud metadata or multicast addresses (`egress.Rules`).

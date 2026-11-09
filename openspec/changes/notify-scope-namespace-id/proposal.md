@@ -1,3 +1,5 @@
+Issue: #2991.
+
 ## Problem
 
 A namespace administrator deletes a namespace and creates another with the same
@@ -65,4 +67,9 @@ separate bug; this change covers only the namespace-ID half.
 
 ## Open questions
 
-1. Does this notification-only part of ADR 220 decision 1 start before RFC 103 step 8, contrary to ADR 363 decision 1? The project owner decides. If the answer is no, the change waits for the store move. If the answer is yes, the owner accepts a documented exception for these tables.
+none
+
+Decided by the PM on 2026-11-09 from ADR 363 decision 1 (owner): the work of
+ADR 220 decisions 1, 2 and 3 starts after RFC 103 step 8. This change is part
+of that work, so it waits for the store move (`openspec/changes/store-move/`,
+PR B). It is not implemented before PR B merges.

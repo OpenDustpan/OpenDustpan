@@ -1,3 +1,5 @@
+Issue: #2990.
+
 ## Problem
 
 A developer renames a Pulumi stack with `pulumi stack rename`. The audit log of

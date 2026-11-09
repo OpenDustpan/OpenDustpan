@@ -1,3 +1,5 @@
+Issue: #2994.
+
 ## Problem
 
 A person who writes a store query or a test can insert a namespace, a stack or

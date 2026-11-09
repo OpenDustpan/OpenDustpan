@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: The namespace list pages with a bound cursor
 The server SHALL page `GET /api/server/namespaces` with an opaque cursor that

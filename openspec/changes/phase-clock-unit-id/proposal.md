@@ -1,3 +1,5 @@
+Issue: #2992.
+
 ## Problem
 
 A developer renames a stack or a workspace while its job runs. The running job

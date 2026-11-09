@@ -1,3 +1,5 @@
+Issue: #2999.
+
 ## Problem
 
 A guide or a reference page can name a route that the built server does not
