@@ -1374,14 +1374,13 @@ func restoreModel() costModel {
 
 // unitStateTrips is the number of round trips by which the state version of
 // each unit changes the fixed part. The restore derives the versions with one
-// statement for the workspaces and one for the stacks, and reads the units
-// that have jobs that wait for a state version with one statement: 3 round
-// trips. The measured run also makes 3 round trips more than the model gives
-// for the table lists, where unit_state is a table that the restore empties
-// and the two earlier tables of state versions are gone. The measured runs at
-// 3 and at 30 units both hold these 6 round trips, so the count does not grow
-// with the units.
-const unitStateTrips = 6
+// statement for the workspaces and one for the stacks: 2 round trips. A
+// restore closes no write-back job, so it reads no waiting jobs. The measured
+// run also makes 3 round trips more than the model gives for the table lists,
+// where unit_state is a table that the restore empties and the two earlier
+// tables of state versions are gone. The measured runs at 3 and at 30 units
+// both hold these 5 round trips, so the count does not grow with the units.
+const unitStateTrips = 5
 
 // forgeStripClassTrips is the number of round trips of the two classes of the
 // Git host links that the dev strip counts for each principal class: the links
