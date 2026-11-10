@@ -62,7 +62,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -1087,17 +1086,8 @@ func (f *serveFlags) serverOptions(
 
 	opts := append([]dustpan.Option{
 		dustpan.WithInstallation(namespace.InstallationName(f.installation)),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
 		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(f.listen),
@@ -1122,13 +1112,20 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithRetention(f.jobRetention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
-		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
-	tail, tailErr := f.storeOptions(st, wrapper, logger)
+	tail, tailErr := f.storeOptions(st)
+	if tailErr != nil {
+		return nil, tailErr
+	}
 
-	return append(opts, tail...), tailErr
+	builtin, builtinErr := builtinStoreOption(st)
+	if builtinErr != nil {
+		return nil, builtinErr
+	}
+
+	return append(append(opts, tail...), builtin), nil
 }
 
 // gitHostOptions returns the option of the address ranges that a connection to
@@ -1143,10 +1140,9 @@ func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
 	return []dustpan.Option{dustpan.WithGitHostAllowedRanges(ranges...)}, nil
 }
 
-// storeOptions returns the options of the components and of the stores that
-// the store may or may not keep: the durable operations, the runners and the
-// profiles.
-func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog.Logger) ([]dustpan.Option, error) {
+// storeOptions returns the options of the components, the Git host ranges,
+// the settings resource, the sink ports and the installation kind.
+func (f *serveFlags) storeOptions(st store) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -1158,14 +1154,6 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog
 	}
 
 	opts := append([]dustpan.Option{dustpan.WithComponents(set)}, gitHostOpts...)
-	opts = append(opts, durableStoreOption(st)...)
-	opts = append(opts, runnerStoreOption(st)...)
-	opts = append(opts, sourceFilterStoreOption(st)...)
-	opts = append(opts, trustRuleStoreOption(st)...)
-	opts = append(opts, jobStoreOption(st, logger)...)
-	opts = append(opts, triggerStoreOption(st)...)
-	opts = append(opts, unitSettingsStoreOption(st)...)
-	opts = append(opts, savedViewStoreOption(st)...)
 
 	wiring, wireErr := f.settingsWiring(st)
 	if wireErr != nil {
@@ -1174,19 +1162,26 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog
 
 	opts = append(opts, wiring.options...)
 	f.settingsSync = wiring.sync
-	opts = append(opts, driftStoreOption(st)...)
-	opts = append(opts, gitHostStoreOption(st)...)
-	opts = append(opts, registryStoreOption(st)...)
-	opts = append(opts, sinkStoreOption(st)...)
 
 	ports, err := f.sinkPorts()
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()),
-		dustpan.WithInstallationKindStore(st), dustpan.WithInstanceStore(st))
+	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()))
 
-	return append(opts, profileStoreOption(st, wrapper)...), nil
+	return opts, nil
+}
+
+// builtinStoreOption sets every store option from the built-in store st.
+func builtinStoreOption(st store) (dustpan.Option, error) {
+	switch s := st.(type) {
+	case sqliteStore:
+		return dustpan.WithOpenedSQLite(s.Store), nil
+	case postgresStore:
+		return dustpan.WithOpenedPostgreSQL(s.Store), nil
+	default:
+		return nil, errUnknownBackend
+	}
 }
 
 // errDestinationPorts reports a --destination-ports item that is no port.
@@ -1218,195 +1213,6 @@ func parseSinkPorts(value string) (egress.Ports, error) {
 	}
 
 	return ports, nil
-}
-
-// durableStoreOption returns the durable schedule store option for st, or nil
-// when st keeps no durable schedules.
-func durableStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
-	default:
-		return nil
-	}
-}
-
-// runnerStoreOption returns the option of the runner stores for st, or nil
-// when st keeps no runners.
-func runnerStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
-	default:
-		return nil
-	}
-}
-
-// sourceFilterStoreOption returns the option of the source filter store for st,
-// or nil when st keeps no source filter.
-func sourceFilterStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
-	default:
-		return nil
-	}
-}
-
-// trustRuleStoreOption returns the option of the trust rule store for st, or
-// nil when st keeps no trust rules.
-func trustRuleStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
-	default:
-		return nil
-	}
-}
-
-// jobStoreOption returns the options of the job store and of the job claimer
-// for st, or nil when st keeps no jobs. The claimer takes the phases of the
-// jobs as durable operations, so a poll of a runner of a pool for jobs finds
-// work.
-func jobStoreOption(st store, logger *slog.Logger) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{
-			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
-			}),
-		}
-	case postgresStore:
-		return []dustpan.Option{
-			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
-			}),
-		}
-	default:
-		return nil
-	}
-}
-
-// triggerStoreOption returns the option of the run trigger store for st, or nil
-// when st keeps no triggers.
-func triggerStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
-	default:
-		return nil
-	}
-}
-
-// unitSettingsStoreOption returns the option of the unit settings store for
-// st, or nil when st keeps no unit settings.
-func unitSettingsStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
-	default:
-		return nil
-	}
-}
-
-// savedViewStoreOption returns the option of the saved view store for st, or
-// nil when st keeps no saved views.
-func savedViewStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
-	default:
-		return nil
-	}
-}
-
-// driftStoreOption returns the option of the drift result store for st, or nil
-// when st keeps no drift results.
-func driftStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithDriftStore(s.DriftResults())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithDriftStore(s.DriftResults())}
-	default:
-		return nil
-	}
-}
-
-// gitHostStoreOption returns the option of the Git host store for st, or nil
-// when st keeps no Git host connections.
-func gitHostStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
-	default:
-		return nil
-	}
-}
-
-// registryStoreOption returns the option of the registry stores for st, or nil
-// when st keeps no registry.
-func registryStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	default:
-		return nil
-	}
-}
-
-// sinkStoreOption returns the option of the notification sink store for st,
-// or nil when st keeps no sinks.
-func sinkStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	default:
-		return nil
-	}
-}
-
-// profileStoreOption returns the profile store option for st, or nil when st
-// keeps no profiles. wrapper seals the server key of the replay records.
-func profileStoreOption(st store, wrapper secret.Wrapper) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	case postgresStore:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	default:
-		return nil
-	}
 }
 
 // blobOpenConfig holds the live blob store settings of serve.
