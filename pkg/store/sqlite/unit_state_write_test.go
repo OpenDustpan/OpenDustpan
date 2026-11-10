@@ -1,9 +1,13 @@
 package sqlite_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,6 +146,112 @@ func assertNoFinalVersion(t *testing.T, s *sqlite.Store, ns namespace.Name, unit
 	got, ok, err := s.Jobs().FinalVersion(t.Context(), ns, unitID)
 	if err != nil || ok {
 		t.Fatalf("final version of unit %s = %+v, %v, %v; want none", unitID, got, ok, err)
+	}
+}
+
+// unitStateLogHandler collects the records that the store writes.
+type unitStateLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler.
+func (h *unitStateLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (h *unitStateLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (h *unitStateLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup implements slog.Handler.
+func (h *unitStateLogHandler) WithGroup(string) slog.Handler { return h }
+
+// count returns the number of records that the handler collected.
+func (h *unitStateLogHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return len(h.records)
+}
+
+// openUnitStateStoreWithLogger opens a fresh store whose handler receives the
+// records of the store, and returns the store with its path.
+func openUnitStateStoreWithLogger(t *testing.T, logger *slog.Logger) (*sqlite.Store, string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path, sqlite.WithLogger(logger))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	return s, path
+}
+
+// TestDamagedJobRowGivesAnEmptyCommit proves that a state write whose origin
+// names a job with a damaged row succeeds with an empty final commit, and that
+// the store writes one log record for the damaged row.
+func TestDamagedJobRowGivesAnEmptyCommit(t *testing.T) {
+	t.Parallel()
+
+	handler := new(unitStateLogHandler)
+	s, path := openUnitStateStoreWithLogger(t, slog.New(handler))
+	ctx := t.Context()
+
+	fence, unit := stateWriteUnit(t, s)
+	jobID := stateWriteJob(t, s, fence, unit)
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database = %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database = %v", closeErr)
+		}
+	})
+
+	if _, err = conn.ExecContext(ctx, `UPDATE jobs SET body = 'not json' WHERE id = ?`, string(jobID)); err != nil {
+		t.Fatalf("damage the job row = %v", err)
+	}
+
+	w := unlockedForWrites(t, s, fence, unit)
+	sv := pendingStateWrite(t, w, string(jobID))
+
+	if createErr := s.CreateStateVersion(ctx, sv, fence, stateWriteCap); createErr != nil {
+		t.Fatalf("CreateStateVersion = %v", createErr)
+	}
+
+	finalizeStateWrite(t, s, sv, fence)
+
+	got, ok, err := s.Jobs().FinalVersion(ctx, fence.Namespace, unit.UnitID())
+	if err != nil || !ok {
+		t.Fatalf("FinalVersion = %+v, %v, %v; want one", got, ok, err)
+	}
+
+	if got.Commit != "" {
+		t.Fatalf("final commit = %q, want the empty commit", got.Commit)
+	}
+
+	if handler.count() != 1 {
+		t.Fatalf("log records = %d, want 1", handler.count())
 	}
 }
 
@@ -304,6 +414,21 @@ func assertWriteBackClosed(
 
 	if closed.State != job.StateSucceeded || closed.Closed == nil || closed.Closed.VersionID != version.String() {
 		t.Fatalf("closed job = %s, %+v; want succeeded, closed by %s", closed.State, closed.Closed, version)
+	}
+}
+
+// assertWriteBackWaiting checks that the delivered write-back job still waits
+// for a state version and is not closed.
+func assertWriteBackWaiting(t *testing.T, s *sqlite.Store, deliveredID job.ID) {
+	t.Helper()
+
+	waiting, err := s.Jobs().Get(t.Context(), deliveredID)
+	if err != nil {
+		t.Fatalf("Get = %v", err)
+	}
+
+	if waiting.State != job.StateAwaitingState || waiting.Closed != nil {
+		t.Fatalf("job = %s, %+v; want awaiting-state, not closed", waiting.State, waiting.Closed)
 	}
 }
 

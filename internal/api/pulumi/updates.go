@@ -372,6 +372,25 @@ const (
 	nullDeployment = "null"
 )
 
+// acceptedGitHead returns raw when it is a commit ID: exactly 40 or exactly
+// 64 lowercase hexadecimal characters. Any other value returns the empty
+// string, because a commit is extra information and the CLI omits it outside
+// a Git working tree.
+func acceptedGitHead(raw string) string {
+	if len(raw) != 40 && len(raw) != 64 {
+		return ""
+	}
+
+	for i := range len(raw) {
+		c := raw[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+
+	return raw
+}
+
 // createUpdateHandler returns the handler that creates an update of kind.
 // The five kinds share this shape; each has its own route.
 func (h *Handler) createUpdateHandler(kind stack.UpdateKind) RouteHandler {
@@ -407,7 +426,10 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 
 	u, err := h.updates.Create(ctx, ref, stack.Plan{
 		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: subject, RestoredFrom: 0,
-		GitHead: req.Metadata.Environment[gitHeadKey],
+		// The commit is what the tool reported. It is never an authenticated
+		// claim, and no decision may trust it. The check at the boundary keeps
+		// a value that is not a commit ID out of the stored state.
+		GitHead: acceptedGitHead(req.Metadata.Environment[gitHeadKey]),
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

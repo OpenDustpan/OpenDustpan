@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -17,7 +18,8 @@ import (
 
 // unitStateKind is the kind of a write of unit_state: a state write that
 // publishes a version, the end of an update that marks the current version
-// final, or a lock release that marks the current version final.
+// final, a lock release that marks the current version final, or a restore
+// derive that writes the versions of the restored units.
 type unitStateKind int
 
 const (
@@ -27,6 +29,8 @@ const (
 	unitStateWriteEnd
 	// unitStateWriteRelease marks the current version final at a lock release.
 	unitStateWriteRelease
+	// unitStateWriteRestore writes the state version of every restored unit.
+	unitStateWriteRestore
 )
 
 // errUnitStateKind reports a write of a kind that the store does not know.
@@ -34,13 +38,14 @@ var errUnitStateKind = errors.New("unit state write kind is unknown")
 
 // valid reports whether k is one of the write kinds.
 func (k unitStateKind) valid() bool {
-	return k >= unitStateWriteState && k <= unitStateWriteRelease
+	return k >= unitStateWriteState && k <= unitStateWriteRestore
 }
 
 // unitStateWrite is one write of unit_state: its kind, the unit, the version
 // that a state write makes current, whether that write also makes it the last
 // final version, the origin of the write and its time on the clock of the
-// store.
+// store. A restore derive carries the transaction that it writes in, and every
+// write carries the logger that records a damaged job row.
 type unitStateWrite struct {
 	kind    unitStateKind
 	nsName  string
@@ -49,11 +54,19 @@ type unitStateWrite struct {
 	final   bool
 	origin  identity.StateOrigin
 	atMs    int64
+	exec    *sql.Tx
+	logger  *slog.Logger
+}
+
+// unitStateTx carries the queries and the logger of a write of unit_state
+// through the helpers of the state write.
+type unitStateTx struct {
+	q      *db.Queries
+	logger *slog.Logger
 }
 
 // publishUnitState records the write of w in unit_state. It is the only writer
-// of unit_state except the restore derive in restore.go, which writes the
-// versions of all restored units with one statement.
+// of unit_state.
 //
 // A state write records the version of w as the current state version of its
 // unit, and, when w.final is true, as the last final state version of the
@@ -63,10 +76,18 @@ type unitStateWrite struct {
 // is final already. A final version closes the jobs that wait for one, in the
 // same transaction.
 //
+// A restore derive writes the state version of every restored unit with one
+// statement for the workspaces and one for the stacks, in the transaction of
+// w. A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and the jobs that wait for a state
+// version keep waiting.
+//
 // An origin that names a job and no commit takes the commit of the spec of
 // that job, read in the same transaction. The commit stays empty when the
 // store holds no such job: a write outlives the job that made it, for example
-// after a purge.
+// after a purge. It also stays empty when the job row is damaged or its read
+// fails: the state write goes on, and the store writes one log record with the
+// job and the error.
 //
 // The stored final fields stay as they are when a state write is not final.
 // sqlc rewrites no query parameter in the DO UPDATE SET clause of this
@@ -78,9 +99,7 @@ func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) erro
 		return fmt.Errorf("%w: %d", errUnitStateKind, w.kind)
 	}
 
-	if err := resolveOriginCommit(ctx, q, &w.origin); err != nil {
-		return err
-	}
+	resolveOriginCommit(ctx, q, w.logger, &w.origin)
 
 	switch w.kind {
 	case unitStateWriteState:
@@ -122,6 +141,8 @@ func publishUnitState(ctx context.Context, q *db.Queries, w unitStateWrite) erro
 			UnitID: w.unitID, VersionID: row.VersionID, Commit: w.origin.Commit, Job: job.ID(w.origin.Job),
 			At: time.UnixMilli(row.FinalAtMs).UTC(),
 		})
+	case unitStateWriteRestore:
+		return restoreUnitState(ctx, w.exec)
 	default:
 		return fmt.Errorf("%w: %d", errUnitStateKind, w.kind)
 	}
@@ -174,42 +195,100 @@ func stateWriteParams(
 }
 
 // jobSpecCommit returns the commit that the spec of the job jobID names, or
-// the empty commit when the store holds no such job. A job row that does not
-// decode is an error: the store refuses a damaged row everywhere, so it never
-// guesses the commit of one.
-func jobSpecCommit(ctx context.Context, q *db.Queries, jobID string) (string, error) {
+// the empty commit when the store holds no such job, its row is damaged or its
+// read fails. A damaged row never fails a state write: the store writes one
+// log record with the job and the error, and the write goes on.
+func jobSpecCommit(ctx context.Context, q *db.Queries, logger *slog.Logger, jobID string) string {
 	row, err := q.GetJob(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return ""
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read the job of a state write: %w", err)
+		logUnreadableJob(ctx, logger, jobID, err)
+
+		return ""
 	}
 
 	damaged := jobRow(row)
 
 	j, err := jobstore.Decode(&damaged)
 	if err != nil {
-		return "", fmt.Errorf("read the commit of job %s: %w", jobID, err)
+		logUnreadableJob(ctx, logger, jobID, err)
+
+		return ""
 	}
 
-	return j.Spec.Location.Revision, nil
+	return j.Spec.Location.Revision
+}
+
+// logUnreadableJob writes one record about a job row that a state write could
+// not read. A write without a logger stays silent.
+func logUnreadableJob(ctx context.Context, logger *slog.Logger, jobID string, err error) {
+	if logger == nil {
+		return
+	}
+
+	logger.WarnContext(ctx, "the job of a state write is unreadable: the commit stays empty",
+		slog.String("job", jobID), slog.String("error", err.Error()))
 }
 
 // resolveOriginCommit fills the commit of the spec of the job that the origin
 // names, when the origin has no commit.
-func resolveOriginCommit(ctx context.Context, q *db.Queries, origin *identity.StateOrigin) error {
+func resolveOriginCommit(ctx context.Context, q *db.Queries, logger *slog.Logger, origin *identity.StateOrigin) {
 	if origin.Job == "" || origin.Commit != "" {
-		return nil
+		return
 	}
 
-	commit, err := jobSpecCommit(ctx, q, origin.Job)
-	if err != nil {
-		return err
+	origin.Commit = jobSpecCommit(ctx, q, logger, origin.Job)
+}
+
+// restoreUnitState writes the state version of every unit of the staged file
+// in unit_state, with one statement for the workspaces and one for the stacks.
+// It is part of the only writer of unit_state: only publishUnitState calls it,
+// because a portable restore derives the versions of all restored units at
+// once and one call per unit would not scale. A restored version is not final:
+// it predates the delivery of any waiting job, so the final fields are empty.
+func restoreUnitState(ctx context.Context, tx *sql.Tx) error {
+	if tx == nil {
+		return fmt.Errorf("%w: restore without a transaction", errUnitStateKind)
 	}
 
-	origin.Commit = commit
+	const (
+		columns = "unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms"
+		update  = " ON CONFLICT (unit_id) DO UPDATE SET namespace_id = excluded.namespace_id," +
+			" version_id = excluded.version_id, final_version_id = excluded.final_version_id," +
+			" final_commit = excluded.final_commit, final_job = excluded.final_job," +
+			" final_at_ms = excluded.final_at_ms"
+	)
+
+	workspaceVersion := "w.current_state_version_id"
+
+	// The WHERE true keeps the parser from reading ON CONFLICT as the ON
+	// clause of the join.
+	workspaces := "INSERT INTO main.unit_state (" + columns + ")" +
+		" SELECT w.id, n.id, " + workspaceVersion + ", '', '', '', 0" +
+		" FROM main.workspaces AS w" +
+		" JOIN main.namespaces AS n ON n.name = w.namespace" +
+		" WHERE true" + update
+
+	version := "lower(hex(c.digest)) || CASE WHEN c.invalid <> 0 THEN ':invalid' ELSE '' END"
+
+	stacks := "INSERT INTO main.unit_state (" + columns + ")" +
+		" SELECT c.stack_id, n.id, " + version + ", '', '', '', 0" +
+		" FROM main.checkpoints AS c" +
+		" JOIN main.updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id" +
+		" JOIN main.stacks AS st ON st.id = c.stack_id" +
+		" JOIN main.namespaces AS n ON n.name = st.namespace" +
+		" WHERE u.version = (SELECT MAX(v.version) FROM main.updates AS v" +
+		" JOIN main.checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id" +
+		" WHERE v.stack_id = c.stack_id)" + update
+
+	for _, stmt := range []string{workspaces, stacks} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("derive unit state: %w", err)
+		}
+	}
 
 	return nil
 }

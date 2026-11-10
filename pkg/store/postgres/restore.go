@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -12,9 +13,8 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
-	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
@@ -313,138 +313,24 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) erro
 		return err
 	}
 
-	return deriveUnitState(ctx, tx, live)
-}
-
-// unitVersion names the unit of the restored installation, the state version
-// that the restore derives for it, and the time that the restore gave the
-// version.
-type unitVersion struct {
-	namespace string
-	id        string
-	version   string
-	atMs      int64
+	return deriveUnitState(ctx, tx, live, s.logger)
 }
 
 // deriveUnitState records the state version of every unit of the restored
 // schema live in unit_state, in tx: a restore derives the version from the
 // restored rows and brings no stored version back. A workspace takes the state
 // version that its row makes current, a stack the digest of its last
-// checkpoint. Every derived version is final: the state that the restore
-// brings is the state of the installation.
+// checkpoint.
 //
-// The write is one statement for the workspaces and one for the stacks, and
-// the close of the jobs that wait for a state version reads its units in one
-// statement. Neither count grows with the number of units.
-func deriveUnitState(ctx context.Context, tx pgx.Tx, live string) error {
-	if err := upsertRestoredUnitState(ctx, tx, live); err != nil {
-		return err
-	}
-
-	awaiting, err := restoredAwaitingUnits(ctx, tx, live)
-	if err != nil {
-		return err
-	}
-
-	q := db.New(tx)
-
-	for _, unit := range awaiting {
-		_, err = jobstore.CloseAwaiting(ctx, stateCloseTx{q: q}, namespace.Name(unit.namespace), jobstore.FinalVersion{
-			UnitID: unit.id, VersionID: unit.version, Commit: "", Job: "",
-			At: time.UnixMilli(unit.atMs).UTC(),
-		}, nil)
-		if err != nil {
-			return fmt.Errorf("close the jobs that wait for the state version: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// upsertRestoredUnitState writes the state version of every unit of the
-// restored schema live in unit_state, in tx, with one statement for the
-// workspaces and one for the stacks. It is the one writer of unit_state
-// outside publishUnitState: a portable restore derives the versions of all
-// restored units at once, so one call per unit would not scale. The final
-// fields are the version, the origin is empty, and the time comes from the
-// database clock.
-func upsertRestoredUnitState(ctx context.Context, tx pgx.Tx, live string) error {
-	const (
-		now     = "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint"
-		columns = "unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms"
-		update  = " ON CONFLICT (unit_id) DO UPDATE SET namespace_id = excluded.namespace_id," +
-			" version_id = excluded.version_id, final_version_id = excluded.final_version_id," +
-			" final_commit = excluded.final_commit, final_job = excluded.final_job," +
-			" final_at_ms = excluded.final_at_ms"
-	)
-
-	schema := pgIdent(live)
-
-	workspaceVersion := "w.current_state_version_id"
-
-	workspaces := "INSERT INTO " + schema + ".unit_state (" + columns + ")" +
-		" SELECT w.id, n.id, " + workspaceVersion + ", " + workspaceVersion + ", '', '', " + now +
-		" FROM " + schema + ".workspaces AS w" +
-		" JOIN " + schema + ".namespaces AS n ON n.name = w.namespace" + update
-
-	version := "encode(c.digest, 'hex') || CASE WHEN c.invalid THEN ':invalid' ELSE '' END"
-
-	stacks := "INSERT INTO " + schema + ".unit_state (" + columns + ")" +
-		" SELECT c.stack_id, n.id, " + version + ", " + version + ", '', '', " + now +
-		" FROM " + schema + ".checkpoints AS c" +
-		" JOIN " + schema + ".updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id" +
-		" JOIN " + schema + ".stacks AS st ON st.id = c.stack_id" +
-		" JOIN " + schema + ".namespaces AS n ON n.name = st.namespace" +
-		" WHERE u.version = (SELECT MAX(v.version) FROM " + schema + ".updates AS v" +
-		" JOIN " + schema + ".checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id" +
-		" WHERE v.stack_id = c.stack_id)" + update
-
-	for _, stmt := range []string{workspaces, stacks} {
-		if _, err := tx.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("derive unit state: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// restoredAwaitingUnits reads the units of the restored schema live that have
-// jobs that wait for a state version, with the final version and the time that
-// the restore gave each unit. It reads them in one statement.
-func restoredAwaitingUnits(ctx context.Context, tx pgx.Tx, live string) ([]unitVersion, error) {
-	const what = "read restored units that wait for a state version"
-
-	query := "SELECT DISTINCT n.name, j.unit_id, u.version_id, u.final_at_ms" +
-		" FROM " + pgIdent(live) + ".jobs AS j" +
-		" JOIN " + pgIdent(live) + ".namespaces AS n ON n.id = j.namespace_id" +
-		" JOIN " + pgIdent(live) + ".unit_state AS u ON u.unit_id = j.unit_id" +
-		" WHERE j.state = 'awaiting-state'" +
-		" ORDER BY n.name, j.unit_id"
-
-	rows, err := tx.Query(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
-	}
-
-	defer rows.Close()
-
-	var out []unitVersion
-
-	for rows.Next() {
-		var unit unitVersion
-
-		if err := rows.Scan(&unit.namespace, &unit.id, &unit.version, &unit.atMs); err != nil {
-			return nil, fmt.Errorf("%s: %w", what, err)
-		}
-
-		out = append(out, unit)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
-	}
-
-	return out, nil
+// A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and a write-back job that waits for a
+// state version keeps waiting. The write is one statement for the workspaces
+// and one for the stacks, through the one writer of unit_state.
+func deriveUnitState(ctx context.Context, tx pgx.Tx, live string, logger *slog.Logger) error {
+	return publishUnitState(ctx, db.New(tx), unitStateWrite{
+		kind: unitStateWriteRestore, nsName: "", unitID: "", version: "", final: false,
+		origin: identity.StateOrigin{Job: "", Commit: ""}, atMs: 0, exec: tx, schema: live, logger: logger,
+	})
 }
 
 // fenceRestored increments the failover version of every namespace of the

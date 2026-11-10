@@ -1,15 +1,21 @@
 package postgres_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -143,6 +149,155 @@ func assertNoFinalVersion(t *testing.T, s *postgres.Store, ns namespace.Name, un
 	got, ok, err := s.Jobs().FinalVersion(t.Context(), ns, unitID)
 	if err != nil || ok {
 		t.Fatalf("final version of unit %s = %+v, %v, %v; want none", unitID, got, ok, err)
+	}
+}
+
+// unitStateLogHandler collects the records that the store writes.
+type unitStateLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler.
+func (h *unitStateLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (h *unitStateLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (h *unitStateLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup implements slog.Handler.
+func (h *unitStateLogHandler) WithGroup(string) slog.Handler { return h }
+
+// count returns the number of records that the handler collected.
+func (h *unitStateLogHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return len(h.records)
+}
+
+// openUnitStateStoreWithLogger opens a store of the test database whose
+// handler receives the records of the store, and returns the store with its
+// schema URL. It skips the test when the database is not configured.
+func openUnitStateStoreWithLogger(t *testing.T, logger *slog.Logger) (*postgres.Store, string) {
+	t.Helper()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL store tests", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL, postgres.WithLogger(logger))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return s, schemaURL
+}
+
+// stateWriteJob stores a queued plan job of the unit whose spec names
+// unitStateWriteRevision, and returns its ID.
+func stateWriteJob(t *testing.T, s *postgres.Store, fence namespace.Fence, unit identity.Object) job.ID {
+	t.Helper()
+
+	phases, err := job.DefaultPhases(job.ExecutorRunner, job.OperationPlan)
+	if err != nil {
+		t.Fatalf("DefaultPhases = %v", err)
+	}
+
+	j := job.Job{
+		ID: job.ID(ident.NewID(job.IDPrefix)), State: job.StateQueued, Wait: job.WaitNone, Reason: "", Current: 0,
+		StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil,
+		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
+		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
+		Spec: job.Spec{
+			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
+			Location: job.Location{
+				Connection: "", Repository: "", Ref: "", Directory: "", Revision: unitStateWriteRevision,
+			},
+			Steps: []job.Step{{
+				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
+				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
+			}},
+			Pool: "rpl-default", Profile: "prf-default", Edits: nil, Delivery: "", Defaulted: nil,
+		},
+		Phases: make([]job.Phase, len(phases)),
+	}
+
+	for i, kind := range phases {
+		j.Phases[i].Kind = kind
+	}
+
+	stored, created, err := s.Jobs().Create(t.Context(), j, nil, fence, []audit.Entry{stateOriginEntry(unit)})
+	if err != nil || !created {
+		t.Fatalf("Create = created %v, %v; want a new job", created, err)
+	}
+
+	return stored.ID
+}
+
+// TestDamagedJobRowGivesAnEmptyCommit proves that a state write whose origin
+// names a job with a damaged row succeeds with an empty final commit, and that
+// the store writes one log record for the damaged row.
+func TestDamagedJobRowGivesAnEmptyCommit(t *testing.T) {
+	t.Parallel()
+
+	handler := new(unitStateLogHandler)
+	s, schemaURL := openUnitStateStoreWithLogger(t, slog.New(handler))
+	ctx := t.Context()
+
+	fence, unit := unitStateTofuUnit(t, s)
+	jobID := stateWriteJob(t, s, fence, unit)
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect = %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			t.Errorf("close connection = %v", closeErr)
+		}
+	})
+
+	if _, err = conn.Exec(ctx, `UPDATE jobs SET body = 'not json' WHERE id = $1`, string(jobID)); err != nil {
+		t.Fatalf("damage the job row = %v", err)
+	}
+
+	w := unlockedForWrites(t, s, fence, unit)
+	sv := unitStatePending(t, w)
+	sv.Origin = identity.StateOrigin{Job: string(jobID), Commit: ""}
+
+	if createErr := s.CreateStateVersion(ctx, sv, fence, unitStatePendingCap); createErr != nil {
+		t.Fatalf("CreateStateVersion = %v", createErr)
+	}
+
+	unitStateFinalize(t, s, sv, fence, "")
+
+	got, ok, err := s.Jobs().FinalVersion(ctx, fence.Namespace, unit.UnitID())
+	if err != nil || !ok {
+		t.Fatalf("FinalVersion = %+v, %v, %v; want one", got, ok, err)
+	}
+
+	if got.Commit != "" {
+		t.Fatalf("final commit = %q, want the empty commit", got.Commit)
+	}
+
+	if handler.count() != 1 {
+		t.Fatalf("log records = %d, want 1", handler.count())
 	}
 }
 
@@ -318,6 +473,21 @@ func assertWriteBackClosed(
 
 	if closed.State != job.StateSucceeded || closed.Closed == nil || closed.Closed.VersionID != version.String() {
 		t.Fatalf("closed job = %s, %+v; want succeeded, closed by %s", closed.State, closed.Closed, version)
+	}
+}
+
+// assertWriteBackWaiting checks that the delivered write-back job still waits
+// for a state version and is not closed.
+func assertWriteBackWaiting(t *testing.T, s *postgres.Store, deliveredID job.ID) {
+	t.Helper()
+
+	waiting, err := s.Jobs().Get(t.Context(), deliveredID)
+	if err != nil {
+		t.Fatalf("Get = %v", err)
+	}
+
+	if waiting.State != job.StateAwaitingState || waiting.Closed != nil {
+		t.Fatalf("job = %s, %+v; want awaiting-state, not closed", waiting.State, waiting.Closed)
 	}
 }
 

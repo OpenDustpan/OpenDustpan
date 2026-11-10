@@ -40,17 +40,16 @@ func unitStateWriteQueries() []string {
 const (
 	// unitStateFile is the file that holds the one entry point of the writes.
 	unitStateFile = "unit_state.go"
-	// unitStateWriter is the function that calls the write queries.
+	// unitStateWriter is the function that writes unit_state.
 	unitStateWriter = "publishUnitState"
-	// unitStateRestoreFile is the file of the restore derive.
-	unitStateRestoreFile = "restore.go"
-	// unitStateRestoreWriter is the restore derive, the one exception.
-	unitStateRestoreWriter = "upsertStagedUnitState"
+	// unitStateRestoreHelper writes the versions of a restore derive. Only
+	// publishUnitState calls it.
+	unitStateRestoreHelper = "restoreUnitState"
 )
 
 // TestQueriesWriteUnitStateOnlyInPublishUnitState proves that the state write
 // queries and the writes of the unit_state table live only in publishUnitState,
-// except the restore derive.
+// which calls the restore helper that writes the restored versions.
 func TestQueriesWriteUnitStateOnlyInPublishUnitState(t *testing.T) {
 	t.Parallel()
 
@@ -115,8 +114,9 @@ func checkQueriesWriteUnitStateOnlyInPublishUnitState(t *testing.T) {
 }
 
 // checkGoFilesWriteUnitStateOnlyInPublishUnitState reads every non-generated
-// Go file of the dialect package and fails when one writes unit_state outside
-// the restore derive or calls a state write query outside publishUnitState.
+// Go file of the dialect package, tests included, and fails when one writes
+// unit_state outside the writer or calls a state write query or the restore
+// helper outside publishUnitState.
 func checkGoFilesWriteUnitStateOnlyInPublishUnitState(t *testing.T) {
 	t.Helper()
 
@@ -129,7 +129,7 @@ func checkGoFilesWriteUnitStateOnlyInPublishUnitState(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
 			continue
 		}
 
@@ -147,7 +147,8 @@ func checkGoFilesWriteUnitStateOnlyInPublishUnitState(t *testing.T) {
 }
 
 // checkGoFileUnitStateWrites fails when name writes unit_state outside the
-// restore derive or calls a state write query outside publishUnitState.
+// writer or its helper, or calls a state write query or the helper outside
+// publishUnitState.
 func checkGoFileUnitStateWrites(t *testing.T, name string, src []byte) {
 	t.Helper()
 
@@ -158,18 +159,19 @@ func checkGoFileUnitStateWrites(t *testing.T, name string, src []byte) {
 		t.Fatalf("parse %s: %v", name, err)
 	}
 
-	restore := unitStateRestoreRange(fset, name, file)
+	ranges := unitStateWriteRanges(fset, name, file)
 
 	for _, loc := range unitStateWritePattern.FindAllIndex(src, -1) {
-		if restore.start <= loc[0] && loc[1] <= restore.end {
+		if unitStateInRanges(ranges, loc[0]) {
 			continue
 		}
 
-		t.Fatalf("%s:%d writes unit_state, want only %s in %s",
-			name, lineNumber(src, loc[0]), unitStateRestoreWriter, unitStateRestoreFile)
+		t.Fatalf("%s:%d writes unit_state, want only %s and %s in %s",
+			name, lineNumber(src, loc[0]), unitStateWriter, unitStateRestoreHelper, unitStateFile)
 	}
 
 	checkGoFileUnitStateCalls(t, name, fset, file)
+	checkGoFileUnitStateHelperCalls(t, name, fset, file)
 }
 
 // unitStateRange is a byte range of a source file.
@@ -178,16 +180,35 @@ type unitStateRange struct {
 	end   int
 }
 
-// unitStateRestoreRange returns the byte range of the body of the restore
-// derive in name, or a range that holds no offset.
-func unitStateRestoreRange(fset *token.FileSet, name string, file *ast.File) unitStateRange {
-	if name != unitStateRestoreFile {
+// unitStateWriteRanges returns the byte ranges of the bodies of the writer and
+// its helper in name, or no range in any other file.
+func unitStateWriteRanges(fset *token.FileSet, name string, file *ast.File) []unitStateRange {
+	if name != unitStateFile {
+		return nil
+	}
+
+	var out []unitStateRange
+
+	for _, fnName := range []string{unitStateWriter, unitStateRestoreHelper} {
+		r := unitStateFunctionRange(fset, name, file, fnName)
+		if r.end > r.start {
+			out = append(out, r)
+		}
+	}
+
+	return out
+}
+
+// unitStateFunctionRange returns the byte range of the body of fnName in
+// unit_state.go, or a range that holds no offset.
+func unitStateFunctionRange(fset *token.FileSet, name string, file *ast.File, fnName string) unitStateRange {
+	if name != unitStateFile {
 		return unitStateRange{start: 0, end: 0}
 	}
 
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != unitStateRestoreWriter || fn.Body == nil {
+		if !ok || fn.Name.Name != fnName || fn.Body == nil {
 			continue
 		}
 
@@ -198,6 +219,17 @@ func unitStateRestoreRange(fset *token.FileSet, name string, file *ast.File) uni
 	}
 
 	return unitStateRange{start: 0, end: 0}
+}
+
+// unitStateInRanges reports whether offset falls in one of ranges.
+func unitStateInRanges(ranges []unitStateRange, offset int) bool {
+	for _, r := range ranges {
+		if r.start <= offset && offset < r.end {
+			return true
+		}
+	}
+
+	return false
 }
 
 // unitStateAllowedCalls returns the positions of the state write query calls
@@ -253,6 +285,37 @@ func checkGoFileUnitStateCalls(t *testing.T, name string, fset *token.FileSet, f
 	})
 }
 
+// checkGoFileUnitStateHelperCalls fails when a function other than
+// publishUnitState calls the restore helper.
+func checkGoFileUnitStateHelperCalls(t *testing.T, name string, fset *token.FileSet, file *ast.File) {
+	t.Helper()
+
+	writer := unitStateFunctionRange(fset, name, file, unitStateWriter)
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		ident, ok := call.Fun.(*ast.Ident)
+		if !ok || ident.Name != unitStateRestoreHelper {
+			return true
+		}
+
+		offset := fset.Position(call.Pos()).Offset
+		if writer.start <= offset && offset < writer.end {
+			return true
+		}
+
+		pos := fset.Position(call.Pos())
+		t.Fatalf("%s:%d calls %s, want only %s in %s",
+			name, pos.Line, unitStateRestoreHelper, unitStateWriter, unitStateFile)
+
+		return false
+	})
+}
+
 // unitStateQueryCall returns the state write query that call calls, or an
 // empty string when it calls none.
 func unitStateQueryCall(call *ast.CallExpr) string {
@@ -261,14 +324,9 @@ func unitStateQueryCall(call *ast.CallExpr) string {
 		return ""
 	}
 
-	receiver, ok := selector.X.(*ast.Ident)
-	if !ok || receiver.Name != "q" {
-		return ""
-	}
-
 	for _, name := range unitStateWriteQueries() {
 		if selector.Sel.Name == name {
-			return "q." + name
+			return name
 		}
 	}
 

@@ -87,8 +87,10 @@ state, inside their transaction, in each dialect:
   transaction it derives `unit_state` from the restored rows (the current
   state version ID; the digest of the last checkpoint) and never restores a
   stored version value. `unit_state` is not in the portable table list.
-  When `final` is true it also runs the close of awaiting write-back jobs
-  (today `observeIn`) in the same transaction.
+  The derive goes through `publishUnitState` with the restore kind. A
+  restore sets the version only: it records no final version and closes no
+  write-back job. A later release of the lock with no write makes the
+  restored version final, because the final version differs from it.
 
 What stops the bug class from coming back:
 
@@ -291,19 +293,21 @@ holds a commit, so `git.head` is new work in task 2.3.
 3c. Restore conformance: plan, then a portable restore of another state,
    then dispatch: `ErrPlanStale`.
 4. Server test: a final write of unit A makes the real dispatcher
-   (`pkg/dustpan/triggers.go`) fire the `follows` trigger of unit B.
+   (`pkg/dustpan/triggers.go`) fire the `follows` trigger of unit B. Moved
+   to #3005.
 5. e2e (OpenTofu, Pulumi CLI): Priya's path with the real CLI. The second
    apply from a "laptop" uses the CLI against the state backend directly.
-6. A store test reads `queries.sql` of each dialect and fails when a query
-   other than `PublishUnitState` writes the version columns.
+6. A store test of each dialect reads `queries.sql` and every Go file of the
+   store package. It fails when SQL that writes `unit_state` is outside
+   `publishUnitState` and its restore helper, or when a function other than
+   `publishUnitState` calls a query or the helper that writes the table.
 
 Status in the code: tests 1, 2, 3, 3b, 3c and 6 are store and suite tests in
-each dialect. Test 4 runs on a real server, but it gives the final version to
-the dispatcher itself: the server does not call the dispatcher of the
-`follows` trigger after a state write yet. That wiring is a separate change.
-Test 5 has no new e2e step in this change.
-
-The plan start of a follows trigger through the gate is tracked in #3007; this change covers the final version and the trigger decision.
+each dialect. Test 4 is moved to #3005, with the wiring of the `follows`
+trigger after a state write. Test 5 has no e2e step yet: the server starts
+plan jobs only (`pkg/dustpan/jobservice.go`), the approve of a job returns
+`ErrUnsupported` (`pkg/job/service.go`), and the jobs API has no approve
+route. The replan reason is covered by the store and suite tests.
 
 ## Notes on the code
 
@@ -383,7 +387,7 @@ is in name order, and `unit_state` sits between `unit_settings` and
   `GetLatestCheckpoint` reads it. A stack with no checkpoint holds no state
   and gets no row: the job store reads the empty version for it, as it does
   for a unit with no row. A workspace with no current state version gets a row
-  with the empty version.
+  with the empty version. The final fields of each derived row are empty.
 - The time of a checkpoint write. That write pays no round trip for the time
   of the version: it uses the clock that the upsert returned, as the check of
   the attempt window does.

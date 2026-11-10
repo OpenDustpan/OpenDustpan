@@ -5,15 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path/filepath"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
-	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -201,7 +200,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		after = func(ctx context.Context, tx *sql.Tx) error { return plan.after(ctx, tx, kept) }
 	}
 
-	if err := fenceStagedFile(ctx, plan.staged, s.path, keep, after); err != nil {
+	if err := s.fenceStagedFile(ctx, plan.staged, s.path, keep, after); err != nil {
 		return 0, err
 	}
 
@@ -218,7 +217,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 // store write lock, so the copy has the last committed control rows. It
 // opens the file in rollback-journal mode, so no write-ahead-log sidecar
 // survives the fence to leak beside the renamed database.
-func fenceStagedFile(
+func (s *Store) fenceStagedFile(
 	ctx context.Context, path, live string, keep bookkeeping, after func(context.Context, *sql.Tx) error,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -240,7 +239,7 @@ func fenceStagedFile(
 		return attachErr
 	}
 
-	return applyStagedFence(ctx, conn, keep, after)
+	return applyStagedFence(ctx, conn, s.logger, keep, after)
 }
 
 // openFencedStaged opens the staged file at path in rollback-journal mode
@@ -293,7 +292,8 @@ func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
 // resets the runtime rows, copies the control tables and applies the journaled
 // revocations again, in one transaction.
 func applyStagedFence(
-	ctx context.Context, conn *sql.DB, keep bookkeeping, after func(context.Context, *sql.Tx) error,
+	ctx context.Context, conn *sql.DB, logger *slog.Logger, keep bookkeeping,
+	after func(context.Context, *sql.Tx) error,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -329,7 +329,7 @@ func applyStagedFence(
 		return errors.Join(err, tx.Rollback())
 	}
 
-	if err := deriveUnitState(ctx, tx); err != nil {
+	if err := deriveUnitState(ctx, tx, logger); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -390,145 +390,20 @@ func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// unitVersion names the unit of the restored installation, the state version
-// that the restore derives for it, and the time that the restore gave the
-// version.
-type unitVersion struct {
-	namespace string
-	id        string
-	version   string
-	atMs      int64
-}
-
 // deriveUnitState records the state version of every unit of the staged file
 // in unit_state, in tx: a restore derives the version from the restored rows
 // and brings no stored version back. A workspace takes the state version that
-// its row makes current, a stack the digest of its last checkpoint. Every
-// derived version is final: the state that the restore brings is the state of
-// the installation.
+// its row makes current, a stack the digest of its last checkpoint.
 //
-// The write is one statement for the workspaces and one for the stacks, and
-// the close of the jobs that wait for a state version reads its units in one
-// statement. Neither count grows with the number of units.
-func deriveUnitState(ctx context.Context, tx *sql.Tx) error {
-	if err := upsertStagedUnitState(ctx, tx); err != nil {
-		return err
-	}
-
-	awaiting, err := stagedAwaitingUnits(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	q := db.New(tx)
-
-	for _, unit := range awaiting {
-		_, err = jobstore.CloseAwaiting(ctx, stateCloseTx{q: q}, namespace.Name(unit.namespace), jobstore.FinalVersion{
-			UnitID: unit.id, VersionID: unit.version, Commit: "", Job: "",
-			At: time.UnixMilli(unit.atMs).UTC(),
-		}, nil)
-		if err != nil {
-			return fmt.Errorf("close the jobs that wait for the state version: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// upsertStagedUnitState writes the state version of every unit of the staged
-// file in unit_state, in tx, with one statement for the workspaces and one for
-// the stacks. It is the one writer of unit_state outside publishUnitState: a
-// portable restore derives the versions of all restored units at once, so one
-// call per unit would not scale. The final fields are the version, the origin
-// is empty, and the time comes from the clock of the database.
-func upsertStagedUnitState(ctx context.Context, tx *sql.Tx) error {
-	const (
-		now     = "CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)"
-		columns = "unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms"
-		update  = " ON CONFLICT (unit_id) DO UPDATE SET namespace_id = excluded.namespace_id," +
-			" version_id = excluded.version_id, final_version_id = excluded.final_version_id," +
-			" final_commit = excluded.final_commit, final_job = excluded.final_job," +
-			" final_at_ms = excluded.final_at_ms"
-	)
-
-	workspaceVersion := "w.current_state_version_id"
-
-	// The WHERE true keeps the parser from reading ON CONFLICT as the ON
-	// clause of the join.
-	workspaces := "INSERT INTO main.unit_state (" + columns + ")" +
-		" SELECT w.id, n.id, " + workspaceVersion + ", " + workspaceVersion + ", '', '', " + now +
-		" FROM main.workspaces AS w" +
-		" JOIN main.namespaces AS n ON n.name = w.namespace" +
-		" WHERE true" + update
-
-	version := "lower(hex(c.digest)) || CASE WHEN c.invalid <> 0 THEN ':invalid' ELSE '' END"
-
-	stacks := "INSERT INTO main.unit_state (" + columns + ")" +
-		" SELECT c.stack_id, n.id, " + version + ", " + version + ", '', '', " + now +
-		" FROM main.checkpoints AS c" +
-		" JOIN main.updates AS u ON u.stack_id = c.stack_id AND u.id = c.update_id" +
-		" JOIN main.stacks AS st ON st.id = c.stack_id" +
-		" JOIN main.namespaces AS n ON n.name = st.namespace" +
-		" WHERE u.version = (SELECT MAX(v.version) FROM main.updates AS v" +
-		" JOIN main.checkpoints AS last ON last.stack_id = v.stack_id AND last.update_id = v.id" +
-		" WHERE v.stack_id = c.stack_id)" + update
-
-	for _, stmt := range []string{workspaces, stacks} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("derive unit state: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// stagedAwaitingUnits reads the units of the staged file that have jobs that
-// wait for a state version, with the final version and the time that the
-// restore gave each unit. It reads them in one statement.
-func stagedAwaitingUnits(ctx context.Context, tx *sql.Tx) ([]unitVersion, error) {
-	const what = "read staged units that wait for a state version"
-
-	const query = `SELECT DISTINCT n.name, j.unit_id, u.version_id, u.final_at_ms
-FROM main.jobs AS j
-JOIN main.namespaces AS n ON n.id = j.namespace_id
-JOIN main.unit_state AS u ON u.unit_id = j.unit_id
-WHERE j.state = 'awaiting-state'
-ORDER BY n.name, j.unit_id`
-
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
-	}
-
-	out, err := scanAwaitingUnits(rows)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
-	}
-
-	return out, nil
-}
-
-// scanAwaitingUnits reads each row of rows and closes it.
-func scanAwaitingUnits(rows *sql.Rows) ([]unitVersion, error) {
-	var out []unitVersion
-
-	for rows.Next() {
-		var unit unitVersion
-
-		if err := rows.Scan(&unit.namespace, &unit.id, &unit.version, &unit.atMs); err != nil {
-			closeErr := rows.Close()
-
-			return nil, errors.Join(err, closeErr)
-		}
-
-		out = append(out, unit)
-	}
-
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, err
-	}
-
-	return out, nil
+// A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and a write-back job that waits for a
+// state version keeps waiting. The write is one statement for the workspaces
+// and one for the stacks, through the one writer of unit_state.
+func deriveUnitState(ctx context.Context, tx *sql.Tx, logger *slog.Logger) error {
+	return publishUnitState(ctx, db.New(tx), unitStateWrite{
+		kind: unitStateWriteRestore, nsName: "", unitID: "", version: "", final: false,
+		origin: identity.StateOrigin{Job: "", Commit: ""}, atMs: 0, exec: tx, logger: logger,
+	})
 }
 
 // writeStagedBookkeeping writes the bookkeeping row keep of the live

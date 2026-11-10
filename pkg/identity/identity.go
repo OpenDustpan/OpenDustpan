@@ -147,6 +147,7 @@ type StateOrigin struct {
 	// other credential.
 	Job string
 	// Commit is the commit that the tool reported with the write. It is
+	// never an authenticated claim, and no decision may trust it. It is
 	// empty when the tool reported none.
 	Commit string
 }

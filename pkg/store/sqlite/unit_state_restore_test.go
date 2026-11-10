@@ -86,6 +86,53 @@ func TestPortableRestoreMakesPlanStale(t *testing.T) {
 	}
 }
 
+// TestPortableRestoreIsNotAFinalVersion proves that a portable restore sets
+// the current state version of a unit from the restored rows and leaves no
+// final version: the restored state predates the delivery of any waiting job,
+// so a write-back job that waited before the restore still waits.
+func TestPortableRestoreIsNotAFinalVersion(t *testing.T) {
+	t.Parallel()
+
+	s := open(t)
+	ctx := t.Context()
+
+	fence, unit := stateWriteUnit(t, s)
+
+	restoredVersion := unitStateTofuFinalize(t, s, fence, unit)
+	delivered := awaitingWriteBackJob(t, s, fence, unit)
+
+	ps, ok := any(s).(storetest.PortableRestoreStore)
+	if !ok {
+		t.Fatal("the SQLite store does not export and stage the portable format")
+	}
+
+	files, sum, descs := storetest.PortableFiles(t, ps)
+
+	_, stageErr := ps.StagePortable(
+		ctx, storetest.PortableOpener(files), sum, descs, storetest.StageAs(t, ps),
+	)
+	if stageErr != nil {
+		t.Fatalf("stage portable backup = %v", stageErr)
+	}
+
+	t.Cleanup(func() {
+		if discardErr := ps.DiscardStaging(context.WithoutCancel(ctx)); discardErr != nil {
+			t.Errorf("discard staging = %v", discardErr)
+		}
+	})
+
+	if err := ps.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup = %v", err)
+	}
+
+	if got := unitStateVersion(t, s, fence.Namespace, unit.UnitID()); got != restoredVersion {
+		t.Fatalf("state version after the restore = %q, want the restored %q", got, restoredVersion)
+	}
+
+	assertNoFinalVersion(t, s, fence.Namespace, unit.UnitID())
+	assertWriteBackWaiting(t, s, delivered.ID)
+}
+
 // plannedApplyJob stores a queued apply job whose plan phase made a plan that
 // read the state version sv of unit, and that waits to dispatch its apply
 // phase.
