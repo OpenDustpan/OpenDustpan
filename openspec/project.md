@@ -106,6 +106,12 @@ it. A design does not add new tooling as a fix.
 The design names the structure that makes the bug class impossible. If none
 exists, it says why, and a guard with a mutation test takes its place.
 
+The design names the unexported type or field that makes the bug class
+impossible (only its constructor can make a value, and the constructor checks
+the invariants), then the golangci-lint setting for what remains, and how a
+rewrite of many call sites is done (go fix with //go:fix inline, gopls, eg or a
+script first). No custom analyzer and no new tool (ADR 364).
+
 ### Tasks
 
 Each task names its acceptance check: a test, a command or an API call that
