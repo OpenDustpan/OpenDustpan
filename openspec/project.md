@@ -96,6 +96,11 @@ questions. The pull request links the change and its issue.
    other than the author's gets one task: list the open questions, failure
    modes and missing scenarios that the change does not cover. Each answer goes
    into the proposal, either answered or as an open question.
+7. **Delight.** The user path is judged on how it feels to use, not only on
+   whether it works: the fewest steps, no surprise, a clear next step at each
+   point, and an error that tells the person what happened and the one command
+   that helps. The usability check of each change records where the path still
+   feels rough.
 
 ### Design
 
