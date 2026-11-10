@@ -4053,3 +4053,15 @@ decisions:
   accepted_artifact: "docs/adr/0363-the-store-move-comes-before-the-namespace-id-change.md"
   evidence:
   - "docs/adr/0363-the-store-move-comes-before-the-namespace-id-change.md"
+- id: "adr-0364"
+  title: "ADR 364: Unexported fields and golangci-lint before added checks (owner)"
+  decision: "1. **Visibility first, then golangci-lint (owner, 2026-11-10).** The owner said:\n```text \"It's called golangci-lint and private structs/fields\" ```\n```text \"This is a decision and it must also hold going forward. Don't get me wrong, I hate Java but we need to be more conscious of our public APIs even internally to prevent this kind of mess.\" ```\nThe guard against a bug class is Go visibility first. Fields are unexported, so that only a constructor can make a value, and the constructor checks the invariants of the value. Rules that visibility cannot express go into the existing golangci-lint configuration (for example `forbidigo`, `depguard` and `exhaustruct`). This decision adds no custom analyzer and no new tool."
+  reason: "On 8 November 2026 the owner asked the project to stop bug classes that came back after each fix. The owner also asked for a code structure that makes a bug class impossible, in place of more checks and more tools. One example is a state version that only test hooks wrote: an exported setter let a test stand in for the product path. The implementation lead proposed two guards. The first guard is unexported fields, so that only a constructor can make a value, and the constructor checks its invariants."
+  scope:
+  - "docs/adr/0364-unexported-fields-and-golangci-lint-before-added-checks.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-10"
+  accepted_artifact: "docs/adr/0364-unexported-fields-and-golangci-lint-before-added-checks.md"
+  evidence:
+  - "docs/adr/0364-unexported-fields-and-golangci-lint-before-added-checks.md"
