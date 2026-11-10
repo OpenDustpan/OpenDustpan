@@ -111,6 +111,14 @@ questions. The pull request links the change and its issue.
    `CLAUDE.md`). The usability check of each change records where the path
    still costs the person time or surprises them.
 
+   The tests of delight:
+   - Each command on a docs page or in a runbook runs as written, and a test
+     runs it.
+   - An upgrade runs its checks, and the new replicas roll out and become ready
+     the first time, with no manual step.
+   - A production installation from the docs works without special knowledge.
+     A dev server alone does not prove a feature.
+
 ### Design
 
 `design.md` prefers a structure that makes a bug class impossible over added
