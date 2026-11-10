@@ -94,6 +94,14 @@ func (m *deleteState) Export(_ context.Context, _ stack.Ref) (stack.Checkpoint, 
 	return res.cp, res.err
 }
 
+// deleteRename records one RenameStack call: the old reference, the new name
+// and the audit entry that the service passed to the store.
+type deleteRename struct {
+	old   stack.Ref
+	new   stack.Name
+	entry audit.Entry
+}
+
 // deleteStacks is a stack.Store for the delete-guard tests that records the
 // guards DeleteStack receives. Queued errors answer first; once the queue is
 // empty it answers from the guard itself, as the real adapters do: a guard
@@ -106,6 +114,8 @@ type deleteStacks struct {
 	queue  []error
 	// restoreCalls counts the calls of RestoreStack.
 	restoreCalls int
+	renames      []deleteRename
+	renamed      *stack.Stack
 }
 
 func (m *deleteStacks) DeleteStack(
@@ -134,7 +144,14 @@ func (m *deleteStacks) CreateStack(_ context.Context, _ stack.Stack, _ namespace
 	return stack.ErrAlreadyExists
 }
 
-func (m *deleteStacks) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, error) {
+func (m *deleteStacks) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.renamed != nil && m.renamed.Ref == ref {
+		return *m.renamed, nil
+	}
+
 	return stack.Stack{}, stack.ErrNotFound
 }
 
@@ -180,9 +197,36 @@ func (m *deleteStacks) UpdateStackTags(
 }
 
 func (m *deleteStacks) RenameStack(
-	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence, e audit.Entry,
 ) error {
-	return stack.ErrNotFound
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.renames = append(m.renames, deleteRename{old: oldRef, new: newName, entry: e})
+	renamed := stack.Stack{
+		NamespaceID: "",
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		Tags:        nil,
+		Ref:         stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName},
+		ID:          "",
+		Version:     0,
+	}
+	m.renamed = &renamed
+
+	return nil
+}
+
+// renameAt returns the RenameStack call at index i.
+func (m *deleteStacks) renameAt(i int) deleteRename {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.renames[i]
 }
 
 // restores returns the number of RestoreStack calls.
@@ -248,7 +292,9 @@ func newDeleteFixture(
 	}
 
 	st := &deleteState{mu: sync.Mutex{}, queue: exports, calls: 0}
-	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: queued, restoreCalls: 0}
+	store := &deleteStacks{
+		mu: sync.Mutex{}, guards: nil, queue: queued, restoreCalls: 0, renames: nil, renamed: nil,
+	}
 
 	svc, err := stack.NewService(stack.Config{
 		Store:       store,
@@ -414,7 +460,9 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	st := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}
+	st := &deleteStacks{
+		mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil,
+	}
 
 	svc, err := stack.NewService(stack.Config{
 		Store:       st,
@@ -772,7 +820,9 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	mem.nsID = ns.ID
 	mem.addStack(ref, "stk-test")
 
-	st := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}
+	st := &deleteStacks{
+		mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil,
+	}
 
 	svc, err := stack.NewService(stack.Config{
 		Store:       st,

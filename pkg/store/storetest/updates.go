@@ -1826,7 +1826,7 @@ func testReferencedBlobKeysByID(t *testing.T, f fixture) {
 
 	f.end(t, u, stack.StatusSucceeded)
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -2034,7 +2034,7 @@ func testRenameDuringRunningUpdate(t *testing.T, f fixture) {
 
 	running := f.run(t, f.ref, "u1", mutating())
 
-	renameErr := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence)
+	renameErr := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref))
 	if !errors.Is(renameErr, stack.ErrUpdateConflict) {
 		t.Fatalf("rename during a running update: err = %v, want ErrUpdateConflict", renameErr)
 	}
@@ -2053,7 +2053,7 @@ func testRenameDuringRunningUpdate(t *testing.T, f fixture) {
 
 	f.end(t, running, stack.StatusSucceeded)
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref)); err != nil {
 		t.Errorf("rename after the update ended: %v", err)
 	}
 }
@@ -2097,7 +2097,9 @@ func testRenameRaceWithNewUpdate(t *testing.T, f fixture) {
 		wg.Go(func() {
 			<-gate
 
-			renameErr = f.s.RenameStack(t.Context(), st.Ref, newRef.Stack, f.fence)
+			renameErr = f.s.RenameStack(
+				t.Context(), st.Ref, newRef.Stack, f.fence, renameEntry(st.Ref.Namespace, st.Ref),
+			)
 		})
 
 		close(gate)
@@ -2776,7 +2778,7 @@ func testRenameKeepsHistory(t *testing.T, f fixture) {
 	oldID := f.stackID(t, f.ref)
 	newRef := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "renamed"}
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

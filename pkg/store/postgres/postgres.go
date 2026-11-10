@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -588,22 +589,44 @@ func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[str
 	return nil
 }
 
+// stackNameChangeKey is the audit change key of a stack name.
+const stackNameChangeKey = "name"
+
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction. It returns ErrNotFound if no live stack has oldRef, and
-// ErrUpdateConflict while a mutating update of the stack runs.
+// same transaction. It appends the audit entry e in that transaction, with the
+// stable stack ID and the old and the new name. It returns ErrNotFound if no
+// live stack has oldRef, and ErrUpdateConflict while a mutating update of the
+// stack runs.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if newName == oldRef.Stack {
+	if newName == oldRef.Stack {
+		return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 			return confirmStackPresent(ctx, q, oldRef)
-		}
+		})
+	}
 
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
 			return err
 		}
+
+		before, err := q.GetStack(ctx, db.GetStackParams{
+			Namespace: oldRef.Namespace.String(),
+			Project:   oldRef.Project.String(),
+			Name:      oldRef.Stack.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("read stack: %w", err)
+		}
+
+		oldName := before.Name
+		e.ObjectID = before.ID
+		e.Changes = []audit.Change{{
+			Key: stackNameChangeKey, Old: &oldName, New: newName.String(), Layer: "", TakesEffect: "",
+		}}
 
 		n, err := q.RenameStack(ctx, db.RenameStackParams{
 			Name:      newName.String(),

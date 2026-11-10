@@ -328,7 +328,9 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}
+	store := &deleteStacks{
+		mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil,
+	}
 
 	svc, err := stack.NewService(stack.Config{
 		Store: store, Namespaces: namespaces, Now: func() time.Time { return now }, State: nil, Retention: 0,
@@ -364,7 +366,7 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 			func(s *stack.Service, ref stack.Ref) error { return s.ForceDelete(t.Context(), ref, deleteEntry()) },
 		},
 		{"Rename", func(s *stack.Service, ref stack.Ref) error {
-			_, renameErr := s.Rename(t.Context(), ref, newName)
+			_, renameErr := s.Rename(t.Context(), ref, newName, deleteEntry())
 
 			return renameErr
 		}},
@@ -408,6 +410,43 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 				t.Errorf("store delete calls = %d, want 0", got)
 			}
 		})
+	}
+}
+
+// TestRenamePassesTheAuditEntry proves the rename service stamps the entry
+// with its clock and passes it to the store, which refuses an entry without a
+// time.
+func TestRenamePassesTheAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	newName, err := stack.ParseName("prod")
+	if err != nil {
+		t.Fatalf("parse name: %v", err)
+	}
+
+	svc, store, ref := newLockedStackService(t, failing(manuallock.ErrNotLocked))
+
+	if _, err := svc.Rename(t.Context(), ref, newName, deleteEntry()); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	if len(store.renames) != 1 {
+		t.Fatalf("rename calls = %d, want 1", len(store.renames))
+	}
+
+	got := store.renameAt(0)
+	wantAt := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	if !got.entry.At.Equal(wantAt) {
+		t.Fatalf("entry time = %v, want %v from the service clock", got.entry.At, wantAt)
+	}
+
+	if got.old != ref || got.new != newName {
+		t.Fatalf("rename = %v to %q, want %v to %q", got.old, got.new, ref, newName)
+	}
+
+	if got.entry.Namespace != ref.Namespace || got.entry.Action != "unit:manage" {
+		t.Fatalf("entry = namespace %q action %q, want %q and unit:manage",
+			got.entry.Namespace, got.entry.Action, ref.Namespace)
 	}
 }
 
