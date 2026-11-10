@@ -17,8 +17,8 @@
 ## 4. Verification
 
 - [ ] 4.1 Store and suite tests of `design.md` (tests 1 to 6). Check: each test fails when its write point or guard is removed.
-- [ ] 4.2 Server test: a final write of unit A starts the `follows` plan of unit B through the real dispatcher. Check: the test in `pkg/dustpan`.
-- [ ] 4.3 E2E: the path of the proposal with the real `tofu` CLI and the real `pulumi` CLI. Check: `make e2e` runs both steps on SQLite and PostgreSQL.
+- [ ] 4.2 Server test: a final write of unit A starts the `follows` plan of unit B through the real dispatcher. Check: the test in `pkg/dustpan`. Moved to #3005.
+- [ ] 4.3 E2E: the path of the proposal with the real `tofu` CLI and the real `pulumi` CLI. Check: `make e2e` runs both steps on SQLite and PostgreSQL. Moved to #1315: no approve route yet (`pkg/job/service.go:330` returns `ErrUnsupported`).
 - [ ] 4.4 Docs: `docs/guides/approval-rules.md` says that an apply refuses a plan whose state changed, and that the job plans again. Check: `make docs-lint` exits 0.
 - [ ] 4.5 Usability check: a person follows the guide, causes the stale plan, and reads the reason in the job. Check: the steps and the answers are in the pull request description.
 - [ ] 4.6 `make check` reports zero findings.

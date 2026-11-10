@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -283,7 +284,7 @@ func deleteInlineCheckpoint(ref stack.Ref, id, deployment string) stack.Checkpoi
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -799,7 +800,7 @@ func saveSequencedVerbatimThenDelta(
 	ctx := t.Context()
 
 	u, err := f.updates.Create(
-		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -838,7 +839,7 @@ func savePlainCheckpoint(t *testing.T, f sequencedDeleteFixture, deployment stri
 	ctx := t.Context()
 
 	u, err := f.updates.Create(
-		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		ctx, f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -986,7 +987,7 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 	f := newSequencedDeleteFixture(t)
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	journaled, err := f.updates.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -1004,7 +1005,7 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 
 	// A dry run does not hold the stack lock, so it can start while the
 	// update above runs.
-	dryRun := stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+	dryRun := stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	plain, err := f.updates.Create(ctx, f.ref, dryRun)
 	if err != nil {

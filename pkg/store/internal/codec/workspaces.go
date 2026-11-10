@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -110,7 +111,7 @@ func FromWorkspaceRow(row WorkspaceRow) workspace.Workspace {
 		Ref:         workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
 		Overrides:   namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
 		Revision:    row.Revision,
-		LastRelease: releaseFromRow(row),
+		LastRelease: releaseFromRow(row), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -289,6 +290,6 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
 		FenceBy:         row.FencedBy, UnlockedWrite: row.UnlockedWrite,
-		SensitiveMarks: marks,
+		SensitiveMarks: marks, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }

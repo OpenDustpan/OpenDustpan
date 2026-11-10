@@ -45,10 +45,6 @@ func testForeignNamespace(t *testing.T, h Harness) {
 	wantError(t, "Apply with an audit entry of another namespace", err, audit.ErrInvalidEntry)
 
 	assertState(t, h, stored.ID, job.StateQueued)
-
-	v := job.StateVersion{Unit: f.unit, VersionID: svOne, Commit: "", Job: "", At: stored.CreatedAt, Final: true}
-	_, err = h.Jobs.ObserveStateVersion(t.Context(), v, other)
-	wantError(t, "ObserveStateVersion of a unit of another namespace", err, job.ErrInvalid)
 }
 
 // wantError fails t unless err wraps want.

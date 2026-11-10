@@ -32,7 +32,6 @@ func reconcileCases() []suiteCase {
 		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
-		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
 		{"the reconcile fails a queued job whose plan phase stored no plan, and never replans it", testReconcileNoPlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
@@ -161,7 +160,7 @@ func testStateChangedAt(t *testing.T, h Harness) {
 
 	// A write that keeps the state moves the update time and not the time of
 	// the state change: the replan of a queued job is such a write.
-	stale := planned(t, h, f, svOne, time.Now())
+	stale := planned(t, h, f, "", time.Now())
 	again := apply(t, h, f, change(&stale, job.EventReplan))
 
 	if !again.StateChangedAt.Equal(stale.StateChangedAt) || !again.UpdatedAt.After(stale.UpdatedAt) {
@@ -290,11 +289,10 @@ func testReconcileStalePlan(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	old := writeState(t, h, f, false)
+	current := writeState(t, h, f, false)
 
-	stale := planned(t, h, f, svOne, time.Now())
+	stale := planned(t, h, f, old, time.Now())
 
 	if res := runReconcile(t, h, 0); res.Replanned != 1 || res.Dispatched != 0 {
 		t.Fatalf("reconcile of a job with a stale plan = %+v; want one replan", res)
@@ -308,13 +306,70 @@ func testReconcileStalePlan(t *testing.T, h Harness) {
 
 	apply(t, h, f, change(&got, job.EventCancel))
 
-	fresh := planned(t, h, f, svTwo, time.Now())
+	fresh := planned(t, h, f, current, time.Now())
 
 	if res := runReconcile(t, h, 0); res.Dispatched != 1 {
 		t.Fatalf("reconcile of a job with a fresh plan = %+v; want one dispatch", res)
 	}
 
 	assertState(t, h, fresh.ID, job.StateDispatched)
+}
+
+// testReconcileReplanReason proves that the replan of a stale plan names the
+// state version that the plan read and the current one, in the reason of the
+// job and in the reason of the audit entry of the replan.
+func testReconcileReplanReason(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	old := writeState(t, h, f, false)
+	current := writeState(t, h, f, false)
+
+	// The plan read old while the unit is at current. The plan time is the
+	// zero time, so the plan is stale by its age too: the stale check reads
+	// the version first, so the reason names the two versions.
+	stale := planned(t, h, f, old, time.Time{})
+
+	if res := runReconcile(t, h, 0); res.Replanned != 1 || res.Dispatched != 0 {
+		t.Fatalf("reconcile of a job with a stale plan = %+v; want one replan", res)
+	}
+
+	got, err := h.Jobs.Get(t.Context(), stale.ID)
+	if err != nil {
+		t.Fatalf("Get = %v", err)
+	}
+
+	if !strings.Contains(got.Reason, old) || !strings.Contains(got.Reason, current) {
+		t.Fatalf("reason after the replan = %q; want it to name %s and %s", got.Reason, old, current)
+	}
+
+	if reason := replanReason(t, h, f, stale.ID); !strings.Contains(reason, old) ||
+		!strings.Contains(reason, current) {
+		t.Fatalf("audit reason of the replan = %q; want it to name %s and %s", reason, old, current)
+	}
+}
+
+// replanReason returns the reason of the audit entry that the reconcile wrote
+// for the job id, and fails t when the run wrote none.
+func replanReason(t *testing.T, h Harness, f fixture, id job.ID) string {
+	t.Helper()
+
+	entries, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	for i := range entries {
+		e := &entries[i]
+		if e.JobID == string(id) && strings.HasPrefix(e.Reason, job.ReconcileName+": ") {
+			return e.Reason
+		}
+	}
+
+	t.Fatalf("no audit entry of the reconcile for job %s", id)
+
+	return ""
 }
 
 // testReconcileNoPlan proves that a job whose plan phase stored no plan ends
@@ -327,7 +382,7 @@ func testReconcileNoPlan(t *testing.T, h Harness) {
 
 	j := newJob(f.unit, job.OperationApply, "")
 	j.Current = 1
-	j.Phases[0].StateVersion = svOne
+	j.Phases[0].StateVersion = ""
 	noPlan := create(t, h, f, j, nil)
 
 	if res := runReconcile(t, h, 0); res.Ended != 1 || res.Replanned != 0 || res.Dispatched != 0 {

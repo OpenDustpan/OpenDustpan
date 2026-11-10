@@ -193,7 +193,7 @@ func newCrashFixture(
 		t.Fatalf("updates: %v", err)
 	}
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := updates.Create(ctx, ref, plan)
 	if err != nil {

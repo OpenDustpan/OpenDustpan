@@ -99,6 +99,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 				Claimer:    job.NewClaimer(jobs, ops, st.Store, jobtest.NoGates{}),
 				Namespaces: st.Store,
 				Domain:     &jobDomain{s: st.Store},
+				WriteState: nil,
 			},
 			Records: jobs, ItemKeys: st.Store, Blobs: live, Wrapper: in.Key,
 		}),

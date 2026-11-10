@@ -824,9 +824,17 @@ type requestFlow struct {
 // caller with one query, for its groups and its break-glass mark. So "lock",
 // "lock, upload and unlock" and each pulumi flow that meets the gates hold 1
 // round trip for that read.
+//
+// Each write that moves the state of a unit writes its state version to
+// unit_state with one statement in the transaction of the write. A final
+// version also reads the jobs of the unit that wait for one. So "opentofu
+// upload" and "pulumi checkpoint save" each hold 1 round trip for the write,
+// "unlock" holds 2 for the final version of the release, and "pulumi cancel"
+// and the other pulumi flows that end an update hold up to 4 for their writes
+// and their final version.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 42, func(h *rtHarness) {
+		{"opentofu upload", 43, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
@@ -835,30 +843,30 @@ func requestFlows() []requestFlow {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		{"unlock", 11, func(h *rtHarness) {
+		{"unlock", 13, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 91, func(h *rtHarness) {
+		{"lock, upload and unlock", 95, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
 				h.unlock()
 			})
 		}},
-		{"pulumi checkpoint save", 13, func(h *rtHarness) {
+		{"pulumi checkpoint save", 14, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 62. The second save reads the blob guard after the
+		// The budget is 66. The second save reads the blob guard after the
 		// commit that replaces the previous checkpoint blob, so that a backup
 		// that started before the commit cannot lose the blob. The
 		// transaction of the create writes the record of the item key of the
 		// update, which seals its event payloads at rest: a read of the
 		// record, a read of the namespace, the insert and a read back.
-		{"pulumi update cycle", 62, func(h *rtHarness) {
+		{"pulumi update cycle", 66, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -889,12 +897,12 @@ func requestFlows() []requestFlow {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 66, func(h *rtHarness) {
+		{"pulumi stack import", 69, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 67, func(h *rtHarness) {
+		{"pulumi stack restore", 70, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
@@ -906,7 +914,7 @@ func requestFlows() []requestFlow {
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 32, func(h *rtHarness) {
+		{"pulumi cancel", 36, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
@@ -1350,16 +1358,29 @@ func backupModel() costModel {
 //
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
+//
+// The fixed part also holds unitStateTrips: the restore derives the state
+// version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
 		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
-			stagedPrincipalCheckTrips,
+			stagedPrincipalCheckTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// unitStateTrips is the number of round trips by which the state version of
+// each unit changes the fixed part. The restore derives the versions with one
+// statement for the workspaces and one for the stacks: 2 round trips. A
+// restore closes no write-back job, so it reads no waiting jobs. The measured
+// run also makes 3 round trips more than the model gives for the table lists,
+// where unit_state is a table that the restore empties and the two earlier
+// tables of state versions are gone. The measured runs at 3 and at 30 units
+// both hold these 5 round trips, so the count does not grow with the units.
+const unitStateTrips = 5
 
 // forgeStripClassTrips is the number of round trips of the two classes of the
 // Git host links that the dev strip counts for each principal class: the links

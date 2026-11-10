@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -292,6 +293,8 @@ func newUpdate(ref stack.Ref, id string, plan stack.Plan, createdBy string, rest
 		CreatedBy:       createdBy,
 		RestoredFrom:    restoredFrom,
 		CheckpointBytes: 0,
+		JobID:           "",
+		GitHead:         "",
 	}
 }
 
@@ -365,16 +368,16 @@ func (f fixture) stackVersion(t *testing.T, ref stack.Ref) int64 {
 }
 
 func mutating() stack.Plan {
-	return stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 }
 
 func preview() stack.Plan {
-	return stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 }
 
 // dryRun is the preview phase of `pulumi up`: the real kind, not mutating.
 func dryRun() stack.Plan {
-	return stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 }
 
 // historyFixture is a store holding namespace "acme" and stack
@@ -563,7 +566,12 @@ func testJournalEndKeepsStoredRefusal(t *testing.T, f fixture) {
 func testUpdateRoundTrip(t *testing.T, f fixture) {
 	t.Helper()
 
-	want := f.create(t, f.ref, "u1", stack.Plan{Kind: stack.KindRefresh, DryRun: true, CreatedBy: "", RestoredFrom: 0})
+	want := f.create(
+		t,
+		f.ref,
+		"u1",
+		stack.Plan{Kind: stack.KindRefresh, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	assertUpdate(t, f, want)
 
 	want = f.start(t, want)
@@ -842,7 +850,12 @@ func testStartVersions(t *testing.T, f fixture) {
 		t.Fatalf("preview version = %d, want 1", p.Version)
 	}
 
-	second := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	second := f.run(
+		t,
+		f.ref,
+		"u2",
+		stack.Plan{Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	if second.Version != 2 {
 		t.Fatalf("second update version = %d, want 2", second.Version)
 	}
@@ -882,7 +895,7 @@ func testOneRunning(t *testing.T, f fixture) {
 		t,
 		f.ref,
 		"u2",
-		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 
 	// The refusal names the update that holds the stack, so the caller needs
@@ -1079,13 +1092,23 @@ func testListUpdates(t *testing.T, f fixture) {
 	f.end(t, f.run(t, f.ref, "p1", preview()), stack.StatusSucceeded)
 	f.end(
 		t,
-		f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0}),
+		f.run(
+			t,
+			f.ref,
+			"u2",
+			stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+		),
 		stack.StatusFailed,
 	)
 	f.end(t, f.run(t, f.ref, "p2", dryRun()), stack.StatusSucceeded)
 	f.end(t, f.run(t, f.ref, "u3", mutating()), stack.StatusCanceled)
 	f.create(t, f.ref, "waiting", mutating())
-	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	f.run(
+		t,
+		f.ref,
+		"u4",
+		stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	f.end(t, f.run(t, f.other(t), "other", mutating()), stack.StatusSucceeded)
 
 	for _, tc := range []struct {
@@ -1131,7 +1154,7 @@ func testHistoryCreator(t *testing.T, f historyFixture) {
 	restored := f.create(
 		t,
 		"u2",
-		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 		"bob@example.com",
 		want.Version,
 	)
@@ -1211,7 +1234,7 @@ func testHistoryKinds(t *testing.T, f historyFixture) {
 		f.run(
 			t,
 			"u1",
-			stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 			"alice@example.com",
 			0,
 		),
@@ -1221,7 +1244,7 @@ func testHistoryKinds(t *testing.T, f historyFixture) {
 	restored := f.run(
 		t,
 		"u2",
-		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 		"",
 		1,
 	)
@@ -1396,7 +1419,7 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		BlobSize:      size,
 		BlobMD5:       sum,
 		// The attempt starts now, so the store accepts it in its time window.
-		AttemptStartedAt: time.Now(),
+		AttemptStartedAt: time.Now(), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -2958,7 +2981,7 @@ func testInventoryAfterUpdateFinish(t *testing.T, f fixture) {
 func testInventoryHoldsRunningLock(t *testing.T, f fixture) {
 	t.Helper()
 
-	plan := stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "admin", RestoredFrom: 0, GitHead: ""}
 	u := f.run(t, f.ref, "u1", plan)
 
 	entries := listUpdatesInventory(t, f)
@@ -3054,7 +3077,7 @@ func testUpdateInventoryLockFenced(t *testing.T, f fixture) {
 	t.Helper()
 
 	stale := namespace.Fence{Namespace: f.ref.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "admin", RestoredFrom: 0, GitHead: ""}
 
 	u := f.create(t, f.ref, "u1", plan)
 
@@ -3283,7 +3306,12 @@ func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	other := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	other := f.run(
+		t,
+		f.ref,
+		"u2",
+		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 
 	st, err := f.s.GetStack(t.Context(), f.ref)
 	if err != nil {

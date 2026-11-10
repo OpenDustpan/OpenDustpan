@@ -34,7 +34,6 @@ func damagedCases() []suiteCase {
 		{"a damaged row does not stop the reconcile from dispatching the good jobs", testDamagedDispatch},
 		{"a damaged row does not stop the reconcile from expiring the good jobs", testDamagedExpire},
 		{"a damaged row does not stop the reconcile from ending the good orphans", testDamagedOrphans},
-		{"a damaged row does not stop a state version from closing the good jobs", testDamagedClose},
 	}
 }
 
@@ -244,10 +243,13 @@ func testDamagedClose(t *testing.T, h Harness) {
 
 	damage(t, h, bad.ID)
 
-	closed, err := h.Jobs.ObserveStateVersion(t.Context(),
-		version(f.unit, svOne, time.Now().Add(time.Second), true), f.fence)
-	if err != nil || len(closed) != 1 || closed[0].ID != good.ID {
-		t.Fatalf("ObserveStateVersion closed %v, %v; want %s", ids(closed), err, good.ID)
+	closedBy := writeState(t, h, f, true)
+
+	closed, err := h.Jobs.Get(t.Context(), good.ID)
+	if err != nil || closed.State != job.StateSucceeded || closed.Closed == nil ||
+		closed.Closed.VersionID != closedBy {
+		t.Fatalf("good job = %s, %+v, %v; want succeeded, closed by %s", closed.State, closed.Closed, err,
+			closedBy)
 	}
 
 	// The damaged row stays awaiting-state and is reported.

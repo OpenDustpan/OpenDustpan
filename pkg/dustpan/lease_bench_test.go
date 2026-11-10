@@ -270,7 +270,7 @@ func startBenchLease(b *testing.B, updates *stack.Updates, stackName, tokenID st
 	}
 
 	u, err := updates.Create(ctx, ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		b.Fatalf("create update: %v", err)

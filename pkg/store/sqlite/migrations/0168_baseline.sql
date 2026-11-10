@@ -46,7 +46,7 @@ CREATE TABLE "updates" (
     lease_expires_at_ms INTEGER NOT NULL,
     created_at_ms       INTEGER NOT NULL,
     started_at_ms       INTEGER NOT NULL,
-    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0, job_id TEXT NOT NULL DEFAULT '', git_head TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (stack_id, id),
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
 ) STRICT;
@@ -123,7 +123,7 @@ CREATE TABLE state_versions (
     lock_id               TEXT    NOT NULL DEFAULT '',
     created_at_ms         INTEGER NOT NULL,
     finalized_at_ms       INTEGER NOT NULL DEFAULT 0
-, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0) STRICT;
+, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '') STRICT;
 
 CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,
@@ -913,20 +913,14 @@ CREATE TABLE job_freezes (
     ended_by      TEXT    NOT NULL
 ) STRICT;
 
-CREATE TABLE unit_state_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE unit_final_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    commit_id     TEXT    NOT NULL,
-    job_id        TEXT    NOT NULL,
-    at_ms         INTEGER NOT NULL
+CREATE TABLE unit_state (
+    unit_id          TEXT    NOT NULL PRIMARY KEY,
+    namespace_id     TEXT    NOT NULL REFERENCES namespaces (id),
+    version_id       TEXT    NOT NULL DEFAULT '',
+    final_version_id TEXT    NOT NULL DEFAULT '',
+    final_commit     TEXT    NOT NULL DEFAULT '',
+    final_job        TEXT    NOT NULL DEFAULT '',
+    final_at_ms      INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TABLE saved_views (

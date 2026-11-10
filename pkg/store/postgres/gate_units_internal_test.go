@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -156,11 +157,19 @@ func createGateUnitWorkspace(t *testing.T, s *Store, ns namespace.Namespace, id 
 	t.Helper()
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: id,
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace %s/%s: %v", ns.Name, name, err)

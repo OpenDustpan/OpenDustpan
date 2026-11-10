@@ -5,8 +5,8 @@
 // A job belongs to exactly one unit, named by its unit reference: the tool,
 // the namespace and the tool's own name. The package never reads the model
 // of a tool. Each tool package gives the default steps of its operations
-// through the StepPlanner port, and reports its state versions through the
-// rule of Store.ObserveStateVersion.
+// through the StepPlanner port, and its store publishes the state version of
+// each state write.
 //
 // A job is a list of phases. An executor runs one phase at a time. Each
 // phase is one durable operation, so the claim, its expiry, the fencing
@@ -394,7 +394,8 @@ type Job struct {
 	// the job is not queued, or when nothing holds it.
 	Wait WaitReason
 	// Reason tells why a terminal job ended, for example the reason of a
-	// failure.
+	// failure. A job that stays queued keeps the reason of its last replan,
+	// which names the state versions that made its plan stale.
 	Reason string
 	// Phases are the phases of the job, in order. Executor.Phases fixes
 	// them at start.
@@ -579,8 +580,8 @@ func (d *DeliveryResult) CloseAfter() (time.Time, bool) {
 
 // ClosedBy reports whether the state version v closes j: j waits in
 // awaiting-state, v is a final version of the unit of j, and v is at or
-// after the time of CloseAfter. The store applies the rule in three
-// places, in the transaction of each: ObserveStateVersion for a new
+// after the time of CloseAfter. The store applies the rule in the
+// transaction of each write: the state write that publishes a final
 // version, and EventMerged and EventDelivered for the last final version
 // of the unit that the store knows, so that a merge or a delivery that
 // the job sees late still closes it.

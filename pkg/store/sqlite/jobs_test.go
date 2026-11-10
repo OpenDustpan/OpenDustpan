@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,7 +10,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/history"
@@ -64,11 +67,15 @@ func (d *jobDomain) CreateUnit(
 
 		w := workspace.Workspace{
 			NamespaceID: "",
-			CreatedAt:   now, UpdatedAt: now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 			LastRelease: workspace.NoRelease(),
-			ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
-			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			ID:          workspace.ID(ident.NewID("ws-")),
+			Ref:         workspace.Ref{Namespace: fence.Namespace, Name: ref},
+			Revision:    1,
+			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+			Origin:      identity.StateOrigin{Job: "", Commit: ""},
 		}
 
 		if err := d.s.CreateWorkspace(ctx, w, fence); err != nil {
@@ -177,10 +184,42 @@ func (d *jobDomain) BumpFence(ctx context.Context, fence namespace.Fence) (names
 	return ns.Fence(), nil
 }
 
-func (d *jobDomain) SetStateVersion(
-	ctx context.Context, fence namespace.Fence, unit identity.Object, version string,
-) error {
-	return d.s.PutUnitStateVersion(ctx, fence, unit.UnitID(), version)
+// writeStateHolder is the holder of the lock that WriteState takes.
+const writeStateHolder = "state-writer"
+
+// writeStatePendingCap bounds the pending state versions of WriteState.
+const writeStatePendingCap = 10
+
+// WriteState returns the jobtest.StateWriter of the store: it writes the
+// state of unit through the workspace store, as an OpenTofu state write does,
+// and returns the state version that the write made current. A final write
+// releases the lock, as the end of an apply does.
+func (d *jobDomain) WriteState() jobtest.StateWriter {
+	return func(
+		ctx context.Context, fence namespace.Fence, unit identity.Object, final bool,
+	) (string, error) {
+		if unit.Tool() != "opentofu" {
+			return "", fmt.Errorf("%w: tool %q", identity.ErrInvalidObject, unit.Tool())
+		}
+
+		w, err := d.lockForStateWrite(ctx, fence, unit)
+		if err != nil {
+			return "", err
+		}
+
+		sv, err := d.declareStateWrite(ctx, fence, w)
+		if err != nil {
+			return "", err
+		}
+
+		if final {
+			if releaseErr := d.releaseStateWrite(ctx, fence, w.ID); releaseErr != nil {
+				return "", releaseErr
+			}
+		}
+
+		return sv.ID.String(), nil
+	}
 }
 
 func (d *jobDomain) PutManualLock(
@@ -250,6 +289,111 @@ func (d *jobDomain) DamageJobBody(ctx context.Context, id job.ID) error {
 	return d.s.ExecForTest(ctx, `UPDATE jobs SET body = '{' WHERE id = ?`, string(id))
 }
 
+// lockForStateWrite returns the workspace of unit, locked for a state write. A
+// workspace that is not locked takes the lock in the same write.
+func (d *jobDomain) lockForStateWrite(
+	ctx context.Context, fence namespace.Fence, unit identity.Object,
+) (workspace.Workspace, error) {
+	w, err := d.s.GetWorkspaceByID(ctx, workspace.ID(unit.UnitID()))
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	if w.Lock.Locked() {
+		return w, nil
+	}
+
+	now := time.Now().UTC()
+
+	w.Lock = workspace.Lock{LockedAt: now, ID: ident.NewID("lock-"), Holder: writeStateHolder, Reason: "state write"}
+	w.Revision++
+	w.UpdatedAt = now
+
+	if saveErr := d.s.SaveWorkspace(ctx, w, fence); saveErr != nil {
+		return workspace.Workspace{}, fmt.Errorf("lock workspace: %w", saveErr)
+	}
+
+	return w, nil
+}
+
+// declareStateWrite declares and finalizes a state version of the locked
+// workspace w, under its lock.
+func (d *jobDomain) declareStateWrite(
+	ctx context.Context, fence namespace.Fence, w workspace.Workspace,
+) (workspace.StateVersion, error) {
+	lineage, serial := "lineage-1", int64(1)
+
+	current, err := d.s.CurrentStateVersion(ctx, w.ID)
+	switch {
+	case err == nil:
+		lineage, serial = current.Lineage, current.Serial+1
+	case errors.Is(err, workspace.ErrNoState):
+		// The unit has no state: the first write sets its own lineage and serial.
+	default:
+		return workspace.StateVersion{}, fmt.Errorf("read current state: %w", err)
+	}
+
+	tok, err := token.New()
+	if err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("new upload capability: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	sv := workspace.StateVersion{
+		CreatedAt: now, FinalizedAt: time.Time{}, UploadExpiresAt: now.Add(workspace.UploadWindow),
+		Upload: tok.Digest(), ID: workspace.StateVersionID(ident.NewID("sv-")), Workspace: w.ID,
+		Holder: w.Lock.Holder, LockID: w.Lock.ID, Lineage: lineage, Status: workspace.StatusPending,
+		Content: "", Outputs: nil, MD5: [16]byte{1, 2, 3}, Serial: serial, Size: 0, Force: false,
+		UnlockedWrite: false, Sealed: true, SensitiveMarks: nil, RestoredFrom: "", FenceBy: "",
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
+	}
+
+	key := blob.Key("state-write/" + sv.ID.String())
+
+	if err = d.s.CreateStateVersion(ctx, sv, fence, writeStatePendingCap); err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("declare state version: %w", err)
+	}
+
+	if _, err = d.s.RecordUploadAttempt(ctx, sv.ID, key, fence); err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("record upload attempt: %w", err)
+	}
+
+	sv.Content = key
+	sv.FinalizedAt = now
+
+	if err = d.s.FinalizeStateVersion(ctx, sv, fence); err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("finalize state version: %w", err)
+	}
+
+	return sv, nil
+}
+
+// releaseStateWrite releases the lock of the workspace id and records the
+// release, which makes the current state version final.
+func (d *jobDomain) releaseStateWrite(ctx context.Context, fence namespace.Fence, id workspace.ID) error {
+	w, err := d.s.GetWorkspaceByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get workspace to release: %w", err)
+	}
+
+	now := time.Now().UTC()
+	lock := w.Lock
+
+	w.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	w.LastRelease = workspace.Release{
+		At: now, LockID: lock.ID, Holder: lock.Holder, By: writeStateHolder, Kind: workspace.ReleaseNormal,
+	}
+	w.Revision++
+	w.UpdatedAt = now
+
+	if saveErr := d.s.SaveWorkspace(ctx, w, fence); saveErr != nil {
+		return fmt.Errorf("release workspace: %w", saveErr)
+	}
+
+	return nil
+}
+
 func TestJobConformance(t *testing.T) {
 	t.Parallel()
 
@@ -260,10 +404,11 @@ func TestJobConformance(t *testing.T) {
 		j := s.Jobs()
 
 		ops := s.DurableOperationsPort()
+		d := &jobDomain{s: s}
 
 		return jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
-			Domain: &jobDomain{s: s},
+			Domain: d, WriteState: d.WriteState(),
 		}
 	})
 }
@@ -316,6 +461,7 @@ func newRecorderHarnessOf(
 	s := open(t)
 	j := s.Jobs()
 	ops := s.DurableOperationsPort()
+	d := &jobDomain{s: s}
 
 	blobs, err := blobfs.Open(t.TempDir())
 	if err != nil {
@@ -331,7 +477,7 @@ func newRecorderHarnessOf(
 	h := build(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
-			Domain: &jobDomain{s: s},
+			Domain: d, WriteState: d.WriteState(),
 		},
 		Records:  j,
 		ItemKeys: s,

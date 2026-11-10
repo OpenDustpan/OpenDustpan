@@ -241,7 +241,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		Kind:         stack.KindUpdate,
 		DryRun:       false,
 		CreatedBy:    "alice@example.com",
-		RestoredFrom: 0,
+		RestoredFrom: 0, GitHead: "",
 	})
 	checkpoint := f.checkpoint(t, running, 0, resourcedDeployment)
 
@@ -259,7 +259,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		Kind:         stack.KindRestore,
 		DryRun:       false,
 		CreatedBy:    "bob@example.com",
-		RestoredFrom: finished.Version,
+		RestoredFrom: finished.Version, GitHead: "",
 	})
 
 	scopes := []secret.Scope{
