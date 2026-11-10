@@ -1094,9 +1094,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
-		closeBuiltin: nil,
 	}
 
 	cfg.watch.attach(srv, observed.Registry())
