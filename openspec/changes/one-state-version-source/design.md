@@ -304,7 +304,7 @@ holds a commit, so `git.head` is new work in task 2.3.
 
 Status in the code: tests 1, 2, 3, 3b, 3c and 6 are store and suite tests in
 each dialect. Test 4 is moved to #3005, with the wiring of the `follows`
-trigger after a state write. Test 5 has no e2e step yet: the server starts
+trigger after a state write. Test 5 is moved to #1315: the server starts
 plan jobs only (`pkg/dustpan/jobservice.go`), the approve of a job returns
 `ErrUnsupported` (`pkg/job/service.go`), and the jobs API has no approve
 route. The replan reason is covered by the store and suite tests.
