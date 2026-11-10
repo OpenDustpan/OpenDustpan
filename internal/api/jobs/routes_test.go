@@ -356,7 +356,8 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
 
 	return job.Job{
-		ID: id,
+		ID:          id,
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{

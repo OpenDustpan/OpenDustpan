@@ -44,7 +44,11 @@ var ErrKeyIndex = errors.New("a job with this idempotency key exists")
 type Row struct {
 	ID        job.ID
 	Namespace namespace.Name
-	UnitID    string
+	// NamespaceID is the stable ID of the namespace of the job, read from
+	// the namespace_id column. The ID of a namespace is never given again,
+	// so a job whose namespace a restore replaced keeps this ID.
+	NamespaceID namespace.ID
+	UnitID      string
 	// Seq orders the jobs of one namespace, oldest first. The jobs of two
 	// namespaces can have the same Seq.
 	Seq   int64

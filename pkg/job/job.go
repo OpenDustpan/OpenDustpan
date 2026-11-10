@@ -35,6 +35,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 var (
@@ -387,9 +388,13 @@ type BreakGlass struct {
 
 // Job is what any instance can read about a job.
 type Job struct {
-	ID    ID
-	Spec  Spec
-	State State
+	ID ID
+	// NamespaceID is the ID of the namespace that held the unit when the
+	// job started. The store sets it from the job row, and a caller never
+	// sets it.
+	NamespaceID namespace.ID
+	Spec        Spec
+	State       State
 	// Wait tells why a queued job does not dispatch now. It is empty when
 	// the job is not queued, or when nothing holds it.
 	Wait WaitReason
