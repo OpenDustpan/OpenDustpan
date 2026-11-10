@@ -528,8 +528,10 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 	}
 
 	// The read document asks the same questions again for each layer of its
-	// chain, so a read route may repeat checks.
-	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+	// chain, so a read route may repeat checks. The namespace read of the path
+	// runs once for the address check, before the decision on the target, and
+	// once more with the other checks.
+	wantChecks := append([]string{rc.checks[0]}, rc.checks[:min(held+1, len(rc.checks))]...)
 	if got := authz.seen(); len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
 		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
 	}
@@ -551,7 +553,8 @@ const unknownObjectText = "not found: no namespace or unit that you can read has
 
 // TestUnknownObjectsAnswerAlike proves an unknown namespace and an unknown
 // unit answer 404 with one text, which names the unit ID and the list route,
-// before any check of the caller runs for the object.
+// before any check of the caller runs for the object. Only the namespace read
+// runs, for the refusal of the IP allowlist.
 func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	t.Parallel()
 
@@ -573,8 +576,10 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 		}
 	}
 
-	if got := authz.seen(); len(got) != 0 {
-		t.Errorf("checks = %q, want none for an object that does not exist", got)
+	if got := authz.seen(); slices.ContainsFunc(got, func(check string) bool {
+		return !strings.HasPrefix(check, string(identity.ActionNamespaceRead)+" ")
+	}) {
+		t.Errorf("checks = %q, want only namespace reads for an object that does not exist", got)
 	}
 }
 

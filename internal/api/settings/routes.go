@@ -7,9 +7,12 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Scope names how a route is protected. Every route declares one explicitly
@@ -184,7 +187,7 @@ func (m *patternMux) Patterns() []string {
 
 // enforce wraps one route table row: it authenticates, finds the object, runs
 // the checks in the order of Route, and only then runs the handler.
-func (h *Handler) enforce(route Route) http.HandlerFunc {
+func (h *Handler) enforce(rt Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -208,66 +211,68 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		// reaches this check today. It stays so that a new row for a write that
 		// forgets the key still refuses the header, and it relies on neither the
 		// route table nor the method of the mux pattern.
-		if !route.Keyed && r.Method != http.MethodGet && idempotent.Present(r) {
+		if !rt.Keyed && r.Method != http.MethodGet && idempotent.Present(r) {
 			h.writeError(ctx, w, errKeyUnsupported)
 
 			return
 		}
 
-		t, err := route.Resolve(r)
+		if err = h.checkAddress(ctx, r, p); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		t, err := rt.Resolve(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		if err := h.authorizeRoute(ctx, r, route, p, &t); err != nil {
+		g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
+		checks := route.Checks{
+			Namespace:     identity.NamespaceObject(t.ns.Name),
+			Reads:         rt.Reads,
+			Actions:       rt.Actions,
+			NotFound:      errNotFound,
+			RequireAction: false,
+		}
+		if err := g.AuthorizeObject(ctx, r, p, t.obj, checks); err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		route.Serve(w, r, p, &t)
+		rt.Serve(w, r, p, &t)
 	}
 }
 
-// authorizeRoute runs the checks of route for p on t. It returns errNotFound for
-// a refused read check and an error that wraps identity.ErrDenied for a refused
-// action.
-func (h *Handler) authorizeRoute(
-	ctx context.Context, r *http.Request, route Route, p identity.Principal, t *target,
+// checkAddress refuses a client address that is outside the IP allowlist of
+// the namespace in the path, before any lookup of the namespace or of the
+// unit. The answer is the same 403 for a name that exists and for a name that
+// does not exist, so it does not tell whether the unit exists. Every other
+// result, also an invalid name, continues: the checks after the lookup give
+// the answer, as before.
+//
+// Defense in depth: AuthorizeObject checks the allowlist again on the found
+// namespace. This check stays so that the order of the lookup never decides
+// the answer.
+func (h *Handler) checkAddress(
+	ctx context.Context, r *http.Request, p identity.Principal,
 ) error {
-	nsRead := identity.ActionNamespaceRead
+	action := identity.ActionNamespaceRead
 
-	nsErr := h.guard.Authorize(ctx, r, p, nsRead, identity.NamespaceObject(t.ns.Name))
-	if err := readRefusal(nsRead, nsErr); err != nil {
-		return err
+	// An invalid name names no namespace and has no allowlist: the lookup that
+	// follows answers 404 for it.
+	var err error
+	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
+		err = h.guard.Authorize(ctx, r, p, action, identity.NamespaceObject(name))
 	}
 
-	for _, action := range route.Reads {
-		if err := readRefusal(action, h.guard.Authorize(ctx, r, p, action, t.obj)); err != nil {
-			return err
-		}
-	}
-
-	for _, action := range route.Actions {
-		if err := h.guard.Authorize(ctx, r, p, action, t.obj); err != nil {
-			return fmt.Errorf("authorize %s: %w", action, err)
-		}
+	if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+		return fmt.Errorf("authorize %s: %w", action, err)
 	}
 
 	return nil
-}
-
-// readRefusal maps the result of a read check: a refusal is the 404 of an
-// unknown object.
-func readRefusal(action identity.Action, err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, identity.ErrDenied):
-		return errNotFound
-	default:
-		return fmt.Errorf("authorize %s: %w", action, err)
-	}
 }
