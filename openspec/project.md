@@ -96,11 +96,20 @@ questions. The pull request links the change and its issue.
    other than the author's gets one task: list the open questions, failure
    modes and missing scenarios that the change does not cover. Each answer goes
    into the proposal, either answered or as an open question.
-7. **Delight.** The user path is judged on how it feels to use, not only on
-   whether it works: the fewest steps, no surprise, a clear next step at each
-   point, and an error that tells the person what happened and the one command
-   that helps. The usability check of each change records where the path still
-   feels rough.
+7. **Delight, for an infrastructure engineer.** The tool is predictable and
+   fast, and it gets out of the way:
+   - it works the first time from the docs page;
+   - every action can be scripted through the API or the CLI;
+   - output is exact, stable and machine-readable;
+   - a risky action can be previewed and undone, or says plainly that it cannot
+     be undone;
+   - an error names what failed and the one command that helps;
+   - nothing happens without a record;
+   - defaults are safe and visible.
+
+   No animation, gamification, celebration or emoji (see "Voice" in
+   `CLAUDE.md`). The usability check of each change records where the path
+   still costs the person time or surprises them.
 
 ### Design
 
