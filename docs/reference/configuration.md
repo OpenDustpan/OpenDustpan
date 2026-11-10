@@ -30,6 +30,7 @@ the same list.
 | `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list. The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--ip-allowlists-include-bootstrap` | `DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP` | `ip-allowlists-include-bootstrap` | (none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--git-host-allowed-ranges` | `DUSTPAN_GIT_HOST_ALLOWED_RANGES` | `git-host-allowed-ranges` | (none: a connection reaches public addresses only). Set the range of a GitHub Enterprise Server on a private network, for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, also inside a range. It checks this when a person sets an address and at each call. |
+| `--allow-plain-connections` | `DUSTPAN_ALLOW_PLAIN_CONNECTIONS` | `egress.allowPlainConnections` | (none: off). Set `true` only in a trusted network. An LDAP bind or an SMTP login then sends its password with no encryption. The settings resource also holds it, and a value from a flag, a variable or this file locks it |
 | `--branding-preset` | `DUSTPAN_BRANDING_PRESET` | `branding.preset` | (none: the console shows its standard palette). A name of lower-case letters, digits and hyphens, at most 32 characters. The settings resource also holds it, and a value from a flag, a variable or this file locks it |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
@@ -63,6 +64,29 @@ the same list.
 | `--oidc-client-id` | `DUSTPAN_OIDC_CLIENT_ID` | `oidc-client-id` | (none) |
 | `--oidc-scopes` | `DUSTPAN_OIDC_SCOPES` | `oidc-scopes` | `profile,email` |
 | `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `oidc-no-auto-create` | false |
+| `--ldap-url` | `DUSTPAN_LDAP_URL` | `ldap.url` | (none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`. |
+| `--ldap-provider` | `DUSTPAN_LDAP_PROVIDER` | `ldap.provider` | (none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID. |
+| `--ldap-display-name` | `DUSTPAN_LDAP_DISPLAY_NAME` | `ldap.displayName` | (the provider ID) |
+| `--ldap-start-tls` | `DUSTPAN_LDAP_START_TLS` | `ldap.startTLS` | false |
+| `--ldap-ca-file` | `DUSTPAN_LDAP_CA_FILE` | `ldap.caFile` | (none: the system roots) |
+| `--ldap-allowed-ranges` | `DUSTPAN_LDAP_ALLOWED_RANGES` | `ldap.allowedRanges` | (none: a connection reaches public addresses only). Set the range of a directory on a private network, for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, also inside a range. It checks the address at each connection. |
+| `--ldap-bind-dn` | `DUSTPAN_LDAP_BIND_DN` | `ldap.bindDN` | (none) |
+| `--ldap-base-dn` | `DUSTPAN_LDAP_BASE_DN` | `ldap.baseDN` | (none) |
+| `--ldap-user-filter` | `DUSTPAN_LDAP_USER_FILTER` | `ldap.userFilter` | (none). The server escapes the user name before it puts it in place of `{user}`. |
+| `--ldap-user-name-attribute` | `DUSTPAN_LDAP_USER_NAME_ATTRIBUTE` | `ldap.userNameAttribute` | (none: the user name that the person typed) |
+| `--ldap-email-attribute` | `DUSTPAN_LDAP_EMAIL_ATTRIBUTE` | `ldap.emailAttribute` | (none: no email) |
+| `--ldap-name-attribute` | `DUSTPAN_LDAP_NAME_ATTRIBUTE` | `ldap.nameAttribute` | (none: no name) |
+| `--ldap-subject` | `DUSTPAN_LDAP_SUBJECT` | `ldap.subject` | `entryUUID`. Use `objectGUID` for Active Directory. The subject must not change when a person changes a name or an email. |
+| `--ldap-disabled-attribute` | `DUSTPAN_LDAP_DISABLED_ATTRIBUTE` | `ldap.disabledAttribute` | (none: the server reads no such value) |
+| `--ldap-disabled-mask` | `DUSTPAN_LDAP_DISABLED_MASK` | `ldap.disabledMask` | (none: compare the values of `ldap.disabledValues`) |
+| `--ldap-disabled-values` | `DUSTPAN_LDAP_DISABLED_VALUES` | `ldap.disabledValues` | (none) |
+| `--ldap-groups` | `DUSTPAN_LDAP_GROUPS` | `ldap.groups` | `off`. With groups on, a person with no group cannot sign in. This version reads the groups and applies no membership. |
+| `--ldap-group-base-dn` | `DUSTPAN_LDAP_GROUP_BASE_DN` | `ldap.groupBaseDN` | (none) |
+| `--ldap-group-filter` | `DUSTPAN_LDAP_GROUP_FILTER` | `ldap.groupFilter` | (none) |
+| `--ldap-group-member-attribute` | `DUSTPAN_LDAP_GROUP_MEMBER_ATTRIBUTE` | `ldap.groupMemberAttribute` | (none) |
+| `--ldap-group-member-of-attribute` | `DUSTPAN_LDAP_GROUP_MEMBER_OF_ATTRIBUTE` | `ldap.groupMemberOfAttribute` | (none) |
+| `--ldap-group-name-attribute` | `DUSTPAN_LDAP_GROUP_NAME_ATTRIBUTE` | `ldap.groupNameAttribute` | (none) |
+| `--ldap-no-auto-create` | `DUSTPAN_LDAP_NO_AUTO_CREATE` | `ldap.noAutoCreate` | false |
 
 With journaling on, the server refuses to complete an update with
 `succeeded` while the server has not stored a journal batch of the update. The

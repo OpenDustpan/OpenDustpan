@@ -10,6 +10,7 @@ package jobstore
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -165,9 +166,6 @@ type Tx interface {
 	// FinalVersion returns the last final state version of the unit of the
 	// namespace ns, and false when none was recorded.
 	FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (FinalVersion, bool, error)
-	// PutFinalVersion records v as the last final state version of the unit
-	// of the namespace ns.
-	PutFinalVersion(ctx context.Context, ns namespace.Name, v FinalVersion) error
 
 	// InsertFreeze stores a freeze. It returns job.ErrConflict for an ID
 	// that exists.
@@ -210,6 +208,27 @@ type Tx interface {
 	ItemKeys(fence namespace.Fence) secret.ItemKeyTx
 }
 
+// CloseTx reads and writes the rows of one transaction, for the close of the
+// jobs that wait for a state version. The Tx of every adapter implements it.
+// An adapter whose state write opens no job transaction, for example the
+// store of a workspace or a stack that publishes a state version, gives the
+// close this narrow view of its transaction: the close runs no hand-written
+// query, so its queries alone serve it.
+type CloseTx interface {
+	// Now returns the time on the clock of the database.
+	Now(ctx context.Context) (time.Time, error)
+	// Awaiting returns the jobs of the unit of the namespace ns that wait for
+	// a state version, oldest first.
+	Awaiting(ctx context.Context, ns namespace.Name, unitID string) ([]Row, error)
+	// UpdateJob replaces the row of version prev with r, and reports false
+	// when the stored version is not prev. It returns ErrHolderIndex for a
+	// row that the index on the unit refuses.
+	UpdateJob(ctx context.Context, r Row, prev int64) (bool, error)
+	// StartOperation starts the durable operation of req with the rules of
+	// durable.Store.Start, and returns its ID.
+	StartOperation(ctx context.Context, req *durable.StartRequest) (string, error)
+}
+
 // Runner opens the transactions of an adapter.
 type Runner interface {
 	// Write runs fn in one write transaction that checks the installation
@@ -220,6 +239,9 @@ type Runner interface {
 	Write(ctx context.Context, fence namespace.Fence, fn func(Tx) error) error
 	// Read runs fn in one read transaction.
 	Read(ctx context.Context, fn func(Tx) error) error
+	// Logger returns the logger of the adapter, or nil. The store reads it at
+	// each use, so the adapter can set its logger after it gives the runner.
+	Logger() *slog.Logger
 }
 
 // PlanRow is one stored plan: the lookup row of job_plans. Body is the JSON of

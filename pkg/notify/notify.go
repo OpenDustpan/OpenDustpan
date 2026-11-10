@@ -121,6 +121,10 @@ const (
 	// second factors of a person, after failed attempts. It goes to the
 	// administrators of the installation.
 	SignInLocked Type = "sign-in.locked"
+	// MembershipMassRemoval reports that one source removed members from
+	// groups at a rate that crossed the removal alert limits. It goes to
+	// the administrators of the installation.
+	MembershipMassRemoval Type = "membership.mass-removal"
 	// SinkTest is the fixed message of the test route of a sink. A person
 	// sends it to check a sink. It reports no event.
 	SinkTest Type = "sink.test"
@@ -136,6 +140,7 @@ func Types() []Type {
 		IncidentOpened, IncidentChanged, IncidentResolved, LockHeldLong, SubscriptionSuspended,
 		IssuerKeyNext, IssuerKeyRevoked, IssuerKeyCopyMissing,
 		SignInLocked,
+		MembershipMassRemoval,
 		SinkTest,
 	}
 }

@@ -141,6 +141,12 @@ func now() time.Time {
 	return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC)
 }
 
+// restoreAt is a fixed time of a restore, after every row time that a suite
+// writes.
+func restoreAt() time.Time {
+	return time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC)
+}
+
 func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namespace {
 	t.Helper()
 

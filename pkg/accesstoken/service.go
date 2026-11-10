@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -65,6 +66,13 @@ type Config struct {
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
 	Authorizer identity.Authorizer
+	// Reach holds the ports that the reach check reads: the grants, the
+	// roles, the callers and the principals of the installation. A make or
+	// a rotation of a service token by a caller that holds
+	// principal:manage-tokens on the installation compares the reach of
+	// the principal with the reach of the caller. A zero or incomplete
+	// config refuses each such change: the check never skips.
+	Reach access.ReachConfig
 	// TempAdmins reads the temporary administrator records for the
 	// break-glass exemption of the inactivity checks. Nil turns the
 	// exemption off: an inactive token is refused even for a temporary
@@ -91,6 +99,7 @@ type Service struct {
 	principals PrincipalReader
 	freshness  Freshness
 	authz      identity.Authorizer
+	reach      access.ReachConfig
 	tempAdmins tempadmin.Reader
 	logger     *slog.Logger
 	now        func() time.Time
@@ -125,7 +134,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
-		authz: cfg.Authorizer, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
+		authz: cfg.Authorizer, reach: cfg.Reach, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
 	}, nil
 }
 

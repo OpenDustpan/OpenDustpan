@@ -37,6 +37,7 @@ func TestMemConformance(t *testing.T) {
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		}
 	})
 }
@@ -63,14 +64,12 @@ type memDB struct {
 	records memRecords
 	// itemKeys holds the item keys that the recorder makes in a write.
 	itemKeys *memKeyIndex
-	// states maps a unit ID to its current state version.
-	states map[string]string
-	// finals maps a unit ID to its last final state version, as
-	// ObserveStateVersion records it.
-	finals  map[string]job.StateVersion
-	jobs    map[job.ID]*job.Job
-	order   []job.ID
-	keys    map[string]job.ID
+	jobs     map[job.ID]*job.Job
+	order    []job.ID
+	keys     map[string]job.ID
+	// damaged maps the ID of a job whose stored body does not decode to the
+	// kind of the damage, as DamageJobBody marks it.
+	damaged map[job.ID]string
 	freezes map[string]*job.Freeze
 	audit   map[namespace.Name][]audit.Entry
 	// locks maps the String of a manual lock target to the lock.
@@ -87,11 +86,10 @@ func newMemDB() *memDB {
 		itemKeys: nil,
 		nsIDs:    map[namespace.Name]namespace.ID{},
 		records:  newMemRecords(),
-		states:   map[string]string{},
-		finals:   map[string]job.StateVersion{},
 		jobs:     map[job.ID]*job.Job{},
 		order:    nil,
 		keys:     map[string]job.ID{},
+		damaged:  map[job.ID]string{},
 		freezes:  map[string]*job.Freeze{},
 		audit:    map[namespace.Name][]audit.Entry{},
 		locks:    map[string]manuallock.Lock{},
@@ -216,20 +214,6 @@ func (m *memDB) BumpFence(_ context.Context, fence namespace.Fence) (namespace.F
 	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
 }
 
-// SetStateVersion implements jobtest.Domain.
-func (m *memDB) SetStateVersion(_ context.Context, fence namespace.Fence, unit identity.Object, v string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.checkFence(fence); err != nil {
-		return err
-	}
-
-	m.states[unit.UnitID()] = v
-
-	return nil
-}
-
 // GetNamespace implements job.NamespaceReader: it answers the name, the ID
 // and the failover version, which is all that the claimer reads.
 func (m *memDB) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
@@ -348,10 +332,34 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	return copyJob(&stored), true, nil
 }
 
+// damagedBodyReason is the kind of the damage that DamageJobBody marks: the
+// SQL adapters store a body that is not JSON.
+const damagedBodyReason = "the body is not JSON"
+
+// DamageJobBody implements jobtest.Domain. It marks the job id as a row whose
+// stored body does not decode, as a restore or another version of the server
+// leaves one. The SQL adapters write a body that is not JSON.
+func (m *memDB) DamageJobBody(_ context.Context, id job.ID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.lookup(id); !ok {
+		return job.ErrNotFound
+	}
+
+	m.damaged[id] = damagedBodyReason
+
+	return nil
+}
+
 // Get implements job.Store.
 func (m *memDB) Get(_ context.Context, id job.ID) (job.Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, ok := m.damaged[id]; ok {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, id)
+	}
 
 	j, ok := m.lookup(id)
 	if !ok {
@@ -362,13 +370,16 @@ func (m *memDB) Get(_ context.Context, id job.ID) (job.Job, error) {
 }
 
 // List implements job.Store.
-func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+func (m *memDB) List(_ context.Context, f job.Filter) (job.Page, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []job.Job
+	var (
+		out  job.Page
+		read int
+	)
 
-	// After is the last job of the previous page: the page starts behind it.
+	// After is the last row of the previous page: the page starts behind it.
 	passed := f.After == ""
 
 	for _, id := range slices.Backward(m.order) {
@@ -387,8 +398,17 @@ func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 			continue
 		}
 
-		out = append(out, copyJob(j))
-		if f.Limit > 0 && len(out) == f.Limit {
+		read++
+
+		if reason, damaged := m.damaged[id]; damaged {
+			out.Damaged = append(out.Damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+		} else {
+			out.Jobs = append(out.Jobs, copyJob(j))
+		}
+
+		if f.Limit > 0 && read == f.Limit {
+			out.After = id
+
 			break
 		}
 	}
@@ -424,6 +444,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	cur, ok := m.lookup(c.Job)
 	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
 		return job.Job{}, job.ErrNotFound
+	}
+
+	if _, damaged := m.damaged[c.Job]; damaged {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, c.Job)
 	}
 
 	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
@@ -463,6 +487,49 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	return copyJob(&next), nil
 }
 
+// CancelDamaged implements job.Store. It reads no body: a row that a reader
+// cannot decode can still be canceled by its ID.
+func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	cur, ok := m.lookup(id)
+	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
+		return job.ErrNotFound
+	}
+
+	// A cancel through this path does not stop the durable operation of
+	// the job, so it is only for a row that no other path can read.
+	// Defense in depth: the caller checks that Get gives ErrDamaged;
+	// this check stays so that a new caller cannot cancel a readable
+	// job here.
+	if _, damaged := m.damaged[id]; !damaged {
+		return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+	}
+
+	if cur.State.Terminal() {
+		return fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
+	}
+
+	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
+		return err
+	}
+
+	next := copyJob(cur)
+	now := time.Now().UTC()
+	next.State, next.Wait, next.Version = job.StateCanceled, job.WaitNone, cur.Version+1
+	next.UpdatedAt, next.StateChangedAt = now, now
+
+	m.jobs[id] = &next
+	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
+
+	return nil
+}
+
 // settle sets the state, the version, the wait reason and the reason of next
 // after the event of c moved the job from the version prev to state to.
 func settle(next *job.Job, to job.State, c *job.Change, prev int64, now time.Time) {
@@ -473,82 +540,11 @@ func settle(next *job.Job, to job.State, c *job.Change, prev int64, now time.Tim
 		next.Wait = c.Wait
 	}
 
-	if to.Terminal() {
+	// A terminal state records why the job ended, and a replan records why the
+	// job plans again while it stays queued.
+	if to.Terminal() || c.Event == job.EventReplan {
 		next.Reason = c.Reason
 	}
-}
-
-// FinalVersion implements job.FinalVersionReader.
-func (m *memDB) FinalVersion(_ context.Context, ns namespace.Name, unitID string) (job.FinalVersion, bool, error) {
-	if ns == "" {
-		return job.FinalVersion{}, false, fmt.Errorf("%w: the namespace of a final version is empty", job.ErrInvalid)
-	}
-
-	if unitID == "" {
-		return job.FinalVersion{}, false, fmt.Errorf("%w: the unit of a final version is empty", job.ErrInvalid)
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	v, ok := m.finals[unitID]
-	if !ok || v.Unit.Namespace() != ns {
-		var none job.FinalVersion
-
-		return none, false, nil
-	}
-
-	return job.FinalVersion{
-		UnitID:    unitID,
-		VersionID: v.VersionID,
-		Commit:    v.Commit,
-		Job:       v.Job,
-		At:        v.At,
-	}, true, nil
-}
-
-// ObserveStateVersion implements job.Store.
-func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) ([]job.Job,
-	error,
-) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.checkFence(fence); err != nil {
-		return nil, err
-	}
-
-	if v.Unit.Namespace() != fence.Namespace {
-		return nil, fmt.Errorf("%w: a state version names a unit of the namespace of the fence", job.ErrInvalid)
-	}
-
-	if !v.Final {
-		return nil, nil
-	}
-
-	var closed []job.Job
-
-	for _, id := range m.order {
-		j, ok := m.lookup(id)
-		if !ok || !j.ClosedBy(v) {
-			continue
-		}
-
-		next := copyJob(j)
-		if err := m.close(ctx, &next, v); err != nil {
-			return nil, err
-		}
-
-		next.Version++
-		next.UpdatedAt = time.Now().UTC()
-		next.StateChangedAt = next.UpdatedAt
-		m.jobs[id] = &next
-		closed = append(closed, copyJob(&next))
-	}
-
-	m.finals[v.Unit.UnitID()] = v
-
-	return closed, nil
 }
 
 // SetVerification implements job.Store.
@@ -585,38 +581,46 @@ func (m *memDB) SetVerification(_ context.Context, id job.ID, v job.Verification
 }
 
 // Orphans implements job.Store.
-func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
+func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.DamagedRow, error) {
+	if limit <= 0 {
+		return nil, nil, nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []job.Orphan
+	var (
+		out     []job.Orphan
+		damaged []job.DamagedRow
+	)
 
 	for _, id := range m.order {
 		j, ok := m.lookup(id)
-		if !ok {
+		if !ok || !j.State.HoldsUnit() || j.Current >= len(j.Phases) {
 			continue
 		}
 
-		if !j.State.HoldsUnit() || j.Current >= len(j.Phases) {
+		end, err := m.endedOperation(ctx, j)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !end.ended {
 			continue
 		}
 
-		op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
-		if err != nil && !errors.Is(err, durable.ErrNotFound) {
-			return nil, fmt.Errorf("get operation: %w", err)
+		if reason, isDamaged := m.damaged[id]; isDamaged {
+			damaged = append(damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+		} else {
+			out = append(out, job.Orphan{Job: copyJob(j), Missing: end.missing})
 		}
 
-		if err == nil && !op.State.Terminal() {
-			continue
-		}
-
-		out = append(out, job.Orphan{Job: copyJob(j), Missing: err != nil})
-		if len(out) == limit {
+		if len(out)+len(damaged) == limit {
 			break
 		}
 	}
 
-	return out, nil
+	return out, damaged, nil
 }
 
 // CreateFreeze implements job.FreezeStore.
@@ -679,6 +683,31 @@ func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Tim
 	slices.SortFunc(out, func(a, b job.Freeze) int { return a.StartsAt.Compare(b.StartsAt) })
 
 	return out, nil
+}
+
+// operationEnd is what Orphans reads of the durable operation of the current
+// phase of a job: whether it has ended, and whether the durable store does not
+// hold it.
+type operationEnd struct {
+	ended   bool
+	missing bool
+}
+
+// endedOperation returns the end of the durable operation of the current phase
+// of j.
+func (m *memDB) endedOperation(ctx context.Context, j *job.Job) (operationEnd, error) {
+	op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
+	if errors.Is(err, durable.ErrNotFound) {
+		// The operation of a job that a restore of the control tables left
+		// out is a missing orphan.
+		return operationEnd{ended: true, missing: true}, nil
+	}
+
+	if err != nil {
+		return operationEnd{ended: false, missing: false}, fmt.Errorf("get operation: %w", err)
+	}
+
+	return operationEnd{ended: op.State.Terminal(), missing: false}, nil
 }
 
 // namespaceLocked returns the namespace name. The caller holds m.mu.
@@ -862,7 +891,7 @@ func (m *memDB) checkPlans(j *job.Job, notBefore time.Time) error {
 	}
 
 	plan := j.Phases[j.Current-1].Plan
-	current := m.states[j.Spec.Unit.UnitID()]
+	current := ""
 	bindings := []*job.PlanBinding{nil}
 
 	approvals := j.Phases[j.Current].Approvals
@@ -910,7 +939,7 @@ func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now ti
 	}
 
 	if c.Event == job.EventClaim && next.Current < len(next.Phases) && next.Phases[next.Current].Kind == job.PhasePlan {
-		next.Phases[next.Current].StateVersion = m.states[next.Spec.Unit.UnitID()]
+		next.Phases[next.Current].StateVersion = ""
 	}
 
 	if f, ok := changes[c.Event]; ok {
@@ -1074,39 +1103,6 @@ func holds(j *job.Job) bool {
 	return j.State.HoldsUnit() && j.Current < len(j.Phases) && j.Phases[j.Current].Kind.Changes()
 }
 
-// close applies EventStateObserved with the closing version v to next, sets
-// its verification to pending and starts its verify operation.
-func (m *memDB) close(ctx context.Context, next *job.Job, v job.StateVersion) error {
-	to, err := job.Next(next.State, job.EventStateObserved)
-	if err != nil {
-		return err
-	}
-
-	if err := m.followUp(ctx, next.ID, job.KindVerify); err != nil {
-		return err
-	}
-
-	closing := v
-	next.State, next.Closed, next.Verification = to, &closing, job.VerificationPending
-
-	return nil
-}
-
-// closeLate closes next on the last final state version of its unit, after
-// EventMerged or EventDelivered, when that version closes it.
-func (m *memDB) closeLate(ctx context.Context, next *job.Job, ev job.Event) error {
-	if ev != job.EventMerged && ev != job.EventDelivered {
-		return nil
-	}
-
-	v, ok := m.finals[next.Spec.Unit.UnitID()]
-	if !ok || !next.ClosedBy(v) {
-		return nil
-	}
-
-	return m.close(ctx, next, v)
-}
-
 // checkNamespace returns job.ErrInvalid when ns is not the namespace of fence,
 // and audit.ErrInvalidEntry for an entry of another namespace.
 func checkNamespace(ns namespace.Name, fence namespace.Fence, e []audit.Entry) error {
@@ -1226,10 +1222,6 @@ func (m *memDB) applyIn(ctx context.Context, cur, next *job.Job, c *job.Change, 
 	}
 
 	settle(next, to, c, cur.Version, now)
-
-	if err := m.closeLate(ctx, next, c.Event); err != nil {
-		return err
-	}
 
 	if err := m.endOperation(ctx, cur, c); err != nil {
 		return err

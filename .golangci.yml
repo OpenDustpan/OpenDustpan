@@ -262,6 +262,7 @@ linters:
             - "**/pkg/trustrule/**"
             - "**/pkg/outputshare/**"
             - "**/pkg/savedview/**"
+            - "**/pkg/jobtoken/**"
             - "**/pkg/unitsettings/**"
             - "**/pkg/preferences/**"
             - "**/pkg/setting/**"

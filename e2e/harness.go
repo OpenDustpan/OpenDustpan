@@ -279,23 +279,25 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	tb.Helper()
 
 	return envInput{
-		deltaCutoff:       0,
-		sinkSenders:       nil,
-		issuer:            nil,
-		disableJournaling: false,
-		ipAllowlists:      false,
-		signIn:            false,
-		signInRealTime:    false,
-		passkeys:          false,
-		journalRefuser:    nil,
-		journalCap:        nil,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               tb.TempDir(),
-		token:             newToken(tb),
-		tokenB:            newToken(tb),
-		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
+		deltaCutoff:            0,
+		sinkSenders:            nil,
+		issuer:                 nil,
+		ldap:                   nil,
+		disableJournaling:      false,
+		ipAllowlists:           false,
+		signIn:                 false,
+		signInSecretInVariable: false,
+		signInRealTime:         false,
+		passkeys:               false,
+		journalRefuser:         nil,
+		journalCap:             nil,
+		tb:                     tb,
+		cli:                    cli,
+		store:                  store,
+		dir:                    tb.TempDir(),
+		token:                  newToken(tb),
+		tokenB:                 newToken(tb),
+		rec:                    &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
 }
 
@@ -377,23 +379,25 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 	tb.Helper()
 
 	return envInput{
-		deltaCutoff:       0,
-		sinkSenders:       nil,
-		issuer:            nil,
-		disableJournaling: false,
-		ipAllowlists:      false,
-		signIn:            false,
-		signInRealTime:    false,
-		passkeys:          false,
-		journalRefuser:    nil,
-		journalCap:        nil,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               tb.TempDir(),
-		token:             newToken(tb),
-		tokenB:            newToken(tb),
-		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
+		deltaCutoff:            0,
+		sinkSenders:            nil,
+		issuer:                 nil,
+		ldap:                   nil,
+		disableJournaling:      false,
+		ipAllowlists:           false,
+		signIn:                 false,
+		signInSecretInVariable: false,
+		signInRealTime:         false,
+		passkeys:               false,
+		journalRefuser:         nil,
+		journalCap:             nil,
+		tb:                     tb,
+		cli:                    cli,
+		store:                  store,
+		dir:                    tb.TempDir(),
+		token:                  newToken(tb),
+		tokenB:                 newToken(tb),
+		rec:                    &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
 }
 
@@ -438,23 +442,25 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 	in := envInput{
-		deltaCutoff:       cutoff,
-		sinkSenders:       nil,
-		issuer:            nil,
-		disableJournaling: false,
-		ipAllowlists:      false,
-		signIn:            false,
-		signInRealTime:    false,
-		passkeys:          false,
-		journalRefuser:    nil,
-		journalCap:        nil,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
+		deltaCutoff:            cutoff,
+		sinkSenders:            nil,
+		issuer:                 nil,
+		ldap:                   nil,
+		disableJournaling:      false,
+		ipAllowlists:           false,
+		signIn:                 false,
+		signInSecretInVariable: false,
+		signInRealTime:         false,
+		passkeys:               false,
+		journalRefuser:         nil,
+		journalCap:             nil,
+		tb:                     tb,
+		cli:                    cli,
+		store:                  store,
+		dir:                    dir,
+		token:                  token,
+		tokenB:                 tokenB,
+		rec:                    rec,
 	}
 
 	if UseBinaryServer() {
@@ -489,6 +495,7 @@ func startInprocessServer(
 		}
 
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
+		signIn.ldap = in.ldap
 	}
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;

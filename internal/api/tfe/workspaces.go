@@ -414,9 +414,10 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 
 	// Defense in depth: the authorizer says that its scope is exact, and the
 	// route authorizes namespace:read first. This check of unit:read on the
-	// namespace stays so that a scope with All set, or an authorizer that
-	// refuses the units of ns, cannot take the store path and show the count
-	// of the store. A refusal sends the caller to the check of each workspace.
+	// namespace stays so that a scope that covers every object, or an
+	// authorizer that refuses the units of ns, cannot take the store path and
+	// show the count of the store. A refusal sends the caller to the check of
+	// each workspace.
 	authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, identity.NamespaceObject(ns))
 	if authErr != nil {
 		if errors.Is(authErr, identity.ErrDenied) {
@@ -431,7 +432,7 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 		return false, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return true, nil
 	}
 

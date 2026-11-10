@@ -410,7 +410,7 @@ func TestDevCommand(t *testing.T) {
 	}
 
 	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	// The downloads and the requests to the servers keep connections open
 	// in the default client. The check for goroutines at the end of the

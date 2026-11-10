@@ -136,9 +136,6 @@ var (
 	errNoDatabase = errors.New(
 		"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db",
 	)
-	// errNoDatabaseTrial is errNoDatabase for a person who most likely wants a
-	// trial.
-	errNoDatabaseTrial = errors.New("no database is set. For a trial, run: opendustpan dev")
 	// errDevEnvironment reports serve in a shell that holds DUSTPAN_DEV.
 	errDevEnvironment error = &refusalError{
 		text:  "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. Start serve in a new shell.",
@@ -299,11 +296,13 @@ type serveFlags struct {
 	oidcClientID                 string
 	oidcScopes                   string
 	oidcNoAutoCreate             bool
+	ldap                         ldapFlags
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
 	ipAllowlistsIncludeBootstrap bool
 	gitHostAllowedRanges         string
+	allowPlainConnections        bool
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -529,12 +528,14 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
+	cli.ByFlag("allow-plain-connections").Bool(fs, &f.allowPlainConnections)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
 	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
 	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
 	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
+	f.ldap.register(fs)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -743,7 +744,9 @@ func hasValue(lookup cli.LookupFunc, name string) bool {
 // no database, in this order, and reports only the first. Serve stops before
 // it opens the database. Each error names one command that helps. A person at
 // a terminal who set no setting of serve most likely wants a trial, so the
-// error names the dev command.
+// error for a missing key names the dev command. The error for a missing
+// database never does: the code reaches the database check only with a key,
+// and a key is a setting of serve.
 func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) error {
 	trial := terminal && f.noSettings(lookup)
 
@@ -756,10 +759,6 @@ func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) erro
 	}
 
 	if strings.TrimSpace(f.database) == "" {
-		if trial {
-			return errNoDatabaseTrial
-		}
-
 		return errNoDatabase
 	}
 
@@ -1070,7 +1069,7 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	signIn, signInErr := f.signInOptions()
+	signIn, signInErr := f.signInOptions(os.LookupEnv)
 	if signInErr != nil {
 		return nil, signInErr
 	}

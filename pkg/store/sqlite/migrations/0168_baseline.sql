@@ -46,7 +46,7 @@ CREATE TABLE "updates" (
     lease_expires_at_ms INTEGER NOT NULL,
     created_at_ms       INTEGER NOT NULL,
     started_at_ms       INTEGER NOT NULL,
-    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0, job_id TEXT NOT NULL DEFAULT '', git_head TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (stack_id, id),
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
 ) STRICT;
@@ -123,7 +123,7 @@ CREATE TABLE state_versions (
     lock_id               TEXT    NOT NULL DEFAULT '',
     created_at_ms         INTEGER NOT NULL,
     finalized_at_ms       INTEGER NOT NULL DEFAULT 0
-, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0) STRICT;
+, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '') STRICT;
 
 CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,
@@ -196,7 +196,7 @@ CREATE TABLE principal_groups (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     deleted_at_ms INTEGER
-) STRICT;
+, closed_to_identity_provider INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE group_members (
     group_id      TEXT    NOT NULL REFERENCES principal_groups (id),
@@ -214,6 +214,24 @@ CREATE TABLE group_mappings (
     created_by    TEXT    NOT NULL,
     created_at_ms INTEGER NOT NULL,
     PRIMARY KEY (source, source_id, claim_value, group_id)
+) STRICT;
+
+CREATE TABLE member_removal_alerts (
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    alerted_at_ms  INTEGER NOT NULL CHECK (alerted_at_ms > 0),
+    PRIMARY KEY (source_kind, source_id)
+) STRICT;
+
+CREATE TABLE member_removals (
+    id             TEXT    NOT NULL PRIMARY KEY,
+    source_kind    TEXT    NOT NULL CHECK (source_kind IN ('identity-provider', 'scim-token')),
+    source_id      TEXT    NOT NULL CHECK (source_id <> ''),
+    group_id       TEXT    NOT NULL CHECK (group_id <> ''),
+    removed        INTEGER NOT NULL CHECK (removed >= 1),
+    members_before INTEGER NOT NULL,
+    at_ms          INTEGER NOT NULL CHECK (at_ms > 0),
+    CHECK (members_before >= removed)
 ) STRICT;
 
 CREATE TABLE "audit_entries" (
@@ -547,6 +565,36 @@ CREATE TABLE temp_admins (
   ended_at_ms BIGINT
 , review_opened_at_ms BIGINT);
 
+CREATE TABLE break_glass_reviews (
+    id                      TEXT    NOT NULL PRIMARY KEY,
+    use_kind                TEXT    NOT NULL,
+    use_ref                 TEXT    NOT NULL,
+    use_scope               TEXT    NOT NULL,
+    use_object              TEXT    NOT NULL,
+    use_subject             TEXT    NOT NULL,
+    use_people              TEXT    NOT NULL,
+    use_reason              TEXT    NOT NULL,
+    use_at_ms               INTEGER NOT NULL,
+    use_until_ms            INTEGER NOT NULL,
+    state                   TEXT    NOT NULL,
+    created_at_ms           INTEGER NOT NULL,
+    due_at_ms               INTEGER NOT NULL,
+    calendar                TEXT    NOT NULL,
+    calendar_from_namespace TEXT    NOT NULL,
+    calendar_from_group     TEXT    NOT NULL,
+    step                    INTEGER NOT NULL,
+    next_notice_at_ms       INTEGER NOT NULL,
+    verdict_reviewer        TEXT    NOT NULL,
+    verdict_note            TEXT    NOT NULL,
+    verdict_auth            TEXT    NOT NULL,
+    verdict_auth_at_ms      INTEGER NOT NULL,
+    verdict_reviewed_at_ms  INTEGER NOT NULL,
+    verdict_act_as          TEXT    NOT NULL,
+    version                 INTEGER NOT NULL,
+    CHECK (use_kind IN ('freeze-break', 'account-session', 'temp-admin')),
+    CHECK (state IN ('pending', 'accepted', 'disputed'))
+) STRICT;
+
 CREATE TABLE gate_records (
     id            TEXT    NOT NULL PRIMARY KEY,
     namespace_id  TEXT    NOT NULL,
@@ -865,20 +913,14 @@ CREATE TABLE job_freezes (
     ended_by      TEXT    NOT NULL
 ) STRICT;
 
-CREATE TABLE unit_state_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE unit_final_versions (
-    unit_id       TEXT    NOT NULL PRIMARY KEY,
-    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
-    version_id    TEXT    NOT NULL,
-    commit_id     TEXT    NOT NULL,
-    job_id        TEXT    NOT NULL,
-    at_ms         INTEGER NOT NULL
+CREATE TABLE unit_state (
+    unit_id          TEXT    NOT NULL PRIMARY KEY,
+    namespace_id     TEXT    NOT NULL REFERENCES namespaces (id),
+    version_id       TEXT    NOT NULL DEFAULT '',
+    final_version_id TEXT    NOT NULL DEFAULT '',
+    final_commit     TEXT    NOT NULL DEFAULT '',
+    final_job        TEXT    NOT NULL DEFAULT '',
+    final_at_ms      INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TABLE saved_views (
@@ -1468,6 +1510,8 @@ CREATE UNIQUE INDEX group_members_current ON group_members (group_id, principal_
 
 CREATE INDEX group_members_principal ON group_members (principal_id) WHERE removed_at_ms IS NULL;
 
+CREATE INDEX member_removals_source ON member_removals (source_kind, source_id, at_ms);
+
 CREATE INDEX audit_entries_ns_time ON audit_entries (namespace, at_ms DESC, sequence DESC);
 
 CREATE INDEX inventory_deleted_namespace ON inventory_deleted (namespace, tool, name);
@@ -1521,6 +1565,10 @@ CREATE INDEX object_context_owners_entry
     ON object_context_owners (namespace_id, object_kind, object_id, resource_key, source);
 
 CREATE INDEX inventory_changes_unit ON inventory_changes (namespace_id, tool, unit_id, seq, at_ms);
+
+CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews (use_kind, use_ref);
+
+CREATE INDEX break_glass_reviews_due ON break_glass_reviews (state, next_notice_at_ms);
 
 CREATE INDEX gate_records_change ON gate_records (namespace_id, change_kind, change_id, at_ms, id);
 

@@ -37,6 +37,9 @@ const (
 	backupColUpdatedAtMs = "updated_at_ms"
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
+	backupColSourceID    = "source_id"
+	backupColSourceKind  = "source_kind"
+	backupColGroupID     = "group_id"
 	backupColKind        = "kind"
 	backupColUsedAtMs    = "used_at_ms"
 	backupColSubject     = "subject"
@@ -131,6 +134,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				backupColJobID,
+				"git_head",
 			},
 		},
 		{
@@ -417,6 +422,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"sensitive_marks",
 				"fenced_by",
 				"unlocked_write",
+				"origin_job",
 			},
 		},
 	}
@@ -449,6 +455,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqlitePlacementBackupTables(),
 		sqliteSelfServiceBackupTables(),
 		sqliteTrustRuleBackupTables(),
+		sqliteBreakGlassReviewBackupTables(),
 	)
 }
 
@@ -620,6 +627,13 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
 		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
+				"final_job", "final_at_ms",
+			},
+		},
 	}
 }
 
@@ -729,17 +743,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"closed_to_identity_provider",
 			},
 		},
 		{
 			table: "group_members",
 			columns: []string{
-				"group_id",
+				backupColGroupID,
 				backupColPrincipalID,
 				"added_at_ms",
 				"removed_at_ms",
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				backupColState,
 				"suspended_at_ms",
 				"pinned",
@@ -749,11 +764,31 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			table: "group_mappings",
 			columns: []string{
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				"claim_value",
-				"group_id",
+				backupColGroupID,
 				backupColCreatedBy,
 				backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "member_removal_alerts",
+			columns: []string{
+				backupColSourceKind,
+				backupColSourceID,
+				"alerted_at_ms",
+			},
+		},
+		{
+			table: "member_removals",
+			columns: []string{
+				"id",
+				backupColSourceKind,
+				backupColSourceID,
+				backupColGroupID,
+				"removed",
+				"members_before",
+				backupColAtMs,
 			},
 		},
 		{

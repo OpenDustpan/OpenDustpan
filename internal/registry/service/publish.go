@@ -224,10 +224,15 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 	}
 
 	if moveErr := s.move(ctx, p.view, p.rec.ID, p.files); moveErr != nil {
-		return registry.Release{}, moveErr
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, moveErr)
 	}
 
-	return s.record(ctx, c, p, rel)
+	rel, err = s.record(ctx, c, p, rel)
+	if err != nil {
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, err)
+	}
+
+	return rel, nil
 }
 
 // publishing holds what a publish needs after the request is checked: the

@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -274,13 +275,19 @@ func newCreateLockWorkspace(ns namespace.Name, name string) workspace.Workspace 
 	now := time.Now()
 
 	return workspace.Workspace{
-		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns, Name: workspace.Name(name)},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 

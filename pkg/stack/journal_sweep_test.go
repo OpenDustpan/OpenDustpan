@@ -27,11 +27,11 @@ func TestJournalSweepKeepsNamedBlobs(t *testing.T) {
 	}{
 		{
 			name: "a preview start",
-			plan: stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			plan: stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 		},
 		{
 			name: "a dry run update start",
-			plan: stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0},
+			plan: stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 		},
 	}
 
@@ -138,7 +138,7 @@ func TestSweepUpdateBlobsKeepsJournalBlobs(t *testing.T) {
 			clk := newClock()
 			f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
 
-			plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+			plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 			u, err := f.svc.Create(t.Context(), f.ref, plan)
 			if err != nil {

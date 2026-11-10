@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,24 +25,24 @@ const ipAllowlistSource = "127.0.0.2"
 func TestIPAllowlists(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -190,33 +191,46 @@ func checkIPAllowlistRefusesOutside(ctx context.Context, t *testing.T, env *e2e.
 		t.Fatalf("read the locked namespace from outside: body %s leaks the list", body)
 	}
 
-	checkForbiddenAnswer(t, "read the locked namespace from outside", body, "access.ip-not-allowed")
+	checkForbiddenAnswer(t, "read the locked namespace from outside", body, forbiddenAnswer{
+		code: "access.ip-not-allowed", message: "forbidden", args: nil,
+	})
 }
 
-// checkForbiddenAnswer fails unless body is a 403 answer with the message
-// "forbidden" and the machine code wantCode. The message is the text that
-// every released client reads, so the code must come as an addition to it.
-func checkForbiddenAnswer(t *testing.T, step, body, wantCode string) {
+// forbiddenAnswer is the 403 answer that checkForbiddenAnswer expects: the
+// machine code, the message and the arguments.
+type forbiddenAnswer struct {
+	code    string
+	message string
+	args    map[string]any
+}
+
+// checkForbiddenAnswer fails unless body is the 403 answer want.
+func checkForbiddenAnswer(t *testing.T, step, body string, want forbiddenAnswer) {
 	t.Helper()
 
 	var got struct {
-		Code      int    `json:"code"`
-		Message   string `json:"message"`
-		ErrorCode string `json:"errorCode"`
+		Code      int            `json:"code"`
+		Message   string         `json:"message"`
+		ErrorCode string         `json:"errorCode"`
+		ErrorArgs map[string]any `json:"errorArgs"`
 	}
 
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
 		t.Fatalf("%s: body %s is not JSON: %v", step, body, err)
 	}
 
-	if got.Code != http.StatusForbidden || got.Message != "forbidden" || got.ErrorCode != wantCode {
-		t.Fatalf("%s: body %s, want code 403, message \"forbidden\" and errorCode %q", step, body, wantCode)
+	if got.Code != http.StatusForbidden || got.Message != want.message || got.ErrorCode != want.code {
+		t.Fatalf("%s: body %s, want code 403, message %q and errorCode %q", step, body, want.message, want.code)
+	}
+
+	if !reflect.DeepEqual(got.ErrorArgs, want.args) {
+		t.Fatalf("%s: body %s, want errorArgs %v", step, body, want.args)
 	}
 }
 
 // checkAccessDeniedCode sends a request of a caller that holds no grant for
-// it. The answer is 403 with the message that the allowlist refusal has, and
-// the code access.denied, so only the code tells the two causes apart.
+// it. The answer is 403 with the code access.denied, the missing action and
+// the kind of the object, and no part of the object.
 func checkAccessDeniedCode(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -225,12 +239,14 @@ func checkAccessDeniedCode(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Skip("the binary server knows only the bootstrap admin tokens, so no caller without a grant exists")
 	}
 
+	const name = "secret-object-7f3"
+
 	status, body, err := env.ServerAPIStatusAs(
 		ctx,
 		token,
 		http.MethodPost,
 		"/api/server/namespaces",
-		`{"name":"denied"}`,
+		`{"name":"`+name+`"}`,
 	)
 	if err != nil {
 		t.Fatalf("create a namespace without a grant: %v", err)
@@ -240,7 +256,15 @@ func checkAccessDeniedCode(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("create a namespace without a grant answers %d, want %d (%s)", status, http.StatusForbidden, body)
 	}
 
-	checkForbiddenAnswer(t, "create a namespace without a grant", body, "access.denied")
+	checkForbiddenAnswer(t, "create a namespace without a grant", body, forbiddenAnswer{
+		code:    "access.denied",
+		message: "forbidden: you need the action server:create-namespace on this server",
+		args:    map[string]any{"action": "server:create-namespace", "objectKind": "server"},
+	})
+
+	if strings.Contains(body, name) {
+		t.Fatalf("create a namespace without a grant names the object: %s", body)
+	}
 }
 
 // checkIPAllowlistAdmitsInside reads the locked namespace from a source

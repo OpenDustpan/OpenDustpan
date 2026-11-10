@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/gatetest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -460,7 +461,7 @@ func (d gateDomain) CreateUnit(
 			ID:          workspace.ID(ident.NewID("ws-")),
 			Ref:         workspace.Ref{Namespace: ns, Name: wname},
 			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-			Revision:    1,
+			Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		}
 		if err = d.s.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 			return fmt.Errorf("create workspace %s: %w", name, err)

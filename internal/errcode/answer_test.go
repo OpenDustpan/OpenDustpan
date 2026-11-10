@@ -274,3 +274,49 @@ func TestIdentifierUpToHasItsOwnLimit(t *testing.T) {
 		})
 	}
 }
+
+// TestDeniedArgs proves the two arguments of a denial: the action that the
+// caller lacks and the kind of the object. A value that an argument cannot
+// hold gives an error, so the answer of a denial never holds an invalid
+// argument.
+func TestDeniedArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		action     string
+		objectKind string
+		want       map[string]any
+		wantErr    error
+	}{
+		{
+			"the action and the kind",
+			"collection:create-unit", "collection",
+			map[string]any{"action": "collection:create-unit", "objectKind": "collection"},
+			nil,
+		},
+		{"no action", "", "collection", nil, errcode.ErrArgValue},
+		{"no kind", "unit:read", "", nil, errcode.ErrArgValue},
+		{"line break in the action", "unit:read\nnext", "unit", nil, errcode.ErrArgValue},
+		{"control character in the kind", "unit:read", "unit\x00", nil, errcode.ErrArgValue},
+		{
+			"action over the limit",
+			strings.Repeat("a", errcode.MaxIdentifier+1), "unit", nil, errcode.ErrArgValue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := errcode.DeniedArgs(tt.action, tt.objectKind)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil && err != nil) {
+				t.Fatalf("DeniedArgs = %v, %v; want %v, %v", got, err, tt.want, tt.wantErr)
+			}
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("arguments = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

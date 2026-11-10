@@ -87,16 +87,18 @@ func (cfg Config) validate() error {
 
 // Handler serves the trust rule routes.
 type Handler struct {
-	namespaces *namespace.Service
-	rules      *trustrulesvc.Service
-	exchanger  *trustrulesvc.Exchanger
-	authn      identity.Authenticator
-	sessions   *sessionauth.Checker
-	guard      *refusal.Recorder
-	logger     *slog.Logger
-	now        func() time.Time
-	mux        *route.Mux
-	routes     []Route
+	namespaces     *namespace.Service
+	rules          *trustrulesvc.Service
+	exchanger      *trustrulesvc.Exchanger
+	authn          identity.Authenticator
+	sessions       *sessionauth.Checker
+	guard          *refusal.Recorder
+	audit          audit.Store
+	onAuditFailure func()
+	logger         *slog.Logger
+	now            func() time.Time
+	mux            *route.Mux
+	routes         []Route
 }
 
 // Route is one row of the route table. The enforcement wrapper runs the
@@ -126,16 +128,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces: cfg.Namespaces,
-		rules:      cfg.Rules,
-		exchanger:  cfg.Exchanger,
-		authn:      cfg.Authenticator,
-		sessions:   cfg.Sessions,
-		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("trustrules"),
-		logger:     cfg.Logger,
-		now:        now,
-		mux:        route.NewMux(),
-		routes:     nil,
+		namespaces:     cfg.Namespaces,
+		rules:          cfg.Rules,
+		exchanger:      cfg.Exchanger,
+		authn:          cfg.Authenticator,
+		sessions:       cfg.Sessions,
+		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("trustrules"),
+		audit:          cfg.Audit,
+		onAuditFailure: cfg.OnAuditFailure,
+		logger:         cfg.Logger,
+		now:            now,
+		mux:            route.NewMux(),
+		routes:         nil,
 	}
 
 	h.routes = h.buildRoutes()

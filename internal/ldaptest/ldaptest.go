@@ -154,22 +154,22 @@ const listeners = 2
 
 // Start starts a directory on loopback with a new certificate authority,
 // and stops it when the test ends.
-func Start(t *testing.T) *Server {
-	t.Helper()
+func Start(tb testing.TB) *Server {
+	tb.Helper()
 
-	cert, pool := newCertificate(t)
+	cert, pool := newCertificate(tb)
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 
 	var lc net.ListenConfig
 
-	tlsLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	tlsLn, err := lc.Listen(tb.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		tb.Fatalf("listen: %v", err)
 	}
 
-	plainLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	plainLn, err := lc.Listen(tb.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		tb.Fatalf("listen: %v", err)
 	}
 
 	s := &Server{
@@ -200,9 +200,9 @@ func Start(t *testing.T) *Server {
 	go s.serve(s.tlsLn)
 	go s.serve(s.plainLn)
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		for _, err := range s.stopAndReport() {
-			t.Logf("ldaptest: %v", err)
+			tb.Logf("ldaptest: %v", err)
 		}
 	})
 
@@ -211,12 +211,12 @@ func Start(t *testing.T) *Server {
 
 // newCertificate returns a self-signed certificate for 127.0.0.1, ::1 and
 // localhost, and a pool that trusts it.
-func newCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
-	t.Helper()
+func newCertificate(tb testing.TB) (tls.Certificate, *x509.CertPool) {
+	tb.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("generate key: %v", err)
+		tb.Fatalf("generate key: %v", err)
 	}
 
 	now := time.Now()
@@ -236,12 +236,12 @@ func newCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
 
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
-		t.Fatalf("create certificate: %v", err)
+		tb.Fatalf("create certificate: %v", err)
 	}
 
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {
-		t.Fatalf("parse certificate: %v", err)
+		tb.Fatalf("parse certificate: %v", err)
 	}
 
 	pool := x509.NewCertPool()

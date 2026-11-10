@@ -3,6 +3,7 @@ package jobstore_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -129,13 +130,6 @@ func changeOf(id job.ID, v int64, ev job.Event) job.Change {
 	}
 }
 
-// stateVersionOf returns the final state version of the unit at the time at.
-func stateVersionOf(unit identity.Object, at time.Time) job.StateVersion {
-	return job.StateVersion{
-		Unit: unit, VersionID: "sv-1", Commit: "c0ffee", Job: "", At: at, Final: true,
-	}
-}
-
 // phaseClaimOf returns the claim of the first phase of the job id.
 func phaseClaimOf(id job.ID) job.PhaseClaim {
 	return job.PhaseClaim{Job: id, Phase: 0, Claim: testClaim(), Fence: testFence()}
@@ -156,7 +150,7 @@ func readJob(t *testing.T, s *jobstore.Store, id job.ID) job.Job {
 // writeApply performs one write of the job id through the applyIn path: the
 // event need-approval on a queued job, and the event cancel on the job that
 // waits for approval.
-func writeApply(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeApply(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -174,12 +168,14 @@ func writeApply(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writeAwait closes the awaiting job id through the closeAwaiting path, with
 // a final state version of the unit at the clock time.
-func writeAwait(t *testing.T, s *jobstore.Store, id job.ID, unit identity.Object, clock time.Time) {
+func writeAwait(t *testing.T, tx jobstore.CloseTx, id job.ID, unit identity.Object, clock time.Time) {
 	t.Helper()
 
-	closed, err := s.ObserveStateVersion(t.Context(), stateVersionOf(unit, clock), testFence())
+	closed, err := jobstore.CloseAwaiting(t.Context(), tx, testNamespace, jobstore.FinalVersion{
+		UnitID: unit.UnitID(), VersionID: "sv-1", Commit: "c0ffee", Job: "", At: clock,
+	}, nil)
 	if err != nil {
-		t.Fatalf("observe state version: %v", err)
+		t.Fatalf("close awaiting: %v", err)
 	}
 
 	if len(closed) != 1 || closed[0].ID != id {
@@ -189,7 +185,7 @@ func writeAwait(t *testing.T, s *jobstore.Store, id job.ID, unit identity.Object
 
 // writeVerification performs one write of the job id through the
 // setVerificationIn path, with the other verdict on the second write.
-func writeVerification(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeVerification(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -206,7 +202,7 @@ func writeVerification(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writeStepRecord appends one step record to the job id through the
 // AppendStepRecord path.
-func writeStepRecord(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeStepRecord(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -223,7 +219,7 @@ func writeStepRecord(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writeSave performs one write of the job id through the save path: it begins
 // the step apply on the first write, and ends it on the second.
-func writeSave(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeSave(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -244,7 +240,7 @@ func writeSave(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writeNeedApproval performs one write of the job id through the applyIn
 // path, with the event need-approval.
-func writeNeedApproval(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeNeedApproval(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -257,7 +253,7 @@ func writeNeedApproval(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writeClaim performs one write of the job id through the applyIn path, with
 // the event claim of the first phase.
-func writeClaim(t *testing.T, s *jobstore.Store, id job.ID) {
+func writeClaim(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -273,7 +269,7 @@ func writeClaim(t *testing.T, s *jobstore.Store, id job.ID) {
 
 // writePhaseDone performs one write of the job id through the applyIn path,
 // with the event phase-done.
-func writePhaseDone(t *testing.T, s *jobstore.Store, id job.ID) {
+func writePhaseDone(t *testing.T, s *jobstore.Store, _ *fakeTx, id job.ID) {
 	t.Helper()
 
 	cur := readJob(t, s, id)
@@ -367,11 +363,6 @@ func (f *fakeTx) StartOperation(_ context.Context, req *durable.StartRequest) (s
 	return "op-" + string(req.Kind), nil
 }
 
-// PutFinalVersion implements jobstore.Tx.
-func (f *fakeTx) PutFinalVersion(context.Context, namespace.Name, jobstore.FinalVersion) error {
-	return nil
-}
-
 // CheckClaim implements jobstore.Tx.
 func (f *fakeTx) CheckClaim(context.Context, durable.Claim) error { return nil }
 
@@ -420,12 +411,15 @@ func (r fakeRunner) Read(_ context.Context, fn func(jobstore.Tx) error) error {
 	return fn(r.tx)
 }
 
+// Logger implements jobstore.Runner: nil, so the store logs nothing.
+func (fakeRunner) Logger() *slog.Logger { return nil }
+
 // writePath is one path that writes a job row through a public store method.
 type writePath struct {
 	// first returns the job to store before the first write.
 	first func() job.Job
 	// write performs one write through the public store method of the path.
-	write func(t *testing.T, s *jobstore.Store, id job.ID)
+	write func(t *testing.T, s *jobstore.Store, tx *fakeTx, id job.ID)
 	// second returns the job to store before the second write, given the job
 	// after the first write, or nil to write the first job again.
 	second func(first job.Job) job.Job
@@ -459,10 +453,10 @@ func TestUpdateTimeMovesOnEachWritePath(t *testing.T) {
 			first: func() job.Job {
 				return awaitJob("job-await-1", unit, clock)
 			},
-			write: func(t *testing.T, s *jobstore.Store, id job.ID) {
+			write: func(t *testing.T, _ *jobstore.Store, tx *fakeTx, id job.ID) {
 				t.Helper()
 
-				writeAwait(t, s, id, unit, clock)
+				writeAwait(t, tx, id, unit, clock)
 			},
 			second: func(first job.Job) job.Job {
 				return awaitJob("job-await-2", unit, first.UpdatedAt)
@@ -499,7 +493,7 @@ func TestUpdateTimeMovesOnEachWritePath(t *testing.T) {
 			first := tc.first()
 			tx.put(t, &first)
 
-			tc.write(t, s, first.ID)
+			tc.write(t, s, tx, first.ID)
 			gotFirst := readJob(t, s, first.ID)
 
 			if !gotFirst.UpdatedAt.After(clock) {
@@ -513,7 +507,7 @@ func TestUpdateTimeMovesOnEachWritePath(t *testing.T) {
 				secondID = next.ID
 			}
 
-			tc.write(t, s, secondID)
+			tc.write(t, s, tx, secondID)
 			gotSecond := readJob(t, s, secondID)
 
 			if gotSecond.UpdatedAt.Before(gotFirst.UpdatedAt.Add(time.Millisecond)) {
@@ -529,7 +523,7 @@ type clockCase struct {
 	// job returns the job to store before the write.
 	job func() job.Job
 	// write performs one write through the public store method of the path.
-	write func(t *testing.T, s *jobstore.Store, id job.ID)
+	write func(t *testing.T, s *jobstore.Store, tx *fakeTx, id job.ID)
 	// check reads the field that must keep the clock time.
 	check func(t *testing.T, got *job.Job, clock time.Time)
 }
@@ -574,10 +568,10 @@ func TestWritePathsKeepTheClockTime(t *testing.T) {
 			job: func() job.Job {
 				return awaitJob("job-await", unit, ahead)
 			},
-			write: func(t *testing.T, s *jobstore.Store, id job.ID) {
+			write: func(t *testing.T, _ *jobstore.Store, tx *fakeTx, id job.ID) {
 				t.Helper()
 
-				writeAwait(t, s, id, unit, clock)
+				writeAwait(t, tx, id, unit, clock)
 			},
 			check: checkStateChangedAt,
 		},
@@ -591,7 +585,7 @@ func TestWritePathsKeepTheClockTime(t *testing.T) {
 			j := tc.job()
 			tx.put(t, &j)
 
-			tc.write(t, s, j.ID)
+			tc.write(t, s, tx, j.ID)
 			got := readJob(t, s, j.ID)
 			tc.check(t, &got, clock)
 		})

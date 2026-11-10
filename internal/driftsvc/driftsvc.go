@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/drift"
@@ -67,9 +68,18 @@ func (s *Service) Check(ctx context.Context, actor job.Actor, req drift.CheckReq
 }
 
 // CheckKeyPrefix starts every idempotency key that a drift check takes. The
-// jobs API refuses a key from a caller that starts with it, so a caller cannot
-// take the key of a drift check first.
+// jobs API and the triggers API refuse a key from a caller that starts with
+// it, so a caller cannot take the key of a drift check first.
 const CheckKeyPrefix = "drift-"
+
+// ReservedKey reports whether key starts with CheckKeyPrefix, without regard
+// to case. The routes that share the key space of the jobs refuse such a key
+// from a caller: it could name the job of a drift check of the same caller.
+// The server makes the keys of its own drift checks with the prefix, and its
+// path to the job service does not call this check.
+func ReservedKey(key string) bool {
+	return len(key) >= len(CheckKeyPrefix) && strings.EqualFold(key[:len(CheckKeyPrefix)], CheckKeyPrefix)
+}
 
 // checkKey returns the idempotency key of a drift check of the unit ref at
 // time at: the same key for the same unit in the same minute, so a double click

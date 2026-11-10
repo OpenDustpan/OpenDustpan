@@ -342,35 +342,24 @@ func (s *ArtifactSweeper) sweepOne(ctx context.Context, j *Job, now time.Time, r
 }
 
 // sweepPass sweeps each job that f selects, at most maxArtifactSweepPages
-// pages of them.
+// pages of them. A damaged row holds no readable job, so there is nothing to
+// sweep: the pass reports it and goes on.
 func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter, res *ArtifactSweepResult) error {
 	for range maxArtifactSweepPages {
-		// The query reads one row more than a page. That row tells whether a
-		// job is left after this page, so no second query is needed.
-		read := f
-		read.Limit = f.Limit + 1
-
-		jobs, err := s.jobs.List(ctx, read)
+		page, err := s.jobs.List(ctx, f)
 		if err != nil {
 			return fmt.Errorf("list jobs: %w", err)
 		}
 
-		more := len(jobs) > f.Limit
+		for i := range page.Damaged {
+			s.logger.WarnContext(ctx, "sweep job artifact blobs skipped a damaged job row",
+				slog.String("job", string(page.Damaged[i].ID)), slog.String("reason", page.Damaged[i].Reason))
+		}
 
-		// last is the ID of the last job of this page: the next page starts
-		// after it.
-		var last ID
-
-		for i := range jobs {
-			if i == f.Limit {
-				break
-			}
-
-			last = jobs[i].ID
-
+		for i := range page.Jobs {
 			var one ArtifactSweepResult
 
-			sweepErr := s.sweepOne(ctx, &jobs[i], now, &one)
+			sweepErr := s.sweepOne(ctx, &page.Jobs[i], now, &one)
 			res.Jobs++
 			res.merge(&one)
 
@@ -380,21 +369,22 @@ func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter
 			case sweepErr != nil:
 				res.Failed++
 
-				s.logger.WarnContext(ctx, "sweep job artifact blobs", slog.String("job", string(jobs[i].ID)),
+				s.logger.WarnContext(ctx, "sweep job artifact blobs", slog.String("job", string(page.Jobs[i].ID)),
 					slog.String("error", sweepErr.Error()))
 			default:
 			}
 		}
 
-		if !more {
+		// An empty cursor means that the page reached the end of the list.
+		if page.After == "" {
 			return nil
 		}
 
-		f.After = last
+		f.After = page.After
 	}
 
-	// The pass stopped at the page cap and the last read held a row after the
-	// page, so the result reports that jobs are left.
+	// The pass stopped at the page cap and a row is left after the last page,
+	// so the result reports that jobs are left.
 	res.Capped = true
 
 	return nil

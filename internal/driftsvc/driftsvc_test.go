@@ -209,6 +209,30 @@ func TestCheckKey(t *testing.T) {
 	}
 }
 
+// TestCheckKeyReachesTheJobService proves: the key that the server makes for a
+// drift check starts with the prefix that the routes reserve for the server,
+// and the path from the check to the job service accepts it. Only a caller key
+// is refused.
+func TestCheckKeyReachesTheJobService(t *testing.T) {
+	t.Parallel()
+
+	starter := newStarter(nil)
+	svc := newChecker(t, starter, time.UnixMilli(1_800_000_000_000).UTC())
+
+	if _, err := svc.Check(t.Context(), actorAda(), requestFor(t, "network")); err != nil {
+		t.Fatalf("Check = %v", err)
+	}
+
+	if len(starter.requests) != 1 {
+		t.Fatalf("starts = %d, want 1", len(starter.requests))
+	}
+
+	key := starter.requests[0].IdempotencyKey
+	if !strings.HasPrefix(key, driftsvc.CheckKeyPrefix) || !driftsvc.ReservedKey(key) {
+		t.Errorf("key = %q, want one with the reserved prefix %q", key, driftsvc.CheckKeyPrefix)
+	}
+}
+
 func TestCheckRefusesWhatIsNoUnit(t *testing.T) {
 	t.Parallel()
 

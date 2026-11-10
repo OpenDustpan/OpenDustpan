@@ -139,8 +139,8 @@ exports:
   check that such a value is a secret. A check when the profile opens does
   not exist yet.
 
-A change of a value that `proxy` or `files` reads, directly or through
-other expressions, is a routing change (see "Routing changes").
+A change of a value that an export reads, directly or through other
+expressions, is a routing change (see "Routing changes").
 
 ## Secrets
 
@@ -167,9 +167,10 @@ audit entry.
 ## Routing changes
 
 A change of a provider block, a rotator block, `imports` or `exports`
-changes where secrets go. So does a change of a value that a block,
-`exports.proxy` or `exports.files` reads, directly or through other
-expressions. Such a save needs `profile:open` as
+changes where secrets go. So does a change of a value that a block or an
+export reads, directly or through other expressions. The exports are
+`variables`, `files`, `pulumi`, `opentofu` and `proxy`. Such a save needs
+`profile:open` as
 well as `profile:write`. Without it, the answer is 403 with the error code
 `profile.routing-change-needs-open` and the list of the blocks and paths.
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -225,7 +226,7 @@ func (s *checkSetup) check(t *testing.T, key secret.Wrapper, installation string
 		Key:          key,
 		ID:           s.id,
 		Installation: installation,
-		Stage:        backup.StageOptions{BackupKind: "", AllowDev: false},
+		Stage:        backup.StageOptions{BackupKind: "", AllowDev: false, RestoreAt: time.Time{}},
 		AfterStage:   nil,
 	})
 }

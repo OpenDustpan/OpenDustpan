@@ -44,10 +44,12 @@ func newProviderAdmin(cfg *settings, s providerStores) (*session.ProviderAdmin, 
 		return nil, fmt.Errorf("installation secrets: %w", err)
 	}
 
-	static := make([]string, 0, len(cfg.oidcProviders))
+	static := make([]string, 0, len(cfg.oidcProviders)+len(cfg.ldapProviders))
 	for _, p := range cfg.oidcProviders {
 		static = append(static, p.ID)
 	}
+
+	static = append(static, ldapIDs(cfg)...)
 
 	admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
 		Store: s, Binder: s, Secrets: secrets, Now: cfg.now, Static: static,

@@ -1,0 +1,20 @@
+schema: spec-driven
+
+context: |
+  Read openspec/project.md first. It holds the personas, the ADR rule and
+  the rules for proposals, designs and tasks.
+  Read docs/adr/INDEX.md and the ADRs that the change touches. Use the terms of
+  GLOSSARY.md. Write Simplified Technical English with US spelling.
+
+rules:
+  proposal:
+    - Start from a persona and what they try to do. Walk the user path (API, CLI, docs page, console) with the errors they may hit and the one command that helps.
+    - Add a section "ADR check". List each ADR touched, quote its decision lines, mark it owner-tagged or not, and follow its Changed-by chain. A conflict with an owner decision blocks the change until the owner decides.
+    - Add a section "Open questions". A change may be implemented only when it reads "none".
+    - A bug or tech-debt change may use a short proposal - problem, evidence, fix boundary, check, "Open questions - none".
+  design:
+    - Use the stable ID for each stored reference to an entity that a user can rename, or remove and make again. A name is a label for people only.
+    - Prefer a structure that makes a bug class impossible over added checks. Add no new tooling as a fix.
+  tasks:
+    - Name the acceptance check of each task.
+    - The definition of done includes the wiring, the route, an e2e step, the docs page and a usability check.

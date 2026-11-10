@@ -176,11 +176,15 @@ func (f storeMoveFixture) createWorkspace(t *testing.T) {
 
 	w := workspace.Workspace{
 		NamespaceID: "",
-		CreatedAt:   time.Now(), UpdatedAt: time.Now(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: f.ns.Name, Name: name},
-		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: f.ns.Name, Name: name},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:      identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if createErr := f.store.CreateWorkspace(t.Context(), w, f.ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)

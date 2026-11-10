@@ -187,12 +187,13 @@ the same name, without regard to case, gets `409` with the code
 | --- | --- | --- |
 | `GET /api/server/groups` | `server:read-principals` | `200`, a page ordered by name |
 | `GET /api/server/groups/{id}` | `server:read-principals` | `200` |
-| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, or both. |
+| `PATCH /api/server/groups/{id}` | `server:manage-groups` | `200`. The body holds `name`, `description`, `closedToIdentityProvider`, or a combination of them. |
 | `DELETE /api/server/groups/{id}` | `server:manage-groups`, with a fresh sign-in | `204` |
 | `GET /api/server/principals/{id}/groups` | `server:read-principals` | `200`, the groups of a principal |
 
 A group has `id` (with the prefix `grp-`), `name`, `description`, `source`,
-`createdAt`, `updatedAt`, `memberCount` and `protected`.
+`createdAt`, `updatedAt`, `memberCount`, `closedToIdentityProvider` and
+`protected`.
 
 `protected` is `true` when the group holds a sensitive action on the
 installation or on a principal of the installation through its own grants. A
@@ -202,7 +203,9 @@ read-only server actions: each `server:read-*` action. A grant inside one
 namespace, and a grant that a member holds as a person, do not make the
 group protected. A disabled principal of the installation counts: the group
 holds a grant on a principal of the installation, and the server can enable
-the principal again.
+the principal again. This classification is one of the
+[code rules](../reference/code-rules.md) that no grant, setting or
+administrator can change.
 
 The server stores a new group before it checks whether the group is
 protected. A new group holds no grant, so it is not protected.
@@ -249,9 +252,41 @@ An action that no family classifies fails the check closed. A read that
 cannot check the group answers `500` with the code `server.internal`. It
 never answers `protected: false`.
 
+A rename moves the members from the old name to the new name, so it can lift
+an access limit that names either name. Such a rename needs a site
+administrator, a caller who holds every action of the installation (the
+site-administrator role on the installation). See
+[Manage group members](#manage-group-members).
+
 A fresh sign-in is a sign-in that the server still accepts for a sensitive
 change. If the sign-in is not fresh, the answer is `403` with the code
 `mfa.fresh-step-required`. Sign in again and retry. A stored access token always gets this answer, so make these changes in the console.
+
+### Close a group to the identity provider
+
+A group carries the switch `closedToIdentityProvider`. The default is `false`:
+the group is open. A `true` value marks the group as closed to the identity
+provider.
+
+A caller with `server:manage-groups` changes the switch with
+`PATCH /api/server/groups/{id}`. The body holds the switch as a JSON boolean:
+
+```sh
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"closedToIdentityProvider":true}' \
+  https://dustpan.example.com/api/server/groups/grp-...
+```
+
+A value of another type gets `400` with the code `request.body-invalid`. A
+change of the switch writes an audit entry for the group. The reason of the
+entry names the new value: `the identity provider may add members: off` for a
+closed group, and `the identity provider may add members: on` for an open one.
+A call that names the current value again is not an error.
+
+The server stores the switch. SCIM and the group claims of a sign-in do not
+read it yet, so the identity provider can still add a member to a closed
+group.
 
 ## Manage group members
 
@@ -262,6 +297,28 @@ A member is a principal. The routes are these:
 | `GET /api/server/groups/{id}/members` | `server:read-principals` | `200`, a page ordered by subject |
 | `POST /api/server/groups/{id}/members` | `server:manage-groups`, with a fresh sign-in | `201` with the member |
 | `DELETE /api/server/groups/{id}/members/{principal}` | `server:manage-groups`, with a fresh sign-in | `204` |
+
+An access limit is one forbid policy. A membership change can lift the
+policy for the member, and then it needs a site administrator. The direction
+of the change decides:
+
+- An add of a member to a group that an `unless` clause names can lift the
+  policy for that member.
+- A delete of a member from a group that a `when` clause or the principal
+  scope names can lift the policy for that member.
+
+The delete of a group deletes all its members, so it counts as a delete of
+each member. A rename moves the members from the old name to the new name,
+so it can lift a policy that names either name. A rename runs the grants
+check of the group too, so the caller must hold every action that the grants
+of the group give. A caller who holds only
+`server:manage-groups` gets `403` for a change that can lift a policy. A
+change that can only add a policy, and a group that no access limit names,
+keep the `server:manage-groups` check. When the server cannot read the group
+or the limits, or a limit does not parse, only a site administrator can make
+the change. The refusal names the limit, its scope and the group. The refusal
+of a limit of a namespace that the caller cannot read does not name the
+limit, but it shows that some access limit names the group.
 
 Add a member:
 
@@ -278,8 +335,57 @@ Add a member in the console. The add needs a fresh sign-in. The body holds the p
 | The group or the principal does not exist | `404` | `principal.not-found` |
 | The group is managed by a directory | `409` | `principal.managed-by-directory` |
 
+A membership gives the grants of the group. A group that holds a delegation
+role, such as `token-manager`, on a service principal gives each member the
+right to act as that principal. The add needs a caller that holds the reach of
+that principal. Otherwise the answer is `403`. See
+[Access tokens](access-tokens.md) for the reach.
+
 A group that a directory manages does not take membership changes from this
 API. Change the membership in the directory.
+
+## The mass removal alert
+
+The server counts the memberships that one source ends or suspends in a
+rolling window. The count is for each source and for each group.
+
+The server alerts the administrators when one source crosses a limit in the
+window:
+
+- the number of memberships that it ended or suspended:
+  `principal.removalAlertCount`, 1 to 10000, default 10,
+- the percent of the members of one group that it ended or suspended:
+  `principal.removalAlertPercent`, 1 to 100, default 20.
+
+`principal.removalAlertWindow` holds the window (1 minute to 24 hours, default
+15 minutes), as a duration, for example `15m`. The three settings are
+installation settings, see [The settings
+API](../reference/settings-api.md) for how to read and change them.
+
+A larger count or percent, and a shorter window, reduce security. Such a
+change needs a fresh sign-in.
+
+The alert writes three records:
+
+- a notification of the type `membership.mass-removal` for the administrators,
+- one audit entry with the action `principal:mass-removal-alert` in the scope
+  of the installation,
+- one warning log line.
+
+Each record names the source, the group, the count of members, the percent and
+the window. The server writes one alert for each source in each window, all
+groups included, or a repeat when a write stops after the notification or two
+writes race. The limits count the removals of each source on its own, so
+removals that are spread across providers do not add up. A marker with a time
+after the removal counts as no marker, and the server writes an audit entry
+with the code `principal.removal-alert-marker-invalid`.
+
+When the alert cannot be written, the sign-in goes on, the server writes an
+ERROR log line and an audit entry of the failed alert, and it tries the alert
+again at the next removal of the source.
+
+The server refuses a sign-in when it cannot store the membership changes of
+its group claims. No session starts then.
 
 ## Errors on these routes
 

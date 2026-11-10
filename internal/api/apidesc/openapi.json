@@ -1320,6 +1320,8 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-group-reach",
+          "gate.limit-membership",
           "gate.limited",
           "gate.not-found",
           "gate.rule-failed",
@@ -1443,6 +1445,9 @@
           "principal.managed-by-directory",
           "principal.not-disabled",
           "principal.not-found",
+          "principal.removal-alert-failed",
+          "principal.removal-alert-marker-invalid",
+          "principal.removal-alert-unrecorded",
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
@@ -1521,7 +1526,9 @@
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
+          "sign-in.failed",
           "sign-in.refused",
+          "sign-in.unavailable",
           "sink.access-token",
           "sink.conflict",
           "sink.delivery-not-found",
@@ -1572,6 +1579,7 @@
           "token.invalid",
           "token.kind-has-none",
           "token.not-found",
+          "token.outside-reach",
           "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",
@@ -2919,6 +2927,10 @@
       },
       "ListJobsResponse": {
         "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
           "jobs": {
             "items": {
               "$ref": "#/components/schemas/Job"
@@ -2930,6 +2942,7 @@
           }
         },
         "required": [
+          "damaged",
           "jobs"
         ],
         "type": "object"
@@ -5305,7 +5318,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"
@@ -17572,6 +17590,51 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/sign-in/providers/{provider}/password": {
+      "post": {
+        "operationId": "signInWithProviderPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "sign-in"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -17785,6 +17848,9 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "sign-in"
     },
     {
       "name": "source-filter"

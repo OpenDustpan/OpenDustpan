@@ -114,6 +114,7 @@ func newSpyHarness(
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		},
 		Records:  spy,
 		ItemKeys: keys,
@@ -400,6 +401,7 @@ func TestRecorderAppendLogRoundTrips(t *testing.T) {
 		Harness: jobtest.Harness{
 			Jobs: &countingJobs{Store: db, reads: reads}, Durable: db.durable, Freezes: db,
 			Claimer: job.NewClaimer(db, db.durable, db, jobtest.NoGates{}), Namespaces: db, Domain: db,
+			WriteState: nil,
 		},
 		Records: records, ItemKeys: keys, Blobs: inner, Wrapper: nil,
 	})

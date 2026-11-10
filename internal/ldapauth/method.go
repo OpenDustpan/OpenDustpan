@@ -2,7 +2,9 @@ package ldapauth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -191,6 +193,15 @@ func (m *Method) signIn(ctx context.Context, c session.Credentials, gate session
 	defer done()
 
 	entry, userDN, err := m.findUser(ctx, conn, c.UserName)
+	if errors.Is(err, errNoEntry) {
+		// An unknown user name costs the same round trips as a wrong password:
+		// a failed bind follows the search. So the time of the answer does not
+		// tell that a user exists.
+		m.dummyBind(ctx, conn)
+
+		return none, errRefused
+	}
+
 	if err != nil {
 		return none, err
 	}
@@ -311,7 +322,7 @@ func (m *Method) findUser(ctx context.Context, conn *ldap.Conn, userName string)
 		return nil, "", fmt.Errorf("%w: the user search answered only a referral, which the method never follows",
 			session.ErrMethodAnswer)
 	case len(res.Entries) == 0:
-		return nil, "", errRefused
+		return nil, "", errNoEntry
 	case len(res.Entries) > 1:
 		return nil, "", fmt.Errorf("%w: the user search found more than one user", session.ErrMethodAnswer)
 	}
@@ -391,6 +402,40 @@ func (m *Method) checkDisabled(e *ldap.Entry) error {
 
 	return nil
 }
+
+// errNoEntry reports a user search that found no entry. signIn answers it
+// with errRefused, the error of a wrong password.
+var errNoEntry = fmt.Errorf("%w: the user search found no entry", session.ErrMethodRejected)
+
+// dummyEntry is the RDN value of the entry of a dummy bind, below the base DN.
+// No directory holds it: its value has a random part on each call.
+const dummyEntry = "opendustpan-no-such-user-"
+
+// dummyBind sends one bind that fails, as the bind of a wrong password does,
+// for a user name that the search did not find. It binds as an entry below the
+// base DN that does not exist, with a random password, never the password
+// that the person typed. Its result is not used: the caller answers
+// errRefused whatever the directory answers, also when the directory accepts
+// the bind.
+func (m *Method) dummyBind(ctx context.Context, conn *ldap.Conn) {
+	random := make([]byte, dummyRandomBytes)
+	if _, err := rand.Read(random); err != nil {
+		m.logDetail(ctx, "random of the dummy bind", err)
+
+		return
+	}
+
+	// The first half names the entry, and the second half is the password.
+	value := hex.EncodeToString(random)
+	dn := "cn=" + EscapeDNValue(dummyEntry+value[:dummyRandomBytes]) + "," + m.baseDNText
+
+	if err := conn.Bind(dn, value[dummyRandomBytes:]); err != nil && network(err) {
+		m.logDetail(ctx, "dummy bind", err)
+	}
+}
+
+// dummyRandomBytes is the count of random bytes of a dummy bind.
+const dummyRandomBytes = 16
 
 // bindUser binds as the user of dn with the password.
 func (m *Method) bindUser(ctx context.Context, conn *ldap.Conn, dn string, password session.Password) error {

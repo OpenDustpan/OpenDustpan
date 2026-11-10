@@ -212,7 +212,7 @@ func driftActor() job.Actor {
 	return job.Actor{
 		Principal: identity.Principal{
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "",
-			Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindPerson, Credential: "",
+			Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "",
 			JobID: "",
 		},
 		Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{},
@@ -255,11 +255,16 @@ func seedUnit(t *testing.T, st checkerStore, ns namespace.Namespace, tool, name 
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: ns.CreatedAt, UpdatedAt: ns.CreatedAt,
+		CreatedAt:   ns.CreatedAt,
+		UpdatedAt:   ns.CreatedAt,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: ns.Name, Name: wsName},
-		NamespaceID: ns.ID, Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: wsName},
+		NamespaceID: ns.ID,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:    1,
+		Origin:      identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if createErr := st.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace %q: %v", name, createErr)

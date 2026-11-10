@@ -97,14 +97,17 @@ type Denial struct {
 	Object identity.Object
 	// Reason says why, in a short sentence.
 	Reason string
+	// ReasonWithin returns the reason inside limit bytes, when the reason has
+	// a part that can get shorter without losing its meaning. A reach reason
+	// uses it, so that the route and the count of suppressed refusals stay and
+	// only the list of actions gets shorter. Nil keeps Reason unchanged apart
+	// from the cut.
+	ReasonWithin func(limit int) string
 	// Window is the window of the limiter for this refusal. Zero means the
 	// window of the limiter of the Recorder. A caller uses one window for each
 	// action and object kind.
 	Window time.Duration
 }
-
-// maxReasonPartBytes bounds the reason text that a caller gives.
-const maxReasonPartBytes = 100
 
 // WithLimiter sets the limiter and returns r. The default is a limiter with
 // the default bounds of package denylimit. A nil limiter keeps the default.
@@ -178,7 +181,7 @@ func (r *Recorder) Authorize(
 		reason = ReasonPolicy
 	}
 
-	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason, Window: 0})
+	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0})
 
 	return err
 }
@@ -235,7 +238,7 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 	}
 
 	entry := deniedEntry(ctx, req, p, d, scope)
-	entry.Reason = reasonOf(req, d.Reason, decision.Suppressed)
+	entry.Reason = reasonOf(req, d, decision.Suppressed)
 
 	r.writeTarget(ctx, target, entry)
 }
@@ -423,19 +426,30 @@ func objectKind(obj identity.Object) string {
 }
 
 // reasonOf returns the reason text: the cleaned reason and route, and the
-// number of refusals that the limiter held back before this entry.
-func reasonOf(req *http.Request, reason string, suppressed int) string {
-	text := Clean(reason, maxReasonPartBytes)
+// number of refusals that the limiter held back before this entry. The route
+// and the count come first in the budget, so a long reason gets shorter and
+// they stay.
+func reasonOf(req *http.Request, d Denial, suppressed int) string {
+	tail := ""
 
 	if route := routeOf(req); route != "" {
-		text += " on " + route
+		tail += " on " + route
 	}
 
 	if suppressed > 0 {
-		text += fmt.Sprintf("; %d further refusals since the last entry", suppressed)
+		tail += fmt.Sprintf("; %d further refusals since the last entry", suppressed)
 	}
 
-	return Clean(text, audit.MaxReasonLen)
+	limit := max(0, audit.MaxReasonLen-len(tail))
+
+	var reason string
+	if d.ReasonWithin != nil {
+		reason = Clean(d.ReasonWithin(limit), limit)
+	} else {
+		reason = Clean(d.Reason, limit)
+	}
+
+	return Clean(reason+tail, audit.MaxReasonLen)
 }
 
 // routeOf returns the route of req: the matched pattern when the mux set one,

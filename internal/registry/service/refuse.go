@@ -32,6 +32,10 @@ func refusalReason(err error) (string, bool) {
 		return "version-exists", true
 	case errors.Is(err, errReleaseRefused):
 		return "release", true
+	case errors.Is(err, ErrIntegrity):
+		return "integrity", true
+	case errors.Is(err, ErrNoKeys):
+		return "no-signing-key", true
 	}
 
 	return "", false
@@ -43,7 +47,8 @@ func refusalReason(err error) (string, bool) {
 // publish: a refused publish stores no release and no content blob.
 //
 // An error that names no reason class is returned unchanged. Request-field,
-// not-staged, no-keys, integrity and store errors stay unrecorded.
+// not-staged and store errors stay unrecorded. Integrity and no-keys refusals
+// are recorded.
 //
 // The publish stays refused when the append fails: the release is not stored,
 // so the refusal is the answer. The answer carries the refusal text only, never
