@@ -609,21 +609,13 @@ func (s *Store) RenameStack(
 	}
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
+		stackID, err := refuseRename(ctx, q, oldRef, newName)
+		if err != nil {
 			return err
 		}
 
-		before, err := q.GetStack(ctx, db.GetStackParams{
-			Namespace: oldRef.Namespace.String(),
-			Project:   oldRef.Project.String(),
-			Name:      oldRef.Stack.String(),
-		})
-		if err != nil {
-			return fmt.Errorf("read stack: %w", err)
-		}
-
-		oldName := before.Name
-		e.ObjectID = before.ID
+		oldName := oldRef.Stack.String()
+		e.ObjectID = stackID
 		e.Changes = []audit.Change{{
 			Key: stackNameChangeKey, Old: &oldName, New: newName.String(), Layer: "", TakesEffect: "",
 		}}
@@ -670,25 +662,30 @@ func (s *Store) RenameStack(
 // ErrAlreadyExists when newName names a stack of the same project. A running
 // update addresses the stack by its name. A rename under it would leave the
 // update with a name that no stack has: its checkpoint saves would fail and
-// the stack would stay locked by the update.
-func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+// the stack would stay locked by the update. On success it returns the stable
+// ID of the stack.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) (string, error) {
 	// The stack lock serializes this check with StartUpdate. Without it, a
 	// start could commit between the count and the rename, and the update
 	// would run under a name that no stack has.
 	locked, err := lockStack(ctx, q, oldRef)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
-		return stack.ErrNotFound
+		return "", stack.ErrNotFound
 	}
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if runErr := refuseRunningStack(ctx, q, locked.ID); runErr != nil {
-		return runErr
+		return "", runErr
 	}
 
-	return rejectTakenName(ctx, q, oldRef, newName)
+	if takenErr := rejectTakenName(ctx, q, oldRef, newName); takenErr != nil {
+		return "", takenErr
+	}
+
+	return locked.ID, nil
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
