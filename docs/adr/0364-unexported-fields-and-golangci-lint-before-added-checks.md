@@ -1,6 +1,6 @@
 # 364. Unexported fields and golangci-lint before added checks (owner)
 
-Status: accepted · 2026-11-10. Records one decision of the project owner of 10 November 2026, in the owner's words
+Status: accepted · 2026-11-10. Records two decisions of the project owner of 10 November 2026, in the owner's words
 
 Changes:
 
@@ -26,8 +26,22 @@ On 8 November 2026 the owner asked the project to stop bug classes that came bac
 
    The guard against a bug class is Go visibility first. Fields are unexported, so that only a constructor can make a value, and the constructor checks the invariants of the value. Rules that visibility cannot express go into the existing golangci-lint configuration (for example `forbidigo`, `depguard` and `exhaustruct`). This decision adds no custom analyzer and no new tool.
 
+2. **The tactical core of domain-driven design (owner, 2026-11-10).** The implementation lead proposed to take the tactical core of domain-driven design and not the full method. The owner answered:
+
+   ```text
+   "Agreed"
+   ```
+
+   The proposal that the owner agreed to has these points:
+   - A domain type such as a group, a principal or a job is an aggregate with private state. It changes only through its own methods, which enforce its invariants. No code outside its package makes or changes it field by field. This is decision 1 applied to the domain.
+   - IDs, names, versions and cursors are value objects: small types that code cannot make in a state that is not valid. The stable IDs of ADR 362 become types, not strings.
+   - Domain events stay where they exist today: the audit log and the inventory projection. Each event is written in the same transaction as its write.
+   - Event sourcing, CQRS, generic repositories and layers for their own sake are out.
+   - Each design names the aggregate that it protects and the invariants of that aggregate.
+
 ## Consequences
 
+- Other parts of domain-driven design are in place already. They are the glossary, the separate tool models (ADR 12 and ADR 13), the ports and adapters, and the sentinel errors.
 - Each exported name is an API, also between packages under `internal/`. A design names its exported surface and keeps all other names unexported.
 - Each OpenSpec design names the unexported type or field that makes its bug class impossible, and the golangci-lint setting for what remains. It also says how a rewrite of many call sites is done: `go fix` with `//go:fix inline`, gopls, `eg` or a script first, then a model for the rest.
 - A rule from this ADR that golangci-lint cannot express is a finding for the owner, not a reason to add a tool.
