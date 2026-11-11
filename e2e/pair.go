@@ -64,6 +64,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:                    rec,
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 	})
@@ -85,6 +86,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:                    rec,
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 	})

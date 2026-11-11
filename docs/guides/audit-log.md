@@ -799,10 +799,10 @@ The full entry stays in the server audit log, and the chain check on the server 
 ### Webhook
 
 The URL must use HTTPS.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
-If you can, block the metadata endpoints in your network.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 Set the signing key in `DUSTPAN_AUDIT_WEBHOOK_SECRET`, or in a file that `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` names.
 Only the owner of the file can read it.
 Each request carries two headers:
@@ -822,9 +822,10 @@ The URL is the base address of the receiver, for example `otlp:https://collector
 The server adds the path `/v1/logs`, unless the path of the URL already ends with it.
 A query in the URL stays.
 The URL must use HTTPS and must not hold a user name or a password.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 
 Each request is one `ExportLogsServiceRequest` with the header `Content-Type: application/json`.
 It holds one resource with the attribute `service.name` set to `opendustpan`, and one log record for each entry:
