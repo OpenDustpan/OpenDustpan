@@ -68,7 +68,7 @@ func newSettingsEnvWith(
 	}
 
 	handler, err := newCheckedHandler(t, settingsConfig(
-		st, namespaces, selectiveAuthorizer{deny: denied},
+		t, st, namespaces, selectiveAuthorizer{deny: denied},
 		setting.NewService(st.SettingStore(), reg, static, st, nil),
 	))
 	if err != nil {
@@ -81,9 +81,11 @@ func newSettingsEnvWith(
 // settingsConfig returns the handler config of the settings tests: no
 // console sign-in, the audit log of st and the service svc.
 func settingsConfig(
-	st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
+	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
 ) *apiserver.Config {
+	t.Helper()
 	return &apiserver.Config{
+		Cursors:     testCursors(t),
 		Reach:       noReach(),
 		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
@@ -536,7 +538,7 @@ func newSettingsEnvOn(t *testing.T, st *sqlite.Store, static setting.Static) set
 	}
 
 	handler, err := newCheckedHandler(t, settingsConfig(
-		st, namespaces, allowAll{},
+		t, st, namespaces, allowAll{},
 		setting.NewService(st.SettingStore(), settingtest.Registry(), static, st, nil),
 	))
 	if err != nil {
@@ -646,7 +648,7 @@ func TestSettingsWithoutAStoreAnswers501(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, settingsConfig(st, namespaces, allowAll{}, nil))
+	handler, err := newCheckedHandler(t, settingsConfig(t, st, namespaces, allowAll{}, nil))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

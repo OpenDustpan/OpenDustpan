@@ -28,7 +28,7 @@ func newBoundsSettingsEnv(t *testing.T) settingsEnv {
 	}
 
 	handler, err := newCheckedHandler(t, settingsConfig(
-		st, namespaces, allowAll{}, setting.NewService(st.SettingStore(), registry, nil, st, nil),
+		t, st, namespaces, allowAll{}, setting.NewService(st.SettingStore(), registry, nil, st, nil),
 	))
 	if err != nil {
 		t.Fatalf("handler: %v", err)

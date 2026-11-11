@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +15,8 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -53,16 +56,16 @@ func createListNamespaces(t *testing.T, f accessFixture, names []string) {
 	}
 }
 
-// grantViewerOn gives the principal with ID principalID the viewer role on
-// the namespace ns, directly in the store.
-func grantViewerOn(t *testing.T, f accessFixture, principalID, ns, grantID string) {
+// grantViewerOn gives bob the viewer role on the namespace ns, directly in
+// the store.
+func grantViewerOn(t *testing.T, f accessFixture, ns, grantID string) {
 	t.Helper()
 
 	obj := identity.NamespaceObject(namespace.Name(ns))
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	grt := access.Grant{
 		CreatedAt: at, Condition: nil, Object: obj, ID: grantID, Role: access.RoleViewer, CreatedBy: "admin",
-		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: principalID},
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:"+grantID)
@@ -241,8 +244,8 @@ func TestNamespaceListSeesOnlyGranted(t *testing.T) {
 
 	f := newAccessFixture(t)
 	createListNamespaces(t, f, []string{"bravo", "charlie", "delta", "echo"})
-	grantViewerOn(t, f, "prn-bob", "bravo", "grt-list-bravo")
-	grantViewerOn(t, f, "prn-bob", "delta", "grt-list-delta")
+	grantViewerOn(t, f, "bravo", "grt-list-bravo")
+	grantViewerOn(t, f, "delta", "grt-list-delta")
 
 	var got []string
 
@@ -384,6 +387,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -483,25 +487,161 @@ func TestNamespaceListWithoutAccessReader(t *testing.T) {
 	}
 }
 
+// namespaceCursorToken is the wire form of a namespace list cursor in a test.
+type namespaceCursorToken struct {
+	After       string `json:"a"`
+	Fingerprint string `json:"f"`
+}
+
+// decodeNamespaceCursorToken decodes a token that a list answered.
+func decodeNamespaceCursorToken(t *testing.T, token string) namespaceCursorToken {
+	t.Helper()
+
+	var wire namespaceCursorToken
+	if err := pagetoken.Decode(token, &wire); err != nil {
+		t.Fatalf("decode cursor %q: %v", token, err)
+	}
+
+	return wire
+}
+
+// encodeNamespaceCursorToken encodes a wire cursor for a request.
+func encodeNamespaceCursorToken(t *testing.T, wire namespaceCursorToken) string {
+	t.Helper()
+
+	token, err := pagetoken.Encode(wire)
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+
+	return token
+}
+
+// checkCursorRefusal sends path as subject and proves that it answers 400
+// with the code of an invalid page token.
+func checkCursorRefusal(t *testing.T, f accessFixture, subject, path string) {
+	t.Helper()
+
+	var failure struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	f.as(t, subject, apiCall{method: http.MethodGet, path: path, body: "", want: http.StatusBadRequest}, &failure)
+
+	if failure.ErrorCode != errcode.RequestPageTokenInvalid {
+		t.Fatalf("%s answers errorCode %q, want %q", path, failure.ErrorCode, errcode.RequestPageTokenInvalid)
+	}
+}
+
+// TestNamespaceListCursorOfAnotherFilterIsRefused proves a cursor of the
+// administrator query answers 400 for a caller with one visible namespace.
+func TestNamespaceListCursorOfAnotherFilterIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	createListNamespaces(t, f, []string{"bravo", "charlie", "delta"})
+	grantViewerOn(t, f, "delta", "grt-list-delta")
+
+	first := listAs(t, f, "admin", "/api/server/namespaces?limit=2")
+	if first.NextCursor == "" {
+		t.Fatal("the administrator page has no next cursor, want one")
+	}
+
+	path := "/api/server/namespaces?cursor=" + url.QueryEscape(first.NextCursor)
+	checkCursorRefusal(t, f, "bob", path)
+}
+
+// TestNamespaceListCursorWithoutSealIsRefused proves the server refuses a
+// wire token with a valid fingerprint that it did not seal.
+func TestNamespaceListCursorWithoutSealIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	createListNamespaces(t, f, []string{"bravo", "charlie", "delta"})
+
+	first := listAs(t, f, "admin", "/api/server/namespaces?limit=2")
+	if first.NextCursor == "" {
+		t.Fatal("the administrator page has no next cursor, want one")
+	}
+
+	wire := namespaceCursorToken{
+		After:       base64.RawURLEncoding.EncodeToString([]byte("bravo")),
+		Fingerprint: decodeNamespaceCursorToken(t, first.NextCursor).Fingerprint,
+	}
+	path := "/api/server/namespaces?cursor=" + url.QueryEscape(encodeNamespaceCursorToken(t, wire))
+
+	checkCursorRefusal(t, f, "admin", path)
+}
+
 // TestNamespaceListBadQuery proves a bad cursor and a bad limit answer 400.
 func TestNamespaceListBadQuery(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
+	createListNamespaces(t, f, []string{"bravo", "charlie", "delta"})
 
-	badCursor := base64.RawURLEncoding.EncodeToString([]byte("bad/name"))
-	longCursor := strings.Repeat("A", 513)
+	first := listAs(t, f, "admin", "/api/server/namespaces?limit=2")
+	if first.NextCursor == "" {
+		t.Fatal("the first page has no next cursor, want one")
+	}
+
+	valid := decodeNamespaceCursorToken(t, first.NextCursor)
+
+	changed := []byte(first.NextCursor)
+	if changed[len(changed)-1] == 'A' {
+		changed[len(changed)-1] = 'B'
+	} else {
+		changed[len(changed)-1] = 'A'
+	}
+
+	unknownField := `{"a":"` + valid.After + `","f":"` + valid.Fingerprint + `","x":1}`
 
 	for _, path := range []string{
 		"/api/server/namespaces?limit=0",
 		"/api/server/namespaces?limit=-1",
 		"/api/server/namespaces?limit=abc",
 		"/api/server/namespaces?limit=1001",
-		"/api/server/namespaces?cursor=!!!",
-		"/api/server/namespaces?cursor=" + badCursor,
-		"/api/server/namespaces?cursor=" + longCursor,
 	} {
 		f.as(t, "bob", apiCall{method: http.MethodGet, path: path, body: "", want: http.StatusBadRequest}, nil)
+	}
+
+	for _, token := range []string{
+		"!!!",
+		base64.RawURLEncoding.EncodeToString([]byte("not json")),
+		base64.RawURLEncoding.EncodeToString([]byte(unknownField)),
+		encodeNamespaceCursorToken(t, namespaceCursorToken{After: "", Fingerprint: valid.Fingerprint}),
+		encodeNamespaceCursorToken(t, namespaceCursorToken{
+			After:       base64.RawURLEncoding.EncodeToString([]byte("bad/name")),
+			Fingerprint: valid.Fingerprint,
+		}),
+		string(changed),
+		strings.Repeat("A", pagetoken.MaxLen+1),
+	} {
+		checkCursorRefusal(t, f, "admin", "/api/server/namespaces?cursor="+url.QueryEscape(token))
+	}
+}
+
+// TestNamespaceListCursorWithAnotherLimitIsAccepted proves the page size is
+// not part of the binding of a cursor.
+func TestNamespaceListCursorWithAnotherLimitIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	createListNamespaces(t, f, []string{"bravo", "charlie", "delta"})
+	grantViewerOn(t, f, "bravo", "grt-list-bravo")
+	grantViewerOn(t, f, "charlie", "grt-list-charlie")
+	grantViewerOn(t, f, "delta", "grt-list-delta")
+
+	first := listAs(t, f, "bob", "/api/server/namespaces?limit=1")
+	if first.NextCursor == "" {
+		t.Fatal("the first page has no next cursor, want one")
+	}
+
+	path := "/api/server/namespaces?limit=2&cursor=" + url.QueryEscape(first.NextCursor)
+	second := listAs(t, f, "bob", path)
+
+	if !slices.Equal(listNames(second), []string{"charlie", "delta"}) {
+		t.Fatalf("second page = %v, want [charlie delta]", listNames(second))
 	}
 }
 
@@ -511,6 +651,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,

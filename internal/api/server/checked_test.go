@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // testHandler is the handler of the adapter with the check of the success
@@ -30,4 +31,16 @@ func newCheckedHandler(t *testing.T, cfg *apiserver.Config) (testHandler, error)
 	}
 
 	return testHandler{Handler: h, served: apidesctest.CheckStatus(t, h)}, nil
+}
+
+// testCursors returns the wrapper that seals the cursor of a page in a test.
+func testCursors(t *testing.T) *secret.BuiltinWrapper {
+	t.Helper()
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("cursor wrapper: %v", err)
+	}
+
+	return wrapper
 }

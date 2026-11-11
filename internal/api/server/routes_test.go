@@ -347,6 +347,7 @@ func newServiceBackedHandlerOf(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Workers:          nil,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -1643,6 +1644,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1818,6 +1820,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1867,6 +1870,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
