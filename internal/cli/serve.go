@@ -55,6 +55,7 @@ func ServeFlags() []*Setting {
 		"plan-retention",
 		"job-log-retention",
 		"audit-sink",
+		"audit-sink-allowed-ranges",
 		"destination-ports",
 		"oidc-issuer",
 		"oidc-provider",

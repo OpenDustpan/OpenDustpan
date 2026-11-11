@@ -44,16 +44,18 @@ type auditSinkList struct {
 
 // TestAuditSinks proves the audit sinks. The file subtest starts an
 // in-process server with a file sink, writes one audited change and reads
-// the sink list: one sink is listed and its lag is a number. The other
-// subtests run on the server binary, on each store, with a syslog sink over
-// TLS, a signed webhook sink and an OTLP sink at once. A receiver in the test
-// process reads each sink on the wire, and the entries it holds match the
-// audit export by scope and sequence.
+// the sink list: one sink is listed and its lag is a number. The receivers
+// subtest runs on the in-process server, on each store, with a syslog sink
+// over TLS, a signed webhook sink and an OTLP sink at once. A receiver in the
+// test process reads each sink on the wire, and the entries it holds match the
+// audit export by scope and sequence. The binary subtest proves that a
+// loopback sink URL fails the start.
 func TestAuditSinks(t *testing.T) {
 	t.Parallel()
 
 	t.Run("file", testFileSink)
 	t.Run("receivers", testSinkReceivers)
+	t.Run("loopback refused", testSinkLoopbackRefused)
 }
 
 // testFileSink checks the sink list of an in-process server with one file
@@ -258,14 +260,14 @@ func sinkScopes() []string {
 	return []string{"orbit", "delta"}
 }
 
-// testSinkReceivers restarts the server binary with the three sinks set,
+// testSinkReceivers starts an in-process server with the three sinks set,
 // writes audited changes, and compares what each receiver read with the audit
 // export.
 func testSinkReceivers(t *testing.T) {
 	t.Parallel()
 
-	if !e2e.UseBinaryServer() {
-		t.Skip("needs E2E_SERVER=binary: the audit sink flags belong to the server binary")
+	if e2e.UseBinaryServer() {
+		t.Skip("needs the in-process server: a loopback receiver needs the test rules of the sink client")
 	}
 
 	databases, err := e2e.Databases()
@@ -286,6 +288,60 @@ func testSinkReceivers(t *testing.T) {
 	}
 }
 
+// testSinkLoopbackRefused proves that a webhook sink URL on the loopback
+// fails the start of the server binary and that the error names the item.
+func testSinkLoopbackRefused(t *testing.T) {
+	t.Parallel()
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary: the audit sink flag belongs to the server binary")
+	}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+
+			runSinkLoopbackRefused(t, db)
+		})
+	}
+}
+
+// runSinkLoopbackRefused proves the refusal on one store.
+func runSinkLoopbackRefused(t *testing.T, db e2e.Store) {
+	t.Helper()
+
+	if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+
+	env := e2e.NewEnv(ctx, t, e2e.NoCLI(), db)
+	if env.HAEnabled() {
+		t.Skip("needs one server: the refusal proves the start of one process")
+	}
+
+	env.StopServer(ctx, t)
+	env.SetAuditSinks(t, e2e.AuditSinkSettings{
+		Items: []string{"webhook=webhook:https://127.0.0.1:4318/hook"},
+		Env:   []string{"DUSTPAN_AUDIT_WEBHOOK_SECRET=" + strings.Repeat("0", 64)},
+	})
+
+	code, out := env.StartServerExpectingRefusal(ctx, t, env.DatabaseURL(t))
+	if code == 0 {
+		t.Fatalf("serve with a loopback webhook sink exits with status 0, want a refusal\n%s", out)
+	}
+
+	if !strings.Contains(out, "--audit-sink") || !strings.Contains(out, "webhook") {
+		t.Fatalf("serve error does not name the sink item:\n%s", out)
+	}
+}
+
 // runSinkScenario runs the scenario on one store and then the subtests, one
 // for each receiver.
 func runSinkScenario(t *testing.T, db e2e.Store) {
@@ -293,15 +349,8 @@ func runSinkScenario(t *testing.T, db e2e.Store) {
 
 	ctx := t.Context()
 
-	// The scenario calls the API only, so it needs no installed CLI.
-	var cli e2e.Install
-
-	env := e2e.NewEnv(ctx, t, cli, db)
 	receivers := e2e.NewAuditReceivers(t)
-
-	env.StopServer(ctx, t)
-	env.SetAuditSinks(t, receivers.Settings())
-	env.StartServer(ctx, t)
+	env := e2e.NewEnvWithAuditSinks(ctx, t, db, receivers.Sinks(t)...)
 
 	for _, name := range sinkScopes() {
 		env.CreateNamespace(ctx, t, name)
