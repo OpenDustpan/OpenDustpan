@@ -348,29 +348,29 @@ func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 	tofu := e2e.OpenTofu()
 	pulumi := e2e.Pulumi()
 
+	// The label is read inside each subtest, after t.Setenv: the version
+	// setting of the run (for example E2E_TOFU_VERSIONS=latest in the nightly
+	// matrix) must not choose the label of this test.
 	cases := []struct {
 		name      string
 		tool      e2e.Tool
 		env       string
 		versions  string
-		label     string
-		checksums string
+		checksums func(label string) string
 	}{
 		{
 			name:      "opentofu default",
 			tool:      tofu,
 			env:       "E2E_TOFU_VERSIONS",
 			versions:  "",
-			label:     tofu.Single(),
-			checksums: "tofu_" + tofu.Single() + "_SHA256SUMS",
+			checksums: func(label string) string { return "tofu_" + label + "_SHA256SUMS" },
 		},
 		{
 			name:      "pulumi journal version",
 			tool:      pulumi,
 			env:       "E2E_PULUMI_VERSIONS",
 			versions:  "3.268.0",
-			label:     "3.268.0",
-			checksums: "pulumi-3.268.0-checksums.txt",
+			checksums: func(label string) string { return "pulumi-" + label + "-checksums.txt" },
 		},
 	}
 
@@ -378,7 +378,12 @@ func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(tc.env, tc.versions)
 
-			checkPinnedFailsClosed(t, tc.tool, tc.label, tc.checksums)
+			label := tc.tool.Single()
+			if label == "" || label == e2e.Latest {
+				t.Fatalf("label = %q, want a pinned version", label)
+			}
+
+			checkPinnedFailsClosed(t, tc.tool, label, tc.checksums(label))
 		})
 	}
 }

@@ -37,11 +37,19 @@ func seedStagedJobRow(t *testing.T, s *Store) job.ID {
 	}
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: workspace.ID("ws-1"),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: "network"},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID("ws-1"),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: "network"},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -63,7 +71,7 @@ func seedStagedJobRow(t *testing.T, s *Store) job.ID {
 		ID: stagedJobID, State: job.StateQueued, Wait: job.WaitNone, Reason: "", Current: 0,
 		StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil,
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
-		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
+		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{}, NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},

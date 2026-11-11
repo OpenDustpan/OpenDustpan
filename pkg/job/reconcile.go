@@ -579,7 +579,7 @@ func (run *reconcileRun) afterRefusedDispatch(ctx context.Context, j *Job, err e
 		// again with no end.
 		return false, run.failNoPlan(ctx, j)
 	case errors.Is(err, ErrPlanStale):
-		return false, run.replan(ctx, j)
+		return false, run.replan(ctx, j, err)
 	default:
 		run.fail(j, string(EventDispatch), err)
 
@@ -618,8 +618,10 @@ func (run *reconcileRun) failNoPlan(ctx context.Context, j *Job) error {
 	return nil
 }
 
-// replan applies EventReplan to the queued job j whose plan is stale.
-func (run *reconcileRun) replan(ctx context.Context, j *Job) error {
+// replan applies EventReplan to the queued job j whose plan is stale. stale is
+// the error of the refused dispatch: it names the state version that the plan
+// read and the current one, so the reason of the replan holds both.
+func (run *reconcileRun) replan(ctx context.Context, j *Job, stale error) error {
 	action, err := reconcileAction(j)
 	if err != nil {
 		run.fail(j, "replan", err)
@@ -627,11 +629,13 @@ func (run *reconcileRun) replan(ctx context.Context, j *Job) error {
 		return nil
 	}
 
+	reason := stale.Error()
+
 	changed, err := run.apply(ctx, j, &Change{
-		Job: j.ID, Version: j.Version, Event: EventReplan, Wait: WaitNone, Reason: "", Dispatch: nil,
+		Job: j.ID, Version: j.Version, Event: EventReplan, Wait: WaitNone, Reason: reason, Dispatch: nil,
 		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,
 		End: nil,
-	}, action, "the plan is stale: the job plans again")
+	}, action, reason)
 	if err != nil {
 		return err
 	}

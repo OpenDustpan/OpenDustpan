@@ -1287,7 +1287,8 @@ CREATE TABLE state_versions (
     sealed boolean DEFAULT false NOT NULL,
     sensitive_marks bytea,
     fenced_by text DEFAULT ''::text NOT NULL,
-    unlocked_write boolean DEFAULT false NOT NULL
+    unlocked_write boolean DEFAULT false NOT NULL,
+    origin_job text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE temp_admins (
@@ -1344,15 +1345,6 @@ CREATE TABLE unit_defaults (
     CONSTRAINT unit_defaults_version_check CHECK ((version >= 1))
 );
 
-CREATE TABLE unit_final_versions (
-    unit_id text NOT NULL,
-    namespace_id text NOT NULL,
-    version_id text NOT NULL,
-    commit_id text NOT NULL,
-    job_id text NOT NULL,
-    at_ms bigint NOT NULL
-);
-
 CREATE TABLE unit_settings (
     unit_id text NOT NULL,
     namespace_id text NOT NULL,
@@ -1362,11 +1354,14 @@ CREATE TABLE unit_settings (
     CONSTRAINT unit_settings_version_check CHECK ((version >= 1))
 );
 
-CREATE TABLE unit_state_versions (
+CREATE TABLE unit_state (
     unit_id text NOT NULL,
     namespace_id text NOT NULL,
-    version_id text NOT NULL,
-    updated_at_ms bigint NOT NULL
+    version_id text NOT NULL DEFAULT '',
+    final_version_id text NOT NULL DEFAULT '',
+    final_commit text NOT NULL DEFAULT '',
+    final_job text NOT NULL DEFAULT '',
+    final_at_ms bigint NOT NULL DEFAULT 0
 );
 
 CREATE TABLE update_events (
@@ -1425,7 +1420,9 @@ CREATE TABLE updates (
     journal_version bigint DEFAULT 0 NOT NULL,
     journal_closed boolean DEFAULT false NOT NULL,
     token_id text DEFAULT ''::text NOT NULL,
-    journal_records_changed boolean DEFAULT false NOT NULL
+    journal_records_changed boolean DEFAULT false NOT NULL,
+    job_id text DEFAULT ''::text NOT NULL,
+    git_head text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE used_tickets (
@@ -1871,14 +1868,11 @@ ALTER TABLE ONLY trust_rules
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_pkey PRIMARY KEY (namespace_id);
 
-ALTER TABLE ONLY unit_final_versions
-    ADD CONSTRAINT unit_final_versions_pkey PRIMARY KEY (unit_id);
-
 ALTER TABLE ONLY unit_settings
     ADD CONSTRAINT unit_settings_pkey PRIMARY KEY (unit_id);
 
-ALTER TABLE ONLY unit_state_versions
-    ADD CONSTRAINT unit_state_versions_pkey PRIMARY KEY (unit_id);
+ALTER TABLE ONLY unit_state
+    ADD CONSTRAINT unit_state_pkey PRIMARY KEY (unit_id);
 
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_pkey PRIMARY KEY (stack_id, update_id, sequence);
@@ -2274,14 +2268,11 @@ ALTER TABLE ONLY trust_rules
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
-ALTER TABLE ONLY unit_final_versions
-    ADD CONSTRAINT unit_final_versions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
-
 ALTER TABLE ONLY unit_settings
     ADD CONSTRAINT unit_settings_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
-ALTER TABLE ONLY unit_state_versions
-    ADD CONSTRAINT unit_state_versions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+ALTER TABLE ONLY unit_state
+    ADD CONSTRAINT unit_state_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;

@@ -137,12 +137,6 @@ func (f *fakeJobs) Apply(context.Context, job.Change, namespace.Fence, []audit.E
 	return job.Job{}, errUnexpected
 }
 
-func (f *fakeJobs) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
-	f.note("ObserveStateVersion")
-
-	return nil, errUnexpected
-}
-
 func (f *fakeJobs) SetVerification(context.Context, job.ID, job.Verification, namespace.Fence, []audit.Entry,
 ) error {
 	f.note("SetVerification")
@@ -362,7 +356,8 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
 
 	return job.Job{
-		ID: id,
+		ID:          id,
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unitOf(t, "acme", testUnit), Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{

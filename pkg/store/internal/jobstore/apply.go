@@ -235,76 +235,66 @@ func settle(next *job.Job, to job.State, c *job.Change, prev int64, updated time
 		next.Wait = c.Wait
 	}
 
-	if to.Terminal() {
+	// A terminal state records why the job ended, and a replan records why the
+	// job plans again while it stays queued.
+	if to.Terminal() || c.Event == job.EventReplan {
 		next.Reason = c.Reason
 	}
 }
 
-// ObserveStateVersion implements job.Store.
-func (s *Store) ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) ([]job.Job,
-	error,
-) {
-	if !v.Unit.IsUnit() || v.Unit.UnitID() == "" || v.Unit.Namespace() != fence.Namespace {
-		return nil, fmt.Errorf("%w: a state version names a unit of the namespace of the fence", job.ErrInvalid)
-	}
-
-	var closed []job.Job
-
-	err := s.run.Write(ctx, fence, func(tx Tx) error {
-		var err error
-
-		closed, err = observeIn(ctx, tx, &v, fence.Namespace, s.logger())
-
-		return err
-	})
+// CloseAwaiting closes the jobs of the unit v.UnitID of the namespace ns that
+// wait for a state version, when the final version v closes them, in the
+// transaction tx, and returns them. A store that publishes a final state
+// version in the transaction of its own write calls it there, so the version
+// and the close of the jobs that wait for it commit together. The caller
+// records v as the last final version of the unit too.
+//
+// The closing record names the unit as the job itself names it: the caller
+// names the unit by its ID only. A nil logger discards.
+func CloseAwaiting(
+	ctx context.Context, tx CloseTx, ns namespace.Name, v FinalVersion, log *slog.Logger,
+) ([]job.Job, error) {
+	rows, err := tx.Awaiting(ctx, ns, v.UnitID)
 	if err != nil {
 		return nil, err
 	}
 
-	return closed, nil
+	return closeRun{tx: tx, ns: ns, log: log}.closeAwaiting(ctx, rows, closeVersion{
+		VersionID: v.VersionID, Commit: v.Commit, Job: v.Job, At: v.At,
+	})
 }
 
-// observeIn closes the jobs that the final state version v closes, and
-// records v as the last final version of its unit. It does nothing for a
-// version that is not final.
-func observeIn(
-	ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Name, log *slog.Logger,
-) ([]job.Job, error) {
-	if !v.Final {
-		return nil, nil
-	}
-
-	rows, err := tx.Awaiting(ctx, ns, v.Unit.UnitID())
-	if err != nil {
-		return nil, err
-	}
-
-	closed, err := closeRun{tx: tx, ns: ns, log: log}.closeAwaiting(ctx, rows, v)
-	if err != nil {
-		return nil, err
-	}
-
-	err = tx.PutFinalVersion(ctx, ns, FinalVersion{
-		UnitID: v.Unit.UnitID(), VersionID: v.VersionID, Commit: v.Commit, Job: v.Job, At: v.At,
-	})
-
-	return closed, err
+// closeVersion is the final state version that closes the jobs that wait for
+// one: its version ID, the job and the commit that its writer reported, and
+// its time.
+type closeVersion struct {
+	VersionID string
+	Commit    string
+	Job       job.ID
+	At        time.Time
 }
 
 // closeRun carries what the close of a state version reads with: the
 // transaction, the namespace of the version, and the logger that records a
 // damaged row.
 type closeRun struct {
-	tx  Tx
+	tx  CloseTx
 	ns  namespace.Name
 	log *slog.Logger
 }
 
-// closeAwaiting closes each job of rows that v closes, and returns them. It
-// refuses a row of another namespace than the run, and it skips a row that
-// does not decode: a damaged job is never closed, and the log records it
-// once.
-func (c closeRun) closeAwaiting(ctx context.Context, rows []Row, v *job.StateVersion) ([]job.Job, error) {
+// closeAwaiting closes each job of rows that the final version v closes, and
+// returns them. It refuses a row of another namespace than the run, and it
+// skips a row that does not decode: a damaged job is never closed, and the
+// log records it once. The closing record names the unit as the job itself
+// names it, so the record stays valid after a rename.
+func (c closeRun) closeAwaiting(ctx context.Context, rows []Row, v closeVersion) ([]job.Job, error) {
+	// The clock is read only when a job waits: a write that publishes a final
+	// version and closes no job pays no extra query.
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
 	now, nowErr := c.tx.Now(ctx)
 	if nowErr != nil {
 		return nil, nowErr
@@ -313,51 +303,83 @@ func (c closeRun) closeAwaiting(ctx context.Context, rows []Row, v *job.StateVer
 	var closed []job.Job
 
 	for i := range rows {
-		// Defense in depth: the query of Awaiting filters by the namespace too;
-		// this check stays so that a Tx that skips that filter cannot close the
-		// job of another namespace.
-		if rows[i].Namespace != c.ns {
-			return nil, job.ErrNotFound
-		}
-
-		j, err := jobOf(&rows[i])
+		j, done, err := c.closeRow(ctx, &rows[i], v, now)
 		if err != nil {
-			if !errors.Is(err, job.ErrDamaged) {
-				return nil, err
-			}
-
-			// A damaged row stays where it is: the close loop cannot read
-			// it, so it never closes it. A person reads the reason and
-			// cancels the job by its ID.
-			c.log.WarnContext(ctx, "close of a state version skipped a damaged job row",
-				slog.String("job", string(rows[i].ID)), slog.String("reason", DamageReason(err)))
-
-			continue
-		}
-
-		if !j.ClosedBy(*v) {
-			continue
-		}
-
-		if err := closeJob(ctx, c.tx, &j, *v); err != nil {
 			return nil, err
 		}
 
-		at := nextUpdateAt(now, j.UpdatedAt)
-
-		prev := j.Version
-		j.Version++
-		// The update time moves; the state change stays on the clock.
-		j.UpdatedAt, j.StateChangedAt = at, now
-
-		if err := update(ctx, c.tx, &j, prev); err != nil {
-			return nil, err
+		if !done {
+			continue
 		}
 
 		closed = append(closed, j)
 	}
 
 	return closed, nil
+}
+
+// closeRow closes the job of the row r that the final version v closes, and
+// returns it with true. It returns false for a row that does not wait for v,
+// and for a row that does not decode: a damaged job is never closed, and the
+// log records it once.
+func (c closeRun) closeRow(ctx context.Context, r *Row, v closeVersion, now time.Time) (job.Job, bool, error) {
+	var none job.Job
+
+	// Defense in depth: the query of Awaiting filters by the namespace too;
+	// this check stays so that a Tx that skips that filter cannot close the
+	// job of another namespace.
+	if r.Namespace != c.ns {
+		return none, false, job.ErrNotFound
+	}
+
+	j, err := jobOf(r)
+	if err != nil {
+		if !errors.Is(err, job.ErrDamaged) {
+			return none, false, err
+		}
+
+		// A damaged row stays where it is: the close loop cannot read
+		// it, so it never closes it. A person reads the reason and
+		// cancels the job by its ID.
+		c.logger().WarnContext(ctx, "close of a state version skipped a damaged job row",
+			slog.String("job", string(r.ID)), slog.String("reason", DamageReason(err)))
+
+		return none, false, nil
+	}
+
+	closing := job.StateVersion{
+		Unit: j.Spec.Unit, VersionID: v.VersionID, Commit: v.Commit, Job: v.Job, At: v.At, Final: true,
+	}
+
+	if !j.ClosedBy(closing) {
+		return none, false, nil
+	}
+
+	if err := closeJob(ctx, c.tx, &j, closing); err != nil {
+		return none, false, err
+	}
+
+	at := nextUpdateAt(now, j.UpdatedAt)
+
+	prev := j.Version
+	j.Version++
+	// The update time moves; the state change stays on the clock.
+	j.UpdatedAt, j.StateChangedAt = at, now
+
+	if err := update(ctx, c.tx, &j, prev); err != nil {
+		return none, false, err
+	}
+
+	return j, true, nil
+}
+
+// logger returns the logger of the run, or a logger that discards.
+func (c closeRun) logger() *slog.Logger {
+	if c.log != nil {
+		return c.log
+	}
+
+	return slog.New(slog.DiscardHandler)
 }
 
 // SetVerification implements job.Store.

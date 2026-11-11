@@ -174,7 +174,7 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
-				"journal_records_changed",
+				"journal_records_changed", pgColJobID, "git_head",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -358,7 +358,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
-				"sensitive_marks", "fenced_by", "unlocked_write",
+				"sensitive_marks", "fenced_by", "unlocked_write", "origin_job",
 			},
 			orderBy: []string{"id"},
 		},
@@ -530,6 +530,14 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
+				"final_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
 		},
 	}
 }

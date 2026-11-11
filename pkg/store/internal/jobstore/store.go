@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -560,7 +559,7 @@ func insert(ctx context.Context, tx Tx, j *job.Job) error {
 }
 
 // update replaces the row of version prev with j.
-func update(ctx context.Context, tx Tx, j *job.Job, prev int64) error {
+func update(ctx context.Context, tx CloseTx, j *job.Job, prev int64) error {
 	r, err := rowOf(j)
 	if err != nil {
 		return err
@@ -590,9 +589,9 @@ func rowOf(j *job.Job) (Row, error) {
 	}
 
 	r := Row{
-		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), UnitID: j.Spec.Unit.UnitID(), Seq: 0, State: j.State,
-		Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
-		Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), NamespaceID: j.NamespaceID, UnitID: j.Spec.Unit.UnitID(), Seq: 0,
+		State: j.State, Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey,
+		Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
 		StateChangedMs: j.StateChangedAt.UnixMilli(),
 	}
 
@@ -609,11 +608,11 @@ func rowOf(j *job.Job) (Row, error) {
 // names another namespace or another unit than the row.
 func jobOf(r *Row) (job.Job, error) {
 	j := job.Job{
-		ID: r.ID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "", Phases: nil, Current: r.Phase,
-		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
-		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
-		StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
+		ID: r.ID, NamespaceID: r.NamespaceID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "",
+		Phases: nil, Current: r.Phase, StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil,
+		Trigger: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: r.Key,
+		RequestHash: "", Version: r.Version, CreatedAt: time.UnixMilli(r.CreatedMs).UTC(),
+		UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(), StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
 	}
 
 	if err := decodeBody(r.Body, &j); err != nil {
@@ -700,6 +699,7 @@ func emptySpec() job.Spec {
 func noJob() job.Job {
 	return job.Job{
 		ID:             "",
+		NamespaceID:    "",
 		Spec:           emptySpec(),
 		State:          "",
 		Wait:           "",
@@ -731,15 +731,4 @@ func noJob() job.Job {
 // the job store would refuse.
 func Decode(r *Row) (job.Job, error) {
 	return jobOf(r)
-}
-
-// logger returns the logger of the runner, which records a damaged row that a
-// reader skips, for example the close loop of ObserveStateVersion. A nil
-// logger discards.
-func (s *Store) logger() *slog.Logger {
-	if log := s.run.Logger(); log != nil {
-		return log
-	}
-
-	return slog.New(slog.DiscardHandler)
 }

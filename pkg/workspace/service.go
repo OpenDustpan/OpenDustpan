@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -514,7 +515,11 @@ func newWorkspaceOf(ref Ref) Workspace {
 		Ref:         ref,
 		NamespaceID: "",
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -1139,7 +1144,9 @@ func (s *Service) BeginState(
 
 	defer unlock()
 
-	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
+	return s.createPending(ctx, w, in, sum, pendingDeclare{
+		restoredFrom: "", unlocked: unlocked, origin: originFrom(ctx),
+	})
 }
 
 // Authority is the caller's side of a declare: the overrides the caller may
@@ -1263,6 +1270,10 @@ func refuseWithoutRecorder(w Workspace, used []Override) error {
 type pendingDeclare struct {
 	restoredFrom StateVersionID
 	unlocked     bool
+	// origin is the writer of the declared version. A restore leaves it
+	// empty: the version holds the content of an earlier one, and no write of
+	// this request made it.
+	origin identity.StateOrigin
 }
 
 // forcedRefusal names the action and the switches that allow a forced write.
@@ -1809,7 +1820,10 @@ func (s *Service) restoreChecked(
 		return sv, err
 	}
 
-	_, unlockErr := s.Unlock(ctx, id, holder)
+	// The release that ends a restore belongs to the restore, not to the
+	// request that started it: it records no origin, like the version that
+	// the restore writes.
+	_, unlockErr := s.Unlock(WithJob(ctx, ""), id, holder)
 
 	return sv, errors.Join(err, unlockErr)
 }
@@ -1840,6 +1854,8 @@ func (s *Service) releaseWithoutState(
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
+
+	released.Origin = originFrom(ctx)
 
 	err = s.workspaces.SaveReleased(ctx, released, fence, forceUnlockEntry(entry, current, by, now))
 	if err != nil {
@@ -2152,7 +2168,7 @@ func (s *Service) copyState(
 		Outputs: outputs,
 		Serial:  src.Serial,
 		Force:   true,
-	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false})
+	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false, origin: identity.StateOrigin{Job: "", Commit: ""}})
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -2620,6 +2636,7 @@ func (s *Service) createPending(
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		Origin:          decl.origin,
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {
@@ -2820,6 +2837,10 @@ func (s *Service) change(
 		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
 	}
 
+	// The write carries the origin of the request. The store publishes it as
+	// the origin of the state version that the write releases.
+	w.Origin = originFrom(ctx)
+
 	if err := s.workspaces.SaveWorkspace(ctx, w, fence); err != nil {
 		return Workspace{}, fmt.Errorf("save workspace %s: %w", id, err)
 	}
@@ -2863,6 +2884,8 @@ func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, by string, e
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
+
+	released.Origin = originFrom(ctx)
 
 	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence, entry); err != nil {
 		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)

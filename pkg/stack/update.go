@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -112,11 +113,12 @@ func ParseUpdateKind(s string) (UpdateKind, error) {
 // and DryRun set, so the kind alone does not say whether an update changes
 // state. CreatedBy is the subject of the principal that asked; it stays
 // empty when the caller gives none. RestoredFrom is 0 unless Kind is
-// KindRestore.
+// KindRestore. GitHead is the commit the client reported in its metadata.
 type Plan struct {
 	Kind         UpdateKind
 	DryRun       bool
 	CreatedBy    string
+	GitHead      string
 	RestoredFrom int64
 }
 
@@ -271,6 +273,14 @@ type Update struct {
 	// empty when no access token started it, as with a bootstrap administrator
 	// token. A lease request checks this token.
 	TokenID string
+	// JobID is the job whose job token started the update, or empty. Every
+	// checkpoint write of the update records it as the origin job of the
+	// state version it publishes, and so does the end of the update.
+	JobID string
+	// GitHead is the commit the client reported with the update, or empty.
+	// Every checkpoint write of the update records it as the origin commit
+	// of the state version it publishes, and so does the end of the update.
+	GitHead string
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.
 	RestoredFrom int64
@@ -292,6 +302,13 @@ type Update struct {
 // history.
 func (u Update) Mutates() bool {
 	return !u.DryRun && u.Kind != KindPreview
+}
+
+// Origin is the writer that every state version of the update records: the
+// job whose job token started it, and the commit the client reported with it.
+// Both are empty when neither is known.
+func (u Update) Origin() identity.StateOrigin {
+	return identity.StateOrigin{Job: u.JobID, Commit: u.GitHead}
 }
 
 // start moves a not-started update to running under lease.
@@ -435,6 +452,11 @@ type Checkpoint struct {
 	// blob.CheckAttempt against the clock of the database, in the transaction
 	// of the commit. The store does not keep it, and a read gives it as zero.
 	AttemptStartedAt time.Time
+	// Origin names the job whose token started the update that saves this
+	// checkpoint, and the commit the update reported. The store records it
+	// with the state version it publishes for the write; a read gives it as
+	// zero.
+	Origin identity.StateOrigin
 }
 
 // CheckpointInput is a checkpoint as a client submits it.

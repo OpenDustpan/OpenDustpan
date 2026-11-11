@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -374,7 +375,12 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		Version:        0,
 		Revision:       1,
 		// Sizes come from the checkpoint rows on read.
-		CreatedBy:       plan.CreatedBy,
+		CreatedBy: plan.CreatedBy,
+		// The job whose token starts the update comes later, with the start.
+		JobID: "",
+		// GitHead comes from the body of the create: no later request of the
+		// update carries it.
+		GitHead:         plan.GitHead,
 		RestoredFrom:    plan.RestoredFrom,
 		CheckpointBytes: 0,
 	}
@@ -459,6 +465,7 @@ func (s *Updates) StartBy(
 
 	u.JournalVersion = journalVersion
 	u.TokenID = by.TokenID
+	u.JobID = by.JobID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {
@@ -507,6 +514,9 @@ type checkpointSave struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
+	// origin is the writer of the state version that the save publishes: the
+	// one of the update.
+	origin identity.StateOrigin
 	// blobs is the scoped blob access of the namespace of this save.
 	blobs *scopedBlobs
 }
@@ -575,7 +585,7 @@ func (s *Updates) SaveCheckpoint(
 
 	return s.storeNewCheckpoint(ctx, checkpointSave{
 		ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), lease: u.Lease.Digest,
-		in: in, digest: digest, prev: prev, key: key, blobs: bl,
+		in: in, digest: digest, prev: prev, key: key, origin: u.Origin(), blobs: bl,
 	})
 }
 
@@ -764,7 +774,11 @@ func (s *Updates) Import(ctx context.Context, ref Ref, subject string, in Checkp
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -805,7 +819,11 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -1164,6 +1182,7 @@ func (s *Updates) commitCheckpointRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+		Origin:        save.origin,
 
 		AttemptStartedAt: started,
 	}
