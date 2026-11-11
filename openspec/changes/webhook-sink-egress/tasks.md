@@ -18,5 +18,5 @@
 - [x] 3.1 `e2e/sinks.go`: the delivery steps start the in-process server with `dustpan.WithAuditSinks` and a sink client whose rules allow loopback for the test, as `chat.NewLoopback` does for the chat sender. Check: `go test -tags e2e ./e2e/ -run TestAuditSinks`.
 - [x] 3.2 The binary step proves the refusal: an `--audit-sink webhook:` item with a loopback address fails the start and names the item. Check: the same test with `E2E_SERVER=binary`.
 - [x] 3.3 `docs/guides/audit-log.md`: the Webhook and OTLP sections state the egress rules, the refusal at the start and at each connection, and the sink status that shows it. Check: `make docs-lint` exits 0.
-- [ ] 3.4 `go test ./cmd/opendustpan/... ./pkg/logsink/...` and `go vet ./cmd/opendustpan/...` report nothing.
-- [ ] 3.5 `make check` reports zero findings.
+- [x] 3.4 `go test ./cmd/opendustpan/... ./pkg/logsink/...` and `go vet ./cmd/opendustpan/...` report nothing. Done: CI at the head of the pull request runs these checks and is green.
+- [x] 3.5 `make check` reports zero findings. Done: CI at the head of the pull request is green for go, lint, golangci-lint, nilaway, scan, e2e and the fault and upgrade suites. CI skips the store suites, because the change touches no store code.
