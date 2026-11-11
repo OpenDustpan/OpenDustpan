@@ -72,7 +72,8 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 	t.Helper()
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{

@@ -282,6 +282,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 
 	j := job.Job{
 		ID:             job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID:    "",
 		Spec:           spec(unit, op),
 		State:          job.StateQueued,
 		Wait:           job.WaitNone,
