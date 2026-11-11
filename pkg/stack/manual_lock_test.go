@@ -26,14 +26,14 @@ var errManualLockRead = errors.New("manual lock store down")
 type fakeManualLocks struct {
 	lock  manuallock.Lock
 	err   error
-	asked []collection.UnitRef
+	asked []manuallock.Unit
 	// passJob, when set, is the job whose request the lock does not refuse.
 	passJob string
 	jobs    []string
 }
 
 func (f *fakeManualLocks) CoveringFor(
-	_ context.Context, unit collection.UnitRef, jobID string,
+	_ context.Context, unit manuallock.Unit, jobID string,
 ) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
 	f.jobs = append(f.jobs, jobID)
@@ -176,7 +176,7 @@ func TestStartMeetsTheManualLock(t *testing.T) {
 				return
 			}
 
-			checkRefusal(t, err, locks)
+			checkRefusal(t, err, locks, startUnit(f))
 
 			got, getErr := svc.Get(t.Context(), f.ref, u.ID)
 			if getErr != nil || got.Status != stack.StatusNotStarted {
@@ -186,10 +186,30 @@ func TestStartMeetsTheManualLock(t *testing.T) {
 	}
 }
 
+// startUnit returns the unit that the start of an update of f asks the manual
+// lock port about.
+func startUnit(f updatesFixture) manuallock.Unit {
+	return manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"},
+		NamespaceID: f.nsID,
+		UnitID:      "stk-test",
+	}
+}
+
+// deleteUnit returns the unit that the delete and rename of the locked stack
+// ask the manual lock port about.
+func deleteUnit() manuallock.Unit {
+	return manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"},
+		NamespaceID: "ns-1",
+		UnitID:      "stk-1",
+	}
+}
+
 // checkRefusal checks that err is the refusal of a manual lock: it matches both
 // sentinels, names the object, the holder and the reason, and the port got the
 // unit of the stack.
-func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
+func checkRefusal(t *testing.T, err error, locks *fakeManualLocks, wantUnit manuallock.Unit) {
 	t.Helper()
 
 	if !errors.Is(err, stack.ErrUpdateConflict) || !errors.Is(err, manuallock.ErrLocked) {
@@ -206,13 +226,12 @@ func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
 		}
 	}
 
-	wantUnit := collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"}
 	if len(locks.asked) != 1 || locks.asked[0] != wantUnit {
 		t.Errorf("unit asked = %v, want [%v]", locks.asked, wantUnit)
 	}
 
-	if manual, ok := errors.AsType[*manuallock.LockedError](err); !ok || manual == nil || manual.Unit != wantUnit {
-		t.Errorf("refused unit of %v, want %v", err, wantUnit)
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); !ok || manual == nil || manual.Unit != wantUnit.Ref {
+		t.Errorf("refused unit of %v, want %v", err, wantUnit.Ref)
 	}
 }
 
@@ -289,7 +308,7 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 
 			_, err = svc.StartBy(t.Context(), f.ref, u.ID, stack.StartedBy{TokenID: "", JobID: tc.jobID}, 0)
 			if tc.wantError {
-				checkRefusal(t, err, locks)
+				checkRefusal(t, err, locks, startUnit(f))
 			} else if err != nil {
 				t.Fatalf("start of the earlier phase = %v, want it to pass", err)
 			}
@@ -298,6 +317,44 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 				t.Errorf("job IDs asked = %q, want [%q]", locks.jobs, tc.jobID)
 			}
 		})
+	}
+}
+
+// TestStartAfterARenamePassesTheLock proves that the start of an update reads
+// the stable namespace ID and stack ID after a rename, so the phase of its job
+// passes the manual lock under the new name.
+func TestStartAfterARenamePassesTheLock(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	renamed, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	f.store.renameStack(f.ref, renamed)
+
+	locks := answering()
+	locks.passJob = "job-1"
+	svc := withManualLocks(t, f, locks)
+
+	u, err := svc.Create(t.Context(), renamed, planOf(stack.KindUpdate, false))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = svc.StartBy(t.Context(), renamed, u.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
+	if err != nil {
+		t.Fatalf("start after a rename = %v, want it to pass", err)
+	}
+
+	want := manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
+		NamespaceID: f.nsID,
+		UnitID:      "stk-test",
+	}
+	if len(locks.asked) != 1 || locks.asked[0] != want {
+		t.Errorf("unit asked = %v, want [%v]", locks.asked, want)
 	}
 }
 
@@ -377,7 +434,7 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 			locks := answering()
 			svc, store, ref := newLockedStackService(t, locks)
 
-			checkRefusal(t, c.call(svc, ref), locks)
+			checkRefusal(t, c.call(svc, ref), locks, deleteUnit())
 
 			if got := store.calls(); got != 0 {
 				t.Errorf("store delete calls = %d, want 0", got)
@@ -443,7 +500,7 @@ func TestImportAndRestoreMeetTheManualLock(t *testing.T) {
 	}
 
 	for _, c := range calls {
-		checkRefusal(t, c.call(), locks)
+		checkRefusal(t, c.call(), locks, startUnit(f))
 		locks.asked = nil
 		locks.jobs = nil
 	}

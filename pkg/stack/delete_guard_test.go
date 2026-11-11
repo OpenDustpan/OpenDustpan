@@ -134,8 +134,16 @@ func (m *deleteStacks) CreateStack(_ context.Context, _ stack.Stack, _ namespace
 	return stack.ErrAlreadyExists
 }
 
-func (m *deleteStacks) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, error) {
-	return stack.Stack{}, stack.ErrNotFound
+func (m *deleteStacks) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
+	return stack.Stack{
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		Tags:        nil,
+		Ref:         ref,
+		ID:          "stk-1",
+		NamespaceID: "ns-1",
+		Version:     0,
+	}, nil
 }
 
 func (m *deleteStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
