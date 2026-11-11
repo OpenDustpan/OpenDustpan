@@ -13,7 +13,7 @@ No release exists yet, so you build the server from source. The server is pre-al
 
 You need these tools:
 
-- Go 1.27.3 or later, to build the server.
+- Go 1.27.4 or later, to build the server.
 - OpenSSL, to make secrets and a test certificate.
 - The Pulumi CLI, OpenTofu, or both.
 - Docker with the Compose plugin, for the compose stack only.
