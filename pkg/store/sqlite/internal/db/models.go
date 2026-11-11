@@ -103,7 +103,7 @@ type Backup struct {
 	ID          string
 	State       string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Target      string
 	Error       string
 }
@@ -953,7 +953,7 @@ type Restore struct {
 	PreBackupID        string
 	RequestedBy        string
 	StartedAtMs        int64
-	EndedAtMs          int64
+	EndedAtMs          sql.NullInt64
 	Error              string
 	DevReport          string
 	MaintenanceEntered int64
@@ -1221,7 +1221,7 @@ type StoreCheck struct {
 	State       string
 	RequestedBy string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Error       string
 	Report      string
 }

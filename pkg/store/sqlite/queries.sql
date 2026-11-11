@@ -1069,7 +1069,7 @@ WHERE id = 1 AND kind IS NULL;
 -- Stores one checking restore. The unique index on the running restores, and
 -- the primary key, make a second running restore or a taken ID match no row.
 INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report)
-VALUES (?, 'checking', ?, '', ?, ?, 0, '', ?)
+VALUES (?, 'checking', ?, '', ?, ?, NULL, '', ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetRestore :one
@@ -4959,7 +4959,7 @@ WHERE namespace = ? AND collection_key = ?;
 
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
-VALUES (?, ?, 'running', ?, ?, 0, '', '')
+VALUES (?, ?, 'running', ?, ?, NULL, '', '')
 ON CONFLICT DO NOTHING;
 
 -- name: GetStoreCheck :one
@@ -4981,7 +4981,7 @@ WHERE id = ? AND state = 'running';
 
 -- name: CountStoreChecksEndedSince :one
 -- The checks of one target that ended after the given time. A running check
--- has no end time (0) and is not counted.
+-- has no end time and is not counted.
 SELECT count(*)
 FROM store_checks
 WHERE target = ? AND state <> 'running' AND ended_at_ms > ?;

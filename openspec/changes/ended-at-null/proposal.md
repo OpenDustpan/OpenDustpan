@@ -14,11 +14,11 @@ claim is false on this checkout (see Evidence).
 
 **Baselines.**
 
-- `pkg/store/sqlite/migrations/0168_baseline.sql`: `:132`, `:149` and `:1147`
+- `pkg/store/sqlite/migrations/0168_baseline.sql`: `:132`, `:149` and `:1141`
   hold `ended_at_ms   INTEGER NOT NULL DEFAULT 0,` for `backups`, `restores`
   and `store_checks`.
-- `pkg/store/postgres/migrations/0168_baseline.sql`: `:2320`, `:2369` and
-  `:2382` hold `ended_at_ms bigint,` for the same three tables.
+- `pkg/store/postgres/migrations/0168_baseline.sql`: `:2311`, `:2360` and
+  `:2373` hold `ended_at_ms bigint,` for the same three tables.
 
 **Queries.** The line numbers are the query name lines in each `queries.sql`.
 The last column says how the query treats a row that is not ended.
@@ -31,10 +31,10 @@ The last column says how the query treats a row that is not ended.
 | `InsertRestore` | 1068 | 1206 | SQLite writes literal `0`; PostgreSQL writes literal `NULL`. |
 | `GetRestore`, `ListRestores` | 1075, 1080 | 1213, 1218 | Read, as for the backups. |
 | `EndRestore` | 1092 | 1230 | Writes the end time. |
-| `CreateStoreCheck` | 4941 | 5366 | SQLite writes literal `0`; PostgreSQL writes literal `NULL`. |
-| `GetStoreCheck`, `ListStoreChecks` | 4946, 4951 | 5371, 5376 | Read, as for the backups. |
-| `FinishStoreCheck`, `FailEndedStoreChecks` | 4956, 4970 | 5381, 5393 | Writes the end time. |
-| `CountStoreChecksEndedSince` | 4963 | 5386 | Filters `ended_at_ms > ?`; 0 and NULL are both excluded. |
+| `CreateStoreCheck` | 4960 | 5383 | SQLite writes literal `0`; PostgreSQL writes literal `NULL`. |
+| `GetStoreCheck`, `ListStoreChecks` | 4965, 4970 | 5388, 5393 | Read, as for the backups. |
+| `FinishStoreCheck`, `FailEndedStoreChecks` | 4975, 4989 | 5398, 5410 | Writes the end time. |
+| `CountStoreChecksEndedSince` | 4982 | 5403 | Filters `ended_at_ms > ?`; 0 and NULL are both excluded. |
 
 - SQLite binds 0 for a running row (`pkg/store/sqlite/backup.go:44`,
   `pkg/store/internal/codec/codec.go:163`,
@@ -103,10 +103,10 @@ The last column says how the query treats a row that is not ended.
   NULL; the case fails.
 - Guard 3: the SQLite adapter does not bind 0. The same not-ended cases.
   Mutation: pass `codec.Millis` at `pkg/store/sqlite/backup.go:44`, or write
-  `0` again at `pkg/store/sqlite/queries.sql:1072` or `:4943`; the case fails.
+  `0` again at `pkg/store/sqlite/queries.sql:1072` or `:4962`; the case fails.
 - Guard 4: a portable restore keeps the shape. Test:
   `TestRestoreConformance/a_restore_keeps_a_not_ended_row_as_NULL`. Mutation:
-  copy `COALESCE(ended_at_ms, 0)` in `pkg/store/sqlite/restore.go:503-521`; the
+  copy `COALESCE(ended_at_ms, 0)` in `pkg/store/sqlite/restore.go:533-551`; the
   case fails.
 
 ## ADR check

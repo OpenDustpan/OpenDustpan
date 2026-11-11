@@ -63,6 +63,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		name string
 	}{
 		{name: "restores table creates, finishes, gets and lists", test: testRestoreRegistry},
+		{
+			name: "a row that is not ended stores NULL, a row that is ended stores its time",
+			test: testRestoreEndedShape,
+		},
 		{name: "one restore runs at a time", test: testRestoreOneRunning},
 		{name: "a backup starts after a restore of a running snapshot", test: testRestoreThenBackup},
 		{name: "a restore starts after a restore of a running snapshot", test: testRestoreThenRestore},
@@ -241,6 +245,31 @@ func mustFinishRestore(t *testing.T, s RestoreStore, finish restoreFinish) backu
 	}
 
 	return got
+}
+
+// testRestoreEndedShape proves the stored shape of ended_at_ms: a running row
+// stores NULL and a finished row stores its end time. It reads the column
+// with the raw reader of the store, not through the domain record.
+func testRestoreEndedShape(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	witness, ok := s.(NullEndedWitness)
+	if !ok {
+		t.Skip("store has no raw end-time reader")
+	}
+
+	running := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+	requireNotEndedStored(t, witness, backup.TableRestores, running.ID.String())
+
+	endedAt := now().Add(time.Hour)
+	mustFinishRestore(t, s, restoreFinish{
+		ID: running.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: endedAt,
+	})
+	requireEndedStored(t, witness, backup.TableRestores, running.ID.String(), endedAt)
 }
 
 // testRestoreRegistry covers the restores table: create a running row, finish
@@ -911,9 +940,10 @@ func setInstallationState(t *testing.T, s maintenance.Store, state maintenance.S
 // testRestoreKeepsControlRows proves that a restore keeps the backups,
 // restores and installation rows of the target on both dialects: a backup
 // leaves the control tables out, so the rows of the source never reach the
-// target, and the swap never renames the control schema. Any handle reads
-// the restore row during the swap: after the apply the running restore is
-// still readable, also through a reopened handle.
+// target, and the swap never renames the control schema. A row that is not
+// ended keeps NULL in ended_at_ms. Any handle reads the restore row during
+// the swap: after the apply the running restore is still readable, also
+// through a reopened handle.
 func testRestoreKeepsControlRows(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -925,6 +955,11 @@ func testRestoreKeepsControlRows(t *testing.T, newStore RestoreFactory) {
 	applySnapshot(t, ps)
 
 	checkTargetControlRows(t, ps.dst, target, srcBackup, srcRestore)
+
+	if witness, ok := ps.dst.(NullEndedWitness); ok {
+		requireNotEndedStored(t, witness, backup.TableRestores, target.restoreID.String())
+		requireEndedStored(t, witness, backup.TableBackups, target.backup.ID.String(), target.backup.EndedAt)
+	}
 
 	// Any handle reads the restore row: a reopened handle to the same
 	// backing storage still reads the running restore.

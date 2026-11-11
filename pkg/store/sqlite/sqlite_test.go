@@ -1009,6 +1009,47 @@ func (s *backupStore) StagingAlive(id string) bool {
 	return err == nil
 }
 
+// errUnknownEndedAtTable reports a table that the raw end-time reader does
+// not know.
+var errUnknownEndedAtTable = errors.New("unknown end-time table")
+
+// StoredEndedAtMs implements storetest.NullEndedWitness: it reads the
+// ended_at_ms column of one control row with a raw query.
+func (s *backupStore) StoredEndedAtMs(ctx context.Context, table, id string) (int64, bool, error) {
+	var query string
+
+	switch table {
+	case backup.TableBackups:
+		query = `SELECT ended_at_ms FROM backups WHERE id = ?`
+	case backup.TableRestores:
+		query = `SELECT ended_at_ms FROM restores WHERE id = ?`
+	case backup.TableStoreChecks:
+		query = `SELECT ended_at_ms FROM store_checks WHERE id = ?`
+	default:
+		return 0, false, fmt.Errorf("read ended_at_ms: %w: %q", errUnknownEndedAtTable, table)
+	}
+
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return 0, false, fmt.Errorf("open raw database: %w", err)
+	}
+
+	var ms sql.NullInt64
+
+	scanErr := conn.QueryRowContext(ctx, query, id).Scan(&ms)
+	closeErr := conn.Close()
+
+	if scanErr != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms of %s %s: %w", table, id, scanErr), closeErr)
+	}
+
+	if closeErr != nil {
+		return 0, false, fmt.Errorf("close raw database: %w", closeErr)
+	}
+
+	return ms.Int64, ms.Valid, nil
+}
+
 // open returns a fresh store in a temporary directory, copied from the
 // migrated template so only the first test of the binary runs every
 // migration.
