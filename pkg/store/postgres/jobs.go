@@ -269,7 +269,7 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 		where = append(where, "j.state_changed_at_ms > "+arg(q.StateChangedAfterMs))
 	}
 
-	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+	query := `SELECT j.id, n.name, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
 		j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
 		j.state_changed_at_ms
 		FROM jobs AS j JOIN namespaces AS n ON n.id = j.namespace_id`
@@ -296,7 +296,7 @@ func scanJobRows(rows pgx.Rows) ([]jobstore.Row, error) {
 	for rows.Next() {
 		var g db.GetJobRow
 
-		err := rows.Scan(&g.ID, &g.Namespace, &g.UnitID, &g.Seq, &g.State, &g.Wait, &g.CurrentPhase,
+		err := rows.Scan(&g.ID, &g.Namespace, &g.NamespaceID, &g.UnitID, &g.Seq, &g.State, &g.Wait, &g.CurrentPhase,
 			&g.CurrentChanges, &g.CurrentOperation, &g.IdempotencyKey, &g.Version, &g.Body, &g.CreatedAtMs,
 			&g.UpdatedAtMs, &g.StateChangedAtMs)
 		if err != nil {
@@ -329,10 +329,11 @@ func (t *jobTx) Orphans(ctx context.Context, limit int) ([]jobstore.OrphanRow, e
 		r := &rows[i]
 		out[i] = jobstore.OrphanRow{
 			Row: jobRow(db.GetJobRow{
-				ID: r.ID, Namespace: r.Namespace, UnitID: r.UnitID, Seq: r.Seq, State: r.State, Wait: r.Wait,
-				CurrentPhase: r.CurrentPhase, CurrentChanges: r.CurrentChanges, CurrentOperation: r.CurrentOperation,
-				IdempotencyKey: r.IdempotencyKey, Version: r.Version, Body: r.Body, CreatedAtMs: r.CreatedAtMs,
-				UpdatedAtMs: r.UpdatedAtMs, StateChangedAtMs: r.StateChangedAtMs,
+				ID: r.ID, Namespace: r.Namespace, NamespaceID: r.NamespaceID, UnitID: r.UnitID, Seq: r.Seq,
+				State: r.State, Wait: r.Wait, CurrentPhase: r.CurrentPhase, CurrentChanges: r.CurrentChanges,
+				CurrentOperation: r.CurrentOperation, IdempotencyKey: r.IdempotencyKey, Version: r.Version,
+				Body: r.Body, CreatedAtMs: r.CreatedAtMs, UpdatedAtMs: r.UpdatedAtMs,
+				StateChangedAtMs: r.StateChangedAtMs,
 			}),
 			Missing: !r.OpState.Valid,
 		}
@@ -343,10 +344,22 @@ func (t *jobTx) Orphans(ctx context.Context, limit int) ([]jobstore.OrphanRow, e
 
 func jobRow(r db.GetJobRow) jobstore.Row {
 	return jobstore.Row{
-		ID: job.ID(r.ID), Namespace: namespace.Name(r.Namespace), UnitID: r.UnitID, Seq: r.Seq,
-		State: job.State(r.State), Wait: job.WaitReason(r.Wait), Phase: int(r.CurrentPhase), Changes: r.CurrentChanges,
-		Operation: r.CurrentOperation, Key: r.IdempotencyKey, Version: r.Version, Body: r.Body,
-		CreatedMs: r.CreatedAtMs, UpdatedMs: r.UpdatedAtMs, StateChangedMs: r.StateChangedAtMs,
+		ID:             job.ID(r.ID),
+		Namespace:      namespace.Name(r.Namespace),
+		NamespaceID:    namespace.ID(r.NamespaceID),
+		UnitID:         r.UnitID,
+		Seq:            r.Seq,
+		State:          job.State(r.State),
+		Wait:           job.WaitReason(r.Wait),
+		Phase:          int(r.CurrentPhase),
+		Changes:        r.CurrentChanges,
+		Operation:      r.CurrentOperation,
+		Key:            r.IdempotencyKey,
+		Version:        r.Version,
+		Body:           r.Body,
+		CreatedMs:      r.CreatedAtMs,
+		UpdatedMs:      r.UpdatedAtMs,
+		StateChangedMs: r.StateChangedAtMs,
 	}
 }
 

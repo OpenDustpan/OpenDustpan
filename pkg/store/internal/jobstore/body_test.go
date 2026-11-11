@@ -30,7 +30,8 @@ func fullJob(t *testing.T) job.Job {
 	binding := job.PlanBinding{Plan: "pln-1", DisplaySHA256: "aa", ApplySHA256: "bb", StateVersion: "sv-1"}
 
 	return job.Job{
-		ID: "job-1",
+		ID:          "job-1",
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorWriteBack,
 			Location: job.Location{
@@ -413,9 +414,9 @@ func TestRowMustAgreeWithItsBody(t *testing.T) {
 
 	row := func(ns, unit string) jobstore.Row {
 		return jobstore.Row{
-			ID: j.ID, Namespace: namespace.Name(ns), UnitID: unit, Seq: 1, State: j.State, Wait: j.Wait,
-			Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version, Body: body,
-			CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+			ID: j.ID, Namespace: namespace.Name(ns), NamespaceID: j.NamespaceID, UnitID: unit, Seq: 1, State: j.State,
+			Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
+			Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
 			StateChangedMs: 0,
 		}
 	}

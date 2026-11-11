@@ -58,7 +58,7 @@ func testPhase(kind job.PhaseKind, op string) job.Phase {
 // changes the fields of its path only.
 func testJob(unit identity.Object, updatedAt time.Time) job.Job {
 	return job.Job{
-		ID: "job-1",
+		ID: "job-1", NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationApply, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
@@ -379,7 +379,7 @@ func (f *fakeTx) put(t *testing.T, j *job.Job) {
 	}
 
 	r := jobstore.Row{
-		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), UnitID: j.Spec.Unit.UnitID(), Seq: 0,
+		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), NamespaceID: j.NamespaceID, UnitID: j.Spec.Unit.UnitID(), Seq: 0,
 		State: j.State, Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "",
 		Key: j.IdempotencyKey, Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(),
 		UpdatedMs: j.UpdatedAt.UnixMilli(), StateChangedMs: j.StateChangedAt.UnixMilli(),
