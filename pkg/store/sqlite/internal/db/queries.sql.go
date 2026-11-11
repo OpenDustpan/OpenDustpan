@@ -6660,7 +6660,7 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 }
 
 const getJob = `-- name: GetJob :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -6671,6 +6671,7 @@ WHERE j.id = ?1
 type GetJobRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -6692,6 +6693,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
+		&i.NamespaceID,
 		&i.UnitID,
 		&i.Seq,
 		&i.State,
@@ -6710,7 +6712,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
 }
 
 const getJobByKey = `-- name: GetJobByKey :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -6726,6 +6728,7 @@ type GetJobByKeyParams struct {
 type GetJobByKeyRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -6747,6 +6750,7 @@ func (q *Queries) GetJobByKey(ctx context.Context, arg GetJobByKeyParams) (GetJo
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
+		&i.NamespaceID,
 		&i.UnitID,
 		&i.Seq,
 		&i.State,
@@ -12606,7 +12610,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 }
 
 const listAwaitingJobsOfUnit = `-- name: ListAwaitingJobsOfUnit :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -12624,6 +12628,7 @@ type ListAwaitingJobsOfUnitParams struct {
 type ListAwaitingJobsOfUnitRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -12651,6 +12656,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.UnitID,
 			&i.Seq,
 			&i.State,
@@ -16017,7 +16023,7 @@ func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextPa
 }
 
 const listOrphanJobs = `-- name: ListOrphanJobs :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms,
        d.state AS op_state
@@ -16034,6 +16040,7 @@ LIMIT ?1
 type ListOrphanJobsRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -16064,6 +16071,7 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int64) ([]ListOrph
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.UnitID,
 			&i.Seq,
 			&i.State,
