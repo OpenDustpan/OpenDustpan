@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
@@ -1348,6 +1349,51 @@ func (s *backupStore) StagingAlive(id string) bool {
 	}
 
 	return count == 1
+}
+
+// errUnknownEndedAtTable reports a table that the raw end-time reader does
+// not know.
+var errUnknownEndedAtTable = errors.New("unknown end-time table")
+
+// StoredEndedAtMs implements storetest.NullEndedWitness: it reads the
+// ended_at_ms column of one control row with a raw query. The control tables
+// live in the control schema of the live schema.
+func (s *backupStore) StoredEndedAtMs(
+	ctx context.Context, table, id string,
+) (int64, bool, error) {
+	switch table {
+	case backup.TableBackups, backup.TableRestores, backup.TableStoreChecks:
+	default:
+		return 0, false, fmt.Errorf("read ended_at_ms: %w: %q", errUnknownEndedAtTable, table)
+	}
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return 0, false, fmt.Errorf("read ended_at_ms: connect: %w", err)
+	}
+
+	var live string
+	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&live); err != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms: read the schema: %w", err), conn.Close(ctx))
+	}
+
+	query := `SELECT ended_at_ms FROM ` +
+		pgx.Identifier{live + "_control", table}.Sanitize() + ` WHERE id = $1`
+
+	var ms pgtype.Int8
+
+	scanErr := conn.QueryRow(ctx, query, id).Scan(&ms)
+	closeErr := conn.Close(ctx)
+
+	if scanErr != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms of %s %s: %w", table, id, scanErr), closeErr)
+	}
+
+	if closeErr != nil {
+		return 0, false, fmt.Errorf("read ended_at_ms: close: %w", closeErr)
+	}
+
+	return ms.Int64, ms.Valid, nil
 }
 
 // open returns a store in a fresh schema of the database at base.

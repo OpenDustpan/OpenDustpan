@@ -129,7 +129,7 @@ CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,
     state         TEXT    NOT NULL,
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     target        TEXT    NOT NULL DEFAULT '',
     error         TEXT    NOT NULL DEFAULT ''
 ) STRICT;
@@ -146,7 +146,7 @@ CREATE TABLE restores (
     pre_backup_id TEXT    NOT NULL DEFAULT '',
     requested_by  TEXT    NOT NULL DEFAULT '',
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     error         TEXT    NOT NULL DEFAULT ''
 , dev_report TEXT NOT NULL DEFAULT '', maintenance_entered INTEGER NOT NULL DEFAULT 0
     CHECK (maintenance_entered IN (0, 1)), audit_events TEXT NOT NULL DEFAULT '[]') STRICT;
@@ -1138,7 +1138,7 @@ CREATE TABLE store_checks (
     state         TEXT    NOT NULL CHECK (state IN ('running', 'succeeded', 'failed')),
     requested_by  TEXT    NOT NULL,
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     error         TEXT    NOT NULL DEFAULT '',
     report        TEXT    NOT NULL DEFAULT ''
 ) STRICT;
