@@ -8,6 +8,7 @@ Changes:
 - Changes ADR 296 decision 1: a wording refinement edits the ADR in place. A changed decision still gets a new ADR.
 - Changes ADR 190 decision 10: a wording refinement, an apply job only for a unit whose plan has a change.
 - Changes ADR 212 decision 5: a wording refinement, the restore entries follow the audit switch.
+- Changes ADR 342 decision 3: a wording refinement with the owner's word, a client-encrypted OpenTofu state is not a read failure.
 
 ## Context
 
@@ -49,7 +50,7 @@ intent, but where one decision, read alone, says something else.
    the reverse "Changed by" item (ADR 296).
 3. **An owner decision keeps its owner.** The words of an owner decision
    change only with the owner's word, also for a wording refinement.
-4. **The first two refinements.**
+4. **The first three refinements.**
    - ADR 190 decision 10 said that the apply of a change order "starts one
      apply job for each unit". It now says "for each unit whose plan has a
      change". ADR 213 decision 3 already said that "a unit plan with no
@@ -58,13 +59,20 @@ intent, but where one decision, read alone, says something else.
      no condition. It now starts "When the audit log is on". ADR 60 decision
      2 already said that when the audit switch is off, "the server writes no
      entry".
+   - ADR 342 decision 3 (owner) said that the server refuses a write when it
+     cannot read the body. Read alone, that refuses every state that the
+     client encrypted, which ADR 150 decision 9 and ADR 255 keep unread on
+     purpose. With the owner's word ("A lgtm", 13 November 2026), decision 3
+     now says that such a state is not a read failure: `state.available` is
+     `false`, the decision record says why, and the write goes on under the
+     gates that apply. The owner also asked that the user documentation name
+     the drawbacks of client encryption: the security model page lists them.
 
 ## Consequences
 
-- The other two pairs that the check found are not in this ADR. ADR 342
-  decision 3 is an owner decision (decision 3). The order of the checks of a
-  self-service submit (ADR 111 decision 6 and ADR 113 decision 8) is a
-  choice, not a wording fix.
+- The fourth pair that the check found is not in this ADR. The order of the
+  checks of a self-service submit (ADR 111 decision 6 and ADR 113 decision 8)
+  is a choice, not a wording fix.
 - A reader still finds every edit: the "Changed by" list at the top of the
   edited ADR, its changelog at the end, and `docs/adr/INDEX.md`.
 - No code changes by this ADR alone.
