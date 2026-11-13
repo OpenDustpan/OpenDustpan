@@ -558,28 +558,30 @@ func TestGitHostCheckAnswersWhatTheGitHostSaid(t *testing.T) {
 		text       string
 		retryAfter string
 		status     int
+		code       string
 	}{
 		{
 			err: forge.ErrAuth, name: "a refused credential", text: "GitHub refused the credential of the connection",
-			retryAfter: "", status: http.StatusUnprocessableEntity,
+			retryAfter: "", status: http.StatusUnprocessableEntity, code: "",
 		},
 		{
 			err: forge.Unavailable(30*time.Second, "rate limit"), name: "no answer with a wait",
 			text: "GitHub did not answer: try again later", retryAfter: "30", status: http.StatusServiceUnavailable,
+			code: "",
 		},
 		{
 			err: forge.ErrUnavailable, name: "no answer", text: "GitHub did not answer: try again later",
-			retryAfter: "", status: http.StatusServiceUnavailable,
+			retryAfter: "", status: http.StatusServiceUnavailable, code: "",
 		},
 		{
 			err: budget, name: "a spent budget of the app",
 			text:       "the GitHub App used its budget of signed requests: try again in 30 seconds",
-			retryAfter: "30", status: http.StatusServiceUnavailable,
+			retryAfter: "30", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
 		},
 		{
 			err: forge.ErrAppBudget, name: "a spent budget with no wait",
 			text:       "the GitHub App used its budget of signed requests: try again later",
-			retryAfter: "", status: http.StatusServiceUnavailable,
+			retryAfter: "", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -600,6 +602,11 @@ func TestGitHostCheckAnswersWhatTheGitHostSaid(t *testing.T) {
 
 			if !strings.Contains(r.body, `"`+tc.text+`"`) {
 				t.Errorf("answer = %s, want the message %q", r.body, tc.text)
+			}
+
+			if tc.code != "" {
+				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, []byte(r.body),
+					errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
 			}
 		})
 	}

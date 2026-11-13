@@ -223,7 +223,7 @@ func classifyGitHostRequest(err error) (failure, bool) {
 	case errors.Is(err, forge.ErrAuth):
 		return fail(http.StatusUnprocessableEntity, "GitHub refused the credential of the connection"), true
 	case errors.Is(err, forge.ErrAppBudget):
-		return fail(http.StatusServiceUnavailable, appBudgetText(err)), true
+		return failCoded(http.StatusServiceUnavailable, appBudgetText(err), errcode.GitHostAppBudgetSpent), true
 	case errors.Is(err, forge.ErrUnavailable):
 		return fail(http.StatusServiceUnavailable, "GitHub did not answer: try again later"), true
 	default:

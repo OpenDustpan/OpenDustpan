@@ -134,6 +134,7 @@ const (
 	ErrorCodeGateRuleFailed                        ErrorCode = "gate.rule-failed"
 	ErrorCodeGateUnavailable                       ErrorCode = "gate.unavailable"
 	ErrorCodeGateVersionConflict                   ErrorCode = "gate.version-conflict"
+	ErrorCodeGitHostAppBudgetSpent                 ErrorCode = "git-host.app-budget-spent"
 	ErrorCodeGitHostAppNotRegistered               ErrorCode = "git-host.app-not-registered"
 	ErrorCodeGitHostInstallationNotAssigned        ErrorCode = "git-host.installation-not-assigned"
 	ErrorCodeGitHostLinkAccountInvalid             ErrorCode = "git-host.link-account-invalid"
