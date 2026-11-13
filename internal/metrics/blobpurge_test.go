@@ -209,3 +209,150 @@ func TestBlobPurgeBacklogGaugesShareOneRead(t *testing.T) {
 		t.Errorf("store reads for one scrape = %d, want 1", got)
 	}
 }
+
+// blobPurgeAgeCase is one row of the oldest age table. oldestSkew is the
+// offset of the oldest record time from the clock.
+type blobPurgeAgeCase struct {
+	name       string
+	oldestSkew time.Duration
+	wantAge    float64
+}
+
+// TestBlobPurgeBacklogGaugesNegativeAge proves that a record that carries a
+// time later than the clock gives age 0, and not a negative age. The last row
+// is the control: a record one second older than the clock gives age 1.
+func TestBlobPurgeBacklogGaugesNegativeAge(t *testing.T) {
+	t.Parallel()
+
+	tests := []blobPurgeAgeCase{
+		{
+			name:       "oldest record one second later than the clock",
+			oldestSkew: time.Second,
+			wantAge:    0,
+		},
+		{
+			name:       "oldest record one hour later than the clock",
+			oldestSkew: time.Hour,
+			wantAge:    0,
+		},
+		{
+			name:       "oldest record one second earlier than the clock",
+			oldestSkew: -time.Second,
+			wantAge:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			now := testNow()
+			clock := func() time.Time { return now }
+
+			read := func(context.Context) (int64, time.Time, error) {
+				return 1, now.Add(tt.oldestSkew), nil
+			}
+
+			reg := metrics.NewRegistry()
+			metrics.RegisterBlobPurgeBacklog(reg, read, clock)
+
+			var buf bytes.Buffer
+			if err := reg.Write(&buf); err != nil {
+				t.Fatalf("write registry: %v", err)
+			}
+
+			out := buf.String()
+			if got := gaugeValue(t, out, "dustpan_blob_purge_pending"); got != 1 {
+				t.Errorf("dustpan_blob_purge_pending = %v, want 1", got)
+			}
+
+			if got := gaugeValue(t, out, "dustpan_blob_purge_oldest_age_seconds"); got != tt.wantAge {
+				t.Errorf("dustpan_blob_purge_oldest_age_seconds = %v, want %v", got, tt.wantAge)
+			}
+		})
+	}
+}
+
+// blobPurgeCacheStep is one row of the snapshot cache table. offset is the
+// time of the scrape since the first scrape of the test.
+type blobPurgeCacheStep struct {
+	name        string
+	offset      time.Duration
+	wantReads   int64
+	wantPending float64
+}
+
+// TestBlobPurgeBacklogGaugesCacheReuse proves that the two gauges share one
+// read of the store for the lifetime of the snapshot, that the snapshot
+// expires at exactly that lifetime, and that a later scrape reads the store
+// again. Each step moves the clock from the time of the first scrape, scrapes
+// once and checks the total read count and the pending gauge. The reader
+// gives one more pending record at each read, so a reused snapshot shows the
+// earlier value. The steps share the registry, the reader and the clock, and
+// each step needs the snapshot of the step before it, so the test walks the
+// table in order.
+func TestBlobPurgeBacklogGaugesCacheReuse(t *testing.T) {
+	t.Parallel()
+
+	now := testNow()
+	clock := func() time.Time { return now }
+
+	var reads atomic.Int64
+
+	read := func(context.Context) (int64, time.Time, error) {
+		return reads.Add(1), testNow().Add(-time.Minute), nil
+	}
+
+	reg := metrics.NewRegistry()
+	metrics.RegisterBlobPurgeBacklog(reg, read, clock)
+
+	steps := []blobPurgeCacheStep{
+		{
+			name:        "the first scrape reads the store",
+			offset:      0,
+			wantReads:   1,
+			wantPending: 1,
+		},
+		{
+			name:        "one millisecond before the lifetime reuses the snapshot",
+			offset:      1999 * time.Millisecond,
+			wantReads:   1,
+			wantPending: 1,
+		},
+		{
+			name:        "the scrape at the lifetime reads the store again",
+			offset:      2 * time.Second,
+			wantReads:   2,
+			wantPending: 2,
+		},
+		{
+			name:        "one millisecond before the second lifetime reuses the snapshot",
+			offset:      3999 * time.Millisecond,
+			wantReads:   2,
+			wantPending: 2,
+		},
+		{
+			name:        "the scrape at the second lifetime reads the store again",
+			offset:      4 * time.Second,
+			wantReads:   3,
+			wantPending: 3,
+		},
+	}
+
+	for _, step := range steps {
+		now = testNow().Add(step.offset)
+
+		var buf bytes.Buffer
+		if err := reg.Write(&buf); err != nil {
+			t.Fatalf("%s: write registry: %v", step.name, err)
+		}
+
+		if got := reads.Load(); got != step.wantReads {
+			t.Errorf("%s: store reads = %d, want %d", step.name, got, step.wantReads)
+		}
+
+		if got := gaugeValue(t, buf.String(), "dustpan_blob_purge_pending"); got != step.wantPending {
+			t.Errorf("%s: dustpan_blob_purge_pending = %v, want %v", step.name, got, step.wantPending)
+		}
+	}
+}
