@@ -64,7 +64,7 @@ func TestAppBudgetRefusesLimitsThatAreNotPositive(t *testing.T) {
 
 	var none *forge.AppBudget
 
-	if _, ok := none.Spend("https://api.github.com#1", time.Now()); ok {
+	if _, ok := none.Spend("https://api.github.com#1", time.UnixMilli(1_700_000_000_000)); ok {
 		t.Error("a nil budget allowed a call")
 	}
 }

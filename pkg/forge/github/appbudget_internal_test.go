@@ -76,7 +76,7 @@ func (r budgetRig) open(t *testing.T, appID, installationID string) *gitHub {
 	fg, err := r.opener.Open(t.Context(), forge.Connection{
 		ID: "c-" + installationID, Kind: forge.KindGitHub, Auth: forge.AuthApp, BaseURL: r.url, Push: true,
 		Params: map[string]string{forge.ParamAppID: appID, forge.ParamInstallationID: installationID},
-	}, forge.Credential{SetID: "s1", Secret: r.pem, CreatedAt: time.Now()})
+	}, forge.Credential{SetID: "s1", Secret: r.pem, CreatedAt: time.Time{}})
 	if err != nil {
 		t.Fatal(err)
 	}
