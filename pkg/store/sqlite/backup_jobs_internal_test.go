@@ -74,7 +74,8 @@ func seedJobRow(t *testing.T, s *Store) job.ID {
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{}, NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
-			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			LocationSource: "",
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,

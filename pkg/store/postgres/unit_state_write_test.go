@@ -228,6 +228,7 @@ func stateWriteJob(t *testing.T, s *postgres.Store, fence namespace.Fence, unit 
 			Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: unitStateWriteRevision,
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
