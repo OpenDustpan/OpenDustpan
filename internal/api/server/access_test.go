@@ -674,7 +674,7 @@ func TestOperatorRefusals(t *testing.T) {
 			http.StatusForbidden,
 		},
 		{http.MethodPost, "/api/server/namespaces", `{"name":"ops"}`, http.StatusForbidden},
-		{http.MethodGet, "/api/server/maintenance", "", http.StatusOK},
+		{http.MethodGet, "/api/dustpan/v1/maintenance", "", http.StatusOK},
 	} {
 		f.as(t, "olga", c, nil)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -143,6 +144,42 @@ func serveMaintenance(
 	return rec.Code, rec.Body.String()
 }
 
+// maintenanceScenarios returns the scenarios of the maintenance operations
+// for the check of the header flags. Each probe sends its request to a fresh
+// handler, so entering and leaving do not disturb the next probe.
+func maintenanceScenarios() map[string]headertest.Scenario {
+	scenario := func(path string) headertest.Scenario {
+		return func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			handler := newMaintenanceHandler(t, newFakeMaintenance(maintenance.StateNormal))
+
+			return headertest.Probe{
+				ETag: "",
+				Send: func(headers map[string]string) headertest.Answer {
+					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, http.NoBody)
+					req.Header.Set("Authorization", "Bearer test-token")
+
+					for name, value := range headers {
+						req.Header.Set(name, value)
+					}
+
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+
+					return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+				},
+				Replayed: nil,
+			}
+		}
+	}
+
+	return map[string]headertest.Scenario{
+		"enterMaintenance": scenario("/api/dustpan/v1/maintenance/enter"),
+		"leaveMaintenance": scenario("/api/dustpan/v1/maintenance/leave"),
+	}
+}
+
 // maintenanceState decodes a state response body in tests.
 type maintenanceState struct {
 	State string `json:"state"`
@@ -160,9 +197,9 @@ func TestMaintenanceRoutesDeclareMaintenance(t *testing.T) {
 	handler := newTestHandler(t)
 
 	want := map[string]bool{
-		"GET /api/server/maintenance":        false,
-		"POST /api/server/maintenance/enter": false,
-		"POST /api/server/maintenance/leave": false,
+		"GET /api/dustpan/v1/maintenance":        false,
+		"POST /api/dustpan/v1/maintenance/enter": false,
+		"POST /api/dustpan/v1/maintenance/leave": false,
 	}
 
 	for _, route := range handler.Routes() {
@@ -198,7 +235,7 @@ func TestGetMaintenanceAnswersState(t *testing.T) {
 
 	handler := newMaintenanceHandler(t, newFakeMaintenance(maintenance.StateNormal))
 
-	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/maintenance", "")
+	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/maintenance", "")
 	if status != http.StatusOK {
 		t.Fatalf("GET maintenance answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -220,7 +257,7 @@ func TestEnterMaintenanceWithoutForce(t *testing.T) {
 	fake := newFakeMaintenance(maintenance.StateNormal)
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", "")
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", "")
 	if status != http.StatusOK {
 		t.Fatalf("POST enter answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -252,7 +289,7 @@ func TestEnterMaintenanceWithForceNamesCanceled(t *testing.T) {
 	handler := newMaintenanceHandler(t, fake)
 
 	status, body := serveMaintenance(
-		t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`,
+		t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", `{"force":true}`,
 	)
 	if status != http.StatusOK {
 		t.Fatalf("POST enter answers %d, want %d (%s)", status, http.StatusOK, body)
@@ -280,7 +317,7 @@ func TestEnterMaintenanceRefusesActiveWork(t *testing.T) {
 	fake.enterErr = fmt.Errorf("%w: %s", maintenance.ErrActiveWork, "pulumi:acme/web/prod")
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", "")
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", "")
 	if status != http.StatusConflict {
 		t.Fatalf("POST enter with active work answers %d, want %d (%s)", status, http.StatusConflict, body)
 	}
@@ -308,7 +345,7 @@ func TestEnterMaintenanceListsCanceledWorkWhenForceGivesUp(t *testing.T) {
 	})
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", `{"force":true}`)
 	if status != http.StatusConflict {
 		t.Fatalf("POST forced enter that gave up answers %d, want %d (%s)", status, http.StatusConflict, body)
 	}
@@ -338,7 +375,7 @@ func TestEnterMaintenanceListsCanceledWorkOnOtherFailures(t *testing.T) {
 	})
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", `{"force":true}`)
 	if status != http.StatusInternalServerError {
 		t.Fatalf("POST forced enter that failed answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
 	}
@@ -363,7 +400,7 @@ func TestEnterMaintenanceRejectsBadBody(t *testing.T) {
 
 	handler := newMaintenanceHandler(t, newFakeMaintenance(maintenance.StateNormal))
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{`)
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", `{`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("POST enter with a bad body answers %d, want %d (%s)", status, http.StatusBadRequest, body)
 	}
@@ -391,7 +428,7 @@ func TestEnterMaintenanceRejectsOversizedBody(t *testing.T) {
 	handler := newMaintenanceHandler(t, fake)
 
 	status, body := serveMaintenance(
-		t, handler, http.MethodPost, "/api/server/maintenance/enter", strings.Repeat(`{"force":true,`, 1024),
+		t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/enter", strings.Repeat(`{"force":true,`, 1024),
 	)
 	if status != http.StatusBadRequest {
 		t.Fatalf("POST enter with an oversized body answers %d, want %d (%s)", status, http.StatusBadRequest, body)
@@ -421,7 +458,7 @@ func TestLeaveMaintenanceAnswersNormal(t *testing.T) {
 	fake := newFakeMaintenance(maintenance.StateMaintenance)
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/leave", "")
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "")
 	if status != http.StatusOK {
 		t.Fatalf("POST leave answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -450,7 +487,7 @@ func TestMaintenanceUnavailableAnswersWithoutDriverText(t *testing.T) {
 	fake.getErr = fmt.Errorf("select installation state sqlite database: %w", maintenance.ErrUnavailable)
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/maintenance", "")
+	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/maintenance", "")
 	if status != http.StatusInternalServerError {
 		t.Fatalf("GET maintenance on a failed read answers %d, want %d (%s)",
 			status, http.StatusInternalServerError, body)
@@ -540,7 +577,12 @@ func TestMaintenanceEnterBusyAnswers503(t *testing.T) {
 		maintenance.StateMaintenance, maintenance.ErrBusy)
 	handler := newMaintenanceHandler(t, fake)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance/enter", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/dustpan/v1/maintenance/enter",
+		http.NoBody,
+	)
 	req.Header.Set("Authorization", "Bearer test-token")
 
 	rec := httptest.NewRecorder()
@@ -615,7 +657,7 @@ func TestEnterMaintenanceCanceledWorkRetryAfter(t *testing.T) {
 			handler := newMaintenanceHandler(t, fake)
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-				"/api/server/maintenance/enter", strings.NewReader(`{"force":true}`))
+				"/api/dustpan/v1/maintenance/enter", strings.NewReader(`{"force":true}`))
 			req.Header.Set("Authorization", "Bearer test-token")
 
 			rec := httptest.NewRecorder()

@@ -13475,7 +13475,7 @@ type maintenanceErrorDoc struct {
 func getMaintenanceState(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/maintenance", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/maintenance", "")
 	if err != nil {
 		t.Fatalf("GET maintenance: %v", err)
 	}
@@ -13502,7 +13502,7 @@ func enterMaintenance(
 ) (int, []string, string) {
 	t.Helper()
 
-	status, resp, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/enter", forceBody)
+	status, resp, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/maintenance/enter", forceBody)
 	if err != nil {
 		t.Fatalf("POST maintenance enter: %v", err)
 	}
@@ -13528,7 +13528,7 @@ func enterMaintenance(
 func leaveMaintenance(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/leave", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "")
 	if err != nil {
 		t.Fatalf("POST maintenance leave: %v", err)
 	}
@@ -13950,9 +13950,9 @@ func checkMaintenanceUnauthorized(ctx context.Context, t *testing.T, env *e2e.En
 	for _, target := range []struct {
 		method, path string
 	}{
-		{http.MethodGet, "/api/server/maintenance"},
-		{http.MethodPost, "/api/server/maintenance/enter"},
-		{http.MethodPost, "/api/server/maintenance/leave"},
+		{http.MethodGet, "/api/dustpan/v1/maintenance"},
+		{http.MethodPost, "/api/dustpan/v1/maintenance/enter"},
+		{http.MethodPost, "/api/dustpan/v1/maintenance/leave"},
 	} {
 		status, body, err := env.ServerAPIStatusBare(ctx, target.method, target.path)
 		if err != nil {

@@ -10,6 +10,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// Paths of the component routes of the installation API.
+const (
+	componentsPath = "/api/dustpan/v1/components"
+	workerPath     = "/api/dustpan/v1/worker"
+)
+
 // UnclaimedOperation is a durable operation that no worker holds. Seconds is
 // how long it has waited.
 type UnclaimedOperation struct {
@@ -101,7 +107,7 @@ func (h *Handler) workerRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/components",
+			Path:    componentsPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
 			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
@@ -109,7 +115,7 @@ func (h *Handler) workerRoutes() []Route {
 		},
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/worker",
+			Path:    workerPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
 			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
@@ -118,7 +124,7 @@ func (h *Handler) workerRoutes() []Route {
 	}
 }
 
-// getComponents serves GET /api/server/components: the components of the
+// getComponents serves GET /api/dustpan/v1/components: the components of the
 // process that answers. It needs the action server:observe.
 func (h *Handler) getComponents(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	names := []string{}
@@ -129,7 +135,7 @@ func (h *Handler) getComponents(w http.ResponseWriter, r *http.Request, _ identi
 	h.writeJSON(r.Context(), w, http.StatusOK, componentsResponse{Components: names})
 }
 
-// getWorker serves GET /api/server/worker: the due schedules and the
+// getWorker serves GET /api/dustpan/v1/worker: the due schedules and the
 // operations that no worker claimed for more than 2 lease periods. It needs
 // the action server:observe.
 func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
