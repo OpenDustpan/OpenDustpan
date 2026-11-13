@@ -277,7 +277,7 @@ output "greeting" {
 func installCLI(t *testing.T, tool e2e.Tool, version string) e2e.Install {
 	t.Helper()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	// The download keeps an idle connection, which goleak reports at the end.
 	t.Cleanup(http.DefaultClient.CloseIdleConnections)

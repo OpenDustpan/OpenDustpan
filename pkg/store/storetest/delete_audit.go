@@ -228,7 +228,10 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 		t.Fatalf("get stack by the stored name: err = %v, want ErrNotFound", err)
 	}
 
-	if err = f.s.RenameStack(ctx, tomb, "back", f.fence); !errors.Is(err, stack.ErrNotFound) {
+	err = f.s.RenameStack(
+		ctx, tomb, "back", f.fence, renameEntry(f.ref.Namespace, tomb),
+	)
+	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("rename by the stored name: err = %v, want ErrNotFound", err)
 	}
 

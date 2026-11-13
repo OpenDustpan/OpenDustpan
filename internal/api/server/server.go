@@ -38,6 +38,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -189,6 +190,10 @@ type Config struct {
 	// StoreChecks runs the deep checks of the blob store. Nil means the server
 	// has none: the store check routes are not mounted.
 	StoreChecks *storecheck.Service
+	// Cursors seals the cursor of each page of the namespace list, so a
+	// cursor does not name a namespace to the caller. Nil makes the list fail
+	// closed: it answers an error, never an unsealed cursor.
+	Cursors secret.Wrapper
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -254,6 +259,7 @@ type Handler struct {
 	idem          *idempotent.Middleware
 	instances     installation.InstanceStore
 	storeChecks   *storecheck.Service
+	cursors       secret.Wrapper
 	mux           *patternMux
 	routes        []Route
 }
@@ -334,7 +340,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		settings:  cfg.Settings,
 		gitHost:   cfg.GitHost,
 		idem:      cfg.Idempotency,
-		instances: cfg.Instances, storeChecks: cfg.StoreChecks,
+		instances: cfg.Instances, storeChecks: cfg.StoreChecks, cursors: cfg.Cursors,
 		mux:    newPatternMux(),
 		routes: nil,
 	}
@@ -643,13 +649,19 @@ func deniedFailure(err error) (failure, bool) {
 
 // keepDenied maps the classes of a denial that keep their own text, as
 // problem.Writer.KeepDenied does. The status is 403 only. The text is built
-// from a sentinel, never from the wrap text.
+// from a sentinel or from a refusal of the domain, never from a wrapped
+// cause.
 func keepDenied(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, access.ErrEscalation):
 		// checkMoveGrant in pkg/access wraps this refusal in identity.ErrDenied
 		// when a grant of a move target gives more than the caller holds.
 		return keptForbidden(err, access.ErrEscalation.Error()), true
+	case errors.Is(err, accesstoken.ErrReachExceeded):
+		// The token service wraps this refusal in identity.ErrDenied. Its text
+		// names the principal and the actions of the principal that the caller
+		// does not hold. The refusal never holds a cause.
+		return keptForbidden(err, err.Error()), true
 	case errors.Is(err, errSignInRefused):
 		// The reason names no code, token or state: the sign-in handler adds it
 		// on purpose, as a signInRefusalError.

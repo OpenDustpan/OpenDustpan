@@ -28,7 +28,7 @@ func runningLogHandler(
 	logs := newFakeLogs(fakeLog{data: "one\ntw", bad: "", err: nil})
 
 	return newWorkerHandler(t, authz, handlerDeps{
-		jobs: jobs, starter: nil, entries: nil, artifacts: logs, logs: opts, cursors: nil,
+		jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: logs, logs: opts, cursors: nil,
 	}, nil)
 }
 
@@ -177,7 +177,7 @@ func TestLogStreamSetsAWriteDeadline(t *testing.T) {
 	jobs := newFakeJobs(logJob(t, 15, phaseEnded))
 	logs := newFakeLogs(fakeLog{data: "one\ntwo\npartial", bad: "", err: nil})
 	h := newWorkerHandler(t, newAuthorizer(logHolds()...), handlerDeps{
-		jobs: jobs, starter: nil, entries: nil, artifacts: logs, logs: opts, cursors: nil,
+		jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: logs, logs: opts, cursors: nil,
 	}, nil)
 
 	w := newDeadlineWriter(false)

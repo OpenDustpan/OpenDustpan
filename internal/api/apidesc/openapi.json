@@ -413,6 +413,20 @@
         ],
         "type": "object"
       },
+      "Components": {
+        "properties": {
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "components"
+        ],
+        "type": "object"
+      },
       "ContextAnswer": {
         "properties": {
           "action": {
@@ -1167,6 +1181,51 @@
         ],
         "type": "object"
       },
+      "DueSchedule": {
+        "properties": {
+          "lateSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lateSeconds",
+          "name"
+        ],
+        "type": "object"
+      },
+      "EnterMaintenanceRequest": {
+        "properties": {
+          "force": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "force"
+        ],
+        "type": "object"
+      },
+      "EnterMaintenanceResponse": {
+        "properties": {
+          "canceled": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "canceled",
+          "state"
+        ],
+        "type": "object"
+      },
       "ErrorAnswer": {
         "description": "An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse.",
         "discriminator": {
@@ -1320,6 +1379,8 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-group-reach",
+          "gate.limit-membership",
           "gate.limited",
           "gate.not-found",
           "gate.rule-failed",
@@ -1524,7 +1585,9 @@
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
+          "sign-in.failed",
           "sign-in.refused",
+          "sign-in.unavailable",
           "sink.access-token",
           "sink.conflict",
           "sink.delivery-not-found",
@@ -1575,6 +1638,7 @@
           "token.invalid",
           "token.kind-has-none",
           "token.not-found",
+          "token.outside-reach",
           "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",
@@ -2925,6 +2989,10 @@
       },
       "ListJobsResponse": {
         "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
           "jobs": {
             "items": {
               "$ref": "#/components/schemas/Job"
@@ -2936,6 +3004,7 @@
           }
         },
         "required": [
+          "damaged",
           "jobs"
         ],
         "type": "object"
@@ -3465,6 +3534,17 @@
         "required": [
           "canceledCount",
           "workCount"
+        ],
+        "type": "object"
+      },
+      "MaintenanceState": {
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
         ],
         "type": "object"
       },
@@ -6743,6 +6823,30 @@
         ],
         "type": "object"
       },
+      "UnclaimedOperation": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "seconds",
+          "state"
+        ],
+        "type": "object"
+      },
       "Unit": {
         "properties": {
           "collection": {
@@ -7541,6 +7645,42 @@
         },
         "type": "object"
       },
+      "UpgradeCheck": {
+        "properties": {
+          "appliedMigrations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "keyEncryptionKey": {
+            "type": "boolean"
+          },
+          "minimumBinaryVersion": {
+            "type": "string"
+          },
+          "runningJournaledUpdates": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "appliedMigrations",
+          "keyEncryptionKey",
+          "minimumBinaryVersion",
+          "runningJournaledUpdates",
+          "schemaVersion",
+          "version"
+        ],
+        "type": "object"
+      },
       "View": {
         "properties": {
           "createdAt": {
@@ -7601,6 +7741,53 @@
         "required": [
           "labels",
           "references"
+        ],
+        "type": "object"
+      },
+      "WorkerReport": {
+        "properties": {
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "leaseSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "oldestUnclaimedSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/UnclaimedOperation"
+            },
+            "type": "array"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/DueSchedule"
+            },
+            "type": "array"
+          },
+          "silentSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "stuck": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "components",
+          "leaseSeconds",
+          "oldestUnclaimedSeconds",
+          "operations",
+          "schedules",
+          "silentSeconds",
+          "stuck"
         ],
         "type": "object"
       },
@@ -7732,6 +7919,42 @@
           "capabilities"
         ],
         "x-dustpan-actions": []
+      }
+    },
+    "/api/dustpan/v1/components": {
+      "get": {
+        "operationId": "getComponents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Components"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
       }
     },
     "/api/dustpan/v1/git-host-apps/{kind}": {
@@ -8369,6 +8592,124 @@
         "x-dustpan-actions": [
           {
             "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance": {
+      "get": {
+        "operationId": "getMaintenance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance/enter": {
+      "post": {
+        "operationId": "enterMaintenance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnterMaintenanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnterMaintenanceResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance/leave": {
+      "post": {
+        "operationId": "leaveMaintenance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
             "object": "server"
           }
         ]
@@ -17583,6 +17924,51 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/sign-in/providers/{provider}/password": {
+      "post": {
+        "operationId": "signInWithProviderPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "sign-in"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -17708,6 +18094,78 @@
           }
         ]
       }
+    },
+    "/api/dustpan/v1/upgrade-check": {
+      "get": {
+        "operationId": "getUpgradeCheck",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeCheck"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/worker": {
+      "get": {
+        "operationId": "getWorker",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerReport"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
+      }
     }
   },
   "security": [
@@ -17756,6 +18214,9 @@
       "name": "git-host-links"
     },
     {
+      "name": "installation"
+    },
+    {
       "name": "issuer"
     },
     {
@@ -17796,6 +18257,9 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "sign-in"
     },
     {
       "name": "source-filter"

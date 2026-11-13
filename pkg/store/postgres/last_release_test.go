@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -20,10 +21,19 @@ func createReleaseWorkspace(t *testing.T, s *postgres.Store) workspace.Workspace
 	fence := ensureNamespace(t, s, "acme")
 	at := time.Date(2026, time.November, 1, 9, 0, 0, 0, time.UTC)
 	w := workspace.Workspace{
-		CreatedAt: at, UpdatedAt: at, Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: workspace.ID(ident.NewID("ws-")),
-		Ref: workspace.Ref{Namespace: "acme", Name: "web"}, NamespaceID: "", Revision: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: "acme", Name: "web"},
+		NamespaceID: "",
+		Revision:    1,
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, fence); err != nil {

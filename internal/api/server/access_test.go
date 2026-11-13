@@ -188,8 +188,12 @@ func newAccessFixtureAll(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -200,6 +204,7 @@ func newAccessFixtureAll(
 			TempAdmins: nil,
 			Store:      st,
 			Guard:      grants,
+			GroupReach: grants,
 			Namespaces: st,
 			Tokens:     grants,
 			Now:        nil,
@@ -212,7 +217,11 @@ func newAccessFixtureAll(
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -226,16 +235,29 @@ func newAccessFixtureAll(
 	passwords := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	signIn := &apiserver.SignIn{
-		Service:      newTestSignInService(t, st, sessions, principals),
-		OnDevRefused: nil, DevCode: nil, DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: nil,
-		Stored: nil, Admin: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: passwords,
-		Passkeys: passkeys, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+		Service:             newTestSignInService(t, st, sessions, principals),
+		OnDevRefused:        nil,
+		DevCode:             nil,
+		DevAdmin:            noBootstrapAdmin,
+		Sessions:            sessions,
+		Limiter:             nil,
+		Stored:              nil,
+		Admin:               nil,
+		PasswordProviders:   nil,
+		Origins:             []string{signInBase},
+		Providers:           nil,
+		PasswordLimiter:     passwords,
+		Passkeys:            passkeys,
+		PasskeySignIn:       nil,
+		PasskeyBeginLimiter: nil,
+		PasskeyLimiter:      nil,
 	}
 	if tweak != nil {
 		tweak(signIn, st)
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		GitHostLinks:     links(st),
@@ -317,6 +339,14 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 		return
 	}
 
+	f.grant(t, subject, role, obj)
+}
+
+// grant writes the grant of role on obj to the principal "prn-<subject>".
+func (f accessFixture) grant(t *testing.T, subject, role string, obj identity.Object) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	grt := access.Grant{
 		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-seed-" + subject, Role: role, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},
@@ -644,7 +674,7 @@ func TestOperatorRefusals(t *testing.T) {
 			http.StatusForbidden,
 		},
 		{http.MethodPost, "/api/server/namespaces", `{"name":"ops"}`, http.StatusForbidden},
-		{http.MethodGet, "/api/server/maintenance", "", http.StatusOK},
+		{http.MethodGet, "/api/dustpan/v1/maintenance", "", http.StatusOK},
 	} {
 		f.as(t, "olga", c, nil)
 	}
@@ -1056,7 +1086,8 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		t.Fatalf("denied entries of ann = %+v, want one", denied)
 	}
 
-	if !strings.HasPrefix(denied[0].Reason, "grant gives more than the granter holds") {
-		t.Fatalf("reason = %q, want the reason of the escalation", denied[0].Reason)
+	if !strings.Contains(denied[0].Reason, "outside the reach of the caller: ") ||
+		!strings.Contains(denied[0].Reason, "server:backup on the installation") {
+		t.Fatalf("reason = %q, want the missing actions of the escalation", denied[0].Reason)
 	}
 }

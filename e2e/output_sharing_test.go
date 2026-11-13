@@ -71,7 +71,7 @@ func TestOutputReadPaths(t *testing.T) {
 		t.Skipf("the output read paths need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -104,9 +104,9 @@ func TestOutputReadPaths(t *testing.T) {
 			t.Parallel()
 
 			cli := installShareCLI(t, fetcher, e2e.OpenTofu(), label)
-			// The step across tools runs on the first Pulumi version of the
-			// matrix, which is the latest release by default.
-			pulumiCLI := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersions[0])
+			// The step across tools runs on the single Pulumi version, which
+			// is a pinned version by default.
+			pulumiCLI := installShareCLI(t, fetcher, e2e.Pulumi(), e2e.Pulumi().Single())
 
 			for _, db := range databases {
 				t.Run(string(db), func(t *testing.T) {
@@ -553,11 +553,11 @@ func TestOutputSharingRules(t *testing.T) {
 		t.Skipf("the sharing rules need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
-	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	fetcher := sharedFetcher(t)
+	pulumiVersion := e2e.Pulumi().Single()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
@@ -584,7 +584,7 @@ func TestOutputSharingRules(t *testing.T) {
 	t.Run("pulumi", func(t *testing.T) {
 		t.Parallel()
 
-		cli := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersions[0])
+		cli := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersion)
 
 		t.Run("reader", func(t *testing.T) {
 			t.Parallel()
@@ -607,7 +607,7 @@ func TestOutputSharingRules(t *testing.T) {
 	t.Run("opentofu", func(t *testing.T) {
 		t.Parallel()
 
-		cli := installShareCLI(t, fetcher, e2e.OpenTofu(), tofuVersions[0])
+		cli := installShareCLI(t, fetcher, e2e.OpenTofu(), tofuVersion)
 
 		t.Run("reader", func(t *testing.T) {
 			t.Parallel()

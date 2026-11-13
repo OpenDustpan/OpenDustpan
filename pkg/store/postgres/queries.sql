@@ -47,6 +47,13 @@ SELECT ip_allowlist
 FROM namespaces
 WHERE name = $1;
 
+-- name: NamespacesWithList :many
+-- Lists the namespaces that have an IP allowlist.
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name;
+
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
 UPDATE namespaces
@@ -223,15 +230,15 @@ FOR NO KEY UPDATE;
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from, token_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
+    created_by, restored_from, token_id, job_id, git_head
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
 
 -- name: GetUpdate :one
 -- One statement finds the stack by its reference and reads the update, so the
 -- read needs no transaction. No stack and no update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -245,7 +252,7 @@ UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
     started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
-    journal_version = @journal_version, token_id = @token_id
+    journal_version = @journal_version, token_id = @token_id, job_id = @job_id
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -281,7 +288,7 @@ WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 -- read needs no transaction. No stack and no running update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -292,7 +299,7 @@ WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AN
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -922,15 +929,15 @@ WHERE workspace_id = $1;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE id = $1;
 
@@ -939,7 +946,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1018,7 +1025,7 @@ WHERE w.id = $1;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -1050,7 +1057,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -1533,12 +1540,12 @@ UPDATE group_members SET removed_at_ms = $1
 WHERE principal_id = $2 AND removed_at_ms IS NULL;
 
 -- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 
@@ -1546,7 +1553,7 @@ FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 SELECT id FROM principal_groups WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
 
 -- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -1563,8 +1570,8 @@ WHERE deleted_at_ms IS NULL
   AND (@high::text = '' OR name_key COLLATE "C" < @high::text);
 
 -- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
-WHERE id = $5 AND deleted_at_ms IS NULL;
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, closed_to_identity_provider = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL;
 
 -- name: DeleteGroup :execrows
 UPDATE principal_groups SET deleted_at_ms = $1
@@ -1625,7 +1632,7 @@ GROUP BY g.name, g.name_key
 ORDER BY g.name_key COLLATE "C";
 
 -- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
@@ -1852,6 +1859,14 @@ SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind,
 FROM grants
 WHERE subject_kind = $1 AND subject_id = $2 AND revoked_at_ms IS NULL
 ORDER BY target, role;
+
+-- name: GrantsOfSubjects :many
+-- The current grants of each subject of the list, in one query. The unique
+-- index grants_current starts with the subject, so each subject is one seek.
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY(@subjects::text[]) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role;
 
 -- name: CountRoleGrantsBelowInstallation :one
 SELECT COUNT(*) FROM grants
@@ -2231,6 +2246,16 @@ SELECT c.name
 FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = $1;
+
+-- name: GetUnitCollectionByName :one
+-- The ID and the collection of one live unit by its name, in one statement.
+-- The collection is NULL when the unit is in no collection. No row means that
+-- the namespace holds no live unit with the name.
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
 
 -- name: UnitCollectionID :one
 -- The stable ID of the collection of one unit by its ID.
@@ -2738,6 +2763,61 @@ WHERE principals.id = sqlc.arg('id') AND principals.deleted_at_ms IS NULL AND pr
 -- record. A principal that is already disabled stays as it is.
 UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
+-- name: InsertBreakGlassReview :execrows
+-- Inserts the review of a new use. The unique index on (use_kind, use_ref)
+-- keeps one review for each use and the primary key keeps one for each ID,
+-- so a repeated open stores no second review.
+INSERT INTO break_glass_reviews (
+  id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+  $24, $25
+) ON CONFLICT DO NOTHING;
+
+-- name: GetBreakGlassReview :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE id = $1;
+
+-- name: GetBreakGlassReviewByUse :one
+-- The review of the kind and the reference of a use, for an open that runs
+-- again after a crash. The unique index makes at most one row match.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE use_kind = $1 AND use_ref = $2;
+
+-- name: UpdateBreakGlassReviewVerdict :execrows
+-- Stores the verdict of a review and clears the next notice. It changes no
+-- row when the stored version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET state = sqlc.arg('state'), verdict_reviewer = sqlc.arg('verdict_reviewer'),
+  verdict_note = sqlc.arg('verdict_note'), verdict_auth = sqlc.arg('verdict_auth'),
+  verdict_auth_at_ms = sqlc.arg('verdict_auth_at_ms'),
+  verdict_reviewed_at_ms = sqlc.arg('verdict_reviewed_at_ms'), verdict_act_as = sqlc.arg('verdict_act_as'),
+  next_notice_at_ms = 0, version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: UpdateBreakGlassReviewStep :execrows
+-- Stores the notice step of a review. It changes no row when the stored
+-- version is not the one that the caller read.
+UPDATE break_glass_reviews
+SET step = sqlc.arg('step'), next_notice_at_ms = sqlc.arg('next_notice_at_ms'), version = sqlc.arg('version')
+WHERE id = sqlc.arg('id') AND version = sqlc.arg('prev_version');
+
+-- name: DueBreakGlassReviews :many
+-- The pending reviews with a notice due at or before now, oldest first.
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews
+WHERE state = 'pending' AND next_notice_at_ms <> 0 AND next_notice_at_ms <= sqlc.arg('now_ms')::bigint
+ORDER BY next_notice_at_ms, id
+LIMIT sqlc.arg('max_rows')::bigint;
 
 -- name: InsertOIDCProvider :exec
 -- The first start with a provider ID records its issuer. A later start
@@ -3322,6 +3402,13 @@ SELECT id, version, body
 FROM gate_objects
 WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind)
 ORDER BY id COLLATE "C";
+
+-- name: ListGateObjectsOfKind :many
+-- Every object of one kind, of every scope, ordered by scope key and ID.
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = sqlc.arg(kind)
+ORDER BY scope_key COLLATE "C", id COLLATE "C";
 
 -- name: ListGateObjectsOfScope :many
 -- Every object and setting of one scope, ordered by kind and ID.
@@ -4115,7 +4202,7 @@ INSERT INTO jobs (
 );
 
 -- name: GetJob :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4123,7 +4210,7 @@ JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.id = sqlc.arg(id);
 
 -- name: GetJobByKey :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4161,7 +4248,7 @@ WHERE j.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg
 LIMIT 1;
 
 -- name: ListAwaitingJobsOfUnit :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4173,7 +4260,7 @@ ORDER BY j.seq;
 -- name: ListOrphanJobs :many
 -- Jobs that hold their unit while the durable operation of their current
 -- phase does not exist or ended. op_state is NULL for a missing operation.
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms,
        d.state AS op_state
@@ -4219,30 +4306,47 @@ JOIN namespaces AS n ON n.id = f.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND (f.ends_at_ms = 0 OR f.ends_at_ms > sqlc.arg(since_ms))
 ORDER BY f.starts_at_ms, f.id;
 
--- name: GetUnitStateVersion :one
-SELECT version_id FROM unit_state_versions
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
+-- name: FinalizeReleasedUnitState :one
+-- Make the current state version of the unit final, with the origin of a
+-- release, and do nothing when the unit has no state version row or its
+-- current version is final already. It returns the version and the time that
+-- the database clock gives it.
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = sqlc.arg(final_commit), final_job = sqlc.arg(final_job),
+    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND unit_id = sqlc.arg(unit_id) AND version_id <> final_version_id
+RETURNING version_id, final_at_ms;
 
--- name: PutUnitStateVersion :exec
-INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
+-- name: FinalizeUnitState :one
+-- Make the current state version of the unit final, with the origin of the
+-- write that ends it, at the time of the database clock. A unit with no state
+-- version row gets a row with the empty version as final. It returns the final
+-- version and its time.
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(version_id), sqlc.arg(updated_at_ms)
+    '', '', sqlc.arg(final_commit), sqlc.arg(final_job), FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
 )
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms;
+ON CONFLICT (unit_id) DO UPDATE SET final_version_id = unit_state.version_id,
+    final_commit = excluded.final_commit, final_job = excluded.final_job, final_at_ms = excluded.final_at_ms
+RETURNING version_id, final_at_ms;
 
--- name: GetUnitFinalVersion :one
-SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
+-- name: GetUnitState :one
+SELECT version_id, final_version_id, final_commit, final_job, final_at_ms FROM unit_state
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
 
--- name: PutUnitFinalVersion :exec
-INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
+-- name: PublishUnitState :exec
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(version_id), sqlc.arg(commit_id), sqlc.arg(job_id), sqlc.arg(at_ms)
+    sqlc.arg(version_id), sqlc.arg(final_version_id), sqlc.arg(final_commit), sqlc.arg(final_job), sqlc.arg(final_at_ms)
 )
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
-    job_id = excluded.job_id, at_ms = excluded.at_ms;
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id,
+    final_version_id = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_version_id ELSE unit_state.final_version_id END,
+    final_commit = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_commit ELSE unit_state.final_commit END,
+    final_job = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_job ELSE unit_state.final_job END,
+    final_at_ms = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_at_ms ELSE unit_state.final_at_ms END;
 
 -- name: GetPersonPreferences :one
 -- One row for a live person, with the stored preferences when the person has

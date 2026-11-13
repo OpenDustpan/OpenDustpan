@@ -54,6 +54,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename to a taken group name is ErrAlreadyExists", test: testRenameGroupTaken},
 		{name: "rename of a group to another case of its own name", test: testRenameGroupCase},
 		{name: "update of a missing group is ErrNotFound", test: testUpdateMissingGroup},
+		{name: "a group records the identity-provider switch", test: testGroupIdentityProviderSwitch},
 		{name: "delete group removes its memberships", test: testDeleteGroup},
 		{name: "delete of a missing group is ErrNotFound", test: testDeleteMissingGroup},
 		{name: "member round trip", test: testMemberRoundTrip},
@@ -167,13 +168,14 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 
 func newGroup(id, name string) principal.Group {
 	return principal.Group{
-		CreatedAt:   at(0),
-		UpdatedAt:   at(0),
-		ID:          id,
-		Name:        name,
-		Description: "The " + name + " group",
-		Source:      principal.SourceLocal,
-		MemberCount: 0,
+		CreatedAt:                at(0),
+		UpdatedAt:                at(0),
+		ID:                       id,
+		Name:                     name,
+		Description:              "The " + name + " group",
+		Source:                   principal.SourceLocal,
+		MemberCount:              0,
+		ClosedToIdentityProvider: false,
 	}
 }
 
@@ -190,6 +192,33 @@ func mustCreateGroup(t *testing.T, s principal.Store, g principal.Group) {
 
 	if err := s.CreateGroup(t.Context(), g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", g.Name, err)
+	}
+}
+
+func mustGroup(t *testing.T, s principal.Store, id string) principal.Group {
+	t.Helper()
+
+	g, err := s.GetGroup(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get the group %q: %v", id, err)
+	}
+
+	return g
+}
+
+func mustUpdateGroup(t *testing.T, s principal.Store, g principal.Group) {
+	t.Helper()
+
+	if err := s.UpdateGroup(t.Context(), g, entry()); err != nil {
+		t.Fatalf("update the group %q: %v", g.Name, err)
+	}
+}
+
+func mustDeleteGroup(t *testing.T, s principal.Store, id string) {
+	t.Helper()
+
+	if err := s.DeleteGroup(t.Context(), id, entry()); err != nil {
+		t.Fatalf("delete the group %q: %v", id, err)
 	}
 }
 
@@ -628,6 +657,62 @@ func testUpdateMissingGroup(t *testing.T, s principal.Store) {
 
 	err := s.UpdateGroup(t.Context(), newGroup("grp-missing", "ops"), entry())
 	wantErr(t, "update a missing group", err, principal.ErrNotFound)
+}
+
+// testGroupIdentityProviderSwitch proves that the switch that closes a group
+// to the identity provider round trips: a new group is open, a create stores
+// the switch, a change closes it, a rename keeps it and a change opens it
+// again. A change of a deleted or an unknown group is ErrNotFound.
+func testGroupIdentityProviderSwitch(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	g := newGroup("grp-1", "ops")
+	mustCreateGroup(t, s, g)
+
+	if mustGroup(t, s, g.ID).ClosedToIdentityProvider {
+		t.Fatal("a new group is closed to the identity provider")
+	}
+
+	closedAtCreate := newGroup("grp-2", "engineering")
+	closedAtCreate.ClosedToIdentityProvider = true
+	mustCreateGroup(t, s, closedAtCreate)
+	equalGroup(t, mustGroup(t, s, closedAtCreate.ID), closedAtCreate)
+
+	closed := g
+	closed.ClosedToIdentityProvider = true
+	closed.UpdatedAt = at(7)
+
+	renamed := closed
+	renamed.Name = "operations"
+	renamed.UpdatedAt = at(8)
+
+	open := renamed
+	open.ClosedToIdentityProvider = false
+	open.UpdatedAt = at(9)
+
+	again := open
+	again.UpdatedAt = at(10)
+
+	// Each change is stored, and the rename between them keeps the switch.
+	steps := []principal.Group{closed, renamed, open, again}
+	for i := range steps {
+		mustUpdateGroup(t, s, steps[i])
+		equalGroup(t, mustGroup(t, s, steps[i].ID), steps[i])
+	}
+
+	missing := newGroup("grp-missing", "dev")
+	missing.ClosedToIdentityProvider = true
+
+	err := s.UpdateGroup(t.Context(), missing, entry())
+	wantErr(t, "update an unknown group", err, principal.ErrNotFound)
+
+	mustDeleteGroup(t, s, g.ID)
+
+	deleted := open
+	deleted.UpdatedAt = at(11)
+
+	err = s.UpdateGroup(t.Context(), deleted, entry())
+	wantErr(t, "update a deleted group", err, principal.ErrNotFound)
 }
 
 func testDeleteGroup(t *testing.T, s principal.Store) {

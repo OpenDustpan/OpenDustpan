@@ -120,7 +120,8 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 	}
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: obj.WithUnitID(u.ID), Operation: op, Purpose: purpose, Executor: job.ExecutorRunner,
 			Location: job.Location{

@@ -14,10 +14,12 @@ import (
 )
 
 // StoreCheckStore is what RunStoreChecks needs: the rows of the checks and
-// the durable operations in one database.
+// the durable operations in one database. Witness reads the stored end time
+// with a raw query; a store without one skips that case.
 type StoreCheckStore struct {
 	Records storecheck.Records
 	Ops     durable.Store
+	Witness NullEndedWitness
 }
 
 // StoreCheckFactory returns a fresh, empty store for one subtest of
@@ -34,6 +36,10 @@ func RunStoreChecks(t *testing.T, newStore StoreCheckFactory) {
 		name string
 	}{
 		{name: "start stores a running row and its operation", test: testCheckStart},
+		{
+			name: "a row that is not ended stores NULL, a row that is ended stores its time",
+			test: testCheckEndedShape,
+		},
 		{name: "start refuses a second running check and stores nothing", test: testCheckOneRunning},
 		{name: "start refuses a taken ID", test: testCheckTakenID},
 		{name: "start refuses a row that is not valid", test: testCheckInvalidRow},
@@ -121,6 +127,29 @@ func endOf(at time.Time) storecheck.Finish {
 		Error:   "",
 		Report:  []byte(`{"passed":true}`),
 	}
+}
+
+// testCheckEndedShape proves the stored shape of ended_at_ms: a running row
+// stores NULL and a finished row stores its end time. It reads the column
+// with the raw reader of the store, not through the domain record.
+func testCheckEndedShape(t *testing.T, s StoreCheckStore) {
+	t.Helper()
+
+	if s.Witness == nil {
+		t.Skip("store has no raw end-time reader")
+	}
+
+	startCheck(t, s, "chk-aaaa", storecheck.TargetBlobs, checkAt())
+	requireNotEndedStored(t, s.Witness, "store_checks", "chk-aaaa")
+
+	fence := claimCheck(t, s)
+	endedAt := checkAt().Add(time.Minute)
+
+	if err := s.Records.FinishCheck(t.Context(), fence, "chk-aaaa", endOf(endedAt)); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	requireEndedStored(t, s.Witness, "store_checks", "chk-aaaa", endedAt)
 }
 
 func testCheckStart(t *testing.T, s StoreCheckStore) {

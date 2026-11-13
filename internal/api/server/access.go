@@ -227,7 +227,9 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 
 	res, err := op(w, r, h.access, c)
 	if err != nil {
-		refused := denials.Denial{Action: identity.Action(c.e.Action), Object: c.obj, Reason: "", Window: 0}
+		refused := denials.Denial{
+			Action: identity.Action(c.e.Action), Object: c.obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}
 		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
@@ -244,7 +246,8 @@ const reasonEscalation = "grant gives more than the granter holds"
 // recordEscalation writes the audit entry of a change that the access service
 // refused with access.ErrEscalation. The 403 alone leaves no trace, and the
 // check of the manage action above passed, so no other layer writes an entry.
-// It does nothing for any other error.
+// A reach refusal names the missing actions with their objects; any other
+// escalation keeps the fixed reason. It does nothing for any other error.
 func (h *Handler) recordEscalation(
 	ctx context.Context, r *http.Request, p identity.Principal, d denials.Denial, err error,
 ) {
@@ -253,6 +256,18 @@ func (h *Handler) recordEscalation(
 	}
 
 	d.Reason = reasonEscalation
+
+	if reason := reachReason(err); reason != "" {
+		d.Reason = reason
+
+		if refusal, ok := errors.AsType[access.ReachRefusal](err); ok {
+			missing := refusal.MissingActions()
+			d.ReasonWithin = func(limit int) string {
+				return access.MissingActionsReasonWithin(missing, limit)
+			}
+		}
+	}
+
 	h.guard.Record(ctx, r, p, d)
 }
 
@@ -279,12 +294,24 @@ func (h *Handler) roleRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: rolesPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(listRoles),
+			Method:       http.MethodGet,
+			Path:         rolesPath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(listRoles),
 		},
 		{
-			Method: http.MethodGet, Path: rolePath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(getRole),
+			Method:       http.MethodGet,
+			Path:         rolePath,
+			Scope:        ScopeAuthorized,
+			Actions:      read,
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(getRole),
 		},
 		{
 			Method:     http.MethodPost,
@@ -292,8 +319,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, createRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveFreshAccessChange(identity.ActionServerManageRoles, createRole),
 		},
 		{
 			Method:     http.MethodPatch,
@@ -301,8 +328,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, changeRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveFreshAccessChange(identity.ActionServerManageRoles, changeRole),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -310,8 +337,8 @@ func (h *Handler) roleRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    manage,
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
 		},
 	}
 }
@@ -349,19 +376,8 @@ func (h *Handler) grantRoutes() []Route {
 		}
 
 		out = append(out,
-			Route{
-				Method: http.MethodGet, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, ActionsFor: nil, Serve: h.serveAccessRead(listGrants),
-			},
-			Route{
-				Method:     http.MethodPost,
-				Path:       k.path,
-				Scope:      ScopeAuthorized,
-				Actions:    actions,
-				Resolve:    k.resolve,
-				ActionsFor: nil,
-				Serve:      grant,
-			},
+			authorizedRoute(http.MethodGet, k.path, actions, k.resolve, h.serveAccessRead(listGrants)),
+			authorizedRoute(http.MethodPost, k.path, actions, k.resolve, grant),
 		)
 
 		if k.path == serverGrantsPath {
@@ -369,11 +385,10 @@ func (h *Handler) grantRoutes() []Route {
 			continue
 		}
 
-		out = append(out, Route{
-			Method: http.MethodDelete, Path: k.path + grantIDSuffix, Scope: ScopeAuthorized,
-			Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve, ActionsFor: nil,
-			Serve: h.serveAccessChange(k.action, revokeGrant),
-		})
+		out = append(out, authorizedRoute(
+			http.MethodDelete, k.path+grantIDSuffix, append([]identity.Action(nil), actions...),
+			k.resolve, h.serveAccessChange(k.action, revokeGrant),
+		))
 	}
 
 	out = append(out, Route{
@@ -384,9 +399,10 @@ func (h *Handler) grantRoutes() []Route {
 			identity.ActionCollectionManageAccess,
 			identity.ActionUnitManageAccess,
 		},
-		Resolve:    h.resolveGrantObject,
-		ActionsFor: grantManageActionsFor,
-		Serve:      h.serveRevokeGrantByID,
+		Resolve:      h.resolveGrantObject,
+		ActionsFor:   grantManageActionsFor,
+		OpaqueDenial: false,
+		Serve:        h.serveRevokeGrantByID,
 	})
 
 	return out
@@ -778,7 +794,9 @@ func (h *Handler) serveRevokeGrantByID(
 
 	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
 	if err != nil {
-		h.recordEscalation(ctx, r, p, denials.Denial{Action: actions.manage, Object: obj, Reason: "", Window: 0}, err)
+		h.recordEscalation(ctx, r, p, denials.Denial{
+			Action: actions.manage, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}, err)
 		h.writeError(ctx, w, err)
 		h.appendObjectChange(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),

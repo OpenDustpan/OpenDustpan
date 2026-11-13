@@ -103,7 +103,7 @@ type Backup struct {
 	ID          string
 	State       string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Target      string
 	Error       string
 }
@@ -113,6 +113,34 @@ type BlobPurge struct {
 	UnitID      string
 	PurgedAtMs  int64
 	NamespaceID string
+}
+
+type BreakGlassReview struct {
+	ID                    string
+	UseKind               string
+	UseRef                string
+	UseScope              string
+	UseObject             string
+	UseSubject            string
+	UsePeople             string
+	UseReason             string
+	UseAtMs               int64
+	UseUntilMs            int64
+	State                 string
+	CreatedAtMs           int64
+	DueAtMs               int64
+	Calendar              string
+	CalendarFromNamespace string
+	CalendarFromGroup     string
+	Step                  int64
+	NextNoticeAtMs        int64
+	VerdictReviewer       string
+	VerdictNote           string
+	VerdictAuth           string
+	VerdictAuthAtMs       int64
+	VerdictReviewedAtMs   int64
+	VerdictActAs          string
+	Version               int64
 }
 
 type Checkpoint struct {
@@ -854,14 +882,15 @@ type Principal struct {
 }
 
 type PrincipalGroup struct {
-	ID          string
-	Name        string
-	NameKey     string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	DeletedAtMs sql.NullInt64
+	ID                       string
+	Name                     string
+	NameKey                  string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	DeletedAtMs              sql.NullInt64
+	ClosedToIdentityProvider bool
 }
 
 type PrincipalSessionGeneration struct {
@@ -924,7 +953,7 @@ type Restore struct {
 	PreBackupID        string
 	RequestedBy        string
 	StartedAtMs        int64
-	EndedAtMs          int64
+	EndedAtMs          sql.NullInt64
 	Error              string
 	DevReport          string
 	MaintenanceEntered int64
@@ -1183,6 +1212,7 @@ type StateVersion struct {
 	SensitiveMarks    []byte
 	FencedBy          string
 	UnlockedWrite     bool
+	OriginJob         string
 }
 
 type StoreCheck struct {
@@ -1191,7 +1221,7 @@ type StoreCheck struct {
 	State       string
 	RequestedBy string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Error       string
 	Report      string
 }
@@ -1246,15 +1276,6 @@ type UnitDefault struct {
 	UpdatedAtMs int64
 }
 
-type UnitFinalVersion struct {
-	UnitID      string
-	NamespaceID string
-	VersionID   string
-	CommitID    string
-	JobID       string
-	AtMs        int64
-}
-
 type UnitSetting struct {
 	UnitID      string
 	NamespaceID string
@@ -1263,11 +1284,14 @@ type UnitSetting struct {
 	UpdatedAtMs int64
 }
 
-type UnitStateVersion struct {
-	UnitID      string
-	NamespaceID string
-	VersionID   string
-	UpdatedAtMs int64
+type UnitState struct {
+	UnitID         string
+	NamespaceID    string
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
 }
 
 type Update struct {
@@ -1289,6 +1313,8 @@ type Update struct {
 	JournalClosed         int64
 	TokenID               string
 	JournalRecordsChanged int64
+	JobID                 string
+	GitHead               string
 }
 
 type UpdateEvent struct {

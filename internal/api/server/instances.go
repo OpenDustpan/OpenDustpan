@@ -62,8 +62,8 @@ func (h *Handler) instanceRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    []identity.Action{identity.ActionServerReadInstances},
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.listInstances,
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.listInstances,
 		},
 		{
 			Method:     http.MethodDelete,
@@ -71,8 +71,8 @@ func (h *Handler) instanceRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    []identity.Action{identity.ActionServerDeleteInstance},
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.deleteInstance,
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.deleteInstance,
 		},
 	}
 }

@@ -261,7 +261,7 @@ schedule.
 | `executor` | `runner` or `write-back` |
 | `state` | `queued`, `awaiting-approval`, `dispatched`, `running`, `canceling`, `awaiting-state`, `succeeded`, `failed`, `canceled`, `rejected` or `expired` |
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
-| `reason` | Why a job that ended did end. The field is not there for a job that runs. |
+| `reason` | Why a job that ended did end, or why a job that plans again did so. The field is not there for a job that runs. |
 | `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. The field `source` says where the effective location came from: `request`, `unit` or `namespace`. `namespace` means that the default connection of the namespace gave the connection. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
 | `pool` | The name of the runner pool of a runner job. A start request takes the same value. The field is not there when the pool no longer exists. It is not there when the pool belongs to another namespace. A `POST` that made the job cannot always read the pool. Then the answer is 201 with no `pool`. The server writes a warning with the job ID to its log. A `GET` that cannot read the pool answers 500. |
 | `poolID` | The ID of the runner pool of a runner job. The field stays when the pool no longer exists. |

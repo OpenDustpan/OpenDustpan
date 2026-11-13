@@ -166,6 +166,29 @@ func (t *gateTx) List(ctx context.Context, scope gate.Scope, kind string) ([]gat
 	return out, nil
 }
 
+func (t *gateTx) ListEveryScope(ctx context.Context, kind string) ([]gatestore.Located, error) {
+	rows, err := t.q.ListGateObjectsOfKind(ctx, kind)
+	if err != nil {
+		return nil, fmt.Errorf("select gate objects of kind: %w", err)
+	}
+
+	out := make([]gatestore.Located, len(rows))
+	for i, r := range rows {
+		name, kerr := t.locatedKey(ctx, r.NamespaceID, r.ScopeKey, r.UnitID)
+		if kerr != nil {
+			return nil, kerr
+		}
+
+		out[i] = gatestore.Located{
+			ScopeKey: name.key,
+			Label:    name.label,
+			Row:      gatestore.Row{Kind: kind, ID: r.ID, Version: r.Version, Body: r.Body},
+		}
+	}
+
+	return out, nil
+}
+
 func (t *gateTx) ListScope(ctx context.Context, scope gate.Scope) ([]gatestore.Row, error) {
 	rs, ok, err := t.rowScopeOf(ctx, scope)
 	if err != nil || !ok {

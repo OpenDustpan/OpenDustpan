@@ -222,7 +222,9 @@ func checkRouteHolding(t *testing.T, rc *routeCase, held int) {
 	}
 
 	got := authz.seen()
-	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+	// The namespace read of the path runs once before the lookup, for the IP
+	// allowlist, and once more with the other checks.
+	wantChecks := append([]string{rc.checks[0]}, rc.checks[:min(held+1, len(rc.checks))]...)
 
 	if len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
 		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)

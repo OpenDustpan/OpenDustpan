@@ -1,6 +1,6 @@
 package client
 
-// Upgrade check subcommand: a client of GET /api/server/upgrade-check
+// Upgrade check subcommand: a client of GET /api/dustpan/v1/upgrade-check
 // (ADR 39 decision 3).
 //
 //	opendustpan upgrade check --server https://dustpan.example [--ca-file ca.pem]
@@ -211,7 +211,7 @@ func readUpgradeCheck(
 ) (UpgradeCheckAnswer, error) {
 	var none UpgradeCheckAnswer
 
-	endpoint := backupEndpoint(server, "/api/server/upgrade-check")
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/upgrade-check")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
