@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // TargetResolver finds the object of a request: the namespace and, for a
@@ -135,56 +138,96 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 	return route.Enforce(h.kit(), h.writeError, route.Steps[target]{
 		Scope:   rt.Scope,
 		Actions: slices.Concat(rt.Reads, rt.Actions),
-		Resolve: rt.Resolve,
+		Resolve: func(w http.ResponseWriter, r *http.Request) (target, error) {
+			return h.resolveTarget(rt, w, r)
+		},
 		Authorize: func(r *http.Request, p identity.Principal, t target) error {
-			return h.authorizeRoute(r.Context(), r, rt, p, t)
+			return h.authorizeTarget(r, p, rt, t)
 		},
 		Serve: rt.Serve,
 	})
 }
 
-// authorizeRoute runs the checks of route for p on t. It returns errNotFound
-// for a refused read check and an error that wraps identity.ErrDenied for a
-// refused action.
-func (h *Handler) authorizeRoute(
-	ctx context.Context, r *http.Request, rt Route, p identity.Principal, t target,
-) error {
-	nsRead := identity.ActionNamespaceRead
+// resolveTarget reads the target of rt. When the lookup fails, it keeps the
+// error in the target and returns no error, so that Authorize can check the
+// client address first.
+func (h *Handler) resolveTarget(rt Route, w http.ResponseWriter, r *http.Request) (target, error) {
+	t, err := rt.Resolve(w, r)
+	if err == nil {
+		return t, nil
+	}
 
-	nsErr := h.guard.Authorize(ctx, r, p, nsRead, identity.NamespaceObject(t.ns.Name))
-	if err := readRefusal(nsRead, nsErr); err != nil {
+	t.lookupErr = err
+
+	return t, nil
+}
+
+// authorizeTarget runs the checks of rt for p on t. It checks the client
+// address first, also when the lookup failed, and then answers the error of a
+// failed lookup. The namespace read runs first, and the read of a namespace
+// route is not repeated on the namespace.
+func (h *Handler) authorizeTarget(r *http.Request, p identity.Principal, rt Route, t target) error {
+	if err := h.checkAddress(r.Context(), r, p); err != nil {
 		return err
 	}
 
-	for _, action := range rt.Reads {
-		if action == nsRead && !t.obj.IsUnit() {
-			// The object is the namespace, which the first check read.
-			continue
-		}
+	if t.lookupErr != nil {
+		return t.lookupErr
+	}
 
-		if err := readRefusal(action, h.guard.Authorize(ctx, r, p, action, t.obj)); err != nil {
-			return err
+	reads := rt.Reads
+	if !t.obj.IsUnit() {
+		reads = make([]identity.Action, 0, len(rt.Reads))
+		for _, action := range rt.Reads {
+			if action != identity.ActionNamespaceRead {
+				reads = append(reads, action)
+			}
 		}
 	}
 
-	for _, action := range rt.Actions {
-		if err := h.guard.Authorize(ctx, r, p, action, t.obj); err != nil {
+	g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
+	checks := route.Checks{
+		Namespace:     identity.NamespaceObject(t.ns.Name),
+		Reads:         reads,
+		Actions:       rt.Actions,
+		NotFound:      errNotFound,
+		RequireAction: false,
+	}
+
+	return g.AuthorizeObject(r.Context(), r, p, t.obj, checks)
+}
+
+// checkAddress refuses a client address that is outside the IP allowlist of
+// the namespace in the path, before the decision on the target, also when the
+// lookup found nothing. The answer is the same 403 for a name that exists and
+// for a name that does not exist, so it does not tell whether the object
+// exists. Every other result, also an invalid name, continues: the checks
+// after the lookup give the answer, as before. It asks through Decide, which
+// writes no entry, and records only the address refusal: AuthorizeObject
+// records every other refusal one time.
+//
+// Defense in depth: AuthorizeObject checks the allowlist again on the found
+// namespace. This check stays so that the order of the lookup never decides
+// the answer.
+func (h *Handler) checkAddress(
+	ctx context.Context, r *http.Request, p identity.Principal,
+) error {
+	action := identity.ActionNamespaceRead
+
+	// An invalid name names no namespace and has no allowlist: the lookup
+	// that answered before this check gave the answer.
+	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
+		obj := identity.NamespaceObject(name)
+
+		err := h.guard.Decide(ctx, p, action, obj)
+		if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
+			})
+
 			return fmt.Errorf("authorize %s: %w", action, err)
 		}
 	}
 
 	return nil
-}
-
-// readRefusal maps the result of a read check: a refusal is the 404 of an
-// unknown object.
-func readRefusal(action identity.Action, err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, identity.ErrDenied):
-		return errNotFound
-	default:
-		return fmt.Errorf("authorize %s: %w", action, err)
-	}
 }

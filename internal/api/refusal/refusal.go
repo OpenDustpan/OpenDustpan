@@ -174,16 +174,32 @@ func (r *Recorder) Authorize(
 		return nil
 	}
 
-	// A request that the Authorizer could not decide is refused too. It gets
-	// an entry with a fixed reason, never the text of the error.
-	reason := ReasonFailed
-	if errors.Is(err, identity.ErrDenied) {
-		reason = ReasonPolicy
-	}
+	reason := ReasonFor(err)
 
 	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0})
 
 	return err
+}
+
+// Decide asks the Authorizer whether p may do action on obj, and returns its
+// answer. It writes no entry. The caller must record each refusal that it
+// returns to the client with Record, and give the entry the reason that
+// ReasonFor returns, as Authorize does.
+func (r *Recorder) Decide(
+	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	return r.authz.Authorize(ctx, p, action, obj)
+}
+
+// ReasonFor returns the reason of the entry for a refusal of the Authorizer.
+// A request that the Authorizer could not decide is refused too. It gets an
+// entry with a fixed reason, never the text of the error.
+func ReasonFor(err error) string {
+	if errors.Is(err, identity.ErrDenied) {
+		return ReasonPolicy
+	}
+
+	return ReasonFailed
 }
 
 // Record writes the entry of a refusal that the caller decided, for example a

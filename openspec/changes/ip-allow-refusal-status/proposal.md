@@ -43,6 +43,11 @@ IN:
 - `internal/api/objectcontext/routes.go`: the caller keeps the rule that drops
   the namespace read when the object is the namespace, because the helper reads
   it first.
+- `checkAddress` in the same three files: it runs before the answer of the
+  lookup, so a refused address gets the same 403 for a namespace, unit or
+  trigger that exists and for one that does not. It asks the Authorizer through
+  `Decide`, which writes no entry, and records only the address refusal;
+  `AuthorizeObject` records each other refusal one time.
 - The 404 of an object that the caller cannot read stays: it is the answer of
   `route.Checks.NotFound`, and the refusal of the list keeps its own 403 code.
 
@@ -62,6 +67,8 @@ OUT:
 | The triggers surface keeps the refusal of the list | `TestAddressOutsideTheAllowlistAnswers403` in `internal/api/triggers` (an authorizer that joins `identity.ErrDenied` and `ipallow.ErrAddressNotAllowed` on the namespace read; the answer is 403 `access.ip-not-allowed` with the message `forbidden`) | restore the local `readRefusal` |
 | The context surface | `TestAddressOutsideTheAllowlistAnswers403` in `internal/api/objectcontext` | the same |
 | The unit settings surface | `TestAddressOutsideTheAllowlistAnswers403` in `internal/api/settings` | the same |
+| The list refusal is the same for an object that exists and for one that does not | `TestAddressOutsideTheAllowlistAnswers403` in `internal/api/triggers`, `internal/api/objectcontext` and `internal/api/settings` | `false &&` before the `ipallow.ErrAddressNotAllowed` test in `checkAddress` |
+| One entry for each refusal | `TestRefusedReadWritesOneDenialEntry` in `internal/api/triggers`, `internal/api/objectcontext` and `internal/api/settings` | `Authorize` in place of `Decide` in `checkAddress` |
 | An object that the caller cannot read still answers 404 | the existing not-found tests of the three packages | answer 403 for every `identity.ErrDenied` |
 
 The tests model `internal/api/jobs/ipallow_test.go`, which joins the two errors

@@ -67,9 +67,10 @@ func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReady(ctx, t, env)
 
 	checkIPAllowlistCreateLocked(ctx, t, env)
+	unitID := checkIPAllowlistCreateUnit(ctx, t, env)
 	checkIPAllowlistEmpty(ctx, t, env)
 	checkIPAllowlistSet(ctx, t, env)
-	checkIPAllowlistRefusesOutside(ctx, t, env)
+	checkIPAllowlistRefusesOutside(ctx, t, env, unitID)
 	t.Run("access denied code", func(t *testing.T) {
 		checkAccessDeniedCode(ctx, t, env)
 	})
@@ -143,6 +144,59 @@ func checkIPAllowlistCreateLocked(ctx context.Context, t *testing.T, env *e2e.En
 	})
 }
 
+// ipAllowlistAgent is the User-Agent of the workspace request that makes the
+// unit of the locked namespace.
+const ipAllowlistAgent = "opendustpan-e2e-ipallowlist"
+
+// ipAllowlistUnitList is the part of the unit list that the setup reads.
+type ipAllowlistUnitList struct {
+	Units []ipAllowlistUnit `json:"units"`
+}
+
+// ipAllowlistUnit is one unit of the unit list.
+type ipAllowlistUnit struct {
+	UnitID string `json:"unitID"`
+	Name   string `json:"name"`
+}
+
+// checkIPAllowlistCreateUnit makes a unit in the locked namespace before the
+// list is set, so that the steps after it can read the three unit surfaces.
+// It answers the unit ID.
+func checkIPAllowlistCreateUnit(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	env.SeedCatchAllPlacement(ctx, t, "locked")
+	env.APIStep(ctx, t, env.AdminToken(), e2e.APIStepSpec{
+		UserAgent: ipAllowlistAgent, Check: nil, Name: "create the locked unit", Method: http.MethodPost,
+		Path: "/api/v2/organizations/locked/workspaces",
+		Body: `{"data":{"type":"workspaces","attributes":{"name":"locked"}}}`,
+		Want: http.StatusCreated, Scheme: "",
+	})
+
+	status, body, err := env.ServerAPIStatusAs(
+		ctx, env.AdminToken(), http.MethodGet, "/api/dustpan/v1/namespaces/locked/units", "",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list the units of the locked namespace = %d, %v: %s", status, err, body)
+	}
+
+	var list ipAllowlistUnitList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode the unit list: %v: %s", err, body)
+	}
+
+	for _, unit := range list.Units {
+		if unit.Name == "locked" {
+			return unit.UnitID
+		}
+	}
+
+	t.Fatalf("the unit list holds no unit locked: %s", body)
+
+	return ""
+}
+
 // checkIPAllowlistEmpty reads the list of the locked namespace before any
 // rule: the feature is on and the namespace has not opted in.
 func checkIPAllowlistEmpty(ctx context.Context, t *testing.T, env *e2e.Env) {
@@ -176,24 +230,46 @@ func checkIPAllowlistSet(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 }
 
-// checkIPAllowlistRefusesOutside reads the locked namespace from the default
-// source: the answer is 403 and never names the list.
-func checkIPAllowlistRefusesOutside(ctx context.Context, t *testing.T, env *e2e.Env) {
+// checkIPAllowlistRefusesOutside reads the locked namespace and the three
+// unit surfaces from the default source: each answer is 403 and never names
+// the list.
+func checkIPAllowlistRefusesOutside(ctx context.Context, t *testing.T, env *e2e.Env, unitID string) {
 	t.Helper()
 
-	body := ipAllowlistCall(ctx, t, env, ipAllowlistStep{
-		step:   "read the locked namespace from outside",
-		method: http.MethodGet, path: "/api/server/namespaces/locked/override-switches", body: "",
-		want: http.StatusForbidden,
-	})
+	unitBase := "/api/dustpan/v1/namespaces/locked/units/" + unitID
 
-	if strings.Contains(body, ipAllowlistSource) {
-		t.Fatalf("read the locked namespace from outside: body %s leaks the list", body)
+	for _, step := range []ipAllowlistStep{
+		{
+			step:   "read the locked namespace from outside",
+			method: http.MethodGet, path: "/api/server/namespaces/locked/override-switches", body: "",
+			want: http.StatusForbidden,
+		},
+		{
+			step:   "read the triggers of the locked unit from outside",
+			method: http.MethodGet, path: unitBase + "/triggers", body: "",
+			want: http.StatusForbidden,
+		},
+		{
+			step:   "read the context of the locked unit from outside",
+			method: http.MethodGet, path: unitBase + "/context", body: "",
+			want: http.StatusForbidden,
+		},
+		{
+			step:   "read the settings of the locked unit from outside",
+			method: http.MethodGet, path: unitBase + "/settings", body: "",
+			want: http.StatusForbidden,
+		},
+	} {
+		body := ipAllowlistCall(ctx, t, env, step)
+
+		if strings.Contains(body, ipAllowlistSource) {
+			t.Fatalf("%s: body %s leaks the list", step.step, body)
+		}
+
+		checkForbiddenAnswer(t, step.step, body, forbiddenAnswer{
+			code: "access.ip-not-allowed", message: "forbidden", args: nil,
+		})
 	}
-
-	checkForbiddenAnswer(t, "read the locked namespace from outside", body, forbiddenAnswer{
-		code: "access.ip-not-allowed", message: "forbidden", args: nil,
-	})
 }
 
 // forbiddenAnswer is the 403 answer that checkForbiddenAnswer expects: the
