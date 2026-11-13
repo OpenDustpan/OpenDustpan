@@ -10,6 +10,8 @@ Changed by:
   merge, and review requests.
 - ADR 300 changes decision 10: a merge queue entry is a request to apply, and the account that queued it is the requester.
 - ADR 344 changes decision 14: an agent can draft a change order. A person must make the draft a change order.
+- ADR 365 changes decision 10: a wording refinement, an apply job only for a
+  unit whose plan has a change.
 
 ## Context
 
@@ -272,8 +274,9 @@ label **One-way door** in the text. This list collects them:
     `approved` and that the request names the digest of the current
     revision. It moves the change order to `applying` and starts the
     durable operation `changeorder.apply` with the start key `<change order
-    ID>/<revision>`. That operation starts one apply job for each unit,
-    with the idempotency key `<change order ID>/<revision>/<unit ID>/apply`.
+    ID>/<revision>`. That operation starts one apply job for each unit
+    whose plan has a change (ADR 213 decision 3), with the idempotency key
+    `<change order ID>/<revision>/<unit ID>/apply`.
     So a retry after a crash gives one apply job for each unit. The apply
     jobs of one change order run with no order between them. Each unit
     keeps the one change at a time rule of the job model.
@@ -417,3 +420,9 @@ it.
   for the review and a deliver job after the approval?
 - Does a later ADR give agents a tool that creates change orders, with a
   confirmation by the person who asked?
+
+## Changelog
+
+- 2026-11-13, wording refinement (ADR 365): decision 10 said "one apply job
+  for each unit". It now says "for each unit whose plan has a change". ADR 213
+  decision 3 already said that a unit plan with no change starts no apply job.
