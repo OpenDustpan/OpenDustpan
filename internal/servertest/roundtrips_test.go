@@ -914,7 +914,10 @@ func requestFlows() []requestFlow {
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 37, func(h *rtHarness) {
+		// The rename appends its audit entry in the transaction of the rename:
+		// one read of the namespace, one read of the last entry of the chain and
+		// one insert.
+		{"pulumi stack rename", 41, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)

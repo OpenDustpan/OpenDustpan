@@ -66,6 +66,8 @@ A purge of the scheduled retention expiry has the subject `@server`. The subject
 acted: a person, a service or a workload. A purge of an expiry run that a
 person starts through the API has that person as the subject.
 
+A stack rename writes one entry with the old and the new name in `changes`.
+
 Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot

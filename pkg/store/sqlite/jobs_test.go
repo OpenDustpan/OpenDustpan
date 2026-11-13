@@ -129,7 +129,8 @@ func (d *jobDomain) RenameUnit(
 
 	_, stackName, _ := strings.Cut(newName, "/")
 
-	if err = d.s.RenameStack(ctx, ref, stack.Name(stackName), fence); err != nil {
+	entry := renameTestEntry(fence.Namespace, ref)
+	if err = d.s.RenameStack(ctx, ref, stack.Name(stackName), fence, entry); err != nil {
 		return identity.Object{}, fmt.Errorf("rename stack: %w", err)
 	}
 
@@ -241,6 +242,18 @@ func lockEntry(ns namespace.Name, target manuallock.Target) audit.Entry {
 		At: time.Now().UTC(), Namespace: ns, Subject: "tester", IDPSubject: "", TokenID: "",
 		Action: "unit:lock", Object: target.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		PrincipalKind: "", JobID: "",
+	}
+}
+
+// renameTestEntry returns a valid audit entry for a rename of ref in ns.
+func renameTestEntry(ns namespace.Name, ref stack.Ref) audit.Entry {
+	return audit.Entry{
+		At: time.UnixMilli(1_700_000_300_000).UTC(), Namespace: ns, Subject: "tester", IDPSubject: "", TokenID: "",
+		Action: "unit:manage", Object: "pulumi:" + ns.String() + "/" + ref.Project.String() + "/" + ref.Stack.String(),
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
 		PrincipalKind: "", JobID: "",
 	}

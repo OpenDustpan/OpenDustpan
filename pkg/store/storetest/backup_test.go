@@ -473,7 +473,7 @@ func (s *fakeBackupStore) UpdateStackTags(
 // RenameStack implements stack.Store. Children key on the stable stack ID,
 // so only the stack row and the inventory entry move.
 func (s *fakeBackupStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

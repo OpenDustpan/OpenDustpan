@@ -1832,7 +1832,7 @@ func TestRenameKeepsTags(t *testing.T) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence()); err != nil {
+	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

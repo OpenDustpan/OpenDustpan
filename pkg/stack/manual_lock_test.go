@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -97,11 +98,11 @@ func (m *unreadableStacks) ForceDeleteStack(
 }
 
 func (m *unreadableStacks) RenameStack(
-	ctx context.Context, ref stack.Ref, name stack.Name, fence namespace.Fence,
+	ctx context.Context, ref stack.Ref, name stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	m.writes.Add(1)
 
-	return m.Store.RenameStack(ctx, ref, name, fence)
+	return m.Store.RenameStack(ctx, ref, name, fence, e)
 }
 
 // unreadableCheckpointStacks fails every stack read.
@@ -425,7 +426,7 @@ func TestStartAfterARenamePassesTheLock(t *testing.T) {
 func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Service, *deleteStacks, stack.Ref) {
 	t.Helper()
 
-	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}
+	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil}
 	svc, ref := newStackService(t, locks, store)
 
 	return svc, store, ref
@@ -437,7 +438,7 @@ func newUnreadableStackService(t *testing.T, locks stack.ManualLocks) (*stack.Se
 	t.Helper()
 
 	store := &unreadableStacks{
-		Store:  &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0},
+		Store:  &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil},
 		err:    errStackRead,
 		writes: atomic.Int64{},
 	}
@@ -507,7 +508,7 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 			func(s *stack.Service, ref stack.Ref) error { return s.ForceDelete(t.Context(), ref, deleteEntry()) },
 		},
 		{"Rename", func(s *stack.Service, ref stack.Ref) error {
-			_, renameErr := s.Rename(t.Context(), ref, newName)
+			_, renameErr := s.Rename(t.Context(), ref, newName, deleteEntry())
 
 			return renameErr
 		}},
@@ -551,6 +552,43 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 				t.Errorf("store delete calls = %d, want 0", got)
 			}
 		})
+	}
+}
+
+// TestRenamePassesTheAuditEntry proves the rename service stamps the entry
+// with its clock and passes it to the store, which refuses an entry without a
+// time.
+func TestRenamePassesTheAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	newName, err := stack.ParseName("prod")
+	if err != nil {
+		t.Fatalf("parse name: %v", err)
+	}
+
+	svc, store, ref := newLockedStackService(t, failing(manuallock.ErrNotLocked))
+
+	if _, err := svc.Rename(t.Context(), ref, newName, deleteEntry()); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	if len(store.renames) != 1 {
+		t.Fatalf("rename calls = %d, want 1", len(store.renames))
+	}
+
+	got := store.renameAt(0)
+	wantAt := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	if !got.entry.At.Equal(wantAt) {
+		t.Fatalf("entry time = %v, want %v from the service clock", got.entry.At, wantAt)
+	}
+
+	if got.old != ref || got.new != newName {
+		t.Fatalf("rename = %v to %q, want %v to %q", got.old, got.new, ref, newName)
+	}
+
+	if got.entry.Namespace != ref.Namespace || got.entry.Action != "unit:manage" {
+		t.Fatalf("entry = namespace %q action %q, want %q and unit:manage",
+			got.entry.Namespace, got.entry.Action, ref.Namespace)
 	}
 }
 
@@ -637,7 +675,7 @@ func runRenameOnUnreadableStack(t *testing.T, locks *fakeManualLocks) (bool, err
 	}
 
 	svc, store, ref := newUnreadableStackService(t, locks)
-	_, err = svc.Rename(t.Context(), ref, newName)
+	_, err = svc.Rename(t.Context(), ref, newName, deleteEntry())
 
 	return store.writes.Load() > 0, err
 }

@@ -208,7 +208,7 @@ func (*fakeStacks) UpdateStackTags(
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence) error {
+func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence, audit.Entry) error {
 	return stack.ErrNotFound
 }
 
