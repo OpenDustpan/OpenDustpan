@@ -32,15 +32,36 @@ head of #3014 (the issue gives the runs).
   checks only the value at the creation instant, which is the one instant where
   floor and ceiling agree. No test reads the value 1 ms later.
 - `rg -n "DaysLeft" --type go` gives the definition, the test above and
-  `internal/api/server/tokens.go:202`. No other caller.
+  `internal/api/server/tokens.go:202`. No other caller of `DaysLeft`.
+- `internal/cli/client/expiry.go:58`: the CLI warning computes its own count,
+  `int(expiresAt.Sub(e.now()) / hoursPerDay)`, and prints "in %d days". It also
+  rounds down, so the CLI says "in 0 days" for a token that still works. It is a
+  second copy of the rule.
+- `tokenOf` builds the token in the create, rotate, read and list answers
+  (`internal/api/server/tokens.go:501`, `:640`, `:745`, `:799`), so one change
+  of `DaysLeft` covers all four.
+- `pkg/accesstoken/service.go:233-240`: a zero expiry takes the default
+  lifetime, so every token has an expiry, and every active token has
+  `expiresInDays`.
+- `internal/api/apidesc/openapi.json` describes `/api/dustpan/v1` only
+  (`internal/api/server/openapi.go:11`). It has no `expiresInDays` field, so no
+  generated file changes.
 - `docs/guides/access-tokens.md:82`: "`expiresInDays` | The whole days left,
   for an active token."
 
 ## Design
 
-`DaysLeft` rounds up: it answers the number of started days left. For an active
-token, `d = ExpiresAt - now` is greater than 0 (`StatusAt` reports expired at
-`ExpiresAt`), so the result is `int64((d + day - 1) / day)`, at least 1.
+One function holds the rule: `accesstoken.DaysUntil(expiresAt, now time.Time)
+int64`, exported from `pkg/accesstoken` because the CLI client already imports
+that package for `accesstoken.ExpiryHeader`. It answers the number of started
+days left: for `d = expiresAt - now > 0`, `int64((d + day - 1) / day)`, at
+least 1; for `d <= 0`, 0. `DaysLeft` calls it for an active token, and the CLI
+warning calls it instead of its own division. The server and the CLI then
+cannot disagree about the count (ADR 364: one place for the rule, an exported
+name by choice, with its doc comment).
+
+For an active token, `d` is greater than 0 (`StatusAt` reports expired at
+`ExpiresAt`, `pkg/accesstoken/accesstoken.go:139`).
 
 - A 90-day token answers 90 for the whole of its first day, 1 in its last day,
   and null once it is expired. The value never shows 0 for a token that works.
@@ -52,6 +73,12 @@ token, `d = ExpiresAt - now` is greater than 0 (`StatusAt` reports expired at
 - The unit test uses the fixture's fixed clock and steps it, so the test does
   not depend on wall-clock time.
 - `ExpiryWarning` uses durations, not this count, and does not change.
+- A revoked, disabled or expired token answers `null`, as today
+  (`DaysLeft` returns false for every status but active, `:185`).
+- Two reads in the last day both answer 1 until the expiry. Two reads that fall
+  on each side of a step (`ExpiresAt - k*day`) still differ, by design: the
+  field is "at the time of the answer". No test reads a token's list across 24
+  hours.
 
 Delight check: the number that a person reads right after the creation is the
 number that the person chose. A script that warns on `expiresInDays <= 7` warns
@@ -61,15 +88,17 @@ one day later at most, and still before the expiry.
 
 **IN**
 
-- `pkg/accesstoken/accesstoken.go`: `DaysLeft` rounds up, and its comment says
-  "started days left, at least 1 for an active token".
+- `pkg/accesstoken/accesstoken.go`: add `DaysUntil` with its doc comment;
+  `DaysLeft` calls it, and its comment says "started days left, at least 1 for
+  an active token".
+- `internal/cli/client/expiry.go`: the warning calls `accesstoken.DaysUntil`;
+  remove `hoursPerDay` if nothing else uses it. Its test asserts the count of a
+  token with 23 hours left (1) and 24 hours and 1 ms left (2).
 - `pkg/accesstoken/accesstoken_test.go`: a table test of `DaysLeft` with the
   fixed clock (section "Check").
 - `internal/api/server/tokens.go:87-89`: the field comment says "rounded up".
 - `docs/guides/access-tokens.md:82`: "The days left, rounded up, for an active
   token. A token in its last day answers 1."
-- The OpenAPI description text of `expiresInDays`, if it has one, through its
-  generator, and the clients and golden files through theirs.
 
 **OUT**
 
@@ -78,6 +107,10 @@ one day later at most, and still before the expiry.
   the status rules or the audit.
 - No new clock type: the `Service` clock and the `now` argument already give one
   reading for each answer.
+- No rule for a server clock that steps back. The count follows the server
+  clock, as every time in the API does; a clock step is an operator fault
+  outside this change.
+- No generated file: `openapi.json` does not describe this route.
 
 ## Check
 
@@ -91,7 +124,16 @@ one day later at most, and still before the expiry.
 - Guard 3, an active token never answers 0. Test:
   `TestDaysLeft/expiry_minus_1ms_answers_1`. Mutation: restore the floor; the
   row fails with 0.
-- Guard 4, an expired token has no count. Test:
+- Guard 4b, a partial day rounds up. Test:
+  `TestDaysUntil/one_day_and_1ms_answers_2` and
+  `TestDaysUntil/23h59m59s_answers_1`. Mutation: restore the floor; the rows
+  fail with 1 and 0.
+- Guard 5, the CLI says the same count. Test: the expiry-warning test of
+  `internal/cli/client` with 23 hours left prints "in 1 days". Mutation:
+  restore the division in `expiry.go`; the test fails with 0.
+- Guard 4, a token that is not active has no count. Rows
+  `TestDaysLeft/revoked_is_not_active` and `TestDaysLeft/disabled_is_not_active`
+  also. Test:
   `TestDaysLeft/at_expiry_is_not_active`. Mutation: return `true` for every
   status; the row fails.
 - The e2e test `TestAccessTokens` passes 12 of 12 runs on the head with
@@ -126,3 +168,9 @@ none. Questions considered:
   reading per answer exists already.
 - Does a script that relies on the old floor break? There are no users and no
   tag yet. The guide says the new rule.
+- Does the CLI warning change too? Yes, it calls the same function (adversarial
+  pass by another provider, 13 Nov).
+- Which OpenAPI text? None: `openapi.json` does not describe this route.
+- What if the server clock steps back? Out of scope; see "Fix boundary".
+- Revoked, disabled, partial-day, last-day and boundary cases: answered in
+  "Design" and "Check" (same pass).

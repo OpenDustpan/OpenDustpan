@@ -6,17 +6,21 @@
   `pkg/accesstoken/accesstoken_test.go` with the fixture's fixed clock and the
   five rows of "Check". Run it before the code change. Check: the two
   first-day rows fail with 89, and the expiry-minus-1ms row fails with 0.
-- [ ] 1.3 Change `DaysLeft` in `pkg/accesstoken/accesstoken.go` to round up,
-  with its comment. Check: `go test ./pkg/accesstoken/ -run 'TestDaysLeft|TestCreatedByAndDaysLeft'`
+- [ ] 1.3 Add `DaysUntil` to `pkg/accesstoken/accesstoken.go` and make
+  `DaysLeft` call it, with both comments. Add `TestDaysUntil` with the
+  partial-day rows. Check: `go test ./pkg/accesstoken/ -run 'TestDaysLeft|TestCreatedByAndDaysLeft'`
   passes, and each mutation of "Check" fails its row.
 
-## 2. Docs and generated files
+- [ ] 1.4 Make the CLI warning in `internal/cli/client/expiry.go` call
+  `accesstoken.DaysUntil`, and add its test rows (23 h left: 1; 24 h and 1 ms
+  left: 2). Check: `go test ./internal/cli/client/` passes, and the mutation of
+  guard 5 fails it.
+
+## 2. Docs
 
 - [ ] 2.1 Update the field comment in `internal/api/server/tokens.go` and the
-  row in `docs/guides/access-tokens.md`. Check: `make docs-lint` passes.
-- [ ] 2.2 Run the generators of the API description, the clients and the golden
-  files. Edit no generated file by hand. Check: `make clients-check` and the
-  golden tests pass.
+  row in `docs/guides/access-tokens.md`. Check: `make docs-lint` passes, and
+  `make clients-check` shows no change.
 
 ## 3. Proof
 
