@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -363,9 +364,9 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 	}
 }
 
-// newListNoAccessHandler builds a handler with no access service over a
-// store with the given namespaces.
-func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []string) testHandler {
+// newListNoAccessHandler builds a handler with no access service and the
+// cursor sealer cursors over a store with the given namespaces.
+func newListNoAccessHandler(t *testing.T, names []string, cursors secret.Wrapper) testHandler {
 	t.Helper()
 
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
@@ -387,7 +388,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		Cursors:          testCursors(t),
+		Cursors:          cursors,
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -400,7 +401,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              nil,
 		TempAdmins:       nil,
-		Authenticator:    authn,
+		Authenticator:    subjectAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
@@ -453,7 +454,7 @@ func serveListAs(t *testing.T, handler testHandler, token, path string) (int, st
 func TestNamespaceListWithoutAccessAdmin(t *testing.T) {
 	t.Parallel()
 
-	handler := newListNoAccessHandler(t, subjectAuthenticator{}, []string{"acme", "bravo"})
+	handler := newListNoAccessHandler(t, []string{"acme", "bravo"}, testCursors(t))
 
 	code, body := serveListAs(t, handler, "admin", "/api/server/namespaces")
 	if code != http.StatusOK {
@@ -473,7 +474,7 @@ func TestNamespaceListWithoutAccessAdmin(t *testing.T) {
 func TestNamespaceListWithoutAccessReader(t *testing.T) {
 	t.Parallel()
 
-	handler := newListNoAccessHandler(t, subjectAuthenticator{}, []string{"acme", "bravo"})
+	handler := newListNoAccessHandler(t, []string{"acme", "bravo"}, testCursors(t))
 
 	code, body := serveListAs(t, handler, "bob", "/api/server/namespaces")
 	if code != http.StatusOK {
@@ -484,6 +485,91 @@ func TestNamespaceListWithoutAccessReader(t *testing.T) {
 
 	if len(doc.Namespaces) != 0 || doc.Total == nil || *doc.Total != 0 {
 		t.Fatalf("reader page = %+v, want empty with total 0", doc)
+	}
+}
+
+// TestNamespaceListWithoutCursorSealer proves the list fails closed when the
+// handler has no cursor sealer: a page that needs a next cursor answers 500
+// and names no cursor, a page that fits answers 200 without a cursor, and any
+// cursor answers 400.
+func TestNamespaceListWithoutCursorSealer(t *testing.T) {
+	t.Parallel()
+
+	handler := newListNoAccessHandler(t, []string{"acme", "bravo", "charlie"}, nil)
+
+	tests := []struct {
+		name     string
+		path     string
+		want     int
+		wantCode string
+	}{
+		{
+			name: "a page that needs a cursor", path: "/api/server/namespaces?limit=1",
+			want: http.StatusInternalServerError, wantCode: errcode.ServerInternal,
+		},
+		{
+			name: "a page that fits", path: "/api/server/namespaces",
+			want: http.StatusOK, wantCode: "",
+		},
+		{
+			name: "a cursor", path: "/api/server/namespaces?cursor=next-page",
+			want: http.StatusBadRequest, wantCode: errcode.RequestPageTokenInvalid,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.want == http.StatusOK {
+				code, body := serveListAs(t, handler, "admin", tc.path)
+				if code != tc.want {
+					t.Fatalf("%s answers %d, want %d (%s)", tc.path, code, tc.want, body)
+				}
+
+				if doc := decodeListBody(t, body); doc.NextCursor != "" {
+					t.Fatalf("%s answers nextCursor %q, want none", tc.path, doc.NextCursor)
+				}
+
+				return
+			}
+
+			checkFailedPageWithoutCursor(t, handler, tc.path, tc.want, tc.wantCode)
+		})
+	}
+}
+
+// checkFailedPageWithoutCursor sends path as an administrator and proves that
+// it answers want with errorCode and holds no nextCursor field.
+func checkFailedPageWithoutCursor(
+	t *testing.T, handler testHandler, path string, want int, errorCode string,
+) {
+	t.Helper()
+
+	code, body := serveListAs(t, handler, "admin", path)
+	if code != want {
+		t.Fatalf("%s answers %d, want %d (%s)", path, code, want, body)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &fields); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+
+	if _, ok := fields["nextCursor"]; ok {
+		t.Fatalf("%s answers %q, want no nextCursor", path, body)
+	}
+
+	var failure struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &failure); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+
+	if failure.ErrorCode != errorCode {
+		t.Fatalf("%s answers errorCode %q, want %q", path, failure.ErrorCode, errorCode)
 	}
 }
 
@@ -518,11 +604,12 @@ func encodeNamespaceCursorToken(t *testing.T, wire namespaceCursorToken) string 
 }
 
 // checkCursorRefusal sends path as subject and proves that it answers 400
-// with the code of an invalid page token.
+// with the code of an invalid page token, without the token in the message.
 func checkCursorRefusal(t *testing.T, f accessFixture, subject, path string) {
 	t.Helper()
 
 	var failure struct {
+		Message   string `json:"message"`
 		ErrorCode string `json:"errorCode"`
 	}
 
@@ -530,6 +617,15 @@ func checkCursorRefusal(t *testing.T, f accessFixture, subject, path string) {
 
 	if failure.ErrorCode != errcode.RequestPageTokenInvalid {
 		t.Fatalf("%s answers errorCode %q, want %q", path, failure.ErrorCode, errcode.RequestPageTokenInvalid)
+	}
+
+	parsed, err := url.Parse(path)
+	if err != nil {
+		t.Fatalf("parse %q: %v", path, err)
+	}
+
+	if token := parsed.Query().Get("cursor"); token != "" && strings.Contains(failure.Message, token) {
+		t.Fatalf("%s answers message %q, which holds the token", path, failure.Message)
 	}
 }
 
@@ -616,6 +712,7 @@ func TestNamespaceListBadQuery(t *testing.T) {
 		}),
 		string(changed),
 		strings.Repeat("A", pagetoken.MaxLen+1),
+		"cursor-echo-canary",
 	} {
 		checkCursorRefusal(t, f, "admin", "/api/server/namespaces?cursor="+url.QueryEscape(token))
 	}
