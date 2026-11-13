@@ -257,6 +257,7 @@ func newAccessFixtureAll(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
 		GitHostLinks:     links(st),

@@ -97,7 +97,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		SignIn: coverageSignIn(
 			coverageSignInService(tb, st, principals, sessions), sessions, admin, code, coveragePasskeys(tb, st),
 		),
-		CheckpointEpochs: nil,
+		CheckpointEpochs: nil, Cursors: nil,
 		InstallationKind: installation.KindDev,
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		DenialLimiter:    nil,

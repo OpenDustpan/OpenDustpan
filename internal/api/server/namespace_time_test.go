@@ -41,7 +41,7 @@ func sendAsAdmin(t *testing.T, handler testHandler, method, body string) *httpte
 func TestNamespaceCreateTimeEqualsTheListTime(t *testing.T) {
 	t.Parallel()
 
-	handler := newListNoAccessHandler(t, subjectAuthenticator{}, nil)
+	handler := newListNoAccessHandler(t, nil, testCursors(t))
 
 	rec := sendAsAdmin(t, handler, http.MethodPost, `{"name":"acme"}`)
 	if rec.Code != http.StatusCreated {
