@@ -115,6 +115,10 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the table list names every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
+		{
+			name: "a row that is not ended stores NULL, a row that is ended stores its time",
+			test: testBackupEndedShape,
+		},
 		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "starting a backup stores the row and the operation together", test: testBackupStart},
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
@@ -1880,6 +1884,29 @@ func newBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Error:     "",
 		State:     backup.StateRunning,
 	}
+}
+
+// testBackupEndedShape proves the stored shape of ended_at_ms: a running row
+// stores NULL and a finished row stores its end time. It reads the column
+// with the raw reader of the store, not through the domain record.
+func testBackupEndedShape(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	witness, ok := s.(NullEndedWitness)
+	if !ok {
+		t.Skip("store has no raw end-time reader")
+	}
+
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	requireNotEndedStored(t, witness, backup.TableBackups, running.ID.String())
+
+	endedAt := now().Add(time.Hour)
+	mustFinishBackup(t, s, backupFinish{
+		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+	})
+	requireEndedStored(t, witness, backup.TableBackups, running.ID.String(), endedAt)
 }
 
 // testBackupRegistry covers the backups table: create a running row, finish

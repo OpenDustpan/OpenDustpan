@@ -20,7 +20,7 @@ CREATE TABLE namespaces (
     primary_installation      TEXT    NOT NULL,
     failover_version INTEGER NOT NULL,
     created_at_ms    INTEGER NOT NULL
-, allow_forced_writes INTEGER NOT NULL DEFAULT 0, allow_unlocked_writes INTEGER NOT NULL DEFAULT 0, ip_allowlist TEXT NOT NULL DEFAULT '', id TEXT NOT NULL DEFAULT '', output_sharing_default TEXT NOT NULL DEFAULT 'nobody'
+, allow_forced_writes INTEGER NOT NULL DEFAULT 0, allow_unlocked_writes INTEGER NOT NULL DEFAULT 0, ip_allowlist TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, output_sharing_default TEXT NOT NULL DEFAULT 'nobody'
     CHECK (output_sharing_default IN ('nobody', 'namespace')), source_filter TEXT NOT NULL DEFAULT ''
     CHECK (length(CAST(source_filter AS BLOB)) <= 1048576 AND (source_filter = '' OR json_valid(source_filter)))) STRICT;
 
@@ -30,7 +30,7 @@ CREATE TABLE stacks (
     name          TEXT    NOT NULL,
     version       INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL, id TEXT NOT NULL DEFAULT '', deleted_at_ms INTEGER, deleted_name TEXT,
+    updated_at_ms INTEGER NOT NULL, id TEXT NOT NULL, deleted_at_ms INTEGER, deleted_name TEXT,
     PRIMARY KEY (namespace, project, name)
 ) STRICT;
 
@@ -129,7 +129,7 @@ CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,
     state         TEXT    NOT NULL,
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     target        TEXT    NOT NULL DEFAULT '',
     error         TEXT    NOT NULL DEFAULT ''
 ) STRICT;
@@ -146,7 +146,7 @@ CREATE TABLE restores (
     pre_backup_id TEXT    NOT NULL DEFAULT '',
     requested_by  TEXT    NOT NULL DEFAULT '',
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     error         TEXT    NOT NULL DEFAULT ''
 , dev_report TEXT NOT NULL DEFAULT '', maintenance_entered INTEGER NOT NULL DEFAULT 0
     CHECK (maintenance_entered IN (0, 1)), audit_events TEXT NOT NULL DEFAULT '[]') STRICT;
@@ -330,7 +330,7 @@ CREATE TABLE access_token_policy (
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
-    purged_at_ms  INTEGER NOT NULL, namespace_id TEXT NOT NULL DEFAULT '',
+    purged_at_ms  INTEGER NOT NULL, namespace_id TEXT NOT NULL,
     PRIMARY KEY (tool, unit_id)
 ) STRICT;
 
@@ -1138,7 +1138,7 @@ CREATE TABLE store_checks (
     state         TEXT    NOT NULL CHECK (state IN ('running', 'succeeded', 'failed')),
     requested_by  TEXT    NOT NULL,
     started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    ended_at_ms   INTEGER,
     error         TEXT    NOT NULL DEFAULT '',
     report        TEXT    NOT NULL DEFAULT ''
 ) STRICT;

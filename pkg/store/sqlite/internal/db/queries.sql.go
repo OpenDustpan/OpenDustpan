@@ -1807,11 +1807,11 @@ WHERE target = ? AND state <> 'running' AND ended_at_ms > ?
 
 type CountStoreChecksEndedSinceParams struct {
 	Target    string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 }
 
 // The checks of one target that ended after the given time. A running check
-// has no end time (0) and is not counted.
+// has no end time and is not counted.
 func (q *Queries) CountStoreChecksEndedSince(ctx context.Context, arg CountStoreChecksEndedSinceParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countStoreChecksEndedSince, arg.Target, arg.EndedAtMs)
 	var count int64
@@ -1899,7 +1899,7 @@ type CreateBackupParams struct {
 	ID          string
 	State       string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Target      string
 	Error       string
 }
@@ -2686,7 +2686,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 
 const createStoreCheck = `-- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
-VALUES (?, ?, 'running', ?, ?, 0, '', '')
+VALUES (?, ?, 'running', ?, ?, NULL, '', '')
 ON CONFLICT DO NOTHING
 `
 
@@ -4467,7 +4467,7 @@ WHERE id = ? AND state IN ('checking', 'applying')
 type EndRestoreParams struct {
 	State     string
 	Error     string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 	DevReport string
 	ID        string
 }
@@ -4676,7 +4676,7 @@ type FailEndedBackupsParams struct {
 	Prefix    string
 	Kind      string
 	Fallback  string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 }
 
 // Marks failed each running backup whose operation ended failed or canceled
@@ -4710,7 +4710,7 @@ WHERE state = 'running'
 
 type FailEndedStoreChecksParams struct {
 	Error     string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 	Prefix    string
 	Kind      string
 }
@@ -4889,7 +4889,7 @@ WHERE id = ? AND state = 'running'
 type FinishBackupParams struct {
 	State     string
 	Error     string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 	ID        string
 }
 
@@ -4918,7 +4918,7 @@ type FinishStoreCheckParams struct {
 	State     string
 	Error     string
 	Report    string
-	EndedAtMs int64
+	EndedAtMs sql.NullInt64
 	ID        string
 }
 
@@ -7916,7 +7916,7 @@ type GetRestoreRow struct {
 	PreBackupID string
 	RequestedBy string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Error       string
 	DevReport   string
 }
@@ -11533,7 +11533,7 @@ func (q *Queries) InsertRegistryRelease(ctx context.Context, arg InsertRegistryR
 
 const insertRestore = `-- name: InsertRestore :execrows
 INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report)
-VALUES (?, 'checking', ?, '', ?, ?, 0, '', ?)
+VALUES (?, 'checking', ?, '', ?, ?, NULL, '', ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -16642,7 +16642,7 @@ type ListRestoresRow struct {
 	PreBackupID string
 	RequestedBy string
 	StartedAtMs int64
-	EndedAtMs   int64
+	EndedAtMs   sql.NullInt64
 	Error       string
 	DevReport   string
 }

@@ -2878,6 +2878,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,

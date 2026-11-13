@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -74,6 +75,12 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 // restoreFromRow converts a restore row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromRestoreRow(codec.RestoreRow{
 		ID:          row.ID,
 		State:       row.State,
@@ -82,7 +89,7 @@ func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
 		RequestedBy: row.RequestedBy,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 		DevReport:   row.DevReport,
 	})
 }

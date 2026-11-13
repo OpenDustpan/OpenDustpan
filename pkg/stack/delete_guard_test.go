@@ -152,7 +152,15 @@ func (m *deleteStacks) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, 
 		return *m.renamed, nil
 	}
 
-	return stack.Stack{}, stack.ErrNotFound
+	return stack.Stack{
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		Tags:        nil,
+		Ref:         ref,
+		ID:          "stk-1",
+		NamespaceID: "ns-1",
+		Version:     0,
+	}, nil
 }
 
 func (m *deleteStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {

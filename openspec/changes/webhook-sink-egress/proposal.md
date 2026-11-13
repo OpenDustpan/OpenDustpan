@@ -67,9 +67,6 @@ OUT:
 - `internal/headerauth`: no caller in the server.
 - `internal/servertest` and `internal/clientgen/conformance`: test helpers.
 - The syslog sink: it is not HTTP. The same check for it is its own change.
-- An allowed-range setting for a sink: after this change the operator cannot
-  reach a receiver on a private network, as with the built-in notification
-  senders. A setting for it is its own change.
 - The OTLP `?ca-file=` option.
 
 ## Check

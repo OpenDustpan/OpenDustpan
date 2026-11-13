@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
@@ -1350,6 +1351,51 @@ func (s *backupStore) StagingAlive(id string) bool {
 	return count == 1
 }
 
+// errUnknownEndedAtTable reports a table that the raw end-time reader does
+// not know.
+var errUnknownEndedAtTable = errors.New("unknown end-time table")
+
+// StoredEndedAtMs implements storetest.NullEndedWitness: it reads the
+// ended_at_ms column of one control row with a raw query. The control tables
+// live in the control schema of the live schema.
+func (s *backupStore) StoredEndedAtMs(
+	ctx context.Context, table, id string,
+) (int64, bool, error) {
+	switch table {
+	case backup.TableBackups, backup.TableRestores, backup.TableStoreChecks:
+	default:
+		return 0, false, fmt.Errorf("read ended_at_ms: %w: %q", errUnknownEndedAtTable, table)
+	}
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return 0, false, fmt.Errorf("read ended_at_ms: connect: %w", err)
+	}
+
+	var live string
+	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&live); err != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms: read the schema: %w", err), conn.Close(ctx))
+	}
+
+	query := `SELECT ended_at_ms FROM ` +
+		pgx.Identifier{live + "_control", table}.Sanitize() + ` WHERE id = $1`
+
+	var ms pgtype.Int8
+
+	scanErr := conn.QueryRow(ctx, query, id).Scan(&ms)
+	closeErr := conn.Close(ctx)
+
+	if scanErr != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms of %s %s: %w", table, id, scanErr), closeErr)
+	}
+
+	if closeErr != nil {
+		return 0, false, fmt.Errorf("read ended_at_ms: close: %w", closeErr)
+	}
+
+	return ms.Int64, ms.Valid, nil
+}
+
 // open returns a store in a fresh schema of the database at base.
 func open(tb testing.TB, base string) *postgres.Store {
 	tb.Helper()
@@ -2418,4 +2464,92 @@ func TestLiveMarkerConformance(t *testing.T) {
 
 		return &liveMarkerStore{revocationStore: &revocationStore{Store: openURL(t, schemaURL), url: schemaURL}}
 	})
+}
+
+// insertWithoutIDCase names one table and the two inserts of its ID guard.
+type insertWithoutIDCase struct {
+	name      string
+	setup     []string
+	withoutID string
+	withID    string
+}
+
+// TestInsertWithoutIDIsRefused proves that an insert into namespaces, stacks
+// or blob_purges with no ID column is refused, and that the same insert with
+// a valid ID succeeds.
+func TestInsertWithoutIDIsRefused(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	cases := []insertWithoutIDCase{
+		{
+			name:  "namespaces",
+			setup: nil,
+			withoutID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms)
+VALUES ('ns-test', 'primary', 0, 0)`,
+			withID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`,
+		},
+		{
+			name: "stacks",
+			setup: []string{`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`},
+			withoutID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0)`,
+			withID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms, id)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0, 'stk-1')`,
+		},
+		{
+			name:      "blob_purges",
+			setup:     nil,
+			withoutID: `INSERT INTO blob_purges (tool, unit_id, purged_at_ms) VALUES ('pulumi', 'unit-1', 1)`,
+			withID:    `INSERT INTO blob_purges (tool, unit_id, purged_at_ms, namespace_id) VALUES ('pulumi', 'unit-1', 1, 'ns-1')`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkInsertWithoutID(t, base, tc)
+		})
+	}
+}
+
+// checkInsertWithoutID runs the two inserts of one case on a new schema.
+func checkInsertWithoutID(t *testing.T, base string, tc insertWithoutIDCase) {
+	t.Helper()
+
+	schemaURL := isolatedURL(t, base)
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	for _, statement := range tc.setup {
+		if _, execErr := conn.Exec(t.Context(), statement); execErr != nil {
+			t.Fatalf("%s: %v", statement, execErr)
+		}
+	}
+
+	// SQLSTATE 23502 is not_null_violation.
+	_, execErr := conn.Exec(t.Context(), tc.withoutID)
+	if execErr == nil || !strings.Contains(execErr.Error(), "SQLSTATE 23502") {
+		t.Fatalf("insert into %s without an ID = %v, want a NOT NULL violation", tc.name, execErr)
+	}
+
+	if _, execErr := conn.Exec(t.Context(), tc.withID); execErr != nil {
+		t.Fatalf("insert into %s with a valid ID: %v", tc.name, execErr)
+	}
 }

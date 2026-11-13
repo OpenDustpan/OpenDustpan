@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -21,19 +23,22 @@ import (
 // errManualLockRead is the failure of a store that cannot read a manual lock.
 var errManualLockRead = errors.New("manual lock store down")
 
+// errStackRead is the failure of a store that cannot read a stack.
+var errStackRead = errors.New("stack store down")
+
 // fakeManualLocks answers one manual lock, or an error. It records the units
 // that the service asked about.
 type fakeManualLocks struct {
 	lock  manuallock.Lock
 	err   error
-	asked []collection.UnitRef
+	asked []manuallock.Unit
 	// passJob, when set, is the job whose request the lock does not refuse.
 	passJob string
 	jobs    []string
 }
 
 func (f *fakeManualLocks) CoveringFor(
-	_ context.Context, unit collection.UnitRef, jobID string,
+	_ context.Context, unit manuallock.Unit, jobID string,
 ) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
 	f.jobs = append(f.jobs, jobID)
@@ -61,6 +66,54 @@ func (f *fakeManualLocks) NamespaceLock(_ context.Context, _ namespace.Name) (ma
 	}
 
 	return f.lock, nil
+}
+
+// unreadableStacks fails every stack read and counts the store writes of an
+// operation whose manual lock check guards it.
+type unreadableStacks struct {
+	stack.Store
+
+	err    error
+	writes atomic.Int64
+}
+
+func (m *unreadableStacks) GetStack(context.Context, stack.Ref) (stack.Stack, error) {
+	return stack.Stack{}, m.err
+}
+
+func (m *unreadableStacks) DeleteStack(
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, d inventory.Deletion,
+) error {
+	m.writes.Add(1)
+
+	return m.Store.DeleteStack(ctx, ref, fence, guard, d)
+}
+
+func (m *unreadableStacks) ForceDeleteStack(
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, d inventory.Deletion,
+) error {
+	m.writes.Add(1)
+
+	return m.Store.ForceDeleteStack(ctx, ref, fence, d)
+}
+
+func (m *unreadableStacks) RenameStack(
+	ctx context.Context, ref stack.Ref, name stack.Name, fence namespace.Fence, e audit.Entry,
+) error {
+	m.writes.Add(1)
+
+	return m.Store.RenameStack(ctx, ref, name, fence, e)
+}
+
+// unreadableCheckpointStacks fails every stack read.
+type unreadableCheckpointStacks struct {
+	stack.CheckpointStacks
+
+	err error
+}
+
+func (m unreadableCheckpointStacks) GetStack(context.Context, stack.Ref) (stack.Stack, error) {
+	return stack.Stack{}, m.err
 }
 
 // heldNamespaceLock is a manual lock of alice on the namespace acme.
@@ -102,6 +155,16 @@ func planOf(kind stack.UpdateKind, dryRun bool) stack.Plan {
 func withManualLocks(t *testing.T, f updatesFixture, locks stack.ManualLocks) *stack.Updates {
 	t.Helper()
 
+	return withManualLocksAndStacks(t, f, locks, f.store)
+}
+
+// withManualLocksAndStacks returns the update service of f with the manual lock
+// port locks and the stack reads through stacks.
+func withManualLocksAndStacks(
+	t *testing.T, f updatesFixture, locks stack.ManualLocks, stacks stack.CheckpointStacks,
+) *stack.Updates {
+	t.Helper()
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
@@ -111,7 +174,7 @@ func withManualLocks(t *testing.T, f updatesFixture, locks stack.ManualLocks) *s
 		Checkpoints:        f.store,
 		Events:             f.store,
 		Namespaces:         f.namespaces,
-		Stacks:             f.store,
+		Stacks:             stacks,
 		Blobs:              f.blobs,
 		Refusals:           stacktest.NewRefusals(),
 		Now:                f.clock.Now,
@@ -176,7 +239,7 @@ func TestStartMeetsTheManualLock(t *testing.T) {
 				return
 			}
 
-			checkRefusal(t, err, locks)
+			checkRefusal(t, err, locks, startUnit(f))
 
 			got, getErr := svc.Get(t.Context(), f.ref, u.ID)
 			if getErr != nil || got.Status != stack.StatusNotStarted {
@@ -186,10 +249,30 @@ func TestStartMeetsTheManualLock(t *testing.T) {
 	}
 }
 
+// startUnit returns the unit that the start of an update of f asks the manual
+// lock port about.
+func startUnit(f updatesFixture) manuallock.Unit {
+	return manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"},
+		NamespaceID: f.nsID,
+		UnitID:      "stk-test",
+	}
+}
+
+// deleteUnit returns the unit that the delete and rename of the locked stack
+// ask the manual lock port about.
+func deleteUnit() manuallock.Unit {
+	return manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"},
+		NamespaceID: "ns-1",
+		UnitID:      "stk-1",
+	}
+}
+
 // checkRefusal checks that err is the refusal of a manual lock: it matches both
 // sentinels, names the object, the holder and the reason, and the port got the
 // unit of the stack.
-func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
+func checkRefusal(t *testing.T, err error, locks *fakeManualLocks, wantUnit manuallock.Unit) {
 	t.Helper()
 
 	if !errors.Is(err, stack.ErrUpdateConflict) || !errors.Is(err, manuallock.ErrLocked) {
@@ -206,13 +289,12 @@ func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
 		}
 	}
 
-	wantUnit := collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/dev"}
 	if len(locks.asked) != 1 || locks.asked[0] != wantUnit {
 		t.Errorf("unit asked = %v, want [%v]", locks.asked, wantUnit)
 	}
 
-	if manual, ok := errors.AsType[*manuallock.LockedError](err); !ok || manual == nil || manual.Unit != wantUnit {
-		t.Errorf("refused unit of %v, want %v", err, wantUnit)
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); !ok || manual == nil || manual.Unit != wantUnit.Ref {
+		t.Errorf("refused unit of %v, want %v", err, wantUnit.Ref)
 	}
 }
 
@@ -289,7 +371,7 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 
 			_, err = svc.StartBy(t.Context(), f.ref, u.ID, stack.StartedBy{TokenID: "", JobID: tc.jobID}, 0)
 			if tc.wantError {
-				checkRefusal(t, err, locks)
+				checkRefusal(t, err, locks, startUnit(f))
 			} else if err != nil {
 				t.Fatalf("start of the earlier phase = %v, want it to pass", err)
 			}
@@ -301,9 +383,73 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 	}
 }
 
+// TestStartAfterARenamePassesTheLock proves that the start of an update reads
+// the stable namespace ID and stack ID after a rename, so the phase of its job
+// passes the manual lock under the new name.
+func TestStartAfterARenamePassesTheLock(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	renamed, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	f.store.renameStack(f.ref, renamed)
+
+	locks := answering()
+	locks.passJob = "job-1"
+	svc := withManualLocks(t, f, locks)
+
+	u, err := svc.Create(t.Context(), renamed, planOf(stack.KindUpdate, false))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = svc.StartBy(t.Context(), renamed, u.ID, stack.StartedBy{TokenID: "", JobID: "job-1"}, 0)
+	if err != nil {
+		t.Fatalf("start after a rename = %v, want it to pass", err)
+	}
+
+	want := manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
+		NamespaceID: f.nsID,
+		UnitID:      "stk-test",
+	}
+	if len(locks.asked) != 1 || locks.asked[0] != want {
+		t.Errorf("unit asked = %v, want [%v]", locks.asked, want)
+	}
+}
+
 // newLockedStackService returns the stack service over the store fake of the
 // delete tests, with the manual lock port locks, and the ref it acts on.
 func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Service, *deleteStacks, stack.Ref) {
+	t.Helper()
+
+	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil}
+	svc, ref := newStackService(t, locks, store)
+
+	return svc, store, ref
+}
+
+// newUnreadableStackService returns the stack service over a store that cannot
+// read a stack, with the manual lock port locks, and the ref it acts on.
+func newUnreadableStackService(t *testing.T, locks stack.ManualLocks) (*stack.Service, *unreadableStacks, stack.Ref) {
+	t.Helper()
+
+	store := &unreadableStacks{
+		Store:  &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil},
+		err:    errStackRead,
+		writes: atomic.Int64{},
+	}
+	svc, ref := newStackService(t, locks, store)
+
+	return svc, store, ref
+}
+
+// newStackService returns the stack service over store, with the manual lock
+// port locks, and the ref it acts on.
+func newStackService(t *testing.T, locks stack.ManualLocks, store stack.Store) (*stack.Service, stack.Ref) {
 	t.Helper()
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
@@ -328,10 +474,6 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	store := &deleteStacks{
-		mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0, renames: nil, renamed: nil,
-	}
-
 	svc, err := stack.NewService(stack.Config{
 		Store: store, Namespaces: namespaces, Now: func() time.Time { return now }, State: nil, Retention: 0,
 		ManualLocks: locks,
@@ -340,7 +482,7 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 		t.Fatalf("new service: %v", err)
 	}
 
-	return svc, store, ref
+	return svc, ref
 }
 
 // TestDeleteAndRenameMeetTheManualLock proves the delete, the forced delete and
@@ -379,7 +521,7 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 			locks := answering()
 			svc, store, ref := newLockedStackService(t, locks)
 
-			checkRefusal(t, c.call(svc, ref), locks)
+			checkRefusal(t, c.call(svc, ref), locks, deleteUnit())
 
 			if got := store.calls(); got != 0 {
 				t.Errorf("store delete calls = %d, want 0", got)
@@ -450,6 +592,118 @@ func TestRenamePassesTheAuditEntry(t *testing.T) {
 	}
 }
 
+// unreadableStackRun runs one operation whose manual lock check needs a stack
+// read. A true answer means that the operation wrote.
+type unreadableStackRun func(t *testing.T, locks *fakeManualLocks) (wrote bool, err error)
+
+// TestManualLockCheckFailsWhenTheStackCannotBeRead proves that each operation
+// that checks a manual lock refuses the request when the stack read fails,
+// before it asks the manual lock port or writes anything.
+func TestManualLockCheckFailsWhenTheStackCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  unreadableStackRun
+	}{
+		{"delete", runDeleteOnUnreadableStack},
+		{"force delete", runForceDeleteOnUnreadableStack},
+		{"rename", runRenameOnUnreadableStack},
+		{"start", runStartOnUnreadableStack},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkUnreadableStack(t, tc.run)
+		})
+	}
+}
+
+// checkUnreadableStack runs run and checks that the stack read failed before
+// the manual lock port or a write.
+func checkUnreadableStack(t *testing.T, run unreadableStackRun) {
+	t.Helper()
+
+	locks := answering()
+
+	wrote, err := run(t, locks)
+	if !errors.Is(err, errStackRead) {
+		t.Fatalf("err = %v, want %v", err, errStackRead)
+	}
+
+	if len(locks.asked) != 0 || len(locks.jobs) != 0 {
+		t.Errorf("manual lock port asked %v with jobs %v, want no call", locks.asked, locks.jobs)
+	}
+
+	if wrote {
+		t.Error("the operation wrote, want no write")
+	}
+}
+
+// runDeleteOnUnreadableStack deletes a stack through a store that cannot read
+// it.
+func runDeleteOnUnreadableStack(t *testing.T, locks *fakeManualLocks) (bool, error) {
+	t.Helper()
+
+	svc, store, ref := newUnreadableStackService(t, locks)
+	err := svc.Delete(t.Context(), ref, deleteEntry())
+
+	return store.writes.Load() > 0, err
+}
+
+// runForceDeleteOnUnreadableStack force-deletes a stack through a store that
+// cannot read it.
+func runForceDeleteOnUnreadableStack(t *testing.T, locks *fakeManualLocks) (bool, error) {
+	t.Helper()
+
+	svc, store, ref := newUnreadableStackService(t, locks)
+	err := svc.ForceDelete(t.Context(), ref, deleteEntry())
+
+	return store.writes.Load() > 0, err
+}
+
+// runRenameOnUnreadableStack renames a stack through a store that cannot read
+// it.
+func runRenameOnUnreadableStack(t *testing.T, locks *fakeManualLocks) (bool, error) {
+	t.Helper()
+
+	newName, err := stack.ParseName("prod")
+	if err != nil {
+		t.Fatalf("parse name: %v", err)
+	}
+
+	svc, store, ref := newUnreadableStackService(t, locks)
+	_, err = svc.Rename(t.Context(), ref, newName, deleteEntry())
+
+	return store.writes.Load() > 0, err
+}
+
+// runStartOnUnreadableStack starts an update through a store that cannot read
+// the stack.
+func runStartOnUnreadableStack(t *testing.T, locks *fakeManualLocks) (bool, error) {
+	t.Helper()
+
+	f := newUpdates(t)
+	stacks := unreadableCheckpointStacks{CheckpointStacks: f.store, err: errStackRead}
+	svc := withManualLocksAndStacks(t, f, locks, stacks)
+
+	u, err := svc.Create(t.Context(), f.ref, planOf(stack.KindUpdate, false))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = svc.Start(t.Context(), f.ref, u.ID)
+
+	got, getErr := svc.Get(t.Context(), f.ref, u.ID)
+	if getErr != nil {
+		t.Fatalf("Get: %v", getErr)
+	}
+
+	return got.Status != stack.StatusNotStarted, err
+}
+
 // TestImportAndRestoreMeetTheManualLock proves `stack import` and a restore run
 // as updates of the kinds import and restore, so a manual lock that covers the
 // stack refuses them at the start. The state stays as it was and no update is
@@ -482,7 +736,7 @@ func TestImportAndRestoreMeetTheManualLock(t *testing.T) {
 	}
 
 	for _, c := range calls {
-		checkRefusal(t, c.call(), locks)
+		checkRefusal(t, c.call(), locks, startUnit(f))
 		locks.asked = nil
 		locks.jobs = nil
 	}

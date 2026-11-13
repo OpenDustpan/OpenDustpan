@@ -490,7 +490,7 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
-	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, ref, ""); lockErr != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
@@ -550,7 +550,7 @@ func (s *Service) ForceDelete(ctx context.Context, ref Ref, e audit.Entry) error
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
-	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, ref, ""); lockErr != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
@@ -670,7 +670,7 @@ func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name, e audit.
 
 	// A rename that a manual lock allowed would leave the state of the stack
 	// under the old name: the import that a rename needs next meets the lock.
-	if lockErr := refuseManualLock(ctx, s.manual, oldRef, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, oldRef, ""); lockErr != nil {
 		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, lockErr)
 	}
 
@@ -690,6 +690,23 @@ func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name, e audit.
 	}
 
 	return st, nil
+}
+
+// checkManualLock refuses the request of job jobID on the stack ref while a
+// manual lock covers the stack, and returns nil when the service has no manual
+// lock port. A lock that cannot be read refuses the request: the check fails
+// closed.
+func (s *Service) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	st, err := s.store.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("read stack %s: %w", ref, err)
+	}
+
+	return refuseManualLock(ctx, s.manual, st, jobID)
 }
 
 // deleteGuard counts the latest checkpoint of ref outside any transaction,

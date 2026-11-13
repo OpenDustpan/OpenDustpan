@@ -216,7 +216,7 @@ type ManualLocks interface {
 	// by a job whose phase started before the lock passes. It returns
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
-	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	CoveringFor(ctx context.Context, unit manuallock.Unit, jobID string) (manuallock.Lock, error)
 	// NamespaceLock returns the manual lock of the namespace, or
 	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
 	// unit has no inventory entry, so CoveringFor cannot find the lock of its
@@ -1951,20 +1951,34 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 // a manual lock covers it. The error matches ErrUpdateConflict and
 // manuallock.ErrLocked, and names the holder and the reason of the manual lock.
 func (s *Updates) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
-	return refuseManualLock(ctx, s.manual, ref, jobID)
+	if s.manual == nil {
+		return nil
+	}
+
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("read stack %s: %w", ref, err)
+	}
+
+	return refuseManualLock(ctx, s.manual, st, jobID)
 }
 
 // refuseManualLock returns an error that matches ErrUpdateConflict and
-// manuallock.ErrLocked while a manual lock covers the stack ref, and nil when
+// manuallock.ErrLocked while a manual lock covers the stack st, and nil when
 // locks is nil or no lock covers the stack for the request. A lock that cannot
 // be read refuses the request: the check fails closed.
-func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID string) error {
+func refuseManualLock(ctx context.Context, locks ManualLocks, st Stack, jobID string) error {
 	if locks == nil {
 		return nil
 	}
 
-	unit := collection.UnitRef{
-		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
+	unit := manuallock.Unit{
+		Ref: collection.UnitRef{
+			Namespace: st.Ref.Namespace, Tool: InventoryTool,
+			Name: st.Ref.Project.String() + "/" + st.Ref.Stack.String(),
+		},
+		NamespaceID: st.NamespaceID,
+		UnitID:      st.ID.String(),
 	}
 
 	l, err := locks.CoveringFor(ctx, unit, jobID)
@@ -1973,10 +1987,10 @@ func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID str
 	}
 
 	if err != nil {
-		return fmt.Errorf("read manual lock of %s: %w", ref, err)
+		return fmt.Errorf("read manual lock of %s: %w", st.Ref, err)
 	}
 
 	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{
-		Lock: l, Unit: unit, Noun: "stack", Name: ref.String(),
+		Lock: l, Unit: unit.Ref, Noun: "stack", Name: st.Ref.String(),
 	})
 }
