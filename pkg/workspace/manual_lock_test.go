@@ -23,7 +23,7 @@ var errManualLockRead = errors.New("manual lock store down")
 type fakeManualLocks struct {
 	lock  manuallock.Lock
 	err   error
-	asked []collection.UnitRef
+	asked []manuallock.Unit
 	// passJob, when set, is the job whose request the lock does not refuse.
 	passJob string
 	jobs    []string
@@ -33,7 +33,7 @@ type fakeManualLocks struct {
 }
 
 func (f *fakeManualLocks) CoveringFor(
-	_ context.Context, unit collection.UnitRef, jobID string,
+	_ context.Context, unit manuallock.Unit, jobID string,
 ) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
 	f.jobs = append(f.jobs, jobID)
@@ -62,12 +62,12 @@ func failing(err error) *fakeManualLocks {
 // NamespaceLockFor answers the lock of the namespace for a unit that does not
 // exist yet, and lets a job pass a lock that came after its phase.
 func (f *fakeManualLocks) NamespaceLockFor(
-	ctx context.Context, unit collection.UnitRef, jobID string,
+	ctx context.Context, unit manuallock.Unit, jobID string,
 ) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
 	f.jobs = append(f.jobs, jobID)
 
-	lock, err := f.NamespaceLock(ctx, unit.Namespace)
+	lock, err := f.NamespaceLock(ctx, unit.Ref.Namespace)
 	if err != nil {
 		return manuallock.Lock{}, err
 	}
@@ -80,7 +80,7 @@ func (f *fakeManualLocks) NamespaceLockFor(
 }
 
 // PhaseStart answers the start of the phase of the job, or the zero time.
-func (f *fakeManualLocks) PhaseStart(_ context.Context, _ collection.UnitRef, jobID string) time.Time {
+func (f *fakeManualLocks) PhaseStart(_ context.Context, _ manuallock.Unit, jobID string) time.Time {
 	return f.phases[jobID]
 }
 
@@ -212,7 +212,11 @@ func TestLockRequestsMeetTheManualLock(t *testing.T) {
 
 			checkLockedError(t, req.call(t, svc, f))
 
-			wantUnit := collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: f.ws.Ref.Name.String()}
+			wantUnit := manuallock.Unit{
+				Ref:         collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: f.ws.Ref.Name.String()},
+				NamespaceID: f.ws.NamespaceID,
+				UnitID:      f.ws.ID.String(),
+			}
 			if len(locks.asked) != 1 || locks.asked[0] != wantUnit {
 				t.Errorf("unit asked = %v, want [%v]", locks.asked, wantUnit)
 			}
@@ -411,6 +415,53 @@ func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
 				checkJobLockResult(t, &tc, sendJobLockRequest(t, req.call, tc.jobID))
 			})
 		}
+	}
+}
+
+// renameWorkspace gives the workspace of f the name name, as a rename would,
+// and keeps its ID and namespace ID.
+func renameWorkspace(t *testing.T, f fixture, name workspace.Name) workspace.Workspace {
+	t.Helper()
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	w := f.store.workspaces[f.ws.ID]
+	w.Ref.Name = name
+	f.store.workspaces[f.ws.ID] = w
+
+	return w
+}
+
+// TestLockAfterARenamePassesTheLock proves that a lock request reads the stable
+// namespace ID and workspace ID after a rename, so the phase of its job passes
+// the manual lock under the new name.
+func TestLockAfterARenamePassesTheLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	name, err := workspace.ParseName("web-2")
+	if err != nil {
+		t.Fatalf("parse name: %v", err)
+	}
+
+	w := renameWorkspace(t, f, name)
+
+	locks := answering(heldCollectionLock())
+	locks.passJob = "job-1"
+	svc := withManualLocks(t, f, locks)
+
+	if _, err := svc.LockForJob(t.Context(), w.ID, "ci", "plan", "job-1"); err != nil {
+		t.Fatalf("lock after a rename = %v, want it to pass", err)
+	}
+
+	want := manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: workspace.InventoryTool, Name: name.String()},
+		NamespaceID: f.ws.NamespaceID,
+		UnitID:      f.ws.ID.String(),
+	}
+	if len(locks.asked) != 1 || locks.asked[0] != want {
+		t.Errorf("unit asked = %v, want [%v]", locks.asked, want)
 	}
 }
 

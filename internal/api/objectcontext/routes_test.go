@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -266,6 +267,23 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testH
 func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store) testHandler {
 	t.Helper()
 
+	return newHandlerWithGuard(t, authz, store, results, guardOptions{records: newTestAudit(), limiter: nil})
+}
+
+// guardOptions sets the audit store and the limiter of the refusals of a
+// handler.
+type guardOptions struct {
+	records audit.Store
+	limiter *denylimit.Limiter
+}
+
+// newHandlerWithGuard is newHandlerWithDrift with the audit store and the
+// limiter of the refusals.
+func newHandlerWithGuard(
+	t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store, guard guardOptions,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
 	)
@@ -281,7 +299,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
-		Audit:          newTestAudit(),
+		Audit:          guard.records,
 		OnAuditFailure: nil,
 		Namespaces:     namespaces,
 		Units:          fakeUnits{},
@@ -294,7 +312,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 		Authorizer:     authz,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		DenialLimiter:  nil,
+		DenialLimiter:  guard.limiter,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -528,8 +546,10 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 	}
 
 	// The read document asks the same questions again for each layer of its
-	// chain, so a read route may repeat checks.
-	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+	// chain, so a read route may repeat checks. The namespace read of the path
+	// runs once for the address check, before the decision on the target, and
+	// once more with the other checks.
+	wantChecks := append([]string{rc.checks[0]}, rc.checks[:min(held+1, len(rc.checks))]...)
 	if got := authz.seen(); len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
 		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
 	}
@@ -551,7 +571,8 @@ const unknownObjectText = "not found: no namespace or unit that you can read has
 
 // TestUnknownObjectsAnswerAlike proves an unknown namespace and an unknown
 // unit answer 404 with one text, which names the unit ID and the list route,
-// before any check of the caller runs for the object.
+// before any check of the caller runs for the object. Only the namespace read
+// runs, for the refusal of the IP allowlist.
 func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	t.Parallel()
 
@@ -573,8 +594,10 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 		}
 	}
 
-	if got := authz.seen(); len(got) != 0 {
-		t.Errorf("checks = %q, want none for an object that does not exist", got)
+	if got := authz.seen(); slices.ContainsFunc(got, func(check string) bool {
+		return !strings.HasPrefix(check, string(identity.ActionNamespaceRead)+" ")
+	}) {
+		t.Errorf("checks = %q, want only namespace reads for an object that does not exist", got)
 	}
 }
 

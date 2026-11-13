@@ -236,6 +236,12 @@ type settings struct {
 	// oidcProviders are the OpenID Connect providers of the console
 	// sign-in. See WithOIDCProvider.
 	oidcProviders []OIDCProvider
+	// ldapProviders are the LDAP providers of the sign-in. See
+	// WithLDAPProvider.
+	ldapProviders []LDAPProvider
+	// ldapLoopback lets the LDAP sign-in reach a loopback address. See
+	// WithLDAPLoopbackForTests.
+	ldapLoopback bool
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
@@ -718,6 +724,8 @@ func defaultSettings() *settings {
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
+		ldapProviders:           nil,
+		ldapLoopback:            false,
 		signInHTTPClient:        nil,
 		sessionCookies:          nil,
 		version:                 "",
@@ -2870,6 +2878,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
@@ -2980,9 +2989,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	var tokens principal.Tokens
 
+	var reach principal.GroupReach
+
 	if grants != nil {
 		guard = grants
 		tokens = grants
+		reach = grants
 	}
 
 	// Both SQL adapters keep the temporary administrators, so a sign-in
@@ -2994,7 +3006,8 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: temps,
-		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		Store:      store, Guard: guard, GroupReach: reach, Namespaces: cfg.namespaceStore,
+		Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -3182,9 +3195,21 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	reach, reachErr := reachConfig(cfg)
+	if reachErr != nil {
+		return nil, fmt.Errorf("access service: %w", reachErr)
+	}
+
+	var limits access.LimitGroups
+
+	if reader := accessLimitGroups(cfg, stores); reader != nil {
+		limits = reader
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
+		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
+		Reach: reach, Now: nil, NewID: nil,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
@@ -3217,7 +3242,9 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // personal token for another person is the grants of grants, and the
 // authorizer of grants decides principal:manage-tokens for a service
 // token. With nil grants, a store that keeps none, only an administrator
-// passes either.
+// passes either. The reach config decides the reach rule of a token change:
+// a store that keeps no grants refuses each such change of a caller that is
+// not an administrator.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -3234,8 +3261,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		authz = grants.Authorizer()
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access token reach: %w", err)
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {

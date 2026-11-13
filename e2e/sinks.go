@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,11 +17,20 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/logsink"
+	"opendustpan.org/opendustpan/pkg/logsink/otlp"
+	"opendustpan.org/opendustpan/pkg/logsink/syslog"
+	"opendustpan.org/opendustpan/pkg/logsink/webhook"
 )
 
 // The audit sink receivers of the suite. They run in the test process and
@@ -279,6 +289,89 @@ func (r *AuditReceivers) Settings() AuditSinkSettings {
 // receiver may read one in an entry.
 func (r *AuditReceivers) Secrets() []string {
 	return []string{r.WebhookSecret, r.OTLPKey}
+}
+
+// Sinks returns the audit sinks that send from the in-process server to the
+// receivers. The webhook and OTLP clients allow the loopback for the test, as
+// chat.NewLoopback does, and trust the certificate of the receivers. It
+// closes the sinks when the test ends.
+func (r *AuditReceivers) Sinks(tb testing.TB) []audit.ShipSink {
+	tb.Helper()
+
+	roots := r.certPool(tb)
+	rules := egress.Rules{Allow: nil, LoopbackForTests: true}
+	client := egresshttp.ClientWith(rules, egress.NoRedirect, egress.HTTPSOnly,
+		egresshttp.Options{RootCAs: roots, Resolver: nil})
+
+	tb.Cleanup(client.CloseIdleConnections)
+
+	webhookSink, err := webhook.New(webhook.Config{
+		Client: client, URL: r.Webhook.URL(), Secret: []byte(r.WebhookSecret), Timeout: 0,
+	})
+	if err != nil {
+		tb.Fatalf("new webhook sink: %v", err)
+	}
+
+	tb.Cleanup(func() { closeSink(tb, "webhook", webhookSink) })
+
+	otlpSink, err := otlp.New(otlp.Config{
+		Client: client, Headers: map[string]string{strings.ToLower(otlpHeaderName): r.OTLPKey},
+		URL: r.OTLP.URL(), ServiceName: "", Timeout: 0,
+	})
+	if err != nil {
+		tb.Fatalf("new OTLP sink: %v", err)
+	}
+
+	tb.Cleanup(func() { closeSink(tb, "otlp", otlpSink) })
+
+	syslogSink, err := syslog.New(syslog.Config{
+		TLSConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		Network:   syslog.TLS,
+		Address:   r.Syslog.Address(),
+		Hostname:  "",
+		AppName:   "",
+		Facility:  syslog.FacilityLogAudit,
+		Timeout:   0,
+
+		MaxMessageBytes: 0,
+	})
+	if err != nil {
+		tb.Fatalf("new syslog sink: %v", err)
+	}
+
+	tb.Cleanup(func() { closeSink(tb, "syslog", syslogSink) })
+
+	return []audit.ShipSink{
+		{Sink: syslogSink, Name: "syslog", Kind: "syslog", Interval: 0},
+		{Sink: webhookSink, Name: "webhook", Kind: "webhook", Interval: 0},
+		{Sink: otlpSink, Name: "otlp", Kind: "otlp", Interval: 0},
+	}
+}
+
+// certPool returns the roots that trust the certificate of the receivers.
+func (r *AuditReceivers) certPool(tb testing.TB) *x509.CertPool {
+	tb.Helper()
+
+	pemBytes, err := os.ReadFile(r.CAFile)
+	if err != nil {
+		tb.Fatalf("read the receiver CA file: %v", err)
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		tb.Fatal("the receiver CA file holds no certificate")
+	}
+
+	return pool
+}
+
+// closeSink closes a sink of the suite and reports a failure.
+func closeSink(tb testing.TB, name string, sink logsink.Sink) {
+	tb.Helper()
+
+	if err := sink.Close(); err != nil {
+		tb.Errorf("close the %s sink: %v", name, err)
+	}
 }
 
 // randomHex returns secretBytes random bytes as hex text.

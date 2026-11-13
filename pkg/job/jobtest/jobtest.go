@@ -43,7 +43,21 @@ type Harness struct {
 	// build their own claimer from it.
 	Namespaces job.NamespaceReader
 	Domain     Domain
+	// WriteState writes the state of a unit through the real store of its
+	// tool, as a state write of that tool does, and returns the state version
+	// that the write made current. A final write releases the lock of the
+	// write, as an apply does; a write of Pulumi ends a mutating update. A
+	// harness with no real store of a tool leaves it nil, and the suite runs
+	// no case that needs a state version.
+	WriteState StateWriter
 }
+
+// StateWriter writes the state of a unit through the store of its tool. The
+// suite cannot choose the text of the version: each write makes a new version
+// and returns it.
+type StateWriter func(
+	ctx context.Context, fence namespace.Fence, unit identity.Object, final bool,
+) (string, error)
 
 // Domain makes the rows that a job needs and that other ports own, and
 // reads the audit entries that the job store appends.
@@ -71,9 +85,6 @@ type Domain interface {
 	// BumpFence increments the failover version of the namespace of fence,
 	// as a failover does, and returns the new fence.
 	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
-	// SetStateVersion makes version the current state version of unit, as
-	// a state write of its tool does.
-	SetStateVersion(ctx context.Context, fence namespace.Fence, unit identity.Object, version string) error
 	// PutManualLock puts a manual lock on target, as manuallock.Store does:
 	// a lock on a unit covers that unit, a lock on a namespace covers each unit
 	// of it. The store of jobs reads the lock in the transaction of a
@@ -94,6 +105,11 @@ type Domain interface {
 	// show what a takeover does after a begin that an earlier claim
 	// recorded.
 	RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r job.StepRecord) error
+	// DamageJobBody replaces the body of the job id with text that this
+	// version cannot decode, as a restore or another version of the server
+	// wrote it. The SQL adapters run a direct update of the body column; the
+	// suite uses it to put a damaged row in the store.
+	DamageJobBody(ctx context.Context, id job.ID) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -148,16 +164,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a cancel of a running job requests the cancel of its operation", testCancelRunning},
 		{"a takeover is a new claim on the same operation", testTakeover},
 		{"a failure during a cancel ends failed", testFailDuringCancel},
-		{"a cancel in awaiting-state ends canceled and abandons", testCancelAwaitingState},
 		{"a stale fence changes nothing", testStaleFence},
-		{"a stale fence on a state version closes nothing", testObserveStaleFence},
-		{"only a final state version closes the delivered jobs of its unit", testObserveStateVersion},
-		{"a review request closes after its merge, and then verifies", testMergeAndVerify},
-		{"a lost webhook: a merge that a later poll sees closes on the earlier state version", testLostWebhook},
-		{"a merge after the last final state version waits", testMergeBeforeOldVersion},
-		{"a late trailer: a commit that a takeover finds closes on the earlier state version", testLateTrailer},
-		{"the claim of a plan phase records the state version, and a takeover again", testPlanClaimRecordsVersion},
-		{"an apply dispatch with a stale plan is ErrPlanStale, and replan goes back", testPlanStale},
+		{"a cancel in awaiting-state ends canceled and abandons", testCancelAwaitingState},
 		{"after a restore, orphans are the jobs whose operation ended", testOrphans},
 		{"a canceling job whose claim expires ends canceled at the reconcile", testCancelClaimExpires},
 		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
@@ -174,10 +182,58 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases(), reconcileCases())
+	}, createRuleCases(), reconcileCases(), damagedCases(), claimerCases(), missingNamespaceCases(), endClaimCases(),
+		claimBoundCases(), claimGateCases())
 
-	for _, tc := range slices.Concat(cases, claimerCases(), missingNamespaceCases(), endClaimCases(), claimBoundCases(),
-		claimGateCases(), finalVersionCases()) {
+	runCases(t, newHarness, cases)
+
+	// The in-memory job store fakes no state version, so it also implements
+	// no reader of one. A harness whose store reads final versions runs the
+	// cases of that port.
+	if _, ok := newHarness(t).Jobs.(job.FinalVersionReader); ok {
+		runCases(t, newHarness, finalVersionCases())
+	}
+
+	// A state version comes from the store of a tool. A harness without one
+	// runs no case that reads a version.
+	if newHarness(t).WriteState == nil {
+		return
+	}
+
+	runCases(t, newHarness, stateVersionCases())
+}
+
+// stateVersionCases returns the cases that need a state version of a unit.
+func stateVersionCases() []suiteCase {
+	return []suiteCase{
+		{"a stale fence on a state version closes nothing", testObserveStaleFence},
+		{"only a final state version closes the delivered jobs of its unit", testFinalStateVersionCloses},
+		{"a review request closes after its merge, and then verifies", testMergeAndVerify},
+		{"a lost webhook: a merge that a later poll sees closes on the earlier state version", testLostWebhook},
+		{"a merge after the last final state version waits", testMergeBeforeOldVersion},
+		{"a late trailer: a commit that a takeover finds closes on the earlier state version", testLateTrailer},
+		{"the claim of a plan phase records the state version, and a takeover again", testPlanClaimRecordsVersion},
+		{"an apply dispatch with a stale plan is ErrPlanStale, and replan goes back", testPlanStale},
+		{"claimer: the claim of a plan phase records the state version", testClaimerPlanVersion},
+		{"the reconcile sends a queued job with a stale plan back to its plan phase", testReconcileStalePlan},
+		{"the reason of a replan names the state version of the plan and the current one", testReconcileReplanReason},
+		{"a damaged row does not stop a state version from closing the good jobs", testDamagedClose},
+		{"final version after a final write", testFinalVersionAfterFinal},
+		{"an intermediate version is not recorded", testFinalVersionIntermediate},
+		{"a newer final version replaces the older", testFinalVersionReplaces},
+		{
+			"the final version of a write with no token has no origin and the time of the write",
+			testFinalVersionRoundTrip,
+		},
+		{"the answer is per namespace", testFinalVersionPerNamespace},
+	}
+}
+
+// runCases runs each case against a fresh harness.
+func runCases(t *testing.T, newHarness Factory, cases []suiteCase) {
+	t.Helper()
+
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, newHarness(t))
@@ -191,13 +247,8 @@ type suiteCase struct {
 	run  func(t *testing.T, h Harness)
 }
 
-// Values that several cases share: the ref of the code location, and two
-// state versions of the unit.
-const (
-	mainRef = "main"
-	svOne   = "sv-1"
-	svTwo   = "sv-2"
-)
+// mainRef is the ref of the code location that the cases share.
+const mainRef = "main"
 
 // fixture is a namespace with one OpenTofu unit.
 type fixture struct {
@@ -231,6 +282,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 
 	j := job.Job{
 		ID:             job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID:    "",
 		Spec:           spec(unit, op),
 		State:          job.StateQueued,
 		Wait:           job.WaitNone,
@@ -330,6 +382,49 @@ func apply(t *testing.T, h Harness, f fixture, c job.Change) job.Job {
 	}
 
 	return got
+}
+
+// writeState writes the state of the unit of f through the real store of its
+// tool, and returns the version that the write made current.
+func writeState(t *testing.T, h Harness, f fixture, final bool) string {
+	t.Helper()
+
+	return writeStateOf(t, h, f.fence, f.unit, final)
+}
+
+// writeStateOf writes the state of unit through the real store of its tool,
+// and returns the version that the write made current.
+func writeStateOf(t *testing.T, h Harness, fence namespace.Fence, unit identity.Object, final bool) string {
+	t.Helper()
+
+	if h.WriteState == nil {
+		t.Fatal("the harness gives no state writer")
+	}
+
+	v, err := h.WriteState(t.Context(), fence, unit, final)
+	if err != nil {
+		t.Fatalf("WriteState(final %t) of %s = %v", final, unit, err)
+	}
+
+	return v
+}
+
+// finalVersionOf returns the last final state version of the unit, and fails t
+// when the store records none.
+func finalVersionOf(t *testing.T, h Harness, ns namespace.Name, unitID string) job.FinalVersion {
+	t.Helper()
+
+	r, ok := h.Jobs.(job.FinalVersionReader)
+	if !ok {
+		t.Fatal("the store does not implement job.FinalVersionReader")
+	}
+
+	v, found, err := r.FinalVersion(t.Context(), ns, unitID)
+	if err != nil || !found {
+		t.Fatalf("FinalVersion of unit %s = %+v, %v, found %t; want a version", unitID, v, err, found)
+	}
+
+	return v
 }
 
 // change returns the change of j by ev.

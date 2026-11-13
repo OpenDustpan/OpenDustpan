@@ -373,6 +373,7 @@ func (s *Service) declarePlaceholder(
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		Origin:          originFrom(ctx),
 	}
 
 	if createErr := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); createErr != nil {

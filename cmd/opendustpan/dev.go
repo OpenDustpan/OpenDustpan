@@ -260,7 +260,7 @@ func (r *devRun) run(ctx context.Context) error {
 	r.logGate = &gateWriter{w: r.stderr, buf: bytes.Buffer{}, mu: sync.Mutex{}, pass: false}
 
 	app, err := newAppLog( //nolint:contextcheck // The log writers outlive this call; close bounds them.
-		nil, level, r.flags.logFormat, r.logGate, r.proc.lookup,
+		nil, level, r.flags.logFormat, r.logGate, sinkEnv{lookup: r.proc.lookup, ranges: nil},
 	)
 	if err != nil {
 		return err

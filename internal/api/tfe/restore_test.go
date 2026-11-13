@@ -207,7 +207,11 @@ func (foreignRestoreWorkspaces) GetByID(
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -290,7 +294,11 @@ func (lockedRestoreWorkspaces) GetByID(
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    2,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 

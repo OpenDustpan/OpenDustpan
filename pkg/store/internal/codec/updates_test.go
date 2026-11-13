@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 )
@@ -44,7 +45,7 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); err != nil {
@@ -104,7 +105,7 @@ func TestToCheckpointRowRefusesNoKey(t *testing.T) {
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); !errors.Is(err, stack.ErrCheckpointNoKey) {

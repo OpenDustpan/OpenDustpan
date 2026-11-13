@@ -110,7 +110,7 @@ func (h *Handler) workerRoutes() []Route {
 			Path:    componentsPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.getComponents,
 		},
 		{
@@ -118,7 +118,7 @@ func (h *Handler) workerRoutes() []Route {
 			Path:    workerPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.getWorker,
 		},
 	}

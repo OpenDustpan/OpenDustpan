@@ -15,6 +15,7 @@ package accesstest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -67,6 +68,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a suspended membership gives no group", test: testSuspendedMembershipGivesNoRights},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
+		{name: "grants of many subjects are the current grants of each, in one read", test: testGrantsOfSubjects},
 		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
 		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
@@ -763,7 +765,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	grp := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -953,7 +955,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 	for _, id := range []string{"grp-1", "grp-2", "grp-3"} {
 		g := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: id, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := ps.CreateGroup(ctx, g, entry()); err != nil {
 			t.Fatalf("create group: %v", err)
@@ -1078,6 +1080,89 @@ func testGrantsOf(t *testing.T, s access.Store) {
 		if got[i].ID == "grt-2" && got[i].Object.UnitID() == "" {
 			t.Fatalf("unit grant %+v lost its stable ID", got[i])
 		}
+	}
+}
+
+// testGrantsOfSubjects reads the grants of two groups and a principal with
+// one call. A revoked grant and a grant of a subject that the call does not
+// name are not in the result, and each grant keeps its subject.
+func testGrantsOfSubjects(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	acme := identity.NamespaceObject("acme")
+	devs := access.Subject{Kind: access.SubjectGroup, ID: "grp-devs"}
+	other := access.Subject{Kind: access.SubjectGroup, ID: "grp-other"}
+
+	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), access.RoleWriter, unit(t, "acme", "web/prod")))
+	mustCreateGrant(t, s, newGrant("grt-3", devs, access.RoleViewer, identity.ServerObject()))
+	mustCreateGrant(t, s, newGrant("grt-4", devs, access.RoleAdmin, identity.NamespaceObject("beta")))
+	mustCreateGrant(t, s, newGrant("grt-5", principalSubject("prn-a"), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-6", other, access.RoleViewer, acme))
+
+	if err := revokeGrant(t, s, "grt-4", "beta", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	got, err := s.GrantsOfSubjects(ctx, []access.Subject{opsGroup(), devs, principalSubject("prn-a")})
+	if err != nil {
+		t.Fatalf("grants of subjects: %v", err)
+	}
+
+	want := map[string]access.Subject{
+		"grt-1": opsGroup(), "grt-2": opsGroup(), "grt-3": devs, "grt-5": principalSubject("prn-a"),
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("grants of the subjects = %v, want grt-1 grt-2 grt-3 grt-5", grantIDs(got))
+	}
+
+	for i := range got {
+		subject, ok := want[got[i].ID]
+		if !ok || got[i].Subject != subject {
+			t.Fatalf("grant %s of %s: want only grt-1 grt-2 grt-3 grt-5, each of its own subject",
+				got[i].ID, got[i].Subject.String())
+		}
+
+		if got[i].ID == "grt-2" && got[i].Object.UnitID() == "" {
+			t.Fatalf("unit grant %+v lost its stable ID", got[i])
+		}
+	}
+
+	none, err := s.GrantsOfSubjects(ctx, nil)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("grants of no subject = %v, %v; want none", grantIDs(none), err)
+	}
+
+	checkGrantsOfSubjectsBound(t, s)
+}
+
+// checkGrantsOfSubjectsBound reads the grants of one page of subjects, the
+// bound, and checks that one subject more is refused with ErrInvalid. The
+// caller stores grt-1 and grt-2 for the group opsGroup.
+func checkGrantsOfSubjectsBound(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	page := make([]access.Subject, 0, principal.MaxLimit+1)
+	for i := range principal.MaxLimit {
+		page = append(page, access.Subject{Kind: access.SubjectGroup, ID: fmt.Sprintf("grp-page-%04d", i)})
+	}
+
+	page[0] = opsGroup()
+
+	got, err := s.GrantsOfSubjects(ctx, page)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("grants of %d subjects = %v, %v; want grt-1 grt-2", len(page), grantIDs(got), err)
+	}
+
+	page = append(page, access.Subject{Kind: access.SubjectGroup, ID: "grp-page-over"})
+
+	over, err := s.GrantsOfSubjects(ctx, page)
+	if !errors.Is(err, access.ErrInvalid) || over != nil {
+		t.Fatalf("grants of %d subjects = %v, %v; want access.ErrInvalid", len(page), grantIDs(over), err)
 	}
 }
 

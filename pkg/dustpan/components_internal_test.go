@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -85,6 +86,9 @@ func TestStartBackgroundByComponent(t *testing.T) {
 
 			tokens, err := accesstoken.NewService(accesstoken.Config{
 				TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
+				Reach: access.ReachConfig{
+					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+				},
 				Logger: srv.logger, Now: time.Now, NewID: nil,
 			})
 			if err != nil {

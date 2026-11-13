@@ -55,7 +55,7 @@ func (g grants) Authorize(_ context.Context, p identity.Principal, a identity.Ac
 }
 
 func (grants) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 const (

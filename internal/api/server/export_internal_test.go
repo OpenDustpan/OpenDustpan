@@ -16,6 +16,23 @@ func WithPrincipalForTest(ctx context.Context, p identity.Principal) context.Con
 	return withPrincipal(ctx, p)
 }
 
+// ServeAccessLimitSaveForTest calls the save of an access limit through the
+// route of h, with p as the caller and a console session whose sign-in is
+// now. The route table, the authentication and the policy check are not in
+// the way, so a test reaches the freshness check and the group reach check
+// with the caller that it names.
+func ServeAccessLimitSaveForTest(
+	h *Handler, w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	var caller sessionCaller
+
+	caller.Match.Session.AuthTime = h.signIn.sessions.Now()
+	caller.Match.Session.Provider = "corp"
+
+	ctx := context.WithValue(r.Context(), sessionKey{}, caller)
+	h.fresh(identity.ActionNamespaceManageGates, h.writeAccessLimit)(w, r.WithContext(ctx), p, obj)
+}
+
 // ErrInvalidBodyForTest is the error of a request body that is not valid JSON.
 var ErrInvalidBodyForTest = errInvalidBody
 
@@ -37,6 +54,17 @@ func ClassifyForTest(err error) (int, string) {
 	f := classify(err)
 
 	return f.status, f.message
+}
+
+// TokenCodeForTest returns the code of the catalog that the token classifier
+// gives for err, and false when the classifier maps no error.
+func TokenCodeForTest(err error) (string, bool) {
+	f, ok := classifyToken(err)
+	if !ok {
+		return "", false
+	}
+
+	return f.code, true
 }
 
 // WriteErrorForTest writes the error answer of err, as a handler of the
@@ -74,6 +102,12 @@ func ServeEmptyForTest(w http.ResponseWriter, r *http.Request) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.mux = newPatternMux()
 	h.ServeHTTP(w, r)
+}
+
+// ServeRouteForTest serves r with route through the registration wrapper of h,
+// so a test can exercise the wrapper on a route that it builds.
+func (h *Handler) ServeRouteForTest(w http.ResponseWriter, r *http.Request, route Route) {
+	h.enforce(route)(w, r)
 }
 
 // DevCodeSignInForTest calls the dev sign-in handler of h directly, as the

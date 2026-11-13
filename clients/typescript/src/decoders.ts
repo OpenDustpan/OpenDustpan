@@ -1192,6 +1192,7 @@ export const decodeListGitHostLinksResponse: Decoder<ListGitHostLinksResponse> =
 
 /** The validator of ListJobsResponse. */
 export const decodeListJobsResponse: Decoder<ListJobsResponse> = object<ListJobsResponse>("ListJobsResponse", {
+  damaged: int64,
   jobs: array(ref(() => decodeJob)),
   nextPageToken: optional(string),
 });

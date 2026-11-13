@@ -238,7 +238,7 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: groups,
-		Removals: removals, States: nil, Logger: slog.New(w.logs),
+		Removals: removals, States: nil, Locks: nil, NameKeys: nil, Logger: slog.New(w.logs),
 		OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {

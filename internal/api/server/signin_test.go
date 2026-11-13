@@ -117,7 +117,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	return newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil,
+		hostile: nil, passwords: nil,
 	})
 }
 
@@ -136,6 +136,10 @@ type signInEnvOptions struct {
 	// provider corp returns, as a method that fails to check its answer
 	// would.
 	hostile func(a *session.Assertion)
+	// passwords are the password providers of the handler. With one or
+	// more, the handler gets the limiter of the environment as its password
+	// budget, so it mounts the password route of a provider.
+	passwords []apiserver.PasswordProvider
 	// noGateEngine leaves the gate config service without a policy engine.
 	noGateEngine bool
 }
@@ -232,7 +236,30 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
+	signIn := &apiserver.SignIn{
+		Service:         newTestSignInService(t, st, sessions, principals),
+		OnDevRefused:    nil,
+		DevCode:         nil,
+		DevAdmin:        noBootstrapAdmin,
+		Sessions:        sessions,
+		Limiter:         limiter,
+		PasswordLimiter: nil,
+		Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+		Stored:            stored,
+		Admin:             admin,
+		PasswordProviders: nil, Origins: []string{signInBase, consoleOrigin},
+		Providers: []apiserver.SignInProvider{
+			{
+				Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
+				DisplayName: "Corp",
+				AutoCreate:  opts.autoCreate, Stored: false,
+			},
+		},
+	}
+	addPasswordProviders(signIn, opts.passwords, limiter)
+
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -267,26 +294,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		SignIn: &apiserver.SignIn{
-			Service:         newTestSignInService(t, st, sessions, principals),
-			OnDevRefused:    nil,
-			DevCode:         nil,
-			DevAdmin:        noBootstrapAdmin,
-			Sessions:        sessions,
-			Limiter:         limiter,
-			PasswordLimiter: nil,
-			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
-			Stored:  stored,
-			Admin:   admin,
-			Origins: []string{signInBase, consoleOrigin},
-			Providers: []apiserver.SignInProvider{
-				{
-					Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
-					DisplayName: "Corp",
-					AutoCreate:  opts.autoCreate, Stored: false,
-				},
-			},
-		},
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
@@ -297,6 +305,18 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	return signInEnv{handler: handler, idp: idp, store: st, limiter: limiter, clock: clock}
+}
+
+// addPasswordProviders gives in the password providers passwords and, with
+// one or more, limiter as the password budget, so the handler mounts the
+// password route of a provider.
+func addPasswordProviders(in *apiserver.SignIn, passwords []apiserver.PasswordProvider, limiter *fakeLimiter) {
+	if len(passwords) == 0 {
+		return
+	}
+
+	in.PasswordProviders = passwords
+	in.PasswordLimiter = limiter
 }
 
 // get sends a GET request with the cookies to the handler.
@@ -1154,13 +1174,15 @@ func TestSignInProviderDown(t *testing.T) {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: allowAllGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: nil, Tokens: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -1201,8 +1223,8 @@ func TestSignInProviderDown(t *testing.T) {
 			DevCode:      nil,
 			DevAdmin:     noBootstrapAdmin,
 			Sessions:     sessions, Stored: nil, Admin: nil,
-			Limiter:         limiter,
-			Origins:         nil,
+			Limiter:           limiter,
+			PasswordProviders: nil, Origins: nil,
 			PasswordLimiter: nil,
 			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
@@ -1345,7 +1367,7 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil,
+		hostile: nil, passwords: nil,
 	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
@@ -1631,8 +1653,12 @@ func newSignInAccess(
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz, Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		},
+		Now: clock.Now, NewID: nil,
+		BootstrapAdmins: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -1660,7 +1686,7 @@ func TestSignInJoinsNoGroup(t *testing.T) {
 	for _, name := range []string{"engineering", "corp", alice().PreferredUsername} {
 		g := principal.Group{
 			CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now(), ID: "grp-" + name, Name: name, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := e.store.CreateGroup(t.Context(), g, policyChangeEntry(e.clock.Now())); err != nil {
 			t.Fatalf("create group %s: %v", name, err)
@@ -1730,7 +1756,7 @@ func TestSignInCallbackRefusesAHostileAssertion(t *testing.T) {
 
 			e := newSignInEnvWith(t, signInEnvOptions{
 				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-				namespaces: nil, hostile: tc.change,
+				namespaces: nil, hostile: tc.change, passwords: nil,
 			})
 
 			binding, authURL := e.start(t, "/console/tokens")

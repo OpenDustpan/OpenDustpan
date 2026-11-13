@@ -533,13 +533,20 @@ type GrantStore interface {
 }
 
 // GrantLookups reads the current grants that a change of who holds them
-// must check: the grants of one subject, and where a role is
+// must check: the grants of one subject or of many, and where a role is
 // granted.
 type GrantLookups interface {
 	// GrantsOf returns every current grant of subject, on any object, in
 	// one query. It serves the checks of a membership change and of a
 	// delete.
 	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
+	// GrantsOfSubjects returns every current grant of each subject of
+	// subjects, on any object, in one query: for each subject, the grants
+	// that GrantsOf returns. It returns no grant of a subject that is not in
+	// subjects, and none for an empty list. It returns ErrInvalid for more
+	// than principal.MaxLimit subjects, the size of one page of a list
+	// route. It serves the protected flag of a page of groups.
+	GrantsOfSubjects(ctx context.Context, subjects []Subject) ([]Grant, error)
 	// RoleGrantedBelowInstallation reports whether a current grant gives
 	// the role with the ID role on a namespace, a collection or a unit.
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)

@@ -237,7 +237,7 @@ func (*mapStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fenc
 }
 
 func (m *mapStackStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -833,7 +833,8 @@ func TestSecretsFollowRename(t *testing.T) {
 		t.Fatalf("parse name: %v", nameErr)
 	}
 
-	if _, renameErr := f.stacks.Rename(t.Context(), oldRef, name); renameErr != nil {
+	entry := testRenameEntry(oldRef.Namespace, oldRef)
+	if _, renameErr := f.stacks.Rename(t.Context(), oldRef, name, entry); renameErr != nil {
 		t.Fatalf("rename: %v", renameErr)
 	}
 
@@ -1259,7 +1260,7 @@ func (*failingStackStore) PurgeStack(
 }
 
 func (m *failingStackStore) RenameStack(
-	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	panic("failingStackStore.RenameStack is not used")
 }

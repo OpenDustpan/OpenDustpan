@@ -125,7 +125,7 @@ func (r *realStack) startUpdate(t *testing.T, name string) {
 		t.Fatalf("create stack %s: %v", name, createErr)
 	}
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := r.updates.Create(ctx, ref, plan)
 	if err != nil {

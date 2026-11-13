@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path/filepath"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -72,6 +75,12 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 // restoreFromRow converts a restore row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromRestoreRow(codec.RestoreRow{
 		ID:          row.ID,
 		State:       row.State,
@@ -80,7 +89,7 @@ func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
 		RequestedBy: row.RequestedBy,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 		DevReport:   row.DevReport,
 	})
 }
@@ -198,7 +207,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		after = func(ctx context.Context, tx *sql.Tx) error { return plan.after(ctx, tx, kept) }
 	}
 
-	if err := fenceStagedFile(ctx, plan.staged, s.path, keep, after); err != nil {
+	if err := s.fenceStagedFile(ctx, plan.staged, s.path, keep, after); err != nil {
 		return 0, err
 	}
 
@@ -215,7 +224,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 // store write lock, so the copy has the last committed control rows. It
 // opens the file in rollback-journal mode, so no write-ahead-log sidecar
 // survives the fence to leak beside the renamed database.
-func fenceStagedFile(
+func (s *Store) fenceStagedFile(
 	ctx context.Context, path, live string, keep bookkeeping, after func(context.Context, *sql.Tx) error,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -237,7 +246,7 @@ func fenceStagedFile(
 		return attachErr
 	}
 
-	return applyStagedFence(ctx, conn, keep, after)
+	return applyStagedFence(ctx, conn, s.logger, keep, after)
 }
 
 // openFencedStaged opens the staged file at path in rollback-journal mode
@@ -290,7 +299,8 @@ func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
 // resets the runtime rows, copies the control tables and applies the journaled
 // revocations again, in one transaction.
 func applyStagedFence(
-	ctx context.Context, conn *sql.DB, keep bookkeeping, after func(context.Context, *sql.Tx) error,
+	ctx context.Context, conn *sql.DB, logger *slog.Logger, keep bookkeeping,
+	after func(context.Context, *sql.Tx) error,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -323,6 +333,10 @@ func applyStagedFence(
 	// revocations that ran in this stay in maintenance mode, so the swap does not
 	// bring back a session or a token that an operator ended.
 	if err := replayRevocations(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	if err := deriveUnitState(ctx, tx, logger); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -381,6 +395,22 @@ func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// deriveUnitState records the state version of every unit of the staged file
+// in unit_state, in tx: a restore derives the version from the restored rows
+// and brings no stored version back. A workspace takes the state version that
+// its row makes current, a stack the digest of its last checkpoint.
+//
+// A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and a write-back job that waits for a
+// state version keeps waiting. The write is one statement for the workspaces
+// and one for the stacks, through the one writer of unit_state.
+func deriveUnitState(ctx context.Context, tx *sql.Tx, logger *slog.Logger) error {
+	return publishUnitState(ctx, db.New(tx), unitStateWrite{
+		kind: unitStateWriteRestore, nsName: "", unitID: "", version: "", final: false,
+		origin: identity.StateOrigin{Job: "", Commit: ""}, atMs: 0, exec: tx, logger: logger,
+	})
 }
 
 // writeStagedBookkeeping writes the bookkeeping row keep of the live

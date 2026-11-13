@@ -805,7 +805,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
 			SensitiveMarks:  nil,
 			FenceBy:         tc.fenceBy,
-			UnlockedWrite:   tc.unlockedWrite,
+			UnlockedWrite:   tc.unlockedWrite, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		})
 	}
 

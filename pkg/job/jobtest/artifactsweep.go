@@ -58,6 +58,21 @@ func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 		{"sweep: an instance clock that runs fast deletes nothing", testSweepFastInstanceClock},
 	}, sweepPlanPartCases())
 
+	runArtifactSweepCases(t, newHarness, cases)
+
+	// A state version comes from the store of a tool. A harness without one
+	// runs no case that reads a version.
+	if newHarness(t).WriteState == nil {
+		return
+	}
+
+	runArtifactSweepCases(t, newHarness, stateSweepPlanPartCases())
+}
+
+// runArtifactSweepCases runs each case against a fresh harness.
+func runArtifactSweepCases(t *testing.T, newHarness ArtifactSweepFactory, cases []artifactSweepCase) {
+	t.Helper()
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

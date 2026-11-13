@@ -2266,6 +2266,15 @@ export interface SignInWithPasswordInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation signInWithProviderPassword. */
+export interface SignInWithProviderPasswordInput {
+  readonly path: {
+    readonly provider: string;
+  };
+  readonly body: PasswordSignInRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation stageRegistryUpload. */
 export interface StageRegistryUploadInput {
   readonly path: {
@@ -5210,6 +5219,23 @@ export const operations = {
       method: "POST",
       path: "/api/dustpan/v1/sign-in/password",
       pathParameters: [],
+      queryParameters: [],
+      security: "public",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  signInWithProviderPassword: operation<void>(
+    {
+      id: "signInWithProviderPassword",
+      method: "POST",
+      path: "/api/dustpan/v1/sign-in/providers/{provider}/password",
+      pathParameters: ["provider"],
       queryParameters: [],
       security: "public",
       idempotencyKey: "none",
