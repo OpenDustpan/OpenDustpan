@@ -2,54 +2,121 @@ package dustpan
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/savedview"
-	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/trigger"
-	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// builtinStoreOpenTimeout bounds the open of a built-in store. NewServer has
-// no context, so the open gets its own bound.
-const builtinStoreOpenTimeout = 30 * time.Second
+// StoreOption configures a built-in store that WithSQLite, WithPostgreSQL or
+// OpenStore opens.
+type StoreOption func(*storeConfig)
 
-// errNilSQLiteStore reports WithOpenedSQLite without a store.
-var errNilSQLiteStore = errors.New("WithOpenedSQLite: the store is nil")
+// storeConfig collects the options of a built-in store before it opens.
+type storeConfig struct {
+	logger              *slog.Logger
+	loggerSet           bool
+	binaryVersion       string
+	binaryVersionSet    bool
+	installationKind    installation.Kind
+	installationKindSet bool
+	withoutMigrate      bool
+}
 
-// errNilPostgresStore reports WithOpenedPostgreSQL without a store.
-var errNilPostgresStore = errors.New("WithOpenedPostgreSQL: the store is nil")
+// defaultStoreConfig returns the store options before any StoreOption.
+func defaultStoreConfig() storeConfig {
+	return storeConfig{
+		logger: nil, loggerSet: false,
+		binaryVersion: "", binaryVersionSet: false,
+		installationKind: "", installationKindSet: false,
+		withoutMigrate: false,
+	}
+}
 
-// StoreOption configures a built-in store that WithSQLite or WithPostgreSQL
-// opens.
-type StoreOption func(*builtinStoreConfig)
+// newStoreConfig returns the store options that opts set.
+func newStoreConfig(opts []StoreOption) storeConfig {
+	config := defaultStoreConfig()
 
-// builtinStoreConfig collects the options of a built-in store before NewServer
-// opens the store.
-type builtinStoreConfig struct {
-	withoutMigrate bool
+	for _, opt := range opts {
+		opt(&config)
+	}
+
+	return config
+}
+
+// WithStoreLogger sets the logger of the store. Without it, WithSQLite and
+// WithPostgreSQL use the logger of the server.
+func WithStoreLogger(logger *slog.Logger) StoreOption {
+	return func(c *storeConfig) {
+		c.logger = logger
+		c.loggerSet = true
+	}
+}
+
+// WithStoreBinaryVersion sets the version of the binary that opens the store.
+// Without it, WithSQLite and WithPostgreSQL use the version of the server.
+func WithStoreBinaryVersion(version string) StoreOption {
+	return func(c *storeConfig) {
+		c.binaryVersion = version
+		c.binaryVersionSet = true
+	}
+}
+
+// WithStoreInstallationKind sets the installation kind of the command that
+// opens the store. Without it, WithSQLite and WithPostgreSQL use the kind of
+// the server.
+func WithStoreInstallationKind(kind installation.Kind) StoreOption {
+	return func(c *storeConfig) {
+		c.installationKind = kind
+		c.installationKindSet = true
+	}
 }
 
 // WithoutStoreMigrate makes the built-in store apply no pending migration and
 // refuse a database with a pending migration.
 func WithoutStoreMigrate() StoreOption {
-	return func(c *builtinStoreConfig) { c.withoutMigrate = true }
+	return func(c *storeConfig) { c.withoutMigrate = true }
+}
+
+// withServerDefaults answers config with the server values for each store
+// option that the caller did not set.
+func (c storeConfig) withServerDefaults(cfg *settings) storeConfig {
+	if !c.loggerSet {
+		c.logger = cfg.logger
+		c.loggerSet = true
+	}
+
+	if !c.binaryVersionSet {
+		c.binaryVersion = cfg.version
+		c.binaryVersionSet = true
+	}
+
+	if !c.installationKindSet {
+		c.installationKind = cfg.installationKind
+		c.installationKindSet = true
+	}
+
+	return c
+}
+
+// loggerValue answers the logger of the store, or a discard logger.
+func (c storeConfig) loggerValue() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+
+	return slog.New(slog.DiscardHandler)
 }
 
 // builtinStoreSource says which option set the built-in store.
@@ -59,19 +126,17 @@ const (
 	builtinStoreNone builtinStoreSource = iota
 	builtinStoreSQLitePath
 	builtinStorePostgresDSN
-	builtinStoreSQLiteOpened
-	builtinStorePostgresOpened
+	builtinStoreHandle
 )
 
 // builtinStoreSettings is the built-in store of a server: the path or DSN that
-// NewServer opens, or the store that the caller opened.
+// NewServer opens, or the handle that the caller opened.
 type builtinStoreSettings struct {
-	source   builtinStoreSource
-	path     string
-	dsn      string
-	config   builtinStoreConfig
-	sqlite   *sqlite.Store
-	postgres *postgres.Store
+	source builtinStoreSource
+	path   string
+	dsn    string
+	config storeConfig
+	handle *BuiltinStore
 	// open opens the store at path or dsn and sets its store options. It is a
 	// function value because NewServer has no context: the open gets its own
 	// bound, builtinStoreOpenTimeout.
@@ -83,16 +148,10 @@ type builtinStoreSettings struct {
 // newBuiltinStoreSettings returns the settings of a built-in store with the
 // StoreOption values applied.
 func newBuiltinStoreSettings(kind builtinStoreSource, opts []StoreOption) builtinStoreSettings {
-	settings := builtinStoreSettings{
-		source: kind, path: "", dsn: "", config: builtinStoreConfig{withoutMigrate: false},
-		sqlite: nil, postgres: nil, open: nil, close: nil,
+	return builtinStoreSettings{
+		source: kind, path: "", dsn: "", config: newStoreConfig(opts), handle: nil,
+		open: nil, close: nil,
 	}
-
-	for _, opt := range opts {
-		opt(&settings.config)
-	}
-
-	return settings
 }
 
 // WithSQLite opens the built-in SQLite store at path and sets every store
@@ -121,24 +180,14 @@ func WithPostgreSQL(dsn string, opts ...StoreOption) Option {
 	}
 }
 
-// WithOpenedSQLite sets every store option of the server from st, which the
-// caller opened. The caller closes st. The store options apply after all other
-// options, so they replace a With...Store option for the same port.
-func WithOpenedSQLite(st *sqlite.Store) Option {
+// WithBuiltinStore sets every store option of the server from b, which the
+// caller opened with OpenStore. The caller closes b. The store options apply
+// after all other options, so they replace a With...Store option for the same
+// port. A nil b fails NewServer.
+func WithBuiltinStore(b *BuiltinStore) Option {
 	return func(o *settings) {
-		builtin := newBuiltinStoreSettings(builtinStoreSQLiteOpened, nil)
-		builtin.sqlite = st
-		o.builtinStore = builtin
-	}
-}
-
-// WithOpenedPostgreSQL sets every store option of the server from st, which
-// the caller opened. The caller closes st. The store options apply after all
-// other options, so they replace a With...Store option for the same port.
-func WithOpenedPostgreSQL(st *postgres.Store) Option {
-	return func(o *settings) {
-		builtin := newBuiltinStoreSettings(builtinStorePostgresOpened, nil)
-		builtin.postgres = st
+		builtin := newBuiltinStoreSettings(builtinStoreHandle, nil)
+		builtin.handle = b
 		o.builtinStore = builtin
 	}
 }
@@ -182,10 +231,8 @@ func applyBuiltinStore(cfg *settings) error {
 		return nil
 	case builtinStoreSQLitePath, builtinStorePostgresDSN:
 		return cfg.builtinStore.open(cfg)
-	case builtinStoreSQLiteOpened:
-		return useOpenedSQLite(cfg, &cfg.builtinStore)
-	case builtinStorePostgresOpened:
-		return useOpenedPostgres(cfg, &cfg.builtinStore)
+	case builtinStoreHandle:
+		return useBuiltinStore(cfg, &cfg.builtinStore)
 	}
 
 	return nil
@@ -193,14 +240,17 @@ func applyBuiltinStore(cfg *settings) error {
 
 // openBuiltinSQLite opens the SQLite store of builtin and sets its options.
 func openBuiltinSQLite(cfg *settings, builtin *builtinStoreSettings) error {
-	st, err := openSQLite(builtin.path, sqliteOpenOptions(cfg, builtin)...)
+	ctx, cancel := context.WithTimeout(context.Background(), builtinStoreOpenTimeout)
+	defer cancel()
+
+	st, err := openSQLiteStore(ctx, builtin.path, builtin.config.withServerDefaults(cfg))
 	if err != nil {
 		return fmt.Errorf("WithSQLite: open the store: %w", err)
 	}
 
-	builtin.sqlite = st
+	builtin.handle = st
 	builtin.close = st.Close
-	cfg.setStoreOptions(sqliteStoreOptions(cfg, st))
+	cfg.setStoreOptions(st.options(cfg))
 
 	return nil
 }
@@ -208,88 +258,58 @@ func openBuiltinSQLite(cfg *settings, builtin *builtinStoreSettings) error {
 // openBuiltinPostgres opens the PostgreSQL store of builtin and sets its
 // options.
 func openBuiltinPostgres(cfg *settings, builtin *builtinStoreSettings) error {
-	st, err := openPostgres(builtin.dsn, postgresOpenOptions(cfg, builtin)...)
+	ctx, cancel := context.WithTimeout(context.Background(), builtinStoreOpenTimeout)
+	defer cancel()
+
+	st, err := openPostgresStore(ctx, builtin.dsn, builtin.config.withServerDefaults(cfg))
 	if err != nil {
 		return fmt.Errorf("WithPostgreSQL: open the store: %w", err)
 	}
 
-	builtin.postgres = st
-	builtin.close = func() error {
-		st.Close()
-		return nil
-	}
-	cfg.setStoreOptions(postgresStoreOptions(cfg, st))
+	builtin.handle = st
+	builtin.close = st.Close
+	cfg.setStoreOptions(st.options(cfg))
 
 	return nil
 }
 
-// useOpenedSQLite sets the store options from the SQLite store of builtin.
-func useOpenedSQLite(cfg *settings, builtin *builtinStoreSettings) error {
-	if builtin.sqlite == nil {
-		return errNilSQLiteStore
+// useBuiltinStore sets the store options from the handle of builtin.
+func useBuiltinStore(cfg *settings, builtin *builtinStoreSettings) error {
+	if builtin.handle == nil {
+		return errNilBuiltinStore
 	}
 
-	cfg.setStoreOptions(sqliteStoreOptions(cfg, builtin.sqlite))
+	cfg.setStoreOptions(builtin.handle.options(cfg))
 
 	return nil
 }
 
-// useOpenedPostgres sets the store options from the PostgreSQL store of
-// builtin.
-func useOpenedPostgres(cfg *settings, builtin *builtinStoreSettings) error {
-	if builtin.postgres == nil {
-		return errNilPostgresStore
-	}
-
-	cfg.setStoreOptions(postgresStoreOptions(cfg, builtin.postgres))
-
-	return nil
-}
-
-// sqliteOpenOptions returns the options of the open of a built-in SQLite
-// store.
-func sqliteOpenOptions(cfg *settings, builtin *builtinStoreSettings) []sqlite.Option {
+// sqliteOptions returns the options of the open of a SQLite store.
+func (c storeConfig) sqliteOptions() []sqlite.Option {
 	opts := []sqlite.Option{
-		sqlite.WithLogger(cfg.logger),
-		sqlite.WithBinaryVersion(cfg.version),
-		sqlite.WithInstallationKind(cfg.installationKind),
+		sqlite.WithLogger(c.loggerValue()),
+		sqlite.WithBinaryVersion(c.binaryVersion),
+		sqlite.WithInstallationKind(c.installationKind),
 	}
-	if builtin.config.withoutMigrate {
+	if c.withoutMigrate {
 		opts = append(opts, sqlite.WithoutMigrate())
 	}
 
 	return opts
 }
 
-// postgresOpenOptions returns the options of the open of a built-in PostgreSQL
-// store.
-func postgresOpenOptions(cfg *settings, builtin *builtinStoreSettings) []postgres.Option {
+// postgresOptions returns the options of the open of a PostgreSQL store.
+func (c storeConfig) postgresOptions() []postgres.Option {
 	opts := []postgres.Option{
-		postgres.WithLogger(cfg.logger),
-		postgres.WithBinaryVersion(cfg.version),
-		postgres.WithInstallationKind(cfg.installationKind),
+		postgres.WithLogger(c.loggerValue()),
+		postgres.WithBinaryVersion(c.binaryVersion),
+		postgres.WithInstallationKind(c.installationKind),
 	}
-	if builtin.config.withoutMigrate {
+	if c.withoutMigrate {
 		opts = append(opts, postgres.WithoutMigrate())
 	}
 
 	return opts
-}
-
-// openSQLite opens the SQLite store at path.
-func openSQLite(path string, opts ...sqlite.Option) (*sqlite.Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), builtinStoreOpenTimeout)
-	defer cancel()
-
-	return sqlite.Open(ctx, path, opts...)
-}
-
-// openPostgres opens the PostgreSQL store at dsn.
-func openPostgres(dsn string, opts ...postgres.Option) (*postgres.Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), builtinStoreOpenTimeout)
-	defer cancel()
-
-	return postgres.Open(ctx, dsn, opts...)
 }
 
 // setStoreOptions applies opts to cfg.
@@ -307,31 +327,8 @@ func (b *builtinStoreSettings) closeFunc() func() error {
 
 // builtinStore is the part of the built-in stores that both dialects share.
 type builtinStore interface {
-	builtinUnitStore
-	builtinInstallationStore
+	StorePorts
 	builtinPortSource
-}
-
-// builtinUnitStore holds the ports of namespaces, stacks, secrets and
-// workspaces that a built-in store implements itself.
-type builtinUnitStore interface {
-	namespace.Store
-	stack.Store
-	stack.UpdateStore
-	stack.CheckpointStore
-	stack.EventStore
-	secret.KeyStore
-	workspace.Store
-	workspace.StateStore
-}
-
-// builtinInstallationStore holds the other ports that a built-in store
-// implements itself.
-type builtinInstallationStore interface {
-	inventory.Reader
-	ipallow.Store
-	installation.KindStore
-	installation.InstanceStore
 }
 
 // builtinPortSource holds the methods that return a port with the same type in

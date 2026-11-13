@@ -4,8 +4,15 @@
 `dustpan.NewServer`, start it with `Run`, and stop it with `Close`.
 
 ```go
+store, err := dustpan.OpenStore(ctx, "sqlite:/var/lib/opendustpan/dustpan.db")
+if err != nil {
+	return err
+}
+
+defer store.Close()
+
 server, err := dustpan.NewServer(
-	dustpan.WithSQLite("/var/lib/opendustpan/dustpan.db"),
+	dustpan.WithBuiltinStore(store),
 	dustpan.WithInstallation("eu-west"),
 	dustpan.WithBlobStore(blobs),
 	dustpan.WithAuthenticator(authn),
@@ -20,8 +27,13 @@ defer server.Close()
 return server.Run(ctx)
 ```
 
-`WithSQLite` opens the built-in SQLite store and sets every store option of
-the server from it. `WithPostgreSQL(dsn)` does the same with the PostgreSQL
-store. A third-party store uses the `With...Store` options and the conformance
+`OpenStore` opens the built-in SQLite or PostgreSQL store and answers a
+`*dustpan.BuiltinStore`. The database takes the forms `sqlite:<path>`,
+`postgres://...` and `postgresql://...`. `WithBuiltinStore` sets every store
+option of the server from the handle. The caller closes a store that it
+opened with `OpenStore`. The server does not close it. `WithSQLite(path)` and
+`WithPostgreSQL(dsn)` open the store in one option and the server closes it.
+
+A third-party store uses the `With...Store` options and the conformance
 suites of the ports. The store options of a built-in store apply after all
 other options, so they replace a `With...Store` option for the same port.

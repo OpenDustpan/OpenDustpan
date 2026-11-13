@@ -267,7 +267,7 @@ type settings struct {
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
 	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
-	// WithPostgreSQL, WithOpenedSQLite and WithOpenedPostgreSQL.
+	// WithPostgreSQL and WithBuiltinStore.
 	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
@@ -767,8 +767,8 @@ func defaultSettings() *settings {
 		operationLease:          0,
 		watch:                   nil,
 		builtinStore: builtinStoreSettings{
-			source: builtinStoreNone, path: "", dsn: "", config: builtinStoreConfig{withoutMigrate: false},
-			sqlite: nil, postgres: nil, open: nil, close: nil,
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
 		},
 	}
 }

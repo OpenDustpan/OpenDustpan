@@ -3,17 +3,15 @@ package dustpan
 import (
 	"path/filepath"
 	"testing"
-
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// TestWithOpenedSQLiteWiresTheJobClaimer proves that the built-in SQLite store
-// sets the job store and the job claimer. Without the claimer, a poll of a
-// runner of a pool for jobs finds no work.
-func TestWithOpenedSQLiteWiresTheJobClaimer(t *testing.T) {
+// TestOpenStoreWiresTheJobClaimer proves that the built-in SQLite store sets
+// the job store and the job claimer. Without the claimer, a poll of a runner
+// of a pool for jobs finds no work.
+func TestOpenStoreWiresTheJobClaimer(t *testing.T) {
 	t.Parallel()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	st, err := OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open the database: %v", err)
 	}
@@ -25,7 +23,7 @@ func TestWithOpenedSQLiteWiresTheJobClaimer(t *testing.T) {
 	})
 
 	cfg := defaultSettings()
-	WithOpenedSQLite(st)(cfg)
+	WithBuiltinStore(st)(cfg)
 
 	if applyErr := applyBuiltinStore(cfg); applyErr != nil {
 		t.Fatalf("apply the built-in store: %v", applyErr)

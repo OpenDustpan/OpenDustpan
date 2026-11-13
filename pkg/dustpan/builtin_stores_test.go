@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -167,4 +168,131 @@ func TestServerCloseTwice(t *testing.T) {
 	if err := srv.Close(); err != nil {
 		t.Fatalf("close the server a second time: %v", err)
 	}
+}
+
+// TestOpenStore proves that OpenStore opens a SQLite path and refuses every
+// other form without repeating the value.
+func TestOpenStore(t *testing.T) {
+	t.Parallel()
+
+	database := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+	password := "fake-password"
+	postgresURL := fakecred.URL("postgres", "user", password, "127.0.0.1:1", "dustpan")
+
+	t.Run("SQLite path", func(t *testing.T) {
+		t.Parallel()
+
+		checkOpenStoreOpens(t, database)
+	})
+
+	cases := []struct {
+		name     string
+		database string
+	}{
+		{name: "empty value", database: ""},
+		{name: "other scheme", database: "mysql://x"},
+		{name: "SQLite without a colon", database: "sqlite"},
+		{name: "PostgreSQL on a closed port", database: postgresURL},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkOpenStoreRefused(t, tc.database)
+		})
+	}
+}
+
+// checkOpenStoreOpens proves that database opens and closes.
+func checkOpenStoreOpens(t *testing.T, database string) {
+	t.Helper()
+
+	st, err := dustpan.OpenStore(t.Context(), database)
+	if err != nil {
+		t.Fatalf("OpenStore(%q) = %v, want an open store", database, err)
+	}
+
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("close the store: %v", closeErr)
+	}
+}
+
+// checkOpenStoreRefused proves that database fails without a repeated value.
+func checkOpenStoreRefused(t *testing.T, database string) {
+	t.Helper()
+
+	_, err := dustpan.OpenStore(t.Context(), database)
+	if err == nil {
+		t.Fatalf("OpenStore(%q) succeeded, want an error", database)
+	}
+
+	if database != "" && strings.Contains(err.Error(), database) {
+		t.Fatalf("OpenStore error = %v, want it to repeat no part of the value", err)
+	}
+}
+
+// TestWithBuiltinStoreNil proves that NewServer refuses a nil store and names
+// the option.
+func TestWithBuiltinStoreNil(t *testing.T) {
+	t.Parallel()
+
+	_, err := dustpan.NewServer(dustpan.WithBuiltinStore(nil))
+	if err == nil {
+		t.Fatal("NewServer succeeded, want an error")
+	}
+
+	if !strings.Contains(err.Error(), "WithBuiltinStore") {
+		t.Fatalf("NewServer error = %v, want it to name WithBuiltinStore", err)
+	}
+}
+
+// TestBuiltinStoreCloseTwice proves that Close answers nil on the second call.
+func TestBuiltinStoreCloseTwice(t *testing.T) {
+	t.Parallel()
+
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("close the store: %v", closeErr)
+	}
+
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("close the store a second time: %v", closeErr)
+	}
+}
+
+// TestOpenStoreOptionsReachTheAdapter proves that the binary version and the
+// migration switch reach the adapter.
+func TestOpenStoreOptionsReachTheAdapter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("binary version", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := dustpan.OpenStore(
+			t.Context(),
+			"sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"),
+			dustpan.WithStoreBinaryVersion("v0.0.0"),
+		)
+		if err == nil {
+			t.Fatal("OpenStore succeeded with a binary version below the schema minimum, want an error")
+		}
+	})
+
+	t.Run("without migrate", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := dustpan.OpenStore(
+			t.Context(),
+			"sqlite:"+filepath.Join(t.TempDir(), "missing", "dustpan.db"),
+			dustpan.WithoutStoreMigrate(),
+		)
+		if err == nil {
+			t.Fatal("OpenStore succeeded without a database and without a migration, want an error")
+		}
+	})
 }
