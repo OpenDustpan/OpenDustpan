@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -142,6 +143,22 @@ func writingLimiter() *denylimit.Limiter {
 	})
 }
 
+// checkDenialEntries checks the denial entries of one request: the count, and
+// the outcome and the action.
+func checkDenialEntries(t *testing.T, got []audit.Entry, want int) {
+	t.Helper()
+
+	if len(got) != want {
+		t.Fatalf("wrote %d denial entries, want %d: %+v", len(got), want, got)
+	}
+
+	for i := range got {
+		if got[i].Outcome != audit.OutcomeDenied || got[i].Action != string(identity.ActionNamespaceRead) {
+			t.Errorf("entry %d = %+v, want a denial of %s", i, got[i], identity.ActionNamespaceRead)
+		}
+	}
+}
+
 // TestRefusedReadWritesOneDenialEntry proves that one refused read writes one
 // denial entry. An address outside the allowlist writes its entry in
 // checkAddress. A policy refusal of the namespace read writes its entry in
@@ -172,6 +189,10 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 			name: "unknown namespace under a policy that refuses everything", authz: newAuthorizer(),
 			path: base + "absent/units/" + netID + "/settings", status: http.StatusNotFound, entries: 0,
 		},
+		{
+			name: "allowed request", authz: newAuthorizer(fullAccess()...),
+			path: base + "acme/units/" + netID + "/settings", status: http.StatusOK, entries: 0,
+		},
 	}
 
 	for _, tc := range cases {
@@ -188,16 +209,34 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
 
-			got := store.denied()
-			if len(got) != tc.entries {
-				t.Fatalf("wrote %d denial entries, want %d: %+v", len(got), tc.entries, got)
-			}
-
-			for i := range got {
-				if got[i].Outcome != audit.OutcomeDenied || got[i].Action != string(identity.ActionNamespaceRead) {
-					t.Errorf("entry %d = %+v, want a denial of %s", i, got[i], identity.ActionNamespaceRead)
-				}
-			}
+			checkDenialEntries(t, store.denied(), tc.entries)
 		})
 	}
+}
+
+// TestCheckAddressRefusesAnAddressOutsideTheAllowlist proves that the address
+// check alone refuses an address outside the allowlist and writes one denial
+// entry, before any other check of the route runs.
+func TestCheckAddressRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+	handler := newRefusalHandler(t, addressRefused{}, store, writingLimiter())
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+netID+"/settings", http.NoBody,
+	)
+	req.SetPathValue("namespace", "acme")
+
+	p, authErr := tokenAuthenticator{}.AuthenticateToken(t.Context(), testToken)
+	if authErr != nil {
+		t.Fatalf("authentication: %v", authErr)
+	}
+
+	err := settings.CheckAddress(t.Context(), handler, req, p)
+	if !errors.Is(err, ipallow.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want an address refusal", err)
+	}
+
+	checkDenialEntries(t, store.denied(), 1)
 }
