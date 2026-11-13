@@ -571,6 +571,24 @@ func postToReceiver(ctx context.Context, t *testing.T, client *http.Client, in r
 	return resp.StatusCode
 }
 
+// forgedScope is the scope of every entry that a forged request carries.
+const forgedScope = "forged"
+
+// countScope returns the number of entries of entries whose scope is scope.
+// A check of a refusal counts only the forged entries: genuine entries can
+// arrive while the check runs.
+func countScope(entries []e2e.ReceivedEntry, scope string) int {
+	count := 0
+
+	for i := range entries {
+		if entries[i].Scope == scope {
+			count++
+		}
+	}
+
+	return count
+}
+
 // checkWebhookRefusals proves that the webhook receiver refuses a request
 // with a wrong signature, a request with a signature of another body, and a
 // signed request with an old timestamp, and keeps none of their entries. A
@@ -580,11 +598,10 @@ func checkWebhookRefusals(ctx context.Context, t *testing.T, receivers *e2e.Audi
 
 	client := receiverClient(t, receivers)
 	target := receivers.Webhook.URL()
-	before := len(receivers.Webhook.Entries())
 	refusedBefore := receivers.Webhook.Refused()
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	old := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
-	body := `[{"scope":"forged","sequence":1,"action":"forged","object":"forged","kind":"forged","hash":""}]`
+	body := `[{"scope":"` + forgedScope + `","sequence":1,"action":"forged","object":"forged","kind":"forged","hash":""}]`
 
 	for name, header := range map[string]map[string]string{
 		"wrong signature": {
@@ -612,8 +629,8 @@ func checkWebhookRefusals(ctx context.Context, t *testing.T, receivers *e2e.Audi
 		t.Fatalf("webhook receiver counts %d refusals, want 4", got)
 	}
 
-	if got := len(receivers.Webhook.Entries()); got != before {
-		t.Fatalf("webhook receiver holds %d entries after refusals, want %d", got, before)
+	if got := countScope(receivers.Webhook.Entries(), forgedScope); got != 0 {
+		t.Fatalf("webhook receiver holds %d entries of the forged requests after refusals, want 0", got)
 	}
 
 	good := map[string]string{"Dustpan-Timestamp": now, "Dustpan-Signature": receivers.Webhook.Sign(now, []byte("[]"))}
@@ -631,16 +648,19 @@ func checkOTLPRefusal(ctx context.Context, t *testing.T, receivers *e2e.AuditRec
 
 	client := receiverClient(t, receivers)
 	target := receivers.OTLP.URL() + "/v1/logs"
-	before := len(receivers.OTLP.Entries())
 
 	header := map[string]string{"Content-Type": "application/json"}
-	request := receiverPost{target: target, header: header, body: `{"resourceLogs":[]}`}
+	body := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{` +
+		`"timeUnixNano":"1","severityText":"INFO","attributes":[` +
+		`{"key":"scope","value":{"stringValue":"` + forgedScope + `"}},` +
+		`{"key":"sequence","value":{"intValue":"1"}}]}]}]}]}`
+	request := receiverPost{target: target, header: header, body: body}
 
 	if got := postToReceiver(ctx, t, client, request); got != http.StatusUnauthorized {
 		t.Fatalf("OTLP export without a key answers %d, want %d", got, http.StatusUnauthorized)
 	}
 
-	if got := len(receivers.OTLP.Entries()); got != before {
-		t.Fatalf("OTLP collector holds %d entries after a refusal, want %d", got, before)
+	if got := countScope(receivers.OTLP.Entries(), forgedScope); got != 0 {
+		t.Fatalf("OTLP collector holds %d entries of the forged export after a refusal, want 0", got)
 	}
 }
