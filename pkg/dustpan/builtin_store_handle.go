@@ -95,7 +95,7 @@ type InstallationStorePorts interface {
 
 // errStoreDatabaseForm reports a database value that names no built-in store.
 var errStoreDatabaseForm = errors.New(
-	"database must start with a SQLite path, postgres:// or postgresql://",
+	"database must start with sqlite:<path>, postgres:// or postgresql://",
 )
 
 // errNilBuiltinStore reports WithBuiltinStore without a store.
@@ -153,11 +153,19 @@ func openStoreConfig(ctx context.Context, database string, config storeConfig) (
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
 		return openSQLiteStore(ctx, strings.TrimPrefix(database, "sqlite:"), config)
-	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
+	case postgresDSNForm(database):
 		return openPostgresStore(ctx, database, config)
 	default:
 		return nil, errStoreDatabaseForm
 	}
+}
+
+// postgresDSNForm reports whether dsn names a PostgreSQL store: it starts with
+// postgres:// or postgresql://. A value of another form must never reach the
+// driver, which then takes the host, the user and the database from its
+// environment defaults.
+func postgresDSNForm(dsn string) bool {
+	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
 }
 
 // openSQLiteStore opens the SQLite store at path.
@@ -177,8 +185,15 @@ func openSQLiteStore(ctx context.Context, path string, config storeConfig) (*Bui
 	}), nil
 }
 
-// openPostgresStore opens the PostgreSQL store at dsn.
+// openPostgresStore opens the PostgreSQL store at dsn. It refuses a dsn of
+// another form with errStoreDatabaseForm and opens nothing.
 func openPostgresStore(ctx context.Context, dsn string, config storeConfig) (*BuiltinStore, error) {
+	// Defense in depth: openStoreConfig and openBuiltinPostgres check the form
+	// too; this check stays so that a new caller cannot skip it.
+	if !postgresDSNForm(dsn) {
+		return nil, errStoreDatabaseForm
+	}
+
 	st, err := postgres.Open(ctx, dsn, config.postgresOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres store: %w", err)

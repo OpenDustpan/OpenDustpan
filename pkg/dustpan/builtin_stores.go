@@ -256,8 +256,17 @@ func openBuiltinSQLite(cfg *settings, builtin *builtinStoreSettings) error {
 }
 
 // openBuiltinPostgres opens the PostgreSQL store of builtin and sets its
-// options.
+// options. It refuses a dsn that does not name a PostgreSQL store, so that a
+// value that names no such store never reaches the driver. The error repeats
+// no part of the value.
 func openBuiltinPostgres(cfg *settings, builtin *builtinStoreSettings) error {
+	// Defense in depth: openStoreConfig and openPostgresStore check the form
+	// too; this check stays so that WithPostgreSQL cannot hand a value of
+	// another form to the driver.
+	if !postgresDSNForm(builtin.dsn) {
+		return fmt.Errorf("WithPostgreSQL: %w", errStoreDatabaseForm)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), builtinStoreOpenTimeout)
 	defer cancel()
 

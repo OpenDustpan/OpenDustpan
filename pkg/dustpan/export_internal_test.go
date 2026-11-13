@@ -335,3 +335,13 @@ func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
 
 	return fields[name]
 }
+
+// ErrStoreDatabaseForm is the refusal of a database value that names no
+// built-in store.
+var ErrStoreDatabaseForm = errStoreDatabaseForm
+
+// OpenPostgresStoreForTest runs openPostgresStore, so that a test reaches the
+// form check of the inner layer.
+func OpenPostgresStoreForTest(ctx context.Context, dsn string) (*BuiltinStore, error) {
+	return openPostgresStore(ctx, dsn, defaultStoreConfig())
+}

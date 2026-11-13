@@ -1,7 +1,9 @@
 # Embed the server
 
 `pkg/dustpan` is the Go SDK of the server. A program can build a server with
-`dustpan.NewServer`, start it with `Run`, and stop it with `Close`.
+`dustpan.NewServer` and serve it with `Run`. `Run` returns when the caller
+cancels the context. `Close` then closes the built-in store that `WithSQLite`
+or `WithPostgreSQL` opened.
 
 ```go
 store, err := dustpan.OpenStore(ctx, "sqlite:/var/lib/opendustpan/dustpan.db")

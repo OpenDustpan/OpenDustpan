@@ -1,8 +1,10 @@
 package dustpan_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,12 +16,31 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // newBuiltinSQLiteServer opens a server over the built-in SQLite store at path,
-// with only the non-store options that NewServer requires. The caller closes
-// the server.
-func newBuiltinSQLiteServer(t *testing.T, path string) *dustpan.Server {
+// with the extra options after the options that NewServer requires. The caller
+// closes the server.
+func newBuiltinSQLiteServer(t *testing.T, path string, extra ...dustpan.Option) *dustpan.Server {
+	t.Helper()
+
+	opts := builtinServerOptions(t)
+	opts = append(opts, dustpan.WithSQLite(path))
+	opts = append(opts, extra...)
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv
+}
+
+// builtinServerOptions returns the options that NewServer requires besides the
+// store, with a blob store that the test closes.
+func builtinServerOptions(t *testing.T) []dustpan.Option {
 	t.Helper()
 
 	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
@@ -38,18 +59,12 @@ func newBuiltinSQLiteServer(t *testing.T, path string) *dustpan.Server {
 		t.Fatalf("authenticator: %v", err)
 	}
 
-	srv, err := dustpan.NewServer(
-		dustpan.WithSQLite(path),
+	return []dustpan.Option{
 		dustpan.WithInstallation(installationName),
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithSecretWrapper(testWrapper(t)),
-	)
-	if err != nil {
-		t.Fatalf("new server: %v", err)
 	}
-
-	return srv
 }
 
 // newBuiltinSQLiteFixture starts a server whose only store option is WithSQLite.
@@ -188,13 +203,22 @@ func TestOpenStore(t *testing.T) {
 		checkOpenStoreOpens(t, database)
 	})
 
+	// The message names the accepted form sqlite:<path>, so it holds the word
+	// sqlite by design. Only the refusal is checked for this value.
+	t.Run("SQLite without a colon", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := dustpan.OpenStore(t.Context(), "sqlite"); !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
+			t.Fatalf("OpenStore(%q) = %v, want the form error", "sqlite", err)
+		}
+	})
+
 	cases := []struct {
 		name     string
 		database string
 	}{
 		{name: "empty value", database: ""},
 		{name: "other scheme", database: "mysql://x"},
-		{name: "SQLite without a colon", database: "sqlite"},
 		{name: "PostgreSQL on a closed port", database: postgresURL},
 	}
 
@@ -281,9 +305,20 @@ func checkOpenStoreRefused(t *testing.T, database string) {
 		t.Fatalf("OpenStore(%q) succeeded, want an error", database)
 	}
 
-	if database != "" && strings.Contains(err.Error(), database) {
+	if repeatsValue(err.Error(), database) {
 		t.Fatalf("OpenStore error = %v, want it to repeat no part of the value", err)
 	}
+}
+
+// repeatsValue reports whether message repeats a part of value. A value with no
+// character of its own has nothing to repeat. Every other value must be absent:
+// the message holds the names of the accepted forms only.
+func repeatsValue(message, value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+
+	return strings.Contains(message, value)
 }
 
 // TestWithBuiltinStoreNil proves that NewServer refuses a nil store and names
@@ -340,13 +375,212 @@ func TestOpenStoreOptionsReachTheAdapter(t *testing.T) {
 	t.Run("without migrate", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := dustpan.OpenStore(
-			t.Context(),
-			"sqlite:"+filepath.Join(t.TempDir(), "missing", "dustpan.db"),
-			dustpan.WithoutStoreMigrate(),
-		)
+		// The file is absent from a directory that exists, so an open with a
+		// migration makes it. Without the migration, the open fails and makes
+		// nothing; the open of the same path below then succeeds.
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		_, err := dustpan.OpenStore(t.Context(), "sqlite:"+path, dustpan.WithoutStoreMigrate())
 		if err == nil {
-			t.Fatal("OpenStore succeeded without a database and without a migration, want an error")
+			t.Fatal("OpenStore succeeded with an absent database and without a migration, want an error")
+		}
+
+		checkOpenStoreOpens(t, "sqlite:"+path)
+	})
+}
+
+// TestWithPostgreSQLRefusesAValueOfAnotherForm proves that WithPostgreSQL
+// refuses each value that does not name a PostgreSQL store before it opens
+// anything, and that the error repeats no part of the value. The cases need no
+// PostgreSQL server: the check refuses before any connection.
+func TestWithPostgreSQLRefusesAValueOfAnotherForm(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "empty value", dsn: ""},
+		{name: "spaces", dsn: " "},
+		{name: "keyword form", dsn: "host=localhost dbname=x"},
+		{name: "other scheme", dsn: "mysql://x"},
+		{name: "SQLite form", dsn: "sqlite:/tmp/x"},
+		{name: "wrong case", dsn: "POSTGRES://x"},
+		{name: "leading newline", dsn: "\npostgres://x"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dustpan.NewServer(dustpan.WithPostgreSQL(tc.dsn))
+			if err == nil {
+				t.Fatalf("NewServer(WithPostgreSQL(%q)) succeeded, want an error", tc.dsn)
+			}
+
+			if !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
+				t.Fatalf("NewServer error = %v, want the form error", err)
+			}
+
+			if repeatsValue(err.Error(), tc.dsn) {
+				t.Fatalf("NewServer error = %v, want it to repeat no part of the value", err)
+			}
+		})
+	}
+}
+
+// TestOpenPostgresStoreRefusesAValueOfAnotherForm proves that the inner layer
+// refuses such a value too, so that a new caller of the open cannot skip the
+// check.
+func TestOpenPostgresStoreRefusesAValueOfAnotherForm(t *testing.T) {
+	t.Parallel()
+
+	_, err := dustpan.OpenPostgresStoreForTest(t.Context(), "")
+	if !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
+		t.Fatalf("openPostgresStore with an empty value = %v, want the form error", err)
+	}
+}
+
+// TestBuiltinStoreOptionReplacesTheStoreOption proves that the store options of
+// a built-in store apply after all other options: a namespace that the API
+// creates lands in the built-in store, not in the store of WithNamespaceStore.
+func TestBuiltinStoreOptionReplacesTheStoreOption(t *testing.T) {
+	t.Parallel()
+
+	second, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "second.db"))
+	if err != nil {
+		t.Fatalf("open the second store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := second.Close(); closeErr != nil {
+			t.Errorf("close the second store: %v", closeErr)
 		}
 	})
+
+	srv := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"), dustpan.WithNamespaceStore(second))
+
+	t.Cleanup(func() {
+		if closeErr := srv.Close(); closeErr != nil {
+			t.Errorf("close the server: %v", closeErr)
+		}
+	})
+
+	ts := httptest.NewServer(startedHandler(t, srv))
+	t.Cleanup(ts.Close)
+
+	f := fixture{store: nil, server: ts, srv: srv}
+
+	status, body := serveServerAPI(t, f, http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create the namespace: status %d, body %s", status, body)
+	}
+
+	if _, readErr := second.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrNotFound) {
+		t.Fatalf("read acme from the store of WithNamespaceStore = %v, want the built-in store to hold it", readErr)
+	}
+
+	// The switches of acme come from the store that the server reads, so a 200
+	// proves that the built-in store holds the namespace.
+	status, body = serveServerAPI(t, f, http.MethodGet, "/api/server/namespaces/acme/override-switches", "")
+	if status != http.StatusOK {
+		t.Fatalf("read the switches of acme: status %d, body %s", status, body)
+	}
+}
+
+// TestServerCloseClosesTheBuiltinStore proves that Close closes the store that
+// WithSQLite opened: the database file stays locked until then.
+func TestServerCloseClosesTheBuiltinStore(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	srv := newBuiltinSQLiteServer(t, path)
+
+	if _, err := dustpan.OpenStore(t.Context(), "sqlite:"+path); !errors.Is(err, sqlite.ErrInUse) {
+		t.Fatalf("open the same database file while the server runs = %v, want the lock of the server", err)
+	}
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the server: %v", err)
+	}
+
+	checkOpenStoreOpens(t, "sqlite:"+path)
+}
+
+// TestServerCloseLeavesTheCallerStoreOpen proves that Close closes the store
+// that WithSQLite or WithPostgreSQL opened only: a store that the caller gave
+// to WithBuiltinStore stays open and holds its data.
+func TestServerCloseLeavesTheCallerStoreOpen(t *testing.T) {
+	t.Parallel()
+
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	opts := builtinServerOptions(t)
+	opts = append(opts, dustpan.WithBuiltinStore(st))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	if closeErr := srv.Close(); closeErr != nil {
+		t.Fatalf("close the server: %v", closeErr)
+	}
+
+	if _, readErr := st.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrNotFound) {
+		t.Fatalf("read through the store after Close = %v, want the store to answer", readErr)
+	}
+
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("close the store: %v", closeErr)
+	}
+}
+
+// TestNewServerClosesTheBuiltinStoreWhenItFails proves that NewServer closes
+// the store that it opened when a later check fails, and that the returned
+// error carries that failure. The absent authenticator fails the check after
+// applyBuiltinStore opened the store; a second open of the same path then shows
+// that the server released it.
+func TestNewServerClosesTheBuiltinStoreWhenItFails(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	_, err := dustpan.NewServer(dustpan.WithSQLite(path))
+	if err == nil {
+		t.Fatal("NewServer succeeded without an authenticator, want an error")
+	}
+
+	if !errors.Is(err, dustpan.ErrMissingOption) || !strings.Contains(err.Error(), "WithAuthenticator") {
+		t.Fatalf("NewServer error = %v, want the absent authenticator", err)
+	}
+
+	checkOpenStoreOpens(t, "sqlite:"+path)
+}
+
+// TestWithPostgreSQLOpensTheTestDatabase proves that WithPostgreSQL opens the
+// store of the test database and sets its store options, so that
+// postgresStoreOptions runs. The test skips without the test database.
+func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(postgresURLEnv)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
+	}
+
+	opts := builtinServerOptions(t)
+	opts = append(opts, dustpan.WithPostgreSQL(isolatedPostgresURL(t, base)))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	if closeErr := srv.Close(); closeErr != nil {
+		t.Fatalf("close the server: %v", closeErr)
+	}
 }
