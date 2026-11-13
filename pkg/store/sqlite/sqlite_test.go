@@ -1856,3 +1856,86 @@ func TestLiveMarkerConformance(t *testing.T) {
 		return &liveMarkerStore{revocationStore: &revocationStore{Store: s, path: path}}
 	})
 }
+
+// insertWithoutIDCase names one table and the two inserts of its ID guard.
+type insertWithoutIDCase struct {
+	name      string
+	setup     []string
+	withoutID string
+	withID    string
+}
+
+// TestInsertWithoutIDIsRefused proves that an insert into namespaces, stacks
+// or blob_purges with no ID column is refused, and that the same insert with
+// a valid ID succeeds.
+func TestInsertWithoutIDIsRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []insertWithoutIDCase{
+		{
+			name:  "namespaces",
+			setup: nil,
+			withoutID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms)
+VALUES ('ns-test', 'primary', 0, 0)`,
+			withID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`,
+		},
+		{
+			name: "stacks",
+			setup: []string{`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`},
+			withoutID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0)`,
+			withID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms, id)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0, 'stk-1')`,
+		},
+		{
+			name:      "blob_purges",
+			setup:     nil,
+			withoutID: `INSERT INTO blob_purges (tool, unit_id, purged_at_ms) VALUES ('pulumi', 'unit-1', 1)`,
+			withID:    `INSERT INTO blob_purges (tool, unit_id, purged_at_ms, namespace_id) VALUES ('pulumi', 'unit-1', 1, 'ns-1')`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkInsertWithoutID(t, tc)
+		})
+	}
+}
+
+// checkInsertWithoutID runs the two inserts of one case on a new database.
+func checkInsertWithoutID(t *testing.T, tc insertWithoutIDCase) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	copyTemplate(t, path)
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	for _, statement := range tc.setup {
+		if _, execErr := conn.ExecContext(t.Context(), statement); execErr != nil {
+			t.Fatalf("%s: %v", statement, execErr)
+		}
+	}
+
+	_, execErr := conn.ExecContext(t.Context(), tc.withoutID)
+	if execErr == nil || !strings.Contains(execErr.Error(), "NOT NULL constraint failed") {
+		t.Fatalf("insert into %s without an ID = %v, want a NOT NULL constraint error", tc.name, execErr)
+	}
+
+	if _, execErr := conn.ExecContext(t.Context(), tc.withID); execErr != nil {
+		t.Fatalf("insert into %s with a valid ID: %v", tc.name, execErr)
+	}
+}
