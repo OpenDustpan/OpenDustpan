@@ -287,6 +287,11 @@ type Spec struct {
 	Purpose  Purpose
 	Executor ExecutorKind
 	Location Location
+	// LocationSource tells where the effective Location came from: the
+	// request, the settings of the unit or the default connection of the
+	// namespace. The service sets it at start, and it is fixed with the rest
+	// of the spec.
+	LocationSource LocationSource
 	// Steps are the steps of a runner job, resolved by the server at start
 	// from the settings of the unit, its blueprint or the defaults of its
 	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
@@ -318,6 +323,20 @@ const (
 	DefaultedPool     = "pool"
 	DefaultedLocation = "location"
 	DefaultedProfile  = "profile"
+)
+
+// LocationSource names where the effective code location of a job came from.
+type LocationSource string
+
+// The sources of a code location.
+const (
+	// LocationSourceRequest is a location that the start request gave.
+	LocationSourceRequest LocationSource = "request"
+	// LocationSourceUnit is a location that the settings of the unit gave.
+	LocationSourceUnit LocationSource = "unit"
+	// LocationSourceNamespace is a location whose connection came from the
+	// default connection of the namespace.
+	LocationSourceNamespace LocationSource = "namespace"
 )
 
 // DefaultedValues returns the names of the values of spec that req did not

@@ -363,6 +363,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 			Location: job.Location{
 				Connection: "", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc123",
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{
 				{
 					Name:             "plan",

@@ -127,6 +127,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
