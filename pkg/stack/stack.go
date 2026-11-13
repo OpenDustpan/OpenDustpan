@@ -257,7 +257,8 @@ type Store interface {
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It appends the audit entry e in the same fenced
-	// transaction, with the stable stack ID and the old and the new name. It
+	// transaction, with the stable stack ID and the old and the new name. A
+	// rename to the current name writes no audit entry. It
 	// returns ErrNotFound for a missing stack, ErrAlreadyExists for a taken
 	// name, ErrUpdateConflict while a mutating update of the stack runs (a
 	// *UpdateConflictError that names that update), namespace.ErrNotFound for a

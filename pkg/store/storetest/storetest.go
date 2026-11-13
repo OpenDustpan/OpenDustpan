@@ -89,6 +89,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
 		{name: "rename keeps tags", test: testRenameKeepsTags},
 		{name: "rename writes the audit entry", test: testRenameWritesAuditEntry},
+		{name: "rename to the same name checks the entry", test: testRenameSameName},
 		{name: "inventory lists the created stack", test: testInventoryAfterCreate},
 		{name: "inventory lists the labels of a stack", test: testInventoryLabels},
 		{name: "inventory labels appear after a create", test: testInventoryLabelsAfterCreate},
@@ -946,6 +947,123 @@ func testRenameWritesAuditEntry(t *testing.T, s Store) {
 	}
 
 	checkRenameAuditEntry(t, listing.Entries[0], want, st.ID)
+}
+
+// testRenameSameName checks a rename that keeps the current name: it checks
+// the entry, keeps the stack and writes no audit entry.
+func testRenameSameName(t *testing.T, s Store) {
+	t.Helper()
+
+	lister, ok := s.(auditLister)
+	if !ok {
+		t.Skip("store does not list audit entries")
+	}
+
+	cases := []sameNameRenameCase{
+		{
+			name:      "a valid entry keeps the stack and writes no entry",
+			namespace: "same-name-valid",
+			create:    true,
+			entry:     renameEntry,
+			wantErr:   nil,
+			otherName: false,
+		},
+		{
+			name:      "an entry without an action is ErrInvalidEntry",
+			namespace: "same-name-action",
+			create:    true,
+			entry: func(ns namespace.Name, ref stack.Ref) audit.Entry {
+				e := renameEntry(ns, ref)
+				e.Action = ""
+
+				return e
+			},
+			wantErr:   audit.ErrInvalidEntry,
+			otherName: false,
+		},
+		{
+			name:      "an entry that names another namespace is ErrInvalidEntry",
+			namespace: "same-name-other",
+			create:    true,
+			entry: func(ns namespace.Name, ref stack.Ref) audit.Entry {
+				e := renameEntry(ns, ref)
+				e.Namespace = namespace.Name(ns.String() + "-other")
+
+				return e
+			},
+			wantErr:   audit.ErrInvalidEntry,
+			otherName: false,
+		},
+		{
+			name:      "a missing stack is ErrNotFound",
+			namespace: "same-name-missing",
+			create:    false,
+			entry:     renameEntry,
+			wantErr:   stack.ErrNotFound,
+			otherName: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runSameNameRename(t, s, lister, tc)
+		})
+	}
+}
+
+// sameNameRenameCase is one case of testRenameSameName.
+type sameNameRenameCase struct {
+	name      string
+	namespace string
+	create    bool
+	entry     func(ns namespace.Name, ref stack.Ref) audit.Entry
+	wantErr   error
+	otherName bool
+}
+
+// runSameNameRename runs one case of testRenameSameName.
+func runSameNameRename(t *testing.T, s Store, lister auditLister, tc sameNameRenameCase) {
+	t.Helper()
+
+	ns := newNamespace(t, s, tc.namespace)
+	ref := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "prod"}
+	st := newStack(ns.Name, "web", "prod")
+
+	if tc.create {
+		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+			t.Fatalf("create stack: %v", err)
+		}
+	}
+
+	err := s.RenameStack(t.Context(), ref, ref.Stack, ns.Fence(), tc.entry(ns.Name, ref))
+	if !errors.Is(err, tc.wantErr) {
+		t.Fatalf("rename to the same name: err = %v, want %v", err, tc.wantErr)
+	}
+
+	if tc.wantErr == nil {
+		got, getErr := s.GetStack(t.Context(), ref)
+		if getErr != nil {
+			t.Fatalf("get stack after rename: %v", getErr)
+		}
+
+		assertStack(t, got, st)
+	}
+
+	listing, listErr := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if listErr != nil {
+		t.Fatalf("list audit entries: %v", listErr)
+	}
+
+	if len(listing.Entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", listing.Entries)
+	}
+
+	if tc.otherName {
+		otherErr := s.RenameStack(t.Context(), ref, "renamed", ns.Fence(), tc.entry(ns.Name, ref))
+		if !errors.Is(otherErr, tc.wantErr) {
+			t.Fatalf("rename to another name: err = %v, want %v", otherErr, tc.wantErr)
+		}
+	}
 }
 
 // checkRenameAuditEntry checks the entry of a rename: its action, object,

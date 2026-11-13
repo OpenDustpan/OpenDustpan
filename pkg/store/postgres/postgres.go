@@ -603,6 +603,12 @@ func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	if newName == oldRef.Stack {
+		// Defense in depth: the service builds a valid entry too; this check
+		// stays so that a new caller cannot skip it.
+		if err := checkFencedEntry(fence, e); err != nil {
+			return err
+		}
+
 		return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 			return confirmStackPresent(ctx, q, oldRef)
 		})
