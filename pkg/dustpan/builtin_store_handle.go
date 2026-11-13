@@ -168,7 +168,7 @@ func openPostgresStore(ctx context.Context, dsn string, config storeConfig) (*Bu
 		settingDeclarations:   postgres.SettingDeclarations(),
 		minimumBinaryVersions: minimumBinaryVersionsOf(st),
 		close: func() error {
-			st.Close()
+			st.CloseContext(context.WithoutCancel(ctx))
 
 			return nil
 		},
