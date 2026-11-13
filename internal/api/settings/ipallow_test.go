@@ -12,9 +12,11 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/settings"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/unitsettingssvc"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -38,7 +40,20 @@ func (addressRefused) ListObjects(context.Context, identity.Principal, identity.
 func newAddressHandler(t *testing.T) *settings.Handler {
 	t.Helper()
 
-	records := idempotencytest.NewMemory()
+	return newRefusalHandler(
+		t, addressRefused{},
+		&recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}, nil,
+	)
+}
+
+// newRefusalHandler returns a handler with authz, records and limiter for its
+// refusals.
+func newRefusalHandler(
+	t *testing.T, authz identity.Authorizer, records *recordingAudit, limiter *denylimit.Limiter,
+) *settings.Handler {
+	t.Helper()
+
+	replay := idempotencytest.NewMemory()
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
@@ -48,7 +63,7 @@ func newAddressHandler(t *testing.T) *settings.Handler {
 	}
 
 	svc, err := unitsettingssvc.New(unitsettingssvc.Config{
-		Store: newMemStore(records), Fences: fences{}, Connections: connections{}, Pools: pools{},
+		Store: newMemStore(replay), Fences: fences{}, Connections: connections{}, Pools: pools{},
 		Now: func() time.Time { return time.Unix(1_800_000_000, 0) },
 	})
 	if err != nil {
@@ -56,18 +71,18 @@ func newAddressHandler(t *testing.T) *settings.Handler {
 	}
 
 	idem, err := idempotent.New(idempotent.Config{
-		Store: records, Logger: slog.New(slog.DiscardHandler), Now: nil, MaxBodyBytes: 1 << 20,
+		Store: replay, Logger: slog.New(slog.DiscardHandler), Now: nil, MaxBodyBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("idempotency middleware: %v", err)
 	}
 
 	handler, err := settings.NewHandler(settings.Config{
-		Idempotency: idem, Records: records,
+		Idempotency: idem, Records: replay,
 		Namespaces: namespaces, Units: fakeInventory{}, Service: svc, Suggestions: suggester{err: nil},
-		Authenticator: tokenAuthenticator{}, Authorizer: addressRefused{},
-		Audit: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}, OnAuditFailure: nil,
-		DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		Authenticator: tokenAuthenticator{}, Authorizer: authz,
+		Audit: records, OnAuditFailure: nil,
+		DenialLimiter: limiter, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -104,5 +119,85 @@ func TestAddressOutsideTheAllowlistAnswers403(t *testing.T) {
 				t.Errorf("read %s: the refusal names %q: %s", path, named, rec.Body.String())
 			}
 		}
+	}
+}
+
+// writingLimiter returns a limiter whose window ends between two refusals, so
+// that each refusal writes one entry and the test can count them.
+func writingLimiter() *denylimit.Limiter {
+	var mu sync.Mutex
+
+	now := time.Unix(1_800_000_000, 0)
+
+	return denylimit.New(denylimit.Config{
+		Window: time.Second, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+
+			now = now.Add(2 * time.Second)
+
+			return now
+		},
+	})
+}
+
+// TestRefusedReadWritesOneDenialEntry proves that one refused read writes one
+// denial entry. An address outside the allowlist writes its entry in
+// checkAddress. A policy refusal of the namespace read writes its entry in
+// AuthorizeObject, and checkAddress writes none. A policy refusal of a
+// namespace that does not exist writes nothing, because the lookup answers 404
+// and never checks the policy on that name.
+func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
+	t.Parallel()
+
+	const base = "/api/dustpan/v1/namespaces/"
+
+	cases := []struct {
+		name    string
+		authz   identity.Authorizer
+		path    string
+		status  int
+		entries int
+	}{
+		{
+			name: "address outside the allowlist", authz: addressRefused{},
+			path: base + "acme/units/" + netID + "/settings", status: http.StatusForbidden, entries: 1,
+		},
+		{
+			name: "policy refuses the namespace read", authz: newAuthorizer(),
+			path: base + "acme/units/" + netID + "/settings", status: http.StatusNotFound, entries: 1,
+		},
+		{
+			name: "unknown namespace under a policy that refuses everything", authz: newAuthorizer(),
+			path: base + "absent/units/" + netID + "/settings", status: http.StatusNotFound, entries: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+			handler := newRefusalHandler(t, tc.authz, store, writingLimiter())
+
+			rec := serve(t, handler, request{
+				method: http.MethodGet, path: tc.path, token: testToken, body: "", header: nil,
+			})
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+
+			got := store.denied()
+			if len(got) != tc.entries {
+				t.Fatalf("wrote %d denial entries, want %d: %+v", len(got), tc.entries, got)
+			}
+
+			for i := range got {
+				if got[i].Outcome != audit.OutcomeDenied || got[i].Action != string(identity.ActionNamespaceRead) {
+					t.Errorf("entry %d = %+v, want a denial of %s", i, got[i], identity.ActionNamespaceRead)
+				}
+			}
+		})
 	}
 }

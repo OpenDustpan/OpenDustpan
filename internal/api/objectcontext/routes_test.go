@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -266,6 +267,23 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testH
 func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store) testHandler {
 	t.Helper()
 
+	return newHandlerWithGuard(t, authz, store, results, guardOptions{records: newTestAudit(), limiter: nil})
+}
+
+// guardOptions sets the audit store and the limiter of the refusals of a
+// handler.
+type guardOptions struct {
+	records audit.Store
+	limiter *denylimit.Limiter
+}
+
+// newHandlerWithGuard is newHandlerWithDrift with the audit store and the
+// limiter of the refusals.
+func newHandlerWithGuard(
+	t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store, guard guardOptions,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
 	)
@@ -281,7 +299,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
-		Audit:          newTestAudit(),
+		Audit:          guard.records,
 		OnAuditFailure: nil,
 		Namespaces:     namespaces,
 		Units:          fakeUnits{},
@@ -294,7 +312,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 		Authorizer:     authz,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		DenialLimiter:  nil,
+		DenialLimiter:  guard.limiter,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

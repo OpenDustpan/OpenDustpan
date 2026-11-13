@@ -18,3 +18,10 @@
 - [x] 3.1 `e2e/ipallow_test.go`: the step reads one route of each surface from outside the list and expects 403 with `access.ip-not-allowed`, as the `override-switches` step does. Check: `go test -tags e2e ./e2e/ -run TestIPAllowlists`.
 - [ ] 3.2 Docs: no change. `docs/guides/ip-allowlists.md:104-105` and `GLOSSARY.md:191` already state the 403, and the fix makes the code agree. Check: `make docs-lint` exits 0.
 - [ ] 3.3 `make check` reports zero findings.
+
+## 4. One entry for each refusal
+
+- [x] 4.1 `internal/api/refusal/refusal.go`: add `Decide`, which asks the Authorizer and writes no entry, and move the choice of the reason out of `Authorize` into one function, `ReasonFor`, that `Authorize` and the callers of `Decide` use. Check: `Authorize` keeps its behavior.
+- [x] 4.2 `internal/api/triggers/routes.go`, `internal/api/objectcontext/routes.go` and `internal/api/settings/routes.go`: `checkAddress` calls `Decide`; an address refusal calls `Record` one time with the action, the namespace object and the reason that `ReasonFor` gives; every other result returns nil and records nothing. Check: `Authorize` in place of `Decide` makes the new test fail.
+- [x] 4.3 Test each surface with a table that counts the denial entries of one request: an address outside the list writes 1 entry and answers 403, a policy refusal of the namespace read writes 1 entry, and an unknown namespace under a policy that refuses everything writes 0 entries and answers 404. Check: `Authorize` in place of `Decide` makes all three rows fail.
+- [x] 4.4 The tests of the three packages and the tests of `internal/api/refusal` pass. Check: `go test -count=1 ./internal/api/refusal/ ./internal/api/triggers/ ./internal/api/objectcontext/ ./internal/api/settings/`.

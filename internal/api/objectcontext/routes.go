@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -201,7 +202,9 @@ func (h *Handler) authorizeTarget(r *http.Request, p identity.Principal, rt Rout
 // lookup found nothing. The answer is the same 403 for a name that exists and
 // for a name that does not exist, so it does not tell whether the object
 // exists. Every other result, also an invalid name, continues: the checks
-// after the lookup give the answer, as before.
+// after the lookup give the answer, as before. It asks through Decide, which
+// writes no entry, and records only the address refusal: AuthorizeObject
+// records every other refusal one time.
 //
 // Defense in depth: AuthorizeObject checks the allowlist again on the found
 // namespace. This check stays so that the order of the lookup never decides
@@ -213,13 +216,17 @@ func (h *Handler) checkAddress(
 
 	// An invalid name names no namespace and has no allowlist: the lookup
 	// that answered before this check gave the answer.
-	var err error
 	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
-		err = h.guard.Authorize(ctx, r, p, action, identity.NamespaceObject(name))
-	}
+		obj := identity.NamespaceObject(name)
 
-	if errors.Is(err, ipallow.ErrAddressNotAllowed) {
-		return fmt.Errorf("authorize %s: %w", action, err)
+		err := h.guard.Decide(ctx, p, action, obj)
+		if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
+			})
+
+			return fmt.Errorf("authorize %s: %w", action, err)
+		}
 	}
 
 	return nil
