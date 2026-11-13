@@ -2,6 +2,7 @@ package forge_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,48 @@ func TestAppBudgetBoundsTheCallsOfOneApp(t *testing.T) {
 		if !ok && wait <= 0 {
 			t.Fatalf("call %d: refused with no wait", i)
 		}
+	}
+}
+
+// TestAppBudgetAllowsTheLimitAtOneTime spends one budget of one app from
+// several goroutines at one fixed time. Exactly the limit of the calls pass,
+// whatever the order of the goroutines.
+func TestAppBudgetAllowsTheLimitAtOneTime(t *testing.T) {
+	t.Parallel()
+
+	const limit = 50
+
+	b, err := forge.NewAppBudget(limit, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.UnixMilli(1_700_000_000_000)
+	app := "https://api.github.com#1"
+
+	var wg sync.WaitGroup
+
+	var mu sync.Mutex
+
+	passed := 0
+
+	for range 4 * limit {
+		wg.Go(func() {
+			if _, ok := b.Spend(app, now); !ok {
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			passed++
+		})
+	}
+
+	wg.Wait()
+
+	if passed != limit {
+		t.Fatalf("calls allowed = %d, want %d", passed, limit)
 	}
 }
 

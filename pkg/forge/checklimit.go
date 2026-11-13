@@ -77,9 +77,12 @@ func (l CheckLimits) Validate() error {
 
 // Default limits of Check: one for each connection in 10 seconds and 30 for
 // each installation in one minute. The default budget of an app is 80 signed
-// calls in one minute: 4,800 in an hour, below the limit of 5,000 calls in an
-// hour that GitHub sets for the calls that the key of an app signs. The
-// budget counts every signed call, so Checks and the installation tokens of
+// calls in one minute: 4,800 in an hour for one instance, below the limit of
+// 5,000 calls in an hour that GitHub sets for the calls that the key of an app
+// signs. Each instance keeps its own budget, so several instances together can
+// pass the limit of GitHub: an operator who runs several instances sets a
+// lower PerApp, so that the sum of the instances stays below it. The budget
+// counts every signed call, so Checks and the installation tokens of
 // write-backs and reads share it, and no kind of call can leave the others
 // with nothing beyond the limit of GitHub.
 const (

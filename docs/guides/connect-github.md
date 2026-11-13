@@ -220,10 +220,17 @@ Errors of a check:
 The server signs some calls with the key of the app: each check, each
 installation token for a read or a write, and each read of an installation or
 of the app. GitHub limits these calls for each app. So the server allows 80
-signed calls of the app in a minute, which is 4,800 in an hour, below the
-GitHub limit of 5,000. All installations and all namespaces of the app share
-this budget. A call over the budget makes no call to GitHub, and the request
-answers 503 with `Retry-After`.
+signed calls of the app in a minute, which is 4,800 in an hour for one
+instance, below the GitHub limit of 5,000. All installations and all
+namespaces of the app share this budget. A call over the budget makes no call
+to GitHub, and the request answers 503 with `Retry-After`.
+
+The budget lives in the memory of one instance: each instance keeps its own
+budget. With several instances, the app can sign 80 calls in a minute in each
+instance, and the sum can pass the GitHub limit of 5,000 in an hour. An
+operator who runs several instances and embeds the server sets a lower
+`PerApp` with `WithGitHostCheckLimits`, so that the sum of the instances
+stays below 5,000 in an hour. The server has no flag for these limits.
 
 When one namespace uses the budget, the other namespaces wait too. A refused
 check writes a warning to the server log with the namespace, the connection

@@ -234,7 +234,7 @@ func classifyGitHostRequest(err error) (failure, bool) {
 // appBudgetText returns the message of a refusal by the budget of the signed
 // calls of the GitHub App, with the wait that Retry-After gives.
 func appBudgetText(err error) string {
-	const text = "the GitHub App used its budget of signed requests"
+	const text = "the GitHub App used its budget of signed calls"
 
 	if seconds, ok := retryAfterSeconds(err); ok {
 		return text + ": try again in " + seconds + " seconds"

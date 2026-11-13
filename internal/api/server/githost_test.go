@@ -575,12 +575,12 @@ func TestGitHostCheckAnswersWhatTheGitHostSaid(t *testing.T) {
 		},
 		{
 			err: budget, name: "a spent budget of the app",
-			text:       "the GitHub App used its budget of signed requests: try again in 30 seconds",
+			text:       "the GitHub App used its budget of signed calls: try again in 30 seconds",
 			retryAfter: "30", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
 		},
 		{
 			err: forge.ErrAppBudget, name: "a spent budget with no wait",
-			text:       "the GitHub App used its budget of signed requests: try again later",
+			text:       "the GitHub App used its budget of signed calls: try again later",
 			retryAfter: "", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
 		},
 	} {

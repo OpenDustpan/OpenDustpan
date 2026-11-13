@@ -119,10 +119,11 @@ func WithGitHostLoopbackForTests() Option {
 }
 
 // WithGitHostCheckLimits sets the limits of the check of a Git host connection:
-// the shortest time between two checks of one connection, and the number of
-// checks of one installation in a window. The default is one check in 10
-// seconds for each connection and 30 in a minute for each installation. The
-// server has no flag for it.
+// the shortest time between two checks of one connection, the number of checks
+// of one installation in a window, and the budget of the app, the number of
+// signed calls of the app in the window (PerApp). The default is one check in
+// 10 seconds for each connection, 30 checks in a minute for each installation
+// and 80 signed calls of the app in a minute. The server has no flag for it.
 func WithGitHostCheckLimits(limits forge.CheckLimits) Option {
 	return func(o *settings) { o.gitHost.checkLimits = &limits }
 }

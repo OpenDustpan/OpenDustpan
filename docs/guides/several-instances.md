@@ -345,7 +345,7 @@ These limits count in the memory of one instance. The limit of the installation 
 | --- | --- | --- |
 | `--max-body-bytes-in-flight` | The memory that large request bodies hold at one time. | Each instance keeps its own budget. This is the intended effect: the limit protects the memory of one process. |
 | Audit entries of refused requests | One audit entry for each refused action, object kind and scope in each minute, with a count of the others. | Each instance writes its own first entry for a key in a minute. The entries of the same denial can be as many as the instances. |
-| Checks of a Git host connection, and calls that the key of the app signs | One check of a connection in 10 seconds. 30 checks of an installation of the Git host in 1 minute. 80 signed calls of the app in 1 minute, for all its installations. | Each instance applies the limits. The checks that the Git host receives can be as many as the instances times the limit. |
+| Checks of a Git host connection, and calls that the key of the app signs | One check of a connection in 10 seconds. 30 checks of an installation of the Git host in 1 minute. 80 signed calls of the app in 1 minute, for all its installations. | Each instance applies the limits. The checks that the Git host receives can be as many as the instances times the limit. The sum of the signed calls of the app can pass the GitHub limit of 5,000 in an hour. |
 
 Three limits count in the database, so they hold for all instances. They are the sign-in failure budget, the limit of pending state versions of a workspace, and the limits of the test of a notification destination.
 

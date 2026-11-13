@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -30,11 +31,21 @@ type budgetRig struct {
 func newBudgetRig(t *testing.T, limit int) budgetRig {
 	t.Helper()
 
+	return newBudgetRigWith(t, limit, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+}
+
+// newBudgetRigWith is newBudgetRig over a server that answers each request
+// with handle.
+func newBudgetRigWith(t *testing.T, limit int, handle http.HandlerFunc) budgetRig {
+	t.Helper()
+
 	calls := new(atomic.Int64)
 
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
+		handle(w, r)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -46,9 +57,13 @@ func newBudgetRig(t *testing.T, limit int) budgetRig {
 		t.Fatal(err)
 	}
 
+	// A fixed clock, so that the window of the budget does not run on the
+	// wall clock of the test.
+	now := time.UnixMilli(1_700_000_000_000)
+
 	o, err := NewOpener(Config{
-		Rules: egress.Rules{Allow: nil, LoopbackForTests: true}, RootCAs: pool, Now: nil, Prover: nil,
-		AppBudget: budget,
+		Rules: egress.Rules{Allow: nil, LoopbackForTests: true}, RootCAs: pool,
+		Now: func() time.Time { return now }, Prover: nil, AppBudget: budget,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +178,55 @@ func budgetWait(err error) time.Duration {
 	}
 
 	return 0
+}
+
+// writeAnswer writes one JSON answer of the fake server.
+func writeAnswer(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if _, err := io.WriteString(w, body); err != nil {
+		return
+	}
+}
+
+// TestOneFullCheckSpendsTwoCallsOfTheAppBudget runs one full check against a
+// server that answers the calls of the check. The check spends two calls of
+// the budget, the read of the installation and the token request. A budget of
+// two is spent by the one check, and the next check is refused with no new
+// request. The revoke of the token does not spend the budget.
+func TestOneFullCheckSpendsTwoCallsOfTheAppBudget(t *testing.T) {
+	t.Parallel()
+
+	r := newBudgetRigWith(t, 2, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/app/installations/101":
+			writeAnswer(w, `{"account":{"id":12345,"login":"acme"},"permissions":{"contents":"write"}}`)
+		case req.Method == http.MethodPost && req.URL.Path == "/app/installations/101/access_tokens":
+			writeAnswer(w, `{"token":"test-token"}`)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	f := r.open(t, "12345", "101")
+
+	if _, err := f.Check(t.Context()); err != nil {
+		t.Fatalf("the one check = %v, want success", err)
+	}
+
+	// Three requests, two of them signed by the key of the app.
+	if got := r.calls.Load(); got != 3 {
+		t.Fatalf("requests of one check = %d, want 3", got)
+	}
+
+	// The budget of two is spent by the one check.
+	if _, err := f.Check(t.Context()); !errors.Is(err, forge.ErrAppBudget) {
+		t.Fatalf("the check over the budget = %v, want ErrAppBudget", err)
+	}
+
+	if got := r.calls.Load(); got != 3 {
+		t.Errorf("requests over the budget = %d, want still 3", got)
+	}
 }
 
 // TestTheAppBudgetIsSharedByItsInstallations spends the budget of an app
