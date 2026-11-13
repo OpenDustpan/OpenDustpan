@@ -20,7 +20,7 @@ CREATE TABLE namespaces (
     primary_installation      TEXT    NOT NULL,
     failover_version INTEGER NOT NULL,
     created_at_ms    INTEGER NOT NULL
-, allow_forced_writes INTEGER NOT NULL DEFAULT 0, allow_unlocked_writes INTEGER NOT NULL DEFAULT 0, ip_allowlist TEXT NOT NULL DEFAULT '', id TEXT NOT NULL DEFAULT '', output_sharing_default TEXT NOT NULL DEFAULT 'nobody'
+, allow_forced_writes INTEGER NOT NULL DEFAULT 0, allow_unlocked_writes INTEGER NOT NULL DEFAULT 0, ip_allowlist TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, output_sharing_default TEXT NOT NULL DEFAULT 'nobody'
     CHECK (output_sharing_default IN ('nobody', 'namespace')), source_filter TEXT NOT NULL DEFAULT ''
     CHECK (length(CAST(source_filter AS BLOB)) <= 1048576 AND (source_filter = '' OR json_valid(source_filter)))) STRICT;
 
@@ -30,7 +30,7 @@ CREATE TABLE stacks (
     name          TEXT    NOT NULL,
     version       INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL, id TEXT NOT NULL DEFAULT '', deleted_at_ms INTEGER, deleted_name TEXT,
+    updated_at_ms INTEGER NOT NULL, id TEXT NOT NULL, deleted_at_ms INTEGER, deleted_name TEXT,
     PRIMARY KEY (namespace, project, name)
 ) STRICT;
 
@@ -330,7 +330,7 @@ CREATE TABLE access_token_policy (
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
-    purged_at_ms  INTEGER NOT NULL, namespace_id TEXT NOT NULL DEFAULT '',
+    purged_at_ms  INTEGER NOT NULL, namespace_id TEXT NOT NULL,
     PRIMARY KEY (tool, unit_id)
 ) STRICT;
 
