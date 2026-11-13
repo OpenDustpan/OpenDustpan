@@ -379,8 +379,12 @@ func checkMutation(t *testing.T, input wireCommitInput) {
 		t.Errorf("expected head %q, branch %+v", input.ExpectedHeadOid, input.Branch)
 	}
 
+	// The digest of the three changes, from an independent Python run.
+	wire := rawDelivery("Dustpan-Job: j-1", rawBase)
+	wire.Changes = "sha256:1487416319573e10c566b64f810e062e09c02a0d96c4a6a1f3cfa9be3a1d7d96"
+
 	wantBody := "Dustpan-Job: j-1\nCo-authored-by: Ada Lovelace <ada@example.com>\n" +
-		testProofLine(rawRepoID, "Dustpan-Job: j-1", rawBase)
+		testProofLineOf(rawRepoID, wire)
 	if input.Message != (wireMessage{Headline: "Change", Body: wantBody}) {
 		t.Errorf("message %+v", input.Message)
 	}
@@ -592,7 +596,7 @@ func TestInstallationThatCannotWriteDoesNotCommit(t *testing.T) {
 			t.Context(),
 			conformanceRepo,
 			"main",
-			forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: base.ID},
+			rawDelivery("Dustpan-Job: j-1", base.ID),
 			time.Unix(0, 0),
 		)
 		if !errors.Is(err, forge.ErrUnsupported) {
@@ -765,7 +769,7 @@ func TestFindCommitReadsHostDataWithCare(t *testing.T) {
 			fg := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) { answer(w, 200, body) })
 
 			got, err := fg.FindCommit(
-				t.Context(), "acme/infra", "main", forge.Delivery{Trailer: trailer, Base: rawBase}, since,
+				t.Context(), "acme/infra", "main", rawDelivery(trailer, rawBase), since,
 			)
 			if !errors.Is(err, tt.err) || got.ID != tt.want {
 				t.Fatalf("FindCommit = %+v, %v; want %q and %v", got, err, tt.want, tt.err)
@@ -866,8 +870,8 @@ func TestFindCommitAsksForTheRefAndTheTime(t *testing.T) {
 			got, err := c.FindCommit(
 				t.Context(),
 				"acme/infra",
-				"dustpan/j-1",
-				forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: rawBase},
+				rawBranch,
+				rawDelivery("Dustpan-Job: j-1", rawBase),
 				since,
 			)
 			if !errors.Is(err, tt.wantErr) || got.ID != tt.wantID {
@@ -877,7 +881,7 @@ func TestFindCommitAsksForTheRefAndTheTime(t *testing.T) {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 
-			want := "/repos/acme/infra/commits?sha=dustpan%2Fj-1&per_page=100&page=1&since=2026-01-01T00%3A00%3A07Z"
+			want := "/repos/acme/infra/commits?sha=main&per_page=100&page=1&since=2026-01-01T00%3A00%3A07Z"
 			if len(p.queries) != tt.wantCalls || p.queries[0] != want {
 				t.Fatalf("%d calls, want %d; first query %q, want %q", len(p.queries), tt.wantCalls, p.queries, want)
 			}
@@ -903,7 +907,7 @@ func TestFindCommitListLongerThanAPageIsNotRead(t *testing.T) {
 	c := rawForge(t, "", func(w http.ResponseWriter, _ *http.Request) { answer(w, http.StatusOK, string(data)) })
 
 	_, err = c.FindCommit(
-		t.Context(), "acme/infra", "main", forge.Delivery{Trailer: "Dustpan-Job: j-1", Base: rawBase}, time.Unix(0, 0),
+		t.Context(), "acme/infra", "main", rawDelivery("Dustpan-Job: j-1", rawBase), time.Unix(0, 0),
 	)
 	if !errors.Is(err, forge.ErrUnavailable) {
 		t.Fatalf("FindCommit = %v, want ErrUnavailable", err)

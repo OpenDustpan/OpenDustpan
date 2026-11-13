@@ -195,7 +195,7 @@ func TestViewIdempotencyReplayChecksTheActionAgain(t *testing.T) {
 func TestViewIdempotencyWithNoReplayStoreRefusesTheHeader(t *testing.T) {
 	t.Parallel()
 
-	f := newViewFixtureWith(t, viewFixtureOptions{views: nil, noIdempotency: true})
+	f := newViewFixtureWith(t, viewFixtureOptions{views: nil, units: nil, noIdempotency: true})
 
 	res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
 	if res.status != http.StatusBadRequest {

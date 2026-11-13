@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -298,14 +299,115 @@ func TestProviders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := e.svc.Providers(t.Context(), tt.ns)
+			got, next, err := e.svc.Providers(t.Context(), tt.ns, "", registry.MaxAddressPage)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Providers(%q) error = %v, want %v", tt.ns, err, tt.wantErr)
 			}
 
-			if tt.wantErr == nil && !slices.Equal(got, tt.want) {
-				t.Errorf("Providers(%q) = %v, want %v", tt.ns, got, tt.want)
+			if tt.wantErr == nil && (!slices.Equal(got, tt.want) || next != "") {
+				t.Errorf("Providers(%q) = %v, %q, want %v, no cursor", tt.ns, got, next, tt.want)
 			}
 		})
+	}
+}
+
+// TestProvidersReadsPages holds the rule that Providers reads one page of the
+// store per call: with more providers than one page, a walk over the pages
+// holds every provider once, in order, and each store read returns at most
+// one address more than the page size.
+func TestProvidersReadsPages(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	// More providers than one page, with two versions each. A second version
+	// of one provider does not make a second address.
+	const count = 60
+
+	want := make([]string, 0, count)
+
+	for i := range count {
+		name := fmt.Sprintf("provider-%02d", i)
+		want = append(want, name)
+
+		for _, version := range []string{"1.0.0", "1.1.0"} {
+			if _, err := e.publish(t, acme, buildSet(t, sg, name, version, "linux_amd64")); err != nil {
+				t.Fatalf("publish %s %s: %v", name, version, err)
+			}
+		}
+	}
+
+	const pageSize = 7
+
+	if got := walkProviders(t, e, pageSize, count); !slices.Equal(got, want) {
+		t.Fatalf("Providers = %v, want %v", got, want)
+	}
+
+	checkAddressCalls(t, e.store.addressCalls, pageSize)
+}
+
+// walkProviders reads the providers of acme page by page with the page size,
+// and returns the names in page order. It fails when a page is empty before
+// the last one, or when a cursor is not the last name of its page.
+func walkProviders(t *testing.T, e *env, pageSize, maxPages int) []string {
+	t.Helper()
+
+	var (
+		got   []string
+		after string
+	)
+
+	for pages := 0; ; pages++ {
+		if pages > maxPages {
+			t.Fatalf("the pages did not end after %d pages", pages)
+		}
+
+		page, next, err := e.svc.Providers(t.Context(), acme, after, pageSize)
+		if err != nil {
+			t.Fatalf("Providers(after %q): %v", after, err)
+		}
+
+		if len(page) == 0 {
+			t.Fatalf("Providers(after %q) = no provider before the last page", after)
+		}
+
+		got = append(got, page...)
+
+		if next == "" {
+			return got
+		}
+
+		if next != page[len(page)-1] {
+			t.Fatalf("next cursor = %q, want the last name %q", next, page[len(page)-1])
+		}
+
+		after = next
+	}
+}
+
+// checkAddressCalls fails when a store read did not use the page size, or
+// when it read more address rows than one page and the one row that tells
+// whether a next page exists.
+func checkAddressCalls(t *testing.T, calls []addressCall, pageSize int) {
+	t.Helper()
+
+	if len(calls) < 2 {
+		t.Fatalf("the store read %d page(s), want more than one", len(calls))
+	}
+
+	for i, call := range calls {
+		if call.limit != pageSize {
+			t.Fatalf("store read %d used limit %d, want %d", i, call.limit, pageSize)
+		}
+
+		if call.rows > call.limit+1 {
+			t.Fatalf("store read %d read %d rows, want at most %d", i, call.rows, call.limit+1)
+		}
+
+		if call.returned > call.limit {
+			t.Fatalf("store read %d returned %d addresses, want at most %d", i, call.returned, call.limit)
+		}
 	}
 }

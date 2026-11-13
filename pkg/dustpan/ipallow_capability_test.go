@@ -95,7 +95,7 @@ func startPreviewLease(t *testing.T, srv *dustpan.Server, inside string) (string
 // upload paths with the capability.
 //
 //nolint:revive // Two unnamed results keep the helper short: the state path, the rendering path.
-func beginTFEUpload(t *testing.T, srv *dustpan.Server) (string, string) {
+func beginTFEUpload(t *testing.T, srv *dustpan.Server, store any) (string, string) {
 	t.Helper()
 
 	svc := srv.Workspaces()
@@ -110,7 +110,7 @@ func beginTFEUpload(t *testing.T, srv *dustpan.Server) (string, string) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	w, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	w, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, store, "acme"))
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestIPAllowlistLeaseTokenBeforeGate(t *testing.T) {
 func TestIPAllowlistCapabilityRoutes(t *testing.T) {
 	t.Parallel()
 
-	srv := newIPAllowlistServer(t, true)
+	srv, st := newIPAllowlistServerWith(t, true)
 	inside := "198.51.100.7:1234"
 	outside := "192.0.2.10:5678"
 
@@ -258,7 +258,7 @@ func TestIPAllowlistCapabilityRoutes(t *testing.T) {
 		t.Fatalf("lease renewal from inside answers %d, want %d: %s", code, http.StatusOK, body)
 	}
 
-	state, rendering := beginTFEUpload(t, srv)
+	state, rendering := beginTFEUpload(t, srv, st)
 	content := `{"version":4,"serial":1,"lineage":"l1"}`
 
 	uploadCall := func(remote, target, body string) (int, string) {

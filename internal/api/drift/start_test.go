@@ -103,6 +103,36 @@ func TestStartCheckBody(t *testing.T) {
 	}
 }
 
+// TestStartCheckRefusesALineSeparator proves that a reason with a line
+// separator, a paragraph separator or a format character never reaches the
+// checker, and that the route answers the coded 400 of an invalid drift value.
+func TestStartCheckRefusesALineSeparator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, body string }{
+		{"line separator", `{"reason":"a\u2028b"}`},
+		{"paragraph separator", `{"reason":"a\u2029b"}`},
+		{"format character", `{"reason":"a\u200bb"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, newAuthorizer(holdsAll()...))
+
+			rec := r.serve(t, startRequest(tt.body))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "job.invalid") {
+				t.Fatalf("POST = %d %s, want 400 job.invalid", rec.Code, rec.Body.String())
+			}
+
+			if r.checker.calls() != 0 {
+				t.Errorf("checker calls = %d, want none", r.checker.calls())
+			}
+		})
+	}
+}
+
 // TestStartCheckRefusesBadBodies proves that a body that is not valid never
 // reaches the checker, and that a field that the server fixes is not accepted.
 func TestStartCheckRefusesBadBodies(t *testing.T) {
@@ -310,6 +340,17 @@ type recordingAudit struct {
 }
 
 func (a *recordingAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
+
+// AppendServer keeps an entry of the installation scope, so that a test counts
+// the refusals of a namespace that does not exist.
+func (a *recordingAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

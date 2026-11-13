@@ -448,6 +448,8 @@ func TestOpenStateBlobRecordsAKeyOfAnotherWorkspace(t *testing.T) {
 				t.Fatalf("err = %v, want ErrStateVersionNotFound", err)
 			}
 
+			checkErrorHidesKey(t, key, err)
+
 			if calls := e.spy.total() - before; calls != 0 {
 				t.Errorf("calls that reached the blob store = %d, want 0", calls)
 			}
@@ -457,6 +459,83 @@ func TestOpenStateBlobRecordsAKeyOfAnotherWorkspace(t *testing.T) {
 				got[0].Where != scopeaudit.OutsideUnitDirectory {
 				t.Fatalf("refusals = %+v, want one get refusal in %s outside the unit directory", got, e.acme.ID)
 			}
+		})
+	}
+}
+
+// TestOpenStateBlobErrorsHideTheKey proves that a refusal names the operation
+// and, when it is known, the version or the workspace, never the key that the
+// caller supplied.
+func TestOpenStateBlobErrorsHideTheKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		key   func(e *scopeEnv) blob.Key
+		want  error
+		holds []string
+	}{
+		{
+			name: "a malformed key",
+			key: func(e *scopeEnv) blob.Key {
+				return blob.Key("namespaces/" + e.acme.ID.String() + "/tofu/" + e.ws.ID.String())
+			},
+			want:  workspace.ErrStateVersionNotFound,
+			holds: nil,
+		},
+		{
+			name: "a version that does not exist",
+			key: func(e *scopeEnv) blob.Key {
+				return blob.Key("namespaces/" + e.acme.ID.String() + "/tofu/" + e.ws.ID.String() + "/sv-ghost/a1")
+			},
+			want:  workspace.ErrStateVersionNotFound,
+			holds: []string{"sv-ghost"},
+		},
+		{
+			name: "a key of another workspace",
+			key: func(e *scopeEnv) blob.Key {
+				return blob.Key(strings.Replace(
+					e.sv.Content.String(), "/tofu/"+e.ws.ID.String()+"/", "/tofu/ws-other/", 1,
+				))
+			},
+			want:  workspace.ErrStateVersionNotFound,
+			holds: []string{"ws-other"},
+		},
+		{
+			name: "a key of another version",
+			key: func(e *scopeEnv) blob.Key {
+				return blob.Key(strings.Replace(
+					e.sv.Content.String(), "/"+e.sv.ID.String()+"/", "/sv-other/", 1,
+				))
+			},
+			want:  workspace.ErrStateVersionNotFound,
+			holds: []string{"sv-other"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newScopeEnv(t)
+			key := tc.key(e)
+
+			_, err := e.svc.OpenStateBlob(t.Context(), key)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+
+			if !strings.Contains(err.Error(), "open state blob") {
+				t.Errorf("error text %q does not name the operation", err)
+			}
+
+			for _, want := range tc.holds {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error text %q does not hold %q", err, want)
+				}
+			}
+
+			checkErrorHidesKey(t, key, err)
 		})
 	}
 }
@@ -499,6 +578,15 @@ func checkErrorHidesKeys(t *testing.T, e *scopeEnv, err error) {
 	text := err.Error()
 	if strings.Contains(text, e.other.ID.String()) || strings.Contains(text, "namespaces/") {
 		t.Errorf("error text %q names a namespace ID or a key", text)
+	}
+}
+
+// checkErrorHidesKey checks that the text of err does not hold key.
+func checkErrorHidesKey(t *testing.T, key blob.Key, err error) {
+	t.Helper()
+
+	if strings.Contains(err.Error(), key.String()) {
+		t.Errorf("error text %q names the key %q", err, key)
 	}
 }
 

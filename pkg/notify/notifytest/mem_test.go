@@ -516,7 +516,9 @@ func (m *memStore) Record(_ context.Context, fence namespace.Fence, a notify.Att
 	}), "delivery "+a.ID)
 }
 
-func (m *memStore) History(_ context.Context, scope namespace.Name, id string, limit int) ([]notify.Delivery, error) {
+func (m *memStore) History(
+	_ context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, limit int,
+) ([]notify.Delivery, error) {
 	var (
 		out   []notify.Delivery
 		other bool
@@ -544,7 +546,58 @@ func (m *memStore) History(_ context.Context, scope namespace.Name, id string, l
 		return cmp.Or(b.NextAt.Compare(a.NextAt), strings.Compare(b.ID, a.ID))
 	})
 
+	if after != nil {
+		out = slices.DeleteFunc(out, func(d notify.Delivery) bool { return !afterCursor(d, *after) })
+	}
+
 	return out[:min(limit, len(out))], nil
+}
+
+// afterCursor reports whether d comes after the cursor c in the history
+// order: an older NextAt, or the same NextAt and a smaller ID.
+func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
+	if order := d.NextAt.Compare(c.NextAt); order != 0 {
+		return order < 0
+	}
+
+	return d.ID < c.ID
+}
+
+func (m *memStore) CountBefore(
+	_ context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, maxCount int,
+) (int, error) {
+	var (
+		count int
+		other bool
+	)
+
+	m.Read(func() {
+		if s, ok := m.subs[id]; ok && s.Scope != scope {
+			other = true
+
+			return
+		}
+
+		if after == nil {
+			return
+		}
+
+		for did := range m.deliveries {
+			if d := m.deliveries[did]; d.Subscription == id && d.Scope == scope && !afterCursor(d, *after) {
+				count++
+			}
+		}
+	})
+
+	if other {
+		return 0, fmt.Errorf("count deliveries of %s: %w", id, notify.ErrNotFound)
+	}
+
+	if maxCount <= 0 {
+		return 0, nil
+	}
+
+	return min(count, maxCount), nil
 }
 
 func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {

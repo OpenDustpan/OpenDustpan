@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -16,8 +19,10 @@ import (
 	"syscall"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/objectstore"
@@ -70,8 +75,8 @@ type openedSinks struct {
 
 // sinkConfig holds what openSink needs beyond the spec: the setting that
 // names the sink (for errors), the live blob store (nil refuses blob:), the
-// default syslog facility, the variables of the webhook secret and the
-// variables of the OTLP headers.
+// default syslog facility, the variables of the webhook secret, the
+// variables of the OTLP headers, the egress rules and the client options.
 type sinkConfig struct {
 	setting        error
 	blobs          blob.Store
@@ -81,10 +86,22 @@ type sinkConfig struct {
 	headersEnv     string
 	headersFileEnv string
 	facility       int
+	rules          egress.Rules
+	options        egresshttp.Options
+}
+
+// sinkRules answers the egress rules of a sink: the ranges that the operator
+// allows, and the zero value of every other rule.
+func sinkRules(ranges []netip.Prefix) egress.Rules {
+	var rules egress.Rules
+
+	rules.Allow = ranges
+
+	return rules
 }
 
 // auditSinkConfig answers the sink configuration of --audit-sink.
-func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkConfig {
+func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool), ranges []netip.Prefix) sinkConfig {
 	return sinkConfig{
 		setting:        errAuditSink,
 		blobs:          blobs,
@@ -94,6 +111,8 @@ func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkC
 		headersEnv:     otlpHeadersEnvVar,
 		headersFileEnv: otlpHeadersFileEnvVar,
 		facility:       syslog.FacilityLogAudit,
+		rules:          sinkRules(ranges),
+		options:        egresshttp.Options{RootCAs: nil, Resolver: nil},
 	}
 }
 
@@ -103,7 +122,9 @@ func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkC
 // one, the kind is the name (file, syslog, webhook or blob), so two sinks
 // of one kind need names. blobs is the live blob store, which blob: sinks
 // write to. On error it closes every sink it opened.
-func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (string, bool)) (openedSinks, error) {
+func openAuditSinks(
+	items []string, blobs blob.Store, lookup func(string) (string, bool), ranges []netip.Prefix,
+) (openedSinks, error) {
 	var out openedSinks
 
 	for _, item := range items {
@@ -115,7 +136,7 @@ func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (strin
 		named := splitSinkName(item)
 		name, spec := named.name, named.spec
 
-		sink, interval, err := openSink(spec, auditSinkConfig(blobs, lookup))
+		sink, interval, err := openSink(spec, auditSinkConfig(blobs, lookup, ranges))
 		if err != nil {
 			return openedSinks{}, errors.Join(err, out.close())
 		}
@@ -320,17 +341,35 @@ var (
 	)
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
+	// errSecretControlChar reports a secret with a control character.
+	errSecretControlChar = errors.New("the secret holds a control character")
 )
+
+// sinkClient answers the client of a webhook or OTLP sink: the egress rules
+// on the URL of each request and on each resolved address, no redirect,
+// https only, and the request timeout.
+func sinkClient(cfg sinkConfig) *http.Client {
+	return egresshttp.ClientWith(cfg.rules, egress.NoRedirect, egress.HTTPSOnly, cfg.options)
+}
 
 // openWebhookSink opens a webhook sink on rawURL with the secret of the
 // variable cfg.secretEnv or of the file that cfg.secretFileEnv names.
 func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
+	// Defense in depth: the client checks the URL of each request and the
+	// dial guard checks each resolved address; this check stays so that a
+	// blocked URL stops the start.
+	if err := cfg.rules.CheckURL(rawURL, egress.HTTPSOnly); err != nil {
+		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
+	}
+
 	secret, err := webhookSecretFrom(cfg.lookup, cfg.secretEnv, cfg.secretFileEnv)
 	if err != nil {
 		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
 
-	s, err := webhook.New(webhook.Config{Client: nil, URL: rawURL, Secret: secret, Timeout: 0})
+	s, err := webhook.New(webhook.Config{
+		Client: sinkClient(cfg), URL: rawURL, Secret: secret, Timeout: 0,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
@@ -343,13 +382,20 @@ func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
 // sink with no headers is valid, because a collector in a private network
 // can need none.
 func openOTLPSink(rawURL string, cfg sinkConfig) (*otlp.Sink, error) {
+	// Defense in depth: the client checks the URL of each request and the
+	// dial guard checks each resolved address; this check stays so that a
+	// blocked URL stops the start.
+	if err := cfg.rules.CheckURL(rawURL, egress.HTTPSOnly); err != nil {
+		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
+	}
+
 	headers, err := otlpHeadersFrom(cfg.lookup, cfg.headersEnv, cfg.headersFileEnv)
 	if err != nil {
 		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
 	}
 
 	s, err := otlp.New(otlp.Config{
-		Client: nil, Headers: headers, URL: rawURL, ServiceName: "", Timeout: 0,
+		Client: sinkClient(cfg), Headers: headers, URL: rawURL, ServiceName: "", Timeout: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
@@ -373,10 +419,11 @@ var (
 // other access. It answers no headers when neither variable holds a value.
 // The text is a list of Name=Value items, separated by commas or line
 // breaks, as OTEL_EXPORTER_OTLP_HEADERS writes it. A value is
-// percent-encoded, so it can hold a comma or an equals sign. The errors name
+// percent-encoded, so it can hold a comma or an equals sign. A name or a
+// decoded value with a control character is refused. The errors name
 // the position of an item, never its text, because a value can be a secret.
 func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (map[string]string, error) {
-	raw, err := secretFrom(lookup, env, fileEnv, errNoOTLPHeaders)
+	raw, _, err := secretTextFrom(lookup, env, fileEnv, errNoOTLPHeaders)
 	if errors.Is(err, errNoOTLPHeaders) {
 		return map[string]string{}, nil
 	}
@@ -396,10 +443,22 @@ func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (m
 			return nil, fmt.Errorf("item %d: %w", i+1, errOTLPHeaderItem)
 		}
 
+		// Defense in depth, as for the value below. The error does not
+		// repeat the name, because the name holds the character.
+		if strings.ContainsFunc(name, isControlRune) {
+			return nil, fmt.Errorf("item %d: %w", i+1, errSecretControlChar)
+		}
+
 		decoded, decodeErr := url.PathUnescape(strings.TrimSpace(value))
 		if decodeErr != nil {
 			// The error of PathUnescape repeats a part of the value.
 			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errOTLPHeaderItem)
+		}
+
+		// Defense in depth: otlp.New refuses a control character too; this
+		// check stays so that a new caller of the headers cannot skip it.
+		if strings.ContainsFunc(decoded, isControlRune) {
+			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errSecretControlChar)
 		}
 
 		if _, dup := headers[strings.ToLower(name)]; dup {
@@ -429,38 +488,66 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 
 // secretFrom reads a secret from the variable env, else from the file that
 // the variable fileEnv names. The file must allow no group or other
-// access. A missing or empty secret answers errMissing.
+// access. A missing or empty secret answers errMissing. A secret with a
+// control character is refused.
 func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
+	secret, source, err := secretTextFrom(lookup, env, fileEnv, errMissing)
+	if err != nil {
+		return nil, err
+	}
+
+	// Defense in depth: the start reads the real environment; this check
+	// stays so that a snapshot value or a broken file cannot become a
+	// secret.
+	if bytes.IndexFunc(secret, isControlRune) >= 0 {
+		return nil, fmt.Errorf("%s: %w", source, errSecretControlChar)
+	}
+
+	return secret, nil
+}
+
+// secretTextFrom reads the text of a secret from the variable env, else
+// from the file that the variable fileEnv names. It answers the text and
+// the variable that gave it. The file must allow no group or other access.
+// A missing or empty secret answers errMissing.
+func secretTextFrom(
+	lookup func(string) (string, bool), env, fileEnv string, errMissing error,
+) ([]byte, string, error) {
 	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
-		return []byte(strings.TrimSpace(raw)), nil
+		return []byte(strings.TrimSpace(raw)), env, nil
 	}
 
 	path, ok := lookup(fileEnv)
 	if !ok || strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
+		return nil, "", fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: stat file: %w", fileEnv, err)
+		return nil, "", fmt.Errorf("%s: stat file: %w", fileEnv, err)
 	}
 
 	if perm := info.Mode().Perm(); perm&keyFilePrivateBits != 0 {
-		return nil, fmt.Errorf("%s: %w %q (mode %04o): run chmod 600 on the file",
+		return nil, "", fmt.Errorf("%s: %w %q (mode %04o): run chmod 600 on the file",
 			fileEnv, errSecretFilePermissions, path, perm)
 	}
 
 	raw, err := os.ReadFile(path) //nolint:gosec // The operator names the secret file through the environment.
 	if err != nil {
-		return nil, fmt.Errorf("%s: read file: %w", fileEnv, err)
+		return nil, "", fmt.Errorf("%s: read file: %w", fileEnv, err)
 	}
 
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
-		return nil, fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
+		return nil, "", fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
 
-	return []byte(secret), nil
+	return []byte(secret), fileEnv, nil
+}
+
+// isControlRune reports a control character: a rune below 0x20 or 0x7f.
+func isControlRune(r rune) bool {
+	return r < 0x20 || r == 0x7f
 }
 
 // close closes every opened sink and answers the joined errors.

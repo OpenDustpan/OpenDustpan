@@ -47,7 +47,7 @@ const openAPIPath = "/api/dustpan/v1/openapi.json"
 func publicOperations() []string {
 	return []string{
 		"beginPasskeySignIn", "exchangeWorkloadToken", "finishPasskeySignIn", "getApiDescription", "getCapabilities",
-		"redeemLocalUserCode", "signInWithPassword",
+		"redeemLocalUserCode", "signInWithPassword", "signInWithProviderPassword",
 	}
 }
 
@@ -117,6 +117,105 @@ func TestEveryRouteHasOneClass(t *testing.T) {
 
 	if problems := checkClasses(patterns, in); len(problems) > 0 {
 		t.Fatalf("routes that are not in exactly one class:\n%s", strings.Join(problems, "\n"))
+	}
+}
+
+// TestEveryRouteCheckSeesAWrappedAdapter proves that the class check of an
+// assembled server catches a route that a mounted adapter serves and the
+// description lacks, and passes a route that is in the operations and in the
+// description. The server is the one of the class check, with one adapter
+// wrapped in test code only.
+func TestEveryRouteCheckSeesAWrappedAdapter(t *testing.T) {
+	t.Parallel()
+
+	base := newEveryModuleServer(t)
+	dev := newDevModuleServer(t)
+
+	describedOp, described := describedCapabilities(t, base)
+	if !described {
+		t.Fatal("the operations and the description lack GET /api/dustpan/v1/capabilities")
+	}
+
+	const undescribed = "GET /api/dustpan/v1/things/extra"
+
+	tests := []struct {
+		name    string
+		pattern string
+		op      *apidesc.Operation
+		want    string
+	}{
+		{
+			name:    "an undescribed route under the prefix",
+			pattern: undescribed,
+			op:      nil,
+			want:    undescribed,
+		},
+		{
+			name:    "a route that is in the operations and in the description",
+			pattern: describedOp.Method + " " + describedOp.Path,
+			op:      &describedOp,
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkWrappedRoute(t, base.WrappedRoute("server", tt.pattern, tt.op), dev, tt.want)
+		})
+	}
+}
+
+// describedCapabilities returns the capabilities operation of the server and
+// reports whether the checked-in description holds it.
+func describedCapabilities(t *testing.T, srv *dustpan.Server) (apidesc.Operation, bool) {
+	t.Helper()
+
+	described, err := apidesc.Read(apidesc.Document())
+	if err != nil {
+		t.Fatalf("read the checked-in description: %v", err)
+	}
+
+	inDocument := map[string]bool{}
+	for i := range described {
+		inDocument[described[i].Key()] = true
+	}
+
+	ops := srv.Operations()
+	for i := range ops {
+		if ops[i].Key() == keyOfPattern("GET /api/dustpan/v1/capabilities") {
+			return ops[i], inDocument[ops[i].Key()]
+		}
+	}
+
+	var none apidesc.Operation
+
+	return none, false
+}
+
+// checkWrappedRoute runs the checks of the class test on srv and dev and
+// reports a problem that does not hold want.
+func checkWrappedRoute(t *testing.T, srv, dev *dustpan.Server, want string) {
+	t.Helper()
+
+	if _, err := srv.DescribeOperations(); err != nil {
+		t.Fatalf("describe the operations: %v", err)
+	}
+
+	in, patterns := servedRoutes(t, srv, dev)
+
+	problems := strings.Join(checkClasses(patterns, in), "\n")
+	if want == "" {
+		if problems != "" {
+			t.Fatalf("problems = %q, want none", problems)
+		}
+
+		return
+	}
+
+	if !strings.Contains(problems, want) {
+		t.Fatalf("problems = %q, want it to hold %q", problems, want)
 	}
 }
 

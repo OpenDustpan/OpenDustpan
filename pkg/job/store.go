@@ -19,7 +19,8 @@ type Change struct {
 	Event   Event
 	// Wait is the new wait reason of a job that stays queued.
 	Wait WaitReason
-	// Reason is the reason of a terminal state.
+	// Reason is the reason of a terminal state, or the reason of a replan
+	// that keeps the job queued.
 	Reason string
 	// Dispatch is set on EventDispatch: the store starts the durable
 	// operation in the transaction of the change. Its key is PhaseKey.
@@ -71,7 +72,10 @@ const (
 	// durable.Store.Fail does.
 	EndFail EndKind = "fail"
 	// EndRelease returns the operation to pending, or ends it canceled
-	// while a cancel is requested, as durable.Store.Release does.
+	// while a cancel is requested, as durable.Store.Release does. A cancel
+	// can end the operation canceled while the job fails instead, when a
+	// step that changes resources began: the operation is canceled and the
+	// job is failed.
 	EndRelease EndKind = "release"
 )
 
@@ -133,7 +137,8 @@ type Filter struct {
 	UnitID string
 	States []State
 	Limit  int
-	// After is the ID of the last job of the previous page.
+	// After is the ID of the last row of the page before, as Page.After
+	// gives it. The ID may name a damaged row.
 	After ID
 	// StateChangedBefore selects the jobs whose state last changed before this
 	// time. The zero time selects every job.
@@ -141,6 +146,35 @@ type Filter struct {
 	// StateChangedAfter selects the jobs whose state last changed after this
 	// time. The zero time selects every job.
 	StateChangedAfter time.Time
+}
+
+// DamagedRow is one stored job row that Store.List or Store.Orphans read and
+// could not decode: the body is not JSON, or it holds a value that this
+// version of the server does not know. The row stays in the store.
+type DamagedRow struct {
+	// ID is the job ID of the row.
+	ID ID
+	// UnitID is the stable ID of the unit of the row, from its unit_id
+	// column. It never comes from the body: the body did not decode.
+	UnitID string
+	// Reason names the kind of the damage, for example "the body is not
+	// JSON". It never holds a value that the body stored.
+	Reason string
+}
+
+// Page is one page of Store.List: the jobs that decoded, the damaged rows
+// that did not, and the cursor of the next page.
+type Page struct {
+	// Jobs holds the jobs of the page that decoded, newest first.
+	Jobs []Job
+	// Damaged holds one entry for each row of the page that did not decode,
+	// newest first. A damaged row is not in Jobs.
+	Damaged []DamagedRow
+	// After is the ID of the last row of the page, whether it decoded or
+	// not, and it is empty when the page reached the end of the list. A
+	// caller gives it as Filter.After for the next page, so a damaged row
+	// never hides the rows behind it.
+	After ID
 }
 
 // Store is the persistence port for jobs. Each SQL store adapter implements
@@ -179,10 +213,27 @@ type Store interface {
 	// are not terminal, or the namespace MaxOpenPerNamespace.
 	Create(ctx context.Context, j Job, dispatch *durable.StartRequest, fence namespace.Fence,
 		e []audit.Entry) (stored Job, created bool, err error)
-	// Get returns the job id, or ErrNotFound.
+	// Get returns the job id, or ErrNotFound. It returns an error that wraps
+	// ErrDamaged for a row whose body does not decode.
 	Get(ctx context.Context, id ID) (Job, error)
-	// List returns the jobs that f selects, newest first.
-	List(ctx context.Context, f Filter) ([]Job, error)
+	// List returns the jobs that f selects, newest first, in a Page. A row
+	// that does not decode is in Page.Damaged, with its job ID, its unit ID
+	// and the kind of the damage, and is not in Page.Jobs: one damaged row
+	// never hides the jobs of a page, and Page.After continues behind it. A
+	// batch reader skips a damaged row: the server never dispatches, expires
+	// or closes it.
+	List(ctx context.Context, f Filter) (Page, error)
+	// CancelDamaged sets the state of the job id to canceled, with e, and
+	// reads no body: a row that a reader cannot decode can still be
+	// canceled by its ID, and a damaged row is not dispatched, expired or
+	// closed by any reader. It returns ErrNotFound for an unknown job and
+	// for a job of another namespace, ErrInvalid for a row that is not
+	// damaged, ErrFinished for a job that already ended, and the error of a
+	// stale fence. The row keeps the rest of its columns and its body. A
+	// caller uses it only for a row that List or Orphans reported as
+	// damaged: a job whose body decodes is canceled through Apply with
+	// EventCancel, which also ends its operation.
+	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) error
 	// Apply makes c with Next, and appends e, in one transaction. It returns
 	// ErrNotFound for an unknown job, ErrConflict when the job is not at
 	// c.Version, and the error of Next for an event that the state does not
@@ -239,33 +290,17 @@ type Store interface {
 	//   - EventCancel of a job with a live durable operation: it applies
 	//     durable.Store.Cancel to the operation.
 	//   - EventMerged and EventDelivered: when the last final state version
-	//     of the unit that ObserveStateVersion recorded closes the job
-	//     (Job.ClosedBy), it also applies EventStateObserved with that
-	//     version, sets the Verification to pending and starts the
-	//     operation of KindVerify, as ObserveStateVersion does. So a merge
-	//     that the review watcher sees after the state version, or a
-	//     commit that a takeover finds by its trailer after the state
-	//     version, still closes the job.
+	//     of the unit closes the job (Job.ClosedBy), it also applies
+	//     EventStateObserved with that version, sets the Verification to
+	//     pending and starts the operation of KindVerify. So a merge that
+	//     the review watcher sees after the state version, or a commit that
+	//     a takeover finds by its trailer after the state version, still
+	//     closes the job.
 	//   - EventDelivered of a review request that stays in awaiting-state:
 	//     it starts the operation of KindReviewWatch.
 	//   - EventCancel, EventRejected or EventExpire of a job that delivered:
 	//     it starts the operation of KindAbandon.
 	Apply(ctx context.Context, c Change, fence namespace.Fence, e []audit.Entry) (Job, error)
-	// ObserveStateVersion records v as the last final state version of
-	// v.Unit when v.Final is true, also when no job waits, and closes each
-	// write-back job of the unit that v closes (Job.ClosedBy): a direct
-	// push must deliver at or before v.At, and a review request must have
-	// a known merge at or before v.At. With no merge yet, the job waits,
-	// and EventMerged closes it later on the recorded version. It applies
-	// EventStateObserved with v as the closing version, sets the
-	// Verification to pending, and starts the operation of KindVerify for
-	// each closed job. It returns the closed jobs, none when v is not final
-	// or no job waits. A tool package never
-	// calls it: the store adapter applies its rule in the transaction of
-	// each state write of any tool, so a state write and the close commit
-	// together. The verify operation asks the forge later, outside that
-	// transaction.
-	ObserveStateVersion(ctx context.Context, v StateVersion, fence namespace.Fence) ([]Job, error)
 	// SetVerification records the result of the verify operation of the
 	// closed job id, with e. It returns ErrNotFound for an unknown job,
 	// ErrInvalid for a job with no closing state version or for v pending,
@@ -273,7 +308,9 @@ type Store interface {
 	SetVerification(ctx context.Context, id ID, v Verification, fence namespace.Fence, e []audit.Entry) error
 	// Orphans returns at most limit jobs that are dispatched, running or
 	// canceling, but whose durable operation does not exist or ended with
-	// no Finish. A restore makes the first kind. A durable failure at the
+	// no Finish. A row that does not decode is in the damaged result, with
+	// its job ID, its unit ID and the kind of the damage, and is not in the
+	// jobs. A restore makes the first kind. A durable failure at the
 	// limit of expired claims makes the second. A claim that expires during
 	// a cancel does not: the claimer takes such an operation and ends the
 	// phase (durable.ClaimRequest.TakeCanceled). The claimer never leaves a
@@ -282,11 +319,11 @@ type Store interface {
 	// (Reconciler) applies the event of AfterOperationEnded to each job that
 	// this method returns: a change that began fails the job,
 	// and a canceling job with no change ends canceled.
-	Orphans(ctx context.Context, limit int) ([]Orphan, error)
+	Orphans(ctx context.Context, limit int) ([]Orphan, []DamagedRow, error)
 }
 
-// FinalVersion is the last final state version of one unit, as
-// Store.ObserveStateVersion recorded it.
+// FinalVersion is the last final state version of one unit, as the state
+// write of the unit recorded it.
 type FinalVersion struct {
 	UnitID    string
 	VersionID string

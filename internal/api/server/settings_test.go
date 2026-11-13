@@ -12,6 +12,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -39,6 +40,17 @@ type settingsEnv struct {
 func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action) settingsEnv {
 	t.Helper()
 
+	return newSettingsEnvWith(t, settingtest.Registry(), static, deny...)
+}
+
+// newSettingsEnvWith builds a handler with the registry reg, the static layer
+// static, and no console sign-in. deny lists the actions that the authorizer
+// refuses.
+func newSettingsEnvWith(
+	t *testing.T, reg *setting.Registry, static setting.Static, deny ...identity.Action,
+) settingsEnv {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -56,8 +68,8 @@ func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action
 	}
 
 	handler, err := newCheckedHandler(t, settingsConfig(
-		st, namespaces, selectiveAuthorizer{deny: denied},
-		setting.NewService(st.SettingStore(), settingtest.Registry(), static, st, nil),
+		t, st, namespaces, selectiveAuthorizer{deny: denied},
+		setting.NewService(st.SettingStore(), reg, static, st, nil),
 	))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -69,9 +81,12 @@ func newSettingsEnv(t *testing.T, static setting.Static, deny ...identity.Action
 // settingsConfig returns the handler config of the settings tests: no
 // console sign-in, the audit log of st and the service svc.
 func settingsConfig(
-	st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
+	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, authz identity.Authorizer, svc *setting.Service,
 ) *apiserver.Config {
+	t.Helper()
 	return &apiserver.Config{
+		Cursors:     testCursors(t),
+		Reach:       noReach(),
 		LocalUsers:  nil,
 		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
 		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -409,6 +424,84 @@ func TestSettingsLockedAnswerNamesTheKeyAndItsSource(t *testing.T) {
 	}
 }
 
+// egressRegistry returns the registry with the declarations of the outbound
+// connection settings.
+func egressRegistry(t *testing.T) *setting.Registry {
+	t.Helper()
+
+	reg, err := setting.NewRegistry(plainconn.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("egress registry: %v", err)
+	}
+
+	return reg
+}
+
+// TestSettingsPlainConnectionsLockedByTheStaticLayer proves the hosted
+// refusal: with the variable at false, the static layer locks the setting, a
+// change to true answers the locked conflict, stores nothing and writes one
+// failure entry.
+func TestSettingsPlainConnectionsLockedByTheStaticLayer(t *testing.T) {
+	t.Parallel()
+
+	static := settingtest.StaticMap{
+		plainconn.SettingAllowPlainConnections: {
+			Source: setting.SourceEnv, Value: "false",
+			By: "the environment variable DUSTPAN_ALLOW_PLAIN_CONNECTIONS",
+		},
+	}
+	e := newSettingsEnvWith(t, egressRegistry(t), static)
+
+	read := e.do(t, getCall(settingsURL))
+	wantSettingsStatus(t, read, http.StatusOK)
+	checkPlainSetting(t, decodeSettings(t, read)[plainconn.SettingAllowPlainConnections])
+
+	r := e.patch(t, settingsURL, `"0"`, `{"egress.allowPlainConnections":true}`)
+	wantSettingsStatus(t, r, http.StatusConflict)
+
+	if !strings.Contains(r.body, `"errorCode":"settings.locked"`) ||
+		!strings.Contains(r.body, `"key":"egress.allowPlainConnections"`) {
+		t.Fatalf("body = %s, want the locked conflict with the key", r.body)
+	}
+
+	after := e.do(t, getCall(settingsURL))
+	if after.header.Get("ETag") != `"0"` {
+		t.Fatalf("ETag = %q, want \"0\": the refused change stored a value", after.header.Get("ETag"))
+	}
+
+	checkPlainSetting(t, decodeSettings(t, after)[plainconn.SettingAllowPlainConnections])
+	checkOneFailureEntry(t, serverEntries(t, e.st))
+}
+
+// checkPlainSetting fails the test unless item is the plain-connection
+// setting with the static value: false from the environment, locked, with a
+// live database layer.
+func checkPlainSetting(t *testing.T, item map[string]any) {
+	t.Helper()
+
+	if !isFalse(item["value"]) || item["source"] != "env" || !isTrue(item["locked"]) {
+		t.Fatalf("setting = %v, want false from the environment, locked", item)
+	}
+
+	if !isTrue(item["databaseLayer"]) || item["apply"] != "live" {
+		t.Fatalf("setting = %v, want a live database layer", item)
+	}
+}
+
+// checkOneFailureEntry fails the test unless entries holds one failure
+// change entry.
+func checkOneFailureEntry(t *testing.T, entries []audit.Entry) {
+	t.Helper()
+
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+
+	if entries[0].Outcome != audit.OutcomeFailure || entries[0].Kind != audit.KindChange {
+		t.Fatalf("entry = %+v, want a failure change", entries[0])
+	}
+}
+
 func TestSettingsNullOnALockedKeyDeletesTheShadowedValue(t *testing.T) {
 	t.Parallel()
 
@@ -445,7 +538,7 @@ func newSettingsEnvOn(t *testing.T, st *sqlite.Store, static setting.Static) set
 	}
 
 	handler, err := newCheckedHandler(t, settingsConfig(
-		st, namespaces, allowAll{},
+		t, st, namespaces, allowAll{},
 		setting.NewService(st.SettingStore(), settingtest.Registry(), static, st, nil),
 	))
 	if err != nil {
@@ -555,7 +648,7 @@ func TestSettingsWithoutAStoreAnswers501(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := newCheckedHandler(t, settingsConfig(st, namespaces, allowAll{}, nil))
+	handler, err := newCheckedHandler(t, settingsConfig(t, st, namespaces, allowAll{}, nil))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

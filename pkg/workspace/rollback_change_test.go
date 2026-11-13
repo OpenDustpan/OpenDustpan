@@ -148,7 +148,7 @@ func TestReadRollbackChangeRefusesOtherWorkspaceAndMissingState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	other, err := f.svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	other, err := f.svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

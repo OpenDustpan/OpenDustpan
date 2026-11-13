@@ -73,11 +73,13 @@ func (r settingsRig) settings() unitsettings.Settings {
 	}
 }
 
-func (r settingsRig) put(t *testing.T, s *unitsettings.Settings, expected int64) (unitsettings.Settings, error) {
+func (r settingsRig) put(t *testing.T, s *unitsettings.Settings, expected int64) error {
 	t.Helper()
 
-	return r.store.Put(t.Context(), s, expected, r.ns.Fence(),
+	_, err := r.store.Put(t.Context(), s, expected, r.ns.Fence(),
 		membershipEntry(time.UnixMilli(1_700_000_100_000).UTC(), r.ns.Name, "unit:manage"))
+
+	return err
 }
 
 // seedDefaults stores a default pool for the namespace of the rig.
@@ -99,7 +101,7 @@ func (r settingsRig) seedSettings(t *testing.T) {
 	t.Helper()
 
 	s := r.settings()
-	if _, err := r.put(t, &s, 0); err != nil {
+	if err := r.put(t, &s, 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 }
@@ -123,7 +125,7 @@ func TestPurgeDeletesUnitSettingsInTheFencedTransaction(t *testing.T) {
 	r := newSettingsRig(t)
 	s := r.settings()
 
-	if _, err := r.put(t, &s, 0); err != nil {
+	if err := r.put(t, &s, 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -165,11 +167,12 @@ func TestRenameKeepsUnitSettings(t *testing.T) {
 	r := newSettingsRig(t)
 	s := r.settings()
 
-	if _, err := r.put(t, &s, 0); err != nil {
+	if err := r.put(t, &s, 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if err := r.s.RenameStack(t.Context(), r.ref, stack.Name("prod"), r.ns.Fence()); err != nil {
+	e := membershipEntry(time.UnixMilli(1_700_000_300_000).UTC(), r.ns.Name, "unit:manage")
+	if err := r.s.RenameStack(t.Context(), r.ref, stack.Name("prod"), r.ns.Fence(), e); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -227,7 +230,7 @@ func TestParallelWritersWithOneVersionGiveOneWinner(t *testing.T) {
 			s := r.settings()
 			s.CodeLocation.Ref = "branch-" + strconv.Itoa(i)
 
-			_, err := r.put(t, &s, 0)
+			err := r.put(t, &s, 0)
 
 			switch {
 			case err == nil:
@@ -300,7 +303,7 @@ func checkCorruptBody(t *testing.T, body string) {
 	r := newSettingsRig(t)
 	s := r.settings()
 
-	if _, err := r.put(t, &s, 0); err != nil {
+	if err := r.put(t, &s, 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -313,7 +316,7 @@ func checkCorruptBody(t *testing.T, body string) {
 	}
 
 	// A valid write repairs the row.
-	if _, err := r.put(t, &s, 1); err != nil {
+	if err := r.put(t, &s, 1); err != nil {
 		t.Fatalf("Put over a row that fails the checks: %v", err)
 	}
 

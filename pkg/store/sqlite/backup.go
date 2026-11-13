@@ -41,7 +41,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 		ID:          row.ID,
 		State:       row.State,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       row.Error,
 	})
@@ -185,7 +185,7 @@ func startBackupTx(
 		ID:          row.ID,
 		State:       string(backup.StateRunning),
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       "",
 	})
@@ -290,7 +290,7 @@ func finishRow(
 	n, err := q.FinishBackup(ctx, db.FinishBackupParams{
 		State:     string(state),
 		Error:     errText,
-		EndedAtMs: codec.OptionalMillis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		ID:        id.String(),
 	})
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 	n, err := s.queries.FailEndedBackups(ctx, db.FailEndedBackupsParams{
 		Prefix:    backup.OperationKeyPrefix,
 		Fallback:  backup.EndedWithoutFinishText,
-		EndedAtMs: codec.Millis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		Kind:      string(backup.OperationKind),
 	})
 	if err != nil {
@@ -332,14 +332,30 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 // backupFromRow converts a backup row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func backupFromRow(row db.Backup) (backup.Record, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromBackupRow(codec.BackupRow{
 		ID:          row.ID,
 		State:       row.State,
 		Target:      row.Target,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 	})
+}
+
+// optionalMillis encodes t as a nullable Unix millisecond column. The zero
+// time is NULL: the row has no end time.
+func optionalMillis(t time.Time) sql.NullInt64 {
+	if t.IsZero() {
+		return sql.NullInt64{Int64: 0, Valid: false}
+	}
+
+	return sql.NullInt64{Int64: codec.Millis(t), Valid: true}
 }
 
 // CheckCoverage implements backup.Coverage: it compares the column list of
@@ -678,7 +694,9 @@ func (s *Store) reopenDatabase(ctx context.Context) error {
 // checkRestoreFile opens the staged file, checks its integrity, reads its
 // summary, and compares the schema version and the row counts with the
 // manifest. It returns the summary of what the swap will load.
-func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (backup.Summary, error) {
+func checkRestoreFile(
+	ctx context.Context, path string, want backup.Summary, restoreAt time.Time,
+) (backup.Summary, error) {
 	conn, err := openSnapshot(ctx, path)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -702,16 +720,8 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
 	}
 
-	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
-	}
-
-	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
-	}
-
-	if featureErr := checkStagedFeatureRows(ctx, conn); featureErr != nil {
-		return backup.Summary{}, fmt.Errorf("check staged backup: %w", featureErr)
+	if rowsErr := checkStagedRows(ctx, conn, restoreAt); rowsErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", rowsErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -807,6 +817,29 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 	}
 
 	return nil
+}
+
+// checkStagedRows checks the rows of the staged database with the rules of
+// the store: the namespace IDs, the owned rows, the grants and the
+// memberships of principals of a namespace, and the feature rows.
+func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) error {
+	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
+		return idsErr
+	}
+
+	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
+		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, conn); grantErr != nil {
+		return grantErr
+	}
+
+	if memberErr := checkStagedNamespacePrincipalMemberships(ctx, conn); memberErr != nil {
+		return memberErr
+	}
+
+	return checkStagedFeatureRows(ctx, conn)
 }
 
 // checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
@@ -1241,9 +1274,14 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
+// break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedJobs(ctx, conn); err != nil {
 		return err
 	}
 
@@ -1276,6 +1314,10 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	}
 
 	if err := checkStagedTrustRules(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
 		return err
 	}
 

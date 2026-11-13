@@ -113,7 +113,10 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -715,14 +718,22 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 			ID:          workspace.ID(tc.id),
 			Ref:         workspace.Ref{Namespace: ns, Name: name},
 			Revision:    1,
-			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+			Overrides: namespace.Overrides{
+				Forced:   false,
+				Unlocked: false,
+			},
+			Origin: identity.StateOrigin{Job: "", Commit: ""},
 		})
 	}
 
 	return pagingWorkspaces{items: items}
 }
 
-func (p pagingWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (p pagingWorkspaces) Create(
+	_ context.Context,
+	_ workspace.Ref,
+	_ workspace.Placement,
+) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrAlreadyExists
 }
 
@@ -889,7 +900,10 @@ func newPagingHandlerWith(t *testing.T, authz identity.Authorizer, ws tfe.Worksp
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

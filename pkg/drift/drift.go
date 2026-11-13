@@ -190,19 +190,45 @@ func (res Resource) validate() error {
 }
 
 // validateAddress reports whether address is a valid UTF-8 string of 1 to
-// MaxAddressBytes bytes with no control character and no format character.
-// Format characters include the bidirectional controls and the zero-width
-// characters that make one address look like another.
+// MaxAddressBytes bytes with no control character, no format character and no
+// line or paragraph separator. Format characters include the bidirectional
+// controls and the zero-width characters that make one address look like
+// another.
 func validateAddress(address string) error {
 	switch {
 	case address == "" || len(address) > MaxAddressBytes:
 		return fmt.Errorf("%w: address length %d", ErrInvalid, len(address))
 	case !utf8.ValidString(address):
 		return fmt.Errorf("%w: address is not valid UTF-8", ErrInvalid)
-	case strings.IndexFunc(address, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
-	}) >= 0:
-		return fmt.Errorf("%w: address has a control or format character", ErrInvalid)
+	}
+
+	return hiddenRuneError("address", address)
+}
+
+// validateText reports whether text is valid UTF-8 with no control character,
+// no format character and no line or paragraph separator. An empty text is
+// valid.
+func validateText(text string) error {
+	if !utf8.ValidString(text) {
+		return fmt.Errorf("%w: text is not valid UTF-8", ErrInvalid)
+	}
+
+	return hiddenRuneError("text", text)
+}
+
+// hiddenRuneError returns an error for the first rune of s that is a control
+// character, a format character, a line separator or a paragraph separator.
+// It returns nil for a string with no such rune.
+func hiddenRuneError(what, s string) error {
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Zl, r):
+			return fmt.Errorf("%w: %s has a line separator", ErrInvalid, what)
+		case unicode.Is(unicode.Zp, r):
+			return fmt.Errorf("%w: %s has a paragraph separator", ErrInvalid, what)
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			return fmt.Errorf("%w: %s has a control or format character", ErrInvalid, what)
+		}
 	}
 
 	return nil

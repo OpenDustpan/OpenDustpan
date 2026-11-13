@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -126,6 +129,146 @@ func (r Reach) Covers(ctx context.Context, other Reach) (bool, error) {
 	return true, nil
 }
 
+// HeldAction is one action of a reach on one object.
+type HeldAction struct {
+	Action identity.Action
+	Object identity.Object
+}
+
+// ReachRefusal is a refusal of a reach check that carries the actions of the
+// reach of a principal that the caller does not hold. The audit entry of the
+// refusal reads them with errors.As, so its reason needs no parsing of text.
+type ReachRefusal interface {
+	error
+	MissingActions() []HeldAction
+}
+
+// MaxReachReasonItems bounds the actions that a reach reason names. A longer
+// list ends with the count of the actions that it leaves out.
+const MaxReachReasonItems = 20
+
+// MissingActionsReason returns the audit reason of a reach refusal: the
+// missing actions with their objects, sorted as Missing returns them, after
+// "outside the reach of the caller: ". It names at most MaxReachReasonItems
+// actions and then the count of the rest, and it stays inside the limit of
+// an audit reason.
+func MissingActionsReason(missing []HeldAction) string {
+	return MissingActionsReasonWithin(missing, audit.MaxReasonLen)
+}
+
+// MissingActionsReasonWithin returns the text of MissingActionsReason inside
+// limit bytes. It names at most MaxReachReasonItems actions and then the
+// count of the rest, so a shorter text names fewer actions and grows that
+// count. A limit too small for the prefix and the count cuts the text to the
+// limit.
+func MissingActionsReasonWithin(missing []HeldAction, limit int) string {
+	const prefix = "outside the reach of the caller: "
+
+	if limit <= 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, min(len(missing), MaxReachReasonItems))
+	total := len(prefix)
+
+	for i := range missing {
+		if i == MaxReachReasonItems {
+			break
+		}
+
+		part := string(missing[i].Action) + " on " + reasonObjectText(missing[i].Object)
+
+		sep := ""
+		if i > 0 {
+			sep = ", "
+		}
+
+		rest := len(missing) - i - 1
+		suffix := ""
+		if rest > 0 {
+			suffix = fmt.Sprintf(", and %d more", rest)
+		}
+
+		if total+len(sep)+len(part)+len(suffix) > limit {
+			break
+		}
+
+		parts = append(parts, part)
+		total += len(sep) + len(part)
+	}
+
+	text := prefix + strings.Join(parts, ", ")
+	if len(parts) < len(missing) {
+		text += fmt.Sprintf(", and %d more", len(missing)-len(parts))
+	}
+
+	if len(text) <= limit {
+		return text
+	}
+
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+
+	return text[:cut]
+}
+
+// reasonObjectText names the object of an action in a reach reason, for
+// example "namespace:team", "unit:team/web" and "principal:prn-x".
+func reasonObjectText(obj identity.Object) string {
+	switch {
+	case obj.IsServer():
+		return "the installation"
+	case obj.IsCaller():
+		return "the caller"
+	case obj.IsPrincipal():
+		return obj.String()
+	case obj.IsCollection():
+		return "collection:" + obj.String()
+	case obj.IsUnit():
+		return "unit:" + obj.Namespace().String() + "/" + obj.UnitName()
+	default:
+		return "namespace:" + obj.String()
+	}
+}
+
+// Missing returns the actions of other that r does not hold, with the
+// object of each, sorted by action and then by object. An empty result
+// means that r covers other. It returns an error only when a resolver
+// fails.
+func (r Reach) Missing(ctx context.Context, other Reach) ([]HeldAction, error) {
+	var out []HeldAction
+
+	for key := range other.entries {
+		e := other.entries[key]
+		if e == nil {
+			continue
+		}
+
+		for action := range e.actions {
+			holds, err := r.Has(ctx, action, e.object)
+			if err != nil {
+				return nil, err
+			}
+
+			if !holds {
+				out = append(out, HeldAction{Action: action, Object: e.object})
+			}
+		}
+	}
+
+	slices.SortFunc(out, func(a, b HeldAction) int {
+		if c := strings.Compare(string(a.Action), string(b.Action)); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.Object.String(), b.Object.String())
+	})
+
+	return out, nil
+}
+
 // ActionsOn returns the sorted actions that r holds on obj. It returns an
 // error only when a resolver fails.
 func (r Reach) ActionsOn(ctx context.Context, obj identity.Object) ([]identity.Action, error) {
@@ -155,6 +298,91 @@ func (r Reach) ActionsOn(ctx context.Context, obj identity.Object) ([]identity.A
 	sortActions(out)
 
 	return out, nil
+}
+
+// protected reports whether r holds a sensitive action on an object that
+// is not confined to one namespace. An action that no family classifies
+// returns ErrUnknownAction, so that a new action fails closed.
+func (r Reach) protected(ctx context.Context) (bool, error) {
+	protected := false
+
+	for key := range r.entries {
+		e := r.entries[key]
+		if e == nil {
+			continue
+		}
+
+		installWide, err := r.protectedObject(ctx, e.object)
+		if err != nil {
+			return false, err
+		}
+
+		for action := range e.actions {
+			family, known := FamilyOf(action)
+			if !known {
+				return false, fmt.Errorf("%w: %q", ErrUnknownAction, action)
+			}
+
+			if installWide && sensitiveFamily(family) && !readOnlyServer(action) {
+				protected = true
+			}
+		}
+	}
+
+	return protected, nil
+}
+
+// protectedObject reports whether a sensitive action on obj makes a group
+// protected: the installation, or a principal of the installation. A
+// namespace, a collection, a unit, and a principal of a namespace are
+// confined to one namespace. A disabled principal of the installation
+// counts: the server can enable it again, so an act-as right on it is not
+// an action that one namespace confines.
+func (r Reach) protectedObject(ctx context.Context, obj identity.Object) (bool, error) {
+	kind, ok := KindOf(obj)
+	if !ok {
+		// Defense in depth: the store rejects a grant on an object that has
+		// no kind, and this check stays so that a new caller cannot skip
+		// it. The check does not rely on the store.
+		return false, fmt.Errorf("%w: object kind of %q", ErrInvalid, obj.String())
+	}
+
+	return r.protectedKind(ctx, obj, kind)
+}
+
+// protectedKind reports whether a sensitive action on obj of the given kind
+// makes a group protected. KindOf is the source of the kind. A principal
+// that does not exist gives no protection: an unknown principal holds
+// nothing.
+func (r Reach) protectedKind(ctx context.Context, obj identity.Object, kind ObjectKind) (bool, error) {
+	switch kind {
+	case ObjectInstallation:
+		return true, nil
+	case ObjectPrincipal:
+		if r.principals == nil {
+			return false, fmt.Errorf("%w: principals", ErrMissingDependency)
+		}
+
+		rec, err := r.principals.GetPrincipal(ctx, obj.PrincipalID())
+		if errors.Is(err, principal.ErrNotFound) {
+			// A grant on a principal that no longer exists gives no
+			// installation-wide power: an unknown principal has an empty
+			// reach too.
+			return false, nil
+		}
+
+		if err != nil {
+			return false, fmt.Errorf("read principal %q: %w", obj.PrincipalID(), err)
+		}
+
+		return rec.Namespace == "", nil
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		return false, nil
+	default:
+		// Defense in depth: KindOf returns one of the kinds above, and a
+		// kind that this check does not know must fail closed.
+		return false, fmt.Errorf("%w: object kind %q", ErrInvalid, kind)
+	}
 }
 
 // entryHas reports whether the entry under key holds action. A missing or nil
@@ -208,15 +436,8 @@ func reachAdd(r *Reach, obj identity.Object, action identity.Action) {
 // through the grant that gives the action. The issuer of a rule is outside
 // the installation and holds no grant.
 func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
-	switch {
-	case cfg.Grants == nil:
-		return Reach{}, fmt.Errorf("%w: grants", ErrMissingDependency)
-	case cfg.Roles == nil:
-		return Reach{}, fmt.Errorf("%w: roles", ErrMissingDependency)
-	case cfg.Callers == nil:
-		return Reach{}, fmt.Errorf("%w: callers", ErrMissingDependency)
-	case cfg.Principals == nil:
-		return Reach{}, fmt.Errorf("%w: principals", ErrMissingDependency)
+	if err := checkReachConfig(cfg); err != nil {
+		return Reach{}, err
 	}
 
 	w := newReachWalker(cfg, id)
@@ -227,6 +448,82 @@ func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 	}
 
 	return w.finish(ctx)
+}
+
+// GroupReachOf returns the reach of the group with the ID groupID: the
+// actions of the grants of the group alone, and of the grants of each
+// service principal that the group can act as through
+// principal:manage-tokens, followed transitively. It reads no grant of a
+// member as a person. An unknown or deleted group has an empty reach. A
+// grant whose role no longer exists gives nothing, as does a grant on a
+// deleted unit or on a collection with another stable ID.
+//
+// A direct act-as edge and a namespace edge reach every target, and a
+// disabled principal is never an act-as target, as in ReachOf. A group ID
+// that is empty or malformed is ErrInvalid.
+func GroupReachOf(ctx context.Context, cfg ReachConfig, groupID string) (Reach, error) {
+	if err := checkReachConfig(cfg); err != nil {
+		return Reach{}, err
+	}
+
+	if !validSubjectID(groupID) {
+		return Reach{}, fmt.Errorf("%w: group ID %q", ErrInvalid, groupID)
+	}
+
+	w := newReachWalker(cfg, "")
+	if err := w.seedGroup(ctx, groupID); err != nil {
+		return Reach{}, err
+	}
+
+	if err := w.expand(ctx); err != nil {
+		return Reach{}, err
+	}
+
+	if err := w.close(ctx); err != nil {
+		return Reach{}, err
+	}
+
+	return w.finish(ctx)
+}
+
+// checkReachConfig returns ErrMissingDependency for a reach config that
+// lacks a required port.
+func checkReachConfig(cfg ReachConfig) error {
+	switch {
+	case cfg.Grants == nil:
+		return fmt.Errorf("%w: grants", ErrMissingDependency)
+	case cfg.Roles == nil:
+		return fmt.Errorf("%w: roles", ErrMissingDependency)
+	case cfg.Callers == nil:
+		return fmt.Errorf("%w: callers", ErrMissingDependency)
+	case cfg.Principals == nil:
+		return fmt.Errorf("%w: principals", ErrMissingDependency)
+	default:
+		return nil
+	}
+}
+
+// Protected reports whether the group with the ID groupID is a protected
+// group: the reach of the group alone holds a sensitive action on the
+// installation or on a principal of the installation. A sensitive action
+// is each action of the operator, the administration and the delegation
+// families, except the read-only server actions: each server:read-*
+// action. A namespace, a collection, a unit and a principal of a namespace
+// are confined to one namespace, so a sensitive action on them does not
+// make the group protected.
+//
+// A grant whose action no family classifies makes the check return an
+// error: a new action fails closed until it is classified. On an error the
+// result is false with the error, and a caller must treat the group as
+// protected: the check failed, so it cannot say that the group is not
+// protected.
+func Protected(ctx context.Context, cfg ReachConfig, groupID string) (bool, error) {
+	group, err := GroupReachOf(ctx, cfg, groupID)
+	if err != nil {
+		return false, err
+	}
+
+	return group.protected(ctx)
 }
 
 // emptyReach returns the reach with no entries over cfg.
@@ -327,17 +624,41 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 			return fmt.Errorf("read grants of %s: %w", subject.String(), err)
 		}
 
-		for i := range grants {
-			if _, done := w.grants[grants[i].ID]; done {
-				continue
-			}
-
-			w.grants[grants[i].ID] = grants[i]
-			fresh = append(fresh, grants[i])
-		}
+		fresh = append(fresh, w.remember(grants)...)
 	}
 
 	return w.follow(ctx, fresh)
+}
+
+// seedGroup adds the grants of the group with the ID groupID and queues
+// the principals that its new grants can act as. It reads no grant of a
+// member as a person.
+func (w *reachWalker) seedGroup(ctx context.Context, groupID string) error {
+	subject := Subject{Kind: SubjectGroup, ID: groupID}
+
+	grants, err := w.cfg.Grants.GrantsOf(ctx, subject)
+	if err != nil {
+		return fmt.Errorf("read grants of %s: %w", subject.String(), err)
+	}
+
+	return w.follow(ctx, w.remember(grants))
+}
+
+// remember records grants that the walker does not hold yet and returns
+// them.
+func (w *reachWalker) remember(grants []Grant) []Grant {
+	fresh := make([]Grant, 0, len(grants))
+
+	for i := range grants {
+		if _, done := w.grants[grants[i].ID]; done {
+			continue
+		}
+
+		w.grants[grants[i].ID] = grants[i]
+		fresh = append(fresh, grants[i])
+	}
+
+	return fresh
 }
 
 // follow records the act-as targets of grants: the service principals that

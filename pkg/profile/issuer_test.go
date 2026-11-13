@@ -404,6 +404,8 @@ func TestCheckClaimName(t *testing.T) {
 	for name, ok := range map[string]bool{
 		"access": true, "unit_id": true, "ref_protected": true, "https://aws.amazon.com/tags": true,
 		"iss": false, "namespace": false, "namespace_id": false, "purpose": false, "Access": false, "a-b": false, "": false,
+		// The authentication claims tell a relying party how a person signed in.
+		"auth_time": false, "amr": false, "acr": false, "auth_time_x": true, "amr2": true,
 	} {
 		if err := profile.CheckClaimName(name); (err == nil) != ok {
 			t.Errorf("CheckClaimName(%q) = %v, want ok %v", name, err, ok)

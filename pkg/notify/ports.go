@@ -229,6 +229,14 @@ const (
 // DeliveryIDPrefix starts every delivery ID.
 const DeliveryIDPrefix = "dlv-"
 
+// ValidDeliveryID reports whether id has the form of a delivery ID: the
+// prefix DeliveryIDPrefix. It is the check of Delivery.Validate, for a caller
+// that holds an ID from outside the store, such as the cursor of a page
+// token.
+func ValidDeliveryID(id string) bool {
+	return strings.HasPrefix(id, DeliveryIDPrefix)
+}
+
 // Delivery is the delivery of one notification to one sink, or to one
 // personal contact of a recipient. Contact is empty for a delivery to the
 // target of the sink. Principal is the principal whose access decides the
@@ -263,7 +271,7 @@ type Delivery struct {
 // LastError that is not empty or a Class.
 func (d Delivery) Validate() error {
 	switch {
-	case !strings.HasPrefix(d.ID, DeliveryIDPrefix) || !strings.HasPrefix(d.Notification, IDPrefix):
+	case !ValidDeliveryID(d.ID) || !strings.HasPrefix(d.Notification, IDPrefix):
 		return fmt.Errorf("%w: a delivery ID starts with %q and its notification with %q", ErrInvalid,
 			DeliveryIDPrefix, IDPrefix)
 	case d.Scope == "" || d.Principal == "":
@@ -379,10 +387,23 @@ type Deliveries interface {
 	// namespace.ErrNotFound.
 	Record(ctx context.Context, fence namespace.Fence, a Attempt) error
 	// History returns the deliveries of the subscription id in scope,
-	// newest first, at most limit. It returns ErrNotFound when the
-	// subscription id is in another scope, so a caller with the read
-	// action on one scope sees no delivery of another.
-	History(ctx context.Context, scope namespace.Name, id string, limit int) ([]Delivery, error)
+	// newest first, at most limit, after the cursor. A nil cursor starts
+	// at the newest delivery. The rows order by NextAt, newest first, and
+	// then by ID, greatest first, so the cursor pair names one row and a
+	// page that starts after it never skips or repeats a row that has the
+	// same NextAt. It returns ErrNotFound when the subscription id is in
+	// another scope, so a caller with the read action on one scope sees no
+	// delivery of another.
+	History(ctx context.Context, scope namespace.Name, id string, after *DeliveryCursor, limit int) ([]Delivery, error)
+	// CountBefore returns how many deliveries of the subscription id in
+	// scope come at or before the cursor in the history order (NextAt,
+	// newest first, then ID, greatest first): the deliveries that the
+	// pages before a page that starts after the cursor returned. It stops
+	// counting at maxCount, so a caller bounds a read without counting a
+	// whole history. A nil cursor names the start of the history, so the
+	// count is zero. It returns ErrNotFound when the subscription id is in
+	// another scope, as History does.
+	CountBefore(ctx context.Context, scope namespace.Name, id string, after *DeliveryCursor, maxCount int) (int, error)
 	// Redeliver makes the delivery id pending again with no attempts and
 	// no claim, and appends e. Only a stopped delivery (delivered,
 	// abandoned or skipped) can be sent again. A delivery of a
@@ -395,6 +416,16 @@ type Deliveries interface {
 	// can hold, and for a delivery whose subscription fails these
 	// conditions; namespace.ErrFenced and namespace.ErrNotFound.
 	Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+}
+
+// DeliveryCursor names one delivery of the history of a subscription: the
+// next page starts after the delivery with this NextAt and ID. The history
+// orders by NextAt, newest first, and then by ID, greatest first, so the
+// pair names one row and a page edge never skips or repeats a row that has
+// the same NextAt.
+type DeliveryCursor struct {
+	NextAt time.Time
+	ID     string
 }
 
 // ClaimRequest asks Claim for the due deliveries of Scope at Now. Lease is

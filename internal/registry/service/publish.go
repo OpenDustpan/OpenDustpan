@@ -216,18 +216,23 @@ func (s *Service) Publish(ctx context.Context, c *Caller, req PublishRequest) (r
 
 	rel, err := s.verify(ctx, c, p)
 	if err != nil {
-		return registry.Release{}, err
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, err)
 	}
 
 	if refuseErr := s.refuseOtherContent(ctx, p, rel); refuseErr != nil {
-		return registry.Release{}, refuseErr
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, refuseErr)
 	}
 
 	if moveErr := s.move(ctx, p.view, p.rec.ID, p.files); moveErr != nil {
-		return registry.Release{}, moveErr
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, moveErr)
 	}
 
-	return s.record(ctx, c, p, rel)
+	rel, err = s.record(ctx, c, p, rel)
+	if err != nil {
+		return registry.Release{}, s.refusal(ctx, c, p.rec, req.Version, err)
+	}
+
+	return rel, nil
 }
 
 // publishing holds what a publish needs after the request is checked: the
@@ -279,7 +284,7 @@ func (s *Service) verify(ctx context.Context, c *Caller, p publishing) (registry
 	rel.PublishedAt = s.now().UTC()
 
 	if err = rel.Validate(); err != nil {
-		return registry.Release{}, fmt.Errorf("check the release: %w", err)
+		return registry.Release{}, fmt.Errorf("check the release: %w: %w", errReleaseRefused, err)
 	}
 
 	return rel, nil
@@ -551,7 +556,7 @@ func (s *Service) check(
 
 	parsed, err := releasecheck.ParseSums(sums.Name, sums.bytes)
 	if err != nil {
-		return registry.Release{}, fmt.Errorf("parse the checksums file: %w", err)
+		return registry.Release{}, fmt.Errorf("parse the checksums file: %w: %w", releasecheck.ErrRefused, err)
 	}
 
 	rel, err := releasecheck.Check(addr, req.Version, set, parsed)

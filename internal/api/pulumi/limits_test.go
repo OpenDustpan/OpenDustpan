@@ -144,7 +144,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}

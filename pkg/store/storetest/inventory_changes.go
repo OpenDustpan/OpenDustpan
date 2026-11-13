@@ -105,7 +105,7 @@ func testStackChangeLog(t *testing.T, f fixture) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "live", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "live", f.fence, renameEntry(ns, f.ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -196,7 +196,10 @@ func testStackChangeLogFence(t *testing.T, f fixture) {
 		t.Fatalf("create with a stale fence: err = %v, want ErrFenced", err)
 	}
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "live", stale); !errors.Is(err, namespace.ErrFenced) {
+	err := f.s.RenameStack(
+		t.Context(), f.ref, "live", stale, renameEntry(ns, f.ref),
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("rename with a stale fence: err = %v, want ErrFenced", err)
 	}
 

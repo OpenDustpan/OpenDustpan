@@ -50,6 +50,19 @@ func TestGitHostAppLifecycle(t *testing.T) {
 	replaceAndDeleteApp(t, e, &first)
 }
 
+func TestGitHostAppPutWithIfMatchNeedsARegistration(t *testing.T) {
+	t.Parallel()
+
+	e := newHostEnv(t, hostAllowAll())
+
+	put := hostCall{
+		headers: map[string]string{"If-Match": `"1"`}, method: http.MethodPut, target: hostAppPath, body: hostAppBody(),
+	}
+
+	wantHost(t, e.do(t, put), http.StatusNotFound)
+	wantHost(t, e.send(t, http.MethodGet, hostAppPath, ""), http.StatusNotFound)
+}
+
 // replaceAndDeleteApp replaces the registration with the version that it read,
 // proves that the old version is stale, and deletes it.
 func replaceAndDeleteApp(t *testing.T, e *hostEnv, first *appDoc) {

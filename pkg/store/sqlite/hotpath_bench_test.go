@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -73,8 +74,8 @@ func hotpathPlanJob(b *testing.B, unit identity.Object) *job.Job {
 	}
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)), State: job.StateQueued, Wait: job.WaitNone, Reason: "",
-		Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
+		ID: job.ID(ident.NewID(job.IDPrefix)), NamespaceID: "", State: job.StateQueued, Wait: job.WaitNone,
+		Reason: "", Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Trigger: nil,
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
@@ -163,6 +164,7 @@ func BenchmarkRecorderPutPlan(b *testing.B) {
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: s.Jobs(), Jobs: s.Jobs(), Blobs: artifacts, Sealer: sealer, Namespaces: s,
 		Retention: history.DefaultRetentionSettings(), Now: time.Now,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		b.Fatalf("recorder: %v", err)

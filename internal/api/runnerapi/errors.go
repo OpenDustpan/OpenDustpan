@@ -138,6 +138,12 @@ func classifyProtocol(err error) (int, protocol.Error) {
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrUnavailable)
 	}
 
+	// A plan that read an old state version failed its phase. The runner does
+	// not try the plan again.
+	if errors.Is(err, job.ErrPlanStale) {
+		return mk(http.StatusConflict, protocol.ErrorPlanStale, job.ErrPlanStale)
+	}
+
 	switch {
 	case errors.Is(err, runner.ErrBadProof), errors.Is(err, runner.ErrReplay):
 		return mk(http.StatusUnauthorized, protocol.ErrorBadProof, runner.ErrBadProof, runner.ErrReplay)
@@ -206,7 +212,10 @@ func classifyProtocolOther(
 		}
 	case errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
-		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrNotHome)
+		return mk(
+			http.StatusServiceUnavailable, protocol.ErrorUnavailable,
+			namespace.ErrNotHome, maintenance.ErrInMaintenance,
+		)
 	case errors.Is(err, schema.ErrBinaryBelowMinimum):
 		// The text names both versions and nothing else, so a runner can show it.
 		message := schema.ErrBinaryBelowMinimum.Error()

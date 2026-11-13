@@ -47,6 +47,10 @@ const (
 	AuditActionMappingPut = "group-mapping:put"
 	// AuditActionMappingDelete is written for each mapping that is deleted.
 	AuditActionMappingDelete = "group-mapping:delete"
+	// AuditActionMassRemovalAlert is written once when the removals of one
+	// source cross a limit of the removal alert. The entry is in the scope
+	// audit.ServerScope.
+	AuditActionMassRemovalAlert = "principal:mass-removal-alert"
 )
 
 // ValidateGroupValue returns ErrInvalid unless v is a group value that an

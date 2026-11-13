@@ -86,6 +86,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Audit == nil:
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+	// Defense in depth: the recorder of refusals needs the namespaces to write the
+	// entry of a namespace. Without them every refusal of a namespace is lost, so
+	// the handler refuses to start. This check stays so that a new caller cannot
+	// skip it.
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
 	case cfg.Service == nil:
 		return nil, fmt.Errorf("%w: registry service", ErrMissingDependency)
 	case cfg.Authenticator == nil:

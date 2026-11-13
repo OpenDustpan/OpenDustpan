@@ -11,9 +11,9 @@ These are the project owner's own instructions. They hold until the owner change
   2026-10-16): `<LEAD_SESSION>` = the ID of the lead's own session;
   `<LEAD_SESSION_URL>` = the URL of the lead's own session; `<IMPLEMENTATION_MODEL>` =
   opencode-go/muse-spark-1.3-contributor. Create sessions with model claude-haiku-5-5, tag opendustpan-swarm. Haiku
-  follows steps; it does not improvise. The environment config sets GOTOOLCHAIN=go1.27.3 (owner, 2026-10-16), so new
+  follows steps; it does not improvise. The environment config sets GOTOOLCHAIN=go1.27.4 (owner, 2026-10-16), so new
   sessions need no prompt line for it. If make nilaway or make vuln fails on a toolchain mismatch, tell the worker to
-  `export GOTOOLCHAIN=go1.27.3`.
+  `export GOTOOLCHAIN=go1.27.4`.
 - **Kill (archive) each Haiku session when its work item is finished.**
 - A worker that refuses the lead's direction is fired (owner, 2026-10-17): archive it and start a new worker with the full task in its first prompt. Do not argue with it, and do not ask the owner to step in. Put every change of direction in a new session's first prompt, not in a message to a running session.
 - **Do not run implementation or review work in my own subagents (the Agent tool).** They die when the owner interrupts

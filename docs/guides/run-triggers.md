@@ -109,8 +109,11 @@ Send `DELETE .../triggers/{trigger_id}`. The answer is 204. A stored trigger can
 fail the checks of the server, for example after a restore of a backup that
 another version made. The server does not serve such a trigger, and a read, a
 replace or a fire of it fails. It starts no plan, and it takes no part in the
-check for a loop of units. A delete deletes it. A delete needs `unit:manage` on
-the unit of the trigger.
+check for a loop of units. A delete deletes a trigger whose kind, frequency,
+source, enabled flag, last saver or last saver ID is not valid. The trigger must
+still name the live unit of the path: a trigger whose unit ID or namespace does
+not match the unit of the path, or whose ID is not valid, is not reachable
+through this route. A delete needs `unit:manage` on the unit of the trigger.
 
 ## Fire a trigger
 

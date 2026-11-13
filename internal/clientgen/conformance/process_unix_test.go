@@ -3,12 +3,12 @@
 package conformance_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -17,6 +17,11 @@ import (
 // pidFileEnv names the file where the fake adapter writes the PID of its child.
 const pidFileEnv = "CONFORMANCE_FAKE_PIDFILE"
 
+// lockFileEnv names the file that the child of the fake adapter locks. The
+// child holds the lock until it ends, so a test can wait on the same lock
+// instead of a clock.
+const lockFileEnv = "CONFORMANCE_FAKE_LOCKFILE"
+
 // startGrandchild starts a process that the fake adapter owns, and writes its
 // PID to the file that the test names. The process has no pipe of the harness,
 // so only a kill of the group can end it.
@@ -24,7 +29,25 @@ func startGrandchild() {
 	cmd := exec.CommandContext(context.Background(), os.Args[0]) //nolint:gosec // The test starts its own binary.
 	cmd.Env = []string{fakeModeEnv + "=sleeper"}
 
+	if lockFile := os.Getenv(lockFileEnv); lockFile != "" {
+		cmd.Env = append(cmd.Env, lockFileEnv+"="+lockFile)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+
 	if err := cmd.Start(); err != nil {
+		return
+	}
+
+	// The child holds the lock before the adapter goes on.
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		return
+	}
+
+	if err := stdout.Close(); err != nil {
 		return
 	}
 
@@ -34,22 +57,64 @@ func startGrandchild() {
 	}
 }
 
-// alive says that a process runs. A zombie, which waits for its parent, is not
-// alive.
-func alive(pid int) bool {
-	if err := syscall.Kill(pid, 0); err != nil {
-		return false
+// runSleeper is the sleeper mode of the fake adapter. With the lock file
+// variable set, the process takes an exclusive lock on that file and blocks
+// until a kill ends it, so that a test can wait on the same lock instead of a
+// clock. Without the variable, it ends after a minute, as before.
+func runSleeper() {
+	lockFile := os.Getenv(lockFileEnv)
+	if lockFile == "" {
+		<-time.After(time.Minute)
+
+		return
 	}
 
-	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	fd, err := syscall.Open(lockFile, syscall.O_CREAT|syscall.O_RDWR, 0o600)
 	if err != nil {
-		return true
+		return
 	}
 
-	// The state is the field after the name, which is in parentheses.
-	_, after, found := strings.Cut(string(stat), ") ")
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		return
+	}
 
-	return !found || !strings.HasPrefix(after, "Z")
+	if _, err := os.Stdout.WriteString("ready\n"); err != nil {
+		return
+	}
+
+	// The process must not end on its own, or a test that misses a kill of
+	// the group would pass. A select with no case would let the runtime stop
+	// the program, so the loop waits in one.
+	for {
+		<-time.After(time.Hour)
+	}
+}
+
+// waitUntilGone waits until the process that holds the lock on the file has
+// exited. The kernel releases the lock when the process ends, so the test
+// needs no clock. A regression that misses the kill makes this wait block
+// until the go test timeout.
+func waitUntilGone(t *testing.T, lockFile string) {
+	t.Helper()
+
+	fd, err := syscall.Open(lockFile, syscall.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("open the lock file: %v", err)
+	}
+
+	defer func() {
+		if cerr := syscall.Close(fd); cerr != nil {
+			t.Errorf("close the lock file: %v", cerr)
+		}
+	}()
+
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		t.Fatalf("take the lock: %v", err)
+	}
+
+	if err := syscall.Flock(fd, syscall.LOCK_UN); err != nil {
+		t.Fatalf("release the lock: %v", err)
+	}
 }
 
 // TestProcessAdapterKillsTheGroup checks that a stop ends the processes that
@@ -57,9 +122,11 @@ func alive(pid int) bool {
 func TestProcessAdapterKillsTheGroup(t *testing.T) {
 	t.Parallel()
 
-	pidFile := t.TempDir() + "/pid"
+	dir := t.TempDir()
+	pidFile, lockFile := dir+"/pid", dir+"/lock"
 
-	a, err := startFakeWith(t, "grandchild", 500*time.Millisecond, pidFileEnv+"="+pidFile)
+	a, err := startFakeWith(t, "grandchild", 500*time.Millisecond,
+		pidFileEnv+"="+pidFile, lockFileEnv+"="+lockFile)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -70,24 +137,36 @@ func TestProcessAdapterKillsTheGroup(t *testing.T) {
 
 	_ = a.Close() //nolint:errcheck // The test checks the child.
 
-	raw, err := os.ReadFile(pidFile) //nolint:gosec // The path is in the directory of the test.
-	if err != nil {
+	// The fake adapter wrote the PID before the stop: the child started.
+	if _, err = os.Stat(pidFile); err != nil {
 		t.Fatalf("the fake adapter wrote no PID: %v", err)
 	}
 
-	pid, err := strconv.Atoi(string(raw))
+	waitUntilGone(t, lockFile)
+}
+
+// TestProcessAdapterCleanShutdownEndsTheGroup checks that a clean shutdown
+// ends the processes that the adapter started, and not only the adapter.
+func TestProcessAdapterCleanShutdownEndsTheGroup(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	pidFile, lockFile := dir+"/pid", dir+"/lock"
+
+	a, err := startFakeWith(t, "grandchildclean", 0,
+		pidFileEnv+"="+pidFile, lockFileEnv+"="+lockFile)
 	if err != nil {
-		t.Fatalf("PID: %v", err)
+		t.Fatalf("start: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for alive(pid) && time.Now().Before(deadline) {
-		<-time.After(20 * time.Millisecond)
+	if err = a.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 
-	if alive(pid) {
-		_ = syscall.Kill(pid, syscall.SIGKILL) //nolint:errcheck // Clean up after a failed test.
-
-		t.Fatalf("the child %d of the adapter is still alive after the stop", pid)
+	// The fake adapter wrote the PID before the close: the child started.
+	if _, err = os.Stat(pidFile); err != nil {
+		t.Fatalf("the fake adapter wrote no PID: %v", err)
 	}
+
+	waitUntilGone(t, lockFile)
 }

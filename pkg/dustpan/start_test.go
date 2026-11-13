@@ -39,11 +39,22 @@ func serveOnce(t *testing.T, handler http.Handler, method, path string) *httptes
 	return rec
 }
 
+// checkProbePasses proves that GET of one live-probe target answers 204
+// before Start.
+func checkProbePasses(t *testing.T, handler http.Handler, path string) {
+	t.Helper()
+
+	if rec := serveOnce(t, handler, http.MethodGet, path); rec.Code != http.StatusNoContent {
+		t.Fatalf("GET %s = %d, want 204 before Start\n%s", path, rec.Code, rec.Body.String())
+	}
+}
+
 // TestHandlerRefusesBeforeStart proves that a handler that was not started
 // answers 503 on each route in the error shape of its adapter, with
 // Retry-After, and that only GET of /health/live passes. The readiness
 // probe, the metrics route and the console files answer 503 too. A path that
-// only looks like the probe does not pass.
+// only looks like the probe does not pass. An absolute-form target, which an
+// HTTP/1.1 proxy sends, gets the same answer.
 func TestHandlerRefusesBeforeStart(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +93,44 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 		{"probe with a parameter", http.MethodGet, "/health/live;a=b", `"code":503`},
 		{"probe with HEAD", http.MethodHead, "/health/live", `"code":503`},
 		{"probe with OPTIONS", http.MethodOptions, "/health/live", `"code":503`},
+		{"absolute URI of an API route", http.MethodGet, "http://example.com/api/server/namespaces", `"code":503`},
+		{
+			"absolute URI of the probe with a method that is not GET",
+			http.MethodPost,
+			"http://example.com/health/live",
+			`"code":503`,
+		},
+		{
+			"absolute URI of the probe with a longer path",
+			http.MethodGet,
+			"http://example.com/health/live/x",
+			`"code":503`,
+		},
+		{
+			"absolute URI of the probe with a trailing slash",
+			http.MethodGet,
+			"http://example.com/health/live/",
+			`"code":503`,
+		},
+		{
+			"absolute URI of the probe with an encoded slash",
+			http.MethodGet,
+			"http://example.com/health%2Flive",
+			`"code":503`,
+		},
+		{"absolute URI of the probe with another case", http.MethodGet, "http://example.com/HEALTH/LIVE", `"code":503`},
+		{
+			"absolute URI of an API route with a query",
+			http.MethodGet,
+			"http://example.com/api/server/namespaces?per_page=1",
+			`"code":503`,
+		},
+		{
+			"absolute URI of an API route over https",
+			http.MethodGet,
+			"https://example.com/api/server/namespaces",
+			`"code":503`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -113,6 +162,28 @@ func TestHandlerRefusesBeforeStart(t *testing.T) {
 
 	if rec := serveOnce(t, handler, http.MethodGet, "/health/live"); rec.Code != http.StatusNoContent {
 		t.Fatalf("GET /health/live = %d, want 204 before Start", rec.Code)
+	}
+
+	// The gate compares the method and the escaped path only, so the scheme,
+	// the host and the query of an absolute-form target do not change the
+	// answer: each form of the probe passes.
+	passCases := []struct {
+		name string
+		path string
+	}{
+		{"absolute URI of the probe", "http://example.com/health/live"},
+		// The scheme is not part of the escaped path, so the https form passes.
+		{"absolute URI of the probe over https", "https://example.com/health/live"},
+		// The query is not part of the escaped path, so the probe with a query passes.
+		{"absolute URI of the probe with a query", "http://example.com/health/live?wait=1"},
+	}
+
+	for _, tc := range passCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkProbePasses(t, handler, tc.path)
+		})
 	}
 }
 

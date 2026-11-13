@@ -196,6 +196,7 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "a legacy stream header is refused", test: testSealerLegacyHeader},
 		{name: "a shredded key answers before any blob read", test: testSealerShredded},
 		{name: "a wrapped key blob of another item does not unwrap", test: testSealerSwappedBlob},
+		{name: "a wrapped key moved to another record ID does not unwrap", test: testSealerMovedRecordID},
 		{name: "a wrapped key blob of another namespace does not unwrap", test: testSealerOtherNamespaceBlob},
 		{name: "only the blob version of the record is read", test: testSealerRecordVersion},
 		{name: "another key-encryption key does not open", test: testSealerForeignWrapper},
@@ -281,11 +282,27 @@ func openSealed(ctx context.Context, s secret.ItemSealer, ref secret.ItemRef, bi
 	}
 
 	out, err := io.ReadAll(rd)
-	if err != nil {
+	if err = errors.Join(err, rd.Close()); err != nil {
 		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 
 	return out, nil
+}
+
+// openRefused opens content that the case expects to be refused, and returns
+// the error. When the open succeeds, it closes the reader, so that the failed
+// case does not also keep a key.
+func openRefused(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding []byte) error {
+	t.Helper()
+
+	rd, err := s.OpenContent(t.Context(), ref, binding, strings.NewReader("x"))
+	if rd != nil {
+		if closeErr := rd.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}
+
+	return err
 }
 
 // keyBlobs lists the object keys of the item key directory of ns.
@@ -461,7 +478,7 @@ func testSealerNoKey(t *testing.T, r *SealerRig) {
 		t.Errorf("seal with no key err = %v, want ErrKeyNotFound", err)
 	}
 
-	if _, err := r.Sealer.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+	if err := openRefused(t, r.Sealer, ref, sealerBinding()); !errors.Is(
 		err, secret.ErrKeyNotFound,
 	) {
 		t.Errorf("open with no key err = %v, want ErrKeyNotFound", err)
@@ -610,7 +627,7 @@ func testSealerBinding(t *testing.T, r *SealerRig) {
 			t.Errorf("seal with a binding of %d bytes err = %v, want ErrInvalidBinding", len(binding), err)
 		}
 
-		if _, err := r.Sealer.OpenContent(t.Context(), ref, binding, strings.NewReader("x")); !errors.Is(
+		if err := openRefused(t, r.Sealer, ref, binding); !errors.Is(
 			err, secret.ErrInvalidBinding,
 		) {
 			t.Errorf("open with a binding of %d bytes err = %v, want ErrInvalidBinding", len(binding), err)
@@ -756,6 +773,69 @@ func testSealerSwappedBlob(t *testing.T, r *SealerRig) {
 	}
 }
 
+// reidIndex answers each read with the stored record of the request, but
+// with the record ID id.
+type reidIndex struct {
+	secret.ItemKeyIndex
+
+	id secret.ItemKeyID
+}
+
+func (i reidIndex) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	k, err := i.ItemKeyIndex.GetItemKey(ctx, ref)
+	k.ID = i.id
+
+	return k, err
+}
+
+// testSealerMovedRecordID sends a hostile record straight to the unwrap: the
+// record of the item names another record ID, and the wrapped key of the item
+// is copied to the blob key of that ID. The reference, the wrapper and the
+// blob version all match. Only the record ID in the associated data of the
+// wrapped key refuses it.
+func testSealerMovedRecordID(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	ref := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-1")
+	k := mustNewKey(t, r, ref)
+	sealed := sealItem(t, r, ref, sealerBinding(), []byte("content of pln-1"))
+
+	if got, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed); err != nil ||
+		string(got) != "content of pln-1" {
+		t.Fatalf("open with the right record = %q, %v", got, err)
+	}
+
+	moved := secret.NewItemKeyID()
+	from := blobOf(t, r, r.Acme.ID, k)
+
+	to, err := blob.ParseKey(strings.Replace(from.String(), "/"+string(k.ID)+"/", "/"+string(moved)+"/", 1))
+	if err != nil {
+		t.Fatalf("blob key of the moved record: %v", err)
+	}
+
+	if err := r.Blobs.Put(t.Context(), to, bytes.NewReader(readBlob(t, r, from))); err != nil {
+		t.Fatalf("put %s: %v", to, err)
+	}
+
+	lying := r.withIndex(reidIndex{ItemKeyIndex: r.Index, id: moved})
+
+	if _, err := openSealed(t.Context(), lying, ref, sealerBinding(), sealed); !errors.Is(err, secret.ErrDecrypt) {
+		t.Errorf("open with a wrapped key moved to another record err = %v, want ErrDecrypt", err)
+	}
+
+	if _, err := lying.SealContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+		err, secret.ErrDecrypt,
+	) {
+		t.Errorf("seal with a wrapped key moved to another record err = %v, want ErrDecrypt", err)
+	}
+
+	bad := r.withIndex(reidIndex{ItemKeyIndex: r.Index, id: "ik-a\x00b"})
+
+	if _, err := openSealed(t.Context(), bad, ref, sealerBinding(), sealed); !errors.Is(err, secret.ErrDecrypt) {
+		t.Errorf("open with a record ID that is not valid err = %v, want ErrDecrypt", err)
+	}
+}
+
 func testSealerOtherNamespaceBlob(t *testing.T, r *SealerRig) {
 	t.Helper()
 
@@ -866,7 +946,7 @@ func testSealerUnkeyed(t *testing.T, r *SealerRig) {
 		t.Errorf("seal with no wrapper err = %v, want ErrKeyNotConfigured", err)
 	}
 
-	if _, err := r.Unkeyed.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+	if err := openRefused(t, r.Unkeyed, ref, sealerBinding()); !errors.Is(
 		err, secret.ErrKeyNotConfigured,
 	) {
 		t.Errorf("open with no wrapper err = %v, want ErrKeyNotConfigured", err)
@@ -897,7 +977,7 @@ func testSealerBadRef(t *testing.T, r *SealerRig) {
 			t.Errorf("seal of %+v succeeded", ref)
 		}
 
-		if _, err := r.Sealer.OpenContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); err == nil {
+		if err := openRefused(t, r.Sealer, ref, sealerBinding()); err == nil {
 			t.Errorf("open of %+v succeeded", ref)
 		}
 	}

@@ -84,14 +84,19 @@ func authorizerOver(t *testing.T, s moveStore, port access.UnitCollections) (*ac
 	t.Helper()
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: port, Units: s, Principals: nil,
+		Store: s, Callers: s, Collections: port, Units: s, Principals: s,
 	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: s, Directory: s, Namespaces: s, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
+		Store: s, Directory: s, Namespaces: s, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: s, Roles: s, Callers: s, Principals: s, Collections: port, Units: s,
+		},
+		Now: nil, NewID: nil, BootstrapAdmins: nil,
+		LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

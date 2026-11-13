@@ -80,7 +80,7 @@ func TestWorkerMuxHoldsNoAPIRoute(t *testing.T) {
 	worker := newMuxServer(t, workerOnly()).ungated
 
 	for _, target := range []string{
-		"/api/server/namespaces", "/api/server/components", "/api/server/backups", "/api/user", "/api/stacks",
+		"/api/server/namespaces", "/api/dustpan/v1/components", "/api/server/backups", "/api/user", "/api/stacks",
 		"/api/v2/ping", "/api/inventory/units", "/api/dustpan/v1/units", "/tofu/state/x", "/runner/v1/claim",
 		"/.well-known/terraform.json", "/", "/console", "/nothing",
 		"/health/ready/../api/server/namespaces", "/health/ready/%2e%2e/api/server/namespaces",

@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
 // Prover seals and opens the proof of a commit that the adapter makes. The
-// proof binds the trailer, the base commit and the repository to a key that
+// proof binds the trailer, the base commit, the branch, the digest of the
+// changes and the repository to a key that
 // only the server holds, so that a person with push access, who knows the job
 // but not the key, cannot make a commit that FindCommit counts. The adapter
 // holds no key: the Prover keeps it.
@@ -42,15 +44,31 @@ const proofPrefix = proofKey + ": "
 const maxProofBytes = 1024
 
 // proofPurpose is the first part of each binding. It keeps a proof of a commit
-// from opening for any other use of the same key.
-const proofPurpose = "dustpan.forge.commit-proof.v1"
+// from opening for any other use of the same key. Version 2 binds the branch
+// and the digest of the changes too, so a proof of version 1 does not open.
+const proofPurpose = "dustpan.forge.commit-proof.v2"
+
+// proofLengthBase is the base of the length before each part of a binding.
+const proofLengthBase = 10
 
 // proofBinding returns the value that a proof binds: the repository, the
-// trailer line and the base commit. The parts are joined with a zero byte,
-// which none of them can hold: the repository ID has digits only, the trailer
-// has graphic characters only, and the base commit has hex digits only.
-func proofBinding(repoID, trailer, base string) []byte {
-	return []byte(proofPurpose + "\x00" + repoID + "\x00" + trailer + "\x00" + base)
+// trailer line, the base commit, the branch and the digest of the changes.
+// Each part has its length before it, in decimal digits and then a colon, so
+// the encoding alone keeps the parts apart.
+//
+// Defense in depth: checkCommit and checkFind refuse a part that is not valid
+// before it reaches the binding. The length prefix stays so that the encoding
+// does not rely on them.
+func proofBinding(repoID string, d forge.Delivery) []byte {
+	var b []byte
+
+	for _, p := range []string{proofPurpose, repoID, d.Trailer, d.Base, d.Branch, d.Changes} {
+		b = strconv.AppendInt(b, int64(len(p)), proofLengthBase)
+		b = append(b, ':')
+		b = append(b, p...)
+	}
+
+	return b
 }
 
 // proofLine returns the trailer line that holds proof.
@@ -133,14 +151,15 @@ func (f *gitHub) repositoryID(ctx context.Context, r repoName, bearer string) (s
 
 // delivery is what FindCommit looks for, and what a proof binds.
 type delivery struct {
-	repo    repoName
-	bearer  string
-	trailer string
-	base    string
+	forge.Delivery
+
+	repo   repoName
+	bearer string
 }
 
 // checkProof requires that the commit c has a proof that opens for the
-// trailer, the base commit and the repository of d. It is its own layer: it
+// trailer, the base commit, the branch, the digest of the changes and the
+// repository of d. It is its own layer: it
 // stops a commit that passes the checks of trustedCommit, and it does not rely
 // on them. A proof that does not open is forge.ErrUntrustedCommit. A Prover
 // that cannot decide gives forge.ErrUnavailable and no commit counts.
@@ -161,13 +180,14 @@ func (f *gitHub) checkProof(ctx context.Context, d delivery, c listedCommit) err
 		return err
 	}
 
-	opens, err := f.o.prover.Open(ctx, proofBinding(repoID, d.trailer, d.base), proof)
+	opens, err := f.o.prover.Open(ctx, proofBinding(repoID, d.Delivery), proof)
 	if err != nil {
 		return forge.Unavailable(0, "the proof of a commit cannot be checked")
 	}
 
 	if !opens {
-		return untrusted(c, "has a proof that does not open for this trailer, base commit and repository")
+		return untrusted(c,
+			"has a proof that does not open for this trailer, base commit, branch, change set and repository")
 	}
 
 	return nil

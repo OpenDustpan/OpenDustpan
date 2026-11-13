@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // checkApprovers returns a with each group name resolved to the ID of the
@@ -190,10 +191,17 @@ func (s *ConfigService) resolveGroups(ctx context.Context, names []string, fresh
 }
 
 // checkUserName returns an error that wraps ErrApprovers for a user name that is
-// not a name: one with a control or format character, or with white space at
-// its start or its end. The name of a user from an identity provider can hold
-// characters that an API subject cannot, so the check is not stricter.
+// not a name: one that is not UTF-8, one with a control or format character, or
+// with white space at its start or its end. The name of a user from an identity
+// provider can hold characters that an API subject cannot, so the check is not
+// stricter.
 func checkUserName(name string) error {
+	if !utf8.ValidString(name) {
+		// Defense in depth: Approvers.Validate refuses a name that is not
+		// UTF-8 first. This check stays so that a new caller cannot skip it.
+		return newApproversError(ApproversUserInvalid, "the user name is not UTF-8")
+	}
+
 	if strings.TrimSpace(name) != name {
 		return newApproversError(ApproversUserInvalid,
 			fmt.Sprintf("the user name %q starts or ends with white space", name))

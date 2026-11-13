@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -45,7 +46,7 @@ type WorkspaceService interface {
 	// GetByID returns the workspace with id, or workspace.ErrNotFound.
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// Create creates an unlocked workspace without state.
-	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	Create(ctx context.Context, ref workspace.Ref, p workspace.Placement) (workspace.Workspace, error)
 	// AdmitFirstWrite returns the error that WriteState would return for a
 	// workspace called ref that does not exist yet, and nil when the write could
 	// go on. It writes nothing.
@@ -108,6 +109,10 @@ type Config struct {
 	// It is required. A server whose store keeps no gates gives the guard of
 	// stategate.Off with its reason.
 	StateGuard stategate.Guard
+	// Placer chooses the collection of each new workspace from the first
+	// placement rule that matches it. Nil means the server keeps no placement
+	// rules: it then refuses to make a workspace.
+	Placer *tofuunit.Placer
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -128,7 +133,8 @@ type Handler struct {
 	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
 	onAuditFailure func()
 	// admit asks the state.write guard before each checked write.
-	admit *stategate.Admitter
+	admit  *stategate.Admitter
+	placer *tofuunit.Placer
 }
 
 // call is the authorized request that a route handler serves.
@@ -191,6 +197,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 
 		onAuditFailure: cfg.OnAuditFailure,
 		admit:          admit,
+		placer:         cfg.Placer,
 	}
 
 	if h.gate == nil {
@@ -357,11 +364,33 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyPlacement(err); ok {
+		return status, message
+	}
+
 	if status, message, ok := classifyNamespace(err); ok {
 		return status, message
 	}
 
 	return http.StatusInternalServerError, "internal error"
+}
+
+// classifyPlacement maps the errors of the placement of a unit to a status. The
+// message names the cause and the step that helps. ok is false for any other
+// error.
+func classifyPlacement(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, collection.ErrNoPlacement):
+		return http.StatusUnprocessableEntity, err.Error(), true
+	case errors.Is(err, tofuunit.ErrPlacementOff):
+		return http.StatusNotImplemented, tofuunit.ErrPlacementOff.Error(), true
+	case errors.Is(err, collection.ErrNotFound):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, collection.ErrNoCollection):
+		return http.StatusConflict, collection.ErrNoCollection.Error(), true
+	default:
+		return 0, "", false
+	}
 }
 
 // classifyNamespace maps the namespace errors of a write to a status. The

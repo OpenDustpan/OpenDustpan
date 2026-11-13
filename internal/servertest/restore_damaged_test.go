@@ -227,6 +227,8 @@ func newDamagedRig(t *testing.T, n int) damagedRig {
 		t.Fatalf("create namespace: status %d, body %s", status, body)
 	}
 
+	seedPlacement(t, c, 0, `{"name":"acme"}`)
+
 	names := make([]string, 0, n)
 
 	for i := range n {

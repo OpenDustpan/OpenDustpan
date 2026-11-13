@@ -233,7 +233,9 @@ func (h *Handler) viewCaller(
 			audited.Kind = ""
 		}
 
-		h.guard.Record(ctx, r, audited, refusal.Denial{Action: action, Object: obj, Reason: reason, Window: 0})
+		h.guard.Record(ctx, r, audited, refusal.Denial{
+			Action: action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		})
 
 		return nil, savedview.ErrNotPerson
 	}
@@ -418,12 +420,16 @@ func (h *Handler) listViewUnits(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	h.serveUnitList(w, r, p, ns, filterOfView(v.Query))
+	h.serveUnitList(w, r, p, ns, filterOfView(v.Query, ns))
 }
 
-// filterOfView returns the unit filter that a stored query means. It has the
-// meaning of the label and reference query values of the unit list.
-func filterOfView(q savedview.Query) unitFilter {
+// filterOfView returns the unit filter that a stored query means in the
+// namespace ns. It has the meaning of the label and reference query values of
+// the unit list. A reference of another namespace is dropped before the
+// constraint on the unit names is built, so it never selects a unit of ns with
+// the same name. A reference that does not parse selects nothing, so the
+// filter fails closed.
+func filterOfView(q savedview.Query, ns namespace.Name) unitFilter {
 	var f unitFilter
 
 	for _, l := range q.Labels {
@@ -435,13 +441,20 @@ func filterOfView(q savedview.Query) unitFilter {
 	}
 
 	for _, ref := range q.References {
-		// A reference was checked when the view was made, and the store checks it
-		// again on every read. A reference that does not parse here selects
-		// nothing, so the filter fails closed.
 		obj, err := identity.ParseObject(ref)
 		if err != nil {
 			f.references[ref] = coreinventory.UnitName{Tool: "", Name: ""}
 
+			continue
+		}
+
+		// Defense in depth: the store checks the namespace of each stored
+		// reference on every read; this check stays so that the filter does
+		// not rely on it. The constraint on the unit names drops the
+		// namespace, so a reference of another namespace would select a unit
+		// of ns with the same name. Drop it here, before the constraint is
+		// built.
+		if obj.Namespace() != ns {
 			continue
 		}
 

@@ -180,6 +180,10 @@ func (s *Server) bind(op *ber.Packet) *ber.Packet {
 
 	s.recordBind(dn)
 
+	if hook := s.currentBindHook(); hook != nil {
+		hook(dn)
+	}
+
 	if auth.ClassType != ber.ClassContext || auth.Tag != 0 {
 		return result(appBindResponse, resultAuthNotSupported, "only simple binds", "")
 	}

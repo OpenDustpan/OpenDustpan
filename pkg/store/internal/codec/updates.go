@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -39,6 +40,10 @@ type UpdateRow struct {
 	JournalVersion   int64
 	CheckpointBytes  int64
 	TokenID          string
+	// JobID is the job whose job token started the update, or empty. GitHead
+	// is the commit the client reported with the update, or empty.
+	JobID   string
+	GitHead string
 }
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
@@ -107,6 +112,8 @@ func ToUpdateRow(u stack.Update, stackID stack.ID) UpdateRow {
 		JournalVersion:   u.JournalVersion,
 		CheckpointBytes:  u.CheckpointBytes,
 		TokenID:          u.TokenID,
+		JobID:            u.JobID,
+		GitHead:          u.GitHead,
 	}
 }
 
@@ -146,6 +153,8 @@ func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 		JournalVersion:  row.JournalVersion,
 		CheckpointBytes: row.CheckpointBytes,
 		TokenID:         row.TokenID,
+		JobID:           row.JobID,
+		GitHead:         row.GitHead,
 	}, nil
 }
 
@@ -256,7 +265,7 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 		BlobSize:      row.BlobSize,
 		BlobMD5:       sum,
 		// The row does not keep the start of the write attempt.
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 

@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -31,6 +31,12 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
+
+# The ref that nolint-check compares the branch with.
+BASE ?= origin/main
+
+nolint-check: ## Fail when the lines added since BASE (default origin/main) carry a suppression marker. Not part of check: CI skips it for the label nolint-approved.
+	./scripts/check-nolint.sh '$(BASE)'
 
 # Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
 LINT_FLAGS ?=
@@ -63,12 +69,18 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The second scan runs the local rules in .semgrep. It ignores .semgrepignore
 # files and the Semgrep default ignores, which skip test files, because the
 # rules in .semgrep are about test files.
+#
+# The third command runs the test cases of the rule
+# tests-no-wall-clock-assertion: each ruleid line must match and each ok line
+# must not.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--x-ignore-semgrepignore-files --config .semgrep .
+	semgrep --test --metrics=off --disable-version-check \
+		--config .semgrep/tests-no-wall-clock-assertion.yml .semgrep/tests-no-wall-clock-assertion.go
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -107,16 +119,18 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 
 # Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
-# that could not be verified (for example, the provider did not answer), so a
-# network failure can fail this target. Exit code 183 means a secret was found.
+# that could not be verified (for example, the provider did not answer).
+# Exit code 1 means a verified secret, or an unknown result after three runs.
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Each entry stays only because an old commit holds a fake credential in that
 # path. A test builds a fake credential with internal/fakecred, and a raw one
 # carries a trufflehog:ignore tag with a reason. Do not add a path.
 # Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
+# An unknown result gets up to two more runs, and a verified result fails at once.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
+	python3 -I scripts/trufflehog-gate.py --selftest
+	python3 -I scripts/trufflehog-gate.py scan -- trufflehog git file://. --branch=HEAD --results=verified,unknown --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).

@@ -174,7 +174,7 @@ func seedSealedState(
 		t.Fatalf("parse name: %v", err)
 	}
 
-	ws, err := sealed.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := sealed.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, st, "acme"))
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
