@@ -9,12 +9,15 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -31,18 +34,31 @@ import (
 type StorePorts interface {
 	UnitStorePorts
 	AccessStorePorts
+	LocalUserStorePorts
 	InstallationStorePorts
 }
 
-// UnitStorePorts holds the ports of namespaces, stacks, secrets and
-// workspaces.
+// UnitStorePorts holds the ports of namespaces, stacks, secrets, workspaces,
+// collections and placement rules.
 type UnitStorePorts interface {
 	namespace.Store
+	stackStorePorts
+	secret.KeyStore
+	workspaceStorePorts
+	collection.Store
+	collection.PlacementStore
+}
+
+// stackStorePorts holds the ports of the stacks.
+type stackStorePorts interface {
 	stack.Store
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
-	secret.KeyStore
+}
+
+// workspaceStorePorts holds the ports of the workspaces.
+type workspaceStorePorts interface {
 	workspace.Store
 	workspace.StateStore
 }
@@ -56,6 +72,15 @@ type AccessStorePorts interface {
 	accesstoken.Store
 	accesstoken.HostStore
 	tempadmin.Store
+}
+
+// LocalUserStorePorts holds the ports of the local users, their passwords and
+// their grants.
+type LocalUserStorePorts interface {
+	localuser.Store
+	localuser.PasswordStore
+	access.GrantStore
+	access.GrantLookups
 }
 
 // InstallationStorePorts holds the ports of the installation.

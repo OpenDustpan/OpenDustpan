@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/fakecred"
+	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/localuser"
 )
 
 // newBuiltinSQLiteServer opens a server over the built-in SQLite store at path,
@@ -200,6 +203,57 @@ func TestOpenStore(t *testing.T) {
 			t.Parallel()
 
 			checkOpenStoreRefused(t, tc.database)
+		})
+	}
+}
+
+// TestOpenStoreKeepsEveryPortOfDev proves that the handle of an open SQLite
+// store satisfies every port that the dev command asserts on it.
+func TestOpenStoreKeepsEveryPortOfDev(t *testing.T) {
+	t.Parallel()
+
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the store: %v", closeErr)
+		}
+	})
+
+	var handle any = st
+
+	cases := []struct {
+		name  string
+		holds func(any) bool
+	}{
+		{
+			name:  "collection.Store",
+			holds: func(value any) bool { _, ok := value.(collection.Store); return ok },
+		},
+		{
+			name:  "collection.PlacementStore",
+			holds: func(value any) bool { _, ok := value.(collection.PlacementStore); return ok },
+		},
+		{
+			name:  "localuser.PasswordStore",
+			holds: func(value any) bool { _, ok := value.(localuser.PasswordStore); return ok },
+		},
+		{
+			name:  "localusersvc.DemoGrants",
+			holds: func(value any) bool { _, ok := value.(localusersvc.DemoGrants); return ok },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !tc.holds(handle) {
+				t.Fatalf("the built-in store does not keep %s", tc.name)
+			}
 		})
 	}
 }
