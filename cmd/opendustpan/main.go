@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -324,6 +325,8 @@ type serveFlags struct {
 	planRetention, jobLogRetention string
 	jobRetention                   history.RetentionSettings
 	auditSinks                     []string
+	auditSinkAllowedRanges         string
+	auditSinkRanges                []netip.Prefix
 	// destinationPorts holds the ports, besides 443, that a notification
 	// destination may use.
 	destinationPorts string
@@ -401,6 +404,13 @@ func (f *serveFlags) check() error {
 	if _, err := egress.ParseAllowedRanges(splitList(f.gitHostAllowedRanges)); err != nil {
 		return fmt.Errorf("invalid --git-host-allowed-ranges: %w", err)
 	}
+
+	ranges, parseErr := egress.ParseAllowedRanges(splitList(f.auditSinkAllowedRanges))
+	if parseErr != nil {
+		return fmt.Errorf("invalid --audit-sink-allowed-ranges: %w", parseErr)
+	}
+
+	f.auditSinkRanges = ranges
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -483,6 +493,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-sink-allowed-ranges").String(fs, &f.auditSinkAllowedRanges)
 	cli.ByFlag("destination-ports").String(fs, &f.destinationPorts)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
 	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
@@ -906,7 +917,7 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
-	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv, f.auditSinkRanges)
 	if err != nil {
 		return err
 	}
@@ -1555,7 +1566,9 @@ func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 		return appLog{}, err
 	}
 
-	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, os.LookupEnv)
+	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, sinkEnv{
+		lookup: os.LookupEnv, ranges: f.auditSinkRanges,
+	})
 }
 
 // store is the opened built-in store chosen by --database.

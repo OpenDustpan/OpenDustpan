@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -242,6 +243,7 @@ type serverStore interface {
 // serverBuild groups the handler, blob store and database proxy newServer
 // opens, so the constructor stays within the result limit.
 type serverBuild struct {
+	srv     *dustpan.Server
 	handler http.Handler
 	store   serverStore
 	blobs   blob.Store
@@ -281,6 +283,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	return envInput{
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -347,6 +350,28 @@ func NewEnvWithSinkSenders(
 // it does for the in-process server only.
 func SinkSendersApply() bool { return !UseBinaryServer() }
 
+// NewEnvWithAuditSinks starts an in-process server as NewEnv does, with the
+// audit sinks set. The server runs its own listener, because the audit
+// shipper runs only in Server.Run. The server binary takes its sinks through
+// --audit-sink, so this constructor refuses it.
+func NewEnvWithAuditSinks(
+	ctx context.Context,
+	tb testing.TB,
+	store Store,
+	sinks ...audit.ShipSink,
+) *Env {
+	tb.Helper()
+
+	if UseBinaryServer() {
+		tb.Fatalf("NewEnvWithAuditSinks needs the in-process server")
+	}
+
+	in := defaultEnvInput(tb, NoCLI(), store)
+	in.auditSinks = sinks
+
+	return startEnv(ctx, in)
+}
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
@@ -381,6 +406,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 	return envInput{
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -444,6 +470,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	in := envInput{
 		deltaCutoff:            cutoff,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -470,6 +497,19 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	return newInprocessEnv(ctx, in)
 }
 
+// inprocessServer is the address, client and cleanup of the in-process
+// server of an env. The handler mode serves the handler directly. The run
+// mode serves its own listener, so the audit shipper of the server runs.
+type inprocessServer struct {
+	URL    string
+	Client *http.Client
+	// ts is the handler server of the direct mode, or nil in the run mode.
+	ts *httptest.Server
+	// close is the cleanup of the direct mode. The run mode registers its own
+	// cleanup before it returns, so this is nil there.
+	close func()
+}
+
 // startInprocessServer builds the in-process server of in and starts it.
 // The handler is set before the server starts. The listener exists
 // already, so the sign-in knows its public URL before the build.
@@ -477,9 +517,13 @@ func startInprocessServer(
 	ctx context.Context,
 	in envInput,
 	member string,
-) (*httptest.Server, serverBuild, *signInSetup) {
+) (*inprocessServer, serverBuild, *signInSetup) {
 	tb := in.tb
 	tb.Helper()
+
+	if len(in.auditSinks) > 0 {
+		return startRunInprocessServer(ctx, in, member)
+	}
 
 	var handler http.Handler
 
@@ -513,6 +557,8 @@ func startInprocessServer(
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
 		claimers:          claimers,
+		auditSinks:        in.auditSinks,
+		listener:          nil,
 	})
 	build.claimers = claimers
 
@@ -524,7 +570,75 @@ func startInprocessServer(
 		ts.Start()
 	}
 
-	return ts, build, signIn
+	return &inprocessServer{URL: ts.URL, Client: ts.Client(), ts: ts, close: ts.Close}, build, signIn
+}
+
+// startRunInprocessServer starts an in-process server that runs its own
+// listener, so Server.Run starts the audit shipper. The handler mode cannot
+// ship audit entries: the shipper runs only in Server.Run.
+func startRunInprocessServer(
+	ctx context.Context,
+	in envInput,
+	member string,
+) (*inprocessServer, serverBuild, *signInSetup) {
+	tb := in.tb
+	tb.Helper()
+
+	var lc net.ListenConfig
+
+	ln, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatalf("listen for the in-process server: %v", err)
+	}
+
+	claimers := newClaimerSlot()
+	build := newServer(ctx, tb, serverArgs{
+		store:             in.store,
+		dbPath:            filepath.Join(in.dir, "dustpan.db"),
+		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB, member: member},
+		deltaCutoff:       in.deltaCutoff,
+		disableJournaling: in.disableJournaling,
+		ipAllowlists:      in.ipAllowlists,
+		signIn:            nil,
+		publicURL:         "",
+		sinkSenders:       in.sinkSenders,
+		issuer:            in.issuer,
+		claimers:          claimers,
+		auditSinks:        in.auditSinks,
+		listener:          ln,
+	})
+	build.claimers = claimers
+
+	serverURL := "http://" + ln.Addr().String()
+	client := &http.Client{Timeout: commandTimeout}
+
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan error, 1)
+
+	go func() { done <- build.srv.Run(runCtx) }()
+
+	tb.Cleanup(func() {
+		cancel()
+
+		select {
+		case runErr := <-done:
+			if runErr != nil {
+				tb.Errorf("run the in-process server: %v", runErr)
+			}
+		case <-time.After(commandTimeout):
+			tb.Errorf("the in-process server did not stop")
+
+			if closeErr := ln.Close(); closeErr != nil {
+				tb.Logf("close the in-process listener: %v", closeErr)
+			}
+		}
+	})
+
+	var logs lockedBuffer
+
+	waitForBackend(ctx, tb, serverURL, &logs)
+
+	return &inprocessServer{URL: serverURL, Client: client, ts: nil, close: nil}, build, nil
 }
 
 // newInprocessEnv starts an in-process server for cli and returns the
@@ -535,15 +649,17 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 
 	member := newToken(tb)
 
-	ts, build, signIn := startInprocessServer(ctx, in, member)
+	srv, build, signIn := startInprocessServer(ctx, in, member)
 
-	tb.Cleanup(ts.Close)
+	if srv.close != nil {
+		tb.Cleanup(srv.close)
+	}
 
-	client := ts.Client()
+	client := srv.Client
 	client.Timeout = commandTimeout
 
 	env := &Env{
-		URL:           ts.URL,
+		URL:           srv.URL,
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
@@ -584,7 +700,11 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 
 	if env.tls {
-		env.writeTofuFiles(tb, ts)
+		if srv.ts == nil {
+			tb.Fatal("the run mode in-process server speaks plain HTTP only")
+		}
+
+		env.writeTofuFiles(tb, srv.ts)
 	}
 
 	// A new installation holds no namespace: the first one is created through
@@ -686,6 +806,12 @@ type serverArgs struct {
 	// claimers keeps the job claimer that the in-process server builds, or
 	// is nil.
 	claimers *claimerSlot
+	// auditSinks receive a copy of each audit entry of the in-process server.
+	auditSinks []audit.ShipSink
+	// listener makes the in-process server run its own listener for the
+	// audit shipper, instead of serving its handler directly. It is nil for
+	// the handler mode.
+	listener net.Listener
 }
 
 // profileStoreOptions returns the option that gives the in-process server the
@@ -752,6 +878,42 @@ func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, 
 	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
 
+// inprocessRunOptions returns the options of the in-process server. The run
+// mode gets a listener and every component, so Server.Run starts the audit
+// shipper. The handler mode runs the api component only.
+func inprocessRunOptions(args serverArgs) []dustpan.Option {
+	opts := []dustpan.Option{
+		dustpan.WithAuditSinks(args.auditSinks...),
+		dustpan.WithListener(args.listener),
+		dustpan.WithComponents(dustpan.AllComponents()),
+	}
+
+	if args.listener == nil {
+		return opts[:1]
+	}
+
+	return opts
+}
+
+// checkServerStart runs the start-up checks that the handler mode must run
+// here, because it serves the handler without Server.Run.
+func checkServerStart(ctx context.Context, tb testing.TB, st serverStore, wrapper secret.Wrapper) {
+	tb.Helper()
+
+	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
+		tb.Fatalf("check key wrapper: %v", checkErr)
+	}
+
+	claimer, ok := st.(installation.KindStore)
+	if !ok {
+		tb.Fatal("the store cannot claim an installation kind")
+	}
+
+	if _, claimErr := claimer.ClaimKind(ctx, installation.KindProduction); claimErr != nil {
+		tb.Fatalf("claim the installation kind: %v", claimErr)
+	}
+}
+
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
@@ -772,29 +934,12 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("key wrapper: %v", err)
 	}
 
-	// The start-up check refuses a key-encryption key that opens less than
-	// every wrapped key in the database (ADR 23). The harness serves the
-	// handler directly, so it runs the check here. Servers that run
-	// Server.Run get the same check at start.
-	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
-		tb.Fatalf("check key wrapper: %v", checkErr)
-	}
-
-	// The harness serves the handler directly, so it claims the installation
-	// kind that Server.Run claims at start. The backup records it.
-	claimer, ok := st.(installation.KindStore)
-	if !ok {
-		tb.Fatal("the store cannot claim an installation kind")
-	}
-
-	if _, claimErr := claimer.ClaimKind(ctx, installation.KindProduction); claimErr != nil {
-		tb.Fatalf("claim the installation kind: %v", claimErr)
-	}
+	checkServerStart(ctx, tb, st, wrapper)
 
 	blobs := openTestBlobStore(ctx, tb, args.dbPath)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
-	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
+	opts := append(ipAllowlistOptions(
 		st,
 		args,
 		append(
@@ -818,15 +963,21 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 				dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 			}...,
 		),
-	), args.signIn.options()...)...)
+	), args.signIn.options()...)
+
+	opts = append(opts, inprocessRunOptions(args)...)
+
+	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
 	}
 
-	startServing(ctx, tb, srv)
+	if args.listener == nil {
+		startServing(ctx, tb, srv)
+	}
 
 	return serverBuild{
-		handler: srv.Handler(), store: st,
+		srv: srv, handler: srv.Handler(), store: st,
 		blobs:     blobs,
 		dbProxy:   dbProxy,
 		dbURL:     dbURL,

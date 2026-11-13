@@ -621,7 +621,7 @@ func testStackRename(t *testing.T, s Store) {
 		t.Fatalf("SetUnit: %v", err)
 	}
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("RenameStack: %v", err)
 	}
 

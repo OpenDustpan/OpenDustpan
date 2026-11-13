@@ -25,10 +25,10 @@ differently.
   (`stacks.id`).
 - `pkg/store/postgres/migrations/0168_baseline.sql:122`
   `namespace_id text NOT NULL` (`blob_purges.namespace_id`).
-- `pkg/store/sqlite/migrations/0168_baseline.sql:1497`
+- `pkg/store/sqlite/migrations/0168_baseline.sql:1491`
   `CREATE UNIQUE INDEX stacks_id ON stacks (id);`. It lets one row with `''`
   exist, not a second one.
-- `pkg/store/sqlite/migrations/0168_baseline.sql:1711-1721` the triggers
+- `pkg/store/sqlite/migrations/0168_baseline.sql:1705-1715` the triggers
   `namespaces_id_insert` and `namespaces_id_update` refuse an id that is not
   `ns-?*`. The empty string fails that test. `stacks` and `blob_purges` have no
   such trigger.
@@ -41,9 +41,9 @@ differently.
   `audit_entries.token_id` :242, `audit_entries.request_id` :253,
   `audit_entries.object_id` :256, `audit_entries.job_id` :256,
   `blob_purges.namespace_id` :333, `runner_claims.job_id` :766,
-  `passkey_challenges.principal_id` :1364,
-  `passkey_challenges.pending_id` :1365,
-  `passkey_challenges.session_id` :1366.
+  `passkey_challenges.principal_id` :1358,
+  `passkey_challenges.pending_id` :1359,
+  `passkey_challenges.session_id` :1360.
   Only three differ from PostgreSQL: `namespaces.id`, `stacks.id` and
   `blob_purges.namespace_id`. The other sixteen are optional references where
   `''` means none, and PostgreSQL has the same `DEFAULT ''`. The fix leaves

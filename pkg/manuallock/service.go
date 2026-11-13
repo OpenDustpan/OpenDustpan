@@ -40,9 +40,13 @@ type Config struct {
 type PhaseClock interface {
 	// PhaseStartedAt returns when the current phase of the job jobID started,
 	// if that phase is live (dispatched, running or canceling) and the job is
-	// a job of unit. It returns ErrNoPhase for an unknown job, for a job of
-	// another unit and for a job with no live phase.
-	PhaseStartedAt(ctx context.Context, jobID string, unit collection.UnitRef) (time.Time, error)
+	// a job of unit. It compares the stable namespace ID and unit ID of unit,
+	// never the name. An empty namespace ID matches no job. An empty unit ID is
+	// for a unit that does not exist yet, and the job must then carry the same
+	// namespace ID, tool and name. It returns ErrNoPhase for an unknown job,
+	// for a job of another unit, for an empty namespace ID and for a job with
+	// no live phase.
+	PhaseStartedAt(ctx context.Context, jobID string, unit Unit) (time.Time, error)
 }
 
 // ErrNoPhase reports that a job has no live phase on the unit that a lock
@@ -239,20 +243,22 @@ func (s *Service) NamespaceLock(ctx context.Context, ns namespace.Name) (Lock, e
 }
 
 // CoveringFor is Covering for the lock request of the caller that holds the job
-// token of the job jobID (empty for any other caller). A lock request of a job
-// whose phase on the unit started before the manual lock passes: it answers
-// ErrNotLocked. The phase runs to its end, and so do its tool locks. Every other
-// case answers as Covering does. The service fails closed: a missing phase
-// clock, an error of the clock, a phase that started at or after the lock and a
-// time of zero all keep the lock. When several locks cover the unit, the phase
-// passes only if it started before each of them, and the answer is the first lock
-// that it did not start before.
+// token of the job jobID (empty for any other caller). It covers a unit that
+// exists, and so has a unit ID. A lock request of a job whose phase on the unit
+// started before the manual lock passes: it answers ErrNotLocked. The phase
+// runs to its end, and so do its tool locks. Every other case answers as
+// Covering does. The service fails closed: a missing phase clock, an error of
+// the clock, a unit with an empty namespace ID, a unit with an empty unit ID, a
+// phase that started at or after the lock and a time of zero all keep the
+// lock. When several locks cover the unit, the phase passes only if it started
+// before each of them, and the answer is the first lock that it did not start
+// before.
 //
 // Defense in depth: the authenticator sets the job ID only for a verified job
 // token, and the clock checks that the job is live on this unit. This check
 // stays so that a caller which sets a job ID by mistake cannot pass a lock.
-func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (Lock, error) {
-	locks, err := s.store.CoveringLocks(ctx, unit)
+func (s *Service) CoveringFor(ctx context.Context, unit Unit, jobID string) (Lock, error) {
+	locks, err := s.store.CoveringLocks(ctx, unit.Ref)
 	if err != nil {
 		return Lock{}, err
 	}
@@ -261,15 +267,23 @@ func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobI
 		return Lock{}, ErrNotLocked
 	}
 
+	// An existing unit always has a unit ID. An empty ID fails closed: it keeps
+	// the first lock and never asks the clock.
+	if unit.UnitID == "" {
+		return locks[0], nil
+	}
+
 	return s.afterPhase(ctx, locks, unit, jobID)
 }
 
 // NamespaceLockFor is CoveringFor for a unit that does not exist yet. A new
 // unit has no inventory row, so it is in no collection and has no lock of its
-// own: only the lock of its namespace covers it. A job whose phase on the unit
-// started before that lock passes it, as it does in CoveringFor.
-func (s *Service) NamespaceLockFor(ctx context.Context, unit collection.UnitRef, jobID string) (Lock, error) {
-	lock, err := s.NamespaceLock(ctx, unit.Namespace)
+// own: only the lock of its namespace covers it. Its unit ID is empty, so the
+// phase clock matches the job by the namespace ID, the tool and the name. A job
+// whose phase on the unit started before that lock passes it, as it does in
+// CoveringFor.
+func (s *Service) NamespaceLockFor(ctx context.Context, unit Unit, jobID string) (Lock, error) {
+	lock, err := s.NamespaceLock(ctx, unit.Ref.Namespace)
 	if err != nil {
 		return Lock{}, err
 	}
@@ -281,10 +295,12 @@ func (s *Service) NamespaceLockFor(ctx context.Context, unit collection.UnitRef,
 // started, for a caller that keeps a manual lock in a transaction of its own
 // and applies the rule of CoveringFor there: the phase passes a lock that came
 // after it. It returns the zero time, which passes no lock, for an empty job
-// ID, for a service without a phase clock and for a clock that fails. The
-// answer fails closed in the same way as CoveringFor.
-func (s *Service) PhaseStart(ctx context.Context, unit collection.UnitRef, jobID string) time.Time {
-	if jobID == "" || s.phases == nil {
+// ID, for a unit with an empty namespace ID, for a service without a phase
+// clock and for a clock that fails. An empty unit ID is for a unit that does
+// not exist yet, and the clock still answers for it. The answer fails closed
+// in the same way as CoveringFor.
+func (s *Service) PhaseStart(ctx context.Context, unit Unit, jobID string) time.Time {
+	if jobID == "" || s.phases == nil || unit.NamespaceID == "" {
 		return time.Time{}
 	}
 
@@ -302,7 +318,7 @@ func (s *Service) PhaseStart(ctx context.Context, unit collection.UnitRef, jobID
 // lock in place. The phase passes only when it started before every lock that
 // covers the unit, so a new lock on a wider object never lifts a refusal that an
 // older lock gives.
-func (s *Service) afterPhase(ctx context.Context, locks []Lock, unit collection.UnitRef, jobID string) (Lock, error) {
+func (s *Service) afterPhase(ctx context.Context, locks []Lock, unit Unit, jobID string) (Lock, error) {
 	started := s.PhaseStart(ctx, unit, jobID)
 	if started.IsZero() {
 		return locks[0], nil

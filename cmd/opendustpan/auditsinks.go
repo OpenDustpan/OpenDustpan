@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -17,8 +19,10 @@ import (
 	"syscall"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/objectstore"
@@ -71,8 +75,8 @@ type openedSinks struct {
 
 // sinkConfig holds what openSink needs beyond the spec: the setting that
 // names the sink (for errors), the live blob store (nil refuses blob:), the
-// default syslog facility, the variables of the webhook secret and the
-// variables of the OTLP headers.
+// default syslog facility, the variables of the webhook secret, the
+// variables of the OTLP headers, the egress rules and the client options.
 type sinkConfig struct {
 	setting        error
 	blobs          blob.Store
@@ -82,10 +86,22 @@ type sinkConfig struct {
 	headersEnv     string
 	headersFileEnv string
 	facility       int
+	rules          egress.Rules
+	options        egresshttp.Options
+}
+
+// sinkRules answers the egress rules of a sink: the ranges that the operator
+// allows, and the zero value of every other rule.
+func sinkRules(ranges []netip.Prefix) egress.Rules {
+	var rules egress.Rules
+
+	rules.Allow = ranges
+
+	return rules
 }
 
 // auditSinkConfig answers the sink configuration of --audit-sink.
-func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkConfig {
+func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool), ranges []netip.Prefix) sinkConfig {
 	return sinkConfig{
 		setting:        errAuditSink,
 		blobs:          blobs,
@@ -95,6 +111,8 @@ func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkC
 		headersEnv:     otlpHeadersEnvVar,
 		headersFileEnv: otlpHeadersFileEnvVar,
 		facility:       syslog.FacilityLogAudit,
+		rules:          sinkRules(ranges),
+		options:        egresshttp.Options{RootCAs: nil, Resolver: nil},
 	}
 }
 
@@ -104,7 +122,9 @@ func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkC
 // one, the kind is the name (file, syslog, webhook or blob), so two sinks
 // of one kind need names. blobs is the live blob store, which blob: sinks
 // write to. On error it closes every sink it opened.
-func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (string, bool)) (openedSinks, error) {
+func openAuditSinks(
+	items []string, blobs blob.Store, lookup func(string) (string, bool), ranges []netip.Prefix,
+) (openedSinks, error) {
 	var out openedSinks
 
 	for _, item := range items {
@@ -116,7 +136,7 @@ func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (strin
 		named := splitSinkName(item)
 		name, spec := named.name, named.spec
 
-		sink, interval, err := openSink(spec, auditSinkConfig(blobs, lookup))
+		sink, interval, err := openSink(spec, auditSinkConfig(blobs, lookup, ranges))
 		if err != nil {
 			return openedSinks{}, errors.Join(err, out.close())
 		}
@@ -325,15 +345,31 @@ var (
 	errSecretControlChar = errors.New("the secret holds a control character")
 )
 
+// sinkClient answers the client of a webhook or OTLP sink: the egress rules
+// on the URL of each request and on each resolved address, no redirect,
+// https only, and the request timeout.
+func sinkClient(cfg sinkConfig) *http.Client {
+	return egresshttp.ClientWith(cfg.rules, egress.NoRedirect, egress.HTTPSOnly, cfg.options)
+}
+
 // openWebhookSink opens a webhook sink on rawURL with the secret of the
 // variable cfg.secretEnv or of the file that cfg.secretFileEnv names.
 func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
+	// Defense in depth: the client checks the URL of each request and the
+	// dial guard checks each resolved address; this check stays so that a
+	// blocked URL stops the start.
+	if err := cfg.rules.CheckURL(rawURL, egress.HTTPSOnly); err != nil {
+		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
+	}
+
 	secret, err := webhookSecretFrom(cfg.lookup, cfg.secretEnv, cfg.secretFileEnv)
 	if err != nil {
 		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
 
-	s, err := webhook.New(webhook.Config{Client: nil, URL: rawURL, Secret: secret, Timeout: 0})
+	s, err := webhook.New(webhook.Config{
+		Client: sinkClient(cfg), URL: rawURL, Secret: secret, Timeout: 0,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
@@ -346,13 +382,20 @@ func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
 // sink with no headers is valid, because a collector in a private network
 // can need none.
 func openOTLPSink(rawURL string, cfg sinkConfig) (*otlp.Sink, error) {
+	// Defense in depth: the client checks the URL of each request and the
+	// dial guard checks each resolved address; this check stays so that a
+	// blocked URL stops the start.
+	if err := cfg.rules.CheckURL(rawURL, egress.HTTPSOnly); err != nil {
+		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
+	}
+
 	headers, err := otlpHeadersFrom(cfg.lookup, cfg.headersEnv, cfg.headersFileEnv)
 	if err != nil {
 		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
 	}
 
 	s, err := otlp.New(otlp.Config{
-		Client: nil, Headers: headers, URL: rawURL, ServiceName: "", Timeout: 0,
+		Client: sinkClient(cfg), Headers: headers, URL: rawURL, ServiceName: "", Timeout: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w otlp: %w", cfg.setting, err)
