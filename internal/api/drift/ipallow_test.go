@@ -1,11 +1,14 @@
 package drift_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -281,4 +284,54 @@ func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
 	}
 
 	checkDenialEntries(t, store.entries, 1, refusal.ReasonFailed, "")
+}
+
+// checkSameAnswer checks that two answers have the same status, body and
+// headers.
+func checkSameAnswer(t *testing.T, a, b *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if a.Code != b.Code {
+		t.Fatalf("status = %d, want %d", a.Code, b.Code)
+	}
+
+	if !bytes.Equal(a.Body.Bytes(), b.Body.Bytes()) {
+		t.Fatalf("body = %q, want %q", a.Body.String(), b.Body.String())
+	}
+
+	if !maps.EqualFunc(a.Header(), b.Header(), slices.Equal) {
+		t.Fatalf("headers = %v, want %v", a.Header(), b.Header())
+	}
+}
+
+// TestAuthorizerErrorAnswersTheSameForAnyNamespace proves that an authorizer
+// error answers the same 500 to a request for a namespace that exists and to
+// one for a namespace that does not exist, so the answer does not tell whether
+// the namespace exists.
+func TestAuthorizerErrorAnswersTheSameForAnyNamespace(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+	handler := newRefusalHandler(t, authorizationFailed{}, store, writingLimiter())
+
+	send := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+		req.Header.Set("Authorization", "token "+testToken)
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec
+	}
+
+	known := send(driftURL)
+	unknown := send("/api/dustpan/v1/namespaces/absent/units/" + testUnitID + "/drift")
+
+	checkSameAnswer(t, known, unknown)
+
+	for _, rec := range []*httptest.ResponseRecorder{known, unknown} {
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+		}
+	}
 }

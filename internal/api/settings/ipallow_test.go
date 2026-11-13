@@ -1,11 +1,14 @@
 package settings_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -306,4 +309,52 @@ func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
 	}
 
 	checkDenialEntries(t, store.denied(), 1, refusal.ReasonFailed, "")
+}
+
+// checkSameAnswer checks that two answers have the same status, body and
+// headers.
+func checkSameAnswer(t *testing.T, a, b *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if a.Code != b.Code {
+		t.Fatalf("status = %d, want %d", a.Code, b.Code)
+	}
+
+	if !bytes.Equal(a.Body.Bytes(), b.Body.Bytes()) {
+		t.Fatalf("body = %q, want %q", a.Body.String(), b.Body.String())
+	}
+
+	if !maps.EqualFunc(a.Header(), b.Header(), slices.Equal) {
+		t.Fatalf("headers = %v, want %v", a.Header(), b.Header())
+	}
+}
+
+// TestAuthorizerErrorAnswersTheSameForAnyNamespace proves that an authorizer
+// error answers the same 500 to a request for a namespace that exists and to
+// one for a namespace that does not exist, so the answer does not tell whether
+// the namespace exists.
+func TestAuthorizerErrorAnswersTheSameForAnyNamespace(t *testing.T) {
+	t.Parallel()
+
+	const base = "/api/dustpan/v1/namespaces/"
+
+	store := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+	handler := newRefusalHandler(t, authorizationFailed{}, store, writingLimiter())
+
+	known := serve(t, handler, request{
+		method: http.MethodGet, path: base + "acme/units/" + netID + "/settings", token: testToken, body: "",
+		header: nil,
+	})
+	unknown := serve(t, handler, request{
+		method: http.MethodGet, path: base + "absent/units/" + netID + "/settings", token: testToken, body: "",
+		header: nil,
+	})
+
+	checkSameAnswer(t, known, unknown)
+
+	for _, rec := range []*httptest.ResponseRecorder{known, unknown} {
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+		}
+	}
 }
