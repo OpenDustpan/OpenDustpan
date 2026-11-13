@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/objectcontext"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // addressRefused refuses every check as the IP allowlist gate does for a
@@ -28,6 +30,21 @@ func (addressRefused) Authorize(context.Context, identity.Principal, identity.Ac
 }
 
 func (addressRefused) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{}, errNoListing
+}
+
+// errAuthorizationFailed is the error of an authorizer that cannot decide.
+var errAuthorizationFailed = errors.New("authorizer is unavailable")
+
+// authorizationFailed fails every check with an error that is neither a denial
+// nor an address refusal.
+type authorizationFailed struct{}
+
+func (authorizationFailed) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return errAuthorizationFailed
+}
+
+func (authorizationFailed) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
 	return identity.Scope{}, errNoListing
 }
 
@@ -83,8 +100,9 @@ func writingLimiter() *denylimit.Limiter {
 }
 
 // checkDenialEntries checks the denial entries of one request: the count, and
-// the outcome and the action.
-func checkDenialEntries(t *testing.T, got []audit.Entry, want int) {
+// the outcome, the action, the start of the reason when reason is not empty,
+// and the namespace when scope is not empty.
+func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string, scope namespace.Name) {
 	t.Helper()
 
 	if len(got) != want {
@@ -94,6 +112,14 @@ func checkDenialEntries(t *testing.T, got []audit.Entry, want int) {
 	for i := range got {
 		if got[i].Outcome != audit.OutcomeDenied || got[i].Action != string(identity.ActionNamespaceRead) {
 			t.Errorf("entry %d = %+v, want a denial of %s", i, got[i], identity.ActionNamespaceRead)
+		}
+
+		if reason != "" && !strings.HasPrefix(got[i].Reason, reason) {
+			t.Errorf("entry %d has reason %q, want the prefix %q", i, got[i].Reason, reason)
+		}
+
+		if scope != "" && got[i].Namespace != scope {
+			t.Errorf("entry %d has namespace %q, want %q", i, got[i].Namespace, scope)
 		}
 	}
 }
@@ -115,18 +141,23 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 		path    string
 		status  int
 		entries int
+		reason  string
+		scope   namespace.Name
 	}{
 		{
 			name: "address outside the allowlist", authz: addressRefused{},
 			path: base + "acme/units/" + testUnitID + "/context", status: http.StatusForbidden, entries: 1,
+			reason: "", scope: "",
 		},
 		{
 			name: "policy refuses the namespace read", authz: newAuthorizer(),
 			path: base + "acme/units/" + testUnitID + "/context", status: http.StatusNotFound, entries: 1,
+			reason: "", scope: "",
 		},
 		{
 			name: "unknown namespace under a policy that refuses everything", authz: newAuthorizer(),
 			path: base + "absent/units/" + testUnitID + "/context", status: http.StatusNotFound, entries: 0,
+			reason: "", scope: "",
 		},
 		{
 			name: "allowed request",
@@ -134,6 +165,17 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 				"namespace:read acme", "unit:read opentofu:acme/net",
 			),
 			path: base + "acme/units/" + testUnitID + "/context", status: http.StatusOK, entries: 0,
+			reason: "", scope: "",
+		},
+		{
+			name: "authorizer failure", authz: authorizationFailed{},
+			path: base + "acme/units/" + testUnitID + "/context", status: http.StatusInternalServerError,
+			entries: 1, reason: refusal.ReasonFailed, scope: "",
+		},
+		{
+			name: "authorizer failure on an unknown namespace", authz: authorizationFailed{},
+			path: base + "absent/units/" + testUnitID + "/context", status: http.StatusInternalServerError,
+			entries: 1, reason: refusal.ReasonFailed, scope: audit.ServerScope,
 		},
 	}
 
@@ -154,7 +196,7 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
 
-			checkDenialEntries(t, store.denied(), tc.entries)
+			checkDenialEntries(t, store.denied(), tc.entries, tc.reason, tc.scope)
 		})
 	}
 }
@@ -186,5 +228,34 @@ func TestCheckAddressRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
 		t.Fatalf("error = %v, want an address refusal", err)
 	}
 
-	checkDenialEntries(t, store.denied(), 1)
+	checkDenialEntries(t, store.denied(), 1, "", "")
+}
+
+// TestCheckAddressRefusesAnAuthorizerError proves that an authorizer error
+// stops the address check and writes one denial entry.
+func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
+	t.Parallel()
+
+	store := newTestAudit()
+	handler := newHandlerWithGuard(
+		t, authorizationFailed{}, newFakeStore(), nil,
+		guardOptions{records: store, limiter: writingLimiter()},
+	)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+testUnitID+"/context", http.NoBody,
+	)
+	req.SetPathValue("namespace", "acme")
+
+	p, authErr := tokenAuthenticator{}.AuthenticateToken(t.Context(), testToken)
+	if authErr != nil {
+		t.Fatalf("authentication: %v", authErr)
+	}
+
+	err := objectcontext.CheckAddress(t.Context(), handler.Handler, req, p)
+	if !errors.Is(err, errAuthorizationFailed) {
+		t.Fatalf("error = %v, want the authorizer error", err)
+	}
+
+	checkDenialEntries(t, store.denied(), 1, refusal.ReasonFailed, "")
 }

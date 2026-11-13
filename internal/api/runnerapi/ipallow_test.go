@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // addressRefused refuses every check as the IP allowlist gate does for a
@@ -68,9 +69,9 @@ func writingLimiter() *denylimit.Limiter {
 }
 
 // checkDenialEntries checks the denial entries of one request: the count, and
-// the outcome, the action and, when reason is not empty, the start of the
-// reason.
-func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string) {
+// the outcome, the action, the start of the reason when reason is not empty,
+// and the namespace when scope is not empty.
+func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string, scope namespace.Name) {
 	t.Helper()
 
 	if len(got) != want {
@@ -84,6 +85,10 @@ func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string
 
 		if reason != "" && !strings.HasPrefix(got[i].Reason, reason) {
 			t.Errorf("entry %d has reason %q, want the prefix %q", i, got[i].Reason, reason)
+		}
+
+		if scope != "" && got[i].Namespace != scope {
+			t.Errorf("entry %d has namespace %q, want %q", i, got[i].Namespace, scope)
 		}
 	}
 }
@@ -137,27 +142,33 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 		status  int
 		entries int
 		reason  string
+		scope   namespace.Name
 	}{
 		{
 			name: "address outside the allowlist", authz: addressRefused{},
-			path: "/api/runners/acme/pools", status: http.StatusForbidden, entries: 1, reason: "",
+			path: "/api/runners/acme/pools", status: http.StatusForbidden, entries: 1, reason: "", scope: "",
 		},
 		{
 			name: "policy refuses the namespace read", authz: holdsOnly{actions: nil},
-			path: "/api/runners/acme/pools", status: http.StatusNotFound, entries: 1, reason: "",
+			path: "/api/runners/acme/pools", status: http.StatusNotFound, entries: 1, reason: "", scope: "",
 		},
 		{
 			name: "unknown namespace under a policy that refuses everything", authz: holdsOnly{actions: nil},
-			path: "/api/runners/absent/pools", status: http.StatusNotFound, entries: 0, reason: "",
+			path: "/api/runners/absent/pools", status: http.StatusNotFound, entries: 0, reason: "", scope: "",
 		},
 		{
 			name: "allowed request", authz: holdsOnly{actions: read},
-			path: "/api/runners/acme/pools", status: http.StatusOK, entries: 0, reason: "",
+			path: "/api/runners/acme/pools", status: http.StatusOK, entries: 0, reason: "", scope: "",
 		},
 		{
 			name: "authorizer failure", authz: authorizationFailed{},
 			path: "/api/runners/acme/pools", status: http.StatusInternalServerError, entries: 1,
-			reason: refusal.ReasonFailed,
+			reason: refusal.ReasonFailed, scope: "",
+		},
+		{
+			name: "authorizer failure on an unknown namespace", authz: authorizationFailed{},
+			path: "/api/runners/absent/pools", status: http.StatusInternalServerError, entries: 1,
+			reason: refusal.ReasonFailed, scope: audit.ServerScope,
 		},
 	}
 
@@ -181,7 +192,7 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
 
-			checkDenialEntries(t, store.denied(), tc.entries, tc.reason)
+			checkDenialEntries(t, store.denied(), tc.entries, tc.reason, tc.scope)
 		})
 	}
 }
@@ -211,5 +222,32 @@ func TestCheckAddressRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
 		t.Fatalf("error = %v, want an address refusal", err)
 	}
 
-	checkDenialEntries(t, store.denied(), 1, "")
+	checkDenialEntries(t, store.denied(), 1, "", "")
+}
+
+// TestCheckAddressRefusesAnAuthorizerError proves that an authorizer error
+// stops the address check and writes one denial entry.
+func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
+	t.Parallel()
+
+	store := newTestAudit()
+	h := handlerAuthorizing(t, authorizationFailed{}, func(cfg *runnerapi.Config) {
+		cfg.Audit = store
+		cfg.DenialLimiter = writingLimiter()
+	})
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runners/acme/pools", http.NoBody)
+	req.SetPathValue("namespace", "acme")
+
+	p, authErr := adminAuthenticator{}.AuthenticateToken(t.Context(), adminToken)
+	if authErr != nil {
+		t.Fatalf("authentication: %v", authErr)
+	}
+
+	err := runnerapi.CheckAddress(t.Context(), h, req, p)
+	if !errors.Is(err, errAuthorizationFailed) {
+		t.Fatalf("error = %v, want the authorizer error", err)
+	}
+
+	checkDenialEntries(t, store.denied(), 1, refusal.ReasonFailed, "")
 }

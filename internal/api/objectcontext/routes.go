@@ -201,10 +201,10 @@ func (h *Handler) authorizeTarget(r *http.Request, p identity.Principal, rt Rout
 // the namespace in the path, before the decision on the target, also when the
 // lookup found nothing. The answer is the same 403 for a name that exists and
 // for a name that does not exist, so it does not tell whether the object
-// exists. Every other result, also an invalid name, continues: the checks
-// after the lookup give the answer, as before. It asks through Decide, which
-// writes no entry, and records only the address refusal: AuthorizeObject
-// records every other refusal one time.
+// exists. Every other result, also an invalid name, continues. An authorizer
+// error stops the request here and writes one entry, also for a namespace that
+// does not exist. A policy refusal continues, so that the later check records
+// it once. It asks through Decide, which writes no entry.
 //
 // Defense in depth: AuthorizeObject checks the allowlist again on the found
 // namespace. This check stays so that the order of the lookup never decides
@@ -221,6 +221,14 @@ func (h *Handler) checkAddress(
 
 		err := h.guard.Decide(ctx, p, action, obj)
 		if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
+			})
+
+			return fmt.Errorf("authorize %s: %w", action, err)
+		}
+
+		if err != nil && !errors.Is(err, identity.ErrDenied) {
 			h.guard.Record(ctx, r, p, refusal.Denial{
 				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
 			})

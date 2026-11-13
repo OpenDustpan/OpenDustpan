@@ -132,10 +132,10 @@ func (h *Handler) checkAuthorized(r *http.Request, rt Route, c *call) (*http.Req
 // checkAddress refuses a client address that is outside the IP allowlist of
 // the namespace in the path, before the lookup of the namespace. The answer is
 // the same 403 for a namespace that exists and for one that does not exist.
-// Every other result, also an invalid name, continues: the checks after the
-// lookup give the answer, as before. It asks through Decide, which writes no
-// entry, and records only the address refusal: AuthorizeObject records every
-// other refusal one time.
+// Every other result, also an invalid name, continues. An authorizer error
+// stops the request here and writes one entry, also for a namespace that does
+// not exist. A policy refusal continues, so that the later check records it
+// once. It asks through Decide, which writes no entry.
 //
 // Defense in depth: checkAuthorized checks the allowlist again on the found
 // namespace. This check stays so that the order of the lookup never decides
@@ -150,6 +150,14 @@ func (h *Handler) checkAddress(ctx context.Context, r *http.Request, p identity.
 
 		err := h.guard.Decide(ctx, p, action, obj)
 		if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
+			})
+
+			return fmt.Errorf("authorize %s: %w", action, err)
+		}
+
+		if err != nil && !errors.Is(err, identity.ErrDenied) {
 			h.guard.Record(ctx, r, p, refusal.Denial{
 				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
 			})

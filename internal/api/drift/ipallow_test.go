@@ -97,9 +97,9 @@ func writingLimiter() *denylimit.Limiter {
 }
 
 // checkDenialEntries checks the denial entries of one request: the count, and
-// the outcome, the action and, when reason is not empty, the start of the
-// reason.
-func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string) {
+// the outcome, the action, the start of the reason when reason is not empty,
+// and the namespace when scope is not empty.
+func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string, scope namespace.Name) {
 	t.Helper()
 
 	if len(got) != want {
@@ -113,6 +113,10 @@ func checkDenialEntries(t *testing.T, got []audit.Entry, want int, reason string
 
 		if reason != "" && !strings.HasPrefix(got[i].Reason, reason) {
 			t.Errorf("entry %d has reason %q, want the prefix %q", i, got[i].Reason, reason)
+		}
+
+		if scope != "" && got[i].Namespace != scope {
+			t.Errorf("entry %d has namespace %q, want %q", i, got[i].Namespace, scope)
 		}
 	}
 }
@@ -176,28 +180,35 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 		status  int
 		entries int
 		reason  string
+		scope   namespace.Name
 	}{
 		{
 			name: "address outside the allowlist", authz: addressRefused{},
-			path: driftURL, status: http.StatusForbidden, entries: 1, reason: "",
+			path: driftURL, status: http.StatusForbidden, entries: 1, reason: "", scope: "",
 		},
 		{
 			name: "policy refuses the namespace read", authz: newAuthorizer(),
-			path: driftURL, status: http.StatusNotFound, entries: 1, reason: "",
+			path: driftURL, status: http.StatusNotFound, entries: 1, reason: "", scope: "",
 		},
 		{
 			name: "unknown namespace under a policy that refuses everything", authz: newAuthorizer(),
 			path:   "/api/dustpan/v1/namespaces/absent/units/" + testUnitID + "/drift",
-			status: http.StatusNotFound, entries: 0, reason: "",
+			status: http.StatusNotFound, entries: 0, reason: "", scope: "",
 		},
 		{
 			name: "allowed request", authz: newAuthorizer(holdsAll()...),
-			path: driftURL, status: http.StatusOK, entries: 0, reason: "",
+			path: driftURL, status: http.StatusOK, entries: 0, reason: "", scope: "",
 		},
 		{
 			name: "authorizer failure", authz: authorizationFailed{},
 			path: driftURL, status: http.StatusInternalServerError, entries: 1,
-			reason: refusal.ReasonFailed,
+			reason: refusal.ReasonFailed, scope: "",
+		},
+		{
+			name: "authorizer failure on an unknown namespace", authz: authorizationFailed{},
+			path:   "/api/dustpan/v1/namespaces/absent/units/" + testUnitID + "/drift",
+			status: http.StatusInternalServerError, entries: 1,
+			reason: refusal.ReasonFailed, scope: audit.ServerScope,
 		},
 	}
 
@@ -218,7 +229,7 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
 
-			checkDenialEntries(t, store.entries, tc.entries, tc.reason)
+			checkDenialEntries(t, store.entries, tc.entries, tc.reason, tc.scope)
 		})
 	}
 }
@@ -245,5 +256,29 @@ func TestCheckAddressRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
 		t.Fatalf("error = %v, want an address refusal", err)
 	}
 
-	checkDenialEntries(t, store.entries, 1, "")
+	checkDenialEntries(t, store.entries, 1, "", "")
+}
+
+// TestCheckAddressRefusesAnAuthorizerError proves that an authorizer error
+// stops the address check and writes one denial entry.
+func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
+	handler := newRefusalHandler(t, authorizationFailed{}, store, writingLimiter())
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, driftURL, http.NoBody)
+	req.SetPathValue("namespace", "acme")
+
+	p, authErr := tokenAuthenticator{}.AuthenticateToken(t.Context(), testToken)
+	if authErr != nil {
+		t.Fatalf("authentication: %v", authErr)
+	}
+
+	err := driftapi.CheckAddress(t.Context(), handler, req, p)
+	if !errors.Is(err, errAuthorizationFailed) {
+		t.Fatalf("error = %v, want the authorizer error", err)
+	}
+
+	checkDenialEntries(t, store.entries, 1, refusal.ReasonFailed, "")
 }
