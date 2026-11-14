@@ -43,6 +43,7 @@ Out of scope:
 
 Depends on:
 
+- ADR 367 on main (pull request #3048)
 - dusty-proposes-change-order
 - every-step-audited
 - person-confirms
@@ -70,12 +71,24 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 122: Twelve task-shaped tools, each with its action and object** (not owner-tagged).
 
-- Decisions that apply: 1 (changed), 14 (current).
-- Changed by: ADR 128 changes decision 1; ADR 210 changes. Chain to the end: ADR 128, ADR 210, ADR 190, ADR 222, ADR 227, ADR 286, ADR 354, ADR 247, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 335, ADR 351, ADR 301, ADR 320, ADR 339, ADR 328, ADR 359, ADR 332.
-- Current rule: this ADR, with ADR 128, 210.
+- Decisions that apply: 1 (changed), 14 (changed).
+- Changed by: ADR 128 changes decision 1; ADR 210 changes; ADR 367 changes decision 1; ADR 367 changes decision 14. Chain to the end: ADR 128, ADR 210, ADR 367, ADR 190, ADR 222, ADR 227, ADR 286, ADR 354, ADR 247, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 335, ADR 351, ADR 301, ADR 320, ADR 339, ADR 328, ADR 359, ADR 332.
+- Current rule: this ADR, with ADR 128, 210, 367.
 - Quote: "A change that makes the catalog larger than 12 tools needs a new ADR."
-- Effect: The three NEW tools join the one Toolset after the short ADR 122 amendment is accepted. No tool is renamed or deleted.
-- Conflict: rfc_needed.
+- Quote: "A tool or a required parameter is never renamed or deleted without a deprecation."
+- Effect: ADR 367 is the new ADR that decision 14 asks for. The three NEW tools join the one Toolset. No tool is renamed or deleted.
+- Conflict: none.
+
+**ADR 367: The agent tool catalog grows to 15 tools** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 2 (current), 3 (current), 4 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The three tools of the change `give-dusty-tools-comment-propose` join the catalog without a further ADR. The catalog then has 15 tools."
+- Quote: "The test of ADR 122 decision 1 keeps the catalog at 8 to 15 tools."
+- Quote: "After the Dusty benchmark (the change `benchmark-dusty-runs-wait-approval`), the project checks the size of the catalog again."
+- Effect: The change adds the three tools and moves the maximum of TestCatalogSize to 15. It merges or removes no tool.
+- Conflict: none.
 
 **ADR 123: An MCP endpoint and a stdio proxy offer the same tools** (not owner-tagged).
 
@@ -127,16 +140,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Is the ADR 122 amendment for the three tools accepted before this change is built? Decides: PM.
-   - Options: Accept the short amendment first, then build; Defer the three tools.
-   - Recommended: Accept the short amendment first, then build. Reason: ADR 122 decision 14 needs a new ADR for a 13th tool. The amendment is a prior step, outside this change.
-
-Not spec-ready: the change conflicts with ADR 122: an RFC comes first.
+none
 
 Questions considered and answered:
 
 - Can an agent approve? No. ADR 128 decision 10 refuses each verdict from an agent. No approve tool is added.
 - Who confirms a draft? The person who delegated confirms through the draft and confirm-draft routes of dusty-proposes-change-order, by ADR 354 decision 1.
 - Does the MCP endpoint gain resources or prompts? No. ADR 123 decision 2 offers tools only.
+- Does the catalog need a new ADR for the three tools? It had one: ADR 367 (owner, 2026-11-14) lets the catalog grow to 15 tools for these three tools, and TestCatalogSize moves to 8 to 15.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

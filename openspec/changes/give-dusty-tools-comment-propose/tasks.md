@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing catalog test: three tools, no approve name. Check: TestToolCatalogHasNoApprove fails on main.
+- [ ] 1.1 Write the failing catalog test: three tools, no approve name. Move the maximum of TestCatalogSize from 12 to 15 (ADR 367 decision 2). Check: TestToolCatalogHasNoApprove fails on main.
 - [ ] 1.2 Write the failing comment tests for terminal jobs, change-order jobs and overlong text. Check: TestCommentJobRefusesChangeOrderJob fails on main.
 - [ ] 1.3 Write the failing draft tests for confirm, agent confirm refusal and replay. Check: TestProposeStaysDraft fails on main.
 - [ ] 1.4 Write the failing verdict and audit tests. Check: TestAgentVerdictRefused fails on main.
