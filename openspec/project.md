@@ -134,6 +134,26 @@ the invariants), then the golangci-lint setting for what remains, and how a
 rewrite of many call sites is done (go fix with //go:fix inline, gopls, eg or a
 script first). No custom analyzer and no new tool (ADR 364).
 
+#### Contract
+
+A change that adds or changes one of these gives a section `## Contract` in
+`design.md`:
+
+- a port or an exported type: the Go signature of each method or function, and
+  the sentinel errors that each one returns;
+- an API endpoint: the method and the path, the request and the response JSON,
+  the status codes, the error codes, the authorization action, the paging and
+  the ETag;
+- stored schema: the tables and the columns of each dialect, with their types,
+  keys and indexes;
+- CLI output that an e2e test asserts: the exact output.
+
+The section holds no function body and no internal detail. This rule applies to
+the changes that are made after it lands. A change made before it gets a
+Contract section only when a finding of the missing-contract kind (a port
+without a signature, a field without a name, an error code that is not defined)
+needs one, and then for that change only. No change is rewritten to add one.
+
 ### Tasks
 
 Each task names its acceptance check: a test, a command or an API call that
