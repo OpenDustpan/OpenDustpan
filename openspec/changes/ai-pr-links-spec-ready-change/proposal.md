@@ -18,16 +18,14 @@ open questions, reaches review, and the maintainer finds out by hand.
 
 - No check exists: `rg -n -i "openspec" .github/workflows Makefile scripts`
   finds no check of a pull request body, and `ls scripts` lists no such script.
-- The owner decided the check on 8 November 2026. The owner's words: "For AI
-  issues only": CI fails an AI-authored pull request that does not link a
-  spec-ready change; a pull request of a person is exempt.
+- ADR 375 (owner, 2026-11-08) records the decision: "For AI issues only".
+  CI fails an AI-authored pull request that does not link a spec-ready
+  OpenSpec change, and a pull request of a person is exempt.
 - How a pull request discloses AI:
   - ADR 76 decision 2: "The pull request names each AI tool and says which
     parts it wrote."
   - `CONTRIBUTING.md:108-109`: "Say that you used AI. In the pull request or
     the issue, name the tool and say which parts it wrote."
-  - `CONTRIBUTING.md:132-139`: each commit that an agent writes carries a
-    `Co-Authored-By` trailer that names the agent tool.
   - ADR 317 decision 2: an agent commit has the identity
     `Claude <noreply@anthropic.com>` as author and sign-off.
 - The spec-ready gate: `openspec/project.md:83-86`: "A change may be
@@ -38,12 +36,10 @@ open questions, reaches review, and the maintainer finds out by hand.
 
 ## Fix boundary
 
-- A pull request is AI-authored when any of these holds:
+- A pull request is AI-authored when either of these holds:
   1. a commit of the pull request has the author email `noreply@anthropic.com`
      (ADR 317 decision 2);
-  2. a commit of the pull request has a `Co-Authored-By:` trailer
-     (`CONTRIBUTING.md`, "How the project itself uses AI");
-  3. the body has a disclosure line that starts with `Tool:` or `AI tool:`
+  2. the body has a disclosure line that starts with `Tool:` or `AI tool:`
      (ADR 76 decision 2).
   Any other pull request is a person's pull request and is exempt.
 - A link is a line of the body, outside a fenced code block, that names
@@ -58,8 +54,7 @@ open questions, reaches review, and the maintainer finds out by hand.
   questions: none"`. When a named change is not spec-ready, the line names
   that change and its open questions.
 - The NEW script `scripts/check-ai-pr-spec.sh` takes the body file and the
-  commit file (author email and trailers of each commit, from `git log
-  --format`), and reads the change folders from the checkout. The NEW Makefile
+  commit file (the author email of each commit, from `git log --format`), and reads the change folders from the checkout. The NEW Makefile
   target `ai-pr-spec-check` runs it with `PR_BODY_FILE` and `PR_COMMITS_FILE`.
   The NEW CI step in `.github/workflows/ci.yml` runs on `pull_request` only. It
   passes the body through an environment variable, never through the shell
@@ -77,21 +72,25 @@ request with no link and passes a person's pull request.
 decisions 7 and 8).
 - Quote: "**Disclosure.** The pull request names each AI tool and says which
   parts it wrote."
-- Effect: the disclosure is one of the three signals of an AI-authored pull
+- Effect: the disclosure is one of the two signals of an AI-authored pull
   request.
 
 **ADR 317: Gate rows key on the unit ID, and the identity of an agent commit**
-(owner-tagged, decision 2).
+(owner-tagged, decision 2; changed by ADR 319 for the trailer, and ADR 375).
 - Quote: "agent commit identity becomes `Claude <noreply@anthropic.com>`
   (author and DCO sign-off) in all new briefs".
 - Effect: the author email is a signal.
+
+**ADR 375: AI-authored pull requests link a spec-ready OpenSpec change**
+(owner-tagged).
+- Quote: "For AI issues only".
+- Effect: this change implements the decision.
 
 **ADR 364: Unexported fields and golangci-lint before added checks (owner)**
 (decision 1).
 - Quote: "This decision adds no custom analyzer and no new tool."
 - Effect: ADR 364 is about guards of the Go code. This check guards the pull
-  request process, and the owner decided it explicitly ("For AI issues
-  only"). It is a script and a CI step, not an analyzer of the code. No code
+  request process, and the owner decided it explicitly (ADR 375). It is a script and a CI step, not an analyzer of the code. No code
   structure can express a rule about a pull request body.
 
 `openspec/project.md` (the spec-ready gate and the short form) applies as
