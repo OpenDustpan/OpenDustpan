@@ -4,6 +4,13 @@
 - [ ] 1.2 Add failing route tests for auth actions and audit entries. Check: go test ./internal/api/triggers/... -run TestTriggerRoutes -count=1
 - [ ] 1.3 Add failing e2e step for a trigger-started plan against the real CLI. Check: go test ./e2e -run TestTriggers -count=1
 
+## 1b. Run-as principal (SECURITY, ADR 369 decision 7, ADR 370)
+
+- [ ] 1b.1 SECURITY. Failing hostile tests: a person as run-as principal, a service principal with no act-as edge, an inline principal with a grant above the author, a suspended run-as principal, a read of a triggered job with the grants of the saver. Check: NEW test `TestTriggerRunAsHostile` in `pkg/trigger` fails on main.
+- [ ] 1b.2 SECURITY. The same table at the HTTP handler. Check: NEW test `TestTriggerRoutesRunAsHostile` fails on main.
+- [ ] 1b.3 SECURITY. Store the stable ID of the run-as principal on the trigger, with the hard check in the constructor of the trigger and the act-as check in the service. Check: both tests pass; removing each check makes a test fail (mutation list in the pull request).
+- [ ] 1b.4 SECURITY. Delete `authorizeNamespaceService` and each use of the namespace service principal in the start path (ADR 370). Check: `rg -n 'IsNamespaceServiceSubject|NamespaceService\(' pkg internal` gives no line in the trigger and job start path.
+
 ## 2. build
 
 - [ ] 2.1 Implement trigger service with plan-only starter and fenced store. Check: go test ./pkg/trigger/... -count=1

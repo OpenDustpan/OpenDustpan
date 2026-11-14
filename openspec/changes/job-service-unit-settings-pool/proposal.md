@@ -27,6 +27,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- NEW: the trigger names its run-as principal by stable ID. It must be a service principal that the author can act as, or one that the author creates in the same request with no grant (ADR 369 decision 7). The start and the reads of the job use it. The namespace service principal is gone (ADR 370).
 - Unit settings hold code location, runner pool, profile reference and default steps with namespace defaults as fallback.
 - Job start resolves inputs from request override then unit settings then defaults, snapshots them on the job, and checks unit:define-steps and namespace:manage-runners for overrides.
 - Job-token output reads enforce the sharing rule plus the trigger saver and manual-fire caller check with unit:read-outputs at each read.
@@ -40,6 +41,9 @@ Out of scope:
 
 Depends on:
 
+- ADR 369 on main (pull request #3056)
+- ADR 370 on main (pull request #3058)
+- housekeeping-principals (lands before this change, or with it)
 - add-job-service-routes-start
 
 ## Usability
@@ -56,13 +60,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 267: Run triggers: three kinds, a plan only, started through the job service** (not owner-tagged).
 
 - Decisions that apply: 2 (current), 4 (current), 9 (current), 14 (changed).
-- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 286, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 273, 299, 307, 310, 338.
+- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14; ADR 369 changes decision 14; ADR 370 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 369, ADR 370, ADR 286, ADR 328, ADR 359.
+- Current rule: this ADR, with ADR 273, 299, 307, 310, 369, 370.
 - Quote: "The runner pool is the only routing key (6.1). A trigger has no pool and no label."
 - Quote: "A trigger starts a job through the job service. It has no path of its own."
 - Quote: "A trigger starts a plan and nothing else."
 - Quote: "The principal of a start that no person makes (question 3). - The start runs as the namespace service principal."
-- Effect: Trigger starts use the job service with the same checks as other jobs, take the pool from the unit settings, start a plan only, and run as the namespace service principal with the saver read check.
+- Effect: Trigger starts use the job service with the same checks as other jobs, take the pool from the unit settings, start a plan only, and run as the run-as principal of the trigger with the saver read check.
 - Conflict: none.
 
 **ADR 213: Job tokens and outputs, plans with no change, the start policy input, bulk calls, the options action, forge connections and locks** (not owner-tagged).
@@ -81,16 +85,27 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "**A job token reads only what a rule names and the starter can read (15.5, option c).**"
-- Effect: The saver part of the read uses unit:read-outputs of the last saver and the manual-fire caller, with a sharing rule that names the unit, its collection or its namespace.
+- Effect: The saver part of the read uses unit:read-outputs of the run-as principal and the manual-fire caller, with a sharing rule that names the unit, its collection or its namespace.
 - Conflict: none.
 
-**ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
 
-- Decisions that apply: 3 (current).
+- Decisions that apply: 7 (current).
+- Changed by: ADR 370 changes. Chain to the end: ADR 370.
+- Current rule: this ADR, with ADR 370.
+- Quote: "The run-as principal must be a service principal. A hard check in code refuses a person, with an error code."
+- Quote: "The author may name only a service principal that the author can act as."
+- Quote: "A job that a run trigger starts acts and reads as the run-as principal of the trigger, not with the grants of the last saver."
+- Effect: Each trigger names its run-as principal by stable ID. The start and the reads of its job use that principal. The person who saved the trigger is the configurer.
+- Conflict: none.
+
+**ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The principal still holds nothing else (owner, 2026-11-07). The grant covers the start of a plan only."
-- Effect: The namespace service principal keeps only the stored grant to start a plan and the saver read rule does not change.
+- Quote: "The namespace service principal is removed (owner, 2026-11-14)."
+- Effect: No start runs as the namespace service principal, and no code rule gives a start permission.
 - Conflict: none.
 
 ## Adversarial second pass
@@ -134,7 +149,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 Questions considered and answered:
 
 - Where does the pool and code location of a trigger start come from? ADR 267 decision 4 answers it: the job takes the pool of the unit settings and the trigger holds none. The request location is an override that needs unit:define-steps; the stored location is the default.
-- What does a job-token read of outputs of another unit check? ADR 213 decision 1 answers the two checks and that a grant change applies at the next read. ADR 267 decision 14 with ADR 273 answers the saver part: check 2 uses unit:read-outputs of the last saver. The namespace service principal holds only the plan start per ADR 338 decision 3.
+- What does a job-token read of outputs of another unit check? ADR 213 decision 1 answers the two checks and that a grant change applies at the next read. ADR 267 decision 14 with ADR 273 answers the saver part: check 2 uses unit:read-outputs of the run-as principal. The run-as principal of the trigger holds only the plan start per ADR 338 decision 3.
 - How does the plan-only secret rule apply to starts that no person makes? ADR 213 decision 2 answers it: a plan-only job gets own-unit secrets only from trusted code. The stored profile reference does not change that rule; a trigger plan with no trusted code gets no secrets of its own unit.
 - Do manual locks stop a trigger start? ADR 267 decision 2 answers it: gates, approval rules, freezes, manual locks and limits of open jobs apply to a trigger job as to any job. ADR 213 decision 10 is owner-tagged and puts manual locks on units, collections and namespaces.
 

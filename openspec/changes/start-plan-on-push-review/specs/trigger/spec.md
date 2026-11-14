@@ -6,7 +6,7 @@ When a push reaches a review request, the server SHALL start a plan job for each
 
 #### Scenario: Push starts plan at head
 - **WHEN** A push reaches a review request that targets the repository and branch of the unit code location.
-- **THEN** One plan job exists for each matching unit at the head commit with source kind forge and the namespace service principal as starter.
+- **THEN** One plan job exists for each matching unit at the head commit with source kind forge and the run-as principal of the trigger as starter.
 
 ### Requirement: Intake authentication
 
@@ -102,15 +102,15 @@ When a push starts a plan, the server SHALL write an audit entry for the automat
 
 #### Scenario: Start audit written
 - **WHEN** A push starts a plan.
-- **THEN** An audit entry records the namespace service principal, the trigger, the head commit, and the matched repository and branch.
+- **THEN** An audit entry records the run-as principal of the trigger, the trigger, the head commit, and the matched repository and branch.
 
 ### Requirement: Starter and output reads
 
-When a push starts a plan, the server SHALL run the start as the namespace service principal and decide output reads by the last saver of the trigger.
+When a push starts a plan, the server SHALL run the start as the run-as principal of the trigger and decide output reads by the run-as principal of the trigger.
 
 #### Scenario: Service principal starts with last-saver reads
 - **WHEN** A push starts a plan.
-- **THEN** The job carries the namespace service principal as starter, unit profile credentials come from the profile attachment authority, and output reads use the last saver of the trigger.
+- **THEN** The job carries the run-as principal of the trigger as starter, unit profile credentials come from the profile attachment authority, and output reads use the run-as principal of the trigger.
 
 ### Requirement: Trigger detail visibility
 

@@ -9,7 +9,7 @@
 - [ ] 2.1 Implement Dispatcher.Upstream over the final-version store with per-trigger error capture Check: go test ./pkg/trigger/... passes; Upstream verifies the version against the job store and uses one idempotency key per trigger and version
 - [ ] 2.2 Wire the OpenTofu final-version writer as the event sender Check: go test ./pkg/... passes; OpenTofu final-version write emits the upstream event, Pulumi emits nothing in this slice
 - [ ] 2.3 Publish the declared follower edge to the graph Check: go test ./internal/graph/... passes; follows trigger publishes a declared edge and safe delete names followers
-- [ ] 2.4 Carry the trigger ID on the job and check each source output read against the last saver Check: go test ./pkg/outputshare/... plus trigger read tests pass; missing saver denies
+- [ ] 2.4 Carry the trigger ID on the job and check each source output read against the run-as principal Check: go test ./pkg/outputshare/... plus trigger read tests pass; missing saver denies
 
 ## 3. Definition of done
 

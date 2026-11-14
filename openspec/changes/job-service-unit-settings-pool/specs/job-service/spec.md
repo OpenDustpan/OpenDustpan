@@ -38,15 +38,15 @@ When a job starts, the server SHALL resolve pool, code location, profile referen
 
 ### Requirement: Trigger saver read check
 
-When a job with a trigger reads the outputs of another unit, the server SHALL allow the read only when the sharing rule names the job unit and trigger.OutputReadCheck.Allow allows the last saver and the manual-fire caller.
+When a job with a trigger reads the outputs of another unit, the server SHALL allow the read only when the sharing rule names the job unit and trigger.OutputReadCheck.Allow allows the run-as principal and the manual-fire caller.
 
 #### Scenario: Saver loses access
-- **WHEN** The last saver of the trigger loses unit:read-outputs on the source after the job starts.
+- **WHEN** The run-as principal of the trigger loses unit:read-outputs on the source after the job starts.
 - **THEN** The next job-token read of the source outputs answers 403 with no secret value.
 
 #### Scenario: Manual fire intersection
 - **WHEN** A person fires a trigger manually and the job reads outputs of another unit.
-- **THEN** The server checks the sharing rule and the unit:read-outputs grants of both the last saver and the person who fired.
+- **THEN** The server checks the sharing rule and the unit:read-outputs grants of both the run-as principal and the person who fired.
 
 #### Scenario: Collection rule names job
 - **WHEN** A sharing rule of the producer names the collection of the job unit.
