@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 370 changes: the point "The namespace service principal" of "Not
   decided here" is decided.
+- ADR 378 extends decision 1: the local wrapper presents the plan hash when
+  it opens its apply claim.
 
 Changes:
 

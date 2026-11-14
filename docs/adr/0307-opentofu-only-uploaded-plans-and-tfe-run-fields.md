@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-01. Records decisions of the project owner of 18 October 2026 that no ADR held
 
+Changed by:
+
+- ADR 378 extends decision 2: how the apply of an uploaded plan presents the
+  same plan hash.
+
 Changes:
 
 - Extends ADR 25 decision 1: the Terraform CLI is not supported. OpenDustpan supports and tests OpenTofu.

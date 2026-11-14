@@ -11,6 +11,7 @@ Changed by:
 
 - ADR 349 changes decision 1: the OpenPGP library is also allowed in the server registry.
 - ADR 349 extends decision 2: the approved versions apply in the server registry.
+- ADR 379 changes decision 2: the approved versions are the versions in `go.mod` on 14 November 2026.
 
 ## Context
 
