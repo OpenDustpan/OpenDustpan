@@ -71,6 +71,9 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 		"POST " + protocol.PathSessionStepEnd:                                noHeaders("{}"),
 		"PUT " + protocol.PathSessionLog:                                     noHeaders("{}"),
 		"POST " + protocol.PathSessionFinish:                                 noHeaders("{}"),
+		"PUT " + protocol.PathSessionPlanUpload:                              noHeaders("{}"),
+		"POST " + protocol.PathSessionPlanCommit:                             noHeaders("{}"),
+		"GET " + protocol.PathSessionPlanPart:                                noHeaders(""),
 	}
 
 	routes := newEnv(t).handler.Routes()

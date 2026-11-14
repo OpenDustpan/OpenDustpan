@@ -21,7 +21,9 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -146,6 +148,24 @@ func (m *mapStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespa
 	return nil
 }
 
+// CreateStackPlaced implements stack.PlacedStore. The map keeps no
+// collections, so it makes the stack and ignores the collection of p.
+func (m *mapStackStore) CreateStackPlaced(
+	ctx context.Context, st stack.Stack, _ stack.Placement, fence namespace.Fence,
+) error {
+	return m.CreateStack(ctx, st, fence)
+}
+
+// acmePlacement is the placement of a new stack in a collection of acme, for a
+// store that keeps no collections.
+func acmePlacement() stack.Placement {
+	return stack.Placement{
+		Collection:   collection.Ref{Namespace: "acme", Name: "placed"},
+		CollectionID: "col-test",
+		Entry:        placementtest.Entry("acme"),
+	}
+}
+
 func (m *mapStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -217,7 +237,7 @@ func (*mapStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fenc
 }
 
 func (m *mapStackStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -331,7 +351,7 @@ func buildSecretFixture(
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}
@@ -813,7 +833,8 @@ func TestSecretsFollowRename(t *testing.T) {
 		t.Fatalf("parse name: %v", nameErr)
 	}
 
-	if _, renameErr := f.stacks.Rename(t.Context(), oldRef, name); renameErr != nil {
+	entry := testRenameEntry(oldRef.Namespace, oldRef)
+	if _, renameErr := f.stacks.Rename(t.Context(), oldRef, name, entry); renameErr != nil {
 		t.Fatalf("rename: %v", renameErr)
 	}
 
@@ -1115,7 +1136,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		t.Fatalf("parse ref: %v", refErr)
 	}
 
-	if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+	if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 		t.Fatalf("create stack: %v", createErr)
 	}
 
@@ -1239,7 +1260,7 @@ func (*failingStackStore) PurgeStack(
 }
 
 func (m *failingStackStore) RenameStack(
-	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	panic("failingStackStore.RenameStack is not used")
 }
@@ -1546,7 +1567,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		t.Fatalf("parse ref: %v", refErr)
 	}
 
-	if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+	if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 		t.Fatalf("create stack: %v", createErr)
 	}
 
@@ -1705,7 +1726,7 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}
@@ -1940,7 +1961,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 			t.Fatalf("parse ref: %v", refErr)
 		}
 
-		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		if _, createErr := stacks.CreatePlaced(t.Context(), ref, nil, acmePlacement()); createErr != nil {
 			t.Fatalf("create stack %s: %v", ref, createErr)
 		}
 	}

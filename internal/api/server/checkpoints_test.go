@@ -53,6 +53,8 @@ func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

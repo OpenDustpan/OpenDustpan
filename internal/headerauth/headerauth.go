@@ -254,22 +254,42 @@ func (m *Method) Strip(r *http.Request, peer netip.Addr) bool {
 		return false
 	}
 
-	refused := false
+	return removeHeaders(r, m.Headers())
+}
 
-	for _, h := range m.Headers() {
-		// Each spelling of the name, also with an underscore for a hyphen:
-		// a proxy or a handler that reads another form of the name must
-		// not get the header.
+// Consume removes the secret header of the plain mode from r after the
+// caller read the request facts and called FromRequest, and reports
+// whether it removed a header. The HTTP adapter calls the methods in this
+// order: Strip, then FromRequest, then Consume after a successful sign-in
+// and after a refused one, then the next handler. So no handler reads the
+// shared secret of the proxy. The jwt mode has no secret header, so
+// Consume removes nothing.
+func (m *Method) Consume(r *http.Request) bool {
+	if r == nil || m.secretHeader == "" {
+		return false
+	}
+
+	return removeHeaders(r, []string{m.secretHeader})
+}
+
+// removeHeaders removes each name in names from r in each spelling of the
+// name, also with an underscore for a hyphen, and reports whether it
+// removed a header. A proxy or a handler that reads another form of the
+// name must not get the header.
+func removeHeaders(r *http.Request, names []string) bool {
+	removed := false
+
+	for _, h := range names {
 		for name := range r.Header {
 			if strings.EqualFold(strings.ReplaceAll(name, "_", "-"), h) {
 				delete(r.Header, name)
 
-				refused = true
+				removed = true
 			}
 		}
 	}
 
-	return refused
+	return removed
 }
 
 // PeerOf returns the TCP peer of r for Strip. It never reads a header.

@@ -391,9 +391,8 @@ func Rename(ctx context.Context, tx Tx, userID, name string) error {
 // 1 to the session generation of the person, so that each session that the
 // password made ends. The principal stays. The delete removes the password
 // too, so it applies the rule of RemovePassword: it fails closed with
-// localuser.ErrLastCredential while the user has a password, because no
-// passkey store exists yet. The passkey store replaces this with the count of
-// the passkeys of the person.
+// localuser.ErrLastCredential while the user has a password. This code counts
+// no passkey, so it refuses the delete also when the person has a passkey.
 func Delete(ctx context.Context, tx Tx, userID string) error {
 	u, _, err := lockedUser(ctx, tx, userID)
 	if err != nil {
@@ -551,13 +550,10 @@ func Rehash(ctx context.Context, tx Tx, userID string, old, h localuser.Password
 }
 
 // RemovePassword deletes the password of the user userID when the person
-// keeps another credential.
-//
-// No passkey store exists yet, so no person has a passkey, and the removal
-// always leaves the person with no credential. It fails closed with
-// localuser.ErrLastCredential after the other checks. The passkey store
-// replaces this with the count of the passkeys of the person, read under
-// the lock of the principal.
+// keeps another credential. This code counts no passkey, so it cannot know
+// whether the person keeps another credential: the removal fails closed with
+// localuser.ErrLastCredential after the other checks, also when the person
+// has a passkey.
 func RemovePassword(ctx context.Context, tx Tx, userID string) error {
 	u, _, err := lockedUser(ctx, tx, userID)
 	if err != nil {

@@ -206,13 +206,14 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 
 ## Settings of the installation
 
-The server declares one setting that the database layer holds. Each other
+The server declares two settings that the database layer holds. Each other
 setting of the installation is read-only: the static layer sets it, or the
 server sets it itself.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
+| `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
 | `server.drainPeriod` | `string` | `10s` | `restart` | The time between the stop signal and the start of the shutdown. In it, `GET /health/ready` answers 503 and the server serves all other requests, so a load balancer takes the instance out of its pool. |
 
 The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the
@@ -223,4 +224,27 @@ The server sets `server.drainPeriod` itself: no flag, variable or file key
 sets it, and its value is the drain that the server runs with. A `PATCH` of
 it answers 409 with `settings.static-only`.
 
+The flag `--allow-plain-connections`, the variable
+`DUSTPAN_ALLOW_PLAIN_CONNECTIONS` and the key
+`egress.allowPlainConnections` of the configuration file set it from the
+static layer and lock it.
+
 A namespace has no declared setting yet.
+
+### Bounds of a PostgreSQL store
+
+A server over a PostgreSQL store declares each bound of its code as a
+read-only setting. The value is a Go duration, the source is `default`, and a
+`PATCH` of one answers 409 with `settings.static-only`. A server over a
+SQLite store declares none of these settings.
+
+| Key | Kind | Default | Apply | Meaning |
+| --- | --- | --- | --- | --- |
+| `database.postgres.statementTimeout` | `string` | `25s` | `restart` | The statement timeout of each connection of the PostgreSQL store. |
+| `database.postgres.idleInTransactionTimeout` | `string` | `1m0s` | `restart` | The idle-in-transaction timeout of each connection of the PostgreSQL store. |
+| `database.postgres.clientConnectionCheckInterval` | `string` | `5s` | `restart` | The interval at which the PostgreSQL server checks that a client of a connection of the store is still there. |
+| `database.postgres.backup.statementTimeout` | `string` | `1h0m0s` | `restart` | The statement timeout of a backup, a restore and the copy of the rows of a backup in the PostgreSQL store. |
+| `database.postgres.backup.idleInTransactionTimeout` | `string` | `15m0s` | `restart` | The idle-in-transaction timeout of a backup, a restore and the copy of the rows of a backup in the PostgreSQL store. |
+| `database.postgres.schemaChange.statementTimeout` | `string` | `10m0s` | `restart` | The statement timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
+| `database.postgres.schemaChange.idleInTransactionTimeout` | `string` | `1m0s` | `restart` | The idle-in-transaction timeout of the creation and the removal of a staging schema in the PostgreSQL store. |
+| `database.postgres.migration.timeout` | `string` | `15m0s` | `restart` | The statement timeout and the idle-in-transaction timeout of the migration transaction of the PostgreSQL store. |

@@ -58,7 +58,9 @@ func operationOf(op *model.Operation) (operationView, error) {
 		return operationView{}, err
 	}
 
-	addResult(&ov, op)
+	if err := addResult(&ov, op); err != nil {
+		return operationView{}, err
+	}
 
 	codes := make([]string, len(op.Result.Statuses))
 	for i, status := range op.Result.Statuses {
@@ -188,6 +190,16 @@ func addQuery(ov *operationView, op *model.Operation) error {
 			return err
 		}
 
+		// Defense in depth: the check of the model refuses a type list that
+		// no template can write, and this check keeps a type list out of the
+		// query, where the adapter would send it as any JSON value.
+		if clientgen.HoldsTypeList(p.Type) {
+			return fmt.Errorf(
+				"%w: query parameter %s of %s holds a type list, which the Go template set does not write",
+				clientgen.ErrUnsupported, p.Name, op.ID,
+			)
+		}
+
 		var qv queryView
 
 		qv.Field, qv.Wire = field, p.Name
@@ -229,6 +241,13 @@ func addBody(ov *operationView, op *model.Operation) error {
 	ov.MediaType = string(op.Body.MediaType)
 	ov.BodyPointer = t.Kind == model.TypeRef && !t.Nullable
 
+	if clientgen.HoldsTypeList(t) {
+		return fmt.Errorf(
+			"%w: operation %s has a body with a type list, which the Go template set does not write",
+			clientgen.ErrUnsupported, op.ID,
+		)
+	}
+
 	if ov.BodyPointer {
 		ov.Body = "*" + t.Ref
 		ov.AdapterBody = "client." + t.Ref
@@ -247,12 +266,22 @@ func addBody(ov *operationView, op *model.Operation) error {
 }
 
 // addResult builds the return type of the method.
-func addResult(ov *operationView, op *model.Operation) {
+func addResult(ov *operationView, op *model.Operation) error {
 	t := op.Result.Type
 	if t == nil {
 		ov.ResultKind = "none"
 
-		return
+		return nil
+	}
+
+	// Defense in depth: the check of the model refuses a type list that no
+	// template can write, and this check keeps a type list out of the answer,
+	// where the client would read it as any JSON value.
+	if clientgen.HoldsTypeList(*t) {
+		return fmt.Errorf(
+			"%w: operation %s has an answer with a type list, which the Go template set does not write",
+			clientgen.ErrUnsupported, op.ID,
+		)
 	}
 
 	ov.Result = baseExpr(*t, "")
@@ -268,4 +297,6 @@ func addResult(ov *operationView, op *model.Operation) {
 	if t.Kind == model.TypeArray || t.Kind == model.TypeMap || t.Kind == model.TypeAny {
 		ov.ResultKind = "nilable"
 	}
+
+	return nil
 }

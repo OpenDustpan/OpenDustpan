@@ -530,7 +530,8 @@ func (errStore) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 func backupService(source, target blob.Store, opener StateOpener) *Service {
 	return &Service{
 		exporter: nil, kinds: nil, registry: nil, source: source, opener: opener, target: target, targetName: "",
-		now: nil, version: "", maxSQL: 0, runner: nil, operations: nil, lease: 0, logger: slog.New(slog.DiscardHandler),
+		now: nil, version: "", maxSQL: 0, maxUnverified: 0, runner: nil, operations: nil, lease: 0,
+		logger: slog.New(slog.DiscardHandler),
 	}
 }
 

@@ -49,24 +49,24 @@ type e2eGrantList struct {
 func TestRolesAndGrants(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -101,6 +101,13 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated,
 	}, &ops)
+
+	if groupProtected(t, ops) {
+		t.Fatal("the new group is protected, want false: it holds no grant")
+	}
+
+	checkGroupBecomesProtected(ctx, t, env, ops)
+
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces", `{"name":"grants"}`, http.StatusCreated,
 	}, nil)
@@ -130,7 +137,118 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkSubjectDeleteRevokes(ctx, t, env, bob)
 	checkLastSiteAdministratorKept(ctx, t, env)
+	checkTokenReachRefusal(ctx, t, env)
 	checkMemberSignsIn(ctx, t, env)
+}
+
+// checkTokenReachRefusal gives a person the account-administrator role and
+// makes two service principals: one holds the installation-operator role and
+// one holds the viewer role. With a console session, the account
+// administrator makes a token for the viewer principal and is refused for the
+// operator principal: the reach of that principal does not fit inside its own
+// reach.
+func checkTokenReachRefusal(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var admin e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("reach@example.com") + `","kind":"person"}`, http.StatusCreated,
+	}, &admin)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:` + admin.ID + `","role":"account-administrator"}`, http.StatusCreated,
+	}, nil)
+
+	for _, p := range []struct {
+		subject, role string
+		want          int
+	}{
+		{subject: "ci-reach-ops", role: "installation-operator", want: http.StatusForbidden},
+		{subject: "ci-reach-viewer", role: "viewer", want: http.StatusCreated},
+	} {
+		var svc e2ePrincipal
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/principals", `{"subject":"` + p.subject + `","kind":"service"}`,
+			http.StatusCreated,
+		}, &svc)
+
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/grants",
+			`{"subject":"principal:` + svc.ID + `","role":"` + p.role + `"}`, http.StatusCreated,
+		}, nil)
+
+		status, body := env.SessionAPIStatus(ctx, t, admin.ID, e2e.SessionRequest{
+			Method: http.MethodPost, Path: "/api/server/principals/" + svc.ID + "/tokens", Body: `{"name":"ci"}`,
+		})
+
+		if status != p.want {
+			t.Fatalf("account administrator makes a token for the %s service principal = %d (%s), want %d",
+				p.role, status, body, p.want)
+		}
+
+		if p.want == http.StatusForbidden &&
+			(!strings.Contains(body, "token.outside-reach") ||
+				!strings.Contains(body, "server:backup on the installation")) {
+			t.Fatalf("refusal = %s, want the code of the reach rule and the actions outside the reach", body)
+		}
+	}
+}
+
+// groupProtected returns the protected flag of a group answer, and fails t
+// when the answer holds no flag.
+func groupProtected(t *testing.T, g e2eGroup) bool {
+	t.Helper()
+
+	if g.Protected == nil {
+		t.Fatal("the group answer has no protected field")
+	}
+
+	return *g.Protected
+}
+
+// checkGroupBecomesProtected gives the group a custom role with a sensitive
+// action on the installation, reads the group again, and checks that the
+// group is protected. The grant goes back at the end, so that the later
+// grant steps read the installation grants alone, and the group is not
+// protected again.
+func checkGroupBecomesProtected(ctx context.Context, t *testing.T, env *e2e.Env, g e2eGroup) {
+	t.Helper()
+
+	var role e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"access-manager","actions":["server:manage-access"]}`, http.StatusCreated,
+	}, &role)
+
+	var grant e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"group:` + g.ID + `#member","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, &grant)
+
+	var protected e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + g.ID, "", http.StatusOK,
+	}, &protected)
+
+	if !groupProtected(t, protected) {
+		t.Fatal("the group with a sensitive grant on the installation is not protected, want true")
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + grant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var revoked e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + g.ID, "", http.StatusOK,
+	}, &revoked)
+
+	if groupProtected(t, revoked) {
+		t.Fatal("the group after the revoke of its sensitive grant is protected, want false")
+	}
 }
 
 // TestRevokeGrantByID revokes a namespace grant and a unit grant through
@@ -141,24 +259,24 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 func TestRevokeGrantByID(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {

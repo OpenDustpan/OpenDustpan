@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // Sentinel errors of state versions.
@@ -163,6 +164,10 @@ type StateVersion struct {
 	// fence this version is (ADR 44, decision 1). It is empty when the version
 	// is not a fence.
 	FenceBy string
+	// Origin names the job whose token wrote the version, and the commit it
+	// wrote. The store records it with the declare and uses it when the
+	// version finalizes; a read gives it as zero.
+	Origin identity.StateOrigin
 }
 
 // NewState is the metadata a client declares before uploading state.

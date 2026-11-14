@@ -1,0 +1,110 @@
+name: auto-regen
+
+# When main moves, the merge queue removes a pull request that then conflicts
+# with main. Most such conflicts are only in generated files. This workflow
+# finds those pull requests and dispatches a resolve run on the branch of each
+# one. The resolve run merges main, takes the side of main for each conflicted
+# generated file, runs the generators again and uploads a patch of the merge
+# result. A push run then puts the patch on the pull request branch and turns
+# auto-merge on again, so that the pull request goes back to the queue after
+# CI.
+#
+# A pull request is a candidate when it is open, not a draft, its branch is in
+# this repository, its base is main, GitHub reports it as dirty (it
+# conflicts), and auto-merge is on or it has the label auto-regen. A conflict
+# in a file that is not generated stops the workflow for that pull request: it
+# posts one comment that names the files, at most once for each head commit.
+#
+# Three files keep pull request code out of the cache scope of main:
+# - auto-regen.yml (this file) runs on main. It finds the candidates and
+#   dispatches the resolve runs.
+# - auto-regen-resolve.yml runs through workflow_dispatch on the pull request
+#   branch, in the cache scope of that branch. It runs the code of the pull
+#   request (make generate), so it has no secret and a read-only token.
+# - auto-regen-push.yml runs on main after the resolve run. It has the token
+#   of the GitHub App and runs only git and the script of main. It accepts
+#   only a patch of generated paths for the pull request whose current head is
+#   the head of the resolve run.
+#
+# scripts/auto-regen.sh holds the steps. Each job takes the script from main.
+# Actions are pinned to commit SHAs; the comment names the release.
+on:
+  push:
+    branches: [ main ]
+  # A person turns auto-merge on or adds the label auto-regen. There is no
+  # event for a removal from the queue that this workflow can use: a
+  # pull_request run never starts for a pull request that conflicts (it has no
+  # merge commit), and pull_request_target has no dequeued type. The push to
+  # main is the event that makes the conflict.
+  # pull_request_target runs the workflow file of main, never the file of the
+  # pull request. The jobs below never run pull request code with a secret.
+  pull_request_target:
+    types: [ auto_merge_enabled, labeled ]
+  # The backstop: a conflict that the other events missed, for example while
+  # GitHub still computed the mergeable state.
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "The number of one pull request (empty: every candidate)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  find:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.find.outputs.prs }}
+      main: ${{ steps.find.outputs.main }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Find the pull requests to resolve
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PR: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}
+          INPUT_PR: ${{ github.event_name == 'workflow_dispatch' && inputs.pr || '' }}
+        run: |
+          main_sha="$(git rev-parse HEAD)"
+          echo "auto-regen: main is $main_sha"
+          ./scripts/auto-regen.sh find "$RUNNER_TEMP/prs.json"
+          {
+            echo "prs=$(cat "$RUNNER_TEMP/prs.json")"
+            echo "main=$main_sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "candidates: $(cat "$RUNNER_TEMP/prs.json")" >> "$GITHUB_STEP_SUMMARY"
+
+  # Dispatches each resolve run on the pull request branch. That run uses the
+  # cache scope of the branch, not the cache scope of main.
+  dispatch:
+    needs: find
+    if: ${{ needs.find.outputs.prs != '[]' && needs.find.outputs.prs != '' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.find.outputs.main }}
+          persist-credentials: false
+      - name: Dispatch the resolve runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_SHA: ${{ needs.find.outputs.main }}
+          PRS: ${{ needs.find.outputs.prs }}
+        run: |
+          printf '%s\n' "$PRS" > "$RUNNER_TEMP/prs.json"
+          ./scripts/auto-regen.sh dispatch "$RUNNER_TEMP/prs.json" "$MAIN_SHA"

@@ -154,9 +154,9 @@ func (d groupDirectory) group(ctx context.Context, name string) (principal.Group
 		return principal.Group{}, fmt.Errorf("list groups: %w", err)
 	}
 
-	for _, g := range page.Items {
-		if strings.EqualFold(g.Name, name) {
-			return g, nil
+	for i := range page.Items {
+		if strings.EqualFold(page.Items[i].Name, name) {
+			return page.Items[i], nil
 		}
 	}
 

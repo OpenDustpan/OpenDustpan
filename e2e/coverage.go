@@ -170,7 +170,7 @@ func (coverageAuthorizer) Authorize(
 func (coverageAuthorizer) ListObjects(
 	_ context.Context, _ identity.Principal, _ identity.Action,
 ) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // AllowEntry is one route that no CLI version in the matrix calls, with the
@@ -217,6 +217,7 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
 		signInAllowEntries(),
+		ldapSignInAllowEntries(),
 		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),

@@ -86,7 +86,9 @@ func checkVariantMarks(t *testing.T, got map[string]model.Schema) {
 		t.Errorf("the base belongs to no union: %+v", got["ErrorResponse"])
 	}
 
-	for _, f := range got["LockError"].Fields {
+	fields := got["LockError"].Fields
+	for i := range fields {
+		f := &fields[i]
 		if f.Name == "errorCode" && (f.Type.Kind != model.TypeString || f.Type.Const != "lock.locked") {
 			t.Errorf("errorCode of the variant = %+v, want the string constant lock.locked", f.Type)
 		}

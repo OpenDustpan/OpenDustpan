@@ -32,6 +32,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -60,7 +61,11 @@ func (coverageTofuHTTPWorkspaces) GetByID(_ context.Context, _ workspace.ID) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (coverageTofuHTTPWorkspaces) Create(
+	_ context.Context,
+	_ workspace.Ref,
+	_ workspace.Placement,
+) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 

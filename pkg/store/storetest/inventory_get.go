@@ -104,7 +104,7 @@ func testGetUnitFollowsRename(t *testing.T, s Store) {
 
 	ns, st := createTagged(t, s, nil)
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod2", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod2", ns.Fence(), renameEntry(ns.Name, st.Ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

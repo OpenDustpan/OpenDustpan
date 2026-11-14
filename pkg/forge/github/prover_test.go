@@ -5,6 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"strconv"
+	"strings"
+
+	"opendustpan.org/opendustpan/pkg/forge"
 )
 
 // proofTestKey is the key of testProver. The key is public: it stands for the
@@ -36,11 +40,35 @@ func testMAC(binding []byte) []byte {
 // rawRepoID is the ID of the repository that rawForge answers for.
 const rawRepoID = "700001"
 
-// testProofLine returns the trailer line that a commit of the repository with
-// the ID repoID, the trailer and the base commit carries. The binding repeats
-// the form of the adapter, so a change of that form fails the tests.
-func testProofLine(repoID, trailer, base string) string {
-	binding := "dustpan.forge.commit-proof.v1\x00" + repoID + "\x00" + trailer + "\x00" + base
+// rawBranch is the branch of oneCommit, and rawChanges is the digest of its
+// changes, from an independent Python run of the form of forge.ChangesDigest.
+const (
+	rawBranch  = "main"
+	rawChanges = "sha256:fba8bd48f831c77a61fa10a332619d49c19e1541d2f36fe3fb2e96c4546e4905"
+)
 
-	return "Dustpan-Proof: " + base64.RawURLEncoding.EncodeToString(testMAC([]byte(binding)))
+// rawDelivery is the delivery of a commit with the trailer and the base
+// commit, on rawBranch, with the changes of oneCommit.
+func rawDelivery(trailer, base string) forge.Delivery {
+	return forge.Delivery{Trailer: trailer, Base: base, Branch: rawBranch, Changes: rawChanges}
+}
+
+// testProofLine returns the trailer line that a commit of the repository with
+// the ID repoID, the trailer and the base commit carries, on rawBranch with
+// the changes of oneCommit.
+func testProofLine(repoID, trailer, base string) string {
+	return testProofLineOf(repoID, rawDelivery(trailer, base))
+}
+
+// testProofLineOf returns the trailer line of the proof of d in the repository
+// with the ID repoID. The binding repeats the form of the adapter, so a change
+// of that form fails the tests.
+func testProofLineOf(repoID string, d forge.Delivery) string {
+	var binding strings.Builder
+
+	for _, p := range []string{"dustpan.forge.commit-proof.v2", repoID, d.Trailer, d.Base, d.Branch, d.Changes} {
+		binding.WriteString(strconv.Itoa(len(p)) + ":" + p)
+	}
+
+	return "Dustpan-Proof: " + base64.RawURLEncoding.EncodeToString(testMAC([]byte(binding.String())))
 }

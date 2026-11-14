@@ -296,14 +296,21 @@ func preferencesOf(d preferences.Document) preferencesResponse {
 func (h *Handler) preferencesRoutes() []Route {
 	return []Route{
 		{
-			Method: http.MethodGet, Path: preferencesPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-			Serve: h.getPreferences,
+			Method: http.MethodGet,
+			Path:   preferencesPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.getPreferences,
 		},
 		{
 			Method: http.MethodPatch, Path: preferencesPath, Scope: ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerManagePreferences}, Resolve: resolveCaller,
-			ActionsFor: nil, Serve: h.patchPreferences,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.patchPreferences,
 		},
 	}
 }

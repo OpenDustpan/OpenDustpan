@@ -47,6 +47,10 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 
 	ctx = workspace.WithBudget(ctx, lease)
 
+	// The job of a job token is the origin of the version this write
+	// publishes. Any other token passes no job.
+	ctx = workspace.WithJob(ctx, c.principal.JobTokenID())
+
 	sum, err := contentMD5(r)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -205,8 +209,11 @@ func (h *Handler) forceUnlockWorkspace(
 	// The lock the caller saw is the one that must still be held: its ID and its
 	// holder come from the same read. On a free workspace, expect names the lock
 	// of the record of the last release, which a repeat must match.
+	//
+	// The job of a job token is the origin of the release: the state version
+	// that the release publishes records it.
 	_, _, err = h.ws.ForceUnlockLock(
-		ctx,
+		workspace.WithJob(ctx, c.principal.JobTokenID()),
 		ws.ID,
 		expect,
 		c.principal.Subject,

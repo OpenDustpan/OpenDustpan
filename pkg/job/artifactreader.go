@@ -111,7 +111,7 @@ func (a *ArtifactReads) OpenPlanPart(
 
 	// The record of the item key answers before any blob read: a shredded key
 	// fails here, also when a redaction deleted the blob.
-	if _, probeErr := a.sealer.OpenContent(ctx, ref, []byte(key.String()), bytes.NewReader(nil)); probeErr != nil {
+	if probeErr := probeContent(ctx, a.sealer, ref, []byte(key.String())); probeErr != nil {
 		return nil, fmt.Errorf("open plan part: %w", probeErr)
 	}
 
@@ -126,7 +126,8 @@ func (a *ArtifactReads) OpenPlanPart(
 	}
 
 	return &verifyReader{
-		src: plain, closer: rc, sum: sha256.New(), want: part.SHA256, size: part.Size, check: true, read: 0,
+		src: plain, closer: closePair{first: plain, second: rc}, sum: sha256.New(), want: part.SHA256,
+		size: part.Size, check: true, read: 0,
 	}, nil
 }
 
@@ -171,6 +172,33 @@ func mapBlobError(err error, what string) error {
 }
 
 // closeWith closes c and returns err.
+// probeContent opens no content: it reads the record of the item key of ref,
+// so a shredded key or no key fails before any blob read. It closes the
+// reader at once, which clears the key that the reader holds.
+func probeContent(ctx context.Context, sealer secret.ItemSealer, ref secret.ItemRef, binding []byte) error {
+	probe, err := sealer.OpenContent(ctx, ref, binding, bytes.NewReader(nil))
+	if err != nil {
+		return fmt.Errorf("probe item key: %w", err)
+	}
+
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("probe item key: %w", err)
+	}
+
+	return nil
+}
+
+// closePair closes the opened content first, which clears its key, and then
+// the blob object under it.
+type closePair struct {
+	first, second io.Closer
+}
+
+// Close closes both, also when the first Close fails.
+func (c closePair) Close() error {
+	return errors.Join(c.first.Close(), c.second.Close())
+}
+
 func closeWith(c io.Closer, err error) error {
 	_ = c.Close() //nolint:errcheck // The error to return is the first one.
 
@@ -225,7 +253,7 @@ func openLogVersion(
 		return nil, err
 	}
 
-	if _, probeErr := sealer.OpenContent(ctx, ref, first, bytes.NewReader(nil)); probeErr != nil {
+	if probeErr := probeContent(ctx, sealer, ref, first); probeErr != nil {
 		return nil, fmt.Errorf("open log: %w", probeErr)
 	}
 
@@ -358,7 +386,7 @@ func (r *logReader) openChunk() error {
 		return closeWith(rc, fmt.Errorf("open log chunk: %w", err))
 	}
 
-	r.cur, r.closer = plain, rc
+	r.cur, r.closer = plain, closePair{first: plain, second: rc}
 	r.next++
 
 	return nil

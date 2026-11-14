@@ -44,16 +44,18 @@ type auditSinkList struct {
 
 // TestAuditSinks proves the audit sinks. The file subtest starts an
 // in-process server with a file sink, writes one audited change and reads
-// the sink list: one sink is listed and its lag is a number. The other
-// subtests run on the server binary, on each store, with a syslog sink over
-// TLS, a signed webhook sink and an OTLP sink at once. A receiver in the test
-// process reads each sink on the wire, and the entries it holds match the
-// audit export by scope and sequence.
+// the sink list: one sink is listed and its lag is a number. The receivers
+// subtest runs on the in-process server, on each store, with a syslog sink
+// over TLS, a signed webhook sink and an OTLP sink at once. A receiver in the
+// test process reads each sink on the wire, and the entries it holds match the
+// audit export by scope and sequence. The binary subtest proves that a
+// loopback sink URL fails the start.
 func TestAuditSinks(t *testing.T) {
 	t.Parallel()
 
 	t.Run("file", testFileSink)
 	t.Run("receivers", testSinkReceivers)
+	t.Run("loopback refused", testSinkLoopbackRefused)
 }
 
 // testFileSink checks the sink list of an in-process server with one file
@@ -258,14 +260,14 @@ func sinkScopes() []string {
 	return []string{"orbit", "delta"}
 }
 
-// testSinkReceivers restarts the server binary with the three sinks set,
+// testSinkReceivers starts an in-process server with the three sinks set,
 // writes audited changes, and compares what each receiver read with the audit
 // export.
 func testSinkReceivers(t *testing.T) {
 	t.Parallel()
 
-	if !e2e.UseBinaryServer() {
-		t.Skip("needs E2E_SERVER=binary: the audit sink flags belong to the server binary")
+	if e2e.UseBinaryServer() {
+		t.Skip("needs the in-process server: a loopback receiver needs the test rules of the sink client")
 	}
 
 	databases, err := e2e.Databases()
@@ -286,6 +288,60 @@ func testSinkReceivers(t *testing.T) {
 	}
 }
 
+// testSinkLoopbackRefused proves that a webhook sink URL on the loopback
+// fails the start of the server binary and that the error names the item.
+func testSinkLoopbackRefused(t *testing.T) {
+	t.Parallel()
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary: the audit sink flag belongs to the server binary")
+	}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+
+			runSinkLoopbackRefused(t, db)
+		})
+	}
+}
+
+// runSinkLoopbackRefused proves the refusal on one store.
+func runSinkLoopbackRefused(t *testing.T, db e2e.Store) {
+	t.Helper()
+
+	if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+
+	env := e2e.NewEnv(ctx, t, e2e.NoCLI(), db)
+	if env.HAEnabled() {
+		t.Skip("needs one server: the refusal proves the start of one process")
+	}
+
+	env.StopServer(ctx, t)
+	env.SetAuditSinks(t, e2e.AuditSinkSettings{
+		Items: []string{"webhook=webhook:https://127.0.0.1:4318/hook"},
+		Env:   []string{"DUSTPAN_AUDIT_WEBHOOK_SECRET=" + strings.Repeat("0", 64)},
+	})
+
+	code, out := env.StartServerExpectingRefusal(ctx, t, env.DatabaseURL(t))
+	if code == 0 {
+		t.Fatalf("serve with a loopback webhook sink exits with status 0, want a refusal\n%s", out)
+	}
+
+	if !strings.Contains(out, "--audit-sink") || !strings.Contains(out, "webhook") {
+		t.Fatalf("serve error does not name the sink item:\n%s", out)
+	}
+}
+
 // runSinkScenario runs the scenario on one store and then the subtests, one
 // for each receiver.
 func runSinkScenario(t *testing.T, db e2e.Store) {
@@ -293,15 +349,8 @@ func runSinkScenario(t *testing.T, db e2e.Store) {
 
 	ctx := t.Context()
 
-	// The scenario calls the API only, so it needs no installed CLI.
-	var cli e2e.Install
-
-	env := e2e.NewEnv(ctx, t, cli, db)
 	receivers := e2e.NewAuditReceivers(t)
-
-	env.StopServer(ctx, t)
-	env.SetAuditSinks(t, receivers.Settings())
-	env.StartServer(ctx, t)
+	env := e2e.NewEnvWithAuditSinks(ctx, t, db, receivers.Sinks(t)...)
 
 	for _, name := range sinkScopes() {
 		env.CreateNamespace(ctx, t, name)
@@ -522,6 +571,24 @@ func postToReceiver(ctx context.Context, t *testing.T, client *http.Client, in r
 	return resp.StatusCode
 }
 
+// forgedScope is the scope of every entry that a forged request carries.
+const forgedScope = "forged"
+
+// countScope returns the number of entries of entries whose scope is scope.
+// A check of a refusal counts only the forged entries: genuine entries can
+// arrive while the check runs.
+func countScope(entries []e2e.ReceivedEntry, scope string) int {
+	count := 0
+
+	for i := range entries {
+		if entries[i].Scope == scope {
+			count++
+		}
+	}
+
+	return count
+}
+
 // checkWebhookRefusals proves that the webhook receiver refuses a request
 // with a wrong signature, a request with a signature of another body, and a
 // signed request with an old timestamp, and keeps none of their entries. A
@@ -531,11 +598,10 @@ func checkWebhookRefusals(ctx context.Context, t *testing.T, receivers *e2e.Audi
 
 	client := receiverClient(t, receivers)
 	target := receivers.Webhook.URL()
-	before := len(receivers.Webhook.Entries())
 	refusedBefore := receivers.Webhook.Refused()
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	old := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
-	body := `[{"scope":"forged","sequence":1,"action":"forged","object":"forged","kind":"forged","hash":""}]`
+	body := `[{"scope":"` + forgedScope + `","sequence":1,"action":"forged","object":"forged","kind":"forged","hash":""}]`
 
 	for name, header := range map[string]map[string]string{
 		"wrong signature": {
@@ -563,8 +629,8 @@ func checkWebhookRefusals(ctx context.Context, t *testing.T, receivers *e2e.Audi
 		t.Fatalf("webhook receiver counts %d refusals, want 4", got)
 	}
 
-	if got := len(receivers.Webhook.Entries()); got != before {
-		t.Fatalf("webhook receiver holds %d entries after refusals, want %d", got, before)
+	if got := countScope(receivers.Webhook.Entries(), forgedScope); got != 0 {
+		t.Fatalf("webhook receiver holds %d entries of the forged requests after refusals, want 0", got)
 	}
 
 	good := map[string]string{"Dustpan-Timestamp": now, "Dustpan-Signature": receivers.Webhook.Sign(now, []byte("[]"))}
@@ -582,16 +648,19 @@ func checkOTLPRefusal(ctx context.Context, t *testing.T, receivers *e2e.AuditRec
 
 	client := receiverClient(t, receivers)
 	target := receivers.OTLP.URL() + "/v1/logs"
-	before := len(receivers.OTLP.Entries())
 
 	header := map[string]string{"Content-Type": "application/json"}
-	request := receiverPost{target: target, header: header, body: `{"resourceLogs":[]}`}
+	body := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{` +
+		`"timeUnixNano":"1","severityText":"INFO","attributes":[` +
+		`{"key":"scope","value":{"stringValue":"` + forgedScope + `"}},` +
+		`{"key":"sequence","value":{"intValue":"1"}}]}]}]}]}`
+	request := receiverPost{target: target, header: header, body: body}
 
 	if got := postToReceiver(ctx, t, client, request); got != http.StatusUnauthorized {
 		t.Fatalf("OTLP export without a key answers %d, want %d", got, http.StatusUnauthorized)
 	}
 
-	if got := len(receivers.OTLP.Entries()); got != before {
-		t.Fatalf("OTLP collector holds %d entries after a refusal, want %d", got, before)
+	if got := countScope(receivers.OTLP.Entries(), forgedScope); got != 0 {
+		t.Fatalf("OTLP collector holds %d entries of the forged export after a refusal, want 0", got)
 	}
 }

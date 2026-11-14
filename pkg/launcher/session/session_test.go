@@ -149,7 +149,7 @@ func opened(t *testing.T, rest answerFunc) answerFunc {
 			Session: "ses-1", ExpiresAt: time.Now(), Lease: protocol.FromStd(time.Minute), AssignmentVersion: 1,
 			Assignment: protocol.Assignment{
 				Namespace: "acme", Unit: "", Tool: "", Job: "job-1", Phase: "plan", Sweep: "", ServerURL: server,
-				Source: nil, Steps: nil, Plan: nil, GitCredentials: "none", GitHelper: "",
+				Source: nil, Steps: nil, Plan: nil, GitCredentials: "none", GitHelper: "", Profile: "",
 			},
 		}), nil
 	}

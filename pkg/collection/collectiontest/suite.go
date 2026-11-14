@@ -31,6 +31,9 @@ import (
 // toolPulumi is the tool name of the Pulumi stacks of the suite.
 const toolPulumi = "pulumi"
 
+// otherNamespace names a second namespace in the cases that cross namespaces.
+const otherNamespace = "other"
+
 // Store is every persistence port the suite exercises.
 type Store interface {
 	collection.Store
@@ -38,6 +41,7 @@ type Store interface {
 	workspace.Store
 	stack.Store
 	stack.PlacedStore
+	workspace.PlacedStore
 	inventory.Reader
 }
 
@@ -81,6 +85,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a placed stack is made in its collection", test: testCreateStackPlaced},
 		{name: "a placed stack that cannot join makes no stack", test: testCreateStackPlacedRefused},
 		{name: "a placed duplicate leaves the old stack as it was", test: testCreateStackPlacedDuplicate},
+		{name: "a placed workspace is made in its collection", test: testCreateWorkspacePlaced},
+		{name: "a placed workspace that cannot join makes no workspace", test: testCreateWorkspacePlacedRefused},
 	}
 
 	for _, tc := range cases {
@@ -615,7 +621,7 @@ func testStackRename(t *testing.T, s Store) {
 		t.Fatalf("SetUnit: %v", err)
 	}
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("RenameStack: %v", err)
 	}
 
@@ -803,7 +809,7 @@ func testListCollectionUnitIDs(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
-	other := newNamespace(t, s, "other")
+	other := newNamespace(t, s, otherNamespace)
 	unit := createUnit(t, s, ns)
 	foreign := createUnit(t, s, other)
 	c := newCollection(t, ns.Name, "payments")
@@ -849,7 +855,7 @@ func testListCollectionUnitIDsMissing(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
-	other := newNamespace(t, s, "other")
+	other := newNamespace(t, s, otherNamespace)
 	same := newCollection(t, other.Name, "payments")
 
 	if err := createColl(t, s, same, other.Fence()); err != nil {
@@ -970,7 +976,11 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         ref,
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
@@ -1074,12 +1084,27 @@ func testCreateStackPlacedRefused(t *testing.T, s Store) {
 	reborn.ID = ident.NewID("col-")
 
 	foreign := placement(c, ns.Fence())
-	foreign.Entry.Namespace = "other"
+	foreign.Entry.Namespace = otherNamespace
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 	missing := newCollection(t, ns.Name, "absent")
 
+	var none stack.Placement
+
+	noID := placement(c, ns.Fence())
+	noID.CollectionID = ""
+
+	noName := placement(c, ns.Fence())
+	noName.Collection.Name = ""
+
+	otherNS := placement(c, ns.Fence())
+	otherNS.Collection.Namespace = otherNamespace
+
 	refusals := []placedRefusal{
+		{"no placement", none, ns.Fence(), collection.ErrNoCollection},
+		{"no collection ID", noID, ns.Fence(), collection.ErrNoCollection},
+		{"no collection name", noName, ns.Fence(), collection.ErrNoCollection},
+		{"a collection of another namespace", otherNS, ns.Fence(), collection.ErrNoCollection},
 		{
 			"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(),
 			collection.ErrPlacementCollectionMissing,

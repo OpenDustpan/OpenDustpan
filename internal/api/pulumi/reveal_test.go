@@ -212,7 +212,7 @@ func seedRevealVersion(t *testing.T, f revealFixture, provider string) (int64, s
 		base64.StdEncoding.EncodeToString(cipher[0]) + `"},"greeting":"hi"}}]}`
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)

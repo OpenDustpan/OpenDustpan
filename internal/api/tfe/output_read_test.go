@@ -58,7 +58,10 @@ func newOutputHandler(t *testing.T, authz identity.Authorizer, checker outputsha
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -347,11 +350,24 @@ func TestOutputRoutesKeepWholeStateChecksForAJobToken(t *testing.T) {
 			workspaces := olderStateWorkspaces{sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}}}
 
 			handler, err := tfe.NewHandler(tfe.Config{
-				Registry: nil, Authenticator: jobTokenAuthenticator{}, Authorizer: authz, AddressGate: nil,
-				Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: workspaces,
-				OutputChecker: newTestOutputChecker(t, authz, workspaces), BaseURL: baseurl.Resolver{},
-				Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-				Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+				Registry:       nil,
+				Authenticator:  jobTokenAuthenticator{},
+				Authorizer:     authz,
+				AddressGate:    nil,
+				Logger:         slog.New(slog.DiscardHandler),
+				Namespaces:     newTestNamespaces(t),
+				Workspaces:     workspaces,
+				OutputChecker:  newTestOutputChecker(t, authz, workspaces),
+				BaseURL:        baseurl.Resolver{},
+				Audit:          newTestAudit(),
+				Gate:           nil,
+				MaxStateBytes:  0,
+				OnAuditFailure: nil,
+				DenialLimiter:  nil,
+				Sessions:       nil,
+				SessionPolicy:  nil,
+				StateGuard:     stategate.Off("the test keeps no gates"),
+				Placer:         testPlacer(),
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

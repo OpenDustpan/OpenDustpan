@@ -236,12 +236,13 @@ func pageAll(t *testing.T, h Harness, f job.Filter) []job.ID {
 			t.Fatalf("List = %v", err)
 		}
 
-		if len(page) == 0 {
+		out = append(out, ids(page.Jobs)...)
+
+		if page.After == "" {
 			return out
 		}
 
-		out = append(out, ids(page)...)
-		f.After = page[len(page)-1].ID
+		f.After = page.After
 	}
 
 	t.Fatalf("paging did not end after %d pages", namespaces*perNamespace)

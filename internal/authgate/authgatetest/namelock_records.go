@@ -326,7 +326,7 @@ func testPruneEndedLocks(t *testing.T, h NameLockHarness) {
 	// This count has no lock.
 	add(t, c, key(authgate.ScopePassword, "plain", "s"), rule(limitFive, longLock), nil)
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	n, err := c.PruneNameLocks(
 		t.Context(),
@@ -381,7 +381,7 @@ func testPruneEndedBound(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
 	}
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	// A limit of one for the ended locks deletes one of them in a run, and
 	// no run deletes an ended lock with no entry.
@@ -482,7 +482,7 @@ func testPruneEndedAboveLimit(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "ended-"+strconv.Itoa(i), "s"), rule(1, shortLock), nil)
 	}
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	before := len(h.Entries(t))
 

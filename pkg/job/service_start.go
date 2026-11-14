@@ -55,7 +55,9 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 	// grants of a job token hold no start action. This check stays so that a
 	// role with too many actions never lets a job token start a job.
 	if a.Principal.Credential == identity.CredentialJobToken {
-		return "", fmt.Errorf("%w: a job token cannot start a job", identity.ErrDenied)
+		// The refusal is not a missing permission, so it is a policy refusal
+		// of the job and not a denial.
+		return "", fmt.Errorf("%w: a job token cannot start a job", ErrPolicyDenied)
 	}
 
 	err := checkKinds(req)
@@ -458,12 +460,12 @@ func editKeys(spec *Spec) []string {
 // gates.
 func (s *service) newJob(a Actor, c *decided) Job {
 	j := Job{
-		ID: s.newID(), Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
+		ID: s.newID(), NamespaceID: "", Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
 		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
 		Closed:       nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
-		RequestHash: requestHash(c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		RequestHash: requestHash(c.source, c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		StateChangedAt: time.Time{},
 	}
 
@@ -505,11 +507,12 @@ func scopedKey(subject, key string) string {
 
 // requestHash returns the hash of the whole request of a start, or "" for a
 // request with no idempotency key. The store compares it when a key names a
-// job that exists: the same key with another reason, another pool name or
-// another code location is another request, and fails with ErrKeyConflict.
-// The store compares the spec too. The spec alone is not enough, because it
-// holds neither the reason nor the pool name as the caller gave it.
-func requestHash(req *StartRequest) string {
+// job that exists: the same key with another reason, another pool name,
+// another code location or another source kind is another request, and fails
+// with ErrKeyConflict. The store compares the spec too. The spec alone is not
+// enough, because it holds neither the reason nor the pool name as the caller
+// gave it.
+func requestHash(source SourceKind, req *StartRequest) string {
 	if req.IdempotencyKey == "" {
 		return ""
 	}
@@ -525,6 +528,7 @@ func requestHash(req *StartRequest) string {
 		b.WriteByte(';')
 	}
 
+	put(string(source))
 	put(req.Unit.String())
 	put(string(req.Operation))
 	put(string(req.Purpose))
@@ -545,15 +549,22 @@ func requestHash(req *StartRequest) string {
 		put("")
 	}
 
-	// The trigger joins the hash when there is one, so a request without a
-	// trigger keeps its hash.
+	// A marker says whether the request has a trigger, so that the fields of
+	// a trigger never read as the edits of a request without one.
 	if req.Trigger != nil {
+		put("trigger")
 		put(req.Trigger.ID)
 		put(req.Trigger.Saver)
+	} else {
+		put("")
 	}
 
+	// The count of the keys of each edit joins the hash, so that the keys of
+	// one edit never read as the keys of another. The edits are last, so
+	// these counts separate them without a count of the edits.
 	for i := range req.Edits {
 		put(req.Edits[i].Path)
+		put(strconv.Itoa(len(req.Edits[i].Keys)))
 
 		for _, k := range slices.Sorted(maps.Keys(req.Edits[i].Keys)) {
 			put(k)

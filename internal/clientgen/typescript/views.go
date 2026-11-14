@@ -177,7 +177,8 @@ func objectOf(s *model.Schema, tv typeView) (typeView, error) {
 
 	tv.Kind = kindInterface
 
-	for _, f := range s.Fields {
+	for i := range s.Fields {
+		f := &s.Fields[i]
 		typ, err := typeExpr(f.Type)
 		if err != nil {
 			return typeView{}, fmt.Errorf("schema %s, member %s: %w", s.Name, f.Name, err)
@@ -245,7 +246,7 @@ func knownFormats(kind model.TypeKind) ([]string, bool) {
 		return []string{"", "int64"}, true
 	case model.TypeNumber:
 		return []string{"", "float", "double"}, true
-	case model.TypeBoolean, model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny:
+	case model.TypeBoolean, model.TypeArray, model.TypeMap, model.TypeRef, model.TypeAny, model.TypeUnion:
 		return []string{""}, true
 	default:
 		return nil, false
@@ -274,15 +275,7 @@ func walkBase(t model.Type) (walked, error) {
 
 	switch t.Kind {
 	case model.TypeString:
-		if t.Const != "" {
-			return walked{tsString(t.Const), "literal(" + tsString(t.Const) + ")"}, nil
-		}
-
-		if t.Format == "date-time" {
-			return walked{stringType, "dateTime"}, nil
-		}
-
-		return walked{stringType, stringType}, nil
+		return stringWalk(t), nil
 	case model.TypeInteger:
 		return walked{numberType, "int64"}, nil
 	case model.TypeNumber:
@@ -302,11 +295,83 @@ func walkBase(t model.Type) (walked, error) {
 	case model.TypeAny:
 		// The description says explicitly that the value is any JSON value.
 		return walked{unknownType, anyDecoder}, nil
+	case model.TypeUnion:
+		return unionWalk(t)
 	}
 
 	return walked{}, fmt.Errorf(
 		"%w: the TypeScript template set has no type for kind %d", clientgen.ErrUnsupported, t.Kind,
 	)
+}
+
+// stringWalk writes the type and the validator of a string: a literal, a date
+// and time, or any string.
+func stringWalk(t model.Type) walked {
+	if t.Const != "" {
+		return walked{tsString(t.Const), "literal(" + tsString(t.Const) + ")"}
+	}
+
+	if t.Format == "date-time" {
+		return walked{stringType, "dateTime"}
+	}
+
+	return walked{stringType, stringType}
+}
+
+// typeListMinMembers is the smallest number of members of a type list.
+const typeListMinMembers = 2
+
+// unionWalk writes the type and the validator of a type list: a union of the
+// listed types, in the order of the list, and a validator that tries each of
+// them.
+func unionWalk(t model.Type) (walked, error) {
+	// Defense in depth: the check of the model refuses a type list with fewer
+	// than two members. This check stays so that the walk cannot write a union
+	// of no member.
+	if len(t.Members) < typeListMinMembers {
+		return walked{}, fmt.Errorf(
+			"%w: the TypeScript template set needs two or more members of a type list, not %d",
+			clientgen.ErrUnsupported, len(t.Members),
+		)
+	}
+
+	types := make([]string, 0, len(t.Members))
+	decoders := make([]string, 0, len(t.Members))
+	texts := make([]string, 0, len(t.Members))
+
+	for _, m := range t.Members {
+		w, err := walkBase(primitive(m))
+		if err != nil {
+			return walked{}, err
+		}
+
+		types = append(types, w.Type)
+		decoders = append(decoders, w.Decoder)
+		texts = append(texts, "a "+w.Type)
+	}
+
+	union := strings.Join(types, " | ")
+
+	return walked{
+		Type:    union,
+		Decoder: "oneOf<" + union + ">(" + tsString(joinText(texts)) + ", " + strings.Join(decoders, ", ") + ")",
+	}, nil
+}
+
+// primitive makes a type of one primitive kind, with the fields that a member
+// of a type list does not have empty.
+func primitive(kind model.TypeKind) model.Type {
+	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
+}
+
+// joinText joins the names of the accepted types of a type list, as in
+// "a string, a number or a boolean".
+func joinText(texts []string) string {
+	if len(texts) < typeListMinMembers {
+		return strings.Join(texts, "")
+	}
+
+	return strings.Join(texts[:len(texts)-1], ", ") + " or " + texts[len(texts)-1]
 }
 
 // walkElem walks the items of an array or the values of a map.

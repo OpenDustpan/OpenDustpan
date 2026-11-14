@@ -94,6 +94,60 @@ func TestGroupDirectoryWithNoGroups(t *testing.T) {
 	}
 }
 
+// TestGroupSchemaName proves that the name of a schema that the tests make
+// keeps the prefix of the test binary, and that it fails without one.
+func TestGroupSchemaName(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "grp_deadbeef_"
+	suffix := []byte{0xde, 0xad, 0xbe, 0xef}
+
+	tests := []struct {
+		name    string
+		prefix  string
+		suffix  []byte
+		want    string
+		wantErr error
+	}{
+		{
+			name:    "prefix and suffix",
+			prefix:  prefix,
+			suffix:  suffix,
+			want:    prefix + hex.EncodeToString(suffix),
+			wantErr: nil,
+		},
+		{
+			name:    "empty prefix",
+			prefix:  "",
+			suffix:  suffix,
+			want:    "",
+			wantErr: errEmptyGroupSchemaPrefix,
+		},
+		{
+			name:    "empty suffix",
+			prefix:  prefix,
+			suffix:  nil,
+			want:    prefix,
+			wantErr: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := groupSchemaName(tc.prefix, tc.suffix)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("groupSchemaName(%q, %x) error = %v, want %v", tc.prefix, tc.suffix, err, tc.wantErr)
+			}
+
+			if got != tc.want {
+				t.Fatalf("groupSchemaName(%q, %x) = %q, want %q", tc.prefix, tc.suffix, got, tc.want)
+			}
+		})
+	}
+}
+
 // groupFixture returns the fixture of the suite over st: groups and people go
 // through the principal service, as the API makes them.
 func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixture {
@@ -105,6 +159,7 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})
@@ -192,8 +247,8 @@ func groupEditors(
 	rename := func(t *testing.T, id, name string) {
 		t.Helper()
 
-		_, err := svc.UpdateGroup(t.Context(), entry(identity.ActionServerManageGroups), id,
-			principal.GroupChange{Name: &name, Description: nil})
+		_, err := svc.UpdateGroup(t.Context(), entry(identity.ActionServerManageGroups), admin, id,
+			principal.GroupUpdate{Name: &name, Description: nil, ClosedToIdentityProvider: nil})
 		if err != nil {
 			t.Fatalf("rename group %q to %q: %v", id, name, err)
 		}
@@ -212,6 +267,21 @@ const groupPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
 // tests.
 const groupSchemaPrefixEnv = "DUSTPAN_TEST_GROUP_SCHEMA_PREFIX"
 
+// errEmptyGroupSchemaPrefix reports an empty prefix for the name of a schema
+// that the tests make.
+var errEmptyGroupSchemaPrefix = errors.New("empty group schema prefix")
+
+// groupSchemaName returns prefix + hex.EncodeToString(suffix). It fails when
+// prefix is empty, because a name without a prefix is not unique to the test
+// binary. The check is a defense in depth layer: TestMain sets the prefix too.
+func groupSchemaName(prefix string, suffix []byte) (string, error) {
+	if prefix == "" {
+		return "", errEmptyGroupSchemaPrefix
+	}
+
+	return prefix + hex.EncodeToString(suffix), nil
+}
+
 // newGroupSchema makes a schema for one case on the database at base, drops it
 // when the case ends, and returns the URL that uses it. The schemas of the
 // cases fill the disk otherwise.
@@ -223,7 +293,10 @@ func newGroupSchema(t *testing.T, base string) string {
 		t.Fatalf("random schema name: %v", err)
 	}
 
-	name := os.Getenv(groupSchemaPrefixEnv) + hex.EncodeToString(suffix)
+	name, err := groupSchemaName(os.Getenv(groupSchemaPrefixEnv), suffix)
+	if err != nil {
+		t.Fatalf("schema name: %v", err)
+	}
 
 	execGroupSQL(t, base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
 	pgtest.DropSchemaAtCleanup(t, base, name)

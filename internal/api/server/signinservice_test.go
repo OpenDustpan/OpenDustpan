@@ -12,16 +12,27 @@ import (
 )
 
 // newTestSignInService returns the sign-in service over the store st, as the
-// server builds it: no group applier, and the principal records and the
-// session generations of st.
+// server builds it: no group applier, and the principal records, the session
+// generations and the temporary administrators of st.
 func newTestSignInService(
 	t *testing.T, st *sqlite.Store, sessions *session.Sessions, principals *principal.Service,
 ) *signinsvc.Service {
 	t.Helper()
 
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: audit.ServerStore(st),
-		Groups: nil, States: st, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: nil,
+		Principals:     principals,
+		Disabler:       st,
+		Generations:    st,
+		Sessions:       sessions,
+		Audit:          audit.ServerStore(st),
+		TempAdmins:     st,
+		Groups:         nil,
+		Removals:       nil,
+		States:         st,
+		Locks:          st,
+		NameKeys:       st,
+		Logger:         slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("sign-in service: %v", err)

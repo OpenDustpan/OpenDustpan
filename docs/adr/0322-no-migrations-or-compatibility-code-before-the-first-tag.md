@@ -4,6 +4,7 @@ Status: accepted · 2026-11-02. Decisions 1, 2, 4 and 5 are owner decisions. Dec
 
 Changed by:
 
+- ADR 362 changes decision 5: the `.sha256` files of the baselines are absent until the first tag, and the release generates them.
 - ADR 325 changes decision 1: the test of the one baseline becomes `TestMigrationFilesFollowTheRecord`, with a second form after the first tag.
 - ADR 325 changes decision 5: the disabled checks skip only while the release record lists no shipped migration file.
 - ADR 325 changes decision 6: the release record turns the checks on, and the collapse script refuses from the record.

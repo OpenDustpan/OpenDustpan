@@ -1,9 +1,7 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -52,11 +50,11 @@ type RollbackChange struct {
 // encryption envelope of the client is a known condition: the read gives
 // Encrypted true and no resource data. A document that holds the member
 // encrypted_data and is not exactly that envelope fails with ErrInvalidState:
-// a plaintext state must never read as encrypted. A workspace with no current
-// state fails with ErrNoState. A state that holds a resource entry the server
-// cannot read fails with ErrInvalidState, because the count would be too low.
-// A state with more than MaxRollbackInstances instances fails with
-// ErrTooManyResources.
+// the read refuses it, so its resources never hide from the gates and never
+// read as plaintext. A workspace with no current state fails with ErrNoState.
+// A state that holds a resource entry the server cannot read fails with
+// ErrInvalidState, because the count would be too low. A state with more than
+// MaxRollbackInstances instances fails with ErrTooManyResources.
 func (s *Service) ReadRollbackChange(ctx context.Context, id ID, to StateVersionID) (RollbackChange, error) {
 	next, nextVersion, err := s.openStateBytes(ctx, to)
 	if err != nil {
@@ -87,14 +85,14 @@ func (s *Service) ReadRollbackChange(ctx context.Context, id ID, to StateVersion
 // store. The time and the memory of the computation grow with the size of the
 // states, not with its square, and MaxRollbackInstances bounds both.
 func rollbackChangeOf(next []byte, nextID StateVersionID, cur []byte, curID StateVersionID) (RollbackChange, error) {
-	nextEnc, err := isEncryptionEnvelope(next, nextID)
+	nextEnc, err := IsClientEncrypted(next)
 	if err != nil {
-		return RollbackChange{}, err
+		return RollbackChange{}, fmt.Errorf("read the restored state %s: %w", nextID, err)
 	}
 
-	curEnc, err := isEncryptionEnvelope(cur, curID)
+	curEnc, err := IsClientEncrypted(cur)
 	if err != nil {
-		return RollbackChange{}, err
+		return RollbackChange{}, fmt.Errorf("read the current state %s: %w", curID, err)
 	}
 
 	if nextEnc || curEnc {
@@ -122,88 +120,6 @@ func rollbackChangeOf(next []byte, nextID StateVersionID, cur []byte, curID Stat
 	slices.Sort(removed)
 
 	return RollbackChange{Current: curID, Resources: int64(len(nextSet)), Removed: removed, Encrypted: false}, nil
-}
-
-// The top-level members of the state that OpenTofu encrypts on the client: the
-// envelope, and the plain serial and lineage that a backend needs to order
-// versions.
-const (
-	stateKeySerial  = "serial"
-	stateKeyLineage = "lineage"
-	stateKeyMeta    = "meta"
-	stateKeyVersion = "encryption_version"
-)
-
-// isEnvelopeKey reports whether k is a member of the encryption envelope.
-func isEnvelopeKey(k string) bool {
-	switch k {
-	case stateKeySerial, stateKeyLineage, stateKeyMeta, encryptedStateKey, stateKeyVersion:
-		return true
-	default:
-		return false
-	}
-}
-
-// isEncryptionEnvelope reports whether state is exactly the envelope of a
-// state that the client encrypted. A state with no encrypted_data member is
-// plaintext and gives false. A state that has the member and any other shape
-// gives ErrInvalidState: it is a look-alike, and the server must not read it as
-// encrypted, because that would hide its resources from the gates.
-func isEncryptionEnvelope(state []byte, id StateVersionID) (bool, error) {
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(state, &doc); err != nil || doc == nil {
-		return false, fmt.Errorf("%w: state %s is not a JSON object", ErrInvalidState, id)
-	}
-
-	if _, has := doc[encryptedStateKey]; !has {
-		return false, nil
-	}
-
-	if err := checkEnvelopeShape(doc); err != nil {
-		return false, fmt.Errorf("%w: state %s has %s and %w", ErrInvalidState, id, encryptedStateKey, err)
-	}
-
-	return true, nil
-}
-
-// errNotEnvelope is the cause of a document that has encrypted_data and is not
-// the encryption envelope.
-var errNotEnvelope = errors.New("is not an encryption envelope")
-
-// checkEnvelopeShape checks the members of a document that has encrypted_data:
-// no member outside the envelope, the three members of the envelope with their
-// kinds, and the plain serial and lineage with theirs.
-func checkEnvelopeShape(doc map[string]json.RawMessage) error {
-	for k := range doc {
-		if !isEnvelopeKey(k) {
-			return fmt.Errorf("%w: the member %q", errNotEnvelope, k)
-		}
-	}
-
-	kinds := map[string]byte{encryptedStateKey: '"', stateKeyMeta: '{', stateKeyVersion: '"'}
-	for k, first := range kinds {
-		if !rawIsKind(doc[k], first) {
-			return fmt.Errorf("%w: the member %q has another kind of value", errNotEnvelope, k)
-		}
-	}
-
-	if raw, ok := doc[stateKeyLineage]; ok && !rawIsKind(raw, '"') {
-		return fmt.Errorf("%w: the lineage is not text", errNotEnvelope)
-	}
-
-	if raw, ok := doc[stateKeySerial]; ok && (len(raw) == 0 || raw[0] < '0' || raw[0] > '9') {
-		return fmt.Errorf("%w: the serial is not a number", errNotEnvelope)
-	}
-
-	return nil
-}
-
-// rawIsKind reports whether the JSON value raw starts with first: a quote for a
-// string, a brace for an object.
-func rawIsKind(raw json.RawMessage, first byte) bool {
-	t := bytes.TrimSpace(raw)
-
-	return len(t) > 0 && t[0] == first
 }
 
 // stateInstances returns the set of the resource instance addresses of a

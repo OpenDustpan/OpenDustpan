@@ -60,6 +60,17 @@ var (
 	// ErrLimit reports a write above a limit of its scope, a condition
 	// above its size limit, or a fact document that does not fit.
 	ErrLimit = errors.New("a gate limit is exceeded")
+	// ErrLimitMembership reports the text of an access limit or a gate whose
+	// membership test of principal names a value that is not a named group
+	// and not a set of named groups. The server cannot tell which group
+	// such a text names, so it refuses an access limit at save and refuses
+	// a change of the members of a group at check time.
+	ErrLimitMembership = errors.New("a membership test of principal can name only a group or a set of groups")
+	// ErrLimitGroupReach reports an access limit whose text names a group
+	// that its author may not manage. The save refuses it, because the
+	// group guard would then let only a site administrator change the
+	// members of that group.
+	ErrLimitGroupReach = errors.New("an access limit names a group that its author cannot manage")
 	// ErrUnavailable reports a policy engine or a store that does not
 	// answer, or an external engine whose answer does not authenticate.
 	ErrUnavailable = errors.New("the policy engine is unavailable")
@@ -94,6 +105,8 @@ func codes() []errorCode {
 		{ErrFinal, "gate.final"},
 		{ErrInvalid, "gate.invalid"},
 		{ErrLimit, "gate.limit"},
+		{ErrLimitGroupReach, "gate.limit-group-reach"},
+		{ErrLimitMembership, "gate.limit-membership"},
 		{ErrUnavailable, "gate.unavailable"},
 	}
 }

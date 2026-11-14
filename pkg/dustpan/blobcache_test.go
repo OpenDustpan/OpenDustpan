@@ -73,7 +73,7 @@ func TestBlobCacheServesRepeatReads(t *testing.T) {
 
 	const content = `{"version":4,"serial":1,"lineage":"l1"}`
 
-	w := createLockedWorkspace(t, svc)
+	w := createLockedWorkspace(t, svc, st)
 	finalized := uploadWorkspaceState(t, svc, w.ID, content)
 
 	checkWorkspaceContent(t, svc, w.ID, finalized.ID, content)
@@ -178,7 +178,7 @@ func TestBlobCacheLeavesOtherReadsUncached(t *testing.T) {
 
 	const content = `{"version":4,"serial":1,"lineage":"l1","outputs":{}}`
 
-	w := createLockedWorkspace(t, srv.Workspaces())
+	w := createLockedWorkspace(t, srv.Workspaces(), st)
 	finalized := uploadWorkspaceState(t, srv.Workspaces(), w.ID, content)
 	checkWorkspaceContent(t, srv.Workspaces(), w.ID, finalized.ID, content)
 

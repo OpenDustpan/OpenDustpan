@@ -24,22 +24,22 @@ import (
 func TestPulumiJournalingOn(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	pulumiVersions := e2e.Pulumi().Versions()
-	if len(pulumiVersions) == 0 {
+	pulumiVersion := e2e.Pulumi().Single()
+	if pulumiVersion == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runPulumiJournalingOn(t, fetcher, pulumiVersions[0], db)
+			runPulumiJournalingOn(t, fetcher, pulumiVersion, db)
 		})
 	}
 }

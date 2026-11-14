@@ -122,7 +122,7 @@ func backupAllowEntries() []AllowEntry {
 				"it with the check handler tests in check_test.go.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/upgrade-check",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/upgrade-check",
 			CoveringTest: "TestUpgradeCheck",
 			Reason: "Operator route: no CLI in the matrix calls it. The " +
 				"opendustpan upgrade check binary calls it with Go-http-client, " +
@@ -173,19 +173,19 @@ const maintenanceCoveringTest = "TestMaintenance"
 func maintenanceAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodGet, Path: "/api/server/maintenance",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/maintenance",
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI reads the installation state. " +
 				"The harness step reads it before and after the enter.",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/server/maintenance/enter",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/maintenance/enter",
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI enters maintenance mode. The " +
 				"harness step refuses active work, then force-cancels it.",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/server/maintenance/leave",
+			Method: http.MethodPost, Path: "/api/dustpan/v1/maintenance/leave",
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",

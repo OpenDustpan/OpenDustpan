@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
@@ -28,6 +29,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -67,6 +69,8 @@ type memStore struct {
 	failReferenced error
 	// released holds the audit entry of each release, in the order written.
 	released []audit.Entry
+	// placements holds the placement of each workspace that CreateWorkspacePlaced made.
+	placements map[workspace.ID]workspace.Placement
 }
 
 type memInventoryKey struct {
@@ -75,7 +79,24 @@ type memInventoryKey struct {
 	name      string
 }
 
-var _ storetest.WorkspaceStore = (*memStore)(nil)
+var (
+	_ storetest.WorkspaceStore = (*memStore)(nil)
+	_ workspace.PlacedStore    = (*memStore)(nil)
+)
+
+// memCollectionID is the ID of the collection of a placement that memPlacement makes.
+const memCollectionID = "col-1"
+
+// memPlacement returns a valid placement of a new workspace in the collection
+// "placed" of ns. The collection is not stored: the memory store keeps no
+// collections.
+func memPlacement(ns namespace.Name) workspace.Placement {
+	return workspace.Placement{
+		Collection:   collection.Ref{Namespace: ns, Name: "placed"},
+		CollectionID: memCollectionID,
+		Entry:        placementtest.Entry(ns),
+	}
+}
 
 func newMemStore() *memStore {
 	return &memStore{
@@ -93,6 +114,7 @@ func newMemStore() *memStore {
 		failReferenced: nil,
 		released:       nil,
 		lastLockPass:   time.Time{},
+		placements:     map[workspace.ID]workspace.Placement{},
 	}
 }
 
@@ -284,6 +306,22 @@ func (m *memStore) CreateWorkspace(ctx context.Context, w workspace.Workspace, f
 
 	m.workspaces[w.ID] = w
 	m.publish(w)
+
+	return nil
+}
+
+// CreateWorkspacePlaced creates w as CreateWorkspace does, then records p.
+func (m *memStore) CreateWorkspacePlaced(
+	ctx context.Context, w workspace.Workspace, p workspace.Placement, fence namespace.Fence,
+) error {
+	if err := m.CreateWorkspace(ctx, w, fence); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.placements[w.ID] = p
 
 	return nil
 }
@@ -1202,7 +1240,7 @@ func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Watch, maxS
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1441,7 +1479,9 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 		t.Fatalf("namespaces: %v", err)
 	}
 
-	if _, err = namespaces.Create(ctx, "acme"); err != nil {
+	var acme namespace.Namespace
+
+	if acme, err = namespaces.Create(ctx, "acme"); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
@@ -1475,7 +1515,9 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 
 	var ws workspace.Workspace
 
-	ws, err = svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, err = svc.Create(
+		ctx, workspace.Ref{Namespace: "acme", Name: name}, placementtest.Workspace(t, store, acme.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -4155,7 +4197,7 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		t.Fatalf("name: %v", err)
 	}
 
-	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName})
+	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create other workspace: %v", err)
 	}
@@ -4257,6 +4299,13 @@ type fencedWorkspaces struct {
 // CreateWorkspace rejects the write with namespace.ErrFenced.
 func (f fencedWorkspaces) CreateWorkspace(
 	_ context.Context, _ workspace.Workspace, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+// CreateWorkspacePlaced rejects the write with namespace.ErrFenced.
+func (f fencedWorkspaces) CreateWorkspacePlaced(
+	_ context.Context, _ workspace.Workspace, _ workspace.Placement, _ namespace.Fence,
 ) error {
 	return namespace.ErrFenced
 }
@@ -4693,7 +4742,7 @@ func newSealedFixture(t *testing.T) fixture {
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -5190,7 +5239,7 @@ func foreignWorkspaceKey(t *testing.T, f fixture, sv workspace.StateVersion) blo
 		t.Fatalf("parse name: %v", nameErr)
 	}
 
-	other, createErr := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName})
+	other, createErr := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName}, memPlacement("acme"))
 	if createErr != nil {
 		t.Fatalf("create other workspace: %v", createErr)
 	}

@@ -140,10 +140,12 @@ func NewDemoSeed(cfg DemoConfig) (*DemoSeed, error) {
 }
 
 // Run sets up the demo person and returns the new password. It makes the
-// principal when it does not exist, sets a new password, and gives the admin
-// role on each namespace in namespaces and the viewer role on the
-// installation. A grant that exists stays. A second call sets a new password
-// and keeps the one person.
+// principal when it does not exist, revokes each grant outside the fixed set,
+// sets a new password, and gives the admin role on each namespace in
+// namespaces and the viewer role on the installation. The revoke runs before
+// the password and the required grants, so a revoke that fails leaves both
+// unchanged. A grant that exists stays. A second call sets a new password and
+// keeps the one person.
 func (d *DemoSeed) Run(ctx context.Context, namespaces []namespace.Name) (string, error) {
 	// Defense in depth: the constructor and the store check the kind too. This
 	// check stays so that a seed built before a change of the kind never runs.
@@ -154,6 +156,18 @@ func (d *DemoSeed) Run(ctx context.Context, namespaces []namespace.Name) (string
 	person, err := d.person(ctx)
 	if err != nil {
 		return "", err
+	}
+
+	subject := access.Subject{Kind: access.SubjectPrincipal, ID: person.ID}
+
+	fixed := map[string]bool{access.RoleViewer + " " + identity.ServerObject().String(): true}
+
+	for _, name := range namespaces {
+		fixed[access.RoleAdmin+" "+identity.NamespaceObject(name).String()] = true
+	}
+
+	if revokeErr := d.revokeExtra(ctx, subject, fixed); revokeErr != nil {
+		return "", revokeErr
 	}
 
 	password, err := d.newPassword(ctx)
@@ -171,25 +185,14 @@ func (d *DemoSeed) Run(ctx context.Context, namespaces []namespace.Name) (string
 		return "", fmt.Errorf("demo seed: set the password: %w", err)
 	}
 
-	subject := access.Subject{Kind: access.SubjectPrincipal, ID: person.ID}
-
 	if err := d.grant(ctx, subject, access.RoleViewer, identity.ServerObject()); err != nil {
 		return "", err
 	}
 
-	fixed := map[string]bool{access.RoleViewer + " " + identity.ServerObject().String(): true}
-
 	for _, name := range namespaces {
-		obj := identity.NamespaceObject(name)
-		fixed[access.RoleAdmin+" "+obj.String()] = true
-
-		if err := d.grant(ctx, subject, access.RoleAdmin, obj); err != nil {
+		if err := d.grant(ctx, subject, access.RoleAdmin, identity.NamespaceObject(name)); err != nil {
 			return "", err
 		}
-	}
-
-	if err := d.revokeExtra(ctx, subject, fixed); err != nil {
-		return "", err
 	}
 
 	return password, nil

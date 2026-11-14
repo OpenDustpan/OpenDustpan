@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -47,7 +48,7 @@ func findWithProof(t *testing.T, opts rawOptions, message string) (forge.Commit,
 		func(w http.ResponseWriter, _ *http.Request) { answer(w, http.StatusOK, string(data)) },
 	)
 
-	return fg.FindCommit(t.Context(), "acme/infra", "main", forge.Delivery{Trailer: proofTrailer, Base: rawBase}, since)
+	return fg.FindCommit(t.Context(), "acme/infra", "main", rawDelivery(proofTrailer, rawBase), since)
 }
 
 // goodOptions are the options of a server that answers as GitHub does, with
@@ -67,6 +68,12 @@ func TestFindCommitNeedsTheProof(t *testing.T) {
 
 	good := testProofLine(rawRepoID, proofTrailer, rawBase)
 	block := "Fix\n\n" + proofTrailer
+
+	// Each of these differs from the delivery of the search in one part only.
+	otherBranch := rawDelivery(proofTrailer, rawBase)
+	otherBranch.Branch = "dustpan/j-1"
+	otherChanges := rawDelivery(proofTrailer, rawBase)
+	otherChanges.Changes = "sha256:bb02d69ebd4333ea48437b256c9fd03cf708e30f48eca93c7450b0f0a6b735cf"
 
 	tests := []struct {
 		name    string
@@ -88,6 +95,15 @@ func TestFindCommitNeedsTheProof(t *testing.T) {
 			"the proof of another base commit",
 			block + "\n" + testProofLine(rawRepoID, proofTrailer, rawCommit), forge.ErrUntrustedCommit,
 		},
+		{
+			"the proof of another branch",
+			block + "\n" + testProofLineOf(rawRepoID, otherBranch), forge.ErrUntrustedCommit,
+		},
+		{
+			"the proof of other changes",
+			block + "\n" + testProofLineOf(rawRepoID, otherChanges), forge.ErrUntrustedCommit,
+		},
+		{"a proof of the previous form", block + "\n" + previousProofLine(), forge.ErrUntrustedCommit},
 		{"two proofs that are good", block + "\n" + good + "\n" + good, forge.ErrUntrustedCommit},
 		{"a proof that is not base64", block + "\nDustpan-Proof: !!!!", forge.ErrUntrustedCommit},
 		{"an empty proof", block + "\nDustpan-Proof: ", forge.ErrUntrustedCommit},
@@ -117,6 +133,15 @@ func TestFindCommitNeedsTheProof(t *testing.T) {
 			wantFound(t, got, err, want, tt.wantErr)
 		})
 	}
+}
+
+// previousProofLine returns the proof line of the previous form of the
+// binding, which bound only the repository, the trailer and the base commit,
+// for the delivery of the search. A proof of that form must not open.
+func previousProofLine() string {
+	binding := "dustpan.forge.commit-proof.v1\x00" + rawRepoID + "\x00" + proofTrailer + "\x00" + rawBase
+
+	return "Dustpan-Proof: " + base64.RawURLEncoding.EncodeToString(testMAC([]byte(binding)))
 }
 
 // errKeyStore is the error of failingProver.
@@ -246,7 +271,7 @@ func refuseWithNoCall(t *testing.T, fg rawClient) {
 		t.Errorf("Commit = %v, want ErrUnsupported", commitErr)
 	}
 
-	d := forge.Delivery{Trailer: proofTrailer, Base: rawBase}
+	d := rawDelivery(proofTrailer, rawBase)
 
 	_, findErr := fg.FindCommit(t.Context(), "acme/infra", "main", d, time.Unix(0, 0))
 	if !errors.Is(findErr, forge.ErrUnsupported) {
@@ -313,5 +338,12 @@ func TestCommitSealsTheProofForTheRequest(t *testing.T) {
 	other := strings.TrimPrefix(testProofLine(rawRepoID, proofTrailer, rawCommit), "Dustpan-Proof: ")
 	if proof == other {
 		t.Fatal("the proof does not depend on the base commit")
+	}
+
+	otherBranch := rawDelivery(proofTrailer, rawBase)
+	otherBranch.Branch = "dustpan/j-1"
+
+	if proof == strings.TrimPrefix(testProofLineOf(rawRepoID, otherBranch), "Dustpan-Proof: ") {
+		t.Fatal("the proof does not depend on the branch")
 	}
 }

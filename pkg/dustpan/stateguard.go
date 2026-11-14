@@ -10,13 +10,16 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
+	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // gateService is the service that checks the writes of state. The alias keeps
@@ -30,8 +33,8 @@ const reasonNoGateStore = "the namespace store keeps no gates: it does not imple
 // errGateParts means that the store keeps gates and the server lacks a part
 // that the gate service needs. The server does not start: it never runs with
 // a store that keeps gates and no check of them.
-var errGateParts = errors.New("the namespace store keeps gates, so the gate service needs the inventory reader " +
-	"and the namespace service")
+var errGateParts = errors.New("the namespace store keeps gates, so the gate service needs the inventory reader, " +
+	"the namespace service and the principal store")
 
 // stateWriteGates is the rule of the state.write gates of a server, which the
 // tool adapters and the claimer of the runner protocol share: a store that
@@ -69,11 +72,25 @@ func newCollectionAndGateServices(
 	return collections, gates, nil
 }
 
+// accessLimitGroups returns the reader through which the guard of a group
+// reads the access limits of every scope, or nil when the store keeps none.
+// An access limit of a scope that names a group holds for the members of
+// that group, so a change of its members that can lift the limit needs a
+// site administrator.
+func accessLimitGroups(cfg *settings, groups access.Directory) *limitgroups.Reader {
+	store, ok := cfg.namespaceStore.(gate.Store)
+	if !ok {
+		return nil
+	}
+
+	return limitgroups.New(store, groups)
+}
+
 // newStateWriteGates returns the state.write gates of the server: the gate
 // service when the store keeps gates, and the guard of stategate.Off when it
 // keeps none. Both SQL adapters keep gates. A store that keeps gates on a
-// server with no inventory reader or no namespace service is an error, so
-// the server does not start: it fails closed.
+// server with no inventory reader, no namespace service or no principal store
+// is an error, so the server does not start: it fails closed.
 func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWriteGates, error) {
 	none := stateWriteGates{svc: nil, guard: nil}
 
@@ -82,12 +99,14 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 		return stateWriteGates{svc: nil, guard: stategate.Off(reasonNoGateStore)}, nil
 	}
 
+	principals := principalStoreOf(cfg)
+
 	// Defense in depth: the option check refuses a server with no inventory
-	// reader, and the namespace service is always built before this call.
-	// This check stays so that a new path to this call cannot run a store
-	// that keeps gates with no gate service. It does not rely on the option
-	// check.
-	if cfg.inventoryReader == nil || namespaces == nil {
+	// reader, and the namespace service and the principal store are always
+	// built before this call. This check stays so that a new path to this call
+	// cannot run a store that keeps gates with no gate service. It does not
+	// rely on the option check.
+	if cfg.inventoryReader == nil || namespaces == nil || principals == nil {
 		return none, fmt.Errorf("%w: %w", ErrMissingOption, errGateParts)
 	}
 
@@ -100,8 +119,9 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: store, Engine: newGateEngine(), Producers: nil,
-		Units: facts, Subjects: principalSubjects{}, Fences: namespaceFences{namespaces: namespaces},
-		Now: cfg.now, Log: log,
+		Units: facts, Subjects: principalSubjects{principals: principals},
+		Fences: namespaceFences{namespaces: namespaces},
+		Now:    cfg.now, Log: log,
 	})
 	if err != nil {
 		return none, fmt.Errorf("gate service: %w", err)
@@ -289,14 +309,30 @@ func (f inventoryFacts) listed(ctx context.Context, unit identity.Object) (inven
 	return inventory.Entry{}, gate.ErrNotFound
 }
 
-// principalSubjects gives the Subject of a principal from the facts that its
-// credential carries. It resolves no group and no authentication time yet, so
-// a limit or a gate that reads a group does not match, and a limit that asks
-// for a recent authentication forbids the call.
-type principalSubjects struct{}
+// principalReads reads the record and the active groups of a principal. The
+// principal store of the server meets it.
+type principalReads interface {
+	// GetPrincipalBySubject returns the principal with the subject subject.
+	// It returns principal.ErrNotFound when no such principal exists or it
+	// was deleted.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+	// ListActiveGroupNamesOf returns the names of the groups in which the
+	// principal with the ID principalID has an active membership that is not
+	// removed, ordered by name without regard to case. It returns
+	// principal.ErrNotFound when no such principal exists or it was deleted.
+	ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error)
+}
+
+// principalSubjects gives the Subject of a principal from its credential and
+// its principal record. A session of a break-glass account is outside the
+// access limits, and the active groups of the record are the groups of the
+// subject.
+type principalSubjects struct {
+	principals principalReads
+}
 
 // Subject implements gate.SubjectSource.
-func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.Subject, error) {
+func (s principalSubjects) Subject(ctx context.Context, p identity.Principal) (gate.Subject, error) {
 	if strings.TrimSpace(p.Subject) == "" {
 		return gate.Subject{}, fmt.Errorf("%w: the principal has no subject", identity.ErrDenied)
 	}
@@ -306,32 +342,112 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		kind = gate.PrincipalService
 	}
 
-	var credential gate.CredentialKind
+	credential, err := credentialKind(p.Credential)
+	if err != nil {
+		return gate.Subject{}, err
+	}
 
-	// The empty credential counts as an access token. A value that this
-	// switch does not know is refused: the gates must not treat a new kind
-	// of credential as an access token.
-	switch p.Credential {
+	record, err := s.principals.GetPrincipalBySubject(ctx, p.Subject)
+	if errors.Is(err, principal.ErrNotFound) {
+		// A principal with no record, for example the bootstrap admin token,
+		// has no group and is no break-glass account. Its kind is empty. A
+		// principal with a kind must have a record, so it fails closed.
+		if p.Kind != "" {
+			return gate.Subject{}, fmt.Errorf(
+				"%w: the principal %q has a kind but no record", identity.ErrDenied, p.Subject,
+			)
+		}
+
+		return gate.Subject{
+			ID: p.Subject, Groups: nil, Kind: kind, Credential: credential, AuthAt: authAt(ctx, credential),
+			BreakGlassAccount: false, Job: nil,
+		}, nil
+	}
+
+	if err != nil {
+		return gate.Subject{}, fmt.Errorf("principal %q: %w", p.Subject, err)
+	}
+
+	groups, err := groupsOf(ctx, s.principals, record.ID)
+	if err != nil {
+		return gate.Subject{}, err
+	}
+
+	// Only a session of a break-glass account is outside the access limits. An
+	// access token or another credential of that account is not: it meets the
+	// limits as each other credential does.
+	breakGlass := record.BreakGlass && credential == gate.CredentialSession
+
+	return gate.Subject{
+		ID: p.Subject, Groups: groups, Kind: kind, Credential: credential, AuthAt: authAt(ctx, credential),
+		BreakGlassAccount: breakGlass, Job: nil,
+	}, nil
+}
+
+// credentialKind returns the credential of the gates for c. The empty
+// credential counts as an access token. A value that it does not know is
+// refused: the gates must not treat a new kind of credential as an access
+// token.
+func credentialKind(c identity.Credential) (gate.CredentialKind, error) {
+	switch c {
 	case identity.CredentialSession:
-		credential = gate.CredentialSession
+		return gate.CredentialSession, nil
 	case identity.CredentialJobToken:
-		credential = gate.CredentialJobToken
+		return gate.CredentialJobToken, nil
 	case identity.CredentialTrustToken:
-		credential = gate.CredentialTrustToken
+		return gate.CredentialTrustToken, nil
 	case identity.CredentialAccessToken, "":
-		credential = gate.CredentialAccessToken
+		return gate.CredentialAccessToken, nil
 	case identity.CredentialServer:
 		// The namespace service principal has no kind of credential in the
 		// gates yet. Until a gate names it, the gates deny it: fail closed.
-		return gate.Subject{}, fmt.Errorf("%w: the gates do not know the server credential", identity.ErrDenied)
+		return "", fmt.Errorf("%w: the gates do not know the server credential", identity.ErrDenied)
 	default:
-		return gate.Subject{}, fmt.Errorf("%w: the principal has an unknown kind of credential", identity.ErrDenied)
+		return "", fmt.Errorf("%w: the principal has an unknown kind of credential", identity.ErrDenied)
+	}
+}
+
+// groupsOf returns the sorted names of the active groups of the principal
+// with the ID principalID, each once.
+func groupsOf(ctx context.Context, reads principalReads, principalID string) ([]string, error) {
+	groups, err := reads.ListActiveGroupNamesOf(ctx, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("active groups of principal %q: %w", principalID, err)
 	}
 
-	return gate.Subject{
-		ID: p.Subject, Groups: nil, Kind: kind, Credential: credential, AuthAt: time.Time{}, BreakGlassAccount: false,
-		Job: nil,
-	}, nil
+	seen := make(map[string]struct{}, len(groups))
+	var names []string
+
+	for _, name := range groups {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+
+		seen[name] = struct{}{}
+
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	return names, nil
+}
+
+// authAt returns the time of the last authentication of a session, or the zero
+// time for every other credential and for a session with no sign-in. The zero
+// time is an unknown age, so a limit that asks for a recent authentication
+// forbids the call.
+func authAt(ctx context.Context, credential gate.CredentialKind) time.Time {
+	if credential != gate.CredentialSession {
+		return time.Time{}
+	}
+
+	signIn, ok := sessionauth.SignInFrom(ctx)
+	if !ok || signIn.At.IsZero() {
+		return time.Time{}
+	}
+
+	return signIn.At
 }
 
 // namespaceFences gives the fence of a namespace from the namespace service.

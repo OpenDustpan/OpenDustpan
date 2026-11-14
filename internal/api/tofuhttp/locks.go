@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -265,15 +266,41 @@ func (h *Handler) workspaceOf(
 ) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
-		return ws, err
+		return h.requireCollection(ctx, c, ws, err)
 	}
 
 	ws, err = h.createWorkspace(ctx, c, admit)
 	if errors.Is(err, workspace.ErrAlreadyExists) {
-		return h.ws.Get(ctx, c.ref)
+		// The workspace that the winning create made is read again. It meets the
+		// same check as a workspace that the first read found.
+		ws, err = h.ws.Get(ctx, c.ref)
+
+		return h.requireCollection(ctx, c, ws, err)
 	}
 
 	return ws, err
+}
+
+// requireCollection returns ws and err unchanged when err is set. Else it
+// refuses a workspace that no collection holds: such a workspace takes no LOCK
+// and no state.
+func (h *Handler) requireCollection(
+	ctx context.Context, c call, ws workspace.Workspace, err error,
+) (workspace.Workspace, error) {
+	if err != nil {
+		return ws, err
+	}
+
+	obj, objErr := unitObject(c.ref)
+	if objErr != nil {
+		return workspace.Workspace{}, objErr
+	}
+
+	if reqErr := h.placer.Require(ctx, obj); reqErr != nil {
+		return workspace.Workspace{}, reqErr
+	}
+
+	return ws, nil
 }
 
 // createWorkspace creates the workspace of the path for a first LOCK or POST, after the caller
@@ -298,7 +325,15 @@ func (h *Handler) createWorkspace(
 	// The job of the token, if any, decides whether a manual lock of the
 	// namespace applies to the create: the phase of a job that started before
 	// the lock passes it, as it does for the LOCK that follows.
-	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref)
+	placement, err := h.placer.Place(ctx, tofuunit.PlaceRequest{
+		Request: c.request, Principal: c.principal, Ref: c.ref, Guard: h.guard,
+		Namespaces: h.namespaces, Workspaces: h.ws,
+	})
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	return h.ws.Create(workspace.WithJob(ctx, c.principal.JobTokenID()), c.ref, placement)
 }
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current
@@ -383,7 +418,9 @@ func (h *Handler) unlockFree(w http.ResponseWriter, r *http.Request, c call, ws 
 func (h *Handler) unlockHeld(w http.ResponseWriter, r *http.Request, c call, id workspace.ID, lockID string) {
 	ctx := r.Context()
 
-	_, err := h.ws.UnlockLock(ctx, id, lockID, c.principal.Subject)
+	// The job of a job token is the origin of the release: the state version
+	// that the release publishes records it.
+	_, err := h.ws.UnlockLock(workspace.WithJob(ctx, c.principal.JobTokenID()), id, lockID, c.principal.Subject)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
 		h.recordLockRefusal(ctx, r, c, "the lock changed or is held by another principal")
@@ -412,7 +449,9 @@ func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call
 		return
 	}
 
-	denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason, Window: 0}
+	denial := refusal.Denial{
+		Action: identity.ActionUnitLock, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+	}
 	h.guard.Record(ctx, r, c.principal, denial)
 }
 

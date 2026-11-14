@@ -894,7 +894,14 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if _, err := h.stacks.Rename(ctx, oldRef, name); err != nil {
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: p,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
+	if _, err := h.stacks.Rename(ctx, oldRef, name, entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

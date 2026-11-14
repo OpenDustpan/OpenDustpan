@@ -82,7 +82,8 @@ that passes none moves to `internal/`.
      `Server`, and the types they name).
   2. every interface that a store must implement: today, the interfaces that
      `NewServer` asserts on the namespace store, and the interfaces that the
-     built-in SQLite or PostgreSQL store implements. When finding 2 of #1400
+     built-in SQLite or PostgreSQL store implements, when each is declared under
+     `pkg/`. When finding 2 of #1400
      replaces the type assertions with a declared store bundle, the bundle is
      this root and the list goes away.
 

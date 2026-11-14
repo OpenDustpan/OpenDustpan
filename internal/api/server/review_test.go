@@ -498,7 +498,7 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := f.store.CreateGroup(t.Context(), group, storetest.ServerChange(at, "group:grp-ops")); err != nil {
 		t.Fatalf("seed group: %v", err)

@@ -1,0 +1,102 @@
+name: auto-regen-resolve
+
+# Runs through workflow_dispatch on the branch of one pull request. A run on
+# that branch uses the Actions cache scope of that branch, so a cache entry
+# that pull request code saves here cannot be restored by a run on main.
+#
+# GitHub takes the workflow file of the branch for this run. The push workflow
+# therefore trusts nothing in the result except what it checks: the pull
+# request is open, its current head is the head of this run, and the patch
+# changes only generated paths.
+#
+# This workflow runs the code of the pull request (make generate). It has no
+# secret and a read-only token.
+on:
+  workflow_dispatch:
+    inputs:
+      main:
+        description: "The SHA of main that the find job read"
+        required: true
+        type: string
+      head:
+        description: "The SHA of the pull request head"
+        required: true
+        type: string
+      pr:
+        description: "The number of the pull request"
+        required: true
+        type: string
+
+run-name: "auto-regen-resolve #${{ inputs.pr }} ${{ inputs.head }}"
+
+permissions:
+  contents: read
+
+# One run for each branch at a time. A newer run replaces an older one.
+concurrency:
+  group: auto-regen-resolve-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: [ "5432:5432" ]
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Validate the inputs
+        env:
+          MAIN_SHA: ${{ inputs.main }}
+          HEAD_SHA: ${{ inputs.head }}
+          PR: ${{ inputs.pr }}
+        run: |
+          [[ "$MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "auto-regen: the main input is not a full commit SHA"; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "auto-regen: the head input is not a full commit SHA"; exit 1; }
+          [[ "$PR" =~ ^[0-9]{1,7}$ ]] || { echo "auto-regen: the pr input is not a number"; exit 1; }
+          if [ "$GITHUB_SHA" != "$HEAD_SHA" ]; then
+            echo "auto-regen: the branch moved; the head is $GITHUB_SHA, not $HEAD_SHA"
+            exit 1
+          fi
+      # The script of main, apart from the checkout of the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.main }}
+          path: trusted
+          persist-credentials: false
+      # All history and branches, so that the merge base and main are here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: pr/go.mod
+          cache: false
+      - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
+        with:
+          sqlc-version: "1.31.1"
+      - name: Merge main and run the generators
+        working-directory: pr
+        env:
+          MAIN_SHA: ${{ inputs.main }}
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: |
+          cp ../trusted/scripts/auto-regen.sh "$RUNNER_TEMP/auto-regen.sh"
+          "$RUNNER_TEMP/auto-regen.sh" resolve "$MAIN_SHA" "$RUNNER_TEMP/out"
+          cat "$RUNNER_TEMP/out/result.env" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auto-regen-result
+          path: ${{ runner.temp }}/out/
+          retention-days: 3
+          if-no-files-found: error

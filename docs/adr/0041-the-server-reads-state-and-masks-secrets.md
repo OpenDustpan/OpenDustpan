@@ -15,6 +15,7 @@ Changed by:
 - ADR 240 changes decisions 9 and 13: a state download by a person writes
   reveal.
 - ADR 240 extends decision 5: fail closed for the reveal entry of a download.
+- ADR 352 extends decision 10: the CI shim encrypts the plan and state files of the team CI at rest.
 
 ## Context
 

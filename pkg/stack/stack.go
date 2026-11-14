@@ -256,15 +256,18 @@ type Store interface {
 	) error
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
-	// row stay with the stack. It returns ErrNotFound for a missing stack,
-	// ErrAlreadyExists for a taken name, ErrUpdateConflict while a mutating
-	// update of the stack runs (a *UpdateConflictError that names that
-	// update), namespace.ErrNotFound for a missing namespace or
-	// namespace.ErrFenced for a stale fence. The adapter checks for the running
-	// update in the transaction of the rename, after it locks the stack, so an
-	// update that starts at the same time cannot run under a name that no
-	// stack has.
-	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence) error
+	// row stay with the stack. It appends the audit entry e in the same fenced
+	// transaction, with the stable stack ID and the old and the new name. A
+	// rename to the current name writes no audit entry. It
+	// returns ErrNotFound for a missing stack, ErrAlreadyExists for a taken
+	// name, ErrUpdateConflict while a mutating update of the stack runs (a
+	// *UpdateConflictError that names that update), namespace.ErrNotFound for a
+	// missing namespace, namespace.ErrFenced for a stale fence or
+	// audit.ErrInvalidEntry if e fails validation or names another namespace.
+	// The adapter checks for the running update in the transaction of the
+	// rename, after it locks the stack, so an update that starts at the same
+	// time cannot run under a name that no stack has.
+	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence, e audit.Entry) error
 }
 
 // LatestState resolves the latest checkpoint of a stack with its deployment
@@ -367,28 +370,28 @@ func NewService(cfg Config) (*Service, error) {
 	}, nil
 }
 
-// Create creates the stack identified by ref with the given tags. The write is
-// fenced on the namespace's failover version and only allowed in its primary installation.
-// The stack has no collection. A server that keeps placement rules uses
-// CreatePlaced.
-func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (Stack, error) {
-	return createStack(ctx, s, ref, tags, nil)
-}
-
 // CreatePlaced creates the stack identified by ref and puts it in the
-// collection of p in one fenced transaction. It returns ErrPlacementUnsupported,
-// and makes no stack, when the store is not a PlacedStore.
+// collection of p in one fenced transaction. The write is fenced on the
+// namespace's failover version and only allowed in its primary installation.
+// A stack always has a collection: it returns an error that matches
+// collection.ErrNoCollection, and makes no stack, when p names no collection,
+// no checked collection ID, or a collection of another namespace. It returns
+// ErrPlacementUnsupported, and makes no stack, when the store is not a
+// PlacedStore.
 func (s *Service) CreatePlaced(ctx context.Context, ref Ref, tags map[string]string, p Placement) (Stack, error) {
-	return createStack(ctx, s, ref, tags, &p)
-}
-
-// createRows makes st in store, with the membership of p when there is one. A
-// store that is not a PlacedStore makes nothing for a placed create.
-func createRows(ctx context.Context, store Store, st Stack, p *Placement, fence namespace.Fence) error {
-	if p == nil {
-		return store.CreateStack(ctx, st, fence)
+	// Defense in depth: the handler chooses the collection by a placement rule
+	// and the store checks the collection in the transaction. This check stays
+	// so that a new caller cannot make a stack that no collection holds.
+	if !p.Complete(ref.Namespace) {
+		return Stack{}, fmt.Errorf("create stack %s: %w", ref, collection.ErrNoCollection)
 	}
 
+	return createStack(ctx, s, ref, tags, p)
+}
+
+// createRows makes st in store with the membership of p. A store that is not a
+// PlacedStore makes nothing.
+func createRows(ctx context.Context, store Store, st Stack, p Placement, fence namespace.Fence) error {
 	placed, ok := store.(PlacedStore)
 	if !ok {
 		return ErrPlacementUnsupported
@@ -396,10 +399,10 @@ func createRows(ctx context.Context, store Store, st Stack, p *Placement, fence 
 
 	p.Entry.At = st.CreatedAt
 
-	return placed.CreateStackPlaced(ctx, st, *p, fence)
+	return placed.CreateStackPlaced(ctx, st, p, fence)
 }
 
-func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p *Placement) (Stack, error) {
+func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p Placement) (Stack, error) {
 	if len(tags) > maxTags {
 		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
 	}
@@ -487,7 +490,7 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
-	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, ref, ""); lockErr != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
@@ -547,7 +550,7 @@ func (s *Service) ForceDelete(ctx context.Context, ref Ref, e audit.Entry) error
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
-	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, ref, ""); lockErr != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
@@ -653,11 +656,13 @@ func (s *Service) UpdateTags(
 
 // Rename changes the stack name of oldRef to newName and returns the renamed
 // stack. The stack ID stays the same. The write is fenced on the namespace's
-// failover version and only allowed in its primary installation. It returns
-// ErrUpdateConflict while a mutating update of the stack runs (a
-// *UpdateConflictError that names that update), and ErrUpdateConflict,
-// matching manuallock.ErrLocked, while a manual lock covers the stack.
-func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, error) {
+// failover version and only allowed in its primary installation. The rename and
+// the audit entry e, stamped with the time of the rename, commit together or
+// not at all. It returns ErrUpdateConflict while a mutating update of the
+// stack runs (a *UpdateConflictError that names that update), and
+// ErrUpdateConflict, matching manuallock.ErrLocked, while a manual lock covers
+// the stack.
+func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name, e audit.Entry) (Stack, error) {
 	ns, err := s.namespaces.WritableHere(ctx, oldRef.Namespace)
 	if err != nil {
 		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, err)
@@ -665,11 +670,13 @@ func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, 
 
 	// A rename that a manual lock allowed would leave the state of the stack
 	// under the old name: the import that a rename needs next meets the lock.
-	if lockErr := refuseManualLock(ctx, s.manual, oldRef, ""); lockErr != nil {
+	if lockErr := s.checkManualLock(ctx, oldRef, ""); lockErr != nil {
 		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, lockErr)
 	}
 
-	renameErr := s.store.RenameStack(ctx, oldRef, newName, ns.Fence())
+	e.At = s.now().UTC()
+
+	renameErr := s.store.RenameStack(ctx, oldRef, newName, ns.Fence(), e)
 	if renameErr != nil {
 		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, renameErr)
 	}
@@ -683,6 +690,23 @@ func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, 
 	}
 
 	return st, nil
+}
+
+// checkManualLock refuses the request of job jobID on the stack ref while a
+// manual lock covers the stack, and returns nil when the service has no manual
+// lock port. A lock that cannot be read refuses the request: the check fails
+// closed.
+func (s *Service) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	st, err := s.store.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("read stack %s: %w", ref, err)
+	}
+
+	return refuseManualLock(ctx, s.manual, st, jobID)
 }
 
 // deleteGuard counts the latest checkpoint of ref outside any transaction,
