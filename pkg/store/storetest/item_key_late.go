@@ -165,8 +165,9 @@ func createLateUpdate(t *testing.T, r LateKeyRig, before, after time.Duration) (
 
 	var ref secret.ItemRef
 
-	u := newUpdate(f.ref, "u-late", stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
-		"", 0)
+	u := newUpdate(f.ref, "u-late", stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
+	}, "", 0)
 	err := r.Store.CreateUpdate(t.Context(), u, stack.UpdateKey{NewKey: keyFunc(before, after, &ref)}, f.fence)
 
 	return ref, f, err
