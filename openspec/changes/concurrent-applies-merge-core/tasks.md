@@ -12,6 +12,7 @@
 - [ ] 1.6 Add failing test for fence, expiry, and foreign-claim refusal Check: TestMergeFence_RejectsMismatch fails on main
 - [ ] 1.7 Add failing test for each of the six strict cases with 423 Check: TestStrictCase_HoldsWholeUnitLock fails on main
 - [ ] 1.8 Add failing test for capability retry, force upload fence, and orphan safety Check: TestCapabilityRetry_SameContentSucceeds fails on main
+- [ ] 1.9 NEW. Write a failing test that an access limit on `ref_protected` refuses an upload under an apply claim from an unprotected branch. Check: NEW test TestStateWriteLimitReadsTokenClaims fails on main
 
 ## 2. Merge core
 
