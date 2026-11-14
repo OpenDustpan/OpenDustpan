@@ -18,7 +18,7 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Implement claim record, normalization and release. Start only after the owner accepts the C2 RFC as an ADR. Check: go test ./pkg/workspace/...
+- [ ] 2.1 Implement claim record, normalization and release. Start only after ADR 368 is on main and the ADR of RFC 129 point 4. Check: go test ./pkg/workspace/...
 - [ ] 2.2 Add concurrency test on each dialect. Check: Parallel registration test passes on SQLite and PostgreSQL.
 - [ ] 2.3 Wire the two claim routes with actions in internal/api/runnerapi. Check: Route test shows POST and GET claims declare unit:claim-register and unit:read.
 
@@ -28,7 +28,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 BLOCKED by the C2 RFC not accepted as an ADR: e2e step with real OpenTofu against POST and GET /api/dustpan/v1/workspaces/{id}/claims with a runner job token credential. Check: e2e finds two claim records in state accepted and no additional version.
+- [ ] 4.1 BLOCKED by RFC 129 point 4 (the job on the TFE-compatible path): e2e step with real OpenTofu against POST and GET /api/dustpan/v1/workspaces/{id}/claims with a runner job token credential. Check: e2e finds two claim records in state accepted and no additional version.
 - [ ] 4.2 Write the docs page for claims. Check: Docs page lists register and list calls with exact output.
 - [ ] 4.3 Run usability check. Check: Developer completes the path from the docs page alone.
 - [ ] 4.4 Run full check. Check: make check reports zero findings.

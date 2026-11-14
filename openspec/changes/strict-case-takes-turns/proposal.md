@@ -35,10 +35,11 @@ Out of scope:
 - The merge of an upload one resource instance at a time
 - The local CLI wrapper and its retry rules
 - Splitting a plan with -target
-- Claim ID, parent pointer, fence and serial rules, which the RFC decides
+- Claim ID, parent pointer, fence and serial rules, which ADR 368 decides and other changes build
 
 Depends on:
 
+- ADR 368 on main (pull request #3052)
 - two-disjoint-claims
 - concurrent-applies-merge-core
 - `two-disjoint-claims` (order of the milestone review)
@@ -61,14 +62,24 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 3 (current), 7 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "This ADR adds no case to the six cases of ADR 302 decision 2 and takes none away."
+- Quote: "The history shows the apply claim and the job of each merged state version."
+- Effect: The data source case keeps the whole-unit lock. The history entry uses the apply claim ID of ADR 368.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
+- Current rule: this ADR, with ADR 368.
 - Quote: "Work that the server cannot prove disjoint takes turns."
 - Quote: "An RFC for concurrent applies comes first."
-- Effect: The change covers the data source case only and gives it the whole-unit lock. It adds no claim field. Code starts after the owner accepts the RFC.
+- Effect: The change covers the data source case only and gives it the whole-unit lock. It adds no claim field. ADR 368 decision 7 keeps the six cases.
 - Conflict: none.
 
 **ADR 26: OpenTofu state** (not owner-tagged).
@@ -85,9 +96,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 1. Does a runner job with a data source plan wait on the whole-unit lock, or end as blocked? Decides: owner.
    - Options: End as blocked, and the person starts the job again; Wait on the whole-unit lock inside the server.
    - Recommended: Wait on the whole-unit lock inside the server. Reason: The exit test says the change starts its apply after the apply of A ends. ADR 302 decision 2 says runner jobs end as blocked on an overlap. The words do not settle a strict case.
-2. Which record fields does the history entry use for the case and the claim? Decides: owner.
-   - Options: Wait for the RFC ADR and use its fields; Define local fields now.
-   - Recommended: Wait for the RFC ADR and use its fields. Reason: ADR 302 decision 6 leaves claim ID, parent pointer and fence to the RFC.
 
 Not spec-ready: a code check fails: test `TestStrictDataSourceWaits` (.tasks[1].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: main_facts[1]: "where" is not file:line (func Name).
 
@@ -95,6 +103,6 @@ Questions considered and answered:
 
 - Which strict case does this change cover? Data sources only. ADR 302 decision 2 lists six cases. The other five are out of scope.
 - Does the strict job wait on the server or end as blocked? ADR 302 decision 2 says a runner job turns a refusal into blocked. See the open question.
-- Which claim fields does the history use? None here. ADR 302 decision 6 leaves them to the RFC.
+- Which record fields does the history entry use for the case and the claim? ADR 368 decision 3: the parent, the base and the apply claim ID of each state version.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

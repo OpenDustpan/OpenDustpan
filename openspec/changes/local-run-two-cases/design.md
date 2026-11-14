@@ -6,7 +6,7 @@ One workspace takes runner claims and one wrapped local claim. The wrapper reuse
 
 1. **Reuse claim path.** The wrapper reuses the claim register, base-state serve, and per-instance merge of the other changes, with no new rule for history, expiry, authorization, or fence.
 2. **No provider write without an accepted claim.** The wrapper starts no provider call before its claim is accepted. After a wait it discards the old plan and makes a new plan on the new base before any provider write. When the new register attempt is refused, the wrapper re-enters the wait loop.
-3. **Gated on the RFC.** The RFC decides the retry interval, the timeout value, the claim lifetime, the fence shape, and the serial rule. This change stores no value for them and gates the build tasks on the RFC ADR.
+3. **Values from ADR 368.** The wrapper retries with backoff from 1 to 30 seconds with full jitter and obeys `Retry-After`. It waits 30 minutes by default; `--claim-timeout` takes 0 to 6 hours. Its apply claim has a lease of 90 seconds, renewed every 30 seconds. The credential that the wrapper gives to `tofu` on the TFE-compatible path waits for the ADR of RFC 129 point 4.
 
 ## Structure
 

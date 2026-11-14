@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | Claim base is touched by a later version on an address of the claim. | Server answers 422 with the touching version and names the current state version. Plan again from the current state version, then register a new claim. | `tofu plan` |
 | Claim overlaps an accepted claim. | Server answers 409 with the blocking claim ID and stores no claim. Wait for the blocking claim to end, plan again, then register a new claim. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
-| Claim holds a replace action. | Server answers 422 and changes nothing. Use the workspace lock path for this change. | `tofu plan` |
+| Claim holds a replace action. | Server answers 409 with the code `claim.closure-unproven` and stores no claim. This change does not build the closure test, and a closure that the server cannot prove is a conflict. Wait for the accepted claims to end, then register again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
 | Principal lacks unit:claim-register on the workspace. | Server answers 403 and names the missing action on the workspace. Ask a namespace administrator for the grant, then register again. | `GET /api/server/principals/{}/grants` |
 | Claim holds an empty resource set. | Server answers 422 and changes nothing. Plan with at least one non-replace resource change, then register again. | `tofu plan` |
 | Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing workspace, 410 for a deleted workspace and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
@@ -34,7 +34,7 @@ Evidence for the claims above:
 - New route POST /api/dustpan/v1/workspaces/{id}/claims: a runner job or local wrapper registers a non-replace claim with base state version, address set and principal.
 - New route GET /api/dustpan/v1/workspaces/{id}/claims: lists each claim with state, base, address set, principal, job ID, start time and end time.
 - Server accepts a second non-replace claim when its address set is disjoint from each accepted claim.
-- Server refuses an overlapping non-replace claim with 409 and a replace claim with 422.
+- Server refuses an overlapping non-replace claim with 409, and a replace claim with 409 `claim.closure-unproven` (ADR 368 decision 6: an unproven closure is a conflict).
 - Each accepted claim writes one audit entry, and each claim marks ended with an end time at job end or lease expiry.
 
 Out of scope:
@@ -44,18 +44,20 @@ Out of scope:
 - Strict cases that keep the whole-unit lock.
 - Local CLI wrapper retry of refused claims.
 - Pulumi CLI claim model and client-encrypted state.
-- Serial assignment under a claim, parent pointer and claim fence.
+- Serial assignment under a claim, parent pointer and claim fence (ADR 368 decisions 2 to 4, built in concurrent-applies-merge-core and concurrent-applies-merge-history-audit).
+- The closure test that can prove a replace claim disjoint (ADR 368 decision 6).
 
 Depends on:
 
-- C2 RFC accepted as an ADR by the owner
+- ADR 368 on main (pull request #3052)
+- An ADR that decides RFC 129 point 4 (the job on the TFE-compatible path)
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
 - Developer reads two claim IDs with state accepted, start time and principal to confirm both jobs proceed.
-- A replace claim gets a plain refusal that names the workspace lock path.
+- A replace claim gets a refusal that says the closure is not proven yet.
 - No local run retry path exists in this step.
 
 ## What main already does
@@ -73,37 +75,49 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 26: OpenTofu state** (not owner-tagged).
 
 - Decisions that apply: 3 (changed), 6 (extended).
-- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
-- Current rule: this ADR, with ADR 31, 44, 45, 220.
+- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2; ADR 368 changes decision 3. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 368, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
+- Current rule: this ADR, with ADR 31, 44, 45, 220, 368.
 - Quote: "A new state version needs the lock of the caller."
 - Quote: "The server mints a lock ID for each acquisition."
 - Effect: Claim registration grants no lock ID and publishes no state version. The lock, serial and lineage checks stay unchanged.
 - Conflict: none.
 
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 4 (current), 6 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "An **apply claim** is the reservation of the resource instances that one saved plan changes and reads."
+- Quote: "Each apply claim has a lease."
+- Quote: "When the check cannot prove an edge, the answer is a conflict."
+- Effect: The claim record is an apply claim with a stable ID and a lease. A replace claim is a conflict until the closure test lands.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 3 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
+- Current rule: this ADR, with ADR 368.
 - Quote: "A runner job registers its saved plan as a claim before the apply."
 - Quote: "OpenTofu is first."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: This change is a draft spec only. It blocks implementation until the owner accepts the C2 RFC as an ADR. Then it records two disjoint runner-job claims and refuses overlapping ones, with no merge and no serial assignment.
-- Conflict: owner_blocks.
+- Effect: ADR 368 answers decision 6, except one principal for each job on the TFE-compatible path. This change records two disjoint runner-job claims and refuses overlapping ones, with no merge and no serial assignment. It waits for the ADR of RFC 129 point 4.
+- Conflict: none.
 
 ## Open questions
 
-1. What is the claim ID format, the per-job principal on the TFE-compatible path and the claim expiry rule, which the C2 RFC decides? Decides: owner.
-   - Options: Follow the accepted RFC when it lands; Fix them in this change now.
-   - Recommended: Follow the accepted RFC when it lands. Reason: ADR 302 decision 6 gives these points to the RFC.
+1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
+   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
+   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
 
-Not spec-ready: the change conflicts with an owner-tagged decision of ADR 302.
+Not spec-ready: RFC 129 point 4 is open for the owner.
 
 Questions considered and answered:
 
 - Where does claim registration happen in the runner path? ADR 302 decision 2: a runner job registers its saved plan as a claim before the apply.
-- Does this change assign serials or merge state under claims? No. ADR 302 decision 6 leaves them to the RFC.
+- Does this change assign serials or merge state under claims? No. ADR 368 decisions 2 and 3 decide them, and concurrent-applies-merge-core builds them.
 - Which tool does this step cover? ADR 302 decision 3: OpenTofu first.
-- Can code start before the RFC is accepted? No. ADR 302 decision 6 orders the accepted RFC before the code. The change waits and implementation does not start.
+- Can code start now? No. ADR 368 accepts RFC 129 except point 4, and this change registers claims from runner jobs on the TFE-compatible path. It waits for the ADR of point 4.
+- What is the claim ID and the expiry rule? ADR 368 decisions 3 and 4: a stable ID for each apply claim, and a lease (the durable claim of the apply phase for a runner job, 90 seconds renewed every 30 seconds for the local wrapper).
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

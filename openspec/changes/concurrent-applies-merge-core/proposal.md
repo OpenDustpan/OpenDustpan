@@ -45,6 +45,7 @@ Out of scope:
 
 Depends on:
 
+- ADR 368 on main (pull request #3052)
 - two-disjoint-claims
 
 ## Usability
@@ -70,14 +71,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 26: OpenTofu state** (not owner-tagged).
 
 - Decisions that apply: 3 (changed), 7 (current).
-- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
-- Current rule: this ADR, with ADR 31, 44, 45, 220.
+- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2; ADR 368 changes decision 3. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 368, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
+- Current rule: this ADR, with ADR 31, 44, 45, 220, 368.
 - Quote: "It needs a higher serial than the current state."
 - Quote: "A force upload skips the lineage check and the serial check."
 - Quote: "The finalize step checks the lock ID, the lineage and the serial again, in one SQL transaction, with the namespace fence (ADR 4)."
 - Quote: "A retry of a finalized upload with the same capability and the same content succeeds."
-- Effect: This change keeps lineage and fenced finalize checks and asks the RFC to change the serial rule to server assignment under a claim.
-- Conflict: rfc_needed.
+- Effect: This change keeps lineage and fenced finalize checks. Under a live apply claim the server assigns the serial (ADR 368 decision 2).
+- Conflict: none.
 
 **ADR 281: Any S3-compatible store: the database decides which write wins** (owner-tagged (all decisions)).
 
@@ -89,33 +90,42 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Each merge attempt runs under the attempt deadline and a refused merge publishes no version, so no orphan version appears.
 - Conflict: none.
 
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 2 (current), 3 (current), 4 (current), 6 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "For an upload under a live apply claim, the merged state version gets the serial of the current state version plus 1, and the server writes this serial into the stored state document."
+- Quote: "The commit succeeds only when its parent is still the current state version."
+- Quote: "An upload under an ended apply claim fails with 409 and the code `claim.ended`."
+- Effect: The merge commits the server serial with a compare-and-swap on the parent, and refuses an upload under an ended apply claim.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
+- Current rule: this ADR, with ADR 368.
 - Quote: "The server serves each job the state version that the plan used as its base."
 - Quote: "The server merges each upload one resource instance at a time."
 - Quote: "Work that the server cannot prove disjoint takes turns."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: This change follows the job-aware merge rule and waits for the owner to accept the RFC for serial assignment, claim fence, and job principal.
-- Conflict: rfc_needed.
+- Effect: This change follows the job-aware merge rule. ADR 368 decides the serial and the fence of each claim. The job on the TFE-compatible path waits for RFC 129 point 4.
+- Conflict: none.
 
 ## Open questions
 
-1. How does a TFE-compatible request name its claim? Decides: owner.
-   - Options: Job token credential names the claim on each TFE-compatible request; HTTP header names the claim alongside the existing lock credential.
-   - Recommended: Job token credential names the claim on each TFE-compatible request. Reason: ADR 302 decision 6 leaves one principal for each job on the TFE-compatible path to the RFC, and the pack names no header or token for the claim.
-2. What lease, renewal, and timeout govern a whole-unit wait under concurrent applies? Decides: owner.
-   - Options: Reuse the existing workspace lock lease for whole-unit waits with no new duration; Set a separate bounded wait with an explicit timeout and a blocked status for the waiter.
-   - Recommended: Reuse the existing workspace lock lease for whole-unit waits with no new duration. Reason: ADR 302 decision 6 leaves retry interval and timeout of the local wrapper to the RFC, and the pack states no duration for a strict-case wait.
+1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
+   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
+   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
 
-Not spec-ready: a code check fails: main_facts[0]: "where" is not file:line (func Name); a code check fails: main_facts[1]: "where" is not file:line (func Name); a code check fails: main_facts[2]: "where" is not file:line (func Name); the change conflicts with ADR 26: an RFC comes first; the change conflicts with ADR 302: an RFC comes first.
+Not spec-ready: RFC 129 point 4 is open for the owner, and the code checks of the main facts fail (the "where" of each fact is not file:line).
 
 Questions considered and answered:
 
 - What belongs in part 1 versus part 2 of the split? Part 1 serves the base named by the claim and merges uploads per instance under fence with atomic serial commit, refuse rules, empty uploads, fail-closed behavior, orphan safety, and strict whole-unit handling. Part 2 records parent pointers, history claim display, audit entries, and sealed-value handling.
 - Which ADR decisions govern the merge? ADR 302 decision 2 requires per-instance merge and refusal of overlap. ADR 26 decisions 3 and 7 require lineage and fenced finalize in one transaction. ADR 281 decision 11 bounds each attempt to 30 minutes.
 - What do reads without a claim return? Reads without a claim return latest. Reads under a claim return the named base. A pruned or deleted base fails closed with replan.
+- What lease and timeout govern a wait? ADR 368 decision 5 for the local wrapper: backoff from 1 to 30 seconds with jitter, a default wait of 30 minutes, `--claim-timeout` from 0 to 6 hours. A runner job does not wait: it turns the refusal into the status blocked (ADR 302 decision 2).
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

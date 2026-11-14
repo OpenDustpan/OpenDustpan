@@ -1,6 +1,6 @@
 ## Context
 
-Job A holds an accepted disjoint claim and applies. Job D reads a data source. The server cannot prove D disjoint, so D keeps the whole-unit lock and applies after A ends. This runs after the owner accepts the RFC.
+Job A holds an accepted disjoint claim and applies. Job D reads a data source. The server cannot prove D disjoint, so D keeps the whole-unit lock and applies after A ends. This runs after ADR 368 is on main.
 
 ## Decisions
 

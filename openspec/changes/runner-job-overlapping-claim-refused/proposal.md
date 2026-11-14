@@ -44,6 +44,7 @@ Out of scope:
 
 Depends on:
 
+- ADR 368 on main (pull request #3052)
 - two-disjoint-claims
 - `two-disjoint-claims` (order of the milestone review)
 
@@ -65,15 +66,25 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 6 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The one `ConflictChecker` serves both the review requests of ADR 299 and the apply claims."
+- Quote: "When the check cannot prove an edge, the answer is a conflict."
+- Effect: The overlap check uses the closure test for a replacement. Until the closure test is built, an unproven closure is a conflict.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
+- Current rule: this ADR, with ADR 368.
 - Quote: "The server refuses overlapping claims before anything runs."
 - Quote: "A runner job turns the refusal into the status "blocked"."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: The change follows the refusal rule of decision 2: overlapping claims are refused before apply and a refused runner job ends as blocked. No code lands before the RFC gate of decision 6, which the design states as a precondition.
+- Effect: The change follows the refusal rule of decision 2: overlapping claims are refused before apply and a refused runner job ends as blocked. ADR 368 answers the RFC gate of decision 6 for this change.
 - Conflict: none.
 
 **ADR 26: OpenTofu state** (not owner-tagged).
@@ -87,9 +98,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Does a replacement count as an overlap of its instance address, or does a closure test prove some replacements disjoint? Decides: owner.
-   - Options: A replacement always counts as an overlap of its instance address; A closure test can prove some replacements disjoint.
-   - Recommended: A replacement always counts as an overlap of its instance address Reason: ADR 302 decision 6 leaves the replacement rule and the closure test to the RFC, so this change cannot decide it. This change uses the safe option only as a placeholder until the RFC is accepted.
+none
 
 Not spec-ready: a code check fails: main_facts[1]: `internal/api/runnerapi` does not exist on main.
 
@@ -99,6 +108,7 @@ Questions considered and answered:
 - Does a refused runner job retry on its own? ADR 302 decision 2 gives the retry only to the local wrapper. A refused runner job stays blocked; the person starts a new job.
 - Does this change cover Pulumi stacks? ADR 302 decision 3: OpenTofu is first, so this change covers workspaces only.
 - What happens to a claim that meets a case that keeps the whole-unit lock? ADR 302 decision 2: work that the server cannot prove disjoint takes turns. The item strict-case-takes-turns specifies those cases. This change refuses only claims that name the same resource instance.
-- What gates the code of this change? ADR 302 decision 6: no code lands before the owner accepts the RFC as an ADR. The design states this gate.
+- What gates the code of this change? ADR 368 on main, and the code checks of the main facts.
+- Does a replacement count as an overlap of its instance address? No. ADR 368 decision 6: one closure test in the one `ConflictChecker` decides. A closure that the check cannot prove is a conflict, so a replacement is a conflict until the closure test is built.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
