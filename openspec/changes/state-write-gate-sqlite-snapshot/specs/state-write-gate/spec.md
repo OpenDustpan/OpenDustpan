@@ -9,12 +9,12 @@ When the server reads deleted-unit facts for state.write on SQLite, the server S
 - **THEN** the gate uses facts from one snapshot and never mixes rows from before and after the commit.
 
 #### Scenario: Failed read transaction
-- **WHEN** the read-only transaction is busy, times out, the context is cancelled, or rollback fails
-- **THEN** the gate returns the store error with the error that names `opendustpan dev logs`, uses no partial facts, and refuses the write path that needed the facts.
+- **WHEN** the read-only transaction begin, select, or rollback fails or the context is canceled
+- **THEN** the gate returns the store error, uses no partial facts, and refuses the write that needed the facts.
 
-#### Scenario: Writer holds lock for full read
-- **WHEN** a writer holds the lock for the full fact-read transaction
-- **THEN** the read waits under the bounded busy timeout and then fails closed with the store error and no partial facts.
+#### Scenario: Select and rollback both fail
+- **WHEN** a select fails and the rollback also fails
+- **THEN** the method closes the transaction and returns the select error.
 
 ### Requirement: Start without gate service
 
@@ -22,14 +22,14 @@ When the server starts with no gate service, the server SHALL write one INFO log
 
 #### Scenario: Server starts with no gate service
 - **WHEN** the server starts with no gate service configured
-- **THEN** the server log holds one INFO line per start with fixed text that names the absent gate service, and a server with a gate service logs no such line.
+- **THEN** the log holds one INFO line with fixed text, and a server with a gate service logs no such line.
 
 #### Scenario: Repeat start with no gate service
 - **WHEN** the process starts twice with no gate service
-- **THEN** each start logs the line once and no start logs the line twice.
+- **THEN** each start logs the line once and no start logs it twice.
 
 #### Scenario: Log write failure at start
-- **WHEN** the start-up log write fails or the logger drops INFO lines
+- **WHEN** the start-up log write fails
 - **THEN** the server start continues on the current no-gate path.
 
 ### Requirement: Clean rollback path
