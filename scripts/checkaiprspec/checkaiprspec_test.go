@@ -234,6 +234,15 @@ func TestCheckAIPRSpec(t *testing.T) {
 			wantPass:  false,
 			want:      "refused id",
 		},
+		{
+			name:      "id of only dots is refused",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/..\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "refused id",
+		},
 	}
 
 	for _, tt := range tests {
@@ -251,5 +260,53 @@ func TestCheckAIPRSpec(t *testing.T) {
 				t.Errorf("the check said:\n%s\nwant %q", out, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckAIPRSpecNoCRInOutput(t *testing.T) {
+	t.Parallel()
+
+	crlf := "# Title\r\n\r\n## Open questions\r\n\r\nSomething open\r\n"
+	out, err := runCheck(t, map[string]string{"demo-crlf": crlf}, nil,
+		"Tool: test harness\n\nChange: openspec/changes/demo-crlf\n",
+		"someone@example.com\n")
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("the check output holds a carriage return:\n%q", out)
+	}
+}
+
+func TestCheckAIPRSpecSymlinkLeavesChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, outside, "proposal.md", notReadyProposal())
+	changes := filepath.Join(dir, "openspec", "changes")
+	if err := os.MkdirAll(changes, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(changes, "demo-link")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-link\n")
+	writeFile(t, dir, "commits.txt", "someone@example.com\n")
+
+	cmd := exec.CommandContext(t.Context(), "bash", "-s")
+	cmd.Stdin = strings.NewReader(readScript(t))
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"AI_PR_BODY_FILE=" + filepath.Join(dir, "body.md"),
+		"AI_PR_COMMITS_FILE=" + filepath.Join(dir, "commits.txt"),
+		"AI_PR_ROOT=" + dir,
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if !strings.Contains(string(out), "resolved path leaves") {
+		t.Errorf("the check said:\n%s\nwant %q", out, "resolved path leaves")
 	}
 }

@@ -114,7 +114,8 @@ for raw in ${link_ids[@]+"${link_ids[@]}"}; do
     esac
   done
   if [[ -z "$id" ]]; then
-    continue
+    echo "check-ai-pr-spec: refused id \"$raw\": an id holds only lowercase letters, digits and hyphens" >&2
+    exit 1
   fi
   if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
     echo "check-ai-pr-spec: refused id \"$id\": an id holds only lowercase letters, digits and hyphens" >&2
@@ -146,7 +147,7 @@ section_first_line() {
   awk '
     /^## / { if (seen) exit; if ($0 ~ /^## Open questions[[:space:]]*$/) { seen = 1; next } }
     seen { print }
-  ' "$proposal" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | head -n 1 || true
+  ' "$proposal" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | head -n 1 || true
 }
 
 resolve_proposal() {
@@ -184,9 +185,12 @@ for id in "${valid_ids[@]}"; do
   fi
   # Defense in depth: the path must stay under openspec/changes, so a
   # hostile id cannot read another file even when the allowlist above is
-  # bypassed by a new caller. The check is textual and needs no realpath,
-  # which macOS lacks; the allowlist already refuses dot segments.
-  if [[ "$proposal" != "$changes_dir"/* ]]; then
+  # bypassed by a new caller. The check resolves symlinks, so a link under
+  # openspec/changes that points outside does not pass.
+  resolved_changes="$(cd -P "$changes_dir" && pwd -P)"
+  proposal_dir="$(dirname "$proposal")"
+  resolved_dir="$(cd -P "$proposal_dir" 2>/dev/null && pwd -P || printf '%s' "$proposal_dir")"
+  if [[ "$resolved_dir" != "$resolved_changes" && "$resolved_dir" != "$resolved_changes"/* ]]; then
     echo "check-ai-pr-spec: refused id \"$id\": the resolved path leaves openspec/changes" >&2
     exit 1
   fi
