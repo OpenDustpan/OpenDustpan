@@ -34,11 +34,11 @@ When a principal with only the planner role starts a job with operation apply or
 
 ### Requirement: Refusal shape
 
-When the server refuses a planner apply or destroy job, the server SHALL answer error code job.forbidden with text that names the missing action and the action that allows it.
+When the server refuses a planner apply or destroy job, the server SHALL answer error code access.denied with text that names the missing action and the action that allows it.
 
 #### Scenario: Apply refusal body
 - **WHEN** the server refuses a planner apply job
-- **THEN** the body carries error code job.forbidden and names the missing action and the action that allows the apply.
+- **THEN** the body carries error code access.denied and names the missing action and the action that allows the apply.
 
 ### Requirement: Secrets by pinned SHA
 

@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #1299, #1300, #1301.
@@ -33,7 +33,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- POST /webhooks/{hook ID} intake with GitHub signature check, two active event secrets (the issue scope), effect-state duplicate rule and 204 for every request
+- POST /webhooks/{hook ID} intake with GitHub signature check, two active event secrets during a rotation with a bounded window for the old secret (ADR 374 decision 2), effect-state duplicate rule and 204 for every request
 - Hint flow with installation-to-connection lookup and replica drop
 - GitHub Files, Commits and Reviews methods behind capabilities
 - RepoToken scoped to one repository for at most 1 hour, and refusal of unscoped tokens on the runner path
@@ -112,17 +112,9 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. How long does the old event secret stay valid when the operator rotates it? No ADR in the pack decides the overlap.
-   - Options: Keep both valid until the operator confirms; End the old secret after at most 7 days, with an audit entry.
-   - Provisional decision (owner review 14 Nov): End the old secret after at most 7 days or at operator confirmation, with an audit entry. Show the window in the API.
-   - Reason: An open-ended overlap can leave a leaked secret valid for ever. Benchmark: AWS Secrets Manager keeps the previous version only during a bounded rotation.
-   - Persona impact: The operator has time to update the Git host. Escape hatch: The operator can confirm early or rotate again.
-   - Owner-tagged ADRs involved: ADR 271 (their words do not change).
-
 Questions considered and answered:
 
+- How long does the old event secret stay valid when the operator rotates it? ADR 374 decision 2.
 - Where does webhook parsing live? ADR 271 decision 4: ParseEvent in the port, the route in the internal adapter.
 - May a long-lived token reach a runner? ADR 271 decision 3: only a scoped token.
 - Does a member poll for missed changes? ADR 299 decision 29: only the federation poll and one catch-up read at start.

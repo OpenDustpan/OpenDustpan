@@ -9,8 +9,8 @@
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 2.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 BLOCKED by the owner decision on the route field and the proof kind: wire the route with its authorization actions, add the e2e step, the docs page and the usability check. Check: make e2e and make check with zero findings
+- [ ] 3.1 BLOCKED by the owner decision on the route field and the proof kind: wire the route with its authorization actions, add the e2e step, the docs page and the usability check. Check: make e2e and make check with zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

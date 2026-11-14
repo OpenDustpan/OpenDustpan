@@ -13,6 +13,8 @@ Changed by:
 - ADR 303 extends decision 11: OpenDustpan is not a Git host. The Forge port
   connects to Git hosts for repositories, pull requests and statuses.
 - ADR 336 extends: answers question 4, the author and the signature of a GitHub write-back commit, and the retry rule for a moved head.
+- ADR 374 extends decision 8: the old event secret stays valid for at most 7
+  days during a rotation.
 
 ## Context
 

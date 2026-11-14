@@ -18,11 +18,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the block into the server. The route GET /api/audit/entries (declared and served in `internal/api/audit/audit.go`) keeps its audit read action and uses an access token. Check: TestAuditEntriesRouteKeepsItsAction
-- [ ] 4.2 Add an e2e step in the NEW file `e2e/audit_agent_block_test.go` that starts a job with the real CLI and reads the entry. It calls the existing route `GET /api/audit/entries` with an access token, and passes the audit read action of the namespace. The agent writes the test; CI runs it. Check: make e2e
+- [ ] 4.2 Add an e2e step in the NEW file `e2e/audit_agent_block_test.go` that starts a job with the real CLI and reads the entry. It calls the existing route `GET /api/audit/entries` with an access token, and passes the audit read action of the namespace. The agent writes the test; CI runs it. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Update the audit docs page `docs/guides/audit-log.md` and check that each error names its command. Check: make docs-lint
-- [ ] 4.4 Run the full check. Check: make check with zero findings
+- [ ] 4.4 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

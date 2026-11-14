@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -17,11 +17,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Check authorization actions on the trigger routes Check: route test passes; make check reports zero findings
-- [ ] 4.2 Add e2e step against the real CLI Check: e2e with real OpenTofu: POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with a personal access token, run tofu apply on workspace A, then GET the trigger shows one plan job of workspace B; a repeat event starts nothing
+- [ ] 4.1 Check authorization actions on the trigger routes Check: route test passes; make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Add e2e step against the real CLI Check: e2e with real OpenTofu: POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with a personal access token, run tofu apply on workspace A, then GET the trigger shows one plan job of workspace B; a repeat event starts nothing. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Write the user docs page Check: make docs-lint passes
-- [ ] 4.4 Run the usability check Check: persona completes the path from the docs page alone; each error names one command
+- [ ] 4.4 Run the usability check Check: persona completes the path from the docs page alone; each error names one command. A person's step.

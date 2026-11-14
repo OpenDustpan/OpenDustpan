@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -24,10 +24,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e step for a Pulumi update and an OpenTofu run that wait and continue, with deny path. Check: e2e step on PUT /api/dustpan/v1/namespaces/{namespace}/approval-default with an access-token credential drives the real Pulumi CLI and the real OpenTofu CLI through TLS and shows approval wait then continue after approvals, plus deny refusal with the record named.
-- [ ] 4.2 Write the docs page for approval defaults on live jobs. Check: Docs page runs as written and shows the default, the wait state and the approve command.
-- [ ] 4.3 Run usability check from the docs page alone and make check with zero findings. Check: make check reports zero findings.
+- [ ] 4.1 Add e2e step for a Pulumi update and an OpenTofu run that wait and continue, with deny path. Check: e2e step on PUT /api/dustpan/v1/namespaces/{namespace}/approval-default with an access-token credential drives the real Pulumi CLI and the real OpenTofu CLI through TLS and shows approval wait then continue after approvals, plus deny refusal with the record named. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page for approval defaults on live jobs. Check: Docs page runs as written and shows the default, the wait state and the approve command. Confirmed by: CI (an e2e step in the NEW file e2e/approval_defaults_take_effect_live_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.3 Run usability check from the docs page alone and make check with zero findings. Check: make check reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

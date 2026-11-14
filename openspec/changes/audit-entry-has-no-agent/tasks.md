@@ -18,10 +18,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run e2e audit read and chain verification over new and legacy entries. Check: GET /api/audit/check with an access token verifies the chain across both shapes.
-- [ ] 4.2 Run usability check of the agent-block read path. Check: Persona completes the user path from the docs page alone, and each error names the one command that helps.
-- [ ] 4.3 Run full wiring, docs page and make check. Check: `make check` with zero findings.
+- [ ] 4.2 Run usability check of the agent-block read path. Check: Persona completes the user path from the docs page alone, and each error names the one command that helps. A person's step.
+- [ ] 4.3 Run full wiring, docs page and make check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

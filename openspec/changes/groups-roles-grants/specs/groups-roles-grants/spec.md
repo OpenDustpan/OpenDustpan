@@ -28,6 +28,26 @@ When a grant ends, the server SHALL refuse the next request that needs that gran
 - **WHEN** the grant ends and the same token sends the next CLI request
 - **THEN** the server answers 403
 
+### Requirement: Namespace discovery for grant holders
+
+When a principal holds a grant on a collection or a unit in a namespace, the organization and discovery routes of that namespace SHALL answer the principal, as ADR 374 decision 1 says.
+
+#### Scenario: Holder discovers the namespace
+- **WHEN** a principal with a grant on a collection reads the entitlement-set of the namespace
+- **THEN** the server answers that the namespace exists with its entitlements and names the grant that allowed it
+
+#### Scenario: List stays filtered
+- **WHEN** a principal with a grant on collection A lists the workspaces of the namespace
+- **THEN** the server shows no unit of another collection
+
+#### Scenario: No grant in the namespace
+- **WHEN** a principal with no grant in the namespace reads the organization
+- **THEN** the server answers the same 404 with the same body as for an unknown namespace
+
+#### Scenario: Revoked grant
+- **WHEN** the grant ends and the same principal sends the next discovery request
+- **THEN** the server answers 404
+
 ### Requirement: Access-review export
 
 When a caller with the read-access action asks for the access-review export, the server SHALL answer each grant with holder, role, object, creator and time.

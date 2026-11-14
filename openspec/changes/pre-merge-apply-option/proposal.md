@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:295` (Pre-merge apply, the option).

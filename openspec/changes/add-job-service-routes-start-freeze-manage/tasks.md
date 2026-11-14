@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -17,11 +17,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step against the real server over TLS on SQLite and PostgreSQL that uses the existing job start route and a personal access token. Check: e2e step with a personal access token calls POST /api/dustpan/v1/namespaces/{namespace}/jobs, creates a freeze, reads 403 on start and cancel, ends the freeze, and starts again over TLS on SQLite and PostgreSQL.
-- [ ] 4.2 Write the docs page for freeze create, list, end, and break-glass start. Check: Docs page commands run as written for freeze create, list, end, and break-glass start.
-- [ ] 4.3 Run the usability check of the freeze path. Check: Namespace administrator completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 4.4 Run the full check suite. Check: `make check` reports zero findings.
+- [ ] 4.1 Add an e2e step against the real server over TLS on SQLite and PostgreSQL that uses the existing job start route and a personal access token. Check: e2e step with a personal access token calls POST /api/dustpan/v1/namespaces/{namespace}/jobs, creates a freeze, reads 403 on start and cancel, ends the freeze, and starts again over TLS on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page for freeze create, list, end, and break-glass start. Check: Docs page commands run as written for freeze create, list, end, and break-glass start. Confirmed by: CI (an e2e step in the NEW file e2e/add_job_service_routes_start_freeze_manage_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.3 Run the usability check of the freeze path. Check: Namespace administrator completes the path from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 4.4 Run the full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

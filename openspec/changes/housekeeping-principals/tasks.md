@@ -24,7 +24,7 @@ Order: this change lands before run-triggers, add-schedule-triggers-due-claim, s
 
 ## 3. Definition of done
 
-- [ ] 3.1 E2e: list the housekeeping principals and their grants, revoke one, and see the denial of its next run. Check: `make e2e` passes.
+- [ ] 3.1 E2e: list the housekeeping principals and their grants, revoke one, and see the denial of its next run. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 Docs page `docs/explanation/housekeeping-principals.md`. Check: `make docs-lint` passes, and a test runs each command of the page.
-- [ ] 3.3 Usability check: the operator finds who ran each sweep from the docs page alone. Check: the check is recorded in the pull request.
-- [ ] 3.4 Full check. Check: `make check` reports zero findings.
+- [ ] 3.3 Usability check: the operator finds who ran each sweep from the docs page alone. Check: the check is recorded in the pull request. A person's step.
+- [ ] 3.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

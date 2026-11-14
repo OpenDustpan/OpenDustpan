@@ -1,21 +1,23 @@
-# 295. Break-glass recovery mode 2 over the network
+# 295. Signed-request recovery over the network
 
 Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026. Amends ADR 245 (decision 12 and the item "A stored recovery mode" of "Not decided here")
 
 Changed by:
 
 - ADR 372 extends decisions 8 and 9: the route also needs the store of
-  break-glass reviews, and its review opens whatever the opt-in.
+  break-glass reviews, and its review opens whatever the opt-in. A wording
+  refinement of the title, the context and decision 1 puts the name
+  signed-request recovery in place.
 
 ## Context
 
-Mode 2 of ADR 57 is a recovery request that an offline operator key signs. ADR 245 decision 12 lets only the host command reach the host issuer. That rule stops a route in the server from making a temporary administrator.
+Signed-request recovery of ADR 57 is a recovery request that an offline operator key signs. ADR 245 decision 12 lets only the host command reach the host issuer. That rule stops a route in the server from making a temporary administrator.
 
-The owner decided that mode 2 may run over the network. The server then needs a route that accepts a signed request.
+The owner decided that signed-request recovery may run over the network. The server then needs a route that accepts a signed request.
 
 ## Decision
 
-1. **The route is allowed (owner).** Mode 2 may run over the network. A route in the server accepts a signed recovery request. The route makes a temporary administrator. This amends ADR 245 decision 12 for this route only. The test of that decision names the route as the one other caller. (owner)
+1. **The route is allowed (owner).** Signed-request recovery may run over the network. A route in the server accepts a signed recovery request. The route makes a temporary administrator. This amends ADR 245 decision 12 for this route only. The test of that decision names the route as the one other caller. (owner)
 2. **The risk statement (owner).** The documentation states the risk in these words. "A theft of the private key alone gives a bounded remote temporary administrator." The bound is the expiry. The limits of a temporary administrator in ADR 245 also apply. (owner)
 3. **The nonce is a unique-key insert.** The server inserts the nonce of a request with a unique key. The insert is in the same transaction that makes the temporary administrator. A second request with the same nonce fails the insert. The transaction fails with it. (owner)
 4. **A shared rate limit.** The database holds the counter of the rate limit, so all instances share it. An IPv6 address counts as its /64 group. (owner)
@@ -31,3 +33,14 @@ The owner decided that mode 2 may run over the network. The server then needs a 
 - ADR 245 gets a pointer to this ADR.
 - Each step of decision 3 to decision 7 needs its own test that sends hostile input to that step alone.
 - The user documentation for recovery says what the risk statement says.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 372, on the owner's word): the title
+  said "Break-glass recovery mode 2 over the network". It now says
+  "Signed-request recovery over the network". The context and decision 1
+  said "mode 2". They now say "signed-request recovery", the name of ADR 372
+  decision 1 and the value `signed-request` of the setting `--recovery-mode`
+  (ADR 245 decision 6). The words "over the network" stay, because they
+  describe the route. The file name stays, so that links to this ADR keep
+  working.

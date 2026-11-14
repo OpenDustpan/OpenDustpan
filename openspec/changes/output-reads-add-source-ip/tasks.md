@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -20,4 +20,4 @@
 - [ ] 3.2 Run the e2e output-sharing step on the existing outputs read route with an access token. Check: e2e output-sharing step for `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit}/outputs` with an access token passes against the real CLI.
 - [ ] 3.3 Update the user docs in the same pull request. Check: Docs page for output sharing names the denial fields and the limit.
 - [ ] 3.4 Check the console audit view shows the new denial fields. Check: Namespace administrator reads a denial in the console audit view and sees the client address, user agent and request ID.
-- [ ] 3.5 Run make check with zero findings. Check: `make check` reports zero findings.
+- [ ] 3.5 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

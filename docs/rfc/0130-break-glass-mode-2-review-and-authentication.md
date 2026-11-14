@@ -10,7 +10,7 @@ created: 2026-11-14
 
 Status: accepted ([ADR 372](../adr/0372-signed-request-recovery-its-review-its-authentication-and-the-names-of-the-recovery-modes.md)). The owner accepted the four points as
 recommended on 14 November 2026. This RFC holds the open points of the OpenSpec change
-`break-glass-mode-2`. That change is not spec-ready: "the change conflicts
+`break-glass-mode-2`, now `signed-request-recovery`. That change was not spec-ready: "the change conflicts
 with ADR 142: an RFC comes first; the change conflicts with ADR 46: an RFC
 comes first." It does not edit an accepted ADR. An owner decision on it
 gives a new ADR.
@@ -19,7 +19,7 @@ gives a new ADR.
 
 ### What depends on this RFC
 
-- The OpenSpec change `break-glass-mode-2` (roadmap, milestone 4, step 11:
+- The OpenSpec change `signed-request-recovery`, before `break-glass-mode-2` (roadmap, milestone 4, step 11:
   one administrator on a signed request, a refusal on a wrong signature or a
   reuse, and a break-glass review).
 - Its open question 1: "Which review scope and use kind does mode 2 use, and
@@ -341,7 +341,7 @@ writes your visit in the ledger.
 
 ## What changes in the blocked change
 
-The change `break-glass-mode-2` must follow the owner decisions of ADR 295
+The change `signed-request-recovery` must follow the owner decisions of ADR 295
 that it does not follow today, whatever the outcome of this RFC:
 
 - The route makes a temporary administrator and returns a token encrypted to

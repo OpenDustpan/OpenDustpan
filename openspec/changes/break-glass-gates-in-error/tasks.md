@@ -17,5 +17,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 The route fields, the e2e step against the real CLI and the usable docs page for the pass: BLOCKED by break-glass-pass-wiring, which adds the pass store, the routes and the proof kind. Here, add a docs note that break-glass is not reachable yet. Check: `make docs-lint` passes.
-- [ ] 4.2 Run the full check. Check: `make check` reports zero findings.
+- [ ] 4.1 The route fields, the e2e step against the real CLI and the usable docs page for the pass: BLOCKED by break-glass-pass-wiring, which adds the pass store, the routes and the proof kind. Here, add a docs note that break-glass is not reachable yet. Check: `make docs-lint` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
