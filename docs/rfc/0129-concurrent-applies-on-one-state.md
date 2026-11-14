@@ -275,9 +275,10 @@ claim of an upload from its credential. ADR 302 decision 6 names "one
 principal for each job" as a point of this RFC.
 `concurrent-applies-merge-core` asks the same question.
 
-**Precedent.** HCP Terraform gives each run its own short-lived run token
-(`TFE_RUN_TOKEN` / the run's API token,
-<https://developer.hashicorp.com/terraform/cloud-docs/workspaces/run/run-environment>).
+**Precedent.** HCP Terraform "generates a unique per-run API token and
+provides it to the Terraform worker in the CLI config file". The tokens
+"become invalid after the run is completed"
+(<https://developer.hashicorp.com/terraform/cloud-docs/workspaces/run/run-environment>).
 OpenDustpan already does the same: the job token with the job-ID claim
 (ADR 100 decision 20). ADR 144 decision 15 already scopes a write to one
 job by comparing the job ID with the job-ID claim.
