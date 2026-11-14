@@ -13,6 +13,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -76,6 +78,72 @@ func holdsApprove() []string {
 
 const goodApprove = `{"verdict":"approve","planBinding":{"plan":"pln-1","displaySha256":"d1",` +
 	`"applySha256":"a1","stateVersion":"sv-1"},"comment":"checked the plan"}`
+
+// The service deliberately allows the request. The handler must refuse a
+// destroy without session proof without help from the service.
+func TestApproveDestroyHandlerNeedsFreshStep(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		body   string
+		state  job.State
+		status int
+		code   string
+	}{
+		{"bound approval", goodApprove, job.StateAwaitingApproval, http.StatusForbidden, errcode.MFAFreshStepRequired},
+		{
+			"no binding",
+			`{"verdict":"approve"}`,
+			job.StateAwaitingApproval,
+			http.StatusForbidden,
+			errcode.MFAFreshStepRequired,
+		},
+		{"running destroy", goodApprove, job.StateRunning, http.StatusConflict, errcode.JobNotAwaitingApproval},
+		{"finished destroy", goodApprove, job.StateSucceeded, http.StatusConflict, errcode.JobFinished},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newApproveRig(t, holdsApprove()...)
+			j := runningJob(t, testJob)
+			j.Spec.Operation = job.OperationDestroy
+			j.State = tc.state
+			r.h = newStartHandler(t, r.authz, newFakeJobs(j), r.svc, r.entries)
+
+			rec := r.send(t, testJob, tc.body)
+			if rec.Code != tc.status || len(r.svc.called()) != 0 {
+				t.Fatalf("status = %d, service calls = %d; want %d and none", rec.Code, len(r.svc.called()), tc.status)
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, rec.Code, rec.Body.Bytes(),
+				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
+
+			if tc.status == http.StatusConflict {
+				return
+			}
+
+			checkDestroyFreshRefusal(t, rec, r.entries)
+		})
+	}
+}
+
+func checkDestroyFreshRefusal(t *testing.T, rec *httptest.ResponseRecorder, entries *recordingAudit) {
+	t.Helper()
+
+	for _, text := range []string{"/api/server/sign-in/", "factor enrollment", "email code", "Git host", "administrator"} {
+		if !strings.Contains(rec.Body.String(), text) {
+			t.Errorf("refusal does not name %q", text)
+		}
+	}
+
+	if len(entries.entries) != 1 || entries.entries[0].Action != string(identity.ActionJobApprove) ||
+		entries.entries[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("entries = %+v, want one approval denial", entries.entries)
+	}
+}
 
 func approvalsURL(id string) string { return jobPath("acme", id) + "/approvals" }
 
@@ -387,9 +455,9 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 	}{
 		{fmt.Errorf("%w: no", job.ErrAgentDenied), http.StatusForbidden, "job.agent-denied"},
 		{fmt.Errorf("%w: ask another approver", job.ErrSelfApproval), http.StatusForbidden, "job.self-approval"},
-		{fmt.Errorf("%w: MFA", job.ErrAuthStale), http.StatusForbidden, "job.auth-stale"},
+		{fmt.Errorf("%w: MFA", job.ErrAuthStale), http.StatusForbidden, "mfa.fresh-step-required"},
 		{fmt.Errorf("%w: wait", job.ErrAlreadyApproved), http.StatusConflict, "job.already-approved"},
-		{fmt.Errorf("%w: unit", identity.ErrDenied), http.StatusForbidden, ""},
+		{fmt.Errorf("%w: unit", identity.ErrDenied), http.StatusForbidden, errcode.AccessDenied},
 		{fmt.Errorf("%w: queued", job.ErrTransition), http.StatusConflict, "job.not-awaiting-approval"},
 		{fmt.Errorf("%w: succeeded", job.ErrFinished), http.StatusConflict, "job.finished"},
 		{fmt.Errorf("%w: other plan", job.ErrPlanChanged), http.StatusConflict, "job.plan-changed"},
@@ -398,7 +466,7 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 		{namespace.ErrFenced, http.StatusConflict, "namespace.fenced"},
 		{fmt.Errorf("%w: verdict", job.ErrInvalid), http.StatusBadRequest, "job.invalid"},
 		{job.ErrNotFound, http.StatusNotFound, "job.not-found"},
-		{errDriver, http.StatusInternalServerError, ""},
+		{errDriver, http.StatusInternalServerError, errcode.ServerInternal},
 	}
 
 	for _, tc := range tests {
@@ -413,9 +481,8 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.status)
 			}
 
-			if tc.code != "" && !strings.Contains(rec.Body.String(), `"errorCode":"`+tc.code+`"`) {
-				t.Errorf("body = %s, want the code %s", rec.Body.String(), tc.code)
-			}
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, rec.Code, rec.Body.Bytes(),
+				errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
 
 			for _, leak := range []string{"hunter2", "/var/lib"} {
 				if strings.Contains(rec.Body.String(), leak) {

@@ -21,10 +21,10 @@ import (
 //     job:approve on the unit of the job.
 //  3. The state: a job that ended, a job that does not wait for approval,
 //     and a phase with no approval gate that waits.
-//  4. An approval by an agent, by a subject that may not fill a slot, and by
+//  4. The fresh MFA step of the approval of a destroy.
+//  5. An approval by an agent, by a subject that may not fill a slot, and by
 //     the starter when no approval gate allows it.
-//  5. The binding to the plan of the phase before, when there is one.
-//  6. The fresh MFA step of the approval of a destroy.
+//  6. The binding to the plan of the phase before, when there is one.
 //
 // A rejection needs checks 1 to 3 only. A rejection by an agent is allowed,
 // and a rejection never needs the plan or a fresh authentication: it only
@@ -32,8 +32,7 @@ import (
 //
 // The store records the verdict, and the event that follows from it, in one
 // transaction with the audit entry. A second approval by one subject is
-// recorded and counts once (Gate.Status). This version does not check the
-// groups of an approver.
+// recorded and counts once (Gate.Status). Group membership is checked by ID.
 //
 //nolint:revive // argument-limit: the signature is the one of job.Service.
 func (s *service) Approve(
@@ -82,6 +81,17 @@ func (s *service) Approve(
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
 // binding of the caller, and stays as the binding to record.
 func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
+	// Defense in depth: the HTTP handler refuses a destroy without session
+	// proof too. This check stays so that another caller cannot skip it.
+	if j.Spec.Operation == OperationDestroy {
+		fresh, err := newDestroyFresh(a, ap.At)
+		if err != nil {
+			return err
+		}
+
+		ap.Auth, ap.AuthAt = fresh.auth, fresh.at
+	}
+
 	err := s.checkApprover(ctx, j, a, gates)
 	if err != nil {
 		return err
@@ -92,7 +102,7 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 		return err
 	}
 
-	return checkDestroy(j, a, ap.At)
+	return nil
 }
 
 // mfaOf returns the authentication kind that the audit entry records, which
@@ -337,25 +347,24 @@ func (s *service) checkPlan(j *Job, ap *Approval) error {
 	return nil
 }
 
-// checkDestroy refuses the approval of a destroy that has no fresh step of
-// the built-in MFA. The server sets Actor.ConfirmAuth and Actor.AuthAt from
-// the sign-in of the principal; no client gives them. The step must not be
-// after now and at most ConfirmFreshness before it.
-//
-// Defense in depth: the route can check the step too. This check stays so
-// that a new caller of the service cannot approve a destroy without it.
-func checkDestroy(j *Job, a Actor, now time.Time) error {
-	if j.Spec.Operation != OperationDestroy {
-		return nil
-	}
+// destroyFresh is the checked session proof of a destroy approval.
+type destroyFresh struct {
+	auth ConfirmAuth
+	at   time.Time
+}
 
-	if a.ConfirmAuth != ConfirmAuthMFA || a.AuthAt.IsZero() || a.AuthAt.After(now) ||
+// newDestroyFresh accepts only a person's console session. A token or an
+// agent never gives a fresh step, even when its caller supplies an MFA time.
+func newDestroyFresh(a Actor, now time.Time) (destroyFresh, error) {
+	if a.Agent != "" || a.Principal.Kind != identity.KindPerson ||
+		a.Principal.Credential != identity.CredentialSession || a.Principal.TokenID != "" ||
+		a.ConfirmAuth != ConfirmAuthMFA || a.AuthAt.IsZero() || a.AuthAt.After(now) ||
 		now.Sub(a.AuthAt) > ConfirmFreshness {
-		return fmt.Errorf("%w: the approval of a destroy needs an MFA step in the last %s",
+		return destroyFresh{}, fmt.Errorf("%w: the approval of a destroy needs an MFA step in the last %s",
 			ErrAuthStale, ConfirmFreshness)
 	}
 
-	return nil
+	return destroyFresh{auth: ConfirmAuthMFA, at: a.AuthAt}, nil
 }
 
 // record stores the verdict in one change with its audit entry. The event

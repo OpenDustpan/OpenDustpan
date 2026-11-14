@@ -83,7 +83,7 @@ func classifyApproval(err error) (problem.Problem, bool) {
 	case errors.Is(err, job.ErrSelfApproval):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobSelfApproval), true
 	case errors.Is(err, job.ErrAuthStale):
-		return problem.Refused(err, http.StatusForbidden, errcode.JobAuthStale), true
+		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired, destroyFreshMessage), true
 	case errors.Is(err, job.ErrAlreadyApproved):
 		return problem.Refused(err, http.StatusConflict, errcode.JobAlreadyApproved), true
 	case errors.Is(err, job.ErrFinished):
@@ -106,11 +106,11 @@ func classifyApproval(err error) (problem.Problem, bool) {
 // with the job after the verdict. The route wrapper allowed job:read and
 // job:approve on the unit of the job. The job service checks both again, and
 // checks the state of the job, the approver, the plan and the MFA step of a
-// destroy (defense in depth: this handler holds no copy of those rules).
+// destroy. The handler also refuses a destroy without session proof.
 //
 // This handler does not set Actor.ConfirmAuth or Actor.AuthAt: no part of this
 // API knows the MFA step of the session yet. So the approval of a destroy fails
-// closed with job.auth-stale until the server sets them from the sign-in.
+// closed until the server sets them from the sign-in.
 func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
@@ -138,6 +138,25 @@ func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
+	// Defense in depth: the service checks the proof and the credential too.
+	// This handler has no session MFA proof yet. Refuse a destroy here even
+	// when an implementation of the service would allow it.
+	if verdict == job.VerdictApprove && t.job.Spec.Operation == job.OperationDestroy {
+		freshErr := job.ErrAuthStale
+		switch {
+		case t.job.State.Terminal():
+			freshErr = job.ErrFinished
+		case t.job.State != job.StateAwaitingApproval:
+			freshErr = job.ErrTransition
+		default:
+		}
+
+		h.recordApprovalRefusal(r, p, t, freshErr)
+		h.writeError(ctx, w, freshErr)
+
+		return
+	}
+
 	actor := job.Actor{Principal: p, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{}}
 
 	j, err := h.starter.Approve(ctx, actor, t.job.ID, verdict, bound, body.Comment)
@@ -160,6 +179,11 @@ func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.
 	setETag(w, &j)
 	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
 }
+
+// The refusal names the sign-in path and the ways to enroll a first factor.
+// It contains no request data or authentication detail.
+const destroyFreshMessage = "Destroy approval needs a fresh step. Sign in at /api/server/sign-in/{provider}?fresh=1. " +
+	"With no factor, open the factor enrollment page. Use an email code, a Git host key, or an administrator code."
 
 // checkApproveBody is the check of the body at the boundary. It uses an
 // allowlist for the verdict, the rules of the audit reason for the comment,
@@ -213,7 +237,7 @@ func (h *Handler) recordApprovalRefusal(r *http.Request, p identity.Principal, t
 	}
 
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionJobApprove, Object: t.obj, Reason: reason, Window: 0,
+		Action: identity.ActionJobApprove, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
 	})
 }
 

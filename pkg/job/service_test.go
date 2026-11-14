@@ -56,7 +56,7 @@ func newSvcStore() *svcStore {
 		createErrs:   nil,
 		applyErr:     nil,
 		jobs:         map[job.ID]job.Job{},
-		keys:       map[string]job.Job{},
+		keys:         map[string]job.Job{},
 	}
 }
 

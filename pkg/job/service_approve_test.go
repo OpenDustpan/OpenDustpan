@@ -85,11 +85,11 @@ func (r *rig) seed(mod func(*job.Job)) job.Job {
 	plan := r.storedPlan()
 
 	j := job.Job{
-		ID: approveID,
+		ID: approveID, NamespaceID: "",
 		Spec: job.Spec{
 			Unit: r.unit, Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorRunner,
 			Location: emptyLocation(), Steps: nil, Pool: "pool-1", Profile: "", Edits: nil, Delivery: "",
-			Defaulted: nil,
+			Defaulted: nil, LocationSource: "",
 		},
 		State: job.StateAwaitingApproval, Wait: job.WaitNone, Reason: "",
 		Phases: []job.Phase{
@@ -448,6 +448,8 @@ func TestApproveDestroyNeedsAFreshMFAStep(t *testing.T) {
 			r.seed(func(j *job.Job) { j.Spec.Operation = job.OperationDestroy })
 
 			actor := actorOf("carol")
+			actor.Principal.Kind = identity.KindPerson
+			actor.Principal.Credential = identity.CredentialSession
 			actor.ConfirmAuth, actor.AuthAt = tc.auth, r.now.Add(-tc.age)
 
 			_, err := r.svc.Approve(t.Context(), actor, approveID, job.VerdictApprove, r.binding(), "")

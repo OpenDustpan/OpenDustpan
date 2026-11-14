@@ -930,6 +930,10 @@ func (m *memDB) followUp(ctx context.Context, id job.ID, k durable.Kind) error {
 // change makes the fields of c on next, and checks the rules of its event.
 // It keeps nothing on an error.
 func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now time.Time) error {
+	if err := checkDestroyProof(next, c.Approval, now); err != nil {
+		return err
+	}
+
 	if c.Approval != nil && next.Current < len(next.Phases) {
 		next.Phases[next.Current].Approvals = append(next.Phases[next.Current].Approvals, *c.Approval)
 	}
@@ -944,6 +948,19 @@ func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now ti
 
 	if f, ok := changes[c.Event]; ok {
 		return f(next, c, now)
+	}
+
+	return nil
+}
+
+func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
+	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
+		return nil
+	}
+
+	if ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA || ap.AuthAt.IsZero() ||
+		ap.AuthAt.After(ap.At) || ap.At.After(now) || now.Sub(ap.AuthAt) > job.ConfirmFreshness {
+		return job.ErrAuthStale
 	}
 
 	return nil

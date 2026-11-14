@@ -203,7 +203,7 @@ func seedMemberships(t *testing.T, st *sqlite.Store) {
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-platform", Name: "platform", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 
 	if err := st.CreateGroup(t.Context(), group, storeEntry()); err != nil {
@@ -268,7 +268,7 @@ func joinGroup(t *testing.T, st *sqlite.Store, groupID, subject string) {
 
 	group := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: groupID, Name: groupID, Description: "", Source: principal.SourceLocal,
-		MemberCount: 0,
+		MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if _, err := st.GetGroup(t.Context(), groupID); errors.Is(err, principal.ErrNotFound) {
 		if createErr := st.CreateGroup(t.Context(), group, storeEntry()); createErr != nil {

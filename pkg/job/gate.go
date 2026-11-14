@@ -184,10 +184,11 @@ type Approval struct {
 	// version that they read.
 	Plan *PlanBinding
 	At   time.Time
-	// Auth is the fresh authentication of a confirmation, or empty for a
-	// verdict on a gate of type GateApproval.
+	// Auth is the fresh authentication of a confirmation or a destroy
+	// approval, and empty for a verdict that needs no fresh step.
 	Auth ConfirmAuth
-	// AuthAt is the time of the fresh authentication of a confirmation:
+	// AuthAt is the time of the fresh authentication of a confirmation or
+	// a destroy approval:
 	// the MFA step, or the authentication at the SSO provider. A
 	// confirmation counts only when Auth is valid and At - AuthAt is at
 	// most ConfirmFreshness.

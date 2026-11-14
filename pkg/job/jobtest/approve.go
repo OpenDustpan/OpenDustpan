@@ -23,6 +23,8 @@ func approveCases() []suiteCase {
 		},
 		{"approval: a write on an older version is ErrConflict and records nothing", testApprovalConflict},
 		{"approval: a dispatch refuses an approval bound to another plan", testApprovalOtherPlan},
+		{"approval: a destroy needs fresh proof in the write transaction", testDestroyApprovalFresh},
+		{"approval: a destroy records fresh proof and permits rejection without it", testDestroyApprovalProofStored},
 	}
 }
 
@@ -40,6 +42,12 @@ func approverPolicy() gate.ApproverPolicy {
 func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 	t.Helper()
 
+	return awaitingApprovalFor(t, h, f, job.OperationApply)
+}
+
+func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) job.Job {
+	t.Helper()
+
 	// A harness without a state writer has no state version to bind.
 	version := ""
 	if h.WriteState != nil {
@@ -48,7 +56,7 @@ func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 
 	made := time.Now()
 
-	j := newJob(f.unit, job.OperationApply, "")
+	j := newJob(f.unit, op, "")
 	j.Current = 1
 	j.Phases[0].StateVersion = version
 	j.Phases[0].Plan = &job.PlanRef{
@@ -67,6 +75,67 @@ func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 	stored := create(t, h, f, j, nil)
 
 	return apply(t, h, f, change(&stored, job.EventNeedApproval))
+}
+
+func testDestroyApprovalFresh(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := awaitingApprovalFor(t, h, f, job.OperationDestroy)
+	tests := []struct {
+		name string
+		edit func(*job.Approval)
+	}{
+		{"no proof", func(ap *job.Approval) { ap.Auth, ap.AuthAt = "", time.Time{} }},
+		{"stale proof", func(ap *job.Approval) { ap.AuthAt = ap.At.Add(-time.Hour) }},
+		{"future proof", func(ap *job.Approval) { ap.AuthAt = ap.At.Add(time.Hour) }},
+		{"unknown proof", func(ap *job.Approval) { ap.Auth = "unknown" }},
+		{"SSO proof", func(ap *job.Approval) { ap.Auth = job.ConfirmAuthSSO }},
+		{"agent proof", func(ap *job.Approval) { ap.Agent = "agent" }},
+		{"expired before write", func(ap *job.Approval) {
+			ap.At = ap.At.Add(-time.Hour)
+			ap.AuthAt = ap.At
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := verdict(&j, "cy", job.VerdictApprove, job.EventApprovalRecorded)
+			c.Approval.Auth, c.Approval.AuthAt = job.ConfirmAuthMFA, c.Approval.At
+			tc.edit(c.Approval)
+
+			_, err := h.Jobs.Apply(t.Context(), c, f.fence, nil)
+			if !errors.Is(err, job.ErrAuthStale) {
+				t.Fatalf("Apply = %v, want ErrAuthStale", err)
+			}
+
+			got, err := h.Jobs.Get(t.Context(), j.ID)
+			if err != nil || got.Version != j.Version || len(got.Phases[1].Approvals) != 0 {
+				t.Fatal("the refused approval changed the job")
+			}
+		})
+	}
+}
+
+func testDestroyApprovalProofStored(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := awaitingApprovalFor(t, h, f, job.OperationDestroy)
+	c := verdict(&j, "cy", job.VerdictApprove, job.EventApprovalRecorded)
+	c.Approval.Auth, c.Approval.AuthAt = job.ConfirmAuthMFA, c.Approval.At.Add(-time.Minute)
+	stored := apply(t, h, f, c)
+	ap := stored.Phases[1].Approvals[0]
+	if ap.Auth != job.ConfirmAuthMFA || !ap.AuthAt.Equal(c.Approval.AuthAt) {
+		t.Fatal("the store did not retain the approval proof")
+	}
+
+	rejected := apply(t, h, f, verdict(&stored, "di", job.VerdictReject, job.EventRejected))
+	if rejected.State != job.StateRejected {
+		t.Fatalf("state = %s, want rejected", rejected.State)
+	}
 }
 
 // verdict returns the change that records the verdict v of subject on j, with

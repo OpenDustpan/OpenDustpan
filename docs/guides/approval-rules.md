@@ -201,7 +201,7 @@ The rules:
   plan, the old approvals do not count, and the job waits again.
 - The approval of a `destroy` job needs a fresh MFA step. This version cannot read
   the MFA step of a console session yet, so it refuses the approval of a destroy
-  with the error code `job.auth-stale`. A rejection works.
+  with 403 and the error code `mfa.fresh-step-required`. A rejection works.
 - One `reject` ends the job in the state `rejected`. Any holder of `job:approve` on the
   unit can reject, also a person who is not in the groups of the default, because a
   rejection only stops the change.
@@ -211,6 +211,25 @@ the apply phase when no freeze, lock or other change holds the unit. If the stat
 the unit changed after the plan, the dispatch refuses the approvals, and the job plans
 again. The
 [jobs API reference](../reference/jobs-api.md) lists the errors.
+
+### Destroy approval and the fresh step
+
+An access token, a job token, a trust token or an agent cannot give the fresh
+step for a destroy approval. A break-glass session does not bypass this check.
+The refusal changes no approval and writes an approval denial to the audit log.
+
+The refusal names `/api/server/sign-in/{provider}?fresh=1` for a new sign-in.
+A person with no factor must first open the factor enrollment page. The first
+factor needs an email code, a key that the Git host lists, or an enrollment
+code from an administrator. A session alone is not proof of an enrolled factor.
+
+This version does not pass session MFA proof to job approvals. A new sign-in
+therefore does not make destroy approval work yet. Do not retry with an access
+token or put an MFA time in the request body.
+
+The composed plan and apply path is not available yet. The server starts plan
+jobs only. It refuses runner apply and destroy starts, rather than omit a plan,
+approval, limit or gate check.
 
 ## Roles and actions
 

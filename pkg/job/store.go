@@ -238,6 +238,11 @@ type Store interface {
 	// ErrNotFound for an unknown job, ErrConflict when the job is not at
 	// c.Version, and the error of Next for an event that the state does not
 	// allow. It checks these rules in the transaction of the change:
+	//   - An approval of a destroy needs an MFA proof with no agent. The
+	//     proof must not be after the approval or the database clock, and
+	//     its age on that clock must not exceed ConfirmFreshness. A missing,
+	//     unknown or expired proof returns ErrAuthStale. A rejection needs
+	//     no proof.
 	//   - EventDispatch of any phase, also a plan phase: ErrLocked while a
 	//     manual lock covers the unit (its own lock, the lock of its
 	//     collection now, or the lock of its namespace). Break-glass does not

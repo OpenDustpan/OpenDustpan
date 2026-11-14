@@ -167,25 +167,25 @@ the request, and the server writes nothing to the job.
    A caller who cannot read the job gets 404.
 2. The job must wait for approval. A job that ended answers 409 with the code `job.finished`.
    A job in another state answers 409 with the code `job.not-awaiting-approval`.
-3. An agent cannot approve. An agent can reject.
-4. The person who started the job cannot approve it, also when an agent started it for that
+3. The approval of a `destroy` job needs a fresh MFA step of the caller, at most 15
+   minutes old. A rejection needs none.
+4. An agent cannot approve. An agent can reject.
+5. The person who started the job cannot approve it, also when an agent started it for that
    person, unless the gate has `allowSelf`. That person can reject.
-5. A person who approved this phase already cannot approve it again. The server answers 409
+6. A person who approved this phase already cannot approve it again. The server answers 409
    with the code `job.already-approved`. A person who approved can still reject.
-6. If a gate names groups, the caller must be an enabled person with an active membership
+7. If a gate names groups, the caller must be an enabled person with an active membership
    in at least one of its groups. A suspended or ended membership does not count. The server compares the immutable ID of the group,
    so a group that someone renamed still matches, and a group that someone made again with
    the same name does not. A caller who is not a member, a server that cannot read the
    membership, and a gate that names groups with no group IDs all answer 403 with the
    code `access.denied`. A gate with no groups needs no membership.
-7. The plan binding must be the binding of the stored plan. Another plan answers 409
+8. The plan binding must be the binding of the stored plan. Another plan answers 409
    with the code `job.plan-changed`. A plan that is older than 24 hours, or that the
    server redacted, answers 409 with the code `job.plan-stale`. A job that waits for a
    plan that was never stored also answers `job.plan-stale`. If the state of the unit
    changes after the plan, the server finds it when it dispatches the apply phase, and
    the dispatch refuses the approvals then.
-8. The approval of a `destroy` job needs a fresh MFA step of the caller, at most 15
-   minutes old. A rejection needs none.
 
 One approval keeps the job in `awaiting-approval` until the gate has all the approvals
 that it needs from distinct people. The last approval moves the job to `queued`. A
@@ -195,13 +195,15 @@ stops the change. Each verdict adds one entry of the kind `change` to the audit 
 entry has the caller, the verdict, the phase, the comment and the event that followed.
 
 A refusal with the code `access.denied`, `job.agent-denied`, `job.self-approval`,
-`job.already-approved`, `job.auth-stale`, `job.plan-changed` or `job.plan-stale` adds one entry with the outcome
+`job.already-approved`, `mfa.fresh-step-required`, `job.plan-changed` or `job.plan-stale` adds one entry with the outcome
 `denied` to the audit log. A request that is not valid, a job that does not wait, and a
 version conflict add none.
 
 This version cannot give the server the MFA step of a console session yet. So the
-server refuses the approval of a destroy with 403 and the code `job.auth-stale`, and
+server refuses the approval of a destroy with 403 and the code `mfa.fresh-step-required`, and
 changes nothing. A rejection of a destroy works.
+The refusal names the sign-in path and the ways to enroll the first factor.
+See [Destroy approval and the fresh step](../guides/approval-rules.md#destroy-approval-and-the-fresh-step).
 
 Example:
 
@@ -224,11 +226,11 @@ The answer is the job document with status 201 and the header `ETag`.
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `request.body-invalid` | The body is not one JSON object, has an unknown field, or has an `Idempotency-Key` header |
-| 401 | | The caller did not sign in |
+| 401 | `auth.unauthenticated` | The caller did not sign in |
 | 403 | `access.denied` | The caller lacks `job:approve` on the unit, or is not a member of a group of the gate |
 | 403 | `job.agent-denied` | An agent tried to approve |
 | 403 | `job.self-approval` | The person who started the job tried to approve it |
-| 403 | `job.auth-stale` | The approval of a destroy has no fresh MFA step |
+| 403 | `mfa.fresh-step-required` | The approval of a destroy has no fresh MFA step |
 | 404 | `job.not-found` | The namespace or the job does not exist, or the caller cannot read it |
 | 409 | `job.already-approved` | The caller approved this phase already |
 | 409 | `job.not-awaiting-approval` | The job waits for no approval |

@@ -42,7 +42,7 @@ func TestActiveMemberIgnoresAMembershipThatOutlivesItsGroup(t *testing.T) {
 
 	g := principal.Group{
 		CreatedAt: at, UpdatedAt: at, ID: "grp-1", Name: "ops", Description: "", Source: principal.SourceLocal,
-		MemberCount: 0,
+		MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := s.CreateGroup(ctx, g, activeMemberEntry()); err != nil {
 		t.Fatalf("create the group: %v", err)
