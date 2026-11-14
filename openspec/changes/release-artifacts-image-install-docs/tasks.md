@@ -10,7 +10,7 @@
 ## 2. Build
 
 - [ ] 2.1 Add the NEW script `scripts/release-build-image.sh` with VERSION input, buildx, QEMU, and console hash check. Check: `scripts/release-build-image.sh 0.1.0-test` builds local multi-arch image with no push.
-- [ ] 2.2 Add the NEW file `.github/workflows/release-image.yml`. It is a workflow that starts on v tag and reuses binary archive outputs without push. Check: Workflow file pins both setup actions by SHA with version tag comment and holds no push step.
+- [ ] 2.2 Add the NEW file `.github/workflows/release-image.yml`. It is a workflow that starts on v tag and reuses binary archive outputs without push. Check: Workflow file pins both setup actions by SHA with version tag comment and holds no push step. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
 - [ ] 2.3 Add the NEW Make target `make image-smoke` in the NEW file `Makefile.image` (NEW, included by the existing `Makefile`) with artifact install test step for the built image and the part 1 binary archive. Check: `make image-smoke VERSION=0.1.0-test` starts image and passes health and console checks.
 - [ ] 2.4 Add the NEW file `docs/install-from-artifacts.md` as an install-from-artifacts docs page with image install, binary archive install, and verify steps. Check: Docs page runs each command as written in test.
 
