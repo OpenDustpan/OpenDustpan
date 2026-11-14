@@ -3,8 +3,10 @@ package forge_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -522,6 +524,130 @@ func TestCheckAuditsItsOutcome(t *testing.T) {
 	}
 }
 
+// TestCheckWarnsWhenTheAppUsedItsBudget sends a check whose error reports that
+// the app used its budget of signed calls, and a check whose error does not.
+// The first writes one warning with the namespace, the connection and the
+// wait; the second writes none.
+func TestCheckWarnsWhenTheAppUsedItsBudget(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		checkErr error
+		wantWait time.Duration
+		wantLog  bool
+	}{
+		"the app used its budget": {
+			checkErr: fmt.Errorf("%w: %w", forge.ErrAppBudget, forge.Unavailable(7*time.Second, "spent")),
+			wantWait: 7 * time.Second,
+			wantLog:  true,
+		},
+		"the budget is spent with no wait": {
+			checkErr: fmt.Errorf("%w: no wait", forge.ErrAppBudget),
+			wantWait: 0,
+			wantLog:  true,
+		},
+		"the host refused the credential": {checkErr: forge.ErrAuth, wantWait: 0, wantLog: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t)
+			conn := ready(t, r)
+			r.opener.checkErr = tc.checkErr
+
+			var buf bytes.Buffer
+
+			svc, err := forge.NewService(forge.Config{
+				Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
+				Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
+				CheckLimits: nil, Logger: slog.New(slog.NewJSONHandler(&buf, nil)), Now: nil,
+			})
+			if err != nil {
+				t.Fatalf("new service: %v", err)
+			}
+
+			_, checkErr := svc.Check(t.Context(), callerEntry(), "acme", conn.Record.ID)
+			if !errors.Is(checkErr, tc.checkErr) {
+				t.Fatalf("check = %v, want %v", checkErr, tc.checkErr)
+			}
+
+			records := logRecords(t, &buf)
+			if !tc.wantLog {
+				if len(records) != 0 {
+					t.Fatalf("log records = %v, want none", records)
+				}
+
+				return
+			}
+
+			wantBudgetWarning(t, records, conn.Record.ID, tc.wantWait)
+		})
+	}
+}
+
+// wantBudgetWarning checks that records holds one budget warning for the
+// connection, with the wait when wantWait is above zero.
+func wantBudgetWarning(t *testing.T, records []map[string]any, connection string, wantWait time.Duration) {
+	t.Helper()
+
+	if len(records) != 1 {
+		t.Fatalf("log records = %d, want one warning", len(records))
+	}
+
+	rec := records[0]
+
+	const wantMessage = "The GitHub App used its budget of signed calls. " +
+		"The server refused the check of the connection."
+
+	if rec["level"] != "WARN" || rec["msg"] != wantMessage {
+		t.Fatalf("record = %v, want one WARN with the message %q", rec, wantMessage)
+	}
+
+	if rec["namespace"] != "acme" || rec["connection"] != connection {
+		t.Fatalf("namespace and connection = %v, %v, want acme and %s",
+			rec["namespace"], rec["connection"], connection)
+	}
+
+	wantAttrs := 5 // time, level, msg, namespace, connection
+
+	if wantWait > 0 {
+		wantAttrs++
+
+		if rec["wait"] != float64(wantWait) {
+			t.Fatalf("wait = %v, want %v", rec["wait"], wantWait)
+		}
+	} else if _, ok := rec["wait"]; ok {
+		t.Fatalf("wait = %v, want no wait attribute", rec["wait"])
+	}
+
+	if len(rec) != wantAttrs {
+		t.Fatalf("record = %v, want %d attributes", rec, wantAttrs)
+	}
+}
+
+// logRecords decodes the JSON records that a handler wrote to buf.
+func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+
+	var records []map[string]any
+
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if line == "" {
+			continue
+		}
+
+		var rec map[string]any
+
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("decode the log line %q: %v", line, err)
+		}
+
+		records = append(records, rec)
+	}
+
+	return records
+}
+
 func TestNewServiceNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -529,7 +655,7 @@ func TestNewServiceNeedsItsDependencies(t *testing.T) {
 	full := forge.Config{
 		Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
 		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
-		CheckLimits: nil, Now: nil,
+		CheckLimits: nil, Logger: nil, Now: nil,
 	}
 
 	for name, edit := range map[string]func(c *forge.Config){
@@ -606,7 +732,8 @@ func TestAuditLossIsCountedWhenTheNamespaceCannotBeRead(t *testing.T) {
 
 	svc, err := forge.NewService(forge.Config{
 		Store: r.store, Namespaces: failingNamespaces{}, Secrets: r.sealer, Audit: r.audit,
-		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnRefused: nil, CheckLimits: nil, Now: nil,
+		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnRefused: nil, CheckLimits: nil,
+		Logger: nil, Now: nil,
 		OnAuditFailure: func() { lost.Add(1) },
 	})
 	if err != nil {
@@ -685,12 +812,14 @@ func TestCheckLimitsTheCallsOfOneInstallation(t *testing.T) {
 
 	r := newRig(t)
 	conn := ready(t, r)
-	limits := forge.CheckLimits{PerConnection: time.Second, PerInstallation: 3, Window: time.Minute}
+	limits := forge.CheckLimits{
+		PerConnection: time.Second, PerInstallation: 3, PerApp: forge.DefaultCheckPerApp, Window: time.Minute,
+	}
 
 	svc, err := forge.NewService(forge.Config{
 		Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
 		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
-		CheckLimits: &limits, Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
+		CheckLimits: &limits, Logger: nil, Now: func() time.Time { return time.UnixMilli(r.clock.Load()) },
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -725,25 +854,44 @@ func invalidCheckLimits() map[string]forge.CheckLimits {
 	good := forge.DefaultCheckLimits()
 
 	return map[string]forge.CheckLimits{
-		"zero":                  {PerConnection: 0, PerInstallation: 0, Window: 0},
-		"zero per installation": {PerConnection: good.PerConnection, PerInstallation: 0, Window: good.Window},
-		"negative per installation": {
-			PerConnection: good.PerConnection, PerInstallation: -1, Window: good.Window,
+		"zero": {PerConnection: 0, PerInstallation: 0, PerApp: good.PerApp, Window: 0},
+		"zero per installation": {
+			PerConnection:   good.PerConnection,
+			PerInstallation: 0,
+			PerApp:          good.PerApp,
+			Window:          good.Window,
 		},
-		"zero per connection": {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
+		"negative per installation": {
+			PerConnection: good.PerConnection, PerInstallation: -1, PerApp: good.PerApp, Window: good.Window,
+		},
+		"zero per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: 0, Window: good.Window,
+		},
+		"negative per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: -1, Window: good.Window,
+		},
+		"zero per connection": {
+			PerConnection:   0,
+			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
+			Window:          good.Window,
+		},
 		"negative per connection": {
 			PerConnection:   -time.Second,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          good.Window,
 		},
 		"zero window": {
 			PerConnection:   good.PerConnection,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          0,
 		},
 		"negative window": {
 			PerConnection:   good.PerConnection,
 			PerInstallation: good.PerInstallation,
+			PerApp:          good.PerApp,
 			Window:          -time.Minute,
 		},
 	}
@@ -763,7 +911,7 @@ func TestNewServiceRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
 			_, err := forge.NewService(forge.Config{
 				Store: r.store, Namespaces: newNamespaces("acme"), Secrets: r.sealer, Audit: r.audit,
 				Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, OnRefused: nil,
-				CheckLimits: &limits, Now: nil,
+				CheckLimits: &limits, Logger: nil, Now: nil,
 			})
 			if !errors.Is(err, forge.ErrInvalid) {
 				t.Fatalf("NewService with %+v = %v, want ErrInvalid", limits, err)

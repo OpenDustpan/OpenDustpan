@@ -497,6 +497,10 @@ func (f *gitHub) installationOwner(ctx context.Context) (string, error) {
 		return "", err
 	}
 
+	if spendErr := f.spendApp(); spendErr != nil {
+		return "", spendErr
+	}
+
 	resp, err := f.do(ctx, http.MethodGet, "/app/installations/"+f.installationID, jwt, nil)
 	if err != nil {
 		return "", err
@@ -530,6 +534,10 @@ func (f *gitHub) mintToken(ctx context.Context, name, level string) (readToken, 
 	body, err := json.Marshal(readTokenRequest{Repositories: []string{name}, Permissions: tokenPermissions(level)})
 	if err != nil {
 		return readToken{}, fmt.Errorf("%w: the GitHub token request does not encode", forge.ErrInvalid)
+	}
+
+	if spendErr := f.spendApp(); spendErr != nil {
+		return readToken{}, spendErr
 	}
 
 	resp, err := f.send(ctx, call{

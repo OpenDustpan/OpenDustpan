@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -549,26 +550,66 @@ func TestGitHostCheckAnswersTheAccountAndTheCapabilities(t *testing.T) {
 func TestGitHostCheckAnswersWhatTheGitHostSaid(t *testing.T) {
 	t.Parallel()
 
-	e := newHostEnv(t, hostAllowAll())
-	e.register(t)
+	budget := fmt.Errorf("%w: %w", forge.ErrAppBudget, forge.Unavailable(30*time.Second, "budget"))
 
-	id := e.connect(t, "101")
-	target := hostConnectionsPath + "/" + id + "/check"
+	for _, tc := range []struct {
+		err        error
+		name       string
+		text       string
+		retryAfter string
+		status     int
+		code       string
+	}{
+		{
+			err: forge.ErrAuth, name: "a refused credential", text: "GitHub refused the credential of the connection",
+			retryAfter: "", status: http.StatusUnprocessableEntity, code: "",
+		},
+		{
+			err: forge.Unavailable(30*time.Second, "rate limit"), name: "no answer with a wait",
+			text: "GitHub did not answer: try again later", retryAfter: "30", status: http.StatusServiceUnavailable,
+			code: "",
+		},
+		{
+			err: forge.ErrUnavailable, name: "no answer", text: "GitHub did not answer: try again later",
+			retryAfter: "", status: http.StatusServiceUnavailable, code: "",
+		},
+		{
+			err: budget, name: "a spent budget of the app",
+			text:       "the GitHub App used its budget of signed calls: try again in 30 seconds",
+			retryAfter: "30", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
+		},
+		{
+			err: forge.ErrAppBudget, name: "a spent budget with no wait",
+			text:       "the GitHub App used its budget of signed calls: try again later",
+			retryAfter: "", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	e.opener.setCheckErr(forge.ErrAuth)
-	wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusUnprocessableEntity)
+			e := newHostEnv(t, hostAllowAll())
+			e.register(t)
 
-	e.opener.setCheckErr(forge.Unavailable(30e9, "rate limit"))
+			id := e.connect(t, "101")
+			e.opener.setCheckErr(tc.err)
 
-	limited := e.send(t, http.MethodPost, target, "")
-	wantHost(t, limited, http.StatusServiceUnavailable)
+			r := e.send(t, http.MethodPost, hostConnectionsPath+"/"+id+"/check", "")
+			wantHost(t, r, tc.status)
 
-	if got := limited.header.Get("Retry-After"); got != "30" {
-		t.Fatalf("Retry-After = %q, want 30", got)
+			if got := r.header.Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
+			}
+
+			if !strings.Contains(r.body, `"`+tc.text+`"`) {
+				t.Errorf("answer = %s, want the message %q", r.body, tc.text)
+			}
+
+			if tc.code != "" {
+				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, []byte(r.body),
+					errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
+			}
+		})
 	}
-
-	e.opener.setCheckErr(forge.ErrUnavailable)
-	wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusServiceUnavailable)
 }
 
 func TestGitHostCheckFailsClosedAfterTheOperatorMovesTheInstallation(t *testing.T) {
