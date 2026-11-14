@@ -4,14 +4,14 @@
 
 ## 1. failing tests
 
-- [ ] 1.1 Write failing tests for a denied console sign-in at POST /api/dustpan/v1/sign-in/providers/{provider}/password and a denied access token request to GET /api/dustpan/v1/namespaces/{namespace}/units. Check: TestDenyConsoleSignInOutsideList and TestDenyTokenOutsideList fail on main.
-- [ ] 1.2 Write a failing test for an invalid CIDR on PATCH /api/dustpan/v1/settings. Check: TestInvalidCidrRefused fails on main.
-- [ ] 1.3 Write a failing test for a spoofed proxy header. Check: TestRecordedAddressIgnoresUntrustedHeader fails on main.
+- [ ] 1.1 Write failing tests in NEW file pkg/dustpan/ipallow_deny_test.go for a denied console sign-in at POST /api/dustpan/v1/sign-in/providers/{provider}/password and a denied access token request to GET /api/dustpan/v1/namespaces/{namespace}/units. Check: TestDenyConsoleSignInOutsideList and TestDenyTokenOutsideList fail on main.
+- [ ] 1.2 Write a failing test in NEW file pkg/dustpan/ipallow_cidr_test.go for an invalid CIDR on PATCH /api/dustpan/v1/settings. Check: TestInvalidCidrRefused fails on main.
+- [ ] 1.3 Write a failing test in NEW file pkg/dustpan/ipallow_proxy_test.go for a spoofed proxy header. Check: TestRecordedAddressIgnoresUntrustedHeader fails on main.
 
 ## 2. implementation
 
-- [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries. Check: PATCH settings returns 200 and GET shows the effective value.
-- [ ] 2.2 Wire the checker into sign-in and token authentication. Check: A denied address gets 403 with ip-allowlist.denied.
+- [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries in NEW file pkg/dustpan/ipallow.go. Check: PATCH settings returns 200 and GET shows the effective value.
+- [ ] 2.2 Wire the checker into sign-in and token authentication. Call the NEW checker newAllowChecker from NEW file pkg/dustpan/ipallow.go. Check: A denied address gets 403 with ip-allowlist.denied.
 - [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written.
 
 ## 3. Side effects (computed from main)

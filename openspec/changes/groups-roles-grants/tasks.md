@@ -11,7 +11,7 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Fix each gap that the e2e steps find in the grant check, reached through the routes of the failing e2e steps (GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, DELETE /api/server/grants/{id}) with a personal access token Check: `go test ./pkg/access/...`
+- [ ] 2.1 Fix each gap that the e2e steps find in the grant check in pkg/access/access.go (the reach function; confirm the file name on main in task 0.1), reached through the routes of the failing e2e steps (GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, DELETE /api/server/grants/{id}) with a personal access token Check: `go test ./pkg/access/...`
 
 ## 3. Side effects (computed from main)
 

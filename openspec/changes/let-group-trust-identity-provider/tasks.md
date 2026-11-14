@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests named for each scenario: trust set, clear, closed group, race, write group, full sync on and off, final removals, refusals. Check: `go test ./pkg/principal/... ./internal/api/server/... ./internal/cli/... -count=1` fails on main.
+- [ ] 1.1 Write failing tests named for each scenario: trust set, clear, closed group, race, write group, full sync on and off, final removals, refusals. Put the tests in `pkg/access/access_test.go` (near `TestGroupGrants` at line 394) and in NEW `pkg/principal/grouptrust_test.go`, NEW `internal/api/server/grouptrust_test.go` and NEW `internal/cli/settings_fullsync_test.go`. Check: `go test ./pkg/principal/... ./internal/api/server/... ./internal/cli/... -count=1` fails on main.
 
 ## 2. Side effects (computed from main)
 

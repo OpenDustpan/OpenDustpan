@@ -4,10 +4,10 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing tests of planner reads with an access token on the existing route /api/stacks/{}/{}/{}/state/{}/outputs and the OpenTofu state read. Check: TestPlannerReadsStateWithBothCLIs fails on main.
-- [ ] 1.2 Write failing tests of refused writes and reveal with an access token on /api/stacks/{}/{}/{}/state/{}/reveal. Check: TestPlannerWriteRefused and TestPlannerSecretRevealRefused fail on main.
-- [ ] 1.3 Write failing tests that CheckAccess allows planner reads and refuses writes, reveal and a token for another principal. Check: TestPlannerCheckAccess fails on main.
-- [ ] 1.4 Write hostile tests for the size limit and containment of request input on the refused routes. Check: TestPlannerHostileInputLimited fails on main.
+- [ ] 1.1 Write failing tests in NEW file e2e/e2e_planner_test.go of planner reads with an access token on the existing route /api/stacks/{}/{}/{}/state/{}/outputs and the OpenTofu state read. Check: TestPlannerReadsStateWithBothCLIs fails on main.
+- [ ] 1.2 Write failing tests in NEW file e2e/e2e_planner_refused_test.go of refused writes and reveal with an access token on /api/stacks/{}/{}/{}/state/{}/reveal. Check: TestPlannerWriteRefused and TestPlannerSecretRevealRefused fail on main.
+- [ ] 1.3 Write failing tests in pkg/gate/service_test.go (NEW file, package gate) that CheckAccess (pkg/gate/service.go:297) allows planner reads and refuses writes, reveal and a token for another principal. Check: TestPlannerCheckAccess fails on main.
+- [ ] 1.4 Write hostile tests in NEW file pkg/gate/planner_hostile_test.go for the size limit and containment of request input on the refused routes. Check: TestPlannerHostileInputLimited fails on main.
 
 ## 2. Side effects (computed from main)
 

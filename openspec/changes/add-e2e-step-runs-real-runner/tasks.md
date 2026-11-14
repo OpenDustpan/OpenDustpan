@@ -4,12 +4,12 @@
 
 ## 1. Failing e2e tests first
 
-- [ ] 1.1 Add failing e2e tests that drive ANY /api/runners/{}/pools with an access token and ANY /runner/v1 join with a join token, and list each route in e2e ServedRoutes. Check: `TestRunnerE2EPoolJoinTokenList` fails on main because no e2e step drives the pool routes.
-- [ ] 1.2 Add failing e2e tests that drive ANY /runner/v1 poll and claim with a runner key and ANY /api/runners/{}/runners/{}/drain and ANY /api/runners/{}/runners/{}/retire with an access token. Check: `TestRunnerE2EPlanApplyCancelDrainRetire` fails on main because no real runner claims the jobs.
+- [ ] 1.1 Add failing e2e tests that drive ANY /api/runners/{}/pools with an access token and ANY /runner/v1 join with a join token, and list each route in e2e ServedRoutes (e2e/coverage.go:42). Write the tests in NEW file e2e/runner_real_test.go. Check: `TestRunnerE2EPoolJoinTokenList` fails on main because no e2e step drives the pool routes.
+- [ ] 1.2 Add failing e2e tests that drive ANY /runner/v1 poll and claim with a runner key and ANY /api/runners/{}/runners/{}/drain and ANY /api/runners/{}/runners/{}/retire with an access token. Write the tests in NEW file e2e/runner_real_flow_test.go. Check: `TestRunnerE2EPlanApplyCancelDrainRetire` fails on main because no real runner claims the jobs.
 
 ## 2. Wiring and routes
 
-- [ ] 2.1 Check authorization actions and Idempotency-Key handling on each driven route with an access token on ANY /api/runners/{}/pools and ANY /api/runners/{}/runners/{}/retire. Check: Route test passes and each runner route declares its read or manage action with its object.
+- [ ] 2.1 Check authorization actions and Idempotency-Key handling on each driven route with an access token on ANY /api/runners/{}/pools and ANY /api/runners/{}/runners/{}/retire. Read the declarations in internal/api/runnerapi/routes.go:76 and add the route test to internal/api/runnerapi/flow_test.go. Check: Route test passes and each runner route declares its read or manage action with its object.
 - [ ] 2.2 Confirm this part changes no path and follows the pool-route-move dependency for prefix lists and maintenance gate. Check: `rg -n poolsPath internal/api/runnerapi` shows this part changes no path and follows the dependency for prefix lists.
 
 ## 3. Side effects (computed from main)
