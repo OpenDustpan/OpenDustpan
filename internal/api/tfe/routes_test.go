@@ -2612,6 +2612,49 @@ func TestCollectionGrantHidesOtherWorkspace(t *testing.T) {
 	}
 }
 
+// workspaceListItemID is one entry of a workspace list in tests.
+type workspaceListItemID struct {
+	ID string `json:"id"`
+}
+
+// workspaceListIDs is a workspace list with only IDs in tests.
+type workspaceListIDs struct {
+	Data []workspaceListItemID `json:"data"`
+}
+
+// TestCollectionGrantListsOnlyReadableWorkspaces proves a caller with a grant
+// on one collection lists the organization workspaces and sees no workspace
+// the caller may not unit:read: the list filters to the readable items.
+func TestCollectionGrantListsOnlyReadableWorkspaces(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, collectionGrantAuthorizer{})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/organizations/acme/workspaces",
+		http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("workspace list answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var doc workspaceListIDs
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+
+	if len(doc.Data) != 0 {
+		t.Fatalf("workspace list holds %d items, want 0", len(doc.Data))
+	}
+}
+
 // SetOverrides is not used by this fake.
 func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil

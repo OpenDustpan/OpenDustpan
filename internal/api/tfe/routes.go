@@ -50,11 +50,12 @@ const (
 	// also takes the console session cookie when the request has no
 	// Authorization header. Only the reveal route may use it.
 	ScopeConsole
-	// ScopeDiscovery serves the entitlement set: it also answers a principal
-	// who holds a grant on a collection or on a unit in the namespace (ADR
-	// 374 decision 1). The wrapper answers 404 for an unknown organization
-	// and for a caller with no grant in the namespace, with the same body.
-	// Only the entitlement-set route may use it.
+	// ScopeDiscovery serves the entitlement set and the workspace list by
+	// organization. Each also answers a principal who holds a grant on a
+	// collection or on a unit in the namespace (ADR 374 decision 1). The
+	// wrapper answers 404 for an unknown organization and for a caller
+	// with no grant in the namespace, with the same body. Only these two
+	// routes may use it.
 	ScopeDiscovery
 )
 
@@ -141,6 +142,19 @@ func (h *Handler) discoveryRoutes() []Route {
 			Resolve: resolveOrganization,
 			Serve:   h.entitlementSet,
 		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/organizations/{organization}/workspaces",
+			// A discovery read: the wrapper also answers a caller who
+			// holds a grant on a collection or on a unit in the namespace
+			// (ADR 374 decision 1). The handler then keeps only the
+			// workspaces the caller may unit:read (decision 1.2) and
+			// answers 404 for an unknown organization.
+			Scope:   ScopeDiscovery,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveOrganization,
+			Serve:   h.listWorkspaces,
+		},
 	}
 }
 
@@ -188,17 +202,6 @@ func (h *Handler) workspaceRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.readWorkspaceByID,
-		},
-		{
-			Method: http.MethodGet,
-			Path:   "/api/v2/organizations/{organization}/workspaces",
-			// A list needs namespace:read on the organization. The handler
-			// then keeps only the workspaces the caller may unit:read and
-			// answers 404 for an unknown organization.
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveOrganization,
-			Serve:   h.listWorkspaces,
 		},
 	}
 }
