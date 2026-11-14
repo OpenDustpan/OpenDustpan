@@ -16,9 +16,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The closure of a replacement reaches the other plan. | 409 `claim.overlap`. The answer names the replaced address and the address of the other plan that reads it. Wait for the other apply claim to end, then plan again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
-| The server cannot prove the closure (a reference through a data source, an unresolved module output, a provider that takes its settings from the replaced instance, a plan JSON that the server cannot read). | 409 `claim.closure-unproven`. The answer names the address and the reason, never a value of the plan. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
-| The plan JSON is above the size limit or not valid. | 422 `claim.plan-invalid`. Nothing is stored. Plan again with a supported OpenTofu version. | `tofu show -json plan.tfplan` |
+| The closure of a replacement reaches the other plan. | 409 `claim.overlap` (NEW code). The answer names the replaced address and the address of the other plan that reads it. Wait for the other apply claim to end, then plan again. | `GET /api/v2/workspaces/{id}/state-versions` |
+| The server cannot prove the closure (a reference through a data source, an unresolved module output, a provider that takes its settings from the replaced instance, a plan JSON that the server cannot read). | 409 `claim.closure-unproven` (NEW code). The answer names the address and the reason, never a value of the plan. | `GET /api/v2/workspaces/{id}/state-versions` |
+| The plan JSON is above the size limit or not valid. | 422 `claim.plan-invalid` (NEW code). Nothing is stored. Plan again with a supported OpenTofu version. | `tofu show -json plan.tfplan` |
 
 Evidence for the claims above:
 
@@ -32,9 +32,9 @@ Evidence for the claims above:
 - NEW strict decoder of the OpenTofu plan JSON (`plan-display` part, ADR 102 decision 2) into a `PlanGraph`.
 - `reviewrequest.PlanClosure` gets the field `Graph PlanGraph`.
 - NEW first adapter of the `ConflictChecker` port. It proves "disjoint" in two cases only: two plans of create and update operations on separate addresses with no shared read, and a replacement that passes the closure test of ADR 368 decision 6. Each other case is a conflict.
-- The conformance case `AReplaceIsNeverDisjoint` is replaced by closure cases. The other never-disjoint cases become real tests of this adapter.
-- The apply claim register route of two-disjoint-claims calls this checker for a claim with a replacement, in place of the fixed 409 `claim.closure-unproven`.
-- A user docs page: `docs/explanation/plan-conflicts.md`.
+- The conformance case `AReplaceIsNeverDisjoint` (NEW name, it is not on main yet) is replaced by closure cases. The other never-disjoint cases become real tests of this adapter.
+- The apply claim register route of two-disjoint-claims calls this checker for a claim with a replacement, in place of the fixed 409 `claim.closure-unproven` (NEW code: no catalog code says that a closure is unproven; `update.conflict` does not name the reason).
+- A user docs page: add the new file `docs/explanation/plan-conflicts.md`.
 
 Out of scope:
 
@@ -62,7 +62,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The port and its rule that a replacement is never proven disjoint. (`pkg/reviewrequest/ports.go:137 (ConflictChecker)`)
 - The input of a check: operations, a flat closure and the count of unseen readers. (`pkg/reviewrequest/ports.go:120 (PlanClosure)`)
-- The kinds of operation, with the two orders of a replace. (`pkg/reviewrequest/reviewrequest.go:137 (OperationKind)`)
+- The kinds of operation, with the two orders of a replace. (`pkg/reviewrequest/reviewrequest.go` (OperationKind))
 - The approval floor of a replace. (`pkg/reviewrequest/reviewrequest.go:163 (OperationKind.Floor)`)
 - The pending conflict cases, with `AReplaceIsNeverDisjoint`. (`pkg/reviewrequest/reviewrequesttest/reviewrequesttest.go:191 (conflictCases)`)
 

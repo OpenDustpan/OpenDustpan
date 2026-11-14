@@ -14,11 +14,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wiring: the counter is reachable from the server metrics Check: The metrics route lists the counter
-- [ ] 4.2 E2E step: BLOCKED by the missing name of the runner poll route and runner credential kind in the pack; the step is a unit test until the owner of the runner protocol names them Check: TestClaimPollCountsBoundSkips
-- [ ] 4.3 Docs page note and usability check from the docs page alone Check: make docs-lint
-- [ ] 4.4 All checks pass Check: `make check` with zero findings
+- [ ] 4.2 E2E step: BLOCKED by the missing name of the runner poll route and runner credential kind in the pack; the step is a unit test until the owner of the runner protocol names them Check: TestClaimPollCountsBoundSkips. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Docs page note and usability check from the docs page alone Check: make docs-lint. A person's step.
+- [ ] 4.4 All checks pass Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

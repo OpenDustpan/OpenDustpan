@@ -8,7 +8,7 @@
 
 - [ ] 2.1 Change `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes` and `MoveCursor` in `pkg/store/sqlite/notifications.go` and `pkg/store/postgres/notifications.go` to read, write and compare the ID. Check: `TestNotificationConformance` case "a namespace made again gets no notification rows" in both dialect packages.
 - [ ] 2.2 Change the sink reads and writes in `pkg/store/sqlite/sinks.go` and `pkg/store/postgres/sinks.go`. Keep the namespace name for the sink secret scope, and change `pkg/notify/seal.go` to use it. Check: the sink cases of the same suite pass.
-- [ ] 2.3 Change the notification queries in both `queries.sql` files and run `make generate`. Check: `sqlc diff` is clean.
+- [ ] 2.3 Change the notification queries in both `queries.sql` files and run `make generate`. Check: `sqlc diff` is clean. Confirmed by: the driver's gates.
 - [ ] 2.4 Change the notification rows of `backup_notifications.go` and `backup_notification_sinks.go` in both dialects. Check: the backup and restore cases of the suite keep the ID.
 
 ## 3. Services and routes
@@ -21,4 +21,4 @@
 
 - [ ] 4.1 Add one sentence to `docs/guides/notification-destinations.md`: a new namespace with the name of a deleted namespace gets no sinks, subscriptions, notifications or deliveries of the old one. Check: `make docs-lint` exits 0.
 - [ ] 4.2 Run `go test ./pkg/notify/... ./internal/subscriptionsvc/... ./internal/api/notifications/...` and the store packages with `-timeout 60m`. Check: the packages pass.
-- [ ] 4.3 Run `make check`. Check: zero findings.
+- [ ] 4.3 Run `make check`. Check: zero findings. Confirmed by: CI (the agent runs the fast checks only).

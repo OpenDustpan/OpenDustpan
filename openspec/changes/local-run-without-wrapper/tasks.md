@@ -1,14 +1,14 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing e2e test in e2e/claim_gate_test.go for plain tofu apply taking the whole-unit lock at the lock call, through the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestPlainApplyTakesWholeUnitLock fails on main, passes after fix.
-- [ ] 1.2 Add failing e2e test in e2e/fence_test.go for a runner job queued behind a plain holder and started after release. BLOCKED by strict-case-takes-turns, which builds the FIFO whole-unit lock queue; the plain lock uses the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestRunnerJobWaitsForPlainHolder fails on main, passes after fix.
-- [ ] 1.3 Add failing test in e2e/fence_test.go for holder principal, interval, end cause, and reason on workspace row and history, through the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestHistoryNamesPlainHolder fails on main, passes after fix.
-- [ ] 1.4 Add failing test in e2e/claim_gate_test.go for a plain lock refused while a runner claim is active. BLOCKED by two-disjoint-claims, which adds the claim record. Check: TestPlainLockRefusedDuringClaim fails on main, passes after fix.
-- [ ] 1.5 Add failing test in e2e/fence_test.go for expiry and force-unlock with unit:manage, fence version, and audit entry, through /api/v2/workspaces/{}/actions/force-unlock with an access token. Check: TestPlainLockReleaseOnDisconnect fails on main, passes after fix.
+- [ ] 1.1 Add failing e2e test in e2e/claim_gate_test.go for plain tofu apply taking the whole-unit lock at the lock call, through the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestPlainApplyTakesWholeUnitLock fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add failing e2e test in e2e/fence_test.go for a runner job queued behind a plain holder and started after release. BLOCKED by strict-case-takes-turns, which builds the FIFO whole-unit lock queue; the plain lock uses the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestRunnerJobWaitsForPlainHolder fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.3 Add failing test in e2e/fence_test.go for holder principal, interval, end cause, and reason on workspace row and history, through the TFE-compatible route /api/v2/workspaces/{}/actions/lock with an access token. Check: TestHistoryNamesPlainHolder fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.4 Add failing test in e2e/claim_gate_test.go for a plain lock refused while a runner claim is active. BLOCKED by two-disjoint-claims, which adds the claim record. Check: TestPlainLockRefusedDuringClaim fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.5 Add failing test in e2e/fence_test.go for expiry and force-unlock with unit:manage, fence version, and audit entry, through /api/v2/workspaces/{}/actions/force-unlock with an access token. Check: TestPlainLockReleaseOnDisconnect fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 1.6 Add failing test in pkg/durable/runner_claimed_test.go for FIFO order of waiting runner jobs behind a plain holder. Check: TestPlainFifoQueueOrder fails on main, passes after fix.
 
 ## 2. Implementation
@@ -21,7 +21,7 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire route with authorization actions and audit entries. Check: TFE-compatible lock route checks run-plan or run-apply on the workspace object and upload checks run-apply; route test passes.
-- [ ] 3.2 Add e2e step against real OpenTofu and fake cloud provider, using the route /api/v2/workspaces/{}/actions/lock with an access token and a runner job through /runner/v1 with a job token. BLOCKED by strict-case-takes-turns for the queue. Check: e2e step replays plain tofu apply during a running runner apply and checks provider log order on Linux with PostgreSQL.
-- [ ] 3.3 Write guide section for plain run lock behavior. Check: Docs page runs as written from a developer laptop.
-- [ ] 3.4 Run usability check of user path. Check: Developer completes plain apply and reads holder from docs page alone; each error names one command.
-- [ ] 3.5 Run full check suite. Check: `make check` reports zero findings.
+- [ ] 3.2 Add e2e step against real OpenTofu and fake cloud provider, using the route /api/v2/workspaces/{}/actions/lock with an access token and a runner job through /runner/v1 with a job token. BLOCKED by strict-case-takes-turns for the queue. Check: e2e step replays plain tofu apply during a running runner apply and checks provider log order on Linux with PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.3 Write guide section for plain run lock behavior. Check: Docs page runs as written from a developer laptop. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_without_wrapper_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 3.4 Run usability check of user path. Check: Developer completes plain apply and reads holder from docs page alone; each error names one command. A person's step.
+- [ ] 3.5 Run full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

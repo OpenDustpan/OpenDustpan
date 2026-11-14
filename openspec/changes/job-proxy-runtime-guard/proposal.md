@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Roadmap: `docs/roadmap.md:393` (Run the job proxy as the only exit.).

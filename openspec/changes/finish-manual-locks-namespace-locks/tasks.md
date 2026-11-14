@@ -12,11 +12,11 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Wire the routes with the unit:lock action and audit entries. Check: go test ./pkg/manuallock/... ./internal/... -run Lock -count=1
-- [ ] 3.2 E2e step: BLOCKED by the real runner pool e2e steps that the dependency change delivers; until then the step drives the real OpenTofu CLI with a personal token on PUT /api/dustpan/v1/namespaces/{namespace}/lock. Check: make e2e step refuses a covered workspace and names holder and reason
-- [ ] 3.3 Extend the guide with namespace locks and dispatch. Check: docs page commands run as written
-- [ ] 3.4 Usability check from the docs page alone, then make check. Check: make check reports zero findings
+- [ ] 3.2 E2e step: BLOCKED by the real runner pool e2e steps that the dependency change delivers; until then the step drives the real OpenTofu CLI with a personal token on PUT /api/dustpan/v1/namespaces/{namespace}/lock. Check: make e2e step refuses a covered workspace and names holder and reason. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.3 Extend docs/guides/manual-locks.md with namespace locks and dispatch. Add the e2e step TestManualLocksGuideCommands in the NEW file e2e/manual_locks_guide_test.go: it runs each command of docs/guides/manual-locks.md, in the order of the page, against the e2e test server with a personal access token (the page uses PUT /api/dustpan/v1/namespaces/{namespace}/lock), and fails on the first command that does not give the output that the page shows. The agent writes the step and does not boot a live server; CI runs it with `make e2e`. Confirmed by CI, not by the agent. Check: the CI e2e job passes TestManualLocksGuideCommands
+- [ ] 3.4 The usability check is the step of task 3.3 (no e2e step of its own): it follows the page alone. Run the local checks (Makefile). Check: make check reports zero findings; the CI e2e job confirms task 3.3. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

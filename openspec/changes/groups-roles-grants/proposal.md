@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:159` (Groups, roles and grants).
@@ -39,6 +39,7 @@ Evidence for the claims above:
 - Add e2e steps that drive the real Pulumi CLI and OpenTofu for viewer refusal and revocation timing
 - Close the gaps that these steps find in the grant check
 - Update the guides with the proved behavior
+- Apply ADR 374 decision 1 (owner, 2026-11-14), which extends ADR 52 decision 5. The organization and discovery routes of a namespace also answer a principal who holds a grant on a collection or a unit in that namespace. These are the TFE routes GET /api/v2/organizations/{organization}/entitlement-set, the organization read and the workspace reads by organization, and the Pulumi organization routes that the Pulumi CLI calls. The answer holds only that the namespace exists and its entitlements. A list route still filters its items to what the caller can read. Each other caller gets the same 404 body as for an unknown namespace. The answer names the grant that allowed it. A revoked grant loses the discovery read on the next request.
 
 Out of scope:
 

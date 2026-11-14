@@ -47,7 +47,7 @@ Out of scope:
 - SCIM provisioning and LDAP sync schedules
 - Group mapping rules
 - IP allowlists and token life cycle
-- Break-glass mode 2
+- Signed-request recovery (change signed-request-recovery)
 - The generic settings API; the switches are keys that add-one-generic-settings-api registers
 
 Depends on:

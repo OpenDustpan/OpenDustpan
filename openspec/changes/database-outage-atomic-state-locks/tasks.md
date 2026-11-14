@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -21,4 +21,4 @@
 - [ ] 3.2 Wrap lock acquire and release in one fenced transaction with holder identity. Check: `go test -race ./pkg/store/postgres/ -run TestLockAcquire|TestUnlock -timeout 60m`
 - [ ] 3.3 Wire the atomic paths through the existing TFE routes with existing gates. Check: GET /health/ready plus `tofu apply` against the real CLI on PostgreSQL with an access token.
 - [ ] 3.4 Document the retry behavior after a failed write. Check: Docs page for outage recovery states the atomic commit behavior.
-- [ ] 3.5 Pass the full check suite. Check: `make check` with zero findings.
+- [ ] 3.5 Pass the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

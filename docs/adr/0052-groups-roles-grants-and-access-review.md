@@ -19,6 +19,8 @@ Changed by:
 - ADR 223 supersedes decision 9: attribute conditions are access limits.
 - ADR 223 extends decision 10: the access-review export lists the limits.
 - ADR 354 extends decisions 1, 3 and 4: a fourth record kind, agent.
+- ADR 374 extends decision 5: a grant on a collection or a unit also opens
+  the discovery reads of its namespace.
 .
 ## Context
 

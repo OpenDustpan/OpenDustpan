@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -13,13 +13,13 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Wire both routes with actions installation:manage-settings and namespace:manage-settings. Check: The route policy test lists both routes with their actions.
 - [ ] 3.2 Add the proposed amendment text of ADR 245 decision 10 for the owner. Check: The pull request lists the text and the owner confirmation.
-- [ ] 3.3 Add an e2e step on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes
+- [ ] 3.3 Add an e2e step on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.4 Write the docs page. Check: make docs-lint passes
-- [ ] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps.
-- [ ] 3.6 Run the full gate. Check: make check with zero findings
+- [ ] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps. A person's step.
+- [ ] 3.6 Run the full gate. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

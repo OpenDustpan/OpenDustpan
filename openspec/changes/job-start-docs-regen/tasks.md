@@ -8,12 +8,12 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Update the docs pages and run their commands in a test. Check: make docs-lint
-- [ ] 3.2 Regenerate the API description and clients. Check: make clients-check
-- [ ] 3.3 BLOCKED by the pack: it names no job start route and no credential kind. The e2e step runs the page commands with the real CLI once the follow-up change names them. Check: make e2e
-- [ ] 3.4 Check the usability of the page. Check: The developer completes the job start path from the docs page alone.
-- [ ] 3.5 Run all checks. Check: make check
+- [ ] 3.2 Regenerate the API description and clients. Check: make clients-check. Confirmed by: the driver's gates.
+- [ ] 3.3 BLOCKED by the pack: it names no job start route and no credential kind. The e2e step runs the page commands with the real CLI once the follow-up change names them. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Check the usability of the page. Check: The developer completes the job start path from the docs page alone. A person's step.
+- [ ] 3.5 Run all checks. Check: make check. Confirmed by: CI (the agent runs the fast checks only).

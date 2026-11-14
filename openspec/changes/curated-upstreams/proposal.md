@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:383` (Curated upstreams).
@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| No curation rule allows the requested public release. | 403 with code registry.release-not-allowed naming the registry address; list the rules of the namespace with the curation rules API call. | `GET /api/dustpan/v1/namespaces/{namespace}/curation/rules` |
+| No curation rule allows the requested public release. | 403 with code access.denied naming the registry address; list the rules of the namespace with the curation rules API call. | `GET /api/dustpan/v1/namespaces/{namespace}/curation/rules` |
 | The requested registry address has no cached release and the upstream host holds no release. | 404 with code registry.not-found naming the registry address; list the allowed releases of the namespace with the rule list API call. | `GET /api/dustpan/v1/namespaces/{namespace}/curation/rules` |
 | The matched upstream host fails with timeout, DNS failure, or 5xx. | 502 with a transient upstream error naming the registry address; retry the fetch after the upstream recovers. | `GET /api/dustpan/v1/namespaces/{namespace}/curation/rules` |
 

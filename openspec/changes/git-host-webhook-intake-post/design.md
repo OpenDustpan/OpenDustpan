@@ -4,7 +4,7 @@ Slice 1 holds the store, the registration map and the check. This change adds th
 
 ## Decisions
 
-1. **Hint parsing in the port.** ParseEvent for GitHub uses an unexported verifier that compares X-Hub-Signature-256 against the stored secrets of one registration snapshot in constant time.
+1. **Hint parsing in the port.** ParseEvent for GitHub uses an unexported verifier that compares X-Hub-Signature-256 against the stored secrets of one registration snapshot in constant time. A registration keeps at most two event secrets. During a rotation the old secret is valid for the check of an event only. It ends after 7 days or when the operator confirms the rotation. Each event accepted with the old secret writes an audit entry. Each refusal of an event signed with an expired, confirmed-away or third (older) secret also writes an audit entry. The API shows the effective end of the window (ADR 374 decision 2).
 2. **Intake answers 204.** The route is outside /api/dustpan/v1, takes no auth action and answers 204 with an empty body. A reject counts git_host_event_rejected_total. The handler method HandleDelivery runs verify, map lookup, duplicate check and hint record in that order.
 3. **Adapter methods and scoped token.** Implement the Files, Commits and Reviews methods behind capabilities, and RepoToken with Scoped set and an expiry of at most 1 hour.
 4. **Duplicates.** The NEW store method MarkDelivery in pkg/forge/delivery.go records the delivery ID for 24 hours and the effect mark in one atomic check-and-set. The effect state decides a manual redelivery.

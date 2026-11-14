@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -16,5 +16,5 @@
 
 - [ ] 3.1 Wire the schedule and manual dispatch, with no pull request trigger Check: `gh workflow run nightly-perf.yml` starts a run with the workflow_dispatch trigger; no run starts on a pull request
 - [ ] 3.2 Add the operations docs page: schedule, `perf/budgets.json`, the rerun command, nightly figures are never a service level agreement Check: `make docs-lint` reports nothing
-- [ ] 3.3 Usability check of the failed-run path Check: an Operator reruns from the docs page alone and each breach names `gh run view <run-id>`
-- [ ] 3.4 Final check Check: `make check` with zero findings
+- [ ] 3.3 Usability check of the failed-run path Check: an Operator reruns from the docs page alone and each breach names `gh run view <run-id>`. A person's step.
+- [ ] 3.4 Final check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

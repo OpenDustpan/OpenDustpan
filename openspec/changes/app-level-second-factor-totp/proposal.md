@@ -47,7 +47,7 @@ Out of scope:
 - The factor store, admin reset and recovery-code rotation paths, owned by the mfa change
 - The zero-window behavior, owned by the fresh-authentication-window-0-turns change
 - Trusted-header proxy allowlist management, owned by the sign-in-methods change
-- Break-glass mode 2 recovery flow
+- Signed-request recovery, and the issue of an enrollment code by a temporary administrator of a recovery with no fresh step (ADR 372 decision 6), owned by the signed-request-recovery change
 
 Depends on:
 
