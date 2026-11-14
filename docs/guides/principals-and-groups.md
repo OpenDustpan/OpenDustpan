@@ -241,8 +241,12 @@ Each `server:read-*` action is not in the table:
 `server:read-principals`, `server:read-access`, `server:read-tokens`,
 `server:read-audit`, `server:read-settings`, `server:read-instances` and
 `server:read-git-host`. A read-only action cannot raise a privilege, so a
-group that holds one is not protected, and the identity provider can still
-manage its members.
+group that holds one is not protected.
+
+The server shows the `protected` flag on the group list and the group read.
+The accepted rule refuses an add by the identity provider to a protected
+group. SCIM and the group claims of a sign-in do not refuse that add yet. The
+server does not enforce the rule yet.
 
 A read that can return secret material stays sensitive. A secret setting, for
 example the database URL or a credential, shows only whether it holds a value,
