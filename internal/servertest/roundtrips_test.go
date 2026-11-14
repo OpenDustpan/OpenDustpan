@@ -1409,10 +1409,10 @@ const forgeStripClassTrips = 2
 // blobDeleteLeaseTrips is the number of round trips that the waits for the
 // blob deleters add to a restore. The restore takes the exclusive lock of the
 // blob delete leases two times and counts the live leases one time: 3
-// statements. The table of the leases is a table that a restore
-// empties, and it costs 1 round trip, not the 2 of perOther, so the model takes
-// 1 off.
-const blobDeleteLeaseTrips = 3 - 1
+// statements. The table of the leases is now a control table that a restore
+// keeps, so it costs 3 round trips: the column check, one delete and one copy.
+// That is 1 more than the 2 of perOther, so the model adds 1.
+const blobDeleteLeaseTrips = 3 + 1
 
 // breakGlassReviewTrips is the number of round trips that the restore of the
 // table break_glass_reviews makes fewer than perTable gives. The measured run
