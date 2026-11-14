@@ -60,14 +60,6 @@ When a backup finishes, the server SHALL delete each non-live attempt prefix of 
 - **WHEN** a stale writer recreates its prefix after cleanup deleted it
 - **THEN** the next list removes it and the live prefix stays complete
 
-### Requirement: Retention expiry deletes each prefix
-
-When retention expiry purges an expired backup, the server SHALL delete each attempt prefix of that backup.
-
-#### Scenario: Expired backup fully removed
-- **WHEN** retention expiry purges an expired backup
-- **THEN** each attempt prefix of the backup is deleted from the target
-
 ### Requirement: Restore reads the live prefix
 
 When a restore reads a backup, the server SHALL read only the attempt prefix named by the finished manifest.
