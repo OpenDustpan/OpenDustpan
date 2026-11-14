@@ -68,6 +68,14 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/server/namespaces/acme/access-review?limit=100"
 ```
 
+A personal access token works here too. To review one collection, name it in
+the path:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example.com/api/server/namespaces/acme/collections/payments/access-review?limit=100"
+```
+
 The answer holds these top-level fields:
 
 | Field | Meaning |

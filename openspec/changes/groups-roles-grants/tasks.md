@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -19,7 +19,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring and routes keep their authorization actions Check: route test passes
+- [x] 4.1 Wiring and routes keep their authorization actions Check: route test passes
 - [ ] 4.2 Update docs/guides/roles-and-grants.md and docs/guides/access-review.md; each command on the pages uses the route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review or DELETE /api/server/grants/{id} with a personal access token Check: the commands on the pages run in e2e
 - [ ] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
 - [ ] 4.4 Run the full check Check: `make check` with zero findings
