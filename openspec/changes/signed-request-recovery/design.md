@@ -204,9 +204,12 @@ at the expiry, and a review after use.
    not empty, the server sends the stored
    sealed answer again, writes one audit entry with the action
    `recovery:use-signed-request` and the result `answer resent`, and creates
-   nothing new. It sends no new `break-glass.used` notice. In all other cases
-   (the same nonce with other bytes, a time at or after `notAfter`, or an
-   empty `sealed_answer`) the
+   nothing new. It sends no new `break-glass.used` notice. The time window
+   accepts a request up to `notAfter` plus 2 minutes, but a resend works only
+   before `notAfter`, so a repeat in those 2 minutes is refused with
+   `nonce-used` (fail closed). Then the operator makes a new request. In all
+   other cases (the same nonce with other bytes, a time at or after
+   `notAfter`, or an empty `sealed_answer`) the
    server refuses the replay with the reason `nonce-used`. A repeat is counted
    like each attempt: by the per-source counter before the signature check and
    by the installation counter after it. The answer is sealed to `answerKey`, so a copy gives nothing
@@ -295,6 +298,14 @@ The depguard rules in `.golangci.yml`: only `cmd/opendustpan` and
   each request under the per-source limit. The help for the operator is the
   server log, which holds the refusal reason and the source of each refusal,
   and `opendustpan recovery verify`, which checks a signed request offline.
+- The per-source counter counts each attempt before the signature check, so a
+  caller in the same source group as the operator can use up the 5 attempts of
+  the operator with no key. The caller can be in the same IPv6 /64 group,
+  behind the same IPv4 NAT, or, when the server sits behind a proxy that is not
+  in `--trusted-proxies`, any caller at all, because each request then carries
+  the address of the proxy. The help for the operator: set `--trusted-proxies`
+  when the server sits behind a proxy, submit from another source group, or use
+  the host command (bootstrap recovery).
 - `recovery sign` uses `golang.org/x/crypto/ssh` to read an encrypted OpenSSH
   key file. The module is already in `go.mod`. The package is new in the
   binary of the CLI.

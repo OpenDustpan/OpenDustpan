@@ -368,7 +368,10 @@ Questions considered and answered:
   is 5 requests in 15 minutes for each source, and 30 in 15 minutes for the
   installation. The server counts the per-source attempt and refuses it before
   the signature check. It counts the installation attempt after the signature
-  check, so a flood of unsigned or badly signed requests cannot block recovery.
+  check, so a flood of unsigned or badly signed requests cannot block recovery
+  through the installation counter. The per-source counter can still lock out
+  an operator who shares a source group with the caller (see the Risks item of
+  design.md).
 - What are the format, the lifetime, the rotation and the rule for a second
   recovery? The four decisions of the product manager above.
 - Why is a copied signed request useless? The request holds the HPKE public
