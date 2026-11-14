@@ -8,10 +8,16 @@
 - [ ] 1.2 Write failing forgetest cases for the file and review methods in NEW file pkg/forge/github/capabilities_test.go. Check: TestGitHubFilesReviewsCapabilities fails on main
 - [ ] 1.3 Write a failing test for the unscoped token refusal in NEW file pkg/forge/github/repotoken_test.go. Check: TestRepoTokenScopedRefused fails on main
 
+- [ ] 1.4 Write failing hostile tests in internal/api/githubwebhook/intake_test.go: an event with the old secret after the window, an event with the old secret after the confirm, and an event signed with a third (older) secret. Each is refused and writes an audit entry of the refusal. Check: TestOldSecretWindow, TestConfirmRotation and TestThirdSecretRefused fail on main
+
 ## 2. implementation
 
 - [ ] 2.1 Implement the verifier and ParseEvent in NEW file pkg/forge/github/event.go, against the port at pkg/forge/forge.go:436. Check: go test ./pkg/forge/... -run TestParseEvent
 - [ ] 2.2 Implement RepoToken in NEW file pkg/forge/github/repotoken.go and finish the adapter methods in pkg/forge/github/files.go:127 and pkg/forge/github/review.go:62. Check: go test ./pkg/forge/github/...
+- [ ] 2.5 Implement the rotation window of the old event secret (7 days, ends at confirm, at most two secrets) in pkg/forge/github/event.go. Check: go test ./pkg/forge/github/... -run TestOldSecretWindow
+- [ ] 2.6 Add the NEW route POST /api/dustpan/v1/git-host-apps/{kind}/confirm-rotation with the action server:manage-git-host: declare it in internal/api/server/githost.go (next to gitHostAppPath at :35) and serve it in internal/api/server/githost_app.go. The confirm ends the old event secret at once and writes an audit entry. Check: go test ./internal/api/server/... -run TestConfirmRotation
+- [ ] 2.7 Write an audit entry for each event accepted with the old secret and for each refusal, in internal/api/githubwebhook/intake.go. Check: go test ./internal/api/githubwebhook/... -run TestSecretAudit
+- [ ] 2.8 Add the field of the effective end of the window (oldSecretEndsAt, Unix milliseconds, absent when no rotation runs) to the answer of GET /api/dustpan/v1/git-host-apps/{kind} in internal/api/server/githost_app.go, and regenerate internal/api/apidesc/openapi.json with make generate. Check: go test ./internal/api/server/... -run TestRotationEndField
 - [ ] 2.3 Add the NEW store method MarkDelivery in NEW file pkg/forge/delivery.go with its SQL in each dialect queries.sql. Check: go test ./pkg/forge/...
 - [ ] 2.4 Wire POST /webhooks/{hook ID}: declare the route in NEW file internal/api/githubwebhook/routes.go and the handler HandleDelivery in NEW file internal/api/githubwebhook/intake.go. Check: The test server answers 204 for good, bad and replayed deliveries
 
