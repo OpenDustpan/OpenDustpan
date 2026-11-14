@@ -37,6 +37,7 @@ func fullJob(t *testing.T) job.Job {
 			Location: job.Location{
 				Connection: "gh", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc",
 			},
+			LocationSource: job.LocationSourceUnit,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"},
 				Env: map[string]string{"A": "b"}, Dir: "sub", Timeout: time.Minute, AllowFailure: true,

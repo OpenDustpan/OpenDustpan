@@ -637,6 +637,7 @@ export interface JobLocation {
   readonly ref?: string;
   readonly repository?: string;
   readonly revision?: string;
+  readonly source?: string;
 }
 
 export interface JobLocationRequest {
