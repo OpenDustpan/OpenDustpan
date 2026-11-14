@@ -4,8 +4,8 @@ The registry signature check needs an OpenPGP dependency. Issue 1293 asks for it
 
 ## Decisions
 
-1. **Record the dependency in one ADR.** Write one ADR with the confirmed owner approval, the module versions that match go.mod output, the reason go-crypto replaces the frozen package, and fresh govulncheck output with the affected symbol count.
-2. **Number, list and link with existing checks only.** Use the next free number from docs/adr/INDEX.md at write time, add the index entry, and link the registry docs signature section to the ADR. Checks use go list -m, make vuln, make docs-lint and rg. No new tool.
+1. **Verify the dependency ADR.** ADR 379 exists at docs/adr/0379-the-openpgp-dependency-of-the-registry.md. Verify that its versions match go.mod and that it has fresh govulncheck output. ADR 379 decision 2: "The owner accepts the residual risk of GO-2026-5932 (owner, 2026-11-14)."
+2. **List and link with existing checks only.** Add the index entry for ADR 379 and link the registry docs signature section to the ADR. Checks use go list -m, make vuln, make docs-lint and rg. No new tool.
 
 ## Structure
 
@@ -59,8 +59,8 @@ flowchart TB
 | Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | boundary check | The version check compares the ADR versions with go list -m output. | Change one version in the ADR text and run the version check. It fails and names the module. |
 | Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | encode or contain | The ADR records exact module paths and versions in one fixed list, so no free text names a version. | Add a version in prose that is not in the list. The review check refuses the ADR. |
 | Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | limit | The ADR lists only the three modules that go.mod holds. It claims no other module. | Add a fourth module that go list -m does not show. The version check fails. |
-| Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | authorize at point of use | The owner approves the ADR before it ships. No one else sets the approval line. | Ship the ADR with no owner answer recorded. The task check refuses it. |
-| Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | fail closed | On a mismatch the change is not done and the owner reviews before ship. | Run make vuln with a differing result. The ADR is not shipped until the owner reviews the fresh output. |
+| Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | authorize at point of use | ADR 379 records the owner approval (decision 1). No one else sets the approval line. | Remove the owner approval line from the ADR. The review refuses it. |
+| Supply chain boundary | T | A dependency update changes a module version, so the ADR no longer matches go.mod and misleads the Operator. | fail closed | On a mismatch the change is not done. A version change needs the owner's word (ADR 379 decision 3). | Run make vuln with a differing result. The change is not done until the ADR shows the fresh output. |
 | Operator docs boundary | S | A dead or wrong docs link sends the Operator to a page that is not the ADR. | boundary check | make docs-lint checks that each docs link resolves. | Point the link to a missing ADR file and run make docs-lint. It names the dead link. |
 | Operator docs boundary | S | A dead or wrong docs link sends the Operator to a page that is not the ADR. | encode or contain | The link uses the relative path of the ADR file, not a free URL. | Replace the link with an outside URL. The docs check refuses it. |
 | Operator docs boundary | S | A dead or wrong docs link sends the Operator to a page that is not the ADR. | limit | The docs page has one link to the ADR, next to the signature text. | Add a second link to another page. The review refuses the change. |
@@ -72,4 +72,4 @@ flowchart TB
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Follow the registry docs link to the ADR. | Docs link points to a missing ADR file. | Add the ADR file and the index entry, then run the docs check again. | Link resolves and the docs check passes. |
-| Run the vulnerability check again. | Fresh govulncheck output differs from the issue report. | Paste the fresh output into the ADR and ask the owner to review the risk before ship. | ADR records fresh output with owner review. |
+| Run the vulnerability check again. | Fresh govulncheck output differs from the issue report. | Paste the fresh output into the ADR. The risk review date is 2027-02-14 (ADR 379 decision 2). | ADR records fresh output. |

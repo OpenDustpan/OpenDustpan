@@ -4,15 +4,16 @@
 
 ## 1. Owner answers and failing checks first
 
-- [ ] 1.1 Get the owner answers to the three open questions and record them in the NEW file docs/adr/NEW-openpgp-dependency.md (the NEW ADR file). Do not edit the open questions in proposal.md. Check: The owner answers are recorded in the change before any ADR text is written.
+- [ ] 1.1 Lifted. ADR 379 decisions 1-3 answer questions 1-3 (docs/adr/0379-the-openpgp-dependency-of-the-registry.md). Check: the file exists on main.
 - [ ] 1.2 Show the current module versions from go.mod (file go.mod on main). Check: `go list -m github.com/ProtonMail/go-crypto github.com/cloudflare/circl golang.org/x/crypto` shows the versions the ADR will record.
-- [ ] 1.3 Show the frozen-package import proof and the fresh vulnerability output. Save both in the NEW file docs/adr/NEW-openpgp-dependency.md (the NEW ADR file). Check: `rg -n -F --glob '!*_test.go' 'golang.org/x/crypto/openpgp' pkg internal cmd` and `make vuln` output saved for the ADR.
+- [ ] 1.3 Show the frozen-package import proof and the fresh vulnerability output. Compare both with docs/adr/0379-the-openpgp-dependency-of-the-registry.md. Check: `rg -n -F --glob '!*_test.go' 'golang.org/x/crypto/openpgp' pkg internal cmd` and `make vuln` output saved for the ADR.
 
 ## 2. Record and check
 
-- [ ] 2.1 Write the NEW file docs/adr/NEW-openpgp-dependency.md after the owner answers. Use the next free number from docs/adr/INDEX.md in the file name. Check: The ADR cites the owner answer, the versions, the replacement reason, the risk owner, the review date and the trigger.
-- [ ] 2.2 Check the versions in the NEW file docs/adr/NEW-openpgp-dependency.md against go.mod. Check: `go list -m` output matches the ADR, including indirect x/crypto.
-- [ ] 2.3 Record fresh vulnerability output in the NEW file docs/adr/NEW-openpgp-dependency.md. Check: `make vuln` output with affected symbol count is in the ADR; on a differing result the owner reviews before ship.
+- [ ] 2.1 Verify docs/adr/0379-the-openpgp-dependency-of-the-registry.md. Check: The ADR cites the owner decisions, the versions, the risk owner, the review date 2027-02-14 and the trigger.
+- [ ] 2.2 Check the versions in docs/adr/0379-the-openpgp-dependency-of-the-registry.md against go.mod. Check: `go list -m` output matches the ADR, including indirect x/crypto.
+- [ ] 2.3 Verify fresh vulnerability output in docs/adr/0379-the-openpgp-dependency-of-the-registry.md. Check: `make vuln` output with affected symbol count matches the ADR; on a differing result, cite ADR 379 decision 2.
+- [ ] 2.4 Move golang.org/x/crypto in go.mod from the pseudo-version to the tag v0.59.0 on or after 25 November 2026, with the owner's word (ADR 379 decision 3) and a clean make vuln. Check: `go list -m golang.org/x/crypto` shows v0.59.0. A person's step.
 
 ## 3. Side effects (computed from main)
 

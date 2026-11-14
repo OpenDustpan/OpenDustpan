@@ -15,6 +15,6 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire the schedule and manual dispatch, with no pull request trigger Check: `gh workflow run nightly-perf.yml` starts a run with the workflow_dispatch trigger; no run starts on a pull request
-- [ ] 3.2 Add the operations docs page: schedule, `perf/budgets.json`, the rerun command, nightly figures are never a service level agreement Check: `make docs-lint` reports nothing
+- [ ] 3.2 Add the section "The nightly run" to the existing files docs/guides/load.md and docs/guides/soak.md: the schedule, `perf/budgets.json`, the rerun command, and that nightly figures are never a service level agreement. Check: both files have the section "The nightly run" and `make docs-lint` reports nothing
 - [ ] 3.3 Usability check of the failed-run path Check: an Operator reruns from the docs page alone and each breach names `gh run view <run-id>`. A person's step.
 - [ ] 3.4 Final check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

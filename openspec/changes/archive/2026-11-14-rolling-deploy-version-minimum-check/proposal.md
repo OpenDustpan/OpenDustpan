@@ -30,6 +30,9 @@ Evidence for the claims above:
 
 ## What Changes
 
+Status (14 Nov 2026): main already does all of this, in the shape of ADR 72 decision 11 ("A contract migration raises it"; "The write path checks the minimum ... A write of a binary below the minimum fails in its own transaction"). The tasks name the proof on main. The change is archived with no spec update, because its design (each instance raises the minimum) does not match ADR 72 decision 11.
+
+
 - Version row per instance plus one stored minimum binary version per installation with atomic raise and installation scope check.
 - Write-path gate: old binaries get 503 with Retry-After and schema.binary-below-minimum; reads stay allowed.
 - Pulumi, TFE-compatible, and tool-neutral error shapes for the refusal.

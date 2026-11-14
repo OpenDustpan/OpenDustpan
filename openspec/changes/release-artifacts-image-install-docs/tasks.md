@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing release test for versioned multi-arch image build with pinned console hash in the NEW file `e2e/release_image_test.go`. The test runs an acceptance path on no API route: BLOCKED by the missing route, because the image build has no API route and no credential kind. It calls the NEW script `scripts/release-build-image.sh`. Check: TestReleaseImageBuildsFromVersion fails on main, passes after. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.1 Add failing release test for versioned multi-arch image build with pinned console hash in the NEW file `e2e/release_image_test.go`. No route: the test builds the image only. It calls the NEW script `scripts/release-build-image.sh`. Check: TestReleaseImageBuildsFromVersion fails on main, passes after. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 1.2 Add failing artifact install test that starts the built image and runs the operator persona path in the NEW file `e2e/release_artifact_install_test.go`. The test calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations` with a session credential. Check: TestReleaseArtifactInstallRunsPersonaPath fails on main, passes after. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build

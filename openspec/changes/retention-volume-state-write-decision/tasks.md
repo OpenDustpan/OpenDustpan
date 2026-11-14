@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the failing conformance test that an expired state.write record is deleted, in NEW pkg/gate/gatetest/prune_test.go. Add the suite entry in NEW pkg/gate/gatetest/gatetest.go and the record helper in NEW pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredDeletesExpired fails on main.
+- [ ] 1.1 Write the failing conformance test that an expired state.write record is deleted, in NEW pkg/gate/gatetest/prune_test.go. Add the suite entry in pkg/gate/gatetest/gatetest.go and the record helper in NEW pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredDeletesExpired fails on main.
 - [ ] 1.2 Write the test that an unexpired record and a record of another decision point stay, in NEW pkg/gate/gatetest/prune_test.go. It uses the helper in NEW pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredKeepsOthers fails on main.
 - [ ] 1.3 Write the test of the batch bound and the order by ID, in NEW pkg/gate/gatetest/prune_test.go. It registers in NEW pkg/gate/gatetest/gatetest.go. Check: TestPruneExpiredBatchOrder fails on main.
 - [ ] 1.4 Write the test that a new evaluation after a prune writes a record, in pkg/gate/statewrite_test.go next to TestEachEvaluationWritesOneRecord. Check: TestEvaluationAfterPruneRecords passes on main and guards the keep behavior.
@@ -12,7 +12,7 @@
 ## 2. Build
 
 - [ ] 2.1 Add pruneExpired to the Records port in pkg/gate/store.go and the pruneRequest constructor in NEW pkg/gate/prune.go. Check: `go test ./pkg/gate/... -count=1` passes.
-- [ ] 2.2 Implement the method in the shared store code NEW pkg/store/internal/gatestore/tx.go and NEW pkg/store/internal/gatestore/records.go, add the query in NEW pkg/store/sqlite/queries.sql and NEW pkg/store/postgres/queries.sql, wire the adapters in NEW pkg/store/sqlite/gate.go and NEW pkg/store/postgres/gate.go, and run the conformance suite. Check: `go test -timeout 60m ./pkg/store/... -run Prune` passes.
+- [ ] 2.2 Implement the method in the shared store code pkg/store/internal/gatestore/tx.go and pkg/store/internal/gatestore/records.go, add the query in pkg/store/sqlite/queries.sql and pkg/store/postgres/queries.sql, wire the adapters in pkg/store/sqlite/gate.go and pkg/store/postgres/gate.go, and run the conformance suite. Check: `go test -timeout 60m ./pkg/store/... -run Prune` passes.
 
 ## 3. Side effects (computed from main)
 
