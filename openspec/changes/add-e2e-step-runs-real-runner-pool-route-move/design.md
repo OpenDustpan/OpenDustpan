@@ -1,10 +1,10 @@
 ## Context
 
-Runner management moves to resource paths under one namespace. The runner protocol under /runner/v1 does not move.
+Runner management moves to resource paths under one namespace. The runner protocol under /runner/v1 does not move. No tag shipped the old paths, so the move is a provisional PM decision: the path column of the route decision is recorded in a later ADR. Benchmark: Google API design practice records a design decision before release. Persona impact: scripts change paths once. Escape hatch: no tag shipped these routes, so the old paths can return before a release.
 
 ## Decisions
 
-1. **Move management to resource paths.** Serve pools, runners and join tokens under the new runner-pools path of the namespace. Keep namespace:read-runners and namespace:manage-runners and the audit events of ADR 138.
+1. **Move management to resource paths.** Serve pools, runners and join tokens under the runner-pools path of the namespace. Keep namespace:read-runners and namespace:manage-runners and the audit events of the route decision.
 2. **No alias on old pool paths.** Old pool paths answer 404 with no redirect and no shim, for these paths only.
 3. **Stable IDs.** Store each pool, runner and join token by its stable ID. A name is a label for people only.
 
@@ -85,8 +85,8 @@ flowchart TB
 
 - Invariant: A pool belongs to one namespace and each write carries the namespace fence.
 - Invariant: The join secret is returned once at create.
-- `create-pool`: pre: Caller holds namespace:manage-runners.. Post: Pool and pool-created audit entry stored in one transaction. Scenario: Create pool..
-- `revoke-join-token`: pre: Caller holds namespace:manage-runners.. Post: Token revoked and audit entry stored in one transaction. Scenario: Revoke join token..
+- `create-pool`: pre: Caller holds namespace:manage-runners.. Post: Pool and pool-created audit entry stored in one transaction. Scenario: create-pool..
+- `revoke-join-token`: pre: Caller holds namespace:manage-runners.. Post: Token revoked and audit entry stored in one transaction. Scenario: revoke-join-token..
 
 ## Failure modes
 
@@ -100,12 +100,12 @@ flowchart TB
 
 Tests:
 
+- `pkg/access/access_test.go` names `runner.ActionNamespaceReadRunners`
 - `internal/api/runnerapi/routes_test.go` names `runner.ActionNamespaceReadRunners`
-- `internal/api/runnerapi/admin_test.go` names `runner.ActionNamespaceReadRunners`
-- `internal/api/runnerapi/ipallow_test.go` names `runner.ActionNamespaceReadRunners`
+- `pkg/identity/identity_test.go` names `runner.ActionNamespaceReadRunners`
 - `pkg/access/access_test.go` names `runner.ActionRunnerJoin`
-- `internal/api/runnerapi/routes_test.go` names `runner.ActionRunnerJoin`
 - `pkg/identity/identity_test.go` names `runner.ActionRunnerJoin`
+- `internal/api/runnerapi/routes_test.go` names `runner.ActionRunnerJoin`
 - `pkg/runner/handoff_test.go` names `runner.AuditRules`
 - `pkg/runner/coordinator_test.go` names `runner.AuditRules`
 

@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-31. Decided by the project owner on 31 October 2026. Amends ADR 245 (decision 12 and the item "A stored recovery mode" of "Not decided here")
 
+Changed by:
+
+- ADR 372 extends decisions 8 and 9: the route also needs the store of
+  break-glass reviews, and its review opens whatever the opt-in.
+
 ## Context
 
 Mode 2 of ADR 57 is a recovery request that an offline operator key signs. ADR 245 decision 12 lets only the host command reach the host issuer. That rule stops a route in the server from making a temporary administrator.

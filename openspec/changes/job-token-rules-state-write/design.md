@@ -1,26 +1,26 @@
 ## Context
 
-State-write adapters pass no job claim, so the gate service cannot apply the job-token rule. The existing job.Claimer builds the claim from the verified job token once per write request. Each state.write call passes the result to Evaluate on the Pulumi and TFE-compatible paths including unlocked-write.
+The state-write adapters pass no job claim, so the gate service cannot apply the job-token rule. A new source builds the claim from the verified job token for each write.
 
 ## Decisions
 
-1. **Resolve JobClaim at the boundary and evaluate with it.** Reuse the existing job.Claimer as the single source, resolve the JobClaim fresh at the adapter boundary for each write request, and pass it into Evaluate at each state.write call.
+1. **Resolve JobClaim at the adapter boundary.** A new unexported resolver builds the JobClaim fresh for each write request from the verified job token and passes it to Evaluate.
 
 ## Structure
 
-Unexported field claim of type gate.JobClaim inside an unexported adapter type jobWriteGuard built only by the constructor newJobWriteGuard(claimer job.Claimer); call sites cannot write a JobClaim literal.
+Unexported type jobClaimSource in the new file internal/api/stategate/jobclaim.go, made only by newJobClaimSource; call sites cannot write a JobClaim literal.
 
 ## Risks
 
-- A job token with no resolvable job fails closed and its write is refused until the claim source resolves.
+- A job token with no resolvable job fails closed until the job record resolves.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| port adapter | Adapter accepts only a JobClaim built by the Claimer from a verified job token, fresh for each write request. | Send a state write with a forged job ID and phase and show it fails closed with identity.ErrDenied. |
-| service | Service refuses any write other than the lock or lease of the plan when PassedApply is false or the unit is outside the units of the job. | Remove the adapter check and show the service still refuses out-of-phase and cross-unit writes. |
-| HTTP handler | Handler declares the state.write authorization and returns the denial. | Call each tool write route with an out-of-phase job token and check the same refusal. |
+| port adapter | The adapter accepts only a JobClaim built by the resolver from a verified job token. | Send a write with a forged job ID and phase; it fails with identity.ErrDenied. |
+| service | The service refuses any write except the plan lock or lease when PassedApply is false or the unit is outside the job. | Skip the adapter check; the service still refuses out-of-phase and cross-unit writes. |
+| HTTP handler | The handler declares the state.write action and returns the denial. | Call each tool write route with an out-of-phase job token; the refusal is the same. |
 
 ## Diagrams
 
@@ -29,24 +29,22 @@ After this change:
 ```mermaid
 sequenceDiagram
 participant R as runner
-participant A as state-write adapter
-participant C as Claimer
-participant G as gate Service
-R->>A: state write with job token
-A->>C: resolve JobClaim
-C-->>A: job, phase, PassedApply, units
-A->>G: Evaluate with JobClaim
-G-->>R: allow or refuse with identity.ErrDenied
+participant A as adapter
+participant G as gate service
+R->>A: write with job token
+A->>G: GuardStateWrite with JobClaim
+G-->>R: allow or identity.ErrDenied
 ```
 
 States and transitions after this change:
 
 ```mermaid
 stateDiagram-v2
-[*] --> requested: write requested
+[*] --> requested
 requested --> resolved: claim resolved
-resolved --> allowed: gates allow
-resolved --> refused: gates refuse
+resolved --> allowed
+resolved --> refused
+requested --> refused: no claim
 refused --> [*]
 ```
 
@@ -54,8 +52,7 @@ refused --> [*]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| correctness | 100 | percent refused when out-of-phase, cross-unit, or unresolvable | each state.write call with a job token |
-| freshness | 1 | claim resolutions per write request | each state.write call with a job token |
+| correctness | 100 | percent refused when out of phase, cross-unit or unresolvable | each state.write call with a job token |
 
 ## Threat model
 
@@ -63,44 +60,41 @@ Data flow and trust boundaries:
 
 ```mermaid
 flowchart TB
-subgraph B1[runner boundary]
-R[runner with job token] --> N[server TLS endpoint]
+subgraph runnerzone[Runner boundary]
+R[runner with job token]
 end
-subgraph B2[service boundary]
-N --> A[state-write adapter]
-A --> C[Claimer resolves JobClaim]
-C --> G[gate Service.Evaluate]
-G --> S[(state store)]
+subgraph serverzone[Server boundary]
+A[state-write adapter]
+C[claim source]
+G[gate service]
 end
+subgraph storezone[Storage boundary]
+S[(state store)]
+end
+R --> A
+A --> C
+C --> G
+G --> S
 ```
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| runner boundary | S | A forged or replayed job token writes state outside its phase or unit. | boundary check | Accept only a server-issued job token and resolve the claim fresh per request. | Replay a forged or expired job token and check refusal with identity.ErrDenied. |
-| runner boundary | S | A forged or replayed job token writes state outside its phase or unit. | encode or contain | Use only the Claimer output, never client-supplied job or phase fields. | Send client fields naming another job and check the server ignores them. |
-| runner boundary | S | A forged or replayed job token writes state outside its phase or unit. | authorize at point of use | Authorize the target unit against the units of the resolved job. | Send an in-phase token for another unit and check refusal. |
-| runner boundary | S | A forged or replayed job token writes state outside its phase or unit. | limit | Plan phase writes only its plan lock or lease. | Send a plan-phase token with a state body and check refusal. |
-| runner boundary | S | A forged or replayed job token writes state outside its phase or unit. | fail closed | Refuse with identity.ErrDenied when the claim does not resolve. | Delete the job before the write and check refusal with no state change. |
-| service boundary | T | A caller tampers with job, phase, or PassedApply to pass evaluation. | boundary check | Accept only a verified job token with a resolvable job and phase. | Send a token with no phase claim and check refusal before evaluation. |
-| service boundary | T | A caller tampers with job, phase, or PassedApply to pass evaluation. | encode or contain | Claimer output only, never client-supplied fields. | Send client fields naming another job and check the server ignores them. |
-| service boundary | T | A caller tampers with job, phase, or PassedApply to pass evaluation. | limit | Limit the effect to the plan lock or lease when PassedApply is false. | Send a plan-phase unlocked-write and check refusal. |
-| service boundary | T | A caller tampers with job, phase, or PassedApply to pass evaluation. | authorize at point of use | Authorize each write with PassedApply and unit membership. | Flip PassedApply in transit and check the service still refuses. |
-| service boundary | T | A caller tampers with job, phase, or PassedApply to pass evaluation. | fail closed | Fail closed on claimer error, cancelled job, or missing phase. | Break the claim lookup and check refusal with identity.ErrDenied. |
+| runner boundary | E | A job token writes state outside its phase or unit. | boundary check | Accept only a server-issued job token. | Send a forged token; it is refused. |
+| runner boundary | E | A job token writes state outside its phase or unit. | encode or contain | Use only the claim source output. | Send client fields naming another job; they are ignored. |
+| runner boundary | E | A job token writes state outside its phase or unit. | limit | A plan phase writes only its lock or lease. | Send a plan-phase body write; it is refused. |
+| runner boundary | E | A job token writes state outside its phase or unit. | authorize at point of use | Check the unit against the units of the job. | Write another unit; it is refused. |
+| runner boundary | E | A job token writes state outside its phase or unit. | fail closed | Refuse when the claim does not resolve. | Delete the job first; the write is refused. |
 
 ## Contracts
 
 **gate**
 
-- Invariant: Each state.write call with a job token evaluates with a JobClaim resolved fresh for that call.
+- Invariant: Each job-token write evaluates with a freshly resolved JobClaim.
 - Invariant: A phase that did not pass change.apply writes only the lock or lease of its plan.
-- Invariant: An unresolvable job claim fails closed with identity.ErrDenied.
-- `GuardStateWrite`: pre: Caller credential and target unit are known.; JobClaim is resolved fresh for the call when the caller holds a job token.. Post: GuardStateWrite evaluated with the JobClaim of the token when the caller holds a job token.; GuardStateWrite refused out-of-phase, cross-unit, or unresolvable writes with identity.ErrDenied..
-- `Evaluate`: pre: Compiled policy set and fact document are present.; JobClaim is present for a job-token caller.. Post: Answer reflects job, phase, PassedApply, and units of the token..
+- `GuardStateWrite`: pre: The caller and the unit are known.. Post: The write is evaluated with the claim or refused with identity.ErrDenied..
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Resolve JobClaim from verified job token | Claimer cannot resolve job, phase, or units | No retry of the write; a later write is evaluated again with a fresh claim | Write refused with identity.ErrDenied; job record unchanged; refusal written to the request log and the audit entry |
-| GuardStateWrite with JobClaim at state.write | Job cancelled or deleted before the write | No retry; a new job starts a new phase and its token makes a new write | Write refused with identity.ErrDenied; job record unchanged; refusal written to the request log and the audit entry |
-| GuardStateWrite out-of-phase write | Plan-phase token writes state body instead of plan lock or lease | No retry of the body write; plan phase writes its own lock or lease again | Body write refused; plan lock or lease unchanged; refusal written to the request log and the audit entry |
+| Resolve the claim | The job, phase or units do not resolve | The server does not retry; a later write resolves again | Write refused; job record unchanged |

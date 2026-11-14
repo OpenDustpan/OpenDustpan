@@ -1,23 +1,23 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing gate service tests for out-of-phase, cross-unit, plan-lock allowed, no-phase, cancelled-job, deny-gate, lease-held, unlock-other-job, and unlocked-write job writes. Check: go test ./pkg/gate/... -run TestStateWriteJobClaim -count=1
-- [ ] 1.2 Add failing adapter tests that a job token without PassedApply writes only the plan lock or lease on each tool path. Check: go test ./internal/api/... -run TestStateWriteJobTokenRefused -count=1
+- [ ] 1.1 Write failing gate service tests for out-of-phase, cross-unit, plan-lock, no-phase, cancelled-job, deny-gate and unlocked-write cases in the new file pkg/gate/statewrite_jobclaim_test.go. Check: go test ./pkg/gate/... -run TestStateWriteJobClaim -count=1
+- [ ] 1.2 Write failing adapter tests in the new file internal/api/stategate/jobclaim_test.go (interface at internal/api/stategate/stategate.go:34). Check: go test ./internal/api/stategate/... -run TestStateWriteJobTokenRefused -count=1
 
 ## 2. Implementation
 
-- [ ] 2.1 Reuse the existing job.Claimer source of JobClaim and pass it to Evaluate at state.write, resolved fresh for each call. Check: go test ./pkg/gate/... -count=1
-- [ ] 2.2 Wire the Claimer through the Pulumi and TFE-compatible state-write paths including unlocked-write. Check: go test ./internal/api/... -count=1
+- [ ] 2.1 Add the new file internal/api/stategate/jobclaim.go with jobClaimSource, and call Service.GuardStateWrite at pkg/gate/statewrite.go:65 with the claim; JobClaim is at pkg/gate/service.go:23. Check: go test ./pkg/gate/... ./internal/api/stategate/... -count=1
+- [ ] 2.2 Wire the source in pkg/dustpan/runners.go:47 (WithJobClaimer) so the Pulumi and TFE-compatible write routes use it. Check: go test ./internal/api/... -count=1
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step. BLOCKED by add-job-session-paths-runner: the job token issuer and job session paths must exist first. Then run a runner plan and apply for each tool with a job token on the Pulumi checkpoint routes and the TFE state-version routes. Check: make e2e passes the runner plan then apply step for both tools, once the blocking change lands
-- [ ] 4.2 Document the refusal and the plan-lock definition on the state.write docs page. Check: make docs-lint passes
-- [ ] 4.3 Pass the definition of done: wiring, route actions, docs page, usability check. The e2e part is BLOCKED by add-job-session-paths-runner. Check: make check with zero findings
+- [ ] 4.1 Add an e2e step in e2e/ for a runner plan then apply on both tools, using the job token credential on the Pulumi update routes and the TFE state-version routes. BLOCKED by add-job-session-paths-runner-token-issuer, which issues the job token. Check: make e2e
+- [ ] 4.2 Document the refusal and the plan lock on the state.write docs page under docs/guides/. Check: make docs-lint
+- [ ] 4.3 Wiring, route actions, docs page and usability check done. Check: make check with zero findings

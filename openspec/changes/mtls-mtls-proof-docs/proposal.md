@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:188` (E2E step and docs prove mTLS with real CLIs.).
@@ -93,10 +93,19 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 284: The token exchange issues a stored access token** (owner-tagged (all decisions)).
 
 - Decisions that apply: 1 (current).
+- Changed by: ADR 371 changes decision 1. Chain to the end: ADR 371.
+- Current rule: this ADR, with ADR 371.
+- Quote: "When one rule accepts it, the server issues a stored access token of ADR 6 of its own kind, `trust`, for the principal of the rule."
+- Effect: ADR 371 renames the kind of the JWT exchange to `jwt-exchange` and gives the mTLS exchange the kind `mtls-exchange`. The proof exchanges the certificate for the stored token of the kind `mtls-exchange` and runs the CLIs with that token.
+- Conflict: none.
+
+**ADR 371: Each way to prove identity in the token exchange has its own token kind** (owner-tagged (decisions 1, 2 and 3)).
+
+- Decisions that apply: 2 (current), 4 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "When one rule accepts it, the server issues a stored access token of ADR 6 of its own kind, `trust`, for the principal of the rule."
-- Effect: The proof exchanges the certificate for the stored trust token and runs the CLIs with that token.
+- Quote: "An exchange that checks a TLS client certificate against the trust rules issues a stored access token of the kind `mtls-exchange` for the principal of the rule."
+- Effect: The e2e steps and the docs page name the kind `mtls-exchange` and the credential `trust-token`.
 - Conflict: none.
 
 ## Open questions

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:195` (Collections and placement).
@@ -54,7 +54,6 @@ Out of scope:
 Depends on:
 
 - groups-roles-grants
-- `groups-roles-grants` (order of the milestone review)
 
 ## Usability
 
@@ -71,7 +70,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Error codes placement.no-match, placement.conflict, placement.invalid-pattern, placement.rule-not-found and placement.too-many-rules exist (`internal/errcode/catalog_placement.go:7 (func catalog entries)`)
 - Error codes collection.not-found and collection.already-exists exist (`internal/errcode/catalog_collection.go:7 (func catalog entries)`)
-- TestPlacementRuleDoesNotAuthorize exists (`pkg/access/access_test.go:841 (func TestPlacementRuleDoesNotAuthorize)`)
+- TestPlacementRuleDoesNotAuthorize exists (`pkg/access/access_test.go:850 (func TestPlacementRuleDoesNotAuthorize)`)
 - TestReviewOfACollection exists (`pkg/access/review_collection_test.go:65 (func TestReviewOfACollection)`)
 - TestApplyStepsRefuseHostilePulumiNames exists (`pkg/dustpan/jobservice_applysteps_internal_test.go:120 (func TestApplyStepsRefuseHostilePulumiNames)`)
 
@@ -113,7 +112,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: the ADR as a whole.
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "ADR 329 extends decisions 1 and 3: placement rules also match OpenTofu unit names, and a unit that no rule matches is refused."
+- Quote: "Placement rules also match OpenTofu unit names."
+- Quote: "This includes the OpenTofu HTTP backend."
 - Effect: Placement rules also match OpenTofu workspace names, and a unit that no rule matches is refused.
 - Conflict: none.
 
@@ -128,7 +128,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: ADR 329: the quote "ADR 329 extends decisions 1 and 3: placement rules also match OpenTofu unit name" is not in the ADR file (copy it character for character from the decision text of the pack).
+none
 
 Questions considered and answered:
 

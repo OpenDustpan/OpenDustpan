@@ -4,17 +4,17 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add the RunProvider cases for Spec, Check, secret literal, Open, deadline, oversize answer, status table, non-JSON body, redirect and message mask. Check: `go test ./pkg/profile/provider/providertest/ -run TestRunProviderConformance -count=1` fails on main
-- [ ] 1.2 Add RunRotator cases with a fake remote and goleak. Check: `go test ./pkg/profile/provider/providertest/ -run TestRunRotatorConformance -count=1` fails on main
-- [ ] 1.3 Add table tests for dial refusals, rebinding, redirect and listed host:port and CIDR. Check: `go test ./pkg/egress/... -run TestDialGuardRefusals -count=1` fails on main
-- [ ] 1.4 Add registry tests for Register and Lookup, with a duplicate pair and an unknown pair. Check: `go test ./pkg/profile/... -run TestProviderRegistry -count=1` fails on main
-- [ ] 1.5 Add validHost, Fetcher and Checkout hostile tests. Check: `go test ./internal/source/... -run TestFetcherPinAndCheckout -count=1` fails on main
+- [ ] 1.1 Add the RunProvider cases in pkg/profile/provider/providertest/providertest.go:71 (func RunProvider) for Spec, Check, secret literal, Open, deadline, oversize answer, status table, non-JSON body, redirect and message mask. Check: `go test ./pkg/profile/provider/providertest/ -run TestRunProviderConformance -count=1` fails on main
+- [ ] 1.2 Add RunRotator (NEW) in NEW file pkg/profile/provider/providertest/rotator.go and its cases with a fake remote and goleak. Check: `go test ./pkg/profile/provider/providertest/ -run TestRunRotatorConformance -count=1` fails on main
+- [ ] 1.3 Add table tests in NEW file pkg/egress/dialguard_refusals_test.go for dial refusals, rebinding, redirect and listed host:port and CIDR. Check: `go test ./pkg/egress/... -run TestDialGuardRefusals -count=1` fails on main
+- [ ] 1.4 Add registry tests in pkg/profile/provider/registry_test.go for Register and Lookup, with a duplicate pair and an unknown pair. Check: `go test ./pkg/profile/... -run TestProviderRegistry -count=1` fails on main
+- [ ] 1.5 Add validHost, Fetcher and Checkout hostile tests in NEW file internal/source/hostile_test.go (Checkout is at internal/source/source.go:263). Check: `go test ./internal/source/... -run TestFetcherPinAndCheckout -count=1` fails on main
 
 ## 2. Wiring
 
-- [ ] 2.1 Add the ports, Spec and the registry with duplicate refusal, and the depguard globs. Check: `go test ./pkg/profile/... -count=1` passes
+- [ ] 2.1 Add the ports, Spec and the registry with duplicate refusal in pkg/profile/provider/registry.go (NEW), and the depguard globs in .golangci.yml. Check: `go test ./pkg/profile/... -count=1` passes
 - [ ] 2.2 Add the two settings through internal/cli/settings.go with refusals, an audit entry and the fresh step for a weaker list. Check: `GET /api/dustpan/v1/settings` shows both settings and a widening PATCH without a fresh step answers 403
-- [ ] 2.3 Wire the egresshttp client with the limits and route the source Fetcher through the dial guard. Check: `go test -race ./pkg/profile/... ./pkg/egress/... ./internal/source/... -count=1` passes
+- [ ] 2.3 Wire the egresshttp client with the limits in NEW file pkg/profile/provider/client.go and route the source Fetcher through the dial guard in internal/source/source.go. Check: `go test -race ./pkg/profile/... ./pkg/egress/... ./internal/source/... -count=1` passes
 
 ## 3. Side effects (computed from main)
 

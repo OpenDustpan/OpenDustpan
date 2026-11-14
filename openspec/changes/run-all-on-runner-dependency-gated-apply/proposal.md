@@ -1,3 +1,7 @@
+---
+version: 3
+---
+
 Roadmap: `docs/roadmap.md:717` (Gate apply starts on change-order dependencies after RFC 115.).
 
 ## Why
@@ -68,11 +72,15 @@ No ADR is touched.
 
 ## Open questions
 
-1. Does each apply job wait for each Terragrunt dependency apply job to succeed before it starts? Decides: PM.
-   - Options: Strict Terragrunt order: each apply job waits for each dependency apply job to succeed; Start each apply job when its own plan succeeds, with no order.
-   - Recommended: Strict Terragrunt order: each apply job waits for each dependency apply job to succeed. Reason: RFC 115 in the pack is a draft stub and its open question on dependency order has no outcome yet. The pack proves no decision.
+none
 
-Not spec-ready: a code check fails: design decision "Dependency gate": a limit with no number; give the number, the unit and the scope.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them. No provisional answer changes the words of an owner decision.
+
+1. Does each apply job wait for each Terragrunt dependency apply job to succeed before it starts?
+   - Options: Strict Terragrunt order: each apply job waits for each dependency apply job to succeed; Start each apply job when its own plan succeeds, with no order.
+   - Provisional decision (PM, 14 Nov 2026): Strict Terragrunt order: each apply job waits for each dependency apply job to succeed.
+   - Reason: RFC 115 has no outcome on the order, and an apply that runs before its dependency reads outputs that are not there yet; Terragrunt itself applies in dependency order. Benchmark: AWS CloudFormation creates and updates resources in dependency order (DependsOn) and starts a dependent resource only after its dependency completes.
+   - Persona impact: none; a platform engineer gets the order that the CLI gives. Escape hatch: the local run of the change local-run-all keeps the order of the Terragrunt CLI without the server gate.
 
 Questions considered and answered:
 

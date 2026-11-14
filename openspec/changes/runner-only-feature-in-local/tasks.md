@@ -5,11 +5,11 @@
 ## 1. Failing tests
 
 - [ ] 1.1 Write failing test for split writes on stdout and stderr. Check: NEW test `TestLocalMaskSplitWrites` in pkg/launcher fails on main, passes after
-- [ ] 1.2 Write failing test for a refused start when the open or set build fails. Check: NEW test `TestLocalMaskRefusesWithoutSet` fails on main, passes after
-- [ ] 1.3 Write failing test for a run with an empty secret list. Check: NEW test `TestLocalMaskEmptySetProceeds` fails on main, passes after
-- [ ] 1.4 Write failing test for flush on child exit and on a signal. Check: NEW test `TestLocalMaskFlushOnExit` fails on main, passes after
-- [ ] 1.5 Write failing test that credential material never reaches display or upload bytes. Check: NEW test `TestLocalMaskNeverLogsCredential` fails on main, passes after
-- [ ] 1.6 Write failing test for a secret that the masker cannot hold. Check: NEW test `TestLocalMaskRefusesUnholdableValue` fails on main, passes after
+- [ ] 1.2 Write failing test in NEW file pkg/launcher/local_mask_test.go for a refused start when the open or set build fails. Check: NEW test `TestLocalMaskRefusesWithoutSet` fails on main, passes after
+- [ ] 1.3 Write failing test in NEW file pkg/launcher/local_mask_test.go for a run with an empty secret list. Check: NEW test `TestLocalMaskEmptySetProceeds` fails on main, passes after
+- [ ] 1.4 Write failing test in NEW file pkg/launcher/local_mask_test.go for flush on child exit and on a signal. Check: NEW test `TestLocalMaskFlushOnExit` fails on main, passes after
+- [ ] 1.5 Write failing test in NEW file pkg/launcher/local_mask_test.go that credential material never reaches display or upload bytes. Check: NEW test `TestLocalMaskNeverLogsCredential` fails on main, passes after
+- [ ] 1.6 Write failing test in NEW file pkg/launcher/local_mask_test.go for a secret that the masker cannot hold. Check: NEW test `TestLocalMaskRefusesUnholdableValue` fails on main, passes after
 
 ## 2. Definition of done
 

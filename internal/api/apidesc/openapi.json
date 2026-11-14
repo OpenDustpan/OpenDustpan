@@ -40,6 +40,55 @@
       }
     },
     "schemas": {
+      "AccessCollectionUnitCapError": {
+        "description": "The error answer with the code access.collection-unit-cap.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/AccessCollectionUnitCapErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "access.collection-unit-cap"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "AccessCollectionUnitCapErrorArgs": {
+        "description": "The arguments of the text of the error with the code access.collection-unit-cap.",
+        "properties": {
+          "cap": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cap",
+          "count",
+          "key"
+        ],
+        "type": "object"
+      },
       "AccessLimit": {
         "properties": {
           "id": {
@@ -1230,6 +1279,7 @@
         "description": "An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse.",
         "discriminator": {
           "mapping": {
+            "access.collection-unit-cap": "#/components/schemas/AccessCollectionUnitCapError",
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
             "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
@@ -1260,6 +1310,9 @@
           "propertyName": "errorCode"
         },
         "oneOf": [
+          {
+            "$ref": "#/components/schemas/AccessCollectionUnitCapError"
+          },
           {
             "$ref": "#/components/schemas/BackupCorruptError"
           },
@@ -1345,6 +1398,7 @@
       },
       "ErrorCode": {
         "enum": [
+          "access.collection-unit-cap",
           "access.denied",
           "access.ip-not-allowed",
           "access.last-site-administrator",

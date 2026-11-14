@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:171` (Send expiry warning email through SMTP queue.).
@@ -27,6 +27,7 @@ Evidence for the claims above:
 - Milestone step 6 requires the server to send the warning email to the test SMTP server before expiry. Proof: Before the expiry, the server sends the warning email to the test SMTP server (roadmap step 6).
 - This change covers the SMTP queue with one retry, not enforcement or display. Proof: This part sends expiry warning email through installation SMTP settings with a durable queue and one retry (item scope).
 - Main has tests of the expiry warning of a token. Proof: pkg/accesstoken/accesstoken_test.go:1386 TestWarningFor and pkg/accesstoken/accesstoken_test.go:1413 TestExpiryWarningOfAnEndedToken.
+- Main defines the two warning windows as ExpiryWarningSoon (ExpiringWithin) and ExpiryWarningImminent (3 * 24 * time.Hour). Proof: pkg/accesstoken/accesstoken.go:370-374 (PM answer in the review finding).
 
 ## What Changes
 
@@ -60,6 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main computes the expiry warning of a token in the access token package. (`pkg/accesstoken/accesstoken_test.go:1386`)
 - Main has an expiry warning case for an ended token. (`pkg/accesstoken/accesstoken_test.go:1413`)
 - Main runs a scheduled tick for token inactivity disable. (`pkg/dustpan/schedules_internal_test.go:341`)
+- Main sets ExpiryWarningSoon = ExpiringWithin and ExpiryWarningImminent = 3 * 24 * time.Hour. (`pkg/accesstoken/accesstoken.go:370-374`)
 
 ## ADR check
 
@@ -108,7 +110,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: design decision "Stable token ID with send-time recheck": a limit with no number; give the number, the unit and the scope.
+none
 
 Questions considered and answered:
 

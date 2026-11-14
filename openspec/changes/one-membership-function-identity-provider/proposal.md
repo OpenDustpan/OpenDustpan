@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #614, #621, #632.
@@ -33,6 +33,7 @@ Evidence for the claims above:
 - One domain membership function for sources scim, claim, and ldap with sentinel refusal for protected groups without trust or full sync and for closed groups, with closed winning over trust and full sync.
 - Source and provider or token ID recorded on each added membership with audit entries in one transaction.
 - server:manage-sign-in plus a fresh check inside the one window on each identity provider, claim mapping, and account matching route with audit plus WARN alerts and a 168-hour SCIM token expiry alert specified for the scim change to apply.
+- A SCIM PATCH is atomic and a SCIM Bulk request gives a status for each operation.
 - Contract tests for refused adds and token expiry with audit checks; full SCIM and claim e2e after those adapters land.
 
 Out of scope:
@@ -47,9 +48,6 @@ Depends on:
 - guide-implies-protected-groups-refuse
 - fresh-authentication-window-0-turns
 - check-reach-when-grant-membership
-- `guide-implies-protected-groups-refuse` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
-- `check-reach-when-grant-membership` (order of the milestone review)
 
 ## Usability
 
@@ -135,19 +133,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Does the PM confirm that a SCIM PATCH is atomic and a Bulk request is per operation? Decides: PM.
-   - Options: PATCH atomic, Bulk per operation; Per-row commit for both.
-   - Recommended: PATCH atomic, Bulk per operation Reason: RFC 7644 defines PATCH as atomic, and a partial commit would surprise the client.
-2. Which durable alert channel replaces the interim audit entry plus WARN line after events exist? Decides: PM.
-   - Options: Keep audit plus WARN, switch channel later without changing callers; Add a pending-alert table with retry now.
-   - Recommended: Keep audit plus WARN, switch channel later without changing callers Reason: The audit entry is the durable record and the WARN line is a view of it, so no alert is lost.
+none
 
-Not spec-ready: a code check fails: main_facts[3]: "where" is not file:line (func Name).
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Which durable alert channel replaces the interim audit entry plus WARN line after events exist?
+   - Options: Keep audit plus WARN, switch channel later without changing callers; Add a pending-alert table with retry now.
+   - Provisional decision (owner review 14 Nov): Keep audit plus WARN, switch channel later without changing callers
+   - Reason: The audit entry is the durable record and the WARN line is a view of it, so no alert is lost. Benchmark: SOC 2: the audit record is the durable evidence of a change.
+   - Persona impact: The site administrator still reads each change in the audit log. Escape hatch: Audit entries stay queryable through the API.
 
 Questions considered and answered:
 
 - Where does the refusal logic live? One domain function in pkg/principal, per ADR 70 decision 18 and ADR 320 decision 13.
-- How does a SCIM batch with mixed rows answer? Provisional: a SCIM PATCH is atomic, and a Bulk request gives per-operation status. The PM confirms in open question 1.
+- How does a SCIM batch with mixed rows answer? A SCIM PATCH is atomic and Bulk request gives per-operation status, as RFC 7644 sections 3.5.2 and 3.7 say. The PM confirmed this.
 - What wins when a group is closed and trusted? Closed wins, per ADR 70 decisions 15 to 17 read together.
 - Does an identity provider add overwrite a local source? No. The local source stays and one audit entry names both sources.
 

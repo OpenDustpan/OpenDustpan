@@ -4,15 +4,15 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing test of overlap refusal with the blocker ID. Check: TestClaimRefusedNamesBlocker fails on main
-- [ ] 1.2 Write the failing test that a refused job ends as blocked with no apply. Check: TestRunnerJobBlockedOnRefusal fails on main
-- [ ] 1.3 Write the failing test of two parallel overlapping registrations. Check: TestParallelOverlappingClaimsOneWinner fails on main
-- [ ] 1.4 Write the failing tests of the audit entry, the release, the apply denial, the stale runner, the final blocked status, the denied refusal reader and the idempotent retry. Check: TestRefusedClaimAuditEntry, TestClaimReleasedAtEnd, TestApplyDeniedWithRefusedClaim, TestStaleRunnerDeniedAfterLeaseLoss, TestBlockedStaysBlockedAfterBlockerEnds, TestRefusedClaimReadDeniedWithoutJobRead and TestRefusedRetrySameIdempotent fail on main
+- [ ] 1.1 Write the failing test of overlap refusal with the blocker ID in `internal/api/runnerapi/claimer_test.go`. Check: TestClaimRefusedNamesBlocker fails on main
+- [ ] 1.2 Write the failing test that a refused job ends as blocked with no apply in `pkg/runner/runner_test.go`. Check: TestRunnerJobBlockedOnRefusal fails on main
+- [ ] 1.3 Write the failing test of two parallel overlapping registrations in `internal/api/runnerapi/claimer_test.go`. Check: TestParallelOverlappingClaimsOneWinner fails on main
+- [ ] 1.4 Write the failing tests of the audit entry, the release, the apply denial, the stale runner, the final blocked status, the denied refusal reader and the idempotent retry in `internal/api/runnerapi/flow_test.go`. Check: TestRefusedClaimAuditEntry, TestClaimReleasedAtEnd, TestApplyDeniedWithRefusedClaim, TestStaleRunnerDeniedAfterLeaseLoss, TestBlockedStaysBlockedAfterBlockerEnds, TestRefusedClaimReadDeniedWithoutJobRead and TestRefusedRetrySameIdempotent fail on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the overlap refusal to the claim registration of the dependency. Check: The register call answers 409 with the blocker claim ID for an overlap
-- [ ] 2.2 Move the job to blocked and write the audit entry. Check: A job read shows blocked with the blocker claim ID, and the audit log has one entry
+- [ ] 2.1 Add the overlap refusal to the claim registration of the dependency in `internal/api/runnerapi/claimer.go` (NEW file). Check: The register call answers 409 with the blocker claim ID for an overlap
+- [ ] 2.2 Move the job to blocked and write the audit entry in `pkg/runner/coordinator.go` (NEW file). Check: A job read shows blocked with the blocker claim ID, and the audit log has one entry
 
 ## 3. Side effects (computed from main)
 

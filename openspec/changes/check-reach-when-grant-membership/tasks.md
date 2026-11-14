@@ -4,17 +4,17 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for a direct grant, a group grant and a member add, each with a covering and a non-covering caller. Check: go test ./pkg/access/... ./pkg/principal/... fails on main
-- [ ] 1.2 Write failing tests for the protecting grant: no identity provider members, members with no trust decision, members with a trust decision. Check: go test ./pkg/access/... fails on main
-- [ ] 1.3 Write failing tests for flags: growth by grant, role change, member add and principal grant; acknowledge; revoke; regrowth; end with grant, principal, group or membership; list filtered by reach. Check: go test ./pkg/access/... fails on main
-- [ ] 1.4 Write failing conformance tests for concurrent grant, member add and revoke on both adapters. Check: go test -timeout 60m ./pkg/store/... fails on main
-- [ ] 1.5 Write failing tests for token create and rotation to a protected member, a member of a group that becomes protected later, and an unprotected member. Check: go test ./pkg/accesstoken/... fails on main
-- [ ] 1.6 Write a failing test that account-administrator reach holds no operator-family action. Check: go test ./pkg/access/... fails on main
+- [ ] 1.1 Write failing tests for a direct grant, a group grant and a member add, each with a covering and a non-covering caller, in the NEW file pkg/access/cover_grant_test.go. Check: go test ./pkg/access/... ./pkg/principal/... fails on main
+- [ ] 1.2 Write failing tests for the protecting grant: no identity provider members, members with no trust decision, members with a trust decision, in the NEW file pkg/access/protect_grant_test.go. Check: go test ./pkg/access/... fails on main
+- [ ] 1.3 Write failing tests for flags: growth by grant, role change, member add and principal grant; acknowledge; revoke; regrowth; end with grant, principal, group or membership; list filtered by reach, in the NEW file pkg/access/flagged_edges_test.go. Check: go test ./pkg/access/... fails on main
+- [ ] 1.4 Write failing conformance tests for concurrent grant, member add and revoke on both adapters, in the NEW file pkg/store/storetest/cover_concurrent_test.go. Check: go test -timeout 60m ./pkg/store/... fails on main
+- [ ] 1.5 Write failing tests for token create and rotation to a protected member, a member of a group that becomes protected later, and an unprotected member, in the existing file pkg/accesstoken/accesstoken_test.go. Check: go test ./pkg/accesstoken/... fails on main
+- [ ] 1.6 Write a failing test that account-administrator reach holds no operator-family action, in the NEW file pkg/access/account_admin_reach_test.go. Check: go test ./pkg/access/... fails on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the cover proof, the checks, the flag record and its end rule. Check: go test ./pkg/access/... ./pkg/principal/... ./pkg/accesstoken/... passes
-- [ ] 2.2 Map the sentinels and add the NEW flag routes with their actions and the API description. Check: go test ./internal/api/server/... passes
+- [ ] 2.1 Add the cover proof, the checks, the flag record and its end rule in pkg/access/service.go, pkg/principal/service.go (AddMember, line 496) and pkg/accesstoken. Check: go test ./pkg/access/... ./pkg/principal/... ./pkg/accesstoken/... passes
+- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the adapter in internal/api/apidesc/openapi.json. Check: go test ./internal/api/server/... passes
 
 ## 3. Side effects (computed from main)
 

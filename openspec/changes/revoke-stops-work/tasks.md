@@ -4,16 +4,16 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing server tests for revoked-delegation-blocks-next-request: request-after-revoke, prior-answer-replay, store-error-fails-closed. Check: Server test TestRequestAfterRevokeFails on main: BLOCKED by the NEW delegation gate on revoked time.
-- [ ] 1.2 Add failing tests for no-scheduled-work-starts: scheduler-after-revoke and queued-work-after-revoke. Check: Scheduler test TestSchedulerAfterRevokeFails on main: BLOCKED by the NEW delegation gate on scheduler start.
-- [ ] 1.3 Add failing tests for running-work-stops and in-flight-work-freezes: revoke-during-run, takeover-after-revoke, finished-call-stands. Check: Run test TestRevokeDuringRunFails on main: BLOCKED by the NEW stop reason revoked.
+- [ ] 1.1 Add failing server tests in `pkg/access/delegation_pin_test.go` for revoked-delegation-blocks-next-request: request-after-revoke, prior-answer-replay, store-error-fails-closed. Check: Server test TestRequestAfterRevokeFails on main: BLOCKED by the NEW delegation gate on revoked time.
+- [ ] 1.2 Add failing tests in `pkg/access/delegation_pin_test.go` for no-scheduled-work-starts: scheduler-after-revoke and queued-work-after-revoke. Check: Scheduler test TestSchedulerAfterRevokeFails on main: BLOCKED by the NEW delegation gate on scheduler start.
+- [ ] 1.3 Add failing tests in `pkg/access/delegation_pin_test.go` for running-work-stops and in-flight-work-freezes: revoke-during-run, takeover-after-revoke, finished-call-stands. Check: Run test TestRevokeDuringRunFails on main: BLOCKED by the NEW stop reason revoked.
 
 ## 2. Build
 
-- [ ] 2.1 Resolve the delegation row again at each use and deny when revoked time is set with no allow cache. Check: Agent request under a revoked delegation answers 403 with the NEW error code delegation.revoked and writes the denied entry in the shape of every-step-audited.
-- [ ] 2.2 Connect revocation to the run cancel path so live runs end with the NEW stop reason revoked. Check: Revocation cancels live durable claims at the next write boundary with the NEW stop reason revoked and no write after the boundary.
-- [ ] 2.3 Resolve the delegation row again at each later step including scheduled starts with the fenced sweeper retry every 30 seconds. Check: Scheduler evaluation after revocation starts nothing and writes collapsed denied audit entries.
-- [ ] 2.4 Write each denial after revoke to the audit log in the shape of every-step-audited. Check: GET /api/audit/entries shows the revoke entry and each denied entry with agent, delegation, and reason.
+- [ ] 2.1 In `pkg/access/access.go` (NEW file), resolve the delegation row again at each use and deny when revoked time is set with no allow cache. Check: Agent request under a revoked delegation answers 403 with the NEW error code delegation.revoked and writes the denied entry in the shape of every-step-audited.
+- [ ] 2.2 In `pkg/access/revoke_cancel.go` (NEW file), connect revocation to the run cancel path so live runs end with the NEW stop reason revoked. Check: Revocation cancels live durable claims at the next write boundary with the NEW stop reason revoked and no write after the boundary.
+- [ ] 2.3 In `pkg/access/revoke_sweeper.go` (NEW file), resolve the delegation row again at each later step including scheduled starts with the fenced sweeper retry every 30 seconds. Check: Scheduler evaluation after revocation starts nothing and writes collapsed denied audit entries.
+- [ ] 2.4 In `pkg/audit/revoke_denied.go` (NEW file), write each denial after revoke to the audit log in the shape of every-step-audited. Check: GET /api/audit/entries shows the revoke entry and each denied entry with agent, delegation, and reason.
 
 ## 3. Side effects (computed from main)
 

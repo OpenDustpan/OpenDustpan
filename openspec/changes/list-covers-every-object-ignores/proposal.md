@@ -1,12 +1,12 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #698, #2964.
 
 ## Problem
 
-The problem: a principal with an every-object scope lists namespaces from an address outside the allowlist of one namespace. The list still shows that namespace, while the gated check refuses each object of it. The scope cannot name the namespaces that it leaves out. The fix adds an exclusion list to the scope, as the accepted decision says.
+The problem: a principal with an every-object scope lists namespaces from an address outside the allowlist of one namespace. The list still shows that namespace, while the gated check refuses each object of it. The scope cannot name the namespaces that it leaves out. The fix adds an exclusion list to the scope, as the accepted decision says. The read of the namespaces that have a list pages, so no list call fails for the installation.
 
 ## Evidence
 
@@ -19,7 +19,7 @@ The problem: a principal with an every-object scope lists namespaces from an add
 - The scope of an every-object grant names excluded namespaces.
 - The IP allowlist gate fills the list for each request.
 - The namespace filter of both dialects, the deleted-units read scope, the namespace list and the caller-access API apply the list.
-- NamespacesWithList gets a bound, with conformance rows at the limit and one past it.
+- NamespacesWithList reads in pages of 50 by default and 200 at most, and the gate reads each page.
 - The conformance check of list against authorize covers a scope with exclusions.
 
 Out of scope:
@@ -29,15 +29,14 @@ Out of scope:
 
 ## Check
 
-- Add the conformance row that leaves out a namespace. Check: `go test ./pkg/identity/identitytest -count=1`
-- Add store tests of the NOT IN filter and the bound. Check: `go test ./pkg/store/... -count=1`
+- Add the conformance row that leaves out a namespace, in pkg/identity/identitytest/identitytest.go:176 (func CheckListWithinAuthorize). Check: `go test ./pkg/identity/identitytest -count=1`
+- Add store tests of the NOT IN filter and of the paged read at 200 names and one past it, in the NEW file pkg/store/namespace_exclusion_test.go. Check: `go test ./pkg/store/... -count=1`
 - Wire the gate, run the e2e step with an access token against GET /api/dustpan/v1/namespaces/{namespace}/collections, update the docs page, run the usability check. Check: `make check` with zero findings
 
 Depends on:
 
 - ip-allowlists
 - move-caller-routes-api-server
-- `ip-allowlists` (order of the milestone review)
 - `move-caller-routes-api-server` (order of the milestone review)
 
 ## What main already does
@@ -73,16 +72,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. What bound applies to NamespacesWithList, and does a read past it refuse or page? Decides: owner.
-   - Options: Refuse past a fixed limit with a named error; Page the read and apply exclusions in chunks.
-   - Recommended: Page the read, so no list call fails for the installation. Reason: ADR 361 leaves the cost limit open; paging avoids an installation-wide outage of list calls.
-
-Not spec-ready: a code check fails: threat 1 (A client outside the allowlist learns th): no guard and hostile test for encode or contain, limit.
+none
 
 Questions considered and answered:
 
 - Exclusion list or explicit list? ADR 361 decisions 1 and 2 choose the exclusion list.
 - Which consumers apply it? ADR 361 decision 3 lists them.
 - What if the feature is off? ADR 55 decision 8: no list, no exclusion.
+- Refuse or page a large read of namespaces with a list? Page it. The PM decided: list APIs of AWS and Google page and do not refuse. Page size 50 by default, 200 at most.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
