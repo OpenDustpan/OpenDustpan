@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #1255.
@@ -99,7 +99,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add an e2e step: OpenTofu lock retry with -lock-timeout=30s against th" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+Not spec-ready: a code check fails: resolution PM.6 answers a missing scenario but adds no scenario: add the scenario and name it in the note.
 
 Questions considered and answered:
 

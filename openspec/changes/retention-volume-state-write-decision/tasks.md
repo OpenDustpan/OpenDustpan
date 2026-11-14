@@ -17,5 +17,5 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Expose the wiring and show the effective sweep values in the settings resource. Check: GET /api/dustpan/v1/settings with an installation administrator access token shows cadence, batch size and last prune count.
-- [ ] 3.2 Add an e2e step: OpenTofu lock retry with -lock-timeout=30s against the real CLI. Check: `make e2e` shows held-lock retries write no record.
+- [ ] 3.2 Add an e2e step with the real tofu CLI: a client holds the lock, a second client runs the lock request POST /api/v2/workspaces/{workspace_id}/actions/lock (internal/api/tfe/locks.go) with -lock-timeout=30s, using an access token of a principal with write on the workspace. Check: `make e2e` shows the held-lock retries answer 409 and write no decision record.
 - [ ] 3.3 Add the docs page, run the usability check from the docs page alone, and pass make check. Check: `make check` reports zero findings.
