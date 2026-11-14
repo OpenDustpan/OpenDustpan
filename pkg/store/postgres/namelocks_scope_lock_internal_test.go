@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,5 +209,177 @@ func serverScopeEntry(action string) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+	}
+}
+
+// TestAServerScopeAppendWithATakenSequenceFailsClosed proves that the primary
+// key of the server scope fails closed. The test appends one entry through the
+// normal path, then writes an append with the taken sequence 1 by hand, as one
+// that read a stale last entry does when it skips the scope lock. The append
+// must be refused, and the stored entries must stay unchanged. The test takes
+// no lock, so it does not depend on the lock of the normal path.
+func TestAServerScopeAppendWithATakenSequenceFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	s, _ := createLockSetup(t, "acme")
+
+	if _, err := s.AppendServer(t.Context(), serverScopeEntry("server:append")); err != nil {
+		t.Fatalf("append the first server entry: %v", err)
+	}
+
+	sequencesBefore, actionsBefore := serverScopeRows(t, s)
+
+	tx, err := s.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	stale := serverScopeEntry("server:stale")
+	stale.Sequence = 1
+
+	_, insertErr := insertPlacedEntry(t.Context(), s.queries.WithTx(tx), stale, "", hashNone)
+
+	rollbackErr := tx.Rollback(t.Context())
+	if rollbackErr != nil {
+		t.Fatalf("roll back the stale append: %v", rollbackErr)
+	}
+
+	if insertErr == nil {
+		t.Fatal("an append with the taken sequence 1 was stored, want the primary key to refuse it")
+	}
+
+	sequencesAfter, actionsAfter := serverScopeRows(t, s)
+	assertServerScopeSequences(t, sequencesAfter, len(sequencesBefore))
+
+	if len(actionsBefore) == 0 {
+		t.Fatal("the server scope holds no entry before the stale append")
+	}
+
+	if actionsAfter[0] != actionsBefore[0] {
+		t.Fatalf("the entry at sequence 1 changed to %q, want %q", actionsAfter[0], actionsBefore[0])
+	}
+
+	if !slices.Equal(actionsBefore, actionsAfter) {
+		t.Fatalf("the server scope changed after the refused append: before %q, after %q",
+			actionsBefore, actionsAfter)
+	}
+}
+
+// TestTwoStoresAppendToTheServerScopeInOrder proves that the scope lock orders
+// the appends of two stores that share one database. A prune on one store and
+// an append on the other start together in every round. Both must succeed in
+// every round, and the server scope must keep one gap-free sequence. Without
+// the lock of the prune, the two appends can read the same last entry, and one
+// fails on the primary key.
+func TestTwoStoresAppendToTheServerScopeInOrder(t *testing.T) {
+	t.Parallel()
+
+	url := membershipURL(t)
+
+	storeA, err := Open(t.Context(), url)
+	if err != nil {
+		t.Fatalf("open store A: %v", err)
+	}
+	t.Cleanup(storeA.Close)
+
+	storeB, err := Open(t.Context(), url)
+	if err != nil {
+		t.Fatalf("open store B: %v", err)
+	}
+	t.Cleanup(storeB.Close)
+
+	base, _ := serverScopeRows(t, storeA)
+
+	for round := range raceRounds {
+		var (
+			wg        sync.WaitGroup
+			pruneErr  error
+			appendErr error
+			start     = make(chan struct{})
+		)
+
+		wg.Go(func() {
+			<-start
+
+			_, pruneErr = storeA.PruneNameLocks(
+				t.Context(), time.Hour, 1, 1, serverScopeEntry("sign-in.name-locks-pruned"),
+			)
+		})
+		wg.Go(func() {
+			<-start
+
+			_, appendErr = storeB.AppendServer(t.Context(), serverScopeEntry("server:append"))
+		})
+
+		close(start)
+		wg.Wait()
+
+		if pruneErr != nil {
+			t.Fatalf("prune in round %d: %v", round, pruneErr)
+		}
+
+		if appendErr != nil {
+			t.Fatalf("append in round %d: %v", round, appendErr)
+		}
+	}
+
+	sequences, _ := serverScopeRows(t, storeA)
+	assertServerScopeSequences(t, sequences, len(base)+2*raceRounds)
+}
+
+// serverScopeRows returns the sequence and the action of each entry of the
+// server audit scope, oldest first.
+func serverScopeRows(t *testing.T, s *Store) ([]int64, []string) {
+	t.Helper()
+
+	rows, err := s.pool.Query(t.Context(),
+		"SELECT sequence, action FROM audit_entries WHERE namespace = $1 ORDER BY sequence",
+		audit.ServerScope.String())
+	if err != nil {
+		t.Fatalf("read the server audit scope: %v", err)
+	}
+
+	defer rows.Close()
+
+	var (
+		sequences []int64
+		actions   []string
+	)
+
+	for rows.Next() {
+		var (
+			sequence int64
+			action   string
+		)
+
+		if err := rows.Scan(&sequence, &action); err != nil {
+			t.Fatalf("scan a server audit entry: %v", err)
+		}
+
+		sequences = append(sequences, sequence)
+		actions = append(actions, action)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the server audit scope: %v", err)
+	}
+
+	return sequences, actions
+}
+
+// assertServerScopeSequences checks that the server scope holds want entries
+// with the sequences 1..want, without a gap and without a duplicate.
+func assertServerScopeSequences(t *testing.T, sequences []int64, want int) {
+	t.Helper()
+
+	if len(sequences) != want {
+		t.Fatalf("the server audit scope holds %d entries, want %d", len(sequences), want)
+	}
+
+	for i, sequence := range sequences {
+		if sequence != int64(i+1) {
+			t.Fatalf("the server audit scope holds the sequence %d at position %d, want %d",
+				sequence, i, i+1)
+		}
 	}
 }
