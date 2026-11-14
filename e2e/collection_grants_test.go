@@ -363,8 +363,11 @@ func scopeAdminTofu(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Ins
 }
 
 // checkWriterScope proves that the writer on collection team-a writes and
-// reads the units of team-a and is refused with a 403 on the units of
-// team-b, with each real CLI. Each refused write leaves the state unchanged.
+// reads the units of team-a and cannot see the units of team-b with the
+// OpenTofu CLI: without namespace:read and without a grant on team-b, the
+// server hides them with the same 404 as for an unknown workspace. The
+// Pulumi CLI names its own refusal with a 403. Each refused write leaves the
+// state unchanged.
 func checkWriterScope(t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install, writer *scopePerson) {
 	t.Helper()
 
@@ -393,12 +396,12 @@ func checkWriterScope(t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install
 		t.Fatalf("tofu state pull of team-a as writer exits %d, want 0:\n%s", res.ExitCode, res.Stderr)
 	}
 
-	scopeRefused(t, tofu.run(ctx, "opentofu", "b", "state", "pull"),
+	scopeHidden(t, tofu.run(ctx, "opentofu", "b", "state", "pull"),
 		"tofu state pull of team-b as writer of team-a")
 
 	beforeTofu := scopeAdminTofu(ctx, t, env, tofuCLI, "b")
 
-	scopeRefused(t, tofu.run(ctx, "opentofu", "b", "apply", "-input=false", "-auto-approve"),
+	scopeHidden(t, tofu.run(ctx, "opentofu", "b", "apply", "-input=false", "-auto-approve"),
 		"tofu apply on team-b as writer of team-a")
 
 	if after := scopeAdminTofu(ctx, t, env, tofuCLI, "b"); after != beforeTofu {
