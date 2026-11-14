@@ -84,9 +84,9 @@ type tokenResponse struct {
 	LastUsedAt *string `json:"lastUsedAt"`
 	RevokedAt  *string `json:"revokedAt"`
 	DisabledAt *string `json:"disabledAt"`
-	// ExpiresInDays is the count of whole days until the expiry, at the
-	// time of the answer by the server clock, or null for a token that is
-	// not active. A client warns from it with no need of its own clock.
+	// ExpiresInDays is the count of days until the expiry, rounded up, at
+	// the time of the answer by the server clock, or null for a token that
+	// is not active. A client warns from it with no need of its own clock.
 	ExpiresInDays *int64 `json:"expiresInDays"`
 	ID            string `json:"id"`
 	PrincipalID   string `json:"principalID"`
