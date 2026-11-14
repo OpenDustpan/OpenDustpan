@@ -255,10 +255,6 @@ func TestAServerScopeAppendWithATakenSequenceFailsClosed(t *testing.T) {
 		t.Fatal("the server scope holds no entry before the stale append")
 	}
 
-	if actionsAfter[0] != actionsBefore[0] {
-		t.Fatalf("the entry at sequence 1 changed to %q, want %q", actionsAfter[0], actionsBefore[0])
-	}
-
 	if !slices.Equal(actionsBefore, actionsAfter) {
 		t.Fatalf("the server scope changed after the refused append: before %q, after %q",
 			actionsBefore, actionsAfter)
