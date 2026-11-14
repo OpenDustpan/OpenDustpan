@@ -1,4 +1,4 @@
-package filescheck_test
+package checkfiles_test
 
 import (
 	"testing"
