@@ -40,7 +40,7 @@ Evidence for the claims above:
 Out of scope:
 
 - OIDC, SAML, CAS, OAuth 2.0, trusted-header, and SCIM behavior
-- Break-glass mode 2
+- Signed-request recovery, and the reset of the factors of a person by a temporary administrator of a recovery with no fresh step (ADR 372 decision 6), owned by the signed-request-recovery change
 - Token expiry email and SMTP settings
 - mTLS workload sign-in
 - Collections and placement
