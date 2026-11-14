@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -619,41 +620,79 @@ func (h *Handler) enforceDiscovery(route Route) http.HandlerFunc {
 			return
 		}
 
-		if _, err := h.namespaces.Get(ctx, ns); err != nil {
-			h.writeError(ctx, w, err)
+		if _, getErr := h.namespaces.Get(ctx, ns); getErr != nil {
+			h.writeError(ctx, w, getErr)
 
 			return
 		}
 
-		obj := identity.NamespaceObject(ns)
-		if err := h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, obj); err == nil {
-			route.Serve(w, r, p, obj)
-
-			return
-		} else if !errors.Is(err, identity.ErrDenied) {
-			h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", identity.ActionNamespaceRead, err))
-
-			return
-		}
-
-		holds, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
-		if holdsErr != nil {
-			h.writeError(ctx, w, holdsErr)
-
-			return
-		}
-
-		if !holds {
-			// The same 404 as for an unknown namespace: the error text is
-			// what the namespace read above answers for one, so the two
-			// answers do not differ.
-			h.writeError(ctx, w, fmt.Errorf("get namespace %q: %w", ns.String(), namespace.ErrNotFound))
-
-			return
-		}
-
-		route.Serve(w, r, p, obj)
+		h.serveDiscovery(w, r, p, ns, route)
 	}
+}
+
+// serveDiscovery serves a discovery route for a namespace that exists: it
+// answers when the caller may read the namespace, or when the caller holds a
+// grant on a collection or on a unit in it. Any other caller gets the same
+// 404 as for an unknown namespace, with the same body, so the answer is no
+// existence oracle. It decides first and records only the final refusal, so
+// a served request writes no denial entry.
+func (h *Handler) serveDiscovery(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, route Route,
+) {
+	ctx := r.Context()
+	obj := identity.NamespaceObject(ns)
+
+	err := h.guard.Decide(ctx, p, identity.ActionNamespaceRead, obj)
+	if err == nil {
+		route.Serve(w, r, p, obj)
+
+		return
+	}
+
+	// Defense in depth: the IP allowlist refusal is checked first and
+	// never falls through to the grant fallback, so a blocked address
+	// cannot discover the namespace through a collection grant.
+	if errors.Is(err, ipallow.ErrAddressNotAllowed) {
+		h.denyDiscovery(ctx, r, p, obj, err)
+		h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", identity.ActionNamespaceRead, err))
+
+		return
+	}
+
+	if !errors.Is(err, identity.ErrDenied) {
+		h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", identity.ActionNamespaceRead, err))
+
+		return
+	}
+
+	holds, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
+	if holdsErr != nil {
+		h.writeError(ctx, w, holdsErr)
+
+		return
+	}
+
+	if !holds {
+		// The same 404 as for an unknown namespace: the error text is
+		// what the namespace read above answers for one, so the two
+		// answers do not differ.
+		h.denyDiscovery(ctx, r, p, obj, err)
+		h.writeError(ctx, w, fmt.Errorf("get namespace %q: %w", ns.String(), namespace.ErrNotFound))
+
+		return
+	}
+
+	route.Serve(w, r, p, obj)
+}
+
+// denyDiscovery records the denial entry of a refused discovery request.
+func (h *Handler) denyDiscovery(
+	ctx context.Context, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	h.guard.Record(ctx, r, p, refusal.Denial{
+		Action: identity.ActionNamespaceRead, Object: obj, Reason: refusal.ReasonFor(err),
+		ReasonWithin: nil, Window: 0,
+	})
 }
 
 // holdsGrantInNamespace reports whether p holds a grant on a collection in
@@ -685,13 +724,10 @@ func (h *Handler) holdsGrantInNamespace(
 }
 
 // scopeHoldsNamespace reports whether scope names a collection or a unit in
-// ns, or covers every object. A grant on the namespace itself is decided by
-// the Authorizer before this runs.
+// ns. A grant on the namespace itself, or on the installation, is decided by
+// the Authorizer before this runs. An every-object scope alone proves no
+// grant in ns: only the gated namespace check above may open that path.
 func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
-	if scope.CoversEveryObject() {
-		return true
-	}
-
 	for _, objs := range [][]identity.Object{scope.Collections, scope.Units} {
 		for i := range objs {
 			if objs[i].Namespace() == ns {
