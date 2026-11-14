@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:259` (Runners).
@@ -123,10 +123,10 @@ none
 
 Questions considered and answered:
 
-- Does the change need separate pools for Pulumi and OpenTofu? No. Server pool claim covers both tools; ADR 131 decision 4 says poll calls job.Claimer.Claim for jobs and sweep claimer for sweeps, and ADR 282 decision 1 accepts one runner design for both tools.
-- Is the join token one-use with short life? Yes. ADR 133 decision 2 says one join, one-hour default, secret shown once with only SHA-256 kept, revokable.
-- What happens when a runner dies during a job? Yes. ADR 131 decisions 7 and 8 give renew, heartbeat, lost-claim and takeover behavior; the milestone exit test kills a runner and expects lease expiry plus takeover by another runner.
-- What lease length, renew interval and takeover delay does the server use? Provisional values for this change: claim lease 60 seconds, renew every 20 seconds, takeover after lease expiry plus 30 second grace. ADR 131 decision 5 gives the 50 second poll hold and 5 second recheck but no lease length, so this change fixes lease values in code and guide and surfaces effective values on the pool read.
-- How does a runner recover when the join response is lost after the store insert? Retry with the same token always gets token-used. The first runner record stays for audit with no live claim. The operator retires the orphan record and creates a fresh token. ADR 133 decision 2 states one-use consume with token-used on second join and no retry rule.
+- Does the change need separate pools for Pulumi and OpenTofu? No. ADR 131 decision 4 says poll calls job.Claimer.Claim for jobs, and ADR 282 decision 1 accepts one runner design for both tools.
+- Is the join token one-use with short life? Yes. ADR 133 decision 2 says one join, one-hour default, secret shown once with only SHA-256 kept, revocable.
+- What happens when a runner dies during a job? ADR 131 decisions 7 and 8 give renew, heartbeat, lost-claim and takeover behavior; the milestone exit test expects lease expiry and takeover.
+- What lease length, renew interval and takeover delay does the server use? Provisional decision, not security semantics and touching no owner-tagged words: lease 60 seconds, renew every 20 seconds, takeover after expiry plus 30 seconds grace. Benchmark: AWS SQS visibility timeout practice of a short lease with renewal. The effective values show on the pool read, so an operator sees them.
+- How does a runner recover when the join response is lost after the store insert? Retry with the same token gets token-used. The operator retires the orphan record and creates a fresh token. ADR 133 decision 2 gives one-use consume and token-used.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

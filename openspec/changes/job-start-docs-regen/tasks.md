@@ -4,7 +4,7 @@
 
 ## 1. Failing checks first
 
-- [ ] 1.1 Show that the clients check fails on main when the generated files are stale. Check: make clients-check
+- [ ] 1.1 Show that the clients check fails on main when the generated files are stale: change nothing, then run the check against `internal/api/apidesc/openapi.json` and write the result in the pull request body. Check: make clients-check
 
 ## 2. Side effects (computed from main)
 

@@ -4,14 +4,14 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing e2e test for 3 units applied from one CI job with an access token over the same per-workspace backend as local-run-all; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiThreeUnitsApply fails on main; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
-- [ ] 1.2 Write the failing check that a CI run-all over 3 units leaves no change order and no discovery job; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiCreatesNoChangeOrder fails on main; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
-- [ ] 1.3 Write the failing tests for same-workspace address handling, lock refusal and credential refusal, including cross-workspace denial; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiSameWorkspaceAddress, TestTerragruntCiLockRefusal and TestTerragruntCiCredentialRefusal fail on main; BLOCKED by the per-workspace backend route named in local-run-all, use access token
+- [ ] 1.1 Write the failing e2e test in NEW file e2e/terragrunt_ci_test.go for 3 units applied from one CI job with an access token over the same per-workspace backend as local-run-all; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiThreeUnitsApply fails on main; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
+- [ ] 1.2 Write the failing check in NEW file e2e/terragrunt_ci_test.go that a CI run-all over 3 units leaves no change order and no discovery job; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiCreatesNoChangeOrder fails on main; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
+- [ ] 1.3 Write the failing tests in NEW file pkg/accesstoken/terragrunt_ci_test.go for same-workspace address handling, lock refusal and credential refusal, including cross-workspace denial; BLOCKED by the per-workspace backend route named in local-run-all. Check: TestTerragruntCiSameWorkspaceAddress, TestTerragruntCiLockRefusal and TestTerragruntCiCredentialRefusal fail on main; BLOCKED by the per-workspace backend route named in local-run-all, use access token
 
 ## 2. Path and docs
 
-- [ ] 2.1 Run the hostile cross-workspace credential check against the per-workspace authorization gate with an access token; BLOCKED by the per-workspace backend route named in local-run-all. Check: The token granted on workspace A is denied on workspace B; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
-- [ ] 2.2 Write the team CI section of the Terragrunt guide with non-interactive access-token setup, the per-unit backend block and the note that profiles and blueprints stay the first choice. Check: Docs commands run as written in a clean CI container
+- [ ] 2.1 Run the hostile cross-workspace credential check in pkg/accesstoken/terragrunt_ci_test.go (NEW in task 1.3) against the per-workspace authorization gate with an access token; BLOCKED by the per-workspace backend route named in local-run-all. Check: The token granted on workspace A is denied on workspace B; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
+- [ ] 2.2 Write the team CI section of the Terragrunt guide in NEW file docs/guides/terragrunt.md with non-interactive access-token setup, the per-unit backend block and the note that profiles and blueprints stay the first choice. Check: Docs commands run as written in a clean CI container
 
 ## 3. Side effects (computed from main)
 

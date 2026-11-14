@@ -56,7 +56,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Maintenance discovery helper exists with a discovery test on main. (`pkg/dustpan/maintenance_test.go:257 (func TestMaintenanceKeepsDiscovery)`)
 - Stack delta preview helper exists with a preview test on main. (`pkg/stack/delta_test.go:267 (func TestCheckpointDeltaPreview)`)
 - Audit chain family test exists on main. (`pkg/access/audit_chain_families_test.go:11 (func TestAuditChainFamilies)`)
-- Runner invalid error code exists on main. (`internal/errcode/catalog_runner.go:10 (func TestRunnerInvalid)`)
+- Runner invalid error code exists on main. (`internal/errcode/catalog_runner.go:10`)
 
 ## ADR check
 

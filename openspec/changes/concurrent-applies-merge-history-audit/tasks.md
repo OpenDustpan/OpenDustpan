@@ -4,14 +4,14 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing history test for parent pointer and claim ID on merged versions. Check: TestHistoryShowsClaimPerMergedVersion fails on main.
-- [ ] 1.2 Add failing audit test for one merged entry with each claim ID in the same transaction. Check: TestMergedAuditEntry fails on main.
-- [ ] 1.3 Add failing sealed values test for merges from two parents with masked reads and unsealed refusal. Check: TestMergeKeepsSealedValues fails on main.
+- [ ] 1.1 Add failing history test for parent pointer and claim ID on merged versions in pkg/inventory/inventorytest/mem_test.go (func TestHistoryConformance is there). TestHistoryShowsClaimPerMergedVersion is NEW. Check: TestHistoryShowsClaimPerMergedVersion fails on main.
+- [ ] 1.2 Add failing audit test for one merged entry with each claim ID in the same transaction in NEW file pkg/audit/merge_record_test.go. TestMergedAuditEntry is NEW. Check: TestMergedAuditEntry fails on main.
+- [ ] 1.3 Add failing sealed values test for merges from two parents with masked reads and unsealed refusal in NEW file pkg/audit/merge_sealed_test.go. TestMergeKeepsSealedValues is NEW. Check: TestMergeKeepsSealedValues fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Store parent pointer and claim ID in the baseline in name order and expose them in the state version list. Check: `ANY /api/v2/workspaces/{}/state-versions` shows parent and claim per version with declared read action.
-- [ ] 2.2 Build mergeRecord through newMergeRecord and write the merged audit entry in the same fenced transaction. Check: `ANY /api/audit/entries` shows the merged entry with declared read action and no plain secrets.
+- [ ] 2.1 Store parent pointer and claim ID in the baseline in name order and expose them in the state version list. Edit the baseline in NEW file pkg/audit/merge_record.go for the record fields. Edit the route declaration and the adapter for `ANY /api/v2/workspaces/{}/state-versions` in the files that main declares for it. Check: `ANY /api/v2/workspaces/{}/state-versions` shows parent and claim per version with declared read action.
+- [ ] 2.2 Build mergeRecord through newMergeRecord (NEW) in NEW file pkg/audit/merge_record.go and write the merged audit entry in the same fenced transaction. Edit the route declaration and the adapter for `ANY /api/audit/entries` in the files that main declares for it. Check: `ANY /api/audit/entries` shows the merged entry with declared read action and no plain secrets.
 
 ## 3. Definition of done
 

@@ -4,14 +4,14 @@
 
 ## 1. failing tests first
 
-- [ ] 1.1 Write the failing test for a failed apply with no new current state version. Check: TestFanoutFailedApplyKeepsPriorState fails on main (calls ANY /api/v2/workspaces/{}/state-versions with an access token).
-- [ ] 1.2 Write the failing test for the failed apply record. Check: TestFanoutFailureRecordNamesWorkspace fails on main (calls GET /api/dustpan/v1/namespaces/{}/units with an access token).
-- [ ] 1.3 Write the failing test for crash, cancel, secret redaction and lock release. Check: TestFanoutCrashCancelAndLockRelease fails on main (calls ANY /api/v2/workspaces/{}/state-versions with an access token).
+- [ ] 1.1 Write the failing test for a failed apply with no new current state version in the NEW file pkg/audit/fanout_failure_test.go. Check: TestFanoutFailedApplyKeepsPriorState fails on main (calls ANY /api/v2/workspaces/{}/state-versions with an access token).
+- [ ] 1.2 Write the failing test for the failed apply record in the NEW file pkg/audit/fanout_failure_test.go. Check: TestFanoutFailureRecordNamesWorkspace fails on main (calls GET /api/dustpan/v1/namespaces/{}/units with an access token).
+- [ ] 1.3 Write the failing test for crash, cancel, secret redaction and lock release in the NEW file pkg/audit/fanout_failure_test.go. Check: TestFanoutCrashCancelAndLockRelease fails on main (calls ANY /api/v2/workspaces/{}/state-versions with an access token).
 
 ## 2. build
 
-- [ ] 2.1 Wire the per-unit outcome keyed by workspace stable ID through the fan-out apply path. Check: ANY /api/v2/workspaces/{}/state-versions with an access token shows the prior current version for the failed workspace.
-- [ ] 2.2 Wire the failure record with the workspace stable ID and the failure reason, without secret values. Check: GET /api/dustpan/v1/namespaces/{}/units with an access token lists the failed unit.
+- [ ] 2.1 Wire the per-unit outcome keyed by workspace stable ID through the fan-out apply path in the NEW file pkg/audit/fanout_outcome.go. Check: ANY /api/v2/workspaces/{}/state-versions with an access token shows the prior current version for the failed workspace.
+- [ ] 2.2 Wire the failure record with the workspace stable ID and the failure reason, without secret values, in the NEW file pkg/audit/fanout_outcome.go. Check: GET /api/dustpan/v1/namespaces/{}/units with an access token lists the failed unit.
 
 ## 3. Side effects (computed from main)
 

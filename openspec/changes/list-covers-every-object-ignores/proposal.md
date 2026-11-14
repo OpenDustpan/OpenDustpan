@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #698, #2964.
@@ -29,8 +29,8 @@ Out of scope:
 
 ## Check
 
-- Add the conformance row that leaves out a namespace. Check: `go test ./pkg/identity/identitytest -count=1`
-- Add store tests of the NOT IN filter and of the paged read at 200 names and one past it. Check: `go test ./pkg/store/... -count=1`
+- Add the conformance row that leaves out a namespace, in pkg/identity/identitytest/identitytest.go:176 (func CheckListWithinAuthorize). Check: `go test ./pkg/identity/identitytest -count=1`
+- Add store tests of the NOT IN filter and of the paged read at 200 names and one past it, in the NEW file pkg/store/namespace_exclusion_test.go. Check: `go test ./pkg/store/... -count=1`
 - Wire the gate, run the e2e step with an access token against GET /api/dustpan/v1/namespaces/{namespace}/collections, update the docs page, run the usability check. Check: `make check` with zero findings
 
 Depends on:

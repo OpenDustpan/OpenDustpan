@@ -4,9 +4,9 @@
 
 ## 1. Failing e2e first
 
-- [ ] 1.1 Add failing e2e step: valid SPIFFE ID exchange on POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with a client certificate, then pulumi up and tofu apply with the exchanged token (kind `mtls-exchange`, credential `trust-token`). BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofPulumiTofu fails on main, passes with the change.
-- [ ] 1.2 Add failing e2e refusals on POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange (token kind `mtls-exchange`, credential `trust-token`): hostile certificates and a forwarded header with no handshake certificate, no token issued. BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofRefusals lists each 401 case with audit entry and body check.
-- [ ] 1.3 Add failing e2e grant and lifetime checks with the exchanged token (kind `mtls-exchange`, credential `trust-token`) from POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange: 403 within grants, 401 after expiry or revoke. BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofGrants shows 403 and 401 cases.
+- [ ] 1.1 Add failing e2e step in e2e/mtls_proof_test.go (NEW): valid SPIFFE ID exchange on POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with a client certificate, then pulumi up and tofu apply with the exchanged token (kind `mtls-exchange`, credential `trust-token`). BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofPulumiTofu fails on main, passes with the change.
+- [ ] 1.2 Add failing e2e refusals in e2e/mtls_proof_test.go (NEW) on POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange (token kind `mtls-exchange`, credential `trust-token`): hostile certificates and a forwarded header with no handshake certificate, no token issued. BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofRefusals lists each 401 case with audit entry and body check.
+- [ ] 1.3 Add failing e2e grant and lifetime checks in e2e/mtls_proof_test.go (NEW) with the exchanged token (kind `mtls-exchange`, credential `trust-token`) from POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange: 403 within grants, 401 after expiry or revoke. BLOCKED by mtls-mtls-exchange-token until it merges. Check: e2e TestMtlsProofGrants shows 403 and 401 cases.
 
 ## 2. Side effects (computed from main)
 

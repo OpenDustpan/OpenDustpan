@@ -6,9 +6,9 @@
 
 - [ ] 1.1 Add failing matcher tests for 2 requirements per change in pkg/gate/jobgate scope, with users, owners, fresh window, unless, and maximum matching Check: TestApproval_BothRequirementsNeedDistinctPeople fails on main
 - [ ] 1.2 Add failing maximum-matching test for 2 requirements per change in pkg/gate/jobgate scope where only a non-greedy assignment satisfies both requirements Check: TestApproval_GreedyOrderStillSatisfies fails on main
-- [ ] 1.3 Add failing handler test for the 403 body that names each unmet requirement and missing count Check: TestApproval_RefusalNamesMissingRequirement fails on main
-- [ ] 1.4 Add failing service tests for 2 approvals per change in job service scope for eligibility recheck, revocation, self-approval, plan binding, withdrawal, dedupe, and window enforcement at approval and apply time Check: TestApproval_FreshWindowRefusesOldSignIn fails on main
-- [ ] 1.5 Add failing test that 2 applies for one change within 100 milliseconds allow exactly 1 Check: TestApproval_ConcurrentAppliesOneWinner fails on main
+- [ ] 1.3 Add failing handler test for the 403 body that names each unmet requirement and missing count in internal/servertest/roundtrips_test.go. The test calls the existing route POST /api/dustpan/v1/namespaces/{namespace}/jobs with a console session cookie credential. Check: TestApproval_RefusalNamesMissingRequirement fails on main
+- [ ] 1.4 Add failing service tests for 2 approvals per change in job service scope for eligibility recheck, revocation, self-approval, plan binding, withdrawal, dedupe, and window enforcement at approval and apply time in pkg/gate/jobgate/jobgate_test.go. Check: TestApproval_FreshWindowRefusesOldSignIn fails on main
+- [ ] 1.5 Add failing test that 2 applies for one change within 100 milliseconds allow exactly 1 in internal/servertest/roundtrips_conflict_test.go. The test calls the existing route POST /api/dustpan/v1/namespaces/{namespace}/jobs with a console session cookie credential. Check: TestApproval_ConcurrentAppliesOneWinner fails on main
 
 ## 2. Side effects (computed from main)
 

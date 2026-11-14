@@ -4,19 +4,19 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing service test for merge event to apply jobs with pinned branch and sha. Check: TestMergeStartsApplyAtMergeCommit fails on main.
-- [ ] 1.2 Add failing service test that a pull request branch push starts no apply. Check: TestBranchPushStartsNoApply fails on main.
-- [ ] 1.3 Add failing service test that a refused gate fails the merge apply with its decision record. Check: TestMergeApplyKeepsGates fails on main.
-- [ ] 1.4 Add failing service test for replayed merge events, partial writes and merges with no touched units. Check: TestDuplicateMergeCreatesOneJob fails on main.
-- [ ] 1.5 Add failing service test for changed replan, no reviewed plan and missing sha paths. Check: TestMergeApplyReplanDiffersResetsApprovals fails on main.
-- [ ] 1.6 Add failing service test for a second merge on a unit with a running apply. Check: TestConcurrentMergesQueue fails on main.
+- [ ] 1.1 Add failing service test for merge event to apply jobs with pinned branch and sha in NEW file internal/mergeapply/merge_test.go. Check: TestMergeStartsApplyAtMergeCommit fails on main.
+- [ ] 1.2 Add failing service test that a pull request branch push starts no apply in NEW file internal/mergeapply/merge_test.go. Check: TestBranchPushStartsNoApply fails on main.
+- [ ] 1.3 Add failing service test that a refused gate fails the merge apply with its decision record in NEW file internal/mergeapply/merge_test.go. Check: TestMergeApplyKeepsGates fails on main.
+- [ ] 1.4 Add failing service test for replayed merge events, partial writes and merges with no touched units in NEW file internal/mergeapply/merge_test.go. Check: TestDuplicateMergeCreatesOneJob fails on main.
+- [ ] 1.5 Add failing service test for changed replan, no reviewed plan and missing sha paths in NEW file internal/mergeapply/merge_test.go. Check: TestMergeApplyReplanDiffersResetsApprovals fails on main.
+- [ ] 1.6 Add failing service test for a second merge on a unit with a running apply in NEW file internal/mergeapply/merge_test.go. Check: TestConcurrentMergesQueue fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Build the merge starter with pinned branch and sha. Check: `go test ./internal/mergeapply/... -run TestMerge -count=1` passes.
-- [ ] 2.2 Wire the starter to the job service with authorization actions. Check: `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{id}` with a personal token returns the merge apply with its branch and commit sha.
-- [ ] 2.3 Add e2e step with real binary over TLS: merge starts apply, branch push does not. Check: e2e step against the fake forge passes on SQLite and PostgreSQL with an existing runner: `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{id}` with a personal token shows the merge apply, and a branch push starts no apply.
-- [ ] 2.4 Write the docs page for apply after the merge. Check: Docs page runs as written.
+- [ ] 2.1 Build the merge starter with pinned branch and sha in NEW file internal/mergeapply/merge.go. Check: `go test ./internal/mergeapply/... -run TestMerge -count=1` passes.
+- [ ] 2.2 Wire the starter to the job service with authorization actions in NEW file internal/mergeapply/wire.go. Check: `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{id}` with a personal token returns the merge apply with its branch and commit sha.
+- [ ] 2.3 Add e2e step with real binary over TLS in NEW file e2e/mergeapply_test.go: merge starts apply, branch push does not. Check: e2e step against the fake forge passes on SQLite and PostgreSQL with an existing runner: `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{id}` with a personal token shows the merge apply, and a branch push starts no apply.
+- [ ] 2.4 Write the docs page for apply after the merge in NEW file docs/apply-after-merge.md. Check: Docs page runs as written.
 
 ## 3. Side effects (computed from main)
 

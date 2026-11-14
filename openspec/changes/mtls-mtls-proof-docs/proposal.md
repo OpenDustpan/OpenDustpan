@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:188` (E2E step and docs prove mTLS with real CLIs.).

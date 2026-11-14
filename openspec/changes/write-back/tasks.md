@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing spec tests for commit with trailer, refusal of non-config paths, stale base, and retryable forge error. Check: `go test ./internal/jobsvc/ -run TestWriteBackCommitsEditWithTrailer -count=1`
-- [ ] 1.2 Add failing conformance tests of the Forge fake for the retryable and refused classes. Check: `go test ./pkg/forge/forgetest/ -run TestForgeFakeRetryClasses -count=1`
+- [ ] 1.1 Add failing spec tests in NEW file internal/jobsvc/writeback_test.go for commit with trailer, refusal of non-config paths, stale base, and retryable forge error. Check: `go test ./internal/jobsvc/ -run TestWriteBackCommitsEditWithTrailer -count=1`
+- [ ] 1.2 Add failing conformance tests of the Forge fake in NEW file pkg/forge/forgetest/retry_classes_test.go for the retryable and refused classes. Check: `go test ./pkg/forge/forgetest/ -run TestForgeFakeRetryClasses -count=1`
 
 ## 2. Side effects (computed from main)
 

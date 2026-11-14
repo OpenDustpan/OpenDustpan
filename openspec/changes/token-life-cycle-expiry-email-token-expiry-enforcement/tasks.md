@@ -5,17 +5,17 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add a test that the authenticator refuses an idle-disabled token Check: NEW TestAuthenticateRefusesDisabledToken in pkg/accesstoken fails on main
-- [ ] 1.2 Add a table test that the response bytes and headers are identical for unknown, expired, revoked and disabled tokens Check: NEW TestRefusalIsIdenticalForEveryEndedCase fails on main
-- [ ] 1.3 Add a test, through the code path, that the digest compare uses subtle.ConstantTimeCompare Check: NEW TestTokenCompareUsesConstantTime fails on main
-- [ ] 1.4 Add an API test for the plain 401 with an audit reason on the three route families, and an unknown token entry with no token ID Check: NEW TestEndedTokenAnswers401WithAuditReason fails on main
-- [ ] 1.5 Add a test that the settings resource shows the token limits Check: NEW TestSettingsShowTokenLimits fails on main
-- [ ] 1.6 Add a test that the ended list shows an expired and a revoked token Check: NEW TestCallerTokensStatusEndedListsEndedTokens fails on main
+- [ ] 1.2 Add a table test in pkg/accesstoken/accesstoken_test.go that the response bytes and headers are identical for unknown, expired, revoked and disabled tokens Check: NEW TestRefusalIsIdenticalForEveryEndedCase fails on main
+- [ ] 1.3 Add a test in pkg/accesstoken/accesstoken_test.go, through the code path, that the digest compare uses subtle.ConstantTimeCompare Check: NEW TestTokenCompareUsesConstantTime fails on main
+- [ ] 1.4 Add an API test in NEW internal/api/server/token_refusal_test.go for the plain 401 with an audit reason on the three route families, and an unknown token entry with no token ID Check: NEW TestEndedTokenAnswers401WithAuditReason fails on main
+- [ ] 1.5 Add a test in NEW pkg/accesstoken/limits_test.go that the settings resource shows the token limits Check: NEW TestSettingsShowTokenLimits fails on main
+- [ ] 1.6 Add a test in NEW internal/api/server/tokens_ended_test.go that the ended list shows an expired and a revoked token Check: NEW TestCallerTokensStatusEndedListsEndedTokens fails on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the shared refusal function and route each 401 case through it Check: `go test ./pkg/accesstoken/...` passes
-- [ ] 2.2 Write the audit entry with reason and token ID on each refusal Check: `go test ./internal/api/...` passes
-- [ ] 2.3 Show the maximum lifetime, the inactivity period and the overlap with their source Check: `GET /api/dustpan/v1/settings` lists each token limit
+- [ ] 2.1 Add the shared refusal function in pkg/accesstoken/service.go (NEW function refuse, used by Service.AuthenticateToken at line 637) and route each 401 case through it Check: `go test ./pkg/accesstoken/...` passes
+- [ ] 2.2 Write the audit entry with reason and token ID on each refusal, in the NEW refuse function in pkg/accesstoken/service.go Check: `go test ./internal/api/...` passes
+- [ ] 2.3 Show the maximum lifetime, the inactivity period and the overlap with their source in the settings resource, in NEW pkg/accesstoken/limits.go Check: `GET /api/dustpan/v1/settings` lists each token limit
 - [ ] 2.4 Document the status=ended filter in the List and read tokens section of docs/guides/access-tokens.md Check: `make docs-lint` passes and a docs test runs the command as written
 
 ## 3. Side effects (computed from main)

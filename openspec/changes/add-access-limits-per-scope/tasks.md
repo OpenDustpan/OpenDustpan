@@ -4,14 +4,14 @@
 
 ## 1. failing tests
 
-- [ ] 1.1 Write failing tests for forbid-only-save, collection forbid wins, scope-addition, installation-scope, never-allow and both gate guards. Check: TestAccessLimitPermitRefused fails on main, passes after the fix.
-- [ ] 1.2 Write failing tests for grant expiry, check clock, sweep, review and history. Check: TestGrantExpiryReviewMarksExpired fails on main, passes after the fix.
-- [ ] 1.3 Write failing tests for limit list, get, delete, decision records, label limits and break-glass. Check: TestLimitListGetDelete and TestBreakGlassExempt fail on main, pass after the fix.
+- [ ] 1.1 Write failing tests in NEW file pkg/access/access_limits_test.go for forbid-only-save, collection forbid wins, scope-addition, installation-scope, never-allow and both gate guards. Check: TestAccessLimitPermitRefused fails on main, passes after the fix.
+- [ ] 1.2 Write failing tests in NEW file pkg/access/grant_expiry_test.go for grant expiry, check clock, sweep, review and history. Check: TestGrantExpiryReviewMarksExpired fails on main, passes after the fix.
+- [ ] 1.3 Write failing tests in NEW file pkg/access/limit_routes_test.go for limit list, get, delete, decision records, label limits and break-glass. Check: TestLimitListGetDelete and TestBreakGlassExempt fail on main, pass after the fix.
 
 ## 2. implementation
 
-- [ ] 2.1 Add expiresAt to the grant store, check and leased sweep. Check: `go test ./pkg/access/... ./pkg/gate/...` passes.
-- [ ] 2.2 Add limit evaluation after grants, audit entries and the docs page. Check: `go test ./internal/...` passes; routes declare scope actions and fresh step.
+- [ ] 2.1 Add expiresAt to the grant store, check and leased sweep in NEW file pkg/access/grant_expiry.go. Check: `go test ./pkg/access/... ./pkg/gate/...` passes.
+- [ ] 2.2 Add limit evaluation after grants and audit entries in NEW file pkg/access/limits.go, and add the docs page in NEW file docs/access-limits.md. Check: `go test ./internal/...` passes; routes declare scope actions and fresh step.
 
 ## 3. Side effects (computed from main)
 

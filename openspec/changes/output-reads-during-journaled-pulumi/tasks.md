@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing read-during-update tests for outputs and state version id. Check: TestOutputReadDuringJournaledUpdateUsesLastCheckpoint fails on main and passes after the fix.
-- [ ] 1.2 Add failing tests for refusals and for the completion race, restart, cancel, and failure cases. Check: Tests for no-checkpoint 404, missing-rule 403, missing-grant 403, deny-before-not-found, completion-race stability, restart mid-journal, rule removed in flight, and deleted producer fail on main and pass after the fix.
+- [ ] 1.1 Add failing read-during-update tests for outputs and state version id in the NEW file pkg/stack/output_read_journal_test.go. Check: TestOutputReadDuringJournaledUpdateUsesLastCheckpoint fails on main and passes after the fix.
+- [ ] 1.2 Add failing tests for refusals and for the completion race, restart, cancel, and failure cases in the NEW file pkg/stack/output_read_refusal_test.go. Check: Tests for no-checkpoint 404, missing-rule 403, missing-grant 403, deny-before-not-found, completion-race stability, restart mid-journal, rule removed in flight, and deleted producer fail on main and pass after the fix.
 
 ## 2. Side effects (computed from main)
 

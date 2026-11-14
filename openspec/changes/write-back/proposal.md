@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:300` (Write-back).
@@ -61,7 +61,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Write-back branch helper is tested. (`pkg/forge/review_test.go:71 (func TestIsWriteBackBranch)`)
-- The GitHub commit trailer rule is tested. (`pkg/forge/github/commit_test.go:465 (func TestCommitNeedsATrailerInTheLastBlock)`)
+- The GitHub commit trailer rule is tested. (`pkg/forge/github/commit_test.go:467 (func TestCommitNeedsATrailerInTheLastBlock)`)
 - Blob retry backoff is tested. (`pkg/blob/retry_test.go:43 (func TestDeleteRetriedBacksOff)`)
 
 ## ADR check

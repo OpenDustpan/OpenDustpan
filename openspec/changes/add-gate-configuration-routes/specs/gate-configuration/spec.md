@@ -120,12 +120,8 @@ If a narrower scope saves an object with the ID of a wider final object, then th
 - **WHEN** a unit manager saves a rule with the ID of a final namespace rule
 - **THEN** the server answers 409 with code gate.final
 
-#### Scenario: Weaker final gate
-- **WHEN** a holder of the manage action of its own scope makes a final gate weaker without a reason
-- **THEN** the server refuses the save and stores no change
-
 #### Scenario: Weaker with reason
-- **WHEN** the holder gives a reason
+- **WHEN** a holder of the manage action of its own scope makes a final gate weaker and gives a reason
 - **THEN** the audit entry holds the reason
 
 ### Requirement: Locks held

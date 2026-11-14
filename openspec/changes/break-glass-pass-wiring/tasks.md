@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the tests of the scenarios: single use, expiry, unit binding, grant, fresh proof. Check: go test ./pkg/gate/... fails on main
+- [ ] 1.1 Write the tests of the scenarios: single use, expiry, unit binding, grant, fresh proof, in the NEW file `pkg/gate/break_glass_pass_test.go`. Check: go test ./pkg/gate/... fails on main
 
 ## 2. Side effects (computed from main)
 

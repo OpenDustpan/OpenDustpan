@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #905.
@@ -59,7 +59,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Gate service test covers job token at state.write. (`pkg/gate/service_test.go:109 (func TestEvaluateJobTokenAtStateWrite)`)
-- Built-in roles hold gate actions. (`pkg/access/access_test.go:1639 (func TestBuiltInRolesHoldTheGateActions)`)
+- Built-in roles hold gate actions. (`pkg/access/access_test.go:1648 (func TestBuiltInRolesHoldTheGateActions)`)
 - Gate error codes exist for denied and not-found. (`internal/errcode/catalog_gate.go:7 (func gate.approvers-count-above)`)
 - Gate error code gate.denied exists. (`internal/errcode/catalog_gate.go:17 (func gate.denied)`)
 

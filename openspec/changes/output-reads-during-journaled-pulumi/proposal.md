@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #1642.
@@ -18,8 +18,8 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Consumer unit has no sharing rule from the producer | 403 with error code output-sharing.denied names the missing sharing rule and the command that lists the sharing rules of the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
-| Caller holds no unit:read-outputs grant on the consumer | 403 with error code unit.forbidden names the missing unit:read-outputs grant and the command that lists the units of the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
-| Producer stack has no completed checkpoint yet | 404 with error code unit.unknown-state names the missing completed checkpoint and the command that lists the units of the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
+| Caller holds no unit:read-outputs grant on the consumer | 403 with error code access.denied names the missing unit:read-outputs grant and the command that lists the units of the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
+| Producer stack has no completed checkpoint yet | 404 with error code unit.no-state names the missing completed checkpoint and the command that lists the units of the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 
 Evidence for the claims above:
 

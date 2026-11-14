@@ -4,8 +4,8 @@
 
 ## 1. failing tests
 
-- [ ] 1.1 Write failing conformance cases for Trigger Paths. Check: The Paths conformance cases fail on main.
-- [ ] 1.2 Write failing dispatcher tests for match, paths, fork refusal and replacement. BLOCKED by the Forge port event, which feeds the dispatcher. Check: The dispatcher tests fail on main.
+- [ ] 1.1 Write failing conformance cases for Trigger Paths in `pkg/trigger/readcheck_test.go` (existing test file of package pkg/trigger). Check: The Paths conformance cases fail on main.
+- [ ] 1.2 Write failing dispatcher tests for match, paths, fork refusal and replacement in `pkg/trigger/dispatcher_reviewrequest_test.go` (NEW). BLOCKED by the Forge port event, which feeds the dispatcher. Check: The dispatcher tests fail on main.
 
 ## 2. Side effects (computed from main)
 
