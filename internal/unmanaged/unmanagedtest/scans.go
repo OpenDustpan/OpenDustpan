@@ -28,6 +28,7 @@ func scanCases() []suiteCase {
 			"sweeps: a fence of another namespace, a stale fence or an entry of another namespace refuses each write",
 			testScansFenced,
 		},
+		{"sweeps: an audit entry of another namespace alone refuses each write", testScanEntryNamespace},
 	}
 }
 
@@ -695,6 +696,117 @@ func testScansFenced(t *testing.T, h Harness) {
 
 		wantErr(t, what, tc.call(f, foreign), audit.ErrInvalidEntry)
 		tc.check(t, what)
+	}
+}
+
+// testScanEntryNamespace proves that each write of the sweep store refuses an
+// audit entry that names another namespace while the fence, the target and the
+// sweep all name one namespace, and that the refused write changes nothing. The
+// entry names a namespace that exists, so only the check of the store against
+// the fence refuses it: the removal of that check fails a row of this test.
+func testScanEntryNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	h.Namespace(t, "other")
+	e := auditOf("acme", "namespace:manage-sweeps")
+	foreign := auditOf("other", "namespace:manage-sweeps")
+
+	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	scan, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanState, ""), f, e)
+	must(t, "start", err)
+
+	// The order keeps each row a proof of its own call: the delete row runs
+	// after the start row, so a start that the check no longer refuses writes a
+	// cloud sweep of the target before the delete can remove the target.
+	for _, tc := range []struct {
+		name  string
+		call  func(t *testing.T, fence namespace.Fence) error
+		check func(t *testing.T, what string)
+	}{
+		{
+			name: "create a target",
+			call: func(t *testing.T, fence namespace.Fence) error {
+				t.Helper()
+
+				return h.Scans.CreateTarget(t.Context(), targetOf("acme", "second"), fence, foreign)
+			},
+			check: func(t *testing.T, what string) {
+				t.Helper()
+
+				wantOnlyTarget(t, h, what)
+			},
+		},
+		{
+			name: "update a target",
+			call: func(t *testing.T, fence namespace.Fence) error {
+				t.Helper()
+
+				changed := targetOf("acme", "aws")
+				changed.Every = 0
+
+				return h.Scans.UpdateTarget(t.Context(), changed, fence, foreign)
+			},
+			check: func(t *testing.T, what string) {
+				t.Helper()
+
+				wantOnlyTarget(t, h, what)
+			},
+		},
+		{
+			name: "start a sweep",
+			call: func(t *testing.T, fence namespace.Fence) error {
+				t.Helper()
+
+				_, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), fence, foreign)
+
+				return err
+			},
+			check: func(t *testing.T, what string) {
+				t.Helper()
+
+				wantNoSweepOfTarget(t, h, what, "aws")
+			},
+		},
+		{
+			name: "delete a target",
+			call: func(t *testing.T, fence namespace.Fence) error {
+				t.Helper()
+
+				return h.Scans.DeleteTarget(t.Context(), "acme", "aws", fence, foreign)
+			},
+			check: func(t *testing.T, what string) {
+				t.Helper()
+
+				wantOnlyTarget(t, h, what)
+			},
+		},
+		{
+			name: "advance a sweep",
+			call: func(t *testing.T, fence namespace.Fence) error {
+				t.Helper()
+
+				_, err := h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+					Namespace: "acme", ID: scan.ID, Event: unmanaged.ScanEventCancel,
+					Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+				}, fence, foreign)
+
+				return err
+			},
+			check: func(t *testing.T, what string) {
+				t.Helper()
+
+				wantScanStatus(t, h, what, scan.ID, unmanaged.ScanQueued)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			what := tc.name + " with an entry of another namespace"
+
+			wantErr(t, what, tc.call(t, f), audit.ErrInvalidEntry)
+			tc.check(t, what)
+		})
 	}
 }
 
