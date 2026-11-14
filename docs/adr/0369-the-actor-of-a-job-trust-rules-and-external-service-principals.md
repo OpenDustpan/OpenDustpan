@@ -1,12 +1,15 @@
 # 369. The actor of a job: trust rules, conditions on token claims, and external service principals
 
-Status: accepted · 2026-11-14. Decided by the project owner. Accepts point 4 of RFC 129
+Status: accepted · 2026-11-14. Decided by the project owner. Accepts point 4 of RFC 129. Adds the run-as principal of each automation
 
 Changes:
 
 - Changes ADR 54 decision 6: a trust rule can opt in to the person who started the event. Four kinds of actor.
 - Extends ADR 67 decisions 1 and 6: a service principal from an external identity system, keyed by its external ID.
 - Extends ADR 302 decision 6: the answer to one principal for each job on the TFE-compatible path.
+- Changes ADR 70 decision 9: a trust rule in person mode needs `server:manage-principals`.
+- Changes ADR 267 decision 14: a triggered job acts and reads as the run-as principal of its trigger.
+- Changes ADR 338 decision 3: the namespace service principal has no role in a user automation.
 
 ## Context
 
@@ -58,6 +61,11 @@ A check of main on 14 November 2026 found:
   from the subject, no rule marks an external account as a service account,
   and the record has no owner.
 
+Later on 14 November 2026 the owner added the run-as principal of each
+automation. The owner gave the reason: a scheduled pipeline that runs as a
+person inherits too much access, and it becomes a problem of ownership when
+the person leaves.
+
 ## Decision
 
 1. **The identity is always the actual actor (owner, 2026-11-14).** An
@@ -80,7 +88,9 @@ A check of main on 14 November 2026 found:
    1. **Person.** A trust rule can opt in to the person. It applies only to
       an event that a person started: a push, a start in the web interface
       of the Git host, a merge request. The local wrapper always acts as the
-      person who signed in.
+      person who signed in. A trust rule in person mode names no single
+      principal, so the act-as rule of ADR 70 decision 9 cannot apply to
+      it. Its create and its change need `server:manage-principals`.
    2. **Workload.** The default for each automated source: a schedule, an
       API trigger, a pipeline that another pipeline started, and a token
       with no user. A schedule that a person owns never takes the identity
@@ -101,10 +111,11 @@ A check of main on 14 November 2026 found:
         glob on the external username (decision 4). The rule is stored and
         audited. The owner named the action `server:manage` (see "Not
         decided here").
-   4. **The OpenDustpan service principal.** The schedules of OpenDustpan
-      (drift checks, run triggers, remediation) act as the namespace service
-      principal with its stored grant (ADR 338). The person who configured
-      the schedule is recorded as the configurer, not as the actor.
+   4. **The run-as principal of an automation.** An automation of
+      OpenDustpan (a run trigger, a schedule, a drift check or its schedule,
+      an automatic remediation, an agent routine) acts as its own run-as
+      principal (decision 7). The person who configured the automation is
+      recorded as the configurer, not as the actor.
 4. **A glob on the external username classifies only (owner, 2026-11-14).**
    An organization with no LDAP group or OU to key on can mark service
    accounts with a glob on the external username, for example `system-*` or
@@ -124,6 +135,8 @@ A check of main on 14 November 2026 found:
      and the action of the rules.
    - The match compares exact bytes: no case folding and no Unicode
      normalization. The docs say so.
+   - A glob of `*` alone is refused, and so is each glob that holds no
+     byte other than `*`.
 5. **A classification rule says what it does to existing principals
    (owner, 2026-11-14).** A create or an update of a classification rule (a
    glob or a condition on a claim) carries the field `existingPrincipals`.
@@ -170,6 +183,29 @@ A check of main on 14 November 2026 found:
    - The audit entry names the actor, the job, the apply claim, the trigger
      and the principal that the actor acts for.
 
+7. **Each automation names its run-as principal (owner, 2026-11-14).** A
+   run trigger, a schedule, a drift check or its schedule, an automatic
+   remediation and an agent routine each name their own run-as principal.
+   - The run-as principal must be a service principal. A hard check in code
+     refuses a person, with an error code.
+   - The author may name only a service principal that the author can act
+     as. This is the rule of ADR 70 decision 9, and it stops an escalation.
+     Or the author creates a new service principal in the same request. The
+     new principal has no grant, and the author can give it only grants that
+     the author could give.
+   - The automation stores the stable ID of its principal, so a tool that
+     manages OpenDustpan as code can create both in one plan.
+   - The audit entry names the run-as principal as the actor, the automation
+     and its trigger. The person who configured the automation is recorded
+     as the configurer.
+   - A suspension of the run-as principal stops only the automations that
+     run as it.
+   - A job that a run trigger starts acts and reads as the run-as principal
+     of the trigger, not with the grants of the last saver. This changes ADR
+     267 decision 14. The namespace service principal of ADR 338 has no
+     role in an automation that a person configures. This changes ADR 338
+     decision 3.
+
 ## What main lacks
 
 These are notes from the check of main. Each one is a NEW item of the
@@ -187,31 +223,22 @@ changes that need it.
 
 ## Not decided here
 
-- **The action that creates a trust rule in person mode.** ADR 70 decision 9
-  says: "A trust rule names only a principal that its author can act as." A
-  rule in person mode names no single principal. The action for it is open.
-  It needs a decision of the owner, because ADR 70 records decisions of the
-  owner.
-- **The read check of a trigger.** ADR 267 decision 14 says that the reads
-  of a job that a trigger starts use "the current grants of the trigger's
-  last saver". ADR 338 decision 3 (owner) keeps this rule. Decision 3 item 4
-  of this ADR records the person who configured a schedule as the
-  configurer, not as the actor. This ADR does not change the read check of
-  ADR 267 decision 14. The owner decides if that check takes the rights of
-  the saver in the sense of decision 3 item 2.
 - **The name of the action of the classification rules.** The owner wrote
   `server:manage`. The action list has no action of that name. The change
   proposes `server:manage-principals` for a rule of the installation and
   `namespace:manage-principals` for a rule of a namespace (ADR 67 decisions
   1 and 7).
-- **A glob that matches every name.** The changes refuse a glob of `*`
-  alone, as a proposal. The owner can choose a warning in place of a
-  refusal.
+- **The namespace service principal.** For now it stays only for the
+  housekeeping of the server that no person configures. Keep it for that
+  housekeeping, or delete it: the owner decides.
 
 ## Consequences
 
 - RFC 129 point 4 is decided. The changes of milestone 8 that waited only on
   point 4 cite this ADR.
+- The changes of run triggers, drift schedules, remediation and agent
+  routines get a run-as field, the hard check and the act-as check
+  (decision 7).
 - The OpenSpec change `external-service-principal` covers decisions 3 to 5,
   with the gaps of "What main lacks".
 - The access facts of the gate engine get the verified claims of the token.

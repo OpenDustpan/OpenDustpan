@@ -10,6 +10,8 @@ Changed by:
   a plan.
 - ADR 310 changes decision 22: the run order.
 - ADR 338 changes decision 14: the permission of the namespace service principal is a stored grant.
+- ADR 369 changes decision 14: a triggered job acts and reads as the run-as
+  principal of its trigger.
 
 ## Context
 
