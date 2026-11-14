@@ -1,18 +1,18 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #984.
 
 ## Why
 
-**Persona: runner operator.** As a runner operator I run a pool that executes jobs, so I create pools, join runners and retire them through stable tool-neutral routes with clear audit records.
+**Persona: runner operator.** As a runner operator I run a pool that executes jobs, so I create pools, join runners and retire them through tool-neutral routes under the versioned prefix, with an audit record for each change.
 
 The user path this change must make work:
 
-1. **API.** Create a pool and a join token, then list pools and tokens through the new runner-pools routes
-2. **API.** Read the pool status and release, drain and retire a runner, and revoke a token through the API
-3. **Docs page.** Follow the docs page for pool work
+1. **API.** Create a pool and a join token, then list pools and tokens through the runner-pools routes under /api/dustpan/v1/namespaces/{namespace}
+2. **API.** Read the pool status and release, drain and retire a runner, and revoke a token through the same routes
+3. **Docs page.** Follow the docs page for pool, drain, retire and join-token work
 
 Errors the person may hit, and the one command that helps:
 
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | A request with no credential reaches a pool route | {"code": 401, "message": "sign-in required: sign in and retry"} | `opendustpan status` |
 | A principal without the read grant lists or reads pools | {"code": 403, "message": "forbidden: needs namespace:read-runners on the namespace"} | `opendustpan status` |
-| A principal without the manage grant changes pools, tokens, drain, or retire | {"code": 403, "message": "forbidden: needs namespace:manage-runners on the namespace"} | `opendustpan status` |
+| A principal without the manage grant changes pools, tokens, drain or retire | {"code": 403, "message": "forbidden: needs namespace:manage-runners on the namespace"} | `opendustpan status` |
 | A caller keeps the old pool path | {"code": 404, "message": "unknown route: use the runner-pools path under /api/dustpan/v1/namespaces/{namespace}"} | `opendustpan status` |
 
 Evidence for the claims above:
@@ -29,16 +29,15 @@ Evidence for the claims above:
 - Main serves runner management under the old prefix Proof: Pack route list: ANY /api/runners/{}/pools, /api/runners/{}/runners/{}/drain, /api/runners/{}/runners/{}/retire, /api/runners/{}/pools/{}/join-tokens/{}/revoke
 - Runner error codes exist on main Proof: internal/errcode/catalog_runner.go:8
 - The split scope sets the new path and no alias Proof: Roadmap step of the pack: moves runner management to /api/dustpan/v1/namespaces/{namespace}/runner-pools with the same actions and no alias
-- No dustpan-runner binary exists on main Proof: Pack path cmd/dustpan-runner exists false
 
 ## What Changes
 
-- Add the new routes GET and POST /api/dustpan/v1/namespaces/{namespace}/runner-pools
-- Add the new routes GET, PATCH and DELETE /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}
-- Runner drain and retire routes move under the new runner-pools path
-- Join-token list, create and revoke routes move under the new runner-pools path
+- Add GET and POST /api/dustpan/v1/namespaces/{namespace}/runner-pools (NEW paths)
+- Add GET, PATCH and DELETE /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool} (NEW paths)
+- Runner drain and retire routes move under the runner-pools path (NEW paths)
+- Join-token list, create and revoke routes move under the runner-pools path (NEW paths)
 - Each mutation writes its audit entry in the same transaction
-- Old pool paths under /api/runners answer 404 with no alias
+- Remove /api/runners/{}/pools, /api/runners/{}/runners/{}/drain, /api/runners/{}/runners/{}/retire and /api/runners/{}/pools/{}/join-tokens/{}/revoke; they answer 404 with no alias
 
 Out of scope:
 
@@ -73,8 +72,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "Two new actions. They join the actions of ADR 103 (`runner.ActionNamespaceReadRunners`, `runner.ActionRunnerJoin`):"
 - Quote: "Audit entries. Each of these writes one audit entry in the transaction of the change (`runner.AuditRules`):"
 - Quote: "Routes. The tool-neutral OpenDustpan API gets these routes. Each route lands with its e2e step:"
-- Effect: Keeps the actions of decision 1 and the audit events of decision 4. Decision 6 lists paths under /api/runners; this change serves the same operations under the versioned prefix, so the path column of decision 6 changes. Open question 1 asks to confirm it.
-- Conflict: rfc_needed.
+- Effect: Keeps the actions of decision 1 and the audit events of decision 4. The paths of decision 6 are changed by ADR 210, the current rule: the change serves them at the paths that ADR 210 gives.
+- Conflict: none.
 
 **ADR 210: The tool-neutral API: one prefix, resource paths, action names, versions and a style guide** (not owner-tagged).
 
@@ -87,16 +86,12 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Does ADR 138 decision 6 need an amendment for the new path prefix? Decides: PM.
-   - Options: Record the path change in a later ADR that changes decision 6; Keep the old paths and skip the move.
-   - Recommended: Record the path change in a later ADR that changes decision 6 Reason: Decision 6 names /api/runners paths, and the pack has no ADR line that sets the new path.
-
-Not spec-ready: a code check fails: evidence path `cmd/dustpan-runner` does not exist in the checkout; a code check fails: task "Update ServedRoutes in e2e/coverage.go and the API description for the" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: contract method create-pool: no requirement or scenario names it; a code check fails: and 1 more; the change conflicts with ADR 138: an RFC comes first.
+none
 
 Questions considered and answered:
 
 - Does the move keep an alias on the old pool paths? No. The split scope says no alias.
 - Do other moved routes get the 404 rule? No. Only pool, runner drain and retire, and join-token paths.
-- Does a live runner e2e run ship here? No. It ships in a later part of the split (ADR 138 decision 6 asks for it there).
+- Does a live runner e2e run ship here? No. It ships in a later part of the split.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

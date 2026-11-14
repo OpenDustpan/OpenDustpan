@@ -12,7 +12,7 @@
 
 - [ ] 2.1 Implement Service.Open, the save fix in document_check.go, mode refusal and provider refusal. Check: `go test ./pkg/profile/... -count=1`
 - [ ] 2.2 Add SQL adapters for Sessions in both dialects, sealed with the root key, out of backups, with Sweep. Check: `go test ./pkg/store/... -count=1` and TestFrozenMigrations pass
-- [ ] 2.3 Wire both routes with actions and replay. Check: `go test ./internal/api/profile/... -run TestRoutes -count=1` with %2F cases
+- [ ] 2.3 Wire both NEW routes with actions and replay. Check: `go test ./internal/api/profile/... -run TestRoutes -count=1` with %2F cases
 - [ ] 2.4 Write the access audit entry for each open and refused open. Check: `go test ./pkg/audit/... -count=1`
 
 ## 3. Side effects (computed from main)
@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e profiles step: POST the NEW open route and GET the NEW profile-sessions route with a personal access token of a person, then replay the key. Check: `make e2e` runs the profiles step
+- [ ] 4.1 Add the e2e profiles step. Existing route: POST /api/dustpan/v1/namespaces/{namespace}/profiles creates the profile. Existing credential kind: a personal token of a person. Then call the open route and the session read route, and replay the key. BLOCKED by the open route and the session read route until the Build section lands them. Check: `make e2e` runs the profiles step
 - [ ] 4.2 Document open and sessions with errors and the one help command. Check: `make docs-lint` passes on docs/reference/profiles-api.md
 - [ ] 4.3 Check the user path from the docs page alone. Check: A walk-through of the page opens and reads a session
 - [ ] 4.4 Run the full gate. Check: `make check` reports zero findings
