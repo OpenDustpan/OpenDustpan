@@ -23,7 +23,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Confirm the wiring with a server start with and without a gate service, in the test of task 2.3 (internal/servertest/nogate_log_test.go, NEW), against recordStateWriteGates (pkg/dustpan/stategates_start.go:58-67). Check: without a gate service the start log holds one WARN line `state.write gates: off` with its reason and the installation scope holds one audit entry of the gates being off; with a gate service the log holds the INFO line `state.write gates: on`, no WARN line and no such audit entry.
+- [ ] 4.1 Confirm the wiring with a server start with and without a gate service (no e2e step: the start path has no route and no credential), in the test of task 2.3 (internal/servertest/nogate_log_test.go, NEW), against recordStateWriteGates (pkg/dustpan/stategates_start.go:58-67). Check: without a gate service the start log holds one WARN line `state.write gates: off` with its reason and the installation scope holds one audit entry of the gates being off; with a gate service the log holds the INFO line `state.write gates: on`, no WARN line and no such audit entry.
 - [ ] 4.2 Confirm no route or authorization change is needed. Check: Route table unchanged; the route test passes
 - [ ] 4.3 Record the e2e step: BLOCKED by the missing route, because the pack names no existing route and credential kind that reads deleted-unit facts alone. Check: BLOCKED by a route and credential kind for the fact read; TestDeletedUnitFactsSnapshot and the storetest gate suite cover it. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.4 Record why no docs page applies. Check: Not applicable: only an operational log line
