@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -123,8 +124,8 @@ func TestDuplicateFinalIdempotent(t *testing.T) {
 
 // TestFinalWriteRollback proves that a version write that fails inside the
 // transaction rolls back the state write: the lock release of a fence version
-// whose recorded content is gone finalizes no row, so the lock, the current
-// version and the awaiting job stay as they were.
+// whose recorded content key no longer matches finalizes no row, so the lock,
+// the current version and the awaiting job stay as they were.
 func TestFinalWriteRollback(t *testing.T) {
 	t.Parallel()
 
@@ -180,4 +181,44 @@ func TestFinalWriteRollback(t *testing.T) {
 
 	assertFinalizeStillPending(t, s, fenceVersion)
 	assertWriteBackWaiting(t, s, delivered.ID)
+}
+
+// tamperStateVersionContent replaces the recorded content key of the state
+// version id through a second database handle, so the next finalize of the
+// version matches no row inside its transaction.
+func tamperStateVersionContent(t *testing.T, path, id string) {
+	t.Helper()
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database = %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database = %v", closeErr)
+		}
+	})
+
+	_, execErr := conn.ExecContext(t.Context(),
+		`UPDATE state_versions SET content_key = 'tampered' WHERE id = ?`, id)
+
+	if execErr != nil {
+		t.Fatalf("tamper the recorded content = %v", execErr)
+	}
+}
+
+// assertFinalizeStillPending fails t when sv is no longer a pending state
+// version: a refused finalize must not change the row.
+func assertFinalizeStillPending(t *testing.T, s *sqlite.Store, sv workspace.StateVersion) {
+	t.Helper()
+
+	stored, err := s.GetStateVersion(t.Context(), sv.ID)
+	if err != nil {
+		t.Fatalf("GetStateVersion = %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Fatalf("status of the refused version = %q, want %q", stored.Status, workspace.StatusPending)
+	}
 }

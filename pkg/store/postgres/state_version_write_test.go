@@ -127,8 +127,8 @@ func TestDuplicateFinalIdempotent(t *testing.T) {
 
 // TestFinalWriteRollback proves that a version write that fails inside the
 // transaction rolls back the state write: the lock release of a fence version
-// whose recorded content is gone finalizes no row, so the lock, the current
-// version and the awaiting job stay as they were.
+// whose recorded content key no longer matches finalizes no row, so the lock,
+// the current version and the awaiting job stay as they were.
 func TestFinalWriteRollback(t *testing.T) {
 	t.Parallel()
 
