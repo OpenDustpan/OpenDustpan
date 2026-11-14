@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #970.
@@ -11,8 +11,8 @@ Issue: #970.
 The user path this change must make work:
 
 1. **Server start.** The operator starts the server with a runner pool. A runner joins the pool.
-2. **API.** The runner claims a phase through the existing runner protocol path /runner/v1. The server stores the job token record in the claim transaction. The server shows the plaintext once, only to the code that makes it.
-3. **API.** A step sends the job token as a bearer access token (credential kind job-token) to the OpenTofu HTTP backend route /tofu/state/{namespace}/{workspace} of its own unit. Another unit gives 403.
+2. **API.** The runner claims a phase through the existing runner protocol under /runner/v1. The server stores the job token record in the claim transaction. The server shows the plaintext once, only to the code that makes it.
+3. **API.** A step sends the job token as a bearer access token (credential kind job-token, identity.CredentialJobToken) to the OpenTofu HTTP backend route /tofu/state/{namespace}/{workspace} of its own unit. Another unit gives 403.
 4. **API.** The job ends, the claim expires, a takeover replaces the claim, the runner is retired or the step grace bound passes. The token stops and later use gives 401.
 
 Errors the person may hit, and the one command that helps:
@@ -104,7 +104,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Wire the issuer into job.Claimer Claim, Renew and Finish. The route /t" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+none
 
 Questions considered and answered:
 

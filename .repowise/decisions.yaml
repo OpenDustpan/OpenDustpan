@@ -4152,3 +4152,15 @@ decisions:
   accepted_artifact: "docs/adr/0371-each-way-to-prove-identity-in-the-token-exchange-has-its-own-token-kind.md"
   evidence:
   - "docs/adr/0371-each-way-to-prove-identity-in-the-token-exchange-has-its-own-token-kind.md"
+- id: "adr-0373"
+  title: "ADR 373: The job actions in the built-in roles, the answer to an ended token, and the break-glass pass"
+  decision: "1. **The job actions go to the roles that exist (owner, 2026-11-14).** No new role `starter` or `lead` exists. `viewer` holds `job:read`. `planner` holds `job:read`, `job:read-plans`, `job:read-logs` and `unit:run-plan`. `writer` holds the actions of `planner`. `maintainer` holds the actions of `writer`, `unit:define-steps` and `namespace:manage-runners`. `admin` holds all of them.\n2. **An ended token gets the plain 401 (owner, 2026-11-14).** An expired, revoked or disabled token gets the same 401 as an unknown token. The answer does not name the token. The audit entry holds the real reason and the ID of the token. A person sees the ended tokens with `GET /api/server/caller/tokens?status=ended`. The owner added: \"Watch out for timing attacks\". So an ended token and an unknown token take the same path and the same work before the 401: the lookup by the hash of the secret, the compare in constant time, then the check of the end. An unknown token also writes an audit entry, with the reason \"unknown token\" and no token ID. A test checks the structure, not the time: one refusal function for each 401, the same bytes and headers for each case, and the compare in constant time.\n3. **The break-glass pass is a stored record (owner, 2026-11-14).** A pass is a row of a new table, written with its audit entry in one transaction. A request header carries the ID of the pass on the routes that take one. A person gets a pass only after a fresh authentication of ADR 227 decision 1. A pass is for one use, and it ends after 15 minutes.\n\nLater changes, from the status line of ADR 373: Decided by the project owner."
+  reason: "Three OpenSpec changes stopped on a question that no ADR answered. The project owner answered the three questions on 14 November 2026. - `job-service-unit-settings-pool` gives the actions `unit:run-plan`, `unit:define-steps`, `job:read`, `job:read-plans`, `job:read-logs` and `namespace:manage-runners` to built-in roles. It named the roles `starter` and `lead`, which do not exist. The built-in roles are in `pkg/access/roles.go`. ADR 212 decision 1 gives `unit:run-plan` and `job:read-plans` to `planner`."
+  scope:
+  - "pkg/access/roles.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-14"
+  accepted_artifact: "docs/adr/0373-job-roles-the-answer-to-an-ended-token-and-the-break-glass-pass.md"
+  evidence:
+  - "docs/adr/0373-job-roles-the-answer-to-an-ended-token-and-the-break-glass-pass.md"
