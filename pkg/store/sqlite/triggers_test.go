@@ -90,6 +90,16 @@ func triggerHarness(t *testing.T, starter trigger.Starter) triggertest.Harness {
 		Store:      s.Triggers(),
 		Dispatcher: dispatcher,
 		Doubles:    doubles,
+		Now: func(t *testing.T) time.Time {
+			t.Helper()
+
+			now, err := s.DatabaseNow(t.Context())
+			if err != nil {
+				t.Fatalf("read the clock of the store: %v", err)
+			}
+
+			return now
+		},
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 

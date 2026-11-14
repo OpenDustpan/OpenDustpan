@@ -2,6 +2,7 @@ package triggertest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -22,6 +23,9 @@ type key struct {
 	id trigger.ID
 }
 
+// errClockNotSet is the setup error of a fake whose clock no test injected.
+var errClockNotSet = errors.New("the clock of the store is not set")
+
 // mem is the reference adapter of Store and Dispatcher. It runs the suite, so
 // each case runs before any SQL adapter exists. It keeps the audit log that a
 // SQL adapter writes in the same transaction.
@@ -30,7 +34,10 @@ type mem struct {
 	triggers map[key]trigger.Trigger
 	next     map[key]time.Time
 	audited  map[namespace.Name]int
-	mu       sync.Mutex
+	// now is the clock of the store. The harness injects a fixed clock, and
+	// Harness.Now reads the same one. A mem without a clock fails its writes.
+	now func() time.Time
+	mu  sync.Mutex
 }
 
 func newMem() *mem {
@@ -39,6 +46,7 @@ func newMem() *mem {
 		triggers: map[key]trigger.Trigger{},
 		next:     map[key]time.Time{},
 		audited:  map[namespace.Name]int{},
+		now:      nil,
 		mu:       sync.Mutex{},
 	}
 }
@@ -91,7 +99,12 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 		prev = &old
 	}
 
-	slot, err := trigger.PutSlot(t, time.Now().UTC(), prev, m.next[k])
+	now, err := m.nowTime()
+	if err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+
+	slot, err := trigger.PutSlot(t, now, prev, m.next[k])
 	if err != nil {
 		return fmt.Errorf("put: %w", err)
 	}
@@ -268,7 +281,12 @@ func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence
 		return trigger.ErrNotFound
 	}
 
-	next, err := trigger.CheckClaim(c, t, m.next[k], time.Now().UTC())
+	now, err := m.nowTime()
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	next, err := trigger.CheckClaim(c, t, m.next[k], now)
 	if err != nil {
 		return fmt.Errorf("claim: %w", err)
 	}
@@ -277,6 +295,16 @@ func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence
 	m.audited[c.Namespace]++
 
 	return nil
+}
+
+// nowTime returns the injected clock of the fake. A mem without a clock is a
+// setup error: its writes fail instead of reading the clock of the process.
+func (m *mem) nowTime() (time.Time, error) {
+	if m.now == nil {
+		return time.Time{}, errClockNotSet
+	}
+
+	return m.now().UTC(), nil
 }
 
 // checkEntry refuses an audit entry that is not valid or names another
@@ -326,7 +354,11 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	triggertest.Run(t, func(_ *testing.T, starter trigger.Starter) triggertest.Harness {
+		clock := time.UnixMilli(1_700_000_000_000).UTC()
+
 		m := newMem()
+		m.now = func() time.Time { return clock }
+
 		doubles := triggertest.NewDoubles()
 
 		dispatcher, err := doubles.Dispatcher(m, starter, m)
@@ -338,6 +370,7 @@ func TestConformance(t *testing.T) {
 			Store:      m,
 			Dispatcher: dispatcher,
 			Doubles:    doubles,
+			Now:        func(_ *testing.T) time.Time { return clock },
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()

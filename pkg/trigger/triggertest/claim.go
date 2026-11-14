@@ -63,8 +63,8 @@ func auditAt(action string, ts time.Time) audit.Entry {
 	return e
 }
 
-// claimEntry returns the audit entry of a claim.
-func claimEntry() audit.Entry { return auditAt("trigger:claim", time.Now().UTC()) }
+// claimEntry returns the audit entry of a claim, stamped with now.
+func claimEntry(now time.Time) audit.Entry { return auditAt("trigger:claim", now) }
 
 // claimOf returns the claim of the slot of trigger id in acme.
 func claimOf(id trigger.ID, slot time.Time) trigger.Claim {
@@ -107,7 +107,7 @@ func pastSlots(t *testing.T, h Harness, fence namespace.Fence) (trigger.Trigger,
 	tr := hourlyTrigger("h1", unit(acme, "a"))
 	must(t, "put", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
 
-	first := time.Now().UTC().Truncate(time.Hour).Add(-pastHours * time.Hour)
+	first := h.Now(t).UTC().Truncate(time.Hour).Add(-pastHours * time.Hour)
 	h.SetNextSlot(t, acme, "h1", first)
 
 	return tr, [3]time.Time{first, first.Add(time.Hour), first.Add(thirdSlotOffset)}
@@ -121,13 +121,13 @@ func caseNextSlotPut(t *testing.T, h Harness, _ *Recorder) {
 
 	off := withFrequency(scheduleTrigger("s2", a), trigger.Frequency{Preset: "", Cron: "0 6 * * *"}, false)
 
-	before := time.Now().UTC()
+	before := h.Now(t).UTC()
 
 	// The audit entry carries a time far from the clock of the store. The slot
 	// must come from the clock of the store.
 	putAll(t, h, fence, scheduleTrigger("s1", a), off, reviewTrigger("r1", a), followsTrigger("f1", b, a))
 
-	after := time.Now().UTC()
+	after := h.Now(t).UTC()
 
 	wantSlotAfterNow(t, scheduleTrigger("s1", a),
 		nextSlot(t, h, "s1"), before, after)
@@ -156,9 +156,9 @@ func caseNextSlotReplace(t *testing.T, h Harness, _ *Recorder) {
 
 	// A new frequency starts from the clock of the store.
 	tr.Frequency = cronOf("30 * * * *")
-	before := time.Now().UTC()
+	before := h.Now(t).UTC()
 	must(t, "new frequency", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
-	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
+	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, h.Now(t).UTC())
 
 	// Off gives no slot. On again starts from the clock of the store: the time
 	// that the trigger was off gives no catch-up.
@@ -170,9 +170,9 @@ func caseNextSlotReplace(t *testing.T, h Harness, _ *Recorder) {
 	}
 
 	tr.Enabled = true
-	before = time.Now().UTC()
+	before = h.Now(t).UTC()
 	must(t, "on", h.Store.Put(t.Context(), tr, fence, auditOf("trigger:put")))
-	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, time.Now().UTC())
+	wantSlotAfterNow(t, tr, nextSlot(t, h, "h1"), before, h.Now(t).UTC())
 }
 
 func caseNextSlotRefusals(t *testing.T, h Harness, _ *Recorder) {
@@ -196,13 +196,14 @@ func caseClaimTakes(t *testing.T, h Harness, _ *Recorder) {
 	fence := h.Namespace(t, string(acme))
 	_, past := pastSlots(t, h, fence)
 
-	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry()))
+	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t))))
 
 	if got := nextSlot(t, h, "h1"); !got.Equal(past[1]) {
 		t.Errorf("next slot after the claim = %v, want %v", got, past[1])
 	}
 
-	must(t, "claim of the next slot", h.Store.ClaimDue(t.Context(), claimOf("h1", past[1]), fence, claimEntry()))
+	must(t, "claim of the next slot",
+		h.Store.ClaimDue(t.Context(), claimOf("h1", past[1]), fence, claimEntry(h.Now(t))))
 }
 
 func caseClaimTwice(t *testing.T, h Harness, _ *Recorder) {
@@ -211,11 +212,11 @@ func caseClaimTwice(t *testing.T, h Harness, _ *Recorder) {
 	fence := h.Namespace(t, string(acme))
 	_, past := pastSlots(t, h, fence)
 
-	must(t, "first claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry()))
+	must(t, "first claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t))))
 
 	before := audited(t, h)
 
-	err := h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry())
+	err := h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t)))
 	wantErr(t, "second claim of the slot", err, trigger.ErrNotDue)
 
 	if after := audited(t, h); after != before {
@@ -233,11 +234,12 @@ func caseClaimOlder(t *testing.T, h Harness, _ *Recorder) {
 	fence := h.Namespace(t, string(acme))
 	_, past := pastSlots(t, h, fence)
 
-	must(t, "claim of the third slot", h.Store.ClaimDue(t.Context(), claimOf("h1", past[2]), fence, claimEntry()))
+	must(t, "claim of the third slot",
+		h.Store.ClaimDue(t.Context(), claimOf("h1", past[2]), fence, claimEntry(h.Now(t))))
 
 	// The first and the second slot are before the next slot now.
 	for _, slot := range past {
-		err := h.Store.ClaimDue(t.Context(), claimOf("h1", slot), fence, claimEntry())
+		err := h.Store.ClaimDue(t.Context(), claimOf("h1", slot), fence, claimEntry(h.Now(t)))
 		wantErr(t, "claim of "+slot.Format(time.RFC3339), err, trigger.ErrNotDue)
 	}
 }
@@ -250,20 +252,21 @@ func caseClaimCatchUp(t *testing.T, h Harness, _ *Recorder) {
 
 	// The server was down for many slots. The tick asks for the latest slot that
 	// is not after now, with LatestSlot, and claims that one slot.
-	first := time.Now().UTC().Truncate(time.Hour).Add(-missedHours * time.Hour)
+	first := h.Now(t).UTC().Truncate(time.Hour).Add(-missedHours * time.Hour)
 	h.SetNextSlot(t, acme, "h1", first)
 
-	latest, ok, err := trigger.LatestSlot(tr, nextSlot(t, h, "h1"), time.Now().UTC())
+	latest, ok, err := trigger.LatestSlot(tr, nextSlot(t, h, "h1"), h.Now(t).UTC())
 	must(t, "latest slot", err)
 
-	hour := time.Now().UTC().Truncate(time.Hour)
+	hour := h.Now(t).UTC().Truncate(time.Hour)
 	current := latest.Equal(hour) || latest.Equal(hour.Add(-time.Hour))
 
 	if !ok || !current {
 		t.Fatalf("latest slot = %v (%v), want the current hour or the one before", latest, ok)
 	}
 
-	must(t, "claim of the latest slot", h.Store.ClaimDue(t.Context(), claimOf("h1", latest), fence, claimEntry()))
+	must(t, "claim of the latest slot",
+		h.Store.ClaimDue(t.Context(), claimOf("h1", latest), fence, claimEntry(h.Now(t))))
 
 	if got, want := nextSlot(t, h, "h1"), latest.Add(time.Hour); !got.Equal(want) {
 		t.Errorf("next slot after the catch-up = %v, want %v", got, want)
@@ -271,7 +274,7 @@ func caseClaimCatchUp(t *testing.T, h Harness, _ *Recorder) {
 
 	// No missed slot is due any more: at most one catch-up run.
 	for _, skipped := range []time.Time{first, past[0]} {
-		err = h.Store.ClaimDue(t.Context(), claimOf("h1", skipped), fence, claimEntry())
+		err = h.Store.ClaimDue(t.Context(), claimOf("h1", skipped), fence, claimEntry(h.Now(t)))
 		wantErr(t, "claim of a skipped slot", err, trigger.ErrNotDue)
 	}
 }
@@ -293,7 +296,7 @@ func caseClaimNotSlot(t *testing.T, h Harness, _ *Recorder) {
 	}
 
 	for _, tc := range bad {
-		err := h.Store.ClaimDue(t.Context(), claimOf("h1", tc.slot), fence, claimEntry())
+		err := h.Store.ClaimDue(t.Context(), claimOf("h1", tc.slot), fence, claimEntry(h.Now(t)))
 		wantErr(t, tc.name, err, trigger.ErrInvalid)
 	}
 
@@ -311,11 +314,11 @@ func caseClaimFuture(t *testing.T, h Harness, _ *Recorder) {
 	// The slots are slots of the schedule, but the store decides from its own
 	// clock, so a slot later than that clock plus the skew is refused. An
 	// instance with a clock that runs ahead cannot stop the schedule.
-	soon := time.Now().UTC().Truncate(time.Hour).Add(beyondSkew)
+	soon := h.Now(t).UTC().Truncate(time.Hour).Add(beyondSkew)
 	far := time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 	for name, slot := range map[string]time.Time{"two hours ahead": soon, "the year 2100": far} {
-		err := h.Store.ClaimDue(t.Context(), claimOf("h1", slot), fence, claimEntry())
+		err := h.Store.ClaimDue(t.Context(), claimOf("h1", slot), fence, claimEntry(h.Now(t)))
 		wantErr(t, name, err, trigger.ErrInvalid)
 	}
 
@@ -327,7 +330,8 @@ func caseClaimFuture(t *testing.T, h Harness, _ *Recorder) {
 		t.Errorf("a refused claim moved the next slot to %v", got)
 	}
 
-	must(t, "claim of a slot that is due", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry()))
+	must(t, "claim of a slot that is due",
+		h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t))))
 }
 
 func caseClaimRefusals(t *testing.T, h Harness, _ *Recorder) {
@@ -340,7 +344,7 @@ func caseClaimRefusals(t *testing.T, h Harness, _ *Recorder) {
 
 	putAll(t, h, fence, off, reviewTrigger("r1", a))
 
-	slot := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	slot := h.Now(t).UTC().Truncate(time.Hour).Add(-time.Hour)
 
 	cases := []struct {
 		name string
@@ -354,7 +358,7 @@ func caseClaimRefusals(t *testing.T, h Harness, _ *Recorder) {
 	}
 
 	for _, tc := range cases {
-		err := h.Store.ClaimDue(t.Context(), claimOf(tc.id, slot), fence, claimEntry())
+		err := h.Store.ClaimDue(t.Context(), claimOf(tc.id, slot), fence, claimEntry(h.Now(t)))
 		wantErr(t, tc.name, err, tc.want)
 	}
 }
@@ -368,8 +372,8 @@ func caseClaimFence(t *testing.T, h Harness, _ *Recorder) {
 
 	c := claimOf("h1", past[0])
 
-	wantErr(t, "stale fence", h.Store.ClaimDue(t.Context(), c, stale(fence), claimEntry()), namespace.ErrFenced)
-	wantErr(t, "fence of another namespace", h.Store.ClaimDue(t.Context(), c, otherFence, claimEntry()),
+	wantErr(t, "stale fence", h.Store.ClaimDue(t.Context(), c, stale(fence), claimEntry(h.Now(t))), namespace.ErrFenced)
+	wantErr(t, "fence of another namespace", h.Store.ClaimDue(t.Context(), c, otherFence, claimEntry(h.Now(t))),
 		namespace.ErrFenced)
 
 	if got := nextSlot(t, h, "h1"); !got.Equal(past[0]) {
@@ -377,7 +381,7 @@ func caseClaimFence(t *testing.T, h Harness, _ *Recorder) {
 	}
 
 	// The slot is still free after the refusals.
-	must(t, "claim with the fence", h.Store.ClaimDue(t.Context(), c, fence, claimEntry()))
+	must(t, "claim with the fence", h.Store.ClaimDue(t.Context(), c, fence, claimEntry(h.Now(t))))
 }
 
 func caseClaimEntry(t *testing.T, h Harness, _ *Recorder) {
@@ -387,10 +391,10 @@ func caseClaimEntry(t *testing.T, h Harness, _ *Recorder) {
 	_, past := pastSlots(t, h, fence)
 	c := claimOf("h1", past[0])
 
-	foreign := claimEntry()
+	foreign := claimEntry(h.Now(t))
 	foreign.Namespace = other
 
-	empty := auditAt("", time.Now().UTC())
+	empty := auditAt("", h.Now(t).UTC())
 
 	wantErr(t, "entry of another namespace", h.Store.ClaimDue(t.Context(), c, fence, foreign), audit.ErrInvalidEntry)
 	wantErr(t, "invalid entry", h.Store.ClaimDue(t.Context(), c, fence, empty), audit.ErrInvalidEntry)
@@ -424,7 +428,7 @@ func caseClaimAudit(t *testing.T, h Harness, _ *Recorder) {
 
 	before := h.Audited(t, string(acme))
 
-	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry()))
+	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t))))
 
 	if got := h.Audited(t, string(acme)); got != before+1 {
 		t.Errorf("audit entries after a claim = %d, want %d", got, before+1)
@@ -445,7 +449,7 @@ func caseClaimConcurrent(t *testing.T, h Harness, _ *Recorder) {
 
 	for range claimers {
 		wg.Go(func() {
-			err := h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry())
+			err := h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t)))
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -487,9 +491,9 @@ func caseClaimCorruptRow(t *testing.T, h Harness, _ *Recorder) {
 	bad := withFrequency(scheduleTrigger("bad", unit(acme, "a")), cronOf("* * * * *"), true)
 	h.StoreRaw(t, bad)
 
-	slot := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	slot := h.Now(t).UTC().Truncate(time.Hour).Add(-time.Hour)
 
-	err := h.Store.ClaimDue(t.Context(), claimOf("bad", slot), fence, claimEntry())
+	err := h.Store.ClaimDue(t.Context(), claimOf("bad", slot), fence, claimEntry(h.Now(t)))
 	wantErr(t, "claim of a bad row", err, trigger.ErrInvalid)
 }
 
@@ -499,7 +503,7 @@ func caseClaimThenStart(t *testing.T, h Harness, rec *Recorder) {
 	fence := h.Namespace(t, string(acme))
 	_, past := pastSlots(t, h, fence)
 
-	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry()))
+	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, claimEntry(h.Now(t))))
 
 	one, err := h.Dispatcher.Scheduled(t.Context(), acme, "h1", past[0])
 	must(t, "start", err)

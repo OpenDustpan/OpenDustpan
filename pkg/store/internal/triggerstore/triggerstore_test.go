@@ -450,7 +450,8 @@ type memTx struct {
 	upserts int
 	removes int
 	moves   int
-	// clock is the clock of the store. The zero time means the clock of the process.
+	// clock is the clock of the store. newMemTx sets a fixed time, and a test
+	// that cares about the clock replaces it.
 	clock time.Time
 	// stale makes MoveNextSlot see a stored slot other than the one it is given.
 	stale bool
@@ -458,7 +459,8 @@ type memTx struct {
 
 func newMemTx(triggers ...trigger.Trigger) *memTx {
 	m := &memTx{
-		rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0, clock: time.Time{}, stale: false,
+		rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0,
+		clock: time.UnixMilli(1_700_000_000_000).UTC(), stale: false,
 	}
 	for i := range triggers {
 		m.rows[string(triggers[i].ID)] = triggerstore.RowOf(triggers[i], 1)
@@ -501,10 +503,6 @@ func (m *memTx) Remove(_ context.Context, _ namespace.Name, id trigger.ID) (bool
 }
 
 func (m *memTx) Now(_ context.Context) (time.Time, error) {
-	if m.clock.IsZero() {
-		return time.Now().UTC(), nil
-	}
-
 	return m.clock, nil
 }
 
