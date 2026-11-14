@@ -7,7 +7,7 @@
 
 - [ ] 1.1 First boot stores the settings. Check: `go test ./pkg/store/... -run TestRecoverySettingsFirstBoot -count=1` fails on main (NEW test, both dialects).
 - [ ] 1.2 A valid request makes one temporary administrator and an encrypted answer. Check: `go test ./internal/recovery/ -run TestSignedRequestMakesOneTempAdmin -count=1` fails on main (NEW test).
-- [ ] 1.3 Twelve refusal reasons give one answer and twelve audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
+- [ ] 1.3 Thirteen refusal reasons give one answer and thirteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
 - [ ] 1.4 Replay, two at once on two instances, and a crash before the commit. Check: `go test ./pkg/store/... -run TestRecoveryNonceOnce -count=1` fails on main (NEW test).
 - [ ] 1.5 The time window and the skew. Check: `go test ./internal/recovery/ -run TestRequestWindow -count=1` fails on main (NEW test).
 - [ ] 1.6 The shared rate limit with the /64 group. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
@@ -27,6 +27,15 @@
 - [ ] 1.20 A malformed or short nonce is refused. Check: `go test ./internal/recovery/ -run TestRecoveryNonceShape -count=1` fails on main (NEW test).
 - [ ] 1.21 A key in a request that is not `ssh-ed25519` is refused. Check: `go test ./internal/recovery/ -run TestRecoveryKeyTypeEd25519 -count=1` fails on main (NEW test).
 - [ ] 1.22 A request with a wrong content type is refused, and a hostile forwarded address has no effect. Check: `go test ./internal/api/server/ -run TestRecoveryContentTypeAndForwarded -count=1` fails on main (NEW test).
+- [ ] 1.23 The successful use writes one audit entry that holds the mode, the time and the client address and the action `recovery:use-signed-request`, in the same transaction. Check: `go test ./internal/recovery/ -run TestRecoveryUseAuditEntry -count=1` fails on main (NEW test).
+- [ ] 1.24 A malformed `answerKey` (a key of 31 bytes, a key of 33 bytes, a key that is not base64) is refused, and a failed seal of the answer refuses the request and creates nothing. Check: `go test ./internal/recovery/ -run TestRecoveryAnswerKeyAndSeal -count=1` fails on main (NEW test).
+- [ ] 1.25 A `reason` with a Unicode Cc or Cf character, and a `reason` of more than 500 characters, are each refused. Check: `go test ./internal/recovery/ -run TestRecoveryReason -count=1` fails on main (NEW test).
+- [ ] 1.26 A request with a wrong audience is refused at the service layer. Check: `go test ./internal/recovery/ -run TestRecoveryAudience -count=1` fails on main (NEW test).
+- [ ] 1.27 A `version` member other than 1 is refused. Check: `go test ./internal/recovery/ -run TestRecoveryVersion -count=1` fails on main (NEW test).
+- [ ] 1.28 A request whose installation name matches but whose audience does not is refused. Check: `go test ./internal/recovery/ -run TestRecoveryInstallationNameAndAudience -count=1` fails on main (NEW test).
+- [ ] 1.29 Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) refuses a path that leaves the root. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileContained -count=1` fails on main (NEW test).
+- [ ] 1.30 Every such file larger than 16 KiB is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileSize -count=1` fails on main (NEW test).
+- [ ] 1.31 `request.key` with mode 0644 is refused when the CLI reads it. Check: `go test ./cmd/opendustpan/ -run TestRecoveryRequestKeyMode -count=1` fails on main (NEW test).
 
 ## 2. Build
 

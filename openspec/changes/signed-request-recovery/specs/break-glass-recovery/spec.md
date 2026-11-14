@@ -2,11 +2,11 @@
 
 ### Requirement: first-boot-recovery-settings
 
-When an installation starts for the first time, the server SHALL store the recovery mode, a new installation ID and, in signed-request recovery, the first key of the trust bundle, in one transaction.
+When an installation starts for the first time, the server SHALL store the recovery mode and, in signed-request recovery, the first key of the trust bundle, in one transaction. The installation name SHALL be the setting `--installation`.
 
 #### Scenario: First boot in signed-request recovery
 - **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and a key file
-- **THEN** the store holds the mode `signed-request`, one installation ID and one key, and the log names the installation ID
+- **THEN** the store holds the mode `signed-request` and one key, and the installation name is the name that `--installation` gives
 
 #### Scenario: No key file
 - **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and no key file
@@ -18,7 +18,7 @@ When an installation starts for the first time, the server SHALL store the recov
 
 ### Requirement: signed-request-makes-one-temporary-administrator
 
-When the stored mode is `signed-request` and a request is canonical, in its time window, for this installation, signed by a key of the trust bundle, with a new nonce, inside the rate limits, and no temporary administrator of a recovery is live, the server SHALL make one temporary administrator and answer with the token encrypted to the key of the request. The `person` member SHALL be 1 to 64 characters of `[a-z0-9._-]`; the server refuses any other value and does not change it.
+When the stored mode is `signed-request` and a request is canonical, in its time window, names this installation and its audience, is signed by a key of the trust bundle, has a new nonce, is inside the rate limits, and no temporary administrator of a recovery is live, the server SHALL make one temporary administrator and answer with the token encrypted to the key of the request.
 
 #### Scenario: A valid request
 - **WHEN** the operator submits a valid signed request
@@ -30,17 +30,40 @@ When the stored mode is `signed-request` and a request is canonical, in its time
 - **THEN** the answer sets no cookie
 
 #### Scenario: The person member
-- **WHEN** a request has a `person` member outside the allowlist
-- **THEN** the server refuses it with the one answer
+- **WHEN** a request carries a `person` member that is not 1 to 64 characters of `[a-z0-9._-]`
+- **THEN** the server refuses it with the one answer and does not change the value
+
+### Requirement: use-writes-one-audit-entry
+
+When a signed-request recovery succeeds, the server SHALL write one audit entry that holds the mode, the time and the client address, and the action `recovery:use-signed-request`, in the same transaction as the use.
+
+#### Scenario: The use audit entry
+- **WHEN** a signed-request recovery succeeds
+- **THEN** the store holds one audit entry with the action `recovery:use-signed-request`, the mode `signed-request`, the time and the client address
+- **AND** the entry commits in the same transaction as the temporary administrator
 
 ### Requirement: one-answer-for-every-refusal
 
 When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write one audit entry with the reason.
 
-#### Scenario: The twelve reasons look the same
-- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance` and `store`
+#### Scenario: The thirteen reasons look the same
+- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer` and `store`
 - **THEN** each answer has the same status, the same body and the same length
 - **AND** each audit entry `recovery.refused` holds its reason
+
+### Requirement: answer-key-and-its-seal
+
+The `answerKey` member SHALL be an X25519 public key of exactly 32 bytes after decoding. The server SHALL refuse any other value with the one answer and the reason `answer`. When the seal of the answer fails, the server SHALL fail closed: refuse the request, write the denial with the reason `answer` and create nothing.
+
+#### Scenario: A malformed answer key
+- **WHEN** the `answerKey` member is 31 bytes, is 33 bytes, or is not base64
+- **THEN** the server refuses the request with the one answer
+- **AND** the audit entry `recovery.refused` holds the reason `answer`
+
+#### Scenario: A failed seal
+- **WHEN** the seal of the answer fails
+- **THEN** the server refuses the request with the one answer and makes no temporary administrator
+- **AND** the audit entry `recovery.refused` holds the reason `answer`
 
 ### Requirement: maintenance-mode-refuses
 
@@ -89,11 +112,11 @@ When one source address, or its /64 group for IPv6, sent 5 recovery requests in 
 
 ### Requirement: source-address
 
-The server SHALL take the source address of a request from the resolved client address of the trusted-proxy setting, or from the remote address of the connection when no proxy is trusted. The server SHALL parse the address and SHALL refuse a value that is not a valid IP address.
+The server SHALL take the source address of a request from the client address, as the trusted-proxy setting of the server gives it. Without trusted proxies it is the address of the TCP peer. With `--trusted-proxies` it is the address that a trusted proxy forwarded. The server SHALL parse the address and SHALL refuse a value that is not a valid IP address.
 
 #### Scenario: A hostile forwarded header
 - **WHEN** a request from a peer that is not a trusted proxy carries a forwarding header
-- **THEN** the source is the remote address of the connection, and the header has no effect
+- **THEN** the source is the client address of the peer, and the header has no effect
 
 #### Scenario: A malformed address
 - **WHEN** the source address is malformed
@@ -165,16 +188,16 @@ When `opendustpan recovery sign` gets a key file that no passphrase encrypts, th
 
 ### Requirement: key-files-are-contained
 
-When the server or the CLI reads a key file, it SHALL open the file through a root or a clean-path containment check, SHALL limit the read to 16 KiB, and SHALL refuse a path that leaves the root or a file larger than 16 KiB. The CLI SHALL refuse a private key file that group or others can read.
+When the server or the CLI reads or writes a file of the flow, it SHALL open the file through a root or a clean-path containment check, SHALL limit the read to 16 KiB, and SHALL refuse a path that leaves the root or a file larger than 16 KiB. The rule applies to `request.json`, `request.json.sig`, `request.key` and the key files. The CLI SHALL write `request.key` with mode 0600, and SHALL refuse a private key file that group or others can read.
 
 #### Scenario: A path that leaves the root
-- **WHEN** a key file path leaves the root
+- **WHEN** a file path leaves the root
 - **THEN** the reader refuses it and writes no signature
 
 #### Scenario: A file larger than 16 KiB
-- **WHEN** a key file is larger than 16 KiB
+- **WHEN** a file is larger than 16 KiB
 - **THEN** the reader refuses it
 
 #### Scenario: A private key file that group or others can read
-- **WHEN** the private key file has mode 0644
+- **WHEN** `request.key` or the private key file of `sign` has mode 0644
 - **THEN** the command refuses it and writes no signature

@@ -18,12 +18,12 @@ The user path this change must make work:
 
 1. **First boot.** Start `opendustpan serve` with
    `--recovery-mode signed-request` and
-   `--recovery-public-key-file <file>`. The server stores the mode, the first
-   key of the trust bundle and a new installation ID in one transaction. It
-   writes the installation ID to its log. The operator writes the
-   installation ID next to the offline key.
+   `--recovery-public-key-file <file>`. The server stores the mode and the
+   first key of the trust bundle in one transaction. The installation name is
+   the setting `--installation` (ADR 248). The operator keeps the name and
+   the offline key.
 2. **Make the request (offline).** `opendustpan recovery request
-   --installation <id> --person <name> --reason <text>` writes the canonical
+   --installation <name> --person <name> --reason <text>` writes the canonical
    request `request.json` and the ephemeral private key of the answer,
    `request.key` (mode 0600).
 3. **Sign (offline).** `opendustpan recovery sign --key <file> request.json`
@@ -74,10 +74,9 @@ Evidence for the claims above:
 
 ## What Changes
 
-- The store keeps the first-boot recovery settings: the mode, a new
-  installation ID and the trust bundle of offline operator keys (ADR 295
-  decision 8). The stored mode wins over `--recovery-mode` (ADR 245 decision
-  6).
+- The store keeps the first-boot recovery settings: the mode and the trust
+  bundle of offline operator keys (ADR 295 decision 8). The stored mode wins
+  over `--recovery-mode` (ADR 245 decision 6).
 - A public route accepts a signed recovery request. It makes one temporary
   administrator in one transaction, with the nonce, the review notification
   and the audit entries (ADR 295, ADR 372).
@@ -120,9 +119,10 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- The operator must keep the installation ID and the offline key together from
-  the first boot. Without the installation ID, no request can be made. The
-  docs page puts this in the first-boot checklist.
+- The request binds to the installation name and to the audience, the external
+  URL of the server. Both must match. The operator keeps the offline key and
+  both values from the first boot, and the docs page puts this in the
+  first-boot checklist.
 - A refusal never says why (ADR 295 decision 5). `recovery verify` finds the
   errors that the operator can make offline: the shape, the times, the key and
   the signature. The other reasons (a used nonce, the rate limit, a live
@@ -173,7 +173,7 @@ Each one was checked against the ADRs. None touches an owner-tagged decision.
 
 1. **The request format.** A detached SSH signature (the format of
    `ssh-keygen -Y sign`, with the namespace `opendustpan-recovery@<installation
-   ID>`) over a canonical JSON body. The server refuses a body that is not in
+   name>`) over a canonical JSON body. The server refuses a body that is not in
    canonical form. ADR check: ADR 57 "Not decided here" leaves the format
    open. ADR 57 "Consequences": "A new library for this is a new dependency."
    The verifier is `internal/sshsig` on the standard library, so no new module
@@ -327,7 +327,8 @@ factor** (not owner-tagged).
   an action (ADR 17), except for the token that the server reads before it
   starts."
 - Effect: an audit entry for each use and each refusal, and a route and an
-  action for each step.
+  action for each step. The use entry holds the mode, the time and the client
+  address, with the action `recovery:use-signed-request`.
 - Conflict: none.
 
 **ADR 39: Commands never touch the database** (decisions 1 and 4).
@@ -367,8 +368,10 @@ Questions considered and answered:
   code. The docs page says to make a new local user in that case.
 - Does the review store exist? Yes, in both dialects (see "What main already
   does"), so ADR 372 decision 4 holds.
-- Where does the installation ID come from? The first boot makes it with the
-  stored mode. No other ID of the installation exists on main.
+- Where does the installation name come from? The setting `--installation`
+  (ADR 248). It is `local` by default, and the server never makes it at
+  random. The request binds to it and to the audience, the external URL of
+  the server.
 - Does a key add wait 24 hours, as the proposal of RFC 21 for its question O8
   said? No. RFC 21 is not accepted for O8, and no ADR asks for a wait. The add
   needs a fresh authentication and a reason, and it sends a notice to every

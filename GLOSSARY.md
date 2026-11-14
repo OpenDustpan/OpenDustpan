@@ -626,6 +626,10 @@ _Avoid_: Mode 1
 The break-glass recovery mode `signed-request` of the setting `--recovery-mode`. The operator signs a recovery request offline with the offline operator key and sends it to a route of the server. The route makes a temporary administrator (ADR 295, ADR 372). "Over the network" describes the route, not the mode.
 _Avoid_: Mode 2, break-glass mode 2
 
+**Trust bundle**:
+The set of offline operator public keys that signed-request recovery trusts. Each key is an `ssh-ed25519` public key with a stable key ID and a SHA-256 fingerprint. The bundle holds 1 to 4 keys, and a site administrator adds and deletes them (ADR 295).
+_Avoid_: Key ring, key set
+
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
 _Avoid_: API key, robot token, machine token

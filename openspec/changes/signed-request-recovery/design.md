@@ -12,8 +12,9 @@ at the expiry, and a review after use.
 1. **The stored recovery settings.** The baseline of each dialect gets four
    tables, in their places in the name order:
    - `recovery_settings`: one row, with the mode (`bootstrap`,
-     `signed-request` or `none`), the installation ID (16 random bytes,
-     base32, no padding) and the time of the first boot.
+     `signed-request` or `none`) and the time of the first boot. The
+     installation name is the setting `--installation` (ADR 248). The server
+     never makes a name at random, so a restore keeps it.
    - `recovery_keys`: the trust bundle. The key ID (a server-made stable ID),
      the public key in the wire form of `ssh-ed25519`, its SHA-256
      fingerprint (unique), the time of the add, the principal ID of the person
@@ -32,22 +33,28 @@ at the expiry, and a review after use.
    A different setting writes one warning to the log at each start (ADR 347).
 3. **The canonical request.** `request.json` is one JSON object, UTF-8, with
    no white space, the members in this order, and no other member:
-   `version` (1), `audience` (`"opendustpan-recovery"`), `installation`,
+   `version` (exactly 1), `audience` (the external URL of the server),
+   `installation` (the installation name),
    `person` (the name of the new temporary administrator: 1 to 64 characters
    of `[a-z0-9._-]`, no other value, and no normalization),
    `reason` (1 to 500
    characters, no Unicode Cc or Cf, ADR 245 decision 17), `nonce` (32 random
    bytes, base64url, no padding), `notBefore` and `notAfter` (Unix
-   milliseconds), `answerKey` (the HPKE public key, X25519, base64url) and
+   milliseconds), `answerKey` (the HPKE public key: an X25519 public key of
+   exactly 32 bytes after base64url decoding) and
    `keyId` (the SHA-256 fingerprint of the signing key). The server decodes
    with a strict decoder, encodes the result again, and refuses the body when
    the two byte strings differ. So one request has exactly one byte form, and
-   the signature covers exactly the bytes that the server reads.
+   the signature covers exactly the bytes that the server reads. The server
+   refuses a `version` other than 1. The request binds to the installation
+   name and to the audience, the external URL of the server. Both must match.
+   Two installations with the same name and the same trust key are told apart
+   by the audience and by the nonce store of each installation.
 4. **The signature.** A detached SSH signature of the format of
    `ssh-keygen -Y sign`, hash `sha512`, namespace
-   `opendustpan-recovery@<installation ID>`. Only `ssh-ed25519` keys pass. The
-   service verifies with the key of the bundle that `keyId` names, never with
-   the key in the signature.
+   `opendustpan-recovery@<installation name>`. Only `ssh-ed25519` keys pass.
+   The service verifies with the key of the bundle that `keyId` names, never
+   with the key in the signature.
 5. **The envelope.** `POST /api/dustpan/v1/recovery/signed-requests` takes
    `{"request": "<base64url of request.json>", "signature": "<armored
    signature>"}`, at most 8 KiB.
@@ -70,37 +77,44 @@ at the expiry, and a review after use.
    - inserts the nonce (a unique key, ADR 295 decision 3),
    - makes the person, the grant, the record and the token, with their four
      audit entries (ADR 245 decision 7),
+   - seals the answer to the `answerKey` of the request (decision 9),
+   - writes one audit entry for the use that holds the mode, the time and the
+     client address, and the action `recovery:use-signed-request`,
    - writes the notification `break-glass.used` with the use (kind
-     `temp-admin`, mode `signed-request`, the source address, `Until` the end
+     `temp-admin`, mode `signed-request`, the client address, `Until` the end
      of the record).
 
-   A failure of any step fails the transaction. On PostgreSQL the transaction
-   pins READ COMMITTED and takes the advisory lock of the server audit scope
-   first, as ADR 245 decision 8 does. A refusal in the transaction rolls back
-   and then writes the refusal audit entry and the attempt count in a second
-   transaction, so a refusal leaves a record and makes no temporary
-   administrator.
+   A failure of any step fails the transaction, so a failed seal of the
+   answer creates nothing. On PostgreSQL the transaction pins READ COMMITTED
+   and takes the advisory lock of the server audit scope first, as ADR 245
+   decision 8 does. A refusal in the transaction rolls back and then writes
+   the refusal audit entry and the attempt count in a second transaction, so
+   a refusal leaves a record and makes no temporary administrator.
 
-   The source address is the client address that the trusted-proxy setting of
-   the server gives: the resolver of `internal/clientip` reads a forwarding
-   header only from a trusted proxy, and otherwise the source is the remote
-   address of the connection. The server parses the address with `net/netip`
-   and refuses a malformed one. A hostile forwarding header from a peer that
-   is not trusted has no effect on the source.
+   The client address is the address that the trusted-proxy setting of the
+   server gives: the resolver of `internal/clientip` reads a forwarding header
+   only from a trusted proxy, and otherwise the client address is the address
+   of the TCP peer. The server parses the address with `net/netip` and refuses
+   a malformed one. A hostile forwarding header from a peer that is not
+   trusted has no effect on the client address.
 8. **One answer.** Every refusal, at each layer, answers `403` with the code
    `recovery.refused` and one fixed text. The audit entry
    `recovery.refused` holds the reason code (`shape`, `canonical`, `time`,
    `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`,
-   `rate-limit`, `recovery-active`, `maintenance`, `store`). A request during
-   maintenance mode refuses with the reason `maintenance`, and the refusal
-   fails closed. The server log line holds the
+   `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`). A
+   malformed `answerKey` and a failed seal of the answer both refuse with the
+   reason `answer`. A request during maintenance mode refuses with the reason
+   `maintenance`, and the refusal fails closed. The server log line holds the
    same reason code and no request text.
 9. **The answer.** On success the server encrypts `{"person", "token",
    "expires"}` with HPKE (RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256),
    HKDF-SHA256, AES-256-GCM, `crypto/hpke` of the standard library) to
    `answerKey`. The info string is `opendustpan-recovery v1` and the
-   installation ID. The additional data is the SHA-256 of the request bytes.
-   The plain token never appears in the answer, a log or an audit entry.
+   installation name. The additional data is the SHA-256 of the request bytes.
+   The server seals the answer in the transaction of decision 7. When the seal
+   fails, the server fails closed: it refuses the request with the reason
+   `answer`, writes the denial to the audit log and creates nothing. The plain
+   token never appears in the answer, a log or an audit entry.
 10. **The review.** The consumer of `break-glass.used` opens the review with
     `Store.Open` whatever `breakGlassReview.enabled` says. With the setting
     off, the review has no deadline and no notice steps. With it on, it has
@@ -120,7 +134,7 @@ at the expiry, and a review after use.
 
     | Route | Action | Object | Fresh step |
     | --- | --- | --- | --- |
-    | `GET /api/dustpan/v1/recovery` (mode, installation ID, keys) | `server:read-settings` | server | no |
+    | `GET /api/dustpan/v1/recovery` (mode, keys) | `server:read-settings` | server | no |
     | `POST /api/dustpan/v1/recovery/keys` | `server:manage-settings` | server | yes |
     | `DELETE /api/dustpan/v1/recovery/keys/{id}` | `server:manage-settings` | server | yes |
     | `POST /api/dustpan/v1/recovery/signed-requests` | `recovery:use-signed-request` | - | no |
@@ -139,13 +153,18 @@ at the expiry, and a review after use.
     `opendustpan recovery keys list|add|remove`. `request`, `sign` and
     `verify` work offline. `sign` reads an OpenSSH private key file and
     refuses a file that no passphrase encrypts. It reads the passphrase from
-    the terminal only. `submit` and `keys` are REST clients (ADR 39).
+    the terminal only. `submit` and `keys` are REST clients (ADR 39). The
+    flag `--installation` of `request` names the installation name (ADR 248).
 
-    Each key file, the private key file of `sign` and the public key file of
-    the first boot (decision 2), opens through `os.Root` or a clean-path
-    containment check, with a size limit of 16 KiB. The reader refuses a path
-    that leaves the root and a file larger than 16 KiB. The private key file
-    is refused when group or others can read it.
+    The containment rule and the 16 KiB size limit apply to every file that
+    the CLI reads or writes in this flow: `request.json`, `request.json.sig`
+    and `request.key`, the private key file of `sign` and the public key file
+    of the first boot (decision 2). Each file opens through `os.Root` or a
+    clean-path containment check, with a size limit of 16 KiB. The reader
+    refuses a path that leaves the root and a file larger than 16 KiB. The
+    private key files are refused when group or others can read them: the
+    private key file of `sign`, and `request.key`, which the CLI writes with
+    mode 0600.
 
 ## Structure
 
@@ -164,9 +183,9 @@ handler import `internal/recovery`.
 
 ## Risks
 
-- A theft of the private key and its passphrase gives "a bounded remote
-  temporary administrator" (ADR 295 decision 2). The notice to each site
-  administrator and the review make the use visible.
+- A theft of the private key alone gives a bounded remote temporary
+  administrator (ADR 295 decision 2). The notice to each site administrator
+  and the review make the use visible.
 - A loss of every key of the bundle leaves signed-request recovery unusable.
   The operator uses a restore (no break-glass).
 - A clock skew of more than 2 minutes refuses a fresh request.
@@ -179,20 +198,20 @@ handler import `internal/recovery`.
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, a non-canonical body, a wrong content type, a time past the skew, a malformed client address, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call. |
-| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation, the audience and the signature against the bundle key again, and it counts the attempt and refuses before the signature check. | Call the service with a request for another installation, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. |
+| HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, a malformed client address, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call. |
+| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again, and it counts the attempt and refuses before the signature check. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. |
 | Store | The stored mode check (a second layer), the attempt counter (a second layer), the live-recovery check and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, and run a recovery with the stored mode `bootstrap`, straight against the store. Expect one success at most. |
-| Key file | Each key file opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key file is refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a private key file with mode 0644, straight to each reader. Expect a refusal. |
-| Answer | HPKE to the key of the request. | Decrypt with another key. Expect a failure. |
+| Key file | Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
+| Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
-| Audit | Each refusal and each use writes an entry. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. |
+| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address and the action `recovery:use-signed-request`. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. |
 
 ## Quality attributes
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
 | security | 1 temporary administrator for each valid nonce. 0 for a replay | temporary administrators | the route, 2 instances on one database |
-| security | 1 answer for 12 refusal reasons: same status, body and length | answers | the route |
+| security | 1 answer for 13 refusal reasons: same status, body and length | answers | the route |
 | reliability | 0 temporary administrators and 0 nonces after a crash before the commit | rows | the route, one restart |
 
 ## Threat model
@@ -214,19 +233,20 @@ flowchart LR
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| Network | S | A caller forges a request. | boundary check | The handler refuses a non-canonical or malformed body, a wrong content type and a `person` outside the allowlist. | A body with an extra member, a wrong content type or a `person` outside the allowlist gives `recovery.refused`. |
+| Network | S | A caller forges a request. | boundary check | The handler refuses a non-canonical or malformed body, a wrong content type, a `person` outside the allowlist, an `answerKey` that is not an X25519 public key of exactly 32 bytes, and a `version` other than 1. | A body with an extra member, a wrong content type or a `person` outside the allowlist gives `recovery.refused` with reason `shape`; an `answerKey` of 31 or 33 bytes or one that is not base64 gives `answer`; a `version` other than 1 gives `shape`. |
 | Network | S | A caller forges a request. | encode or contain | The service verifies with the bundle key that `keyId` names, never with the key in the signature, and accepts only `ssh-ed25519`. | A signature with a key that is not in the bundle, or with a key type other than `ssh-ed25519`, gives a refusal. |
 | Network | S | A caller forges a request. | limit | 8 KiB, 5 attempts in 15 minutes for each source, 30 for the installation, in the database. The server counts the attempt and refuses before the signature check. | The sixth attempt from one /64 group is refused on a second instance, and a refused request runs no signature check. |
 | Network | S | A caller forges a request. | authorize at point of use | The handler checks the stored mode before any other work, and the store checks it again in the transaction. | A valid request with the stored mode `bootstrap` gives a refusal. |
-| Network | S | A caller forges a request. | boundary check | The server reads the client address from the connection, or from a trusted proxy, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the peer address, and a malformed address gives a refusal. |
+| Network | S | A caller forges a request. | boundary check | The server takes the client address from the trusted proxy when one is trusted, and otherwise the address of the TCP peer, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the client address of the peer, and a malformed address gives a refusal. |
 | Network | S | A caller forges a request. | fail closed | An unknown member, value or store error refuses, with an audit entry. | A store fault gives `recovery.refused` with reason `store`. |
 | Network | T | A caller replays a used request. | boundary check | The handler refuses a time outside the window, including `notAfter` more than 10 minutes after `notBefore`. | A request 3 minutes past `notAfter`, or with `notAfter` more than 10 minutes after `notBefore`, gives a refusal. |
 | Network | T | A caller replays a used request. | encode or contain | Placeholders only. The nonce is a unique key and its shape is checked. | A nonce with quote characters, a malformed nonce or a short nonce gives one row or a refusal. |
 | Network | T | A caller replays a used request. | limit | The nonce stays until `notAfter` plus 1 hour. | The purge keeps a row inside the window. |
 | Network | T | A caller replays a used request. | authorize at point of use | The nonce insert is in the transaction of the temporary administrator. | Two submits at once give one temporary administrator. |
 | Network | T | A caller replays a used request. | fail closed | A failed insert fails the transaction. | No record exists after a duplicate nonce. |
-| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 12 refusal reasons give the same status, body and length. |
+| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 13 refusal reasons give the same status, body and length. |
 | Network | I | A copy of a signed request gives the token. | encode or contain | HPKE to `answerKey`. | Decrypt with another key: failure. |
+| Network | I | A copy of a signed request gives the token. | fail closed | The seal of the answer is in the transaction of decision 7; a failed seal rolls back. | A forced seal failure gives `recovery.refused` with reason `answer` and no temporary administrator. |
 | Server | E | The temporary administrator does more than recovery steps with no fresh step. | authorize at point of use | Only the two routes read the predicate. | A token creation as a temporary administrator gives `mfa.fresh-step-required`. |
 | Server | E | A second recovery runs while one is live. | authorize at point of use | The live-recovery check in the transaction. | A second valid request gives a refusal with reason `recovery-active`. |
 | Server | T | A recovery request during maintenance mode changes the installation. | fail closed | The handler refuses while the installation is in maintenance mode. | A request in maintenance mode gives `recovery.refused` with reason `maintenance`. |
