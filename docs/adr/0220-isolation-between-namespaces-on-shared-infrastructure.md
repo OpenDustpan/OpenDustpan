@@ -8,6 +8,7 @@ Changed by:
   namespaces.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 363 extends decisions 1, 2 and 3: their work starts after RFC 103 step 8.
 
 ## Context
 

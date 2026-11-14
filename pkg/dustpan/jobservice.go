@@ -362,35 +362,13 @@ func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *jo
 		return p.base.Plan(ctx, unit, req)
 	}
 
-	// Only a request with no location uses the default connection of the
-	// namespace, so only then does the planner read the connections.
-	var defaultConn string
-
-	if req.Location.IsZero() {
-		var connErr error
-
-		defaultConn, connErr = p.defaultConnection(ctx, unit.Namespace())
-		if connErr != nil {
-			return job.Spec{}, connErr
-		}
-	}
-
-	eff, err := p.effective(ctx, unit, defaultConn)
+	eff, err := p.effectiveFor(ctx, unit, req.Location)
 	if err != nil {
 		return job.Spec{}, err
 	}
 
 	filled := *req
-
-	if filled.Location.IsZero() && eff.Repository.Value != "" {
-		filled.Location = job.Location{
-			Connection: eff.Connection.Value, Repository: eff.Repository.Value, Ref: eff.Ref.Value,
-			Directory: "", Revision: "",
-		}
-		if eff.Directory.Origin == unitsettings.OriginUnit {
-			filled.Location.Directory = eff.Directory.Value
-		}
-	}
+	source := fillLocation(&filled, eff)
 
 	if filled.Pool == "" && eff.Pool.Value != "" {
 		name, nameErr := p.poolName(ctx, unit.Namespace(), eff.Pool.Value)
@@ -401,7 +379,57 @@ func (p settingsPlanner) Plan(ctx context.Context, unit identity.Object, req *jo
 		filled.Pool = name
 	}
 
-	return p.base.Plan(ctx, unit, &filled)
+	spec, err := p.base.Plan(ctx, unit, &filled)
+	if err != nil {
+		return job.Spec{}, err
+	}
+
+	spec.LocationSource = source
+
+	return spec, nil
+}
+
+// effectiveFor returns the effective settings of unit. It reads the default
+// connection of the namespace when the request names no code location.
+func (p settingsPlanner) effectiveFor(
+	ctx context.Context, unit identity.Object, loc job.Location,
+) (unitsettings.Effective, error) {
+	var defaultConn string
+
+	if loc.IsZero() {
+		var err error
+
+		defaultConn, err = p.defaultConnection(ctx, unit.Namespace())
+		if err != nil {
+			return unitsettings.Effective{}, err
+		}
+	}
+
+	return p.effective(ctx, unit, defaultConn)
+}
+
+// fillLocation sets the effective code location of req when the request names
+// none, and returns the source of the location. A request that names the
+// location gives the source request.
+func fillLocation(req *job.StartRequest, eff unitsettings.Effective) job.LocationSource {
+	if !req.Location.IsZero() || eff.Repository.Value == "" {
+		return job.LocationSourceRequest
+	}
+
+	req.Location = job.Location{
+		Connection: eff.Connection.Value, Repository: eff.Repository.Value, Ref: eff.Ref.Value,
+		Directory: "", Revision: "",
+	}
+
+	if eff.Directory.Origin == unitsettings.OriginUnit {
+		req.Location.Directory = eff.Directory.Value
+	}
+
+	if eff.Connection.Origin == unitsettings.OriginNamespaceDefault && eff.Connection.Value != "" {
+		return job.LocationSourceNamespace
+	}
+
+	return job.LocationSourceUnit
 }
 
 // effective returns the effective settings of unit. It fails closed: a store
@@ -513,8 +541,8 @@ func (p jobPlanner) Plan(ctx context.Context, unit identity.Object, req *job.Sta
 
 	return job.Spec{
 		Unit: unit, Operation: req.Operation, Purpose: req.Purpose, Executor: job.ExecutorRunner,
-		Location: req.Location, Steps: steps, Pool: poolID, Profile: "", Edits: nil, Delivery: "",
-		Defaulted: nil,
+		Location: req.Location, LocationSource: job.LocationSourceRequest, Steps: steps, Pool: poolID, Profile: "",
+		Edits: nil, Delivery: "", Defaulted: nil,
 	}, nil
 }
 

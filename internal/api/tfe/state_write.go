@@ -215,7 +215,9 @@ func (h *Handler) createStateVersion(
 
 	auth := workspace.Authority{Allow: allow, Record: record}
 
-	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
+	// The job of a job token is the origin of the declared version, which the
+	// finalize of that version reads. Any other token passes no job.
+	pending, err := h.workspaces.BeginState(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject, in, auth)
 	if err != nil {
 		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))

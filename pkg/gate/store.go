@@ -110,6 +110,11 @@ type Objects[T Object] interface {
 	// List returns the objects stored at scope, ordered by ID. It returns
 	// none of a wider scope.
 	List(ctx context.Context, scope Scope) ([]T, error)
+	// ListEveryScope returns every object of this kind of the installation,
+	// of every scope, with the objects of one scope ordered by ID. The
+	// order of the scopes is not defined. It returns the objects of a
+	// deleted unit too, because a restore brings them back.
+	ListEveryScope(ctx context.Context) ([]T, error)
 	// Put stores obj at its scope and returns its new version. With prev
 	// 0, the object must be new: Put returns ErrConflict when it exists.
 	// With prev above 0, it replaces the stored object of version prev and

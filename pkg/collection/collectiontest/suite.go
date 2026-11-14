@@ -621,7 +621,7 @@ func testStackRename(t *testing.T, s Store) {
 		t.Fatalf("SetUnit: %v", err)
 	}
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("RenameStack: %v", err)
 	}
 
@@ -976,7 +976,11 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         ref,
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
@@ -1101,7 +1105,10 @@ func testCreateStackPlacedRefused(t *testing.T, s Store) {
 		{"no collection ID", noID, ns.Fence(), collection.ErrNoCollection},
 		{"no collection name", noName, ns.Fence(), collection.ErrNoCollection},
 		{"a collection of another namespace", otherNS, ns.Fence(), collection.ErrNoCollection},
-		{"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(), collection.ErrNotFound},
+		{
+			"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(),
+			collection.ErrPlacementCollectionMissing,
+		},
 		{"a collection with another ID", placement(reborn, ns.Fence()), ns.Fence(), collection.ErrCollectionChanged},
 		{"a stale fence", placement(c, stale), stale, namespace.ErrFenced},
 		{"an audit entry of another namespace", foreign, ns.Fence(), audit.ErrInvalidEntry},

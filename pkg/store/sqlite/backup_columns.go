@@ -136,6 +136,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				backupColJobID,
+				"git_head",
 			},
 		},
 		{
@@ -422,6 +424,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"sensitive_marks",
 				"fenced_by",
 				"unlocked_write",
+				"origin_job",
 			},
 		},
 	}
@@ -455,6 +458,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSelfServiceBackupTables(),
 		sqliteTrustRuleBackupTables(),
 		sqliteUnmanagedBackupTables(),
+		sqliteBreakGlassReviewBackupTables(),
 	)
 }
 
@@ -626,6 +630,13 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
 		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
+				"final_job", "final_at_ms",
+			},
+		},
 	}
 }
 
@@ -735,6 +746,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"closed_to_identity_provider",
 			},
 		},
 		{

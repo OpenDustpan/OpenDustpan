@@ -74,7 +74,8 @@ func (f *fakeSettings) Effective(_ context.Context, _ setting.Scope, key string)
 
 	return setting.Effective(setting.Declaration{
 		Key: key, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "", Secret: false,
-		Database: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil, Doc: "unknown",
+		Database: false, StaticCredentialHost: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil,
+		Doc: "unknown",
 	}, nil, nil), setting.ErrUnknownKey
 }
 
@@ -93,8 +94,8 @@ func newFixture(t *testing.T) *fixture {
 	})
 
 	principals, err := principal.NewService(principal.Config{
-		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil, Now: nil,
-		NewID: nil,
+		Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, TempAdmins: nil,
+		GroupReach: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

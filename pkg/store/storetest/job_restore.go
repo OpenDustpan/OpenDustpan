@@ -38,8 +38,8 @@ func RunJobRestoreReconcile(t *testing.T, newPair func(t *testing.T) (src, dst J
 		t.Fatalf("apply the staged backup: %v", err)
 	}
 
-	orphans, err := dst.Jobs.Orphans(t.Context(), restoreOrphanPage)
-	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != seeded.lost || !orphans[0].Missing {
+	orphans, damaged, err := dst.Jobs.Orphans(t.Context(), restoreOrphanPage)
+	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != seeded.lost || !orphans[0].Missing || len(damaged) != 0 {
 		t.Fatalf(
 			"Orphans after the restore = %+v, %v; want only %s with a missing operation",
 			orphans,
@@ -126,9 +126,17 @@ func reconcileRestored(t *testing.T, b JobBackup, seeded restoredJobs) {
 		t.Fatalf("queued job after the reconcile = %s, %v; want dispatched", got.State, err)
 	}
 
-	orphans, err := b.Jobs.Orphans(t.Context(), restoreOrphanPage)
-	if err != nil || len(orphans) != 0 {
-		t.Fatalf("Orphans after the reconcile = %+v, %v; want none", orphans, err)
+	checkNoOrphans(t, b)
+}
+
+// checkNoOrphans fails the test unless the restored store b holds no orphan
+// and no damaged row.
+func checkNoOrphans(t *testing.T, b JobBackup) {
+	t.Helper()
+
+	orphans, damaged, err := b.Jobs.Orphans(t.Context(), restoreOrphanPage)
+	if err != nil || len(orphans) != 0 || len(damaged) != 0 {
+		t.Fatalf("Orphans after the reconcile = %+v, damaged %+v, %v; want none", orphans, damaged, err)
 	}
 }
 
@@ -149,12 +157,14 @@ func restoreJob(unit identity.Object) job.Job {
 	}
 
 	return job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationRefresh, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "refresh", Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{"tofu", "apply"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: true, Outputs: nil,
