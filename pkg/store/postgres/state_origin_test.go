@@ -76,8 +76,9 @@ func awaitingWriteBackJob(
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network",
 				Revision: unitStateWriteRevision,
 			},
-			Steps: nil,
-			Pool:  "", Profile: "", Edits: []job.FileEdit{{
+			LocationSource: job.LocationSourceRequest,
+			Steps:          nil,
+			Pool:           "", Profile: "", Edits: []job.FileEdit{{
 				Path: "network.tfvars.json", Keys: map[string][]byte{"size": []byte(`"large"`)},
 			}},
 			Delivery: job.DeliveryDirectPush, Defaulted: nil,

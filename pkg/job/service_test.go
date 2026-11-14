@@ -353,6 +353,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 						Directory:  "",
 						Revision:   "",
 					},
+					LocationSource: job.LocationSourceRequest,
 					Steps: []job.Step{
 						{
 							Name:             "plan",
@@ -738,8 +739,8 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
-					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
-					Defaulted: nil,
+					Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "p", Profile: "", Edits: nil,
+					Delivery: "", Defaulted: nil,
 				}
 			}
 		}},
@@ -1604,6 +1605,7 @@ type fieldCase struct {
 
 func fieldCases() []fieldCase {
 	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 	none := emptyLocation()
 
 	return []fieldCase{
@@ -1613,6 +1615,10 @@ func fieldCases() []fieldCase {
 		{"both with both actions", "ci", repo, "", nil},
 		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{
+			"a revision-only location without unit:define-steps", "", revisionOnly, job.ActionUnitDefineSteps,
+			identity.ErrDenied,
+		},
 		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
 		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},

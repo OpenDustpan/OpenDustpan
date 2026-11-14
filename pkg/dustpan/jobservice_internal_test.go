@@ -1254,48 +1254,59 @@ func TestSettingsPlannerLocation(t *testing.T) {
 	}, getErr: nil, listErr: nil}
 	zero := plannerLocation("", "", "", "")
 	cleared := func(q *job.StartRequest) { q.Location = zero }
+	unitLoc := plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")
 
 	tests := []struct {
-		name     string
-		record   *unitsettings.Settings
-		change   func(*job.StartRequest)
-		wantLoc  job.Location
-		wantPool string
-		wantErr  error
+		name       string
+		record     *unitsettings.Settings
+		change     func(*job.StartRequest)
+		wantLoc    job.Location
+		wantPool   string
+		wantSource job.LocationSource
+		wantErr    error
 	}{
 		{
 			"the unit location and pool",
-			unitRecord("pool-2", plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")), cleared,
-			plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir"), "pool-2", nil,
+			unitRecord("pool-2", unitLoc), cleared,
+			unitLoc, "pool-2", job.LocationSourceUnit, nil,
 		},
 		{
 			"the namespace default connection and pool",
 			unitRecord("", plannerLocation("", "acme/unit-repo", "dev", "")), cleared,
-			plannerLocation("conn-1", "acme/unit-repo", "dev", ""), "pool-1", nil,
+			plannerLocation("conn-1", "acme/unit-repo", "dev", ""), "pool-1", job.LocationSourceNamespace, nil,
 		},
 		{
 			"a request location and pool win",
-			unitRecord("pool-2", plannerLocation("conn-3", "acme/unit-repo", "dev", "unit-dir")),
+			unitRecord("pool-2", unitLoc),
 			func(q *job.StartRequest) { q.Pool = "ci" },
-			plannerLocation("", "acme/infra", "main", "net"), "pool-1", nil,
+			plannerLocation("", "acme/infra", "main", "net"), "pool-1", job.LocationSourceRequest, nil,
 		},
-		{"no setting and no request location", nil, cleared, zero, "", job.ErrUnsupported},
+		{
+			"a request with only a revision",
+			unitRecord("pool-2", unitLoc),
+			func(q *job.StartRequest) {
+				q.Location = job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
+			},
+			zero, "", "", job.ErrInvalid,
+		},
+		{"no setting and no request location", nil, cleared, zero, "", "", job.ErrUnsupported},
 		{
 			"a request connection of another namespace", nil,
-			func(q *job.StartRequest) { q.Location.Connection = "conn-2" }, zero, "", identity.ErrDenied,
+			func(q *job.StartRequest) { q.Location.Connection = "conn-2" }, zero, "", "", identity.ErrDenied,
 		},
 		{
 			"an unknown request connection", nil, func(q *job.StartRequest) { q.Location.Connection = "nope" },
-			zero, "", identity.ErrDenied,
+			zero, "", "", identity.ErrDenied,
 		},
 		{
 			"a unit connection of another namespace",
-			unitRecord("", plannerLocation("conn-2", "acme/unit-repo", "dev", "")), cleared, zero, "",
+			unitRecord("", plannerLocation("conn-2", "acme/unit-repo", "dev", "")), cleared, zero, "", "",
 			identity.ErrDenied,
 		},
 		{
 			"a unit pool that is no job pool",
-			unitRecord("pool-9", plannerLocation("", "acme/unit-repo", "dev", "")), cleared, zero, "", job.ErrInvalid,
+			unitRecord("pool-9", plannerLocation("", "acme/unit-repo", "dev", "")), cleared, zero, "", "",
+			job.ErrInvalid,
 		},
 	}
 
@@ -1319,9 +1330,9 @@ func TestSettingsPlannerLocation(t *testing.T) {
 				t.Fatalf("Plan = %v", err)
 			}
 
-			if spec.Location != tt.wantLoc || spec.Pool != tt.wantPool {
-				t.Fatalf("spec location %+v pool %q, want %+v pool %q",
-					spec.Location, spec.Pool, tt.wantLoc, tt.wantPool)
+			if spec.Location != tt.wantLoc || spec.Pool != tt.wantPool || spec.LocationSource != tt.wantSource {
+				t.Fatalf("spec location %+v pool %q source %q, want %+v pool %q source %q",
+					spec.Location, spec.Pool, spec.LocationSource, tt.wantLoc, tt.wantPool, tt.wantSource)
 			}
 		})
 	}

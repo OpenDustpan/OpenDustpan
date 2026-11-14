@@ -29,8 +29,8 @@ func TestPurposeValid(t *testing.T) {
 func specOf(op job.Operation, purpose job.Purpose, executor job.ExecutorKind) job.Spec {
 	return job.Spec{
 		Unit: identity.Object{}, Operation: op, Purpose: purpose, Executor: executor,
-		Location: emptyLocation(), Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
-		Defaulted: nil,
+		Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "", Profile: "", Edits: nil,
+		Delivery: "", Defaulted: nil,
 	}
 }
 
