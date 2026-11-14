@@ -17,6 +17,6 @@
 ## 3. Definition of done
 
 - [ ] 3.1 E2e step: with a site administrator access token, read GET /api/dustpan/v1/namespaces/{namespace}/gates on the real server. BLOCKED by the missing gate evaluation on main: the denial path itself cannot run until Evaluate exists. Check: e2e step reads the gate list with the access token. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Update the gates docs page with NoApprover and dev-signature behavior. Check: docs page lists both rules
+- [ ] 3.2 Update the existing guide docs/guides/state-write-gates.md with the NoApprover and dev-signature behavior, in the same pull request as the code. Check: docs/guides/state-write-gates.md lists both rules
 - [ ] 3.3 Usability check of the denial and fix flow from the docs page. Check: Administrator completes the flow from the docs page alone. A person's step.
 - [ ] 3.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

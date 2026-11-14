@@ -4,7 +4,7 @@
 
 ## 1. CI wiring
 
-- [ ] 1.1 Confirm the owner gate on issue #183 (NEW record in the pull request text for .github/workflows/ci.yml, no file edit): do no work until the owner says yes to RustFS. Write no edit to .github/workflows/ci.yml before then. Check: Owner yes recorded on issue #183 before any edit. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
+- [ ] 1.1 Record the owner decision in the pull request text (NEW note, no file edit): ADR 376 decision 2 says "CI runs the S3 suite on RustFS 1.x, pinned by digest (owner, 2026-11-14)." Read the digest of the current 1.x release again and pin that digest in .github/workflows/ci.yml. Check: Pull request text cites ADR 376 decision 2 and lists the digest of the current RustFS 1.x release. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
 - [ ] 1.2 Record the failing baseline in the pull request text (NEW note, no file edit): show the S3 suite in pkg/blob/s3/store_test.go skips without the four variables. Check: `go test ./pkg/blob/s3/... -v` on main without variables shows --- SKIP
 
 ## 2. Bucket and readiness

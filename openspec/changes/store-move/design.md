@@ -5,10 +5,16 @@ check. This file gives the structure.
 
 ## Two pull requests
 
-- PR A adds `dustpan.WithSQLite(path string, opts ...)` and
-  `dustpan.WithPostgreSQL(dsn string, opts ...)`. Each opens the built-in
-  store and sets every store option of `NewServer`. `cmd/opendustpan` uses
-  them, so the wiring of the built-in stores exists in one place. The 23
+- PR A adds `dustpan.OpenStore(ctx, database string, opts ...)`, which opens
+  the built-in store from a `--database` form and answers a
+  `*dustpan.BuiltinStore`. The handle keeps the adapter behind
+  `dustpan.StorePorts`, so no exported signature names an adapter type. The
+  caller closes a store that it opened with `OpenStore`.
+  `dustpan.WithBuiltinStore(store)` sets every store option of `NewServer`
+  from the handle. `dustpan.WithSQLite(path string, opts ...)` and
+  `dustpan.WithPostgreSQL(dsn string, opts ...)` open and close the store in
+  one option. `cmd/opendustpan` uses `OpenStore` and `WithBuiltinStore`, so
+  the wiring of the built-in stores exists in one place. The 23
   `With...Store` options stay for a third-party store.
 - PR B is a script run, with no hand-written change: `git mv` of the 28
   packages to `internal/store/`, a rewrite of the import paths, and

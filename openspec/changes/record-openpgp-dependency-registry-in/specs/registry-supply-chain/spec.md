@@ -38,4 +38,4 @@ Where the finding GO-2026-5932 applies to x/crypto, the ADR SHALL record the fre
 
 #### Scenario: govulncheck-differs
 - **WHEN** the fresh output differs from the issue report
-- **THEN** the ADR records the fresh output and the owner reviews the risk before the ADR ships.
+- **THEN** the ADR records the fresh output and cites ADR 379 decision 2 for the risk.

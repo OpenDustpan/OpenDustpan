@@ -12,4 +12,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire the route with its authorization actions, the e2e step with the real OpenTofu CLI, the docs page and the usability check. Check: BLOCKED by the owner ADR for the hash binding and by the upload route, which does not exist on main; then `make check` with zero findings and `make e2e`. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Wire the route with its authorization actions, the e2e step with the real OpenTofu CLI, the docs page and the usability check. The upload route is NEW; it does not exist on main. ADR 378 sets the hash binding. Declare the route in `internal/api/apidesc/openapi.json` and write its adapter in a NEW file under `internal/api/`. The e2e step is BLOCKED by the missing upload route and the missing credential kind for it: no existing route and no existing credential kind on main run the acceptance path. Check: `make check` with zero findings and `make e2e`. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

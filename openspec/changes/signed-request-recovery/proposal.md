@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:201` (Signed-request recovery).
@@ -40,7 +40,7 @@ The user path this change must make work:
 6. **Recover.** With the token, the temporary administrator resets the factors
    of the locked-out person (the admin reset route of the change `mfa`) and
    issues an enrollment code for that person
-   (`POST /api/dustpan/v1/principals/{id}/enrollment-code` of the change
+   (the NEW route `POST /api/dustpan/v1/principals/{id}/enrollment-code` of the change
    `app-level-second-factor-totp`). The person enrolls a new factor. A second
    site administrator records the break-glass review.
 7. **Rotate the key.** A site administrator with a fresh authentication adds a
@@ -77,8 +77,8 @@ Evidence for the claims above:
 - The store keeps the first-boot recovery settings: the mode and the trust
   bundle of offline operator keys (ADR 295 decision 8). The stored mode wins
   over `--recovery-mode` (ADR 245 decision 6).
-- A public route accepts a signed recovery request. It makes one temporary
-  administrator in one transaction, with the nonce, the sealed answer, the
+- The NEW public route `POST /api/dustpan/v1/recovery/signed-requests` accepts a signed recovery request.
+  It makes one temporary administrator in one transaction, with the nonce, the sealed answer, the
   review notification and the audit entries (ADR 295, ADR 372).
 - In signed-request recovery, `serve` refuses to start without `--public-url`
   (the audience of a request) and without a key file.
@@ -142,22 +142,16 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies
 only the difference.
 
-- `pkg/breakglass` has the kind `temp-admin`, in `@server`, with a time limit.
-  (`pkg/breakglass/breakglass.go:82`, `KindTempAdmin`;
-  `pkg/breakglass/breakglass.go:143`, `Use.validateKind`)
-- `pkg/breakglass` has a store adapter in each dialect, so the condition of
-  ADR 372 decision 4 holds. (`pkg/store/sqlite/breakglass.go:33`,
-  `pkg/store/postgres/breakglass.go:35`, `BreakGlassStore`)
-- The host issuer makes the person, the grant, the record and the token in
-  one transaction. (`pkg/accesstoken/host.go:55`,
-  `HostStore.CreateHostRecovery`)
-- The host command knows the three modes. (`cmd/opendustpan/host.go:86`,
-  `modeBootstrap`, `modeSignedRequest`, `modeNone`)
-- A verifier of the signature format of `ssh-keygen -Y sign` exists on the
-  standard library. (`internal/sshsig/verifier.go:27`, `Verifier.Verify`;
-  `internal/sshsig/sshsig.go:170`, `ParsePublicKey`)
-- The error code of a missing fresh step exists.
-  (`internal/errcode/catalog_mfa.go:15`, `MFAFreshStepRequired`)
+- `pkg/breakglass` has the kind `temp-admin`, in `@server`, with a time limit (`pkg/breakglass/breakglass.go:82 (KindTempAdmin)`)
+- `pkg/breakglass` checks the kind of a use (`pkg/breakglass/breakglass.go:135 (validateKind)`)
+- `pkg/breakglass` has a store adapter in SQLite, so the condition of ADR 372 decision 4 holds (`pkg/store/sqlite/breakglass.go:33 (BreakGlass)`)
+- `pkg/breakglass` has a store adapter in PostgreSQL (`pkg/store/postgres/breakglass.go:35 (BreakGlass)`)
+- The host issuer makes the person, the grant, the record and the token in one transaction (`pkg/accesstoken/host.go:55 (CreateHostRecovery)`)
+- The host command knows the three modes `modeBootstrap`, `modeSignedRequest` and `modeNone` (`cmd/opendustpan/host.go:86 (modeBootstrap)`)
+- A verifier of the signature format of `ssh-keygen -Y sign` exists on the standard library (`internal/sshsig/verifier.go:27 (NewVerifier)`)
+- The verifier parses an SSH public key (`internal/sshsig/sshsig.go:170 (ParsePublicKey)`)
+- The denial limiter keys a stream of denials by `Principal`, `Action`, `Kind` and `Scope` (`internal/denylimit/denylimit.go:45 (Key)`)
+- The error code of a missing fresh step exists (`internal/errcode/catalog_mfa.go:15 (MFAFreshStepRequired)`)
 
 ## Owner decisions that apply
 
