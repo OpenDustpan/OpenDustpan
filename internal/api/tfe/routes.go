@@ -50,6 +50,13 @@ const (
 	// also takes the console session cookie when the request has no
 	// Authorization header. Only the reveal route may use it.
 	ScopeConsole
+	// ScopeDiscovery serves an organization or discovery read that also
+	// answers a principal who holds a grant on a collection or on a unit in
+	// the namespace (ADR 374 decision 1). The wrapper answers 404 for an
+	// unknown organization and for a caller with no grant in the namespace,
+	// with the same body. Only the entitlement-set and the workspace list
+	// routes may use it.
+	ScopeDiscovery
 )
 
 // ObjectResolver returns the authorization object for a request: the unit
@@ -125,9 +132,12 @@ func (h *Handler) discoveryRoutes() []Route {
 			Method: http.MethodGet,
 			Path:   "/api/v2/organizations/{organization}/entitlement-set",
 			// The organization is the namespace: the route reads it, so
-			// namespace:read stays the gate. The handler answers 404 for an
-			// unknown organization and never creates one.
-			Scope:   ScopeAuthorized,
+			// namespace:read stays the gate for callers who hold it. A
+			// caller who holds a grant on a collection or on a unit in the
+			// namespace also gets the answer (ADR 374 decision 1). The
+			// handler answers 404 for an unknown organization and never
+			// creates one.
+			Scope:   ScopeDiscovery,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,
 			Serve:   h.entitlementSet,
@@ -183,10 +193,11 @@ func (h *Handler) workspaceRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/organizations/{organization}/workspaces",
-			// A list needs namespace:read on the organization. The handler
-			// then keeps only the workspaces the caller may unit:read and
-			// answers 404 for an unknown organization.
-			Scope:   ScopeAuthorized,
+			// A list needs namespace:read on the organization, or a grant on
+			// a collection or on a unit in it (ADR 374 decision 1). The
+			// handler then keeps only the workspaces the caller may
+			// unit:read and answers 404 for an unknown organization.
+			Scope:   ScopeDiscovery,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,
 			Serve:   h.listWorkspaces,
@@ -557,6 +568,8 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		return h.enforcePublic(route)
 	case ScopeAuthorized, ScopeConsole:
 		return h.enforceAuthorized(route)
+	case ScopeDiscovery:
+		return h.enforceDiscovery(route)
 	case ScopeRegistry:
 		return h.enforceRegistry(route)
 	case ScopeSigned:
@@ -684,14 +697,29 @@ func hiddenNotFound() errorClass {
 }
 
 // hidden reports whether p cannot see obj: a unit without unit:read and
-// without unit:read-outputs, or a namespace without namespace:read. A principal
-// that reads the outputs of a unit knows that the unit exists, so a refusal of
+// without unit:read-outputs, or a namespace without namespace:read. A
+// principal who holds any grant in the namespace of a unit already knows the
+// namespace exists through discovery (ADR 374 decision 1), so a refusal on
+// one of its units is a 403 for it. A principal with no grant in the
+// namespace gets the same 404 as for an unknown namespace. A caller that
+// reads the outputs of a unit knows that the unit exists, so a refusal of
 // a route that answers more than the outputs is a 403 for it. Any other object
 // is never hidden. It returns the error of a read check that fails for another
 // reason than a refusal.
 func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
 	if obj.IsServer() || obj.IsCaller() || obj.Namespace() == "" {
 		return false, nil
+	}
+
+	if ns := obj.Namespace(); ns != "" {
+		holds, err := h.holdsGrantInNamespace(ctx, p, ns)
+		if err != nil {
+			return false, fmt.Errorf("check grants in namespace: %w", err)
+		}
+
+		if holds {
+			return false, nil
+		}
 	}
 
 	reads := []identity.Action{identity.ActionNamespaceRead}

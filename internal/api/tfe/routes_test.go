@@ -1230,7 +1230,7 @@ func validateRoute(route tfe.Route, public map[string]bool) error {
 	switch route.Scope {
 	case tfe.ScopePublic:
 		return validatePublicRoute(route, public)
-	case tfe.ScopeAuthorized:
+	case tfe.ScopeAuthorized, tfe.ScopeDiscovery:
 		return validateAuthorizedRoute(route, public)
 	case tfe.ScopeConsole:
 		if route.Method+" "+route.Path != revealPattern() {
@@ -2063,7 +2063,7 @@ func checkRouteObject(t *testing.T, route tfe.Route) {
 		checkUploadRouteObject(t, route)
 
 		return
-	case tfe.ScopeAuthorized, tfe.ScopeConsole:
+	case tfe.ScopeAuthorized, tfe.ScopeConsole, tfe.ScopeDiscovery:
 		checkAuthorizedRouteObject(t, route)
 
 		return
