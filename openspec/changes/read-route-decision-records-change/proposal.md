@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #1257.
@@ -25,7 +25,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Issue #1257 asks for a read route of decision records with its actions. Proof: Issue #1257: A refusal at `state.write` names a decision record ID, but no route reads a record. Add the read route (ADR 229 decision 2) with its actions.
-- The state.write decision point exists in the server code. Proof: The code fact `rg -n -F --glob '!*_test.go' 'state.write' pkg internal cmd` shows internal/api/stategate/stategate.go:2 and cmd/opendustpan/main.go:1811.
+- The state.write decision point exists in the server code. Proof: The code fact `rg -n -F --glob '!*_test.go' 'state.write' pkg internal cmd` shows internal/api/stategate/stategate.go:2.
 
 ## What Changes
 
@@ -52,7 +52,6 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The state.write guard point exists in the server wiring. (`cmd/opendustpan/main.go:1811`)
 - The state-gate adapter covers state.write for HTTP adapters. (`internal/api/stategate/stategate.go:2`)
 
 ## ADR check

@@ -9,6 +9,6 @@
 ## 2. Definition of done
 
 - [ ] 2.1 Wire the counter to the server metrics registry. Check: BLOCKED by the credential kind of the metrics route: the pack names the route ANY /api/server/metrics but no credential kind; the e2e step reads it with the access token of an operator principal. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 2.2 Document the counter on the metrics docs page. Check: make docs-lint
+- [ ] 2.2 Document the counter in the page docs/reference/metrics.md (NEW; no page on main covers the metrics route). The task names the counter and its meaning. Check: make docs-lint
 - [ ] 2.3 Usability check: an operator finds the counter from the docs page alone. Check: Manual walk of the docs page. A person's step.
 - [ ] 2.4 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

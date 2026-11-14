@@ -20,7 +20,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step BLOCKED by the missing change order fan-out path: over 3 workspaces it checks 3 plan jobs and 3 apply jobs, each on its own unit, each with 1 new state version and 1 history entry. Check: e2e step BLOCKED by the missing change order fan-out path over 3 workspaces with an access token. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add the e2e step in the NEW file `e2e/runall_fanout_test.go`. Over 3 workspaces it checks 3 plan jobs and 3 apply jobs, each on its own unit, each with 1 new state version and 1 history entry. It calls the existing route `GET /api/dustpan/v1/namespaces/{}/units` and the change order routes with an access token. Check: the e2e step in `e2e/runall_fanout_test.go` over 3 workspaces with an access token. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Add the guide for the fan-out record and the gated apply. Check: add the new file `docs/guides/terragrunt-run-all.md`
 - [ ] 4.3 Run the usability check with the Runner operator from the docs page alone and record where the path costs time. Check: usability walkthrough with the Runner operator from the docs page alone. A person's step.
 - [ ] 4.4 Run `make check` with zero findings. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

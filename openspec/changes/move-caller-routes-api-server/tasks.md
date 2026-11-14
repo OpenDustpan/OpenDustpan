@@ -23,5 +23,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step that calls GET /api/dustpan/v1/me/access and the routes /api/dustpan/v1/me/tokens and /api/dustpan/v1/me/tokens/{id} with an access token of the caller, and checks the 404 of the old path /api/server/caller/access. Check: `make e2e` passes with the real Pulumi CLI and OpenTofu. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add an e2e step in e2e/caller_routes_test.go (NEW) that calls GET /api/dustpan/v1/me/access and the routes /api/dustpan/v1/me/tokens and /api/dustpan/v1/me/tokens/{id} with an access token of the caller, and checks the 404 of the old path /api/server/caller/access. The declaration of these routes is in pkg/dustpan/dustpan.go (mountV1 at :3636). The adapter is in internal/api/server/tokens.go for the token routes and in internal/api/server/review.go for the access route and the old path. The apidesc labels of the moved routes join in internal/api/server/operations.go (joinLabels). Check: `make e2e` passes with the real Pulumi CLI and OpenTofu. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Run the full check, and the usability check from the docs page alone. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

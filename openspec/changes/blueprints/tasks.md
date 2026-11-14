@@ -14,7 +14,7 @@
 ## 2. Build
 
 - [ ] 2.1 Implement the core and quota reservation in pkg/catalog/engine.go (NEW). Check: `go test ./pkg/catalog/... ./pkg/quota/...` passes
-- [ ] 2.2 Wire the NEW request routes with actions and audit, declared in internal/api/apidesc/openapi.json (generated) and adapted in internal/api/selfservice_requests.go (NEW). Check: `POST /api/dustpan/v1/namespaces/{namespace}/self-service/requests` (NEW) makes a unit seen in `GET /api/dustpan/v1/namespaces/{namespace}/units`
+- [ ] 2.2 Wire the NEW request routes with actions and audit, declared in the route table of its adapter package (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand) and adapted in internal/api/selfservice/requests.go (NEW, in the existing package internal/api/selfservice). Check: `POST /api/dustpan/v1/namespaces/{namespace}/self-service/requests` (NEW) makes a unit seen in `GET /api/dustpan/v1/namespaces/{namespace}/units`
 
 ## 3. Side effects (computed from main)
 

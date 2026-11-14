@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 ## Why
@@ -23,7 +23,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The SDK entry point exists on main as dustpan.NewServer. Proof: main lists pkg/dustpan/dustpan.go:774 (func NewServer) in package pkg/dustpan
+- The SDK entry point exists on main as dustpan.NewServer. Proof: main lists pkg/dustpan/dustpan.go:784 (func NewServer) in package pkg/dustpan
 - The binary wiring on main lives in a thin main package. Proof: main lists package cmd/opendustpan at cmd/opendustpan
 - The tool-neutral API on main exposes installation routes the guide can probe. Proof: main lists ANY/GET /api/dustpan/v1/capabilities and ANY/GET /api/dustpan/v1/components from the route table or API description
 
@@ -56,7 +56,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main provides the SDK entry point constructor NewServer. (`pkg/dustpan/dustpan.go:774 (func NewServer)`)
+- Main provides the SDK entry point constructor NewServer. (`pkg/dustpan/dustpan.go:784 (func NewServer)`)
 
 ## ADR check
 

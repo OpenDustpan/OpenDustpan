@@ -11,7 +11,7 @@
 ## 2. implementation
 
 - [ ] 2.1 Add expiresAt to the grant store, check and leased sweep in NEW file pkg/access/grant_expiry.go. Check: `go test ./pkg/access/... ./pkg/gate/...` passes.
-- [ ] 2.2 Add limit evaluation after grants and audit entries in NEW file pkg/access/limits.go, and add the docs page in NEW file docs/access-limits.md. Check: `go test ./internal/...` passes; routes declare scope actions and fresh step.
+- [ ] 2.2 Add limit evaluation after grants and audit entries in the existing file pkg/access/limits.go (extend it; it holds LimitKind on main), and add the docs page in NEW file docs/access-limits.md. Check: `go test ./internal/...` passes; routes declare scope actions and fresh step.
 
 ## 3. Side effects (computed from main)
 

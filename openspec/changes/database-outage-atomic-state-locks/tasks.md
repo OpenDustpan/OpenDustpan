@@ -13,12 +13,12 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 2.1 Confirm that no request flow changed, so the round-trip budgets stand. Check: Confirmed by: CI (the round-trip tests pass unchanged).
 
 ## 3. Definition of done
 
 - [ ] 3.1 Wrap state version commit and current pointer in one fenced transaction. Check: `go test -race ./pkg/store/postgres/ -run TestStateCommit -timeout 60m`
 - [ ] 3.2 Wrap lock acquire and release in one fenced transaction with holder identity. Check: `go test -race ./pkg/store/postgres/ -run TestLockAcquire|TestUnlock -timeout 60m`
 - [ ] 3.3 Wire the atomic paths through the existing TFE routes with existing gates. Check: GET /health/ready plus `tofu apply` against the real CLI on PostgreSQL with an access token.
-- [ ] 3.4 Document the retry behavior after a failed write. Check: Docs page for outage recovery states the atomic commit behavior.
+- [ ] 3.4 Document the retry behavior after a failed write in NEW file docs/guides/database-outage-recovery.md. Check: the docs page for outage recovery states the atomic commit behavior.
 - [ ] 3.5 Pass the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
