@@ -5,16 +5,16 @@
 ## 1. failing tests
 
 - [ ] 1.1 Record each difference between this spec and main in the implementer's notes (the pull request body), with repository paths such as pkg/workspace/... Check: The pull request body lists each difference
-- [ ] 1.2 Add failing conformance tests for finalize storage on both dialects Check: TestFinalizeStoresEncryptedBit fails on main
-- [ ] 1.3 Add a failing test that Latest with a present bit reads no blob Check: TestLatestWithPresentBitReadsNoBlob fails on main
-- [ ] 1.4 Add a failing test for the legacy null-bit fallback Check: TestLegacyNullBitStreamsOnce fails on main
-- [ ] 1.5 Add failing tests for both-keys refusal, concurrent finalize and shred precedence Check: TestBothKeysRefusedRemovesPending, TestConcurrentFinalizeKeepsWinnerBit and TestShreddedLatestAnswersShreddedWithPresentBit fail on main
+- [ ] 1.2 Add failing conformance tests for finalize storage on both dialects in pkg/outputshare/outputsharetest/states.go. Check: TestFinalizeStoresEncryptedBit fails on main
+- [ ] 1.3 Add a failing test that Latest with a present bit reads no blob in NEW file pkg/workspace/latest_bit_test.go. Check: TestLatestWithPresentBitReadsNoBlob fails on main
+- [ ] 1.4 Add a failing test for the legacy null-bit fallback in NEW file pkg/workspace/latest_bit_test.go. Check: TestLegacyNullBitStreamsOnce fails on main
+- [ ] 1.5 Add failing tests for both-keys refusal, concurrent finalize and shred precedence in NEW file pkg/workspace/finalize_bit_test.go. Check: TestBothKeysRefusedRemovesPending, TestConcurrentFinalizeKeepsWinnerBit and TestShreddedLatestAnswersShreddedWithPresentBit fail on main
 
 ## 2. change
 
-- [ ] 2.1 Add the column to each dialect baseline in name order Check: `make generate` and `sqlc diff` are clean with no numbered migration file
-- [ ] 2.2 Write the bit at finalize and read it in Latest Check: `go test ./pkg/workspace/...` passes
-- [ ] 2.3 Add a guard test that removes the constructor rejection Check: The mutation fails the conformance suite
+- [ ] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Check: `make generate` and `sqlc diff` are clean with no numbered migration file
+- [ ] 2.2 Write the bit at finalize and read it in Latest in pkg/workspace/state_meta.go. Check: `go test ./pkg/workspace/...` passes
+- [ ] 2.3 Add a guard test that removes the constructor rejection in pkg/outputshare/outputsharetest/states.go. Check: The mutation fails the conformance suite
 
 ## 3. Side effects (computed from main)
 

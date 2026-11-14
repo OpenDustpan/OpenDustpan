@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1213.
@@ -91,8 +91,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Conflict: none.
 
 ## Open questions
-
-Not spec-ready: a code check fails: main_facts[3]: "where" is not file:line (func Name).
 
 Questions considered and answered:
 

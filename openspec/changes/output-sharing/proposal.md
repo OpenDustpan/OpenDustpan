@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:315` (Output sharing).
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Job read of another unit outputs with no naming rule gives 403. | 403 with error code unit.forbidden. List the units of the producer namespace to check names, then read the guide. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
+| Job read of another unit outputs with no naming rule gives 403. | 403 with error code access.denied. List the units of the producer namespace to check names, then read the guide. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 | Job read of a secret output when the starter lacks read-secrets gives 403. | 403 naming unit:read-secrets and the 403 shape in docs/guides/output-sharing.md. Retry the same outputs read after a grant change to confirm the fix. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/outputs` |
 | Job read of a producer with no latest state gives 404. | 404 with error code unit.not-found. Check the producer name and run the read again after its first state write. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 

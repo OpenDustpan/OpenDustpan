@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the tests of the scenarios. Check: TestPollSkipCounterCountsJobsAfterTheBound fails on main
+- [ ] 1.1 Write the tests of the scenarios in internal/api/runnerapi/protocol_test.go (NEW; package runnerapi, which the change edits in protocol.go). Check: TestPollSkipCounterCountsJobsAfterTheBound fails on main
 
 ## 2. Definition of done
 

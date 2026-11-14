@@ -38,7 +38,7 @@ If the one function refuses an add, then the server SHALL map a SCIM call to a S
 
 #### Scenario: SCIM error
 - **WHEN** The function refuses a SCIM add.
-- **THEN** The server answers a SCIM error with code idp.protected-group that names the group and the rule.
+- **THEN** The server answers a SCIM error with code access.denied that names the group and the rule.
 
 #### Scenario: Claim skipped
 - **WHEN** A group claim names a protected group that refuses the add.

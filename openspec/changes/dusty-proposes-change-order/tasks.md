@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing tests of the scenarios: draft then confirm-draft, scope denials, once per key, confirm-draft window. Check: TestDustyDraftThenConfirmDraft and TestDustyConfirmDraftWindow fail on main
+- [ ] 1.1 Write failing tests of the scenarios: draft then confirm-draft, scope denials, once per key, confirm-draft window. Write them in the NEW file internal/agent/propose_test.go. Check: TestDustyDraftThenConfirmDraft and TestDustyConfirmDraftWindow fail on main
 
 ## 2. Side effects (computed from main)
 

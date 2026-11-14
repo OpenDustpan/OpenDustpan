@@ -4,16 +4,18 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing route tests for list, read, create, change, delete, token list, create and revoke, drain and retire on the new paths, with a personal token of a principal that holds namespace:manage-runners Check: TestPoolRoutes_NewPaths fails on main
-- [ ] 1.2 Add failing test that old pool paths answer 404 Check: TestPoolRoutes_OldPathsAreUnknown fails on main
-- [ ] 1.3 Add failing tests that each mutation stores its audit entry in the same transaction Check: TestPoolRoutes_AuditEntriesStoredInTransaction fails on main
-- [ ] 1.4 Add failing tests for 401 and 403 on each route Check: TestPoolRoutes_AuthRefusals fails on main
+- [ ] 1.1 Add failing route tests in NEW file pkg/runner/pool_routes_test.go for list, read, create, change, delete, token list, create and revoke, drain and retire on the new paths, with a personal token of a principal that holds namespace:manage-runners. Name TestPoolRoutes_NewPaths as NEW. Check: TestPoolRoutes_NewPaths fails on main
+- [ ] 1.2 Add failing test in NEW file pkg/runner/pool_routes_test.go that old pool paths answer 404. Name TestPoolRoutes_OldPathsAreUnknown as NEW. Check: TestPoolRoutes_OldPathsAreUnknown fails on main
+- [ ] 1.3 Add failing tests in NEW file pkg/runner/pool_routes_test.go that each mutation stores its audit entry in the same transaction. Name TestPoolRoutes_AuditEntriesStoredInTransaction as NEW. Check: TestPoolRoutes_AuditEntriesStoredInTransaction fails on main
+- [ ] 1.4 Add failing tests in NEW file pkg/runner/pool_routes_test.go for 401 and 403 on each route. Name TestPoolRoutes_AuthRefusals as NEW. Check: TestPoolRoutes_AuthRefusals fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Move the adapter to the new prefix with the same actions Check: `go test ./pkg/runner/... ./internal/api/...` passes
-- [ ] 2.2 Write the audit entries in each change transaction Check: `go test ./...` shows the audit events
-- [ ] 2.3 Update ServedRoutes in e2e/coverage.go: replace the old pool route GET /api/runners/{namespace}/pools with GET /api/dustpan/v1/namespaces/{namespace}/runner-pools, called with a personal token that holds namespace:read-runners Check: `make e2e` route coverage check lists the new paths
+- [ ] 2.1 Move the adapter to the new prefix with the same actions. Edit the route declarations and the adapter in internal/api/runnerapi/routes.go, and the reducing-route list in pkg/maintenance/reducing.go:43 (retire) and :49 (join-token revoke). Test the path with the existing route GET /api/runners/{}/pools before the move, and with the NEW route GET /api/dustpan/v1/namespaces/{namespace}/runner-pools after the move, each with a personal token that holds namespace:read-runners. Check: `go test ./pkg/runner/... ./internal/api/...` passes
+- [ ] 2.2 Write the audit entries in each change transaction in pkg/runner/coordinator.go with runner.AuditRules. Check: `go test ./...` shows the audit events
+- [ ] 2.3 Update ServedRoutes in e2e/coverage.go: replace the old pool route GET /api/runners/{}/pools with GET /api/dustpan/v1/namespaces/{namespace}/runner-pools, called with a personal token that holds namespace:read-runners Check: `make e2e` route coverage check lists the new paths
+- [ ] 2.4 Replace every old admin path under the runners prefix (runnerAPIPrefix) with the new path under /api/dustpan/v1/namespaces/{namespace} in pkg/dustpan/maintenance.go:68 (runnerAPIPrefix), pkg/dustpan/maintenance.go:232, pkg/dustpan/dustpan.go:3694 and the error text at pkg/dustpan/jobservice.go:666. The /runner/v1 protocol does not move. Check: `rg -n 'api/runners' pkg internal` finds no old admin path
+- [ ] 2.5 Update the tests that name the old paths: pkg/dustpan/maintenance_reducing_internal_test.go, pkg/dustpan/runners_maintenance_test.go, pkg/dustpan/route_actions_test.go, pkg/dustpan/apidesc_classes_test.go, internal/servertest/job_pool_roundtrip_test.go and the tests in internal/api/runnerapi that name the old paths. Run the acceptance path with the existing route GET /api/runners/{}/pools before the move and the NEW route GET /api/dustpan/v1/namespaces/{namespace}/runner-pools after it, with a personal token that holds namespace:read-runners. Check: `go test ./pkg/dustpan/... ./internal/servertest/... ./internal/api/runnerapi/...` passes
 
 ## 3. Side effects (computed from main)
 
