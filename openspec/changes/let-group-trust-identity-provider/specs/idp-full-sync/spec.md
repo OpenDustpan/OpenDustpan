@@ -12,6 +12,14 @@ When a site administrator with a fresh authentication turns full sync on, the se
 - **WHEN** full sync is turned off
 - **THEN** groups that are not trusted refuse the add again, removals that were final stay final, and an audit entry is written
 
+### Requirement: Final removals
+
+While full sync is on, the server SHALL make each removal by the identity provider final with no suspension.
+
+#### Scenario: Removal from protected group
+- **WHEN** the identity provider removes a member from a protected group
+- **THEN** the membership ends at once and no suspended row exists
+
 ### Requirement: Full sync needs a fresh step
 
 If the caller has no fresh authentication, then the server SHALL refuse the full sync change with 403.
@@ -23,6 +31,10 @@ If the caller has no fresh authentication, then the server SHALL refuse the full
 #### Scenario: No factor
 - **WHEN** a person of the OAuth or trusted-header method with no enrolled factor changes full sync
 - **THEN** the server answers 403 mfa.fresh-step-required and names the factor path
+
+#### Scenario: No action
+- **WHEN** a caller without server:manage-sign-in changes full sync
+- **THEN** the server answers 403
 
 ### Requirement: Break-glass exempt
 

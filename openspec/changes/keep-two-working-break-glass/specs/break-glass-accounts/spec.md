@@ -10,7 +10,11 @@ If a disable, delete or sweep leaves no enabled break-glass account, then the se
 
 #### Scenario: Disable that leaves one enabled account passes
 - **WHEN** a site administrator disables one of two enabled break-glass accounts
-- **THEN** the server accepts the change and the answer names the live count
+- **THEN** the server accepts the change, writes an audit entry, notifies the other administrators and names the live count
+
+#### Scenario: Disable in maintenance mode
+- **WHEN** a site administrator disables one of two accounts in maintenance mode
+- **THEN** the server accepts the change
 
 #### Scenario: Sweep of the last account is refused
 - **WHEN** the sweep tries to delete the last enabled break-glass account
@@ -22,7 +26,7 @@ If a grant revoke, a credential change, a passkey removal, an expiry change, a p
 
 #### Scenario: IP allowlist change below the floor is refused
 - **WHEN** an IP allowlist change leaves one working path
-- **THEN** the server answers 409 with the live count and keeps the old list
+- **THEN** the server answers 409 with the live count, keeps the old list and writes an audit entry
 
 #### Scenario: Passkey removal below the floor is refused
 - **WHEN** a person removes the passkey of a break-glass account and the count would fall below two
@@ -36,9 +40,33 @@ If a grant revoke, a credential change, a passkey removal, an expiry change, a p
 - **WHEN** an expiry change puts an account in the past and the count would fall below two
 - **THEN** the server answers 409 and keeps the old expiry
 
+#### Scenario: Hosted admin grant revoke is refused
+- **WHEN** a revoke of the role admin of a namespace leaves fewer than two break-glass principals
+- **THEN** the server answers 409 and keeps the grant
+
 #### Scenario: A change that does not lower the count passes
 - **WHEN** the installation holds one working path and a change leaves the count the same
 - **THEN** the server accepts the change
+
+### Requirement: add-raises-count
+
+When a site administrator adds a break-glass account with a fresh authentication, the server SHALL accept the add whatever the current count.
+
+#### Scenario: Add at zero accounts
+- **WHEN** no working account exists and an administrator adds one with a passkey
+- **THEN** the server accepts the add
+
+#### Scenario: Add without fresh step
+- **WHEN** the add comes with a stale fresh step
+- **THEN** the server answers 403 with mfa.fresh-step-required
+
+### Requirement: report-count
+
+When a site administrator reads the list of break-glass accounts, the server SHALL compute the live count of working paths at read time.
+
+#### Scenario: Account expires by time
+- **WHEN** an account expires with no write and an administrator reads the list
+- **THEN** the count excludes the account and the missing count rises
 
 ### Requirement: guard-race
 
@@ -68,6 +96,10 @@ If a restore leaves fewer than two working break-glass paths in the staged data 
 - **WHEN** an operator restores a backup with two working accounts
 - **THEN** the server runs the swap
 
+#### Scenario: Swap fails half way
+- **WHEN** the swap fails after the check
+- **THEN** the transaction rolls back and the live data stays
+
 #### Scenario: Hosted namespace restore
 - **WHEN** a restore brings a namespace whose break-glass principals sit in another namespace
 - **THEN** the server counts only the principals of the restored namespace and refuses when they are fewer than two
@@ -95,6 +127,14 @@ When a site administrator rotates the credential of a break-glass account, the s
 #### Scenario: Failed insert keeps the old credential
 - **WHEN** the insert of the new credential fails
 - **THEN** the transaction rolls back and the old credential stays active
+
+#### Scenario: Unknown or other account
+- **WHEN** the id is unknown or names an account that is not a break-glass account
+- **THEN** the server answers 404 with break-glass.not-found
+
+#### Scenario: Parallel rotations
+- **WHEN** two rotations of the same account run together
+- **THEN** the second waits and then rotates the new credential
 
 ### Requirement: setup-needs-two
 

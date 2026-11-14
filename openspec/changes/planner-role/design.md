@@ -1,25 +1,91 @@
 ## Context
 
-The planner role is a data role in the existing access model. No new store table and no new grant shape is needed. The built-in role table and the per-route action checks carry the behavior. The server plan-job start for planners stays closed until milestone 5 enforces the protected-branch gate.
+The planner role is a data role in the existing access model. No new table or grant shape is needed.
 
 ## Decisions
 
-1. **Planner as role-table entry with secret deny.** Define planner in the built-in role table as viewer actions plus unit:run-plan, job:read-plans and changeorder:author, with no secret reveal action. Reuse grant evaluation, masked state read and the audit writer.
-2. **Protected-branch gate stated now, server start closed until milestone 5.** State the protected-branch gate for planner-started plan jobs now and refuse planner plan-job start on the server until milestone 5 enforces the gate. Local plan and preview on a workstation read masked state through the same state actions.
+1. **Planner as role-table entry.** Define planner in the built-in role table with no secret reveal action. Reuse grant evaluation, masked read and the audit writer.
+2. **Plan-job start refused until milestone 5.** The server refuses planner plan-job start with 403 until milestone 5 ships the protected-branch rule.
 
 ## Structure
 
-Built-in role table with unexported roleActionSet built only by NewRoleActionSet, which checks that planner holds exactly viewer actions plus unit:run-plan, job:read-plans and changeorder:author and no secret action.
+Built-in role table with an unexported roleActionSet built only by NewRoleActionSet, which checks that planner holds exactly the viewer actions plus unit:run-plan, job:read-plans and changeorder:author.
 
 ## Risks
 
 - A handler declares a wrong action and lets a planner write.
-- A secret read path forgets the reveal check, including for old state versions.
+- A secret read path forgets the reveal check.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | Access service allows only viewer reads plus unit:run-plan, job:read-plans and changeorder:author for planner holders and refuses secret reveal and non-plan job start. | Call reveal and non-plan job start as planner directly on the service; each call fails with 403 and writes an audit entry. |
-| HTTP handler | Pulumi, TFE-compatible, OpenTofu HTTP backend and tool-neutral handlers declare read actions for reads, write actions for apply and destroy, the reveal action for secret reads including state history and export routes, run-plan for plan start, and token and settings actions for those routes; each refusal is 403 with a fixed code. | Send pulumi up, pulumi destroy, tofu apply, tofu destroy, secret reveal, state history export, settings write, token create for another principal and non-plan job start with a planner token; each gets 403. |
-| port adapter | Store adapters enforce the same action check in the transaction with the namespace fence and mask secret values at read time for every state version including pre-change versions. | Attempt a write query with planner reach and read a state version written before the change as planner; the write is refused and the read shows masked placeholders. |
+| service | The access service refuses reveal, writes, non-plan job start and token create for another principal. | Call each action as planner directly on the service; each fails with 403. |
+| HTTP handler | Each route declares its action; refusals are 403 with a fixed code. | Send up, destroy, apply, reveal, export and settings write with a planner token; each gets 403. |
+| port adapter | The store checks the action in the fenced transaction and masks marked secrets at read time for every version. | Write with planner reach and read an old version; the write is refused and secrets are masked. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+  Developer->>CLI: read state
+  CLI->>Server: GET state
+  Server-->>CLI: masked state
+  CLI->>Server: up
+  Server-->>CLI: 403
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| audit completeness | 1 audit entry for each refused write or reveal | entries per refusal | all planner refusals on stacks and workspaces |
+| refusal clarity | 100 percent of refusals carry the refused action name | percent of 403 answers | planner write and reveal routes |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+  subgraph Client
+    CLI[Pulumi CLI or OpenTofu]
+  end
+  subgraph Server
+    H[HTTP handler]
+    S[Access service]
+  end
+  subgraph Data
+    D[(Store)]
+  end
+  CLI --> H --> S --> D
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| API routes for state, secrets, settings, tokens and jobs | E | A planner escalates a read grant to a write or a secret reveal. | boundary check | Each route declares its action. | Call each route as planner; each gets 403. |
+| API routes for state, secrets, settings, tokens and jobs | E | A planner escalates a read grant to a write or a secret reveal. | encode or contain | Mask marked secrets at read time. | Read an old version; no plain text. |
+| API routes for state, secrets, settings, tokens and jobs | E | A planner escalates a read grant to a write or a secret reveal. | limit | The role holds only the planner action set. | Revoke mid-plan; next call fails. |
+| API routes for state, secrets, settings, tokens and jobs | E | A planner escalates a read grant to a write or a secret reveal. | authorize at point of use | The service and store check the action. | Call the service directly; it fails. |
+| API routes for state, secrets, settings, tokens and jobs | E | A planner escalates a read grant to a write or a secret reveal. | fail closed | Unknown action is denied and audited. | Send an unknown action; denied and audited. |
+
+## Contracts
+
+**access**
+
+- Invariant: Planner holds exactly the viewer actions plus unit:run-plan, job:read-plans and changeorder:author.
+- `CheckAccess`: pre: Caller presents a session or an access token.. Post: Allows planner state reads.; Refuses writes and reveal with 403..
+
+**secret**
+
+- Invariant: Reveal needs the reveal action.
+- `ReadMasked`: pre: Caller holds state read.. Post: Marked secrets are masked for every version..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| planner runs up | The write is refused. | Ask an administrator for a write role. | No state version changes; refusal is audited. |
+| planner grant revoked | The next request fails. | Ask for a new grant. | 403 on the next call. |

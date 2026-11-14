@@ -1,43 +1,47 @@
+---
+version: 2
+---
+
 Roadmap: `docs/roadmap.md:171` (Show token expiry warnings in API and CLIs.).
 
 ## Why
 
-**Persona: developer.** A developer runs the Pulumi CLI and OpenTofu with a personal token. The developer wants a clear warning before the token expires, in the API, in the console, and in the CLI, so a long run does not fail with 401.
+**Persona: developer.** A developer runs the Pulumi CLI and OpenTofu with a personal token. The developer wants a clear warning before the token expires, so a long run does not fail with 401.
 
 The user path this change must make work:
 
-1. **API.** Developer reads own tokens through the API and sees expiry time and warning level.
-2. **CLI.** Developer runs work with the Pulumi CLI and sees the expiry warning.
-3. **CLI.** Developer runs work with OpenTofu and sees the same expiry warning.
-4. **Console.** Developer opens the console and sees the banner for a token that expires soon.
-5. **Docs page.** Developer follows the docs page to rotate the token before expiry.
+1. **API.** Developer reads own tokens and sees the expiry time, the seconds left and the warning level.
+2. **Console.** Developer opens the console and sees the banner for a token that expires soon.
+3. **CLI.** Developer runs the first-party command that reads the token and sees the warning text.
+4. **Docs page.** Developer follows the docs page to rotate the token before expiry.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A CLI request with an expired token fails before any warning shows. | 401 with the expired token code. The token no longer works for any command. Rotate the token. | `pulumi up` |
-| A read of a token without the token read grant fails and shows no warning field. | 403 with the missing action and object. The caller cannot read the token record. Ask an administrator for the token read grant. | `pulumi up` |
+| A request with an expired token fails. | 401 with error code token.invalid. Create a new personal token, then run the command again. | `GET /api/server/caller/tokens` |
+| A read of a token without the token read grant fails. | 403 with the missing action and object. No warning field is returned. Ask an administrator for the grant. | `GET /api/server/caller/tokens` |
 
 Evidence for the claims above:
 
-- ADR 53 requires an API field, a console banner, an email, and a CLI warning before token expiry. Proof: docs/adr/0053-access-token-life-cycle.md
-- ADR 69 sets the warning times at 14 days and 3 days before expiry as settings. Proof: docs/adr/0069-token-lifetime-and-session-defaults.md
-- This change is part 2 of the token expiry email split and covers the warning field, banner data, and CLI warning. Proof: docs/roadmap.md:171
+- ADR 53 requires an API field, a console banner, an email and a CLI warning before token expiry. Proof: docs/adr/0053-access-token-life-cycle.md
+- ADR 69 sets the warning times at 14 days and 3 days as settings. Proof: docs/adr/0069-token-lifetime-and-session-defaults.md
+- This change is part 2 of the split of the token expiry email change. Proof: docs/roadmap.md:171
+- A test for the warning computation exists in pkg/accesstoken. Proof: pkg/accesstoken/accesstoken_test.go:1386
 
 ## What Changes
 
-- Add new route GET /api/dustpan/v1/me/tokens and token list read with expiry warning level and time left
-- Expose the same warning data for the console expiry banner
-- Carry the warning in Pulumi-compatible and TFE-compatible responses so both CLIs show it
+- Add the expiry warning level and the seconds left to the existing token reads under /api/server/tokens, /api/server/caller/tokens and /api/server/principals/{}/tokens
+- Give the console banner the same data from the caller token read
 - Read the 14-day and 3-day thresholds from settings
+- Leave the carriage in tool-compatible responses to an open question
 
 Out of scope:
 
-- Expiry enforcement, lifetime limits, and inactivity disable
+- Expiry enforcement, lifetime limits and inactivity disable
 - Expiry warning email and SMTP queue
 - Expiry events and webhooks
-- Service principal lifetime limits beyond display
+- Warning text in the real Pulumi CLI and OpenTofu output
 
 Depends on:
 
@@ -48,8 +52,16 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- A developer with many tokens must find which token nears expiry from the token list alone.
-- A CLI warning must name the days left and the one rotation command without extra text.
+- A developer finds the token that nears expiry from the token list alone.
+- The docs page names the one rotation command.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- TestWarningFor covers the warning computation (`pkg/accesstoken/accesstoken_test.go:1386`)
+- TestExpiryWarningOfAnEndedToken covers an ended token (`pkg/accesstoken/accesstoken_test.go:1413`)
+- Error code token.invalid exists (`internal/errcode/catalog_token.go:11`)
 
 ## ADR check
 
@@ -63,9 +75,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "Expiry warnings in milestone 4. Before an access token expires, the server warns in four ways:"
 - Quote: "a field in the API response for the token,"
 - Quote: "a banner in the console,"
-- Quote: "a warning in the CLI."
 - Quote: "API and audit. Every token operation has a REST API and an action (ADR 17). Each operation writes an audit entry (ADR 41)."
-- Effect: Decision 11 names the API field, the console banner, and the CLI warning that this part builds. Decision 13 requires a named action for each token read that returns the warning field.
+- Effect: The API field and the banner data follow decision 11. Each read keeps its action and audit entry as decision 13 says.
 - Conflict: none.
 
 **ADR 69: Token lifetime and session defaults** (not owner-tagged).
@@ -74,45 +85,25 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 297 changes decision 4. Chain to the end: ADR 297, ADR 301, ADR 333.
 - Current rule: this ADR, with ADR 297.
 - Quote: "Expiry warnings. The warnings of ADR 53 decision 11 start 14 days and again 3 days before the expiry. Both are settings."
-- Effect: The warning levels use the two start times of decision 5 as settings and apply the boundary rule stated in the spec.
+- Effect: The two start times are settings that the warning level reads.
 - Conflict: none.
-
-**ADR 212: The planner role, SMTP settings, fresh MFA for weaker settings and approvals, trusted proxies, restore audit entries, the branding preset and one settings API** (not owner-tagged).
-
-- Decisions that apply: 2 (extended).
-- Changed by: ADR 227 changes decision 3; ADR 232 changes decision 6; ADR 235 changes decision 6; ADR 301 extends decision 2; ADR 365 changes decision 5. Chain to the end: ADR 227, ADR 232, ADR 235, ADR 301, ADR 365, ADR 320, ADR 339, ADR 354, ADR 288, ADR 332.
-- Current rule: this ADR, with ADR 227, 232, 235, 301, 365.
-- Quote: "SMTP settings are installation settings."
-- Effect: This part sends no email and changes no SMTP setting. It only reads whether a sender exists to decide banner copy.
-- Conflict: none.
-
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (scope): The change lists the route GET /api/dustpan/v1/me/tokens as a token read path, but the Open questions section records it as absent from the API description and route table; the change must name it as new or use an existing route before it is spec-ready (proposal.md, tasks.md 2.1). Resolution: answered: Named GET /api/dustpan/v1/me/tokens and the list read as new routes in what_changes and tasks.
-- R1.2 (open question): The change does not define the warning thresholds' units or boundary: whether a token expiring exactly at 14 or 3 days is 'early' or 'urgent', and which warning level applies when both thresholds are set to 0 or the second is larger than the first. ADR 69 decision 5 only says the warnings start 14 and 3 days before expiry (design.md Structure, spec.md Requirement Warning field). Resolution: answered: Added inclusive boundary rule, level precedence, and zero and inverted threshold behavior to design and to the threshold requirement.
-- R1.3 (missing scenario): No scenario covers a token whose expiry has already passed. The proposal says a CLI request with an expired token fails with 401 before any warning shows, but the spec never states what the read path answers for an expired token (warning level, time left, or refusal). Resolution: answered: Added expired token requirement and scenario: read still answers expiry data with level expired and zero seconds left.
-- R1.4 (missing scenario): No scenario covers a token with no expiry, or a service principal token whose lifetime is limited by ADR 67 and ADR 69. Null or absent expiresAt is not defined, so the warning level for such tokens is unknown. Resolution: answered: Added no-expiry requirement and scenario: warning level none with null expiry, including service tokens without expiry.
-- R1.5 (missing scenario): No requirement covers authorization of the warning field. The proposal names a 403 when the token read grant is missing, but the spec and tasks have no scenario for that refusal, and ADR 53 decision 13 requires a named action for each token operation. Resolution: answered: Added authorization requirement and refusal scenario tied to the token read action.
-- R1.6 (failure mode): The design accepts that a CLI which ignores the warning field shows no warning, but no fallback or test is defined for it. The e2e step (tasks 3.2) does not check a CLI version that ignores the field. The risk is recorded but not covered. Resolution: answered: Stated the API field as source of truth and added e2e and task checks that verify the API field even when a CLI ignores the carriage.
-- R1.7 (failure mode): Clock skew between server and client is listed as a risk, but the spec does not say whether the server computes time left from its own clock only, nor how the response carries that time so a client cannot compute a different count. Resolution: answered: Stated server clock only and seconds left carried in the response in the computation requirement.
-- R1.8 (open question): ADR 53 decision 11 says the warning is in the CLI, but the change carries it in the tool-compatible response headers or body without naming which field. The Pulumi and TFE response shapes are not stated, so the contract is open for both CLIs. Resolution: answered: Named the exact carriage: token response fields plus warning header and body field on tool-compatible responses and first-party CLI text.
-- R1.9 (missing scenario): The console banner scenario covers only the current session token. It does not cover a token of another principal read by an administrator, nor a read that is refused for the console session. The usability note asks that a developer find the token near expiry from the list, but no requirement covers the list read. Resolution: answered: Added list read requirement covering the token list, other principals, and refused reads.
-- R1.10 (wrong claim): The ADR check says ADR 53 decision 11 is the only decision applied, but the text 'Effect' claims the change adds the console banner data; the console data is an API consumer and the claim that the same API field drives it is not shown by the cited ADR text (ADR 53 decision 11 names a banner, not an API field shared with it). Resolution: answered: Split ADR 53 effect to decision 11 for banner and decision 13 for the named action on the read.
-- R1.11 (open question): The change does not say whether the warning level is stored or computed on each read, nor how it behaves across a server restart or a change of the threshold settings while a token is in its warning window; design decision 1 says read-only but the revision and cache behavior are unstated. Resolution: answered: Stated computed on each read with no storage, restart safe, threshold change applies at next read.
 
 ## Open questions
 
-none
+1. Which field or header of the tool-compatible responses can make the real Pulumi CLI and OpenTofu show a warning, and with which text? Decides: PM.
+   - Options: Send a custom response header and use a wrapper script; Use a body field that each CLI already prints; Show the warning only in the token reads, the console banner and first-party command output.
+   - Recommended: Show the warning only in the token reads, the console banner and first-party command output until a spike proves a field the real CLIs render. Reason: ADR 53 decision 11 requires a CLI warning but names no field. The pack proves no CLI behavior for a custom header.
+2. Do the threshold settings keys exist, and what do negative, zero and inverted values mean? Decides: PM.
+   - Options: Reuse existing keys; 0 disables a window; negative is refused; Add new keys with the same rule.
+   - Recommended: Reuse existing keys if present; 0 disables a window; negative is refused; urgent wins when both match. Reason: ADR 69 decision 5 says both are settings but the pack names no keys.
+
+Not spec-ready: a code check fails: route `/api/server` (.quality[0].scope) is not in the API description or the route table; use an existing route (nearest: /api/server/tokens/{}, /api/server/tokens, /api/server/token-policy/sweep), or; a code check fails: contract method newWarningState: no requirement or scenario names it.
 
 Questions considered and answered:
 
-- Does this part include the expiry warning email? No. ADR 53 decision 11 names four warning ways and ADR 69 decision 5 sets the two times as settings. This part covers the API field, the console banner data, and the CLI warning. Email stays in the email queue part.
-- Does this part change SMTP settings? No. ADR 212 decision 2 keeps SMTP as installation settings. This part changes no SMTP setting and sends no mail.
-- Does this part change expiry or inactivity disable rules? No. The split scope says the enforcement part owns expiry and disable rules. This part only reads expiry and remaining time to compute the warning state.
-- Is the warning level stored or computed? Computed on each read from the server clock from expiry and the two threshold settings. No stored value, so a restart or a threshold change applies at the next read.
-- How does clock skew affect the day count? The server clock alone decides seconds left, and the response carries seconds left, so a client never recomputes the count from its own clock.
-- What happens when a CLI ignores the warning carriage? The API field is the source of truth. A CLI that ignores the carriage still leaves the warning visible in the token read, and the e2e step checks the API field.
+- Does this part send the warning email? No. ADR 53 decision 11 lists email as a separate way and the split scope puts it in the email queue part.
+- Is the warning level stored? No. It is computed on each read from the server clock, the expiry and the two settings, so a restart or a threshold change applies at the next read.
+- Does this part change expiry or disable rules? No. The enforcement part owns them. This part reads the expiry only.
+- Does client clock skew change the count? No. The response carries seconds left from the server clock.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

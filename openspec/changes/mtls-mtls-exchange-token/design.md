@@ -1,26 +1,82 @@
 ## Context
 
-The exchange is security code on an external TLS endpoint. It must fail closed on chain, time, revocation, SPIFFE ID, rule state, and principal state before it issues a stored trust token.
+The exchange is security code on an external TLS endpoint. It fails closed.
 
 ## Decisions
 
-1. **Verified chain value only.** The handler takes the verified chain from the TLS layer and passes an opaque verified-chain value to the service; the service never parses PEM and never reads sockets.
-2. **Single enabled rule match.** Rule match selects at most one enabled rule in the request namespace by bundle ID and exact case-sensitive SPIFFE ID; no match, more than one match, disabled rule, disabled bundle, disabled principal, or issuer of this installation refuses.
-3. **Stored issue and shared revoke.** Match check and stored issue share one transaction with a version check on rule, bundle, and principal; a concurrent disable between check and commit aborts with no token. Issue writes the stored trust token, its expiry, and its audit entry in one transaction; revoke uses the existing service-token revoke routes.
+1. **Verified chain value only.** The service takes an opaque verified-chain value from the TLS layer and never reads headers for a chain.
+2. **Single enabled rule match.** Match picks at most one enabled rule by bundle ID and exact SPIFFE ID; any other result refuses.
+3. **Stored issue.** Match check and issue share one transaction. Revoke uses the service-token revoke routes.
 
 ## Structure
 
-Unexported mtlsExchange with constructor that takes bundle store, rule store, token issuer, clock, and policy; only the constructor makes a ready value and it refuses nil stores.
+Unexported mtlsExchange with a constructor that takes the stores, the issuer, the clock and the policy and refuses nil values.
 
 ## Risks
 
-- A second rule with the same SPIFFE ID could make match ambiguous.
-- A large chain or high exchange rate could load the verifier.
+- Two rules with the same SPIFFE ID refuse.
+- A large chain or high rate loads the verifier.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| port adapter | TLS adapter checks chain to enabled bundle, expiry with no skew, name, and revocation from the bundle revocation source; refuses other CA, expired, not-yet-valid, revoked, unknown revocation status, missing chain, or missing URI SAN. | Send a chain from another CA, an expired leaf, a not-yet-valid leaf, a revoked leaf, an unreachable revocation source, no client certificate, and a leaf with no URI SAN; each gets a refusal and no token. |
-| service | Service rechecks rule enabled, bundle enabled, exact case-sensitive SPIFFE match, single match, namespace match, principal enabled, and issue lifetime against policy inside one transaction. | Replay a valid chain against a disabled rule, a disabled bundle, a rule of another namespace, two rules with the same SPIFFE ID, a disabled principal, and an over-long lifetime; each gets a refusal. |
-| HTTP handler | HTTP handler requires client-cert authentication on the exchange route, checks authorization action on the exchange object, and fails closed on any error with no partial write. | Call the route with no client certificate and with a forced store error; each gets a 401 or 500 with no token and a refusal audit entry. |
+| boundary check | The TLS adapter checks chain, time, revocation, depth 8 and size 32 KB. | Send another CA, expired, revoked and oversize chains; each refuses. |
+| authorize at point of use | The service rechecks rule, bundle, principal and namespace in one transaction. | Send a forged forwarded-chain header, disabled rule and cross-namespace principal; each refuses. |
+| limit | The handler caps body size and rate and fails closed. | Flood with no-certificate calls and force a store error; no token. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+ Workload->>Server: TLS client certificate
+ Server->>Server: verify and match
+ Server-->>Workload: trust token
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| correctness | 0 tokens issued for refused chains | tokens | mTLS exchange |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+ subgraph Outside
+ W[Workload]
+ end
+ subgraph Server
+ T[TLS exchange route]
+ V[Verifier]
+ S[Store]
+ end
+ W --> T --> V --> S
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| TLS exchange route | S | A spoofed certificate or forwarded-chain header gains a trust token. | boundary check | Verify chain, time and revocation. | Replay other CA, expired and revoked chains. |
+| TLS exchange route | S | A spoofed certificate or forwarded-chain header gains a trust token. | encode or contain | Read the chain only from the TLS session; ignore headers. | Send a forged forwarded-chain header; it refuses. |
+| TLS exchange route | S | A spoofed certificate or forwarded-chain header gains a trust token. | limit | Cap chain size, body and rate. | Flood with oversize chains. |
+| TLS exchange route | S | A spoofed certificate or forwarded-chain header gains a trust token. | authorize at point of use | Single enabled rule and in-namespace enabled principal. | Replay duplicate rules and cross-namespace principal. |
+| TLS exchange route | S | A spoofed certificate or forwarded-chain header gains a trust token. | fail closed | Any error gives no token. | Force a store error; no token. |
+
+## Contracts
+
+**trust-token**
+
+- Invariant: One live token names one namespace, one rule and one non-person principal.
+- `exchange`: pre: A verified client chain is present.. Post: A stored token with an audit entry exists, or no token exists..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Verify revocation | Responder slow or unreachable | Retry the exchange after the cache TTL. | No token. |
+| Issue | Store fails | Retry as a new call. | No token and no audit entry. |

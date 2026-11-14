@@ -44,9 +44,9 @@ When a namespace or approval rule sets a shorter window, the server SHALL use th
 - **WHEN** The installation window is 900 and the namespace window is 0
 - **THEN** The server asks for a fresh authentication at each step of that namespace.
 
-#### Scenario: Longer narrow window refused
-- **WHEN** A namespace or approval rule asks for a longer window than the installation
-- **THEN** The server refuses the setting and keeps the shorter window.
+#### Scenario: Approval rule sets 0
+- **WHEN** The approval rule window is 0 and the installation window is 900
+- **THEN** The server asks for a fresh authentication at each step of that rule.
 
 ### Requirement: Boundary stays fresh
 
@@ -55,3 +55,23 @@ When the window is above 0 and the step age equals the window, the server SHALL 
 #### Scenario: Age equals nonzero window
 - **WHEN** The window is above 0 and the step age equals the window
 - **THEN** The server accepts the step as fresh.
+
+### Requirement: Invalid window refused
+
+When the window value is not 0 and not 60 to 900, the server SHALL refuse the setting.
+
+#### Scenario: Window 30 refused
+- **WHEN** An administrator sets freshAuthSeconds to 30
+- **THEN** The server refuses the setting and keeps the prior window.
+
+### Requirement: Window change needs fresh
+
+When an administrator changes the window to a longer value, the server SHALL ask for a fresh authentication before the change.
+
+#### Scenario: Change to longer needs fresh
+- **WHEN** An administrator changes the window to a longer value
+- **THEN** The server asks for a fresh authentication before the change.
+
+#### Scenario: Change to 0 needs none
+- **WHEN** An administrator changes the window to 0
+- **THEN** The server accepts the change without a fresh authentication.

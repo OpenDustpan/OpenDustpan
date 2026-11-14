@@ -1,77 +1,77 @@
 ## ADDED Requirements
 
+### Requirement: first-boot-mode-pinned
+
+When an installation starts in signed-request mode, the server SHALL keep the first-boot mode unchanged and require one pinned offline public key.
+
+#### Scenario: Start needs a pinned key
+- **WHEN** an installation starts in signed-request mode with no pinned key
+- **THEN** the server refuses recovery with 403 and reports missing-key on the status route.
+
 ### Requirement: signed-request-grants-session
 
 When an installation in signed-request mode receives a fresh signed recovery request with a valid signature, the server SHALL issue one admin session.
 
-#### Scenario: Valid signed request gives one admin session
-- **WHEN** an installation in signed-request mode receives a fresh request with a valid offline-key signature
-- **THEN** the server issues one admin session, writes one audit entry with mode and time and source, writes the break-glass.used notice in the same transaction, and opens one break-glass review only when the review opt-in is on.
+#### Scenario: Valid request gives one session
+- **WHEN** a fresh request has a valid offline-key signature
+- **THEN** the server issues one session to the recovery administrator and writes one audit entry with mode, time and source.
 
 ### Requirement: wrong-signature-refused
 
-When a recovery request carries a wrong signature or an unknown key, the server SHALL refuse it with 401 and issue no session.
+When a recovery request carries a wrong signature or an unknown key, the server SHALL refuse it with 401.
 
 #### Scenario: Wrong signature gives no session
-- **WHEN** a recovery request carries a wrong signature or a key the installation does not pin
-- **THEN** the server answers 401, issues no session, writes one refused-use audit entry, and opens no review.
+- **WHEN** a request carries a wrong signature
+- **THEN** the server answers 401, issues no session and writes one refused-use audit entry.
 
 ### Requirement: replay-refused
 
-When the same recovery request ID arrives a second time, the server SHALL refuse it and issue no session.
+When the same recovery request ID arrives a second time, the server SHALL refuse it with 409.
 
 #### Scenario: Second use gives no session
-- **WHEN** the same recovery request ID arrives a second time
-- **THEN** the server answers 409, issues no second session, writes one refused-use audit entry, and opens no review.
+- **WHEN** the same ID arrives again
+- **THEN** the server answers 409 and issues no second session.
 
-#### Scenario: Restart after commit still refuses replay
-- **WHEN** the server restarts after it committed a recovery use
-- **THEN** the server answers 409 after restart and issues no session.
+#### Scenario: Crash before commit leaves it unused
+- **WHEN** the server crashes before commit
+- **THEN** a retry with the same ID succeeds once.
 
 ### Requirement: wrong-mode-refused
 
-When a recovery request arrives at an installation whose recovery mode is not signed-request, the server SHALL refuse it with 403 and issue no session.
+When a recovery request arrives at an installation whose recovery mode is not signed-request, the server SHALL refuse it with 403.
 
 #### Scenario: Wrong mode gives no session
-- **WHEN** a recovery request arrives at an installation whose recovery mode is not signed-request
-- **THEN** the server answers 403 with code break-glass.wrong-mode, issues no session, and writes one refused-use audit entry.
+- **WHEN** the mode is not signed-request
+- **THEN** the server answers 403 with code break-glass.wrong-mode and issues no session.
 
 ### Requirement: stale-request-refused
 
-When a recovery request is past its expiry or not yet valid past the skew bound, the server SHALL refuse it with 401 and issue no session.
+When a recovery request is past its expiry or not yet valid past the skew bound, the server SHALL refuse it with 401.
 
 #### Scenario: Expired request gives no session
-- **WHEN** a recovery request is past its expiry or has an issued-at time in the future past the skew bound
-- **THEN** the server answers 401, issues no session, and writes one refused-use audit entry.
-
-### Requirement: misdirected-malformed-refused
-
-When a recovery request names another installation or audience or carries a malformed request ID, the server SHALL refuse it with 401 and issue no session.
-
-#### Scenario: Misdirected or malformed request gives no session
-- **WHEN** a recovery request names another installation or audience or carries a malformed or oversize request ID
-- **THEN** the server answers 401, issues no session, and writes one refused-use audit entry.
+- **WHEN** the request is past its expiry
+- **THEN** the server answers 401 and issues no session.
 
 ### Requirement: concurrent-consume-single-winner
 
 When the same unused recovery request ID arrives in two concurrent submits, the server SHALL issue one admin session for one submit only.
 
 #### Scenario: Two at-once submits give one session
-- **WHEN** the same unused recovery request ID arrives in two concurrent submits
-- **THEN** the server issues one admin session for one submit, answers 409 to the other submit, and records the request ID once.
-
-### Requirement: refused-use-bounded
-
-When refused recovery submits pass the per-address refusal limit, the server SHALL throttle further refused submits by client address without refusing a valid signed request.
-
-#### Scenario: Flood of bad requests stays bounded
-- **WHEN** refused recovery submits pass the per-address refusal limit
-- **THEN** the server throttles further refused submits by client address, writes no unbounded audit rows, and still accepts a later valid signed request from the same address.
+- **WHEN** two submits carry one unused ID
+- **THEN** one submit gets a session and the other gets 409.
 
 ### Requirement: recovery-ends-prior-sessions
 
 When a valid signed recovery request succeeds, the server SHALL add 1 to the session generation of the recovery administrator in the same transaction.
 
-#### Scenario: Recovery ends prior sessions
-- **WHEN** a valid signed recovery request succeeds for the recovery administrator
-- **THEN** cookies from before the recovery no longer authenticate and only the new recovery session works.
+#### Scenario: Prior cookies end
+- **WHEN** a valid request succeeds
+- **THEN** cookies from before no longer authenticate.
+
+### Requirement: refused-use-bounded
+
+When refused recovery submits pass the per-address refusal limit, the server SHALL throttle further refused submits by client address.
+
+#### Scenario: Flood stays bounded
+- **WHEN** refused submits pass the limit
+- **THEN** the server throttles them and still accepts a later valid request from the same address.

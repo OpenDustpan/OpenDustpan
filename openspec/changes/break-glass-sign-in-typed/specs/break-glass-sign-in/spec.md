@@ -6,7 +6,7 @@ When a break-glass account starts a sign-in, the server SHALL refuse the sign-in
 
 #### Scenario: Empty reason refused
 - **WHEN** a break-glass account starts a sign-in with no typed reason
-- **THEN** the server refuses the sign-in and sets no session cookie
+- **THEN** the server answers 400 with the message that names the limits and sets no session cookie
 
 #### Scenario: Controls refused
 - **WHEN** the reason holds a CR, LF, tab, DEL or Unicode line separator
@@ -20,13 +20,21 @@ When a break-glass account starts a sign-in, the server SHALL refuse the sign-in
 - **WHEN** the reason has 1 or 500 printable characters, including non-ASCII letters
 - **THEN** the server accepts the reason
 
+### Requirement: Assertion before reason
+
+If the passkey assertion of a break-glass sign-in is not valid, then the server SHALL refuse the sign-in without an alert entry.
+
+#### Scenario: Bad assertion
+- **WHEN** a client sends a valid reason with a bad passkey assertion
+- **THEN** the server refuses the sign-in, writes no alert entry and sets no session cookie
+
 ### Requirement: Alert on sign-in
 
 When a break-glass sign-in succeeds, the server SHALL write the alert audit entry in the transaction of the sign-in.
 
 #### Scenario: Alert written
 - **WHEN** a break-glass sign-in with a typed reason succeeds
-- **THEN** the audit log holds one entry with the reason and the server then writes one WARN log line
+- **THEN** the audit log holds one entry with the reason, the notification is written in the same transaction, and the server then writes one WARN log line
 
 #### Scenario: Audit failure
 - **WHEN** the audit write fails during the sign-in
@@ -68,6 +76,10 @@ If the expiry of a break-glass cookie is later than the limit from the server cl
 - **WHEN** a cookie carries an expiry beyond the limit ahead of the server clock
 - **THEN** the server answers 401 and writes an audit entry
 
+#### Scenario: Tampered cookie
+- **WHEN** a cookie is changed after the server sealed it
+- **THEN** the server answers 401
+
 ### Requirement: Per-request audit
 
 While a break-glass session is active, the server SHALL write one audit entry for each request with the session ID and the reason.
@@ -84,6 +96,10 @@ If the audit write of a request of a break-glass session fails, then the server 
 - **WHEN** the audit store is down during a request
 - **THEN** the server answers 503 and the request changes no data
 
+#### Scenario: Sign-out exempt
+- **WHEN** the audit store is down and the person signs out
+- **THEN** the session ends
+
 ### Requirement: No identity provider start
 
 If a break-glass sign-in starts at the identity provider, then the server SHALL refuse the sign-in.
@@ -99,14 +115,6 @@ When a site administrator revokes the sessions of a break-glass principal, the s
 #### Scenario: Early end
 - **WHEN** a site administrator adds 1 to the session generation of the principal
 - **THEN** the next request of the session answers 401
-
-### Requirement: Floor of two paths kept
-
-While a break-glass sign-in or session exists, the server SHALL keep the count of enabled break-glass accounts unchanged.
-
-#### Scenario: No change of the count
-- **WHEN** a break-glass sign-in succeeds or its session ends
-- **THEN** the count of enabled break-glass accounts stays the same
 
 ### Requirement: 90-day test marker
 
@@ -127,3 +135,7 @@ If a break-glass account has no successful sign-in for 90 days, then the server 
 #### Scenario: Never signed in
 - **WHEN** an account made 91 days ago has never signed in
 - **THEN** the principal response shows no test time and the flag true
+
+#### Scenario: Parallel sign-ins
+- **WHEN** two sign-ins of the account finish at the same time
+- **THEN** the last test time is the later of the two

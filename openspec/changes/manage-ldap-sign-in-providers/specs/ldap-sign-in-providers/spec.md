@@ -16,17 +16,45 @@ The server SHALL provide create, read, update and delete routes for stored LDAP 
 - **WHEN** two requests race on the same directory URL
 - **THEN** one answers 409 and the database holds one record
 
+### Requirement: Fix the directory URL
+
+If an update changes the directory URL of a stored provider, then the server SHALL refuse the update with 409.
+
+#### Scenario: URL change
+- **WHEN** an update names another URL
+- **THEN** the server answers 409, names the rebind route and keeps the record
+
+### Requirement: Delete a provider
+
+When a site administrator deletes a stored provider, the server SHALL revoke the sessions of the provider and keep its ID reserved.
+
+#### Scenario: Delete
+- **WHEN** a provider is deleted
+- **THEN** its sessions end and a create with the same ID answers 409
+
 ### Requirement: Reference the bind password
 
-The server SHALL store the bind password of a provider only as a reference to an environment variable or a file.
+The server SHALL accept the bind password reference of a provider only when it names an environment variable or a file from the allowlist of the operator.
 
 #### Scenario: Never returned
 - **WHEN** a site administrator reads a provider
 - **THEN** the answer shows the reference and no password
 
+#### Scenario: Outside allowlist
+- **WHEN** a create names a variable that is not on the allowlist
+- **THEN** the server answers 400 and stores nothing
+
+#### Scenario: Unreadable value
+- **WHEN** the variable is empty or the file is missing at sign-in
+- **THEN** the sign-in is refused
+
+#### Scenario: Symlink
+- **WHEN** the file path leaves the allowed root through a symlink
+- **THEN** the server refuses to read it
+
 ### Requirement: Refuse plain connections
 
-If a stored provider uses a plain connection to a non-loopback address while the plain-connection setting is off, then the server SHALL refuse the provider.
+If a provider uses a plain connection to a non-loopback address while the plain-connection setting is off, then the server SHALL refuse the connection.
 
 #### Scenario: Plain refused
 - **WHEN** a create names an ldap:// URL to a non-loopback host
@@ -40,13 +68,29 @@ If a stored provider uses a plain connection to a non-loopback address while the
 - **WHEN** a create names an ldap:// URL to a loopback address
 - **THEN** the server accepts the provider
 
-### Requirement: Re-check on setting change
-
-When the plain-connection setting changes to off, the server SHALL refuse the sign-in through a stored plain provider.
-
 #### Scenario: Setting turned off
 - **WHEN** the setting changes to off after a plain provider exists
 - **THEN** the next sign-in through that provider is refused and the record stays
+
+#### Scenario: Static provider
+- **WHEN** the static provider uses a plain URL while the setting is off
+- **THEN** the sign-in is refused
+
+### Requirement: Keep certificate checks
+
+If the certificate of the directory fails the check, then the server SHALL refuse the sign-in.
+
+#### Scenario: Bad certificate
+- **WHEN** the directory certificate is not signed by the CA bundle
+- **THEN** the sign-in is refused
+
+#### Scenario: StartTLS
+- **WHEN** a provider uses StartTLS and the upgrade fails
+- **THEN** the sign-in is refused
+
+#### Scenario: Unreachable
+- **WHEN** the directory does not answer in 10 seconds
+- **THEN** the sign-in is refused
 
 ### Requirement: Restrict subject source
 
@@ -66,7 +110,7 @@ If the user name is empty, longer than 256 bytes or holds a control character, t
 
 ### Requirement: Refuse unsafe sign-in
 
-If the directory reports the user disabled, the bind fails or the directory is unreachable, then the server SHALL refuse the sign-in.
+If the directory reports the user disabled, the bind fails or the user is absent, then the server SHALL refuse the sign-in.
 
 #### Scenario: Disabled user
 - **WHEN** the directory reports the user disabled
@@ -79,6 +123,10 @@ If the directory reports the user disabled, the bind fails or the directory is u
 #### Scenario: Referral
 - **WHEN** the directory answers with a referral only
 - **THEN** the sign-in is refused and no referral is followed
+
+#### Scenario: Absent user
+- **WHEN** the directory has no entry for the user
+- **THEN** the sign-in is refused and no membership changes
 
 ### Requirement: Limit directory answers
 
@@ -93,8 +141,8 @@ If a group search returns more than 1000 entries, then the server SHALL refuse t
 When an LDAP sign-in returns groups, the server SHALL apply them through the one membership function with source ldap under the protected-group rules.
 
 #### Scenario: Applied
-- **WHEN** an LDAP sign-in returns group memberships
-- **THEN** memberships change with source ldap and each change has an audit entry
+- **WHEN** an LDAP sign-in returns group memberships, nested groups included
+- **THEN** memberships change as a flat list with source ldap and each change has an audit entry
 
 #### Scenario: Protected
 - **WHEN** a claim names a protected group
@@ -121,11 +169,15 @@ If the static LDAP provider ID points at another directory URL than the recorded
 - **THEN** the server starts
 
 #### Scenario: First start
-- **WHEN** no record exists and the installation never started the provider
-- **THEN** the server writes the record and starts
+- **WHEN** no row exists and the start marker is not set
+- **THEN** the server writes the row and the marker in one transaction and starts
+
+#### Scenario: Concurrent first start
+- **WHEN** two servers start together with no row
+- **THEN** one row exists and the other server reads it
 
 #### Scenario: Lost record
-- **WHEN** the record is missing after a first start
+- **WHEN** the row is missing and the start marker is set
 - **THEN** the server refuses to start and names the rebind route
 
 ### Requirement: Authorize rebind

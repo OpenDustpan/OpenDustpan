@@ -1,20 +1,25 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing e2e for writer scope across two collections Check: e2e writer on collection A writes unit of A and gets 403 on unit of B
-- [ ] 1.2 Add failing e2e for viewer read and write Check: e2e viewer reads export and pull and gets 403 on up and apply, in both collections
-- [ ] 1.3 Add failing e2e for revocation and membership timing Check: e2e revoke grant and end membership then next CLI request fails with 403
-- [ ] 1.4 Add failing e2e for access-review snapshot and history export Check: e2e export lists holder, role, object, creator, time, last use with Never, and history end time
-- [ ] 1.5 Add failing e2e for non-admin baseline Check: e2e non-admin token runs milestone 1 to 3 Pulumi and OpenTofu reads and writes with collection grants
+- [ ] 1.1 Write a failing e2e for writer scope across two collections with the real Pulumi CLI and OpenTofu, route PUT /api/server/namespaces/{namespace}/collections/{collection}/grants, personal access token of a non-admin person Check: e2e/access_test.go new test fails on main
+- [ ] 1.2 Write a failing e2e for viewer read and write with `pulumi stack export`, `tofu state pull`, `pulumi up` and `tofu apply`, personal access token of a viewer Check: e2e/access_test.go new test fails on main
+- [ ] 1.3 Write a failing e2e for revocation, route DELETE /api/server/grants/{id}, and the retry with the same personal access token Check: e2e/access_test.go new test fails on main
+- [ ] 1.4 Write a failing e2e for the access-review export, route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, with a site administrator session Check: e2e/access_review_test.go new test fails on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Enforce collection-scoped grant checks on unit reads and writes with installation-grant reach Check: `go test ./internal/access/... -run TestCollectionScope`
-- [ ] 2.2 Refuse a grant above the granter reach through the shared reach function Check: `go test ./internal/access/... -run TestGranterReach`
-- [ ] 2.3 Serve snapshot and history export with the required row fields, action and audit entry Check: `go test ./internal/access/... -run TestAccessReviewExport`
+- [ ] 2.1 Fix each gap that the e2e steps find in the grant check Check: `go test ./pkg/access/...`
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Wire routes with authorization actions and audit entries Check: e2e roadmap step writer on one collection writes there and gets 403 elsewhere, viewer reads but refuses up and apply, revocation applies on next request, export lists each grant
-- [ ] 3.2 Document groups, roles, grants and the export in the same pull request Check: docs page command runs as written
-- [ ] 3.3 Run usability check with error names for the one helping command Check: persona completes the path from the docs page alone
-- [ ] 3.4 Run full definition of done Check: `make check` with zero findings
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Wiring and routes keep their authorization actions Check: route test passes
+- [ ] 4.2 Update docs/guides/roles-and-grants.md and docs/guides/access-review.md Check: the commands on the pages run in e2e
+- [ ] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
+- [ ] 4.4 Run the full check Check: `make check` with zero findings

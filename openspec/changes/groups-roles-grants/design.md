@@ -1,25 +1,65 @@
 ## Context
 
-Groups, roles and grants are stored grants checked at the point of use with no cached allow. Principals and groups live in the home that the installation setting identity.principalHome sets. The change adds no new grant shape and no new role. This change ships the shared unexported reach function and the refusal codes unit.forbidden and secret.forbidden for reuse by later changes.
+The grant check reads stored grants at each request. This change adds proof and fixes gaps. It adds no grant shape.
 
 ## Decisions
 
-1. **Check stored grants on each request.** Reuse the stored grant check at the service for each tool route, so revocation and membership change take effect on the next request with no cached allow.
-2. **One shared reach function.** Evaluate every grant, membership and act-as cover through one unexported reach function shipped here, so later changes reuse it and cannot diverge.
-3. **Export reads stored grants.** Build the access-review export as a read over stored grants with holder, role, object, creator, time, last use with Never, and history end time, in snapshot and history modes under its own read-access action.
+1. **Read stored grants at each request.** The service reads the live grant and membership rows. No allow is cached, so a revoked grant fails on the next request.
 
 ## Structure
 
-The check lives in an unexported granter with constructor newGranter that loads only stored grants by stable ID and calls the shared unexported reach function reachOf; names stay labels for people.
+Keep the one existing reach function in pkg/access as the only place that decides reach, so the write path and the export cannot diverge. Add no new exported type.
 
 ## Risks
 
-- A cached allow lets a revoked grant or ended membership write until the cache ends.
+- A cached allow lets a revoked grant write after it ended.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | Service checks the stored grant for the caller, the action and the object before any state read or write. | Call unit write with a writer grant on another collection and expect 403. |
-| port adapter | Store transaction reads the live grant and membership rows at the time of the request with no cached allow. | Revoke the grant or end the membership then retry the same token and expect refusal on the next request. |
-| HTTP handler | HTTP adapter maps a refused check to 403 with error code, missing action and object, and writes a refusal audit entry. | Send viewer up and apply calls and export calls without the export action and expect 403 with audit entries. |
+| service | The service checks the stored grant for the caller, action and object before each state read or write | A writer on collection A writes a unit of collection B and expects 403 |
+| port adapter | The store reads live grant and membership rows in the same transaction | Revoke the grant and retry the same token and expect 403 |
+| HTTP handler | The handler maps a refused check to 403 | A viewer sends the write call and expects 403 |
+
+## Diagrams
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/access]
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| Revocation latency | 0 | requests served after the grant ends | each tool route |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+ subgraph Client
+ CLI[Pulumi CLI or OpenTofu]
+ end
+ subgraph Server
+ API[HTTP handler] --> SVC[Grant check] --> DB[(Store)]
+ end
+ CLI -->|access token| API
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Server | E | A writer or viewer does an action outside its grant | authorize at point of use | The service checks the stored grant for the action and object | A viewer runs tofu apply and expects 403 |
+| Server | E | A writer or viewer does an action outside its grant | fail closed | An unknown or ended grant denies | Use a token after its grant ends and expect 403 |
+| Server | I | A caller reads the export without the read-access action | authorize at point of use | The export route checks its read-access action | Ask for the export without the action and expect 403 |
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Unit write | The grant ends between the grant read and the commit | Retry after a new grant | No write committed and the answer is 403 |

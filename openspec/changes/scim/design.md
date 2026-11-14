@@ -1,25 +1,77 @@
 ## Context
 
-SCIM is a provisioning adapter behind a port. It writes persons, groups, and memberships. It never issues sessions or tokens. Removal disables sessions and tokens at once.
+SCIM is a provisioning adapter behind a port. It writes persons, groups and memberships and never issues sessions or tokens.
 
 ## Decisions
 
-1. **Service owns the writes.** One service owns SCIM writes. It creates or links the person by stable subject, creates groups by stable ID, and routes each membership write through the one membership function of one-membership-function-identity-provider in the same transaction. The SCIM adapter maps wire fields and does no store write.
-2. **Disable on delete.** Removal is disable first. SCIM DELETE disables the person, disables sessions and access tokens, and keeps the rows. When the revocation setting from the generic settings API is on, the same transaction revokes them instead. The setting key is registered once through the generic settings API and shared with manage-ldap-sign-in-providers for LDAP removals. The guard of keep-two-working-break-glass refuses DELETE of the last enabled break-glass principal with 409 and no state change.
+1. **One service owns the writes.** The service creates persons by stable subject with source scim, maps group values through the same claim rule, and calls the one membership function in one transaction. The adapter maps wire fields only.
+2. **Disable first.** A DELETE or active false disables the person, adds 1 to the session generation and disables tokens. With the setting on, it revokes them. The break-glass guard refuses the last enabled break-glass principal with 409.
 
 ## Structure
 
-Untrusted SCIM input never reaches the store. Type scimRequest has unexported fields and only NewScimRequest makes it and checks the subject, group ID, and size.
+The unexported type scimRequest is made only by NewScimRequest, which checks the subject, the group ID and the size. The store never sees raw SCIM input.
 
 ## Risks
 
-- A SCIM client mass-disables users; rate limit and audit each removal.
-- Two clients race on the same subject; the subject has a unique index and one wins.
+- A client mass-disables users: the rate limit and the audit bound it.
+- Two creates race on one subject: a unique index lets one win.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP handler | Bearer token with SCIM scope on each SCIM route, checked at the handler. Unknown or weak token gets 401. | Send SCIM create with no token, a wrong token, and a token without SCIM scope; each gets 401 and writes no row. |
-| Service | Strict decode of SCIM JSON, field allowlist, size limit, and stable ID check in the service constructor. | Send extra fields, oversize body, and bad subject; each is refused and writes no row. |
-| Port adapter | Store checks the namespace fence and the grant on the group object in the same transaction. | Call the service with a fence of another namespace and without the grant; each write is refused. |
+| HTTP handler | A SCIM-scoped bearer credential on each route. | Send create with no token, a wrong token and an admin token without SCIM scope. Each gives 401 and no row. |
+| Service | Strict decode, field allowlist and size limit in the constructor. | Send extra fields, an oversize body and a bad subject. Each is refused. |
+| Port adapter | The store checks the namespace fence in the same transaction. | Call the store with a fence of another namespace. The write is refused. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+ participant C as SCIM client
+ participant R as Routes
+ participant S as Service
+ participant D as Store
+ C->>R: DELETE user
+ R->>S: remove
+ S->>D: disable, bump generation, audit
+ D-->>S: ok
+ S-->>C: 204
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| recoverability | 100 | percent of SCIM removals visible in the audit export on the next read | each SCIM disable and revocation |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+ subgraph External
+ C[SCIM client]
+ end
+ subgraph Server
+ R[SCIM routes] --> S[Service] --> D[(Store)]
+ end
+ C --> R
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | boundary check | Strict decode and an allowlist of fields. | Send extra fields and an oversize body. Each is refused. |
+| SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | authorize at point of use | SCIM-scoped bearer credential on each route. | Send an admin token without SCIM scope. The server answers 401. |
+| SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | limit | A rate limit on DELETE for each credential. | Send a burst of DELETEs. The excess gets 429. |
+| SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | fail closed | An unknown credential or value is denied and audited. | Send an unknown credential. The server answers 401 and writes an audit entry. |
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| DELETE user | A burst above the limit. | Retry after the window. | The excess users stay enabled. |
+| POST user | Two creates race on one subject. | Read the user list and retry. | One row exists. |

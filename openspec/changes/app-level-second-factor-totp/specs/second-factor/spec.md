@@ -5,7 +5,7 @@
 When a person with no factor presents a valid unused 128-bit enrollment code inside its one-hour life or a one-time first-enrollment-only email code with a valid TOTP setup, the server SHALL store one TOTP factor for the person.
 
 #### Scenario: Enroll with code then list
-- **WHEN** a person with no factor presents a valid unused 128-bit enrollment code inside its one-hour life or a one-time first-enrollment-only email code with a valid TOTP setup
+- **WHEN** a person with no factor presents a valid unused enrollment code with a valid TOTP setup
 - **THEN** the server stores one TOTP factor for the person and writes one audit entry
 
 #### Scenario: Reuse or expiry fails
@@ -17,12 +17,24 @@ When a person with no factor presents a valid unused 128-bit enrollment code ins
 When a person with no factor presents a valid unused 128-bit enrollment code inside its one-hour life or a one-time first-enrollment-only email code with a valid attestation, the server SHALL store one passkey credential for the person.
 
 #### Scenario: Enroll with code then step up
-- **WHEN** a person with no factor presents a valid unused 128-bit enrollment code inside its one-hour life or a one-time first-enrollment-only email code with a valid attestation
+- **WHEN** a person with no factor presents a valid unused enrollment code with a valid attestation
 - **THEN** the server stores one passkey credential for the person and writes one audit entry
 
 #### Scenario: Email code second use fails
 - **WHEN** the same email code arrives a second time
 - **THEN** the server answers 403 and stores no credential
+
+### Requirement: issue-enrollment-code
+
+When an administrator with server:manage-sign-in requests an enrollment code for a person, the server SHALL issue one 128-bit single-use code with a one-hour life.
+
+#### Scenario: Administrator issues code
+- **WHEN** an administrator with server:manage-sign-in requests an enrollment code for a person
+- **THEN** the server shows the code one time, stores only its hash with a one-hour expiry and writes one audit entry
+
+#### Scenario: Email code sent once
+- **WHEN** a person with no factor requests the email enrollment proof
+- **THEN** the server sends one one-time code to the stored email of the person and writes one audit entry
 
 ### Requirement: concurrent-enrollment
 
@@ -31,6 +43,14 @@ When two enroll requests with the same enrollment code arrive together, the serv
 #### Scenario: Concurrent use keeps one
 - **WHEN** two enroll requests with the same enrollment code arrive together
 - **THEN** the server stores one factor from the first winner, rejects the second with 403 and writes one audit entry for each attempt
+
+### Requirement: factor-change-needs-fresh-step
+
+When a person with a factor adds or removes a factor with no fresh step inside the window, the server SHALL refuse the change.
+
+#### Scenario: Remove needs fresh step
+- **WHEN** a person with a factor calls delete or second enrollment with no fresh step inside the window
+- **THEN** the server answers 403 with error code mfa.fresh-step-required and removes no factor
 
 ### Requirement: step-up-restarts-window
 
@@ -72,6 +92,26 @@ When a person enrolls or removes a factor, the server SHALL write one audit entr
 - **WHEN** no notification channel exists or delivery fails
 - **THEN** the server still writes the audit entry and still adds 1 to the session generation
 
+### Requirement: recovery-code-only-replaces
+
+When a person presents a valid unused recovery code with a valid factor setup, the server SHALL enroll one replacement factor and never accept the code as a fresh step.
+
+#### Scenario: Recovery code enrolls one replacement
+- **WHEN** a person presents a valid unused recovery code with a valid factor setup
+- **THEN** the server consumes the code, stores one replacement factor and writes one audit entry
+
+#### Scenario: Recovery code never steps up
+- **WHEN** a person presents a recovery code at step-up
+- **THEN** the server answers 403 with error code mfa.fresh-step-required
+
+### Requirement: email-code-never-fresh
+
+When a person presents an email enrollment code at step-up, the server SHALL refuse it as a fresh step.
+
+#### Scenario: Email code refused at step-up
+- **WHEN** a person presents an email enrollment code at step-up
+- **THEN** the server answers 403 with error code mfa.fresh-step-required
+
 ### Requirement: ssh-signature-fresh-step
 
 When a person presents a valid SSH signature with an enrolled SSH key, the server SHALL accept the signature as a fresh step.
@@ -79,6 +119,10 @@ When a person presents a valid SSH signature with an enrolled SSH key, the serve
 #### Scenario: SSH fallback passes
 - **WHEN** a person presents a valid SSH signature with an enrolled SSH key
 - **THEN** the server accepts the signature as a fresh step after passkey and TOTP
+
+#### Scenario: Invalid SSH fails
+- **WHEN** the signature is invalid, replayed, from an unenrolled key or from a revoked key
+- **THEN** the server answers 403 with error code mfa.fresh-step-required and records no step
 
 ### Requirement: single-use-challenge
 
@@ -98,10 +142,10 @@ When the server accepts a TOTP code or WebAuthn assertion, the server SHALL reco
 
 ### Requirement: rate-limit-attempts
 
-When TOTP or enrollment-code attempts pass the configured retry limit, the server SHALL refuse further attempts until the limit resets.
+When TOTP or enrollment-code attempts pass the per-person retry limit, the server SHALL refuse further attempts until the limit resets.
 
 #### Scenario: Brute force slows
-- **WHEN** TOTP or enrollment-code attempts pass the configured retry limit
+- **WHEN** TOTP or enrollment-code attempts pass the per-person retry limit
 - **THEN** the server answers 429 and writes one audit entry after the limit
 
 ### Requirement: trusted-header-and-mfa-toggle
@@ -111,6 +155,18 @@ When a trusted-header session outlives an allowlist change or MFA turns off and 
 #### Scenario: Allowlist or toggle keeps refusal
 - **WHEN** a trusted-header session outlives an allowlist change or MFA turns off and back on while a fresh step is held
 - **THEN** the server still requires a fresh app-factor step and grants no step from the old cookie
+
+### Requirement: require-second-factor-setting
+
+When the installation setting require-second-factor-for-plain-oauth is on, the server SHALL require a fresh app-factor step for each fresh-step operation of a plain OAuth session.
+
+#### Scenario: Setting on requires factor
+- **WHEN** the installation setting require-second-factor-for-plain-oauth is on
+- **THEN** the server refuses each fresh-step operation of a plain OAuth session with 403 with error code mfa.fresh-step-required until the person passes an app-factor step
+
+#### Scenario: Setting off keeps default
+- **WHEN** the installation setting require-second-factor-for-plain-oauth is off
+- **THEN** the server applies only the default freshness rule with no extra factor demand
 
 ### Requirement: restore-leaves-factors-unreadable
 

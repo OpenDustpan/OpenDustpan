@@ -1,29 +1,68 @@
 ## Context
 
-Mode 2 recovery for an installation with no working administrator. Offline operator key signs a one-time recovery request; server checks signature, refuses reuse, issues one admin session, writes audit entry, and opens a break-glass review only when the review opt-in is on.
+Mode 2 recovery for an installation with no working administrator. The server checks the signature of an offline-signed one-time request, refuses reuse, issues one session and writes an audit entry. The review waits for the RFC.
 
 ## Decisions
 
-1. **Mode choice is immutable after first boot.** Store the recovery-mode choice at first boot and refuse changes after data exists; the write carries no fence because no namespace exists yet.
-2. **Single-use requests by stored request ID.** Hold pending and used recovery request IDs in one store with compare-and-set on use; second use of the same request fails even under retry, restart, or concurrent submit on two nodes.
-3. **One transaction for use and review notice.** Commit session issue, session-generation bump of the recovery administrator, audit entry with mode time and source, and break-glass.used notification in one transaction on success; a crash before commit leaves the request unused, a crash after commit leaves one session and one used ID; refusals commit only a refused-use audit entry and open no review.
-4. **Bounded refused-use writes that never block valid recovery.** Throttle refused recovery submits by client address with a bounded refusal log, but a request with a valid signature and unused ID always reaches the service; the throttle never refuses a valid recovery, so shared addresses and floods cannot deny recovery.
-5. **Review opt-in on for verification and named session-limit key.** The e2e step and the docs page turn breakglass.review-enabled on before the mode 2 use and show its effective value in the API, so the step-11 check sees one opened review without changing the ADR 142 opt-in rule; the recovery session lifetime uses breakglass.recovery-session-seconds, default 900, range 60 to 900, from the same settings key family as break-glass-sign-in-typed, and the generic settings API serves both keys.
+1. **Mode choice is immutable after first boot.** The store refuses a change of the recovery mode after data exists. A start in signed-request mode with no pinned key serves no recovery.
+2. **Single-use requests by stored request ID.** One store holds used IDs with compare-and-set on use. A second use fails under retry, restart or concurrent submit. Used IDs are purged at expiry plus 7 days.
+3. **One transaction for use.** Session issue, generation bump and audit entry commit in one transaction. A crash before commit leaves the request unused.
+4. **Bounded pre-check cost.** An 8 KB body limit and a per-address refusal throttle with a bounded log. A valid signature bypasses the throttle.
 
 ## Structure
 
-Unexported breakglass recovery service with constructor that loads pinned public key and recovery mode; only its Redeem method can mark a request ID used and issue the admin session.
+Unexported recovery service with a constructor that loads the pinned public key and the mode. Only its Redeem method marks a request ID used and issues the session.
 
 ## Risks
 
-- Offline key loss leaves mode 2 unusable until restore from backup.
-- Clock skew rejects fresh requests or accepts stale ones without tight expiry and skew bound.
-- With the review opt-in off, a stolen offline key gives a short session with only an audit entry and no review; the docs page warns of this and tells the operator to turn the review on.
+- Loss of the offline key leaves mode 2 unusable until a restore.
+- Clock skew rejects fresh requests.
+- A stolen offline key gives a short session; audit makes the use visible.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP adapter | Handler checks mode is signed-request, request shape is valid, expiry is in the future, issued-at is not in the future past skew, and request ID has the allowed form, plus per-address rate limit on refused submits that a valid signature bypasses. | Send expired request, future issued-at, oversize fields, and path traversal in key ID directly to handler with valid signature bypassed, plus a flood of bad signatures from one address followed by one valid request from the same address that must still succeed. |
-| Service | Service checks Ed25519 signature against pinned offline public key, checks audience and installation ID match, and consumes request ID in one transaction. | Replay a used request ID, submit a request signed by another key or for another installation, and submit the same ID twice at once directly to service. |
-| Store | Store enforces unique request ID and immutable recovery mode; session issue, generation bump, audit entry, and review notification commit in the same transaction. | Insert duplicate request ID, attempt mode change after first boot, and restart after consume-before-commit directly against store adapter. |
+| HTTP adapter | Checks mode, 8 KB body limit, shape, expiry, skew and ID form. | Send expired, future-dated, oversize and malformed requests directly to the handler. |
+| Service | Checks the Ed25519 signature, audience and installation ID, and consumes the ID once. | Replay an ID, use another key, and submit the same ID twice at once to the service. |
+| Store | Unique request ID and immutable mode. | Insert a duplicate ID and change the mode after first boot against the store. |
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| security | 1 session for each valid request ID; a replay gives 409 with 0 sessions | sessions | recovery redeem |
+| reliability | 0 sessions from a request that crashed before commit, 0 second sessions after commit | sessions | recovery redeem, one server restart |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+ subgraph offline[Offline operator]
+ K[Offline key]
+ end
+ subgraph net[Network boundary]
+ R[Recovery request]
+ end
+ subgraph srv[Server]
+ H[Handler] --> S[Service] --> D[(Store)]
+ end
+ K --> R --> H
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Network boundary | S | An attacker forges a recovery request. | boundary check | The service checks the Ed25519 signature against the pinned key. | Submit a request signed by another key to the service. |
+| Network boundary | S | An attacker forges a recovery request. | fail closed | Any unknown value gives 401 and an audit entry. | Submit a malformed request and check for 401 and one audit entry. |
+| Network boundary | T | An attacker replays a used request. | authorize at point of use | The store consumes the ID once with compare-and-set. | Submit the same ID twice at once to the store. |
+| Server | D | A flood of bad requests exhausts the server. | limit | 8 KB body limit and a per-address refusal throttle; a valid signature bypasses it. | Send a flood of bad signatures, then one valid request from the same address. |
+| Server | E | The recovery session gains more rights than recovery. | limit | The session lifetime uses the freshAuthSeconds window. | Use the session after the window and expect 401. |
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Redeem | Crash before commit | Submit the same request ID again. | No session, no used ID. |
+| Redeem | Concurrent duplicate submit | The loser makes a new request ID. | One session and one used ID. |

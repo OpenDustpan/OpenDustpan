@@ -1,20 +1,27 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing conformance tests for SCIM create user, create group, and add membership. Check: `go test ./pkg/scim/... -run TestScimCreateUserGroupMembership` fails on main.
-- [ ] 1.2 Add failing tests for SCIM PATCH and PUT, membership removal, duplicate 409, and concurrent create. Check: `go test ./pkg/scim/... -run TestScimUpdateAndDuplicate` fails on main.
-- [ ] 1.3 Add failing tests for missing or wrong SCIM scope 401 and for invalid or oversize body. Check: `go test ./pkg/scim/... -run TestScimAuthScopeAndInvalidBody` fails on main.
-- [ ] 1.4 Add failing tests for SCIM DELETE disable of sessions and tokens and 401 on next CLI call. Check: `go test ./pkg/scim/... -run TestScimDeleteDisablesKeeps` fails on main.
-- [ ] 1.5 Add failing tests for opt-in revocation, break-glass 409, idempotent DELETE, atomic audit, and rate limit. Check: `go test ./pkg/scim/... -run TestScimDeleteRevokesWhenSet` fails on main.
+- [ ] 1.1 Write failing tests for create, group, membership, mapping and source scim. Check: `go test ./pkg/scim/... -run TestScimCreateUserGroupMembership`
+- [ ] 1.2 Write failing tests for update, active, duplicate and concurrent create. Check: `go test ./pkg/scim/... -run TestScimUpdateActiveDuplicate`
+- [ ] 1.3 Write failing tests for auth scope, invalid body and rate limit. Check: `go test ./pkg/scim/... -run TestScimAuthScopeAndInvalidBody`
+- [ ] 1.4 Write failing tests for delete, revocation, break-glass 409 and atomic audit. Check: `go test ./pkg/scim/... -run TestScimDeleteDisablesKeeps`
 
 ## 2. Build
 
-- [ ] 2.1 Build the provisioning port, service, and SCIM adapter with stable subjects and group IDs. Check: `go test ./pkg/scim/... ./internal/scimsvc/...` passes.
-- [ ] 2.2 Wire SCIM routes with auth actions and the public list check. Check: `go test ./internal/api/... -run TestScimRoutes` passes and route test lists actions.
-- [ ] 2.3 Build audit entries for each SCIM create, change, membership change, disable, and revocation. Check: `go test ./internal/api/... -run TestScimAuditExport` passes and lists each SCIM entry.
-- [ ] 2.4 Add e2e step: SCIM client creates user and group, existing grant on collection, pulumi up and tofu apply pass, DELETE, next CLI gives 401, revocation on revokes. Check: e2e step passes against the real binary over TLS with the real Pulumi CLI and the real OpenTofu CLI, using the collection grant that groups-roles-grants and collections-placement provide as a precondition.
-- [ ] 2.5 Write the SCIM docs page in the same pull request. Check: Docs page builds and each command runs as written, with each 401, 404, 409, and 429 answer shown.
+- [ ] 2.1 Get the owner decision on SCIM timing. Build tasks are BLOCKED by it. Check: The decision is recorded.
+- [ ] 2.2 Build the port, the service and the adapter. Check: `go test ./pkg/scim/... ./internal/scimsvc/...`
+- [ ] 2.3 Wire the NEW routes with their authorization actions. Check: `go test ./internal/api/... -run TestScimRoutes`
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Run full check with zero findings. Check: `make check` reports zero findings.
-- [ ] 3.2 Do the usability check. Check: Site administrator completes the path from the docs page alone and each error names the one command that helps.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Add the e2e step: a SCIM client calls the NEW /api/dustpan/v1/scim/v2/Users route with the SCIM credential, then pulumi up and tofu apply pass, a DELETE follows, and the next CLI command gives 401. Check: `make e2e`
+- [ ] 4.2 Write the SCIM docs page and run each command on it. Check: `make docs-lint` and the docs command test
+- [ ] 4.3 Do the usability check from the docs page alone. Check: Each error names one command.
+- [ ] 4.4 Run the full check. Check: `make check` with zero findings

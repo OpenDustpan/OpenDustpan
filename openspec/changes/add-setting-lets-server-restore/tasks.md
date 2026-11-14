@@ -1,13 +1,24 @@
-## 1. build
+## 0. Confirm against the code first
 
-- [ ] 1.1 Add failing tests for default off refusal, off with server:restore-access success, allowed change, refused change without action, refused change without fresh step, and restore with setting on plus snapshot, invalid value, and race cases. Check: TestRestoreAccessSetting_defaultOff fails on main, passes after.
-- [ ] 1.2 Add the setting with default off and the REST route with its actions and object. Check: `go test ./internal/api/server/... -run TestSettingsRoute -count=1` passes.
-- [ ] 1.3 Branch the restore apply step on the snapshot value with fail-closed read and the two-path guard in the same transaction. Check: `go test ./internal/backup/... -run TestRestoreAccess -count=1` passes.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
 
-## 2. definition of done
+## 1. tests first
 
-- [ ] 2.1 Update the route test and the audit entry check for old and new value. Check: Route test lists the new settings route with its actions.
-- [ ] 2.2 Add e2e coverage for the setting change and a restore. Check: e2e step changes the setting and runs a restore against the real binary over TLS.
-- [ ] 2.3 Add the user docs page in the same pull request. Check: Docs page shows the setting, default, actions, fresh step, and audit record.
-- [ ] 2.4 Run the usability walk from the docs page alone. Check: Persona completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 2.5 Run full checks. Check: `make check` passes with zero findings.
+- [ ] 1.1 Write failing tests for each spec scenario. Check: TestRestoreAccessSettingDefaultOff fails on main
+
+## 2. build
+
+- [ ] 2.1 Add the stored boolean key with fail-closed parse. Check: `go test ./pkg/setting/... -count=1`
+- [ ] 2.2 Branch the restore apply step on the snapshot with the two-path guard. Check: `go test ./internal/backup/... -run TestRestoreAccess -count=1`
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. definition of done
+
+- [ ] 4.1 Route test lists the settings route with its actions. Check: Route test passes
+- [ ] 4.2 E2E: console session changes the setting, then a restore runs over TLS. Check: `make e2e`
+- [ ] 4.3 Add the docs page and the report listing. Check: Docs page and report show the value
+- [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command
+- [ ] 4.5 Run full checks. Check: `make check` has zero findings

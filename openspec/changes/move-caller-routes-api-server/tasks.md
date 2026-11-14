@@ -1,17 +1,24 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing route tests for GET /me/access, GET /me/grants, and token list, create, delete, and rotate. Check: `go test ./internal/api/server -run TestCallerRoutesMoved -count=1` fails on main with 404 on /me paths
-- [ ] 1.2 Add failing API description tests with WithQuery pageSize and pageToken labels and Idempotency-Key on each mutating token route. Check: `go test ./pkg/dustpan -run TestApiDescCoversMeRoutes -count=1` fails on main for missing description
-- [ ] 1.3 Add failing tests for replay without secret, key reuse with different body or route, concurrent use of one key, and replay with an ended token. Check: `go test ./internal/api/server -run TestCallerIdempotencyConflict -count=1` fails on main
+- [ ] 1.1 Write route tests for the six moved routes. NEW test. Check: `go test ./internal/api/server -run TestCallerRoutesMoved` (NEW) fails on main
+- [ ] 1.2 Write the paging test for cursor and limit refusal. NEW test. Check: `go test ./internal/api/server -run TestCallerPagingNames` (NEW) fails on main
+- [ ] 1.3 Write the idempotency test for the token routes. NEW test. Check: `go test ./internal/api/server -run TestCallerIdempotency` (NEW) fails on main
 
 ## 2. Move
 
-- [ ] 2.1 Move handlers, tests, and e2e/coverage.go rows to /api/dustpan/v1/me paths with atomic rotate. Check: `go test ./internal/api/server/... -count=1` passes
-- [ ] 2.2 Remove the six caller entries from the not-moved list in pkg/dustpan/apidesc_classes_test.go. Check: `go test ./pkg/dustpan -run TestClassCheck -count=1` passes with six fewer not-moved entries and fails when an old caller path stays served
-- [ ] 2.3 Update docs pages that name old caller paths and confirm console account views call only /me paths before the next server tag. Check: `rg -n /api/server/caller docs e2e internal pkg` returns no hits; PM accepts console path updates before the next server tag
-- [ ] 2.4 Reject cursor and limit with 400 naming pageSize and pageToken and declare default and maximum pageSize in the description. Check: `go test ./internal/api/server -run TestCallerPagingNames -count=1` passes
+- [ ] 2.1 Move the handlers to /me and remove six entries from the not-moved list. Check: `go test ./pkg/dustpan -run TestClassCheckFailsClosed`
+- [ ] 2.2 Move the coverage rows in e2e/coverage.go and update the docs that name the old paths. Check: `rg -n -F '/api/server/caller' docs e2e internal pkg` returns no hit
+- [ ] 2.3 Declare the 404, 401, 400 and conflict codes with arguments in the catalog. NEW test. Check: `go test ./internal/errcode -run TestCallerCodes` (NEW)
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Add e2e steps for caller access, grants, token create, rotate, and delete each with Idempotency-Key, plus old-path 404 through the new paths. Check: `make e2e E2E_FOCUS=caller-routes` passes against the real server over TLS
-- [ ] 3.2 Run definition of done: wiring, route authorization checks, e2e step, docs page, usability check from docs page alone. Check: `make check` passes with zero findings
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Add an e2e step that calls GET /api/dustpan/v1/me/access and the token routes with a personal access token, and checks the 404 of the old path. Check: `make e2e` passes with the real Pulumi CLI and OpenTofu
+- [ ] 4.2 Run the full check, and the usability check from the docs page alone. Check: `make check` with zero findings
