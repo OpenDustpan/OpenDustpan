@@ -4138,3 +4138,17 @@ decisions:
   accepted_artifact: "docs/adr/0370-housekeeping-principals-replace-the-namespace-service-principal.md"
   evidence:
   - "docs/adr/0370-housekeeping-principals-replace-the-namespace-service-principal.md"
+- id: "adr-0371"
+  title: "ADR 371: Each way to prove identity in the token exchange has its own token kind"
+  decision: "1. **The JWT exchange issues the kind `jwt-exchange` (owner, 2026-11-14).** The stored token that the exchange issues for a JWT of a workload has the kind `jwt-exchange`. This name replaces `trust`. All else in ADR 284 decision 1 stays: the token belongs to the principal of the rule, it has an ID, an audit entry for its issue, a lifetime from the token policy and a revoke through the routes of the service tokens.\n2. **The mTLS exchange issues the kind `mtls-exchange` (owner, 2026-11-14).** An exchange that checks a TLS client certificate against the trust rules issues a stored access token of the kind `mtls-exchange` for the principal of the rule. It has the same life cycle as a token of decision 1: an ID, an audit entry for its issue, a lifetime from the token policy and a revoke through the routes of the service tokens.\n3. **A new way to prove identity gets a new kind (owner, 2026-11-14).** A later exchange that takes another proof issues a stored token of its own kind. No two ways to prove identity share one kind.\n4. **The kind is in the API, the list and the audit entry.** The list of the tokens of a principal shows the kind of each token. The audit entry of each issue records the kind.\n5. **No migration.** No installation exists, and no tag shipped the kind `trust` (ADR 322). The baseline schema, the code, the guides and the glossary change in place. No alias, conversion or upgrade code reads the kind `trust`.\n\nLater changes, from the status line of ADR 371: Decided by the project owner."
+  reason: "ADR 284 decision 1 (owner, 2026-10-30) says that the token exchange issues \"a stored access token of ADR 6 of its own kind, `trust`, for the principal of the rule\". The exchange of ADR 284 checks the JWT of a workload. ADR 284 leaves one point open in \"Not decided here\": \"Whether an mTLS exchange that issues a stored token follows decision 1 too.\""
+  scope:
+  - "internal/unitimport/unitimport.go"
+  - "pkg/accesstoken/accesstoken.go"
+  - "pkg/principal/removal.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-14"
+  accepted_artifact: "docs/adr/0371-each-way-to-prove-identity-in-the-token-exchange-has-its-own-token-kind.md"
+  evidence:
+  - "docs/adr/0371-each-way-to-prove-identity-in-the-token-exchange-has-its-own-token-kind.md"
