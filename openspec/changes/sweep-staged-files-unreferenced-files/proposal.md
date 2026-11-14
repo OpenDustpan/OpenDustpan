@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1290.
@@ -52,7 +52,6 @@ Out of scope:
 
 Depends on:
 
-- artifact-registry
 - h1-hash-provider-archive-registry
 - backups-do-not-copy-files
 
