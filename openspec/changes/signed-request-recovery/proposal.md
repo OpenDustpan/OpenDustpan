@@ -236,8 +236,10 @@ decisions).
 - Changed by: ADR 372 extends decisions 8 and 9. Chain to the end: ADR 372.
 - Current rule: this ADR, with ADR 372.
 - Quote: "The route makes a temporary administrator."
-- Quote: "The insert is in the same transaction that makes the temporary
-  administrator."
+- Quote: "The nonce is a unique-key insert. The server inserts the nonce of a
+  request with a unique key. The insert is in the same transaction that makes
+  the temporary administrator. A second request with the same nonce fails the
+  insert. The transaction fails with it."
 - Quote: "The database holds the counter of the rate limit, so all instances
   share it. An IPv6 address counts as its /64 group."
 - Quote: "Every refusal gives the same answer: the same status, the same body
@@ -252,7 +254,11 @@ decisions).
   limit counter in the database. The stored mode and key in this change.
 - Conflict: none. The draft of this change conflicted with decisions 1, 4, 5
   and 7 (a console session, three refusal codes, nonces kept 7 days, a counter
-  in memory). This version follows them.
+  in memory). This version follows them. The resend path does not conflict
+  with decision 3: a second request with the same nonce still fails the
+  insert, and the transaction still fails and creates nothing. The resend is a
+  separate read after that failed transaction, and it returns bytes that the
+  server already stored.
 
 **ADR 245: Host recovery: database access, recovery modes and break-glass
 controls** (decisions of the product manager and fixes of the review).

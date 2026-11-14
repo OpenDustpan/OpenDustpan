@@ -84,7 +84,7 @@ When a signed-request recovery succeeds, the server SHALL write one audit entry 
 
 ### Requirement: one-answer-for-every-refusal
 
-When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write the refusal audit entry with the reason, within the bound of the refusal limiter.
+When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write the refusal audit entry with the reason, within the bound of the refusal limiter. One exception applies: the aggregate entry of a full limiter table holds no reason.
 
 #### Scenario: The sixteen reasons look the same
 - **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `audience`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`, `address` and `person`
@@ -93,7 +93,13 @@ When the server refuses a recovery request for any reason, it SHALL answer `403`
 
 #### Scenario: The refusal entries are bounded
 - **WHEN** one source sends many refusals with one reason
-- **THEN** the audit log holds a bounded number of `recovery.refused` entries and one entry that carries the count of suppressed entries
+- **THEN** the limiter keys each refusal by the source group in its principal (`recovery-source:` and the group), the action `recovery:use-signed-request`, the reason, and an empty scope, and one source group holds at most 16 keys
+- **AND** the audit log holds a bounded number of `recovery.refused` entries and one entry that carries the count of suppressed entries
+
+#### Scenario: The table is full
+- **WHEN** refusals from many sources fill the limiter table to `MaxKeys`
+- **THEN** each later refusal goes into one aggregate entry that names no source group and no reason and counts the denials
+- **AND** each refusal still writes one server log line with its reason
 
 ### Requirement: answer-key-and-its-seal
 
@@ -120,11 +126,28 @@ When the installation is in maintenance mode, the server SHALL refuse a signed r
 
 ### Requirement: nonce-once
 
-When the same request (the same bytes, the same nonce) arrives again before `notAfter`, the server SHALL send the stored sealed answer again and SHALL create nothing new. When a request carries a nonce of a stored request with other bytes, or arrives after `notAfter`, the server SHALL refuse it with the one answer and the reason `nonce-used`. The server SHALL keep the nonce until the `notAfter` time of its request plus 1 hour.
+During a signed-request recovery, the server SHALL insert the nonce with a unique key as the first write of the transaction, before the live-recovery check. The insert SHALL write the nonce, `notAfter`, the delete time and the SHA-256 hash of the exact request bytes. A second request with the same nonce SHALL fail the insert, and the transaction SHALL fail with it and SHALL create nothing. The server SHALL keep the nonce until the `notAfter` time of its request plus 1 hour.
+
+#### Scenario: Two at once
+- **WHEN** two submits carry one new nonce at the same time on two instances
+- **THEN** one temporary administrator exists
+
+### Requirement: sealed-answer-written-in-the-transaction
+
+When the server inserts the nonce, the insert SHALL leave `sealed_answer` empty. After the token is made and the answer is sealed, the same transaction SHALL write `sealed_answer` into the nonce row, so the commit makes the nonce row and the sealed answer visible together. When the seal fails, the transaction SHALL fail and SHALL commit no nonce row, so a committed nonce row always holds a sealed answer.
+
+#### Scenario: Crash before the commit
+- **WHEN** the server stops before the commit
+- **THEN** no temporary administrator and no nonce exist, and the same request succeeds once
+
+### Requirement: replay-sends-the-stored-answer
+
+After the failed transaction of a repeated request, the server SHALL read the nonce row in a separate read. When the stored request hash equals the hash of this request, the time is before `notAfter` and the stored `sealed_answer` is not empty, the server SHALL send the stored sealed answer again. In all other cases, including other bytes, a time at or after `notAfter` or an empty `sealed_answer`, the server SHALL refuse with the one answer and the reason `nonce-used`.
 
 #### Scenario: Replay before the end
 - **WHEN** the same request arrives again before `notAfter`
 - **THEN** the server sends the stored sealed answer again, makes no new temporary administrator and creates no new nonce
+- **AND** the audit entry `recovery.refused` does not hold the reason `recovery-active`
 
 #### Scenario: Replay with other bytes
 - **WHEN** a request carries a nonce of a stored request but other bytes
@@ -136,13 +159,14 @@ When the same request (the same bytes, the same nonce) arrives again before `not
 - **THEN** the server refuses it with the one answer
 - **AND** the audit entry `recovery.refused` holds the reason `nonce-used`
 
-#### Scenario: Two at once
-- **WHEN** two submits carry one new nonce at the same time on two instances
-- **THEN** one temporary administrator exists
+### Requirement: replay-writes-one-audit-entry
 
-#### Scenario: Crash before the commit
-- **WHEN** the server stops before the commit
-- **THEN** no temporary administrator and no nonce exist, and the same request succeeds once
+The repeat SHALL be counted like each attempt: by the per-source counter before the signature check and by the installation counter after it. The repeat SHALL write one audit entry with the action `recovery:use-signed-request`, the result `answer resent`, the nonce, the `keyId` of the signing key and the client address. It SHALL create no temporary administrator and SHALL send no new `break-glass.used` notice.
+
+#### Scenario: The resend audit entry
+- **WHEN** the same request arrives again before `notAfter`
+- **THEN** the store holds one audit entry with the action `recovery:use-signed-request`, the result `answer resent`, the nonce, the `keyId` of the signing key and the client address
+- **AND** no new temporary administrator and no new `break-glass.used` notice exist
 
 ### Requirement: request-window
 
@@ -186,11 +210,15 @@ The server SHALL take the source address of a request from the client address, a
 
 ### Requirement: one-live-recovery
 
-When a temporary administrator from a recovery, by the host command or by the route, is live, the server SHALL refuse a signed recovery request.
+When a temporary administrator from a recovery, by the host command or by the route, is live, the server SHALL refuse a new signed recovery request. A repeat of the request that made the live temporary administrator SHALL NOT be refused with `recovery-active`: its nonce insert fails first, and the server sends the stored sealed answer again.
 
 #### Scenario: Second recovery
 - **WHEN** a valid request arrives while a temporary administrator of a recovery is live
 - **THEN** the server refuses it with the one answer, and the audit reason is `recovery-active`
+
+#### Scenario: A repeat of the live request
+- **WHEN** the same request that made the live temporary administrator arrives again before `notAfter`
+- **THEN** the server sends the stored sealed answer and the audit reason is not `recovery-active`
 
 ### Requirement: review-whatever-the-opt-in
 
