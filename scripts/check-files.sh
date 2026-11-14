@@ -32,7 +32,19 @@ allow="$root/.large-files-allowlist"
 cd "$root"
 
 if [[ -f "$allow" ]]; then
-  if awk 'NF == 1 && !/^#/ { bad = 1; print "check-files: " FILENAME ":" FNR " lists " $1 " with no reason" > "/dev/stderr" } END { exit bad }' "$allow"; then
+  if awk '
+    !/^#/ && NF {
+      if (NF == 1) {
+        bad = 1
+        print "check-files: " FILENAME ":" FNR " lists " $1 " with no reason" > "/dev/stderr"
+      }
+      if ($1 ~ /^\// || $1 ~ /(^|\/)\.\.(\/|$)/ || $1 ~ /[*?\[\]]/) {
+        bad = 1
+        print "check-files: " FILENAME ":" FNR " lists invalid path " $1 > "/dev/stderr"
+      }
+    }
+    END { exit bad }
+  ' "$allow"; then
     :
   else
     exit 1
@@ -42,7 +54,9 @@ fi
 # allowed reports whether the allowlist lists a path.
 allowed() {
   [[ -f "$allow" ]] || return 1
-  awk -v p="$1" '!/^#/ && NF >= 2 && $1 == p { found = 1 } END { exit !found }' "$allow"
+  # Defense in depth: matches still exclude comments and require a reason after validation.
+  # The environment preserves backslashes. The prefix prevents numeric comparison.
+  FILES_CHECK_PATH="$1" awk '!/^#/ && NF >= 2 && ("x" $1) == ("x" ENVIRON["FILES_CHECK_PATH"]) { found = 1 } END { exit !found }' "$allow"
 }
 
 problems=0
