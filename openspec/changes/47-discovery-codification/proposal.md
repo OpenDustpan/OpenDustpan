@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -21,6 +21,10 @@ Out of scope:
 - Code generation for unmanaged resources in detail (RFC 124)
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runs (milestone 5)
 

@@ -2,11 +2,11 @@
 
 ### Requirement: stored-minimum-gates-writes
 
-When the binary version of the serving instance is below the stored minimum binary version, the server SHALL refuse the write with 409 schema.binary-below-minimum.
+When the binary version of the serving instance is below the stored minimum binary version, the server SHALL refuse the write with 503, Retry-After and schema.binary-below-minimum.
 
 #### Scenario: Old TFE write refused
 - **WHEN** an instance below the stored minimum receives ANY /api/v2/state-versions and the NEW VersionStore.CheckWriteAllowed method runs in the write transaction
-- **THEN** server returns 409 with error code schema.binary-below-minimum and writes no state version.
+- **THEN** server returns 503 with Retry-After and error code schema.binary-below-minimum and writes no state version.
 
 #### Scenario: Old Pulumi checkpoint refused
 - **WHEN** an instance below the stored minimum receives a Pulumi checkpoint write and the NEW VersionStore.CheckWriteAllowed method runs
@@ -14,7 +14,7 @@ When the binary version of the serving instance is below the stored minimum bina
 
 #### Scenario: Lock and secret writes refused
 - **WHEN** an instance below the stored minimum receives a workspace lock or secret write and the NEW VersionStore.CheckWriteAllowed method runs
-- **THEN** server returns 409 with error code schema.binary-below-minimum and writes nothing.
+- **THEN** server returns 503 with Retry-After and error code schema.binary-below-minimum and writes nothing.
 
 #### Scenario: Read allowed
 - **WHEN** an instance below the stored minimum receives a state read
@@ -34,7 +34,7 @@ When two instances raise the stored minimum at the same time, the server SHALL k
 
 ### Requirement: version-edge-rules
 
-When the stored minimum is unparseable or unreadable, the server SHALL refuse writes with 409 schema.binary-below-minimum.
+When the stored minimum is unparseable or unreadable, the server SHALL refuse writes with 503, Retry-After and schema.binary-below-minimum.
 
 #### Scenario: Lower raise is no-op
 - **WHEN** a raise with the NEW VersionStore.RaiseMinimum method requests a version below the stored minimum
@@ -46,7 +46,7 @@ When the stored minimum is unparseable or unreadable, the server SHALL refuse wr
 
 #### Scenario: Bad minimum fails closed
 - **WHEN** the stored minimum is unparseable or unreadable and the NEW VersionStore.CheckWriteAllowed method runs
-- **THEN** writes return 409 schema.binary-below-minimum and reads return 200.
+- **THEN** writes return 503 schema.binary-below-minimum and reads return 200.
 
 #### Scenario: Dev-build never gates
 - **WHEN** a dev-build calls the NEW VersionStore.RecordInstance method

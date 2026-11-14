@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1158.
@@ -48,7 +48,6 @@ Depends on:
 
 - fresh-authentication-window-0-turns
 - gate-evaluation-must-apply-dev
-- `gate-evaluation-must-apply-dev` (order of the milestone review)
 
 ## Usability
 

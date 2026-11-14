@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -21,6 +21,10 @@ Out of scope:
 - Kubernetes operator packaging
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runners-and-remote-runs (RFC 6) - a second role that needs its own process
 

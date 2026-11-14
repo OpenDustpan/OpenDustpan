@@ -19,6 +19,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wiring: the counter is reachable from the server metrics Check: The metrics route lists the counter
-- [ ] 4.2 E2E step: BLOCKED by the missing name of the runner poll route and runner credential kind in the pack; the step is a unit test until the owner of the runner protocol names them Check: TestClaimPollCountsBoundSkips. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 No e2e step (PM decision, rule 16): the skip counter lives in the internal durable claim poll (pkg/store/internal/jobstore/claim_skips.go, NEW), which no route serves, so there is no route or credential to name. The proof is TestClaimPollCountsBoundSkips (task 1.1) and the NEW metric dustpan_job_claim_poll_skipped_total in internal/metrics/server.go, which task 4.1 shows on the metrics route. Check: `go test ./pkg/store/... -run TestClaimPollCountsBoundSkips` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Docs page note and usability check from the docs page alone Check: make docs-lint. A person's step.
 - [ ] 4.4 All checks pass Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

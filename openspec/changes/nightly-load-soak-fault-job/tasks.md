@@ -9,8 +9,8 @@
 ## 2. Workflow and budgets
 
 - [ ] 2.1 Add the NEW file `perf/compare/main.go` (the compare program, NEW path `perf/compare/main.go`), the NEW file `perf/budgets.json` and the three NEW wrapper scripts `perf/run-load.sh`, `perf/run-soak.sh` and `perf/run-toxiproxy.sh` Check: `go test ./perf/compare/ -count=1` passes
-- [ ] 2.2 Add the NEW file `.github/workflows/nightly-perf.yml` with service containers, pinned actions, concurrency, timeout and `if always()` upload Check: `gh workflow view nightly-perf.yml` lists load, soak and toxiproxy-faults jobs
-- [ ] 2.3 Do a trial run of the NEW file `.github/workflows/nightly-perf.yml` with a lowered budget in the NEW file `perf/budgets.json` to prove the fail, the exact-title issue and the comment on repeat Check: `gh workflow run nightly-perf.yml` ends failed, with one issue and the measurements artifact
+- [ ] 2.2 Add the NEW file `.github/workflows/nightly-perf.yml` with service containers, pinned actions, concurrency, timeout and `if always()` upload Check: `gh workflow view nightly-perf.yml` lists load, soak and toxiproxy-faults jobs. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
+- [ ] 2.3 Do a trial run of the NEW file `.github/workflows/nightly-perf.yml` with a lowered budget in the NEW file `perf/budgets.json` to prove the fail, the exact-title issue and the comment on repeat Check: `gh workflow run nightly-perf.yml` ends failed, with one issue and the measurements artifact. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
 
 ## 3. Definition of done
 

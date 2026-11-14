@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #905.
@@ -44,8 +44,6 @@ Depends on:
 
 - add-gate-configuration-routes
 - read-route-decision-records-change
-- `add-gate-configuration-routes` (order of the milestone review)
-- `read-route-decision-records-change` (order of the milestone review)
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -36,6 +36,10 @@ Out of scope:
 - Step results, hooks, approval steps and scanners
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runs (milestone 5): the run model that carries options, re-run links and variables
 

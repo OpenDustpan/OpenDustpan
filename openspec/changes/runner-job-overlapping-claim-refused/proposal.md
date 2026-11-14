@@ -44,9 +44,11 @@ Out of scope:
 
 Depends on:
 
-- ADR 368 on main (pull request #3052)
 - two-disjoint-claims
-- `two-disjoint-claims` (order of the milestone review)
+
+Builds on (not a change):
+
+- ADR 368 on main (pull request #3052)
 
 ## Usability
 

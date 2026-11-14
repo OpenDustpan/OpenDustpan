@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:149` (MFA).
@@ -52,7 +52,6 @@ Depends on:
 - ldap-sign-in
 - add-one-generic-settings-api
 - fresh-authentication-window-0-turns
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

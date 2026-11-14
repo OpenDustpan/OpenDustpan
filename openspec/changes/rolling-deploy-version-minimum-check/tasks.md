@@ -9,8 +9,8 @@
 
 ## 2. Build
 
-- [ ] 2.1 Add VersionGate and version rows with atomic raise and installation scope check via InstallationScope. The code is in the NEW file internal/instance/version.go. Check: `go test -race ./pkg/store/schema/... ./internal/instance/...` passes
-- [ ] 2.2 Wire CheckWriteAllowed into write paths and map refusal through belowMinimum (internal/api/problem/problem.go:501) and belowMinimumText (internal/api/pulumi/pulumi.go:1130). The write paths are in the existing file internal/api/problem/problem.go. Check: `go test -race ./internal/api/...` passes with Pulumi and TFE shapes checked
+- [ ] 2.1 Add the NEW type VersionGate, the NEW port VersionStore with the NEW methods RecordInstance, RaiseMinimum and CheckWriteAllowed, and the version rows with atomic raise and installation scope check via InstallationScope, in the NEW file internal/instance/version.go (next to the existing internal/instance/instance.go). The minimum check at Open stays in pkg/store/schema (schema.go: MinimumError, ErrBinaryBelowMinimum); the new gate reuses its comparison. Check: `go test -race ./pkg/store/schema/... ./internal/instance/...` passes
+- [ ] 2.2 Wire CheckWriteAllowed into write paths and map refusal to 503 with Retry-After through belowMinimum (internal/api/problem/problem.go:501) and belowMinimumText (internal/api/pulumi/pulumi.go:1130). The write paths are in the existing file internal/api/problem/problem.go. Check: `go test -race ./internal/api/...` passes with Pulumi and TFE shapes checked
 
 ## 3. Side effects (computed from main)
 
@@ -18,5 +18,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run e2e step against real CLI binaries on existing TFE state-version and Pulumi checkpoint routes with mixed binary pool. Check: Real `tofu apply` and `pulumi up` via ANY /api/v2/state-versions with namespace write grant gate and access token show old write 409 and reads 200. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Run e2e step against real CLI binaries on existing TFE state-version and Pulumi checkpoint routes with mixed binary pool. Check: Real `tofu apply` and `pulumi up` via ANY /api/v2/state-versions with namespace write grant gate and access token show old write 503 and reads 200. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page for minimum version behavior, route authorization actions listed, usability check from docs page alone. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

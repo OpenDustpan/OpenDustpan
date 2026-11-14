@@ -46,8 +46,6 @@ Depends on:
 - two-disjoint-claims
 - runner-job-overlapping-claim-refused
 - strict-case-takes-turns
-- `two-disjoint-claims` (order of the milestone review)
-- `strict-case-takes-turns` (order of the milestone review)
 
 ## Usability
 

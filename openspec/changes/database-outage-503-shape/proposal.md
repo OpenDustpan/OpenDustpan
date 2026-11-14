@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:475` (Return 503 with Retry-After and keep live check green.).
@@ -42,8 +42,12 @@ Out of scope:
 
 Depends on:
 
-- database-outage-atomic-state-locks
-- database-outage-e2e-probe
+- none
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- database-outage-atomic-state-locks: a later part of the same split, handed over by this change
+- database-outage-e2e-probe: a later part of the same split, handed over by this change
 
 ## Usability
 
@@ -68,7 +72,7 @@ No ADR is touched.
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add failing server test for ready 503 on GET /health/ready" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
+none
 
 Questions considered and answered:
 

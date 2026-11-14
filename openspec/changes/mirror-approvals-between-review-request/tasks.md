@@ -10,7 +10,7 @@
 ## 2. Build
 
 - [ ] 2.1 Implement the mirror service in NEW file internal/changeordersvc/mirror.go with the link check at point of use and one audit entry per direction. Check: `go test ./internal/changeordersvc -count=1` passes
-- [ ] 2.2 Add the approve and read routes with authorization actions and the fresh-step refusal shape. Declare the routes in NEW file internal/api/server/changeorderapprovals.go and write the adapter in NEW file internal/api/server/changeorderapprovals_adapter.go. Check: `POST /api/dustpan/v1/change-orders/{id}/approvals` inside and outside the window behaves as specified
+- [ ] 2.2 Add the approve and read routes with authorization actions and the fresh-step refusal shape. Declare the routes in NEW file internal/api/server/changeorderapprovals.go and write the adapter in NEW file internal/api/server/changeorderapprovals_adapter.go. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: `POST /api/dustpan/v1/change-orders/{id}/approvals` inside and outside the window behaves as specified
 - [ ] 2.3 Add the namespace switch and window through the settings resource with audit entries in NEW file internal/changeordersvc/freshwindow.go. Check: `PATCH /api/dustpan/v1/namespaces/{namespace}/settings` sets freshAuthForApprovals and freshAuthSeconds, with an audit entry and a new revision
 
 ## 3. Side effects (computed from main)

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -23,7 +23,6 @@ Out of scope:
 Depends on:
 
 - 67-spend-cost-tools
-- `67-spend-cost-tools` (order of the milestone review)
 
 ## Usability
 

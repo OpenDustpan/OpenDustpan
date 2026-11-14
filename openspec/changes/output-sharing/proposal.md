@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:315` (Output sharing).
@@ -45,8 +45,6 @@ Out of scope:
 Depends on:
 
 - add-output-sharing-setting-new
-- `add-output-sharing-setting-new` (order of the milestone review)
-- `job-service-unit-settings-pool` (order of the milestone review)
 
 ## Usability
 

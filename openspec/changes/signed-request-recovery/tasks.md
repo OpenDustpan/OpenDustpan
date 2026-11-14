@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 - [ ] 0.2 Run the adversarial second pass of `openspec/project.md` with a model of another provider. Put each answer in proposal.md, answered or as an open question. Check: proposal.md lists the answers, and "Open questions" still reads "none", or the change stops.
 
 ## 1. Failing tests first
@@ -53,7 +53,7 @@
 - [ ] 2.1 The four tables in the baseline of each dialect, in their places in the name order, with the columns `request_hash` (the SHA-256 hash of the request bytes) and `sealed_answer` (empty in the first insert of the nonce row, and written later in the same transaction) of `recovery_nonces` in `pkg/store/sqlite/migrations/0168_baseline.sql` and `pkg/store/postgres/migrations/0168_baseline.sql`, and the store methods with their conformance suite. Check: `go test ./pkg/store/... -run TestRecovery -count=1 -timeout 60m` passes.
 - [ ] 2.2 `breakglass.Use` gets `Mode` and `Source`, and `Use.Validate` checks them. Check: `go test ./pkg/breakglass/ -count=1` passes.
 - [ ] 2.3 `internal/recovery` (NEW): `parseSignedRequest`, the canonical encoding with `encoding/json` and `SetEscapeHTML(false)`, the transaction, HPKE. The depguard rules of the design. Check: `go test ./internal/recovery/ -count=1` and `golangci-lint run ./...` pass.
-- [ ] 2.4 The routes with their actions and the public list entry, in `internal/api/server/recovery.go` (NEW), registered in `internal/api/server/routes.go`, with the public list entry in `internal/api/server/routes_test.go`. Check: the route test and `go test ./internal/api/server/ -count=1` pass.
+- [ ] 2.4 The routes with their actions and the public list entry, in `internal/api/server/recovery.go` (NEW), registered in `internal/api/server/routes.go`, with the public list entry in `internal/api/server/routes_test.go`. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: the route test and `go test ./internal/api/server/ -count=1` pass.
 - [ ] 2.5 The exception of ADR 372 decision 6 in the admin reset route (the change `mfa`) and the enrollment code route (the change `app-level-second-factor-totp`), at the fresh-step check in `internal/api/server/freshness.go`, with the predicate `tempadmin.IsRecoveryAdmin`. Check: `TestRecoveryAdminFreshSteps` passes.
 - [ ] 2.6 The CLI commands `recovery request|sign|verify|submit` and `recovery keys list|add|remove`, in `internal/cli/recovery.go` (NEW, the offline commands) and `internal/cli/client/recovery.go` (NEW, the REST clients), registered in `cmd/opendustpan/commands.go`. Check: `go test ./cmd/opendustpan/ -run TestRecovery -count=1` passes.
 - [ ] 2.7 The store methods for the nonce in `pkg/store/sqlite/recovery.go` and `pkg/store/postgres/recovery.go` (NEW): the insert of the nonce with `request_hash` (which leaves `sealed_answer` empty), the write of `sealed_answer` into the nonce row after the token is made and the answer is sealed, the read of the nonce row by nonce, and the purge of nonces and attempt windows, with their queries in `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`. Check: `go test ./pkg/store/... -run TestRecoveryPurge -count=1` passes.
@@ -70,13 +70,13 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 - [ ] 3.2 Update the test of ADR 245 decision 12 in `pkg/accesstoken/host_test.go` to name `internal/recovery` as the one other caller. Check: the test passes and fails when a third package names the host issuer.
 - [ ] 3.3 Update `docs/guides/host-recovery.md` (the stored mode) and `docs/reference/configuration.md` (`--recovery-public-key-file`). Check: `make docs-lint` passes.
 
 ## 4. Definition of done
 
-- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. Check: `make e2e` passes.
+- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 The docs page `docs/guides/signed-request-recovery.md`, with the risk statement of ADR 295 decision 2, the always-on notice, the two recovery steps and the crash case. Check: a test runs each command of the page.
-- [ ] 4.3 The usability check from the docs page alone. Check: the operator recovers, and each error names one command.
-- [ ] 4.4 Run all checks. Check: `make check` reports zero findings.
+- [ ] 4.3 The usability check from the docs page alone. Check: the operator recovers, and each error names one command. A person's step.
+- [ ] 4.4 Run all checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

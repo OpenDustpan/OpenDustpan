@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:201` (Signed-request recovery).

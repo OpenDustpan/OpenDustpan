@@ -11,7 +11,7 @@
 
 - [ ] 2.1 Extend the e2e mixed-version harness in e2e/upgrade.go to build the last 2 ancestor v* tags and run `pulumi up` and `tofu apply` against each old binary. Check: `go test -tags upgrade -run TestMixedVersion ./e2e` drives `pulumi up` and `tofu apply` against each old binary through ANY /api/v2/state-versions and ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token on SQLite
 - [ ] 2.2 Add the NEW `make mixed-version-test` target in the NEW file Makefile (Makefile is not on main) for SQLite and PostgreSQL with DUSTPAN_TEST_POSTGRES_URL. Check: The NEW `make mixed-version-test` passes on SQLite and with DUSTPAN_TEST_POSTGRES_URL set, through ANY /api/v2/state-versions with an access token
-- [ ] 2.3 Add the NEW CI job in the NEW file .github/workflows/ci.yml next to the upgrade test with tag fetch and PostgreSQL service. Check: CI log shows the matrix job next to the upgrade test with all tags fetched and the PostgreSQL service set for DUSTPAN_TEST_POSTGRES_URL
+- [ ] 2.3 Add the NEW CI job in the NEW file .github/workflows/ci.yml next to the upgrade test with tag fetch and PostgreSQL service. Check: CI log shows the matrix job next to the upgrade test with all tags fetched and the PostgreSQL service set for DUSTPAN_TEST_POSTGRES_URL. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
 
 ## 3. Side effects (computed from main)
 

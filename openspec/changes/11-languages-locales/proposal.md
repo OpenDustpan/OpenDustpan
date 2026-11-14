@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -21,6 +21,10 @@ Out of scope:
 - Themes and white-labeling
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - Console core views (RFC 52)
 

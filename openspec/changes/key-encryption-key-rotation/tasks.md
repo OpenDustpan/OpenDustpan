@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing server test in NEW file `internal/api/server/rotation_test.go` for NEW `POST /api/dustpan/v1/installation/key-encryption-key/rotations` start with the NEW action `installation:rotate-key`; BLOCKED by NEW route and NEW action. Check: `TestRotationStartStoresStarted` fails on main; BLOCKED by NEW route `POST /api/dustpan/v1/installation/key-encryption-key/rotations`.
+- [ ] 1.1 Add failing server test in NEW file `internal/api/server/rotation_test.go` for NEW `POST /api/dustpan/v1/installation/key-encryption-key/rotations` start with the NEW action `installation:rotate-key`; BLOCKED by NEW route and NEW action. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: `TestRotationStartStoresStarted` fails on main; BLOCKED by NEW route `POST /api/dustpan/v1/installation/key-encryption-key/rotations`.
 - [ ] 1.2 Add failing server test in NEW file `pkg/secret/rotation_test.go` for NEW `RewrapNextBatch` dual-read of old and new wrapper IDs during rotation; BLOCKED by NEW rotation service. Check: `TestRotationReadsOldAndNew` fails on main; BLOCKED by NEW rotation service and NEW routes.
 - [ ] 1.3 Add failing server test in NEW file `pkg/secret/rotation_resume_test.go` for NEW `RewrapNextBatch` resume from the stored cursor after a stop; BLOCKED by NEW resume operation. Check: `TestRotationResume` fails on main; BLOCKED by NEW resume operation.
 - [ ] 1.4 Add failing server test in NEW file `internal/api/server/rotation_finish_test.go` for NEW `FinishRotation` start refusal with the old key after finish; BLOCKED by NEW finish operation. Check: `TestRotationFinishRefusesOldKey` fails on main; BLOCKED by NEW finish operation.

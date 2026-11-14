@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #906.
@@ -43,9 +43,11 @@ Out of scope:
 
 Depends on:
 
-- #900
 - add-gate-configuration-routes
-- `add-gate-configuration-routes` (order of the milestone review)
+
+Builds on (not a change):
+
+- #900
 
 ## Usability
 

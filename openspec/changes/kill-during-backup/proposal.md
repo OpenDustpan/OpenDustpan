@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:455` (Kill during a backup).
@@ -51,8 +51,6 @@ Out of scope:
 Depends on:
 
 - backup-fence-target-writes-attempt
-- `alternation` (order of the milestone review)
-- `backup-fence-target-writes-attempt` (order of the milestone review)
 
 ## Usability
 

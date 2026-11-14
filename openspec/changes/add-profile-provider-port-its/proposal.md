@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1013, #1079.
@@ -50,7 +50,6 @@ Out of scope:
 Depends on:
 
 - open-profile-serve-open-sessions
-- `open-profile-serve-open-sessions` (order of the milestone review)
 
 ## Usability
 

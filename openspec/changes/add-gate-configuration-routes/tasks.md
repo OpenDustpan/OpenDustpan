@@ -13,7 +13,7 @@
 ## 2. Implementation
 
 - [ ] 2.1 Verify only: the gate store transaction in pkg/store/internal/gatestore/settings.go:129 and the gate tables in the baseline of each dialect under pkg/store/<dialect>/migrations/. Edit nothing unless the unit key test fails. Check: `go test ./pkg/store/...` on SQLite and PostgreSQL
-- [ ] 2.2 Add the routes: declare them in internal/api/server/gate_config.go:24 (GateConfig port) and serve them from the adapter in pkg/dustpan/gateconfig.go:45 (func gatesPort), with their authorization actions at the four scopes. Check: the route and policy tests pass, including TestActionsWithoutRoutesAreUnclassified
+- [ ] 2.2 Add the routes: declare them in internal/api/server/gate_config.go:24 (GateConfig port) and serve them from the adapter in pkg/dustpan/gateconfig.go:45 (func gatesPort), with their authorization actions at the four scopes. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. The fake coverageGateConfig in e2e/coverage_gate.go:16 implements the GateConfig port too: add CarryOver and PutCarryOver to it, or the build of the end-to-end suite fails. Check: the route and policy tests pass, including TestActionsWithoutRoutesAreUnclassified
 - [ ] 2.3 Verify only: the backup table list in pkg/backup holds the gate rows. Edit nothing unless the round-trip test fails. Check: the backup round-trip test passes on both dialects
 - [ ] 2.4 Regenerate the API description and the clients with the generate target (Makefile:335). It rewrites internal/api/apidesc/openapi.json and the files under clients/typescript/. Check: `make generate` leaves no diff and `make clients-check` passes. Confirmed by: the driver's gates.
 
