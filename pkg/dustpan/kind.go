@@ -132,6 +132,7 @@ func (s *Server) warnDevPrincipals(ctx context.Context) {
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})

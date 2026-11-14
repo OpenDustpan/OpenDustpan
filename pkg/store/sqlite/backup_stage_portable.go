@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -36,7 +37,9 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, err
 	}
 
-	sum, err := s.buildCheckedStaging(ctx, temp, open, index, want)
+	sum, err := s.buildCheckedStaging(ctx, temp, open, portableCheck{
+		index: index, want: want, restoreAt: opts.RestoreAt,
+	})
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -84,14 +87,21 @@ func (s *Store) portableStage(
 	return index, nil
 }
 
+// portableCheck holds what buildCheckedStaging loads, compares and checks
+// after it builds the staging file.
+type portableCheck struct {
+	index     map[string]backup.PortableFile
+	want      backup.Summary
+	restoreAt time.Time
+}
+
 // buildCheckedStaging builds the staging file at path, loads the table files
-// and checks the staged data against want. It returns the summary. A failure
-// removes the file.
+// and checks the staged data against check.want. It returns the summary. A
+// failure removes the file.
 func (s *Store) buildCheckedStaging(
-	ctx context.Context, path string, open backup.PortableOpener, index map[string]backup.PortableFile,
-	want backup.Summary,
+	ctx context.Context, path string, open backup.PortableOpener, check portableCheck,
 ) (backup.Summary, error) {
-	if err := s.buildPortableStaging(ctx, path, open, index); err != nil {
+	if err := s.buildPortableStaging(ctx, path, open, check.index); err != nil {
 		return backup.Summary{}, err
 	}
 
@@ -103,16 +113,16 @@ func (s *Store) buildCheckedStaging(
 		}
 	}()
 
-	sum, err := checkRestoreFile(ctx, path, want)
+	sum, err := checkRestoreFile(ctx, path, check.want, check.restoreAt)
 	if err != nil {
 		return backup.Summary{}, err
 	}
 
-	if err := checkStagedBlobs(sum.Blobs, want.Blobs); err != nil {
+	if err := checkStagedBlobs(sum.Blobs, check.want.Blobs); err != nil {
 		return backup.Summary{}, err
 	}
 
-	if err := backup.CheckUnverified(sum.Unverified, want.Unverified); err != nil {
+	if err := backup.CheckUnverified(sum.Unverified, check.want.Unverified); err != nil {
 		return backup.Summary{}, fmt.Errorf("staged backup: %w", err)
 	}
 

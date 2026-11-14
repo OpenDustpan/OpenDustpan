@@ -283,7 +283,9 @@ func (r *outputShareRig) unit(
 			t.Fatalf("workspace name %q: %v", name, err)
 		}
 
-		ws, err := r.svc.Workspaces.Create(t.Context(), workspace.Ref{Namespace: ns, Name: parsed})
+		ws, err := r.svc.Workspaces.Create(
+			t.Context(), workspace.Ref{Namespace: ns, Name: parsed}, placeWorkspace(t, r.store, ns),
+		)
 		if err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
 		}
@@ -295,7 +297,7 @@ func (r *outputShareRig) unit(
 			t.Fatalf("stack ref %q: %v", name, err)
 		}
 
-		st, err := r.svc.Stacks.Create(t.Context(), ref, nil)
+		st, err := r.svc.Stacks.CreatePlaced(t.Context(), ref, nil, placeStack(t, r.store, ns))
 		if err != nil {
 			t.Fatalf("create stack %s: %v", name, err)
 		}

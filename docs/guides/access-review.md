@@ -33,6 +33,9 @@ collection, and the grants on the namespace and on the installation. A grant on
 the namespace or the installation appears only when its role gives a data action
 or manages access, and its row has `inheritedFrom`. A deleted unit
 that is not purged stays in the list, with `objectState` set to `deleted`.
+The export reads at most `accessReview.collectionUnitCap` units, 10000 by
+default, and the setting takes 1 to 100000. A collection over that count gets
+`422`. A change to a larger cap needs a fresh sign-in.
 
 The route takes the same query values as the other routes: `limit`, `cursor`,
 `from` and `to`, `subject`, and `expand`. An unknown collection gets `404`.
@@ -135,6 +138,22 @@ has the `via` field.
 curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/server/namespaces/acme/access-review?expand=members"
 ```
+
+## Where a membership comes from
+
+Each `via` object has `memberSource`, `memberSourceId` and `memberSuspended`.
+The `memberSource` field has one of these values:
+
+- `local`: The membership was made through the API. Check who made it in the audit log.
+  The `memberSourceId` field is empty.
+- `scim`: A SCIM call kept the membership. The source ID names the identity in the directory.
+  Check the directory group.
+- `claim`: The membership came from a group claim at sign-in. The source ID names the identity.
+  Check the identity provider's group claim.
+
+In a snapshot, `memberSuspended: true` means the membership was suspended at the snapshot time and grants nothing.
+A membership suspended after the snapshot time shows `false`.
+In a history, only active memberships are listed, so `memberSuspended` is always `false`.
 
 ## Save the review
 

@@ -17,6 +17,7 @@ import (
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	selfserviceapi "opendustpan.org/opendustpan/internal/api/selfservice"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	settingsapi "opendustpan.org/opendustpan/internal/api/settings"
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -113,6 +114,7 @@ func knownRowTypes() []reflect.Type {
 		reflect.TypeFor[runnerapi.Route](),
 		reflect.TypeFor[profileapi.Route](),
 		reflect.TypeFor[route.Route[identity.Object]](),
+		reflect.TypeFor[selfserviceapi.Route](),
 		reflect.TypeFor[jobsapi.Route](),
 		reflect.TypeFor[triggersapi.Route](),
 		reflect.TypeFor[settingsapi.Route](),

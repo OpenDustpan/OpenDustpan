@@ -4,12 +4,12 @@ title: Organizations are namespaces, in every client
 status: accepted
 adr: 18
 created: 2026-10-09
-was: proposed ADR 10
+was: proposed under number 10
 ---
 
 # RFC 2. Organizations are namespaces, in every client
 
-Status: accepted as ADR 18. It was proposed ADR 10 until ADR 15 moved every
+Status: accepted as ADR 18. It was proposed under number 10 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
 ## Context

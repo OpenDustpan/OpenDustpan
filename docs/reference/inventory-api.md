@@ -195,6 +195,14 @@ characters. Both use only letters, digits and `. _ : / -`, with no space. A
 `request.invalid-query`. A label outside this form, for example a Pulumi stack
 tag with a space, shows in the list, but a filter cannot select it.
 
+With more than one `label`, the server reads the units that have the first
+label, and checks the other labels on each of them. A query whose labels have
+no unit in common answers an empty page, but it can take as long as a read of
+every unit with the first label. Put the label with the fewest units first. A
+`state` filter has no index of its own: the server reads the units in the
+order of the unit ID and checks the lock state of each, so a page can read
+every unit of the namespace when the locked units are fewer than a page.
+
 The server answers 400 for a `label`, a `reference` or a `state` value that is
 not valid, for more values than the limit, for a `reference` in another namespace, for a
 `pageSize` outside the limits, for a `pageToken` that is not valid, and for a

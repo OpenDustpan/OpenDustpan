@@ -186,7 +186,10 @@ type RecordStore interface {
 	// version of the unit is another one, it fails the phase in the same
 	// transaction (with the end of the claim) and returns ErrPlanStale. It
 	// returns ErrInvalid for a phase that is not a plan phase, and ErrConflict
-	// for a phase that has a plan.
+	// for a phase that has a plan. A second reserve of the same plan ID by the
+	// same job, before the parts exist, checks the claim again and returns the
+	// reserved plan with no second item key. A reserve of the ID of a plan of
+	// another job, or of a plan that has parts, returns ErrConflict.
 	ReservePlan(ctx context.Context, pc PhaseClaim, np *NewPlan) (PlanRef, error)
 	// PutPlan stores p, with its parts, as the plan of the plan phase of pc
 	// that ReservePlan recorded, with the state version of the phase, and
@@ -508,7 +511,8 @@ func CheckPutPlan(j *Job, phase int, current string) error {
 
 // CheckPlanParts returns ErrInvalid unless parts are the parts of a plan: one
 // or two parts, each of a plan output kind, no kind twice, each with a valid
-// SHA-256 and a size from 0 to MaxPlanPart.
+// SHA-256 and a size from 0 to MaxPlanPart, and only a part of kind
+// OutputPlanApply is secret.
 func CheckPlanParts(parts []PlanPart) error {
 	if len(parts) < 1 || len(parts) > 2 {
 		return fmt.Errorf("%w: a plan has 1 or 2 parts, not %d", ErrInvalid, len(parts))
@@ -529,6 +533,9 @@ func CheckPlanParts(parts []PlanPart) error {
 		case p.Size < 0 || p.Size > MaxPlanPart:
 			return fmt.Errorf("%w: plan part %q has a size from 0 to %d, not %d", ErrInvalid, p.Kind, MaxPlanPart,
 				p.Size)
+		case p.Secret != (p.Kind == OutputPlanApply):
+			return fmt.Errorf("%w: plan part %q has secret %t, not %t", ErrInvalid, p.Kind, p.Secret,
+				p.Kind == OutputPlanApply)
 		}
 
 		if err := checkStoredPart(p); err != nil {

@@ -173,14 +173,17 @@ type Principal struct {
 // prefix "grp-". Name is unique among the groups that exist, without regard
 // to case. Source names where the record comes from. MemberCount is the
 // count of its current members: a read sets it, and a write ignores it.
+// ClosedToIdentityProvider is true when the identity provider may not add
+// members to the group, through SCIM or through a group claim at sign-in.
 type Group struct {
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ID          string
-	Name        string
-	Description string
-	Source      Source
-	MemberCount int64
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   Source
+	MemberCount              int64
+	ClosedToIdentityProvider bool
 }
 
 // MembershipSource names where a group membership comes from: a local

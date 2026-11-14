@@ -3,11 +3,20 @@ package postgres //nolint:testpackage // The unexported write path of the settin
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
+
+// Pool returns the connection pool of s, so a test can read or change rows
+// with direct SQL.
+func Pool(s *Store) *pgxpool.Pool {
+	return s.pool
+}
 
 // CheckSettingFence runs the comparison of the fence and the namespace that
 // SetSetting makes before it opens a transaction.
@@ -72,6 +81,22 @@ func SeedRunnerControlRows(ctx context.Context, s *Store) error {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("seed runner control row: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// SeedHeartbeatRow writes one durable_heartbeats row with exactly the given
+// time and lease, as the upsert of Beat writes it. It is a test hook for the
+// ordering cases of the heartbeat suite, which cannot wait on the clock of
+// the store.
+func SeedHeartbeatRow(ctx context.Context, s *Store, owner string, at time.Time, lease time.Duration) error {
+	const stmt = `INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms`
+
+	if _, err := s.pool.Exec(ctx, stmt, owner, at.UnixMilli(), lease.Milliseconds()); err != nil {
+		return fmt.Errorf("seed heartbeat row: %w", err)
 	}
 
 	return nil

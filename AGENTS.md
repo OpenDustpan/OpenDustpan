@@ -53,8 +53,9 @@ Consider a change done only when `make check` passes with zero findings:
   Resolve a conflict in a generated file (the API description, the clients,
   the golden files, `internal/db`) with a new run of its generator on the
   merged code, never by hand.
-- A feature that a user can see has its page in the user documentation in
-  the same pull request (ADR 214).
+- A feature is complete only when a user can reach it. That needs the wiring, the
+  route, an e2e step, a page in the user documentation in the same pull
+  request (ADR 214) and a usability check.
 
 Do not report work as finished if any of these fail. Say what fails instead.
 
@@ -119,7 +120,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
-  agent/, dependency/, source/, stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
+  agent/, dependency/, source/ (the source pipeline of runner jobs), stepup/, unmanaged/, unitimport/, scopeaudit/, cron/
                        domain packages and helpers that the SDK port closure does not reach
   calendar/, chatops/, cost/, freeze/, incident/, oncall/, policy/, quota/, selfservice/
                        features with their own package and suite (<name>test/)
@@ -147,6 +148,7 @@ clients/typescript/    the generated TypeScript client package; make clients-che
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
+openspec/              OpenSpec: project.md (rules for specs), config.yaml, specs/ and changes/ (one directory for each change)
 deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only; INDEX.md lists their change links
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
@@ -225,6 +227,7 @@ The platform must be observable and intuitive. A user must be able to see and ex
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
+- Security code: write one table of hostile cases for each layer. The layers are the port adapter, the service and the HTTP handler. For each guard, show a test that fails when you remove the guard.
 - The backend protocols implemented so far are not published, versioned specs
   we can implement from. Any endpoint change must be checked against the real
   CLI with `make e2e`.
@@ -254,6 +257,7 @@ CLIs. Until 1.0, everything else can break (ADR 73).
   each action. Make every change pass the policy check. A route without an
   action fails the route test. Put routes that need no sign-in on the explicit
   public list in that test.
+- Until the first server tag, do not change `info.version` in the API description or `internal/api/apidesc/openapi.pin`. The release sets both. `make pin-frozen` checks this.
 
 ## Security code: defense in depth (ADR 250)
 
@@ -333,10 +337,30 @@ skill (ADR 14):
 - Keep changes small and reviewable, with one concern per change.
 - Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
+- Agent work starts only from an OpenSpec change in `openspec/changes`. The
+  proposal of the change says "Open questions: none". The pull request of an
+  agent links its change and its issue. The rules for a change are in
+  `openspec/project.md`.
+- Each proposal and each design checks the existing ADRs. It lists the ADRs
+  that it touches, quotes their decision lines, follows the "Changed by" chain
+  and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
+  stops the change until the owner decides.
+- Prefer a code structure that makes a class of bug impossible over an added
+  check or an added tool.
+- Prefer unexported fields with a constructor that checks the invariants. Put
+  a rule that visibility cannot express into the golangci-lint configuration.
+  Do not add a custom check or a new tool (ADR 364).
+- Use the stable ID for each stored reference to an entity that a user can
+  rename, or remove and make again. A name is a label for people only
+  (ADR 362).
+- File a bug issue and a tech-debt issue as before. Their change uses the
+  short proposal form of `openspec/project.md`.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
   two weeks old (ADR 7), and review its diff first.
+- Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash. Do not skip the pre-commit hook.
+- Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
 
 ## Agent skills
 

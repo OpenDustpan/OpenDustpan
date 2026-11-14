@@ -71,7 +71,7 @@ func TestComposeQuickstart(t *testing.T) {
 	}
 
 	pulumi := installCLI(t, e2e.Pulumi(), "3.250.0")
-	tofu := installCLI(t, e2e.OpenTofu(), "1.12.7")
+	tofu := installCLI(t, e2e.OpenTofu(), "1.12.12")
 
 	dir := t.TempDir()
 	copyComposeFiles(t, filepath.Join(root, "deploy", "compose"), dir)
@@ -277,7 +277,7 @@ output "greeting" {
 func installCLI(t *testing.T, tool e2e.Tool, version string) e2e.Install {
 	t.Helper()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	// The download keeps an idle connection, which goleak reports at the end.
 	t.Cleanup(http.DefaultClient.CloseIdleConnections)

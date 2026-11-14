@@ -285,6 +285,63 @@ func TestPutChecksTheDefaultConnectionWhenTheBodyNamesNone(t *testing.T) {
 	}
 }
 
+// TestPutUsesTheDefaultsOfTheWrite checks that the view of a write uses the
+// unit defaults that the store read in the transaction of the write, not the
+// defaults that the earlier read of the service found.
+func TestPutUsesTheDefaultsOfTheWrite(t *testing.T) {
+	t.Parallel()
+
+	before := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "0123456789abcdef", Version: 1, UpdatedAt: time.Time{},
+	}
+	next := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "fedcba9876543210", Version: 2, UpdatedAt: time.Time{},
+	}
+	none := unitsettings.NamespaceDefaults{Namespace: "acme", Pool: "", Version: 2, UpdatedAt: time.Time{}}
+
+	cases := []struct {
+		name  string
+		after unitsettings.NamespaceDefaults
+		want  unitsettings.Field[string]
+	}{
+		{
+			name:  "a new pool before the write",
+			after: next,
+			want:  unitsettings.Field[string]{Value: next.Pool, Origin: unitsettings.OriginNamespaceDefault},
+		},
+		{
+			name:  "the pool removed before the write",
+			after: none,
+			want:  unitsettings.Field[string]{Value: "", Origin: unitsettings.OriginBuiltIn},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, true)
+			r.store.defaults = before
+			r.store.defaultsAtPut = &tc.after
+
+			s := settingsFor(r.unit)
+
+			view, err := r.svc.Put(t.Context(), &s, 0, entry())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if view.Defaults != tc.after {
+				t.Fatalf("Put defaults = %+v, want %+v", view.Defaults, tc.after)
+			}
+
+			if view.Effective.Pool != tc.want {
+				t.Fatalf("effective pool = %+v, want %+v", view.Effective.Pool, tc.want)
+			}
+		})
+	}
+}
+
 func needs(connection string, steps bool) unitsettingssvc.Needs {
 	return unitsettingssvc.Needs{Connection: connection, Steps: steps}
 }

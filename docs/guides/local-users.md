@@ -133,11 +133,31 @@ A good sign-in answers `204` with the session cookie. The session records the
 provider `local`.
 
 Each failure answers `401` with the error code `local-user.sign-in-failed`
-and the text "the user name or the password is wrong": for an unknown user
+and the text "The user name or the password is wrong.": for an unknown user
 name, a wrong password, a user with no password and a disabled person. The
 answer does not tell which. The audit entry `sign-in.password-failed`
 records the real reason. Each failure spends one unit of the password budget
 of the source address.
+
+The server refuses a sign-in that another site can send, so that a page of
+another site cannot sign your browser in to an account of the attacker. The
+request must have the media type `application/json`. When the browser sends
+an `Origin` header, it must be one of the allowed origins of the console.
+When the browser sends `Sec-Fetch-Site`, it must not be `cross-site`. A
+request that fails this check gets the same `401` answer before the server
+reads the store, and spends no unit of the password budget. A client that is
+not a browser, for example curl, sends neither header and passes with the
+JSON media type.
+
+The server refuses a sign-in that another site can send, so that a page of
+another site cannot sign your browser in to an account of the attacker. The
+request must have the media type `application/json`. When the browser sends
+an `Origin` header, it must be one of the allowed origins of the console.
+When the browser sends `Sec-Fetch-Site`, it must not be `cross-site`. A
+request that fails this check gets the same `401` answer before the server
+reads the store, and spends no unit of the password budget. A client that is
+not a browser, for example curl, sends neither header and passes with the
+JSON media type.
 
 The password budget is separate from the budget of the other sign-ins. The
 password sign-in, the use of a set-up or reset code, and the change of the
@@ -148,8 +168,10 @@ empty, these routes answer `429` until it refills.
 ## Lockout by user name
 
 Each instance on one database shares the counts of failed attempts. The
-server adds a failure before it compares the password, and only a full
-sign-in clears the counts of its name. Two counts apply to each user name:
+server adds a failure before it compares the password. A full sign-in
+clears the failure counts of its name from its own source, and the counts of
+the name from every source. A lock of the name from another source stays.
+Two counts apply to each user name:
 
 | Count | Lock |
 | --- | --- |
@@ -271,6 +293,12 @@ current password:
 Send it to `POST /api/dustpan/v1/me/password`. A session with a recent
 sign-in can leave `currentPassword` empty. The change ends every other
 session of the person. The browser of the change gets a new session cookie.
+
+The request needs two headers. `Origin` must equal the public URL of the
+server. `X-Dustpan-CSRF` must hold the `csrfToken` value of
+`GET /api/server/session`. Without `Origin` the server answers `403` with the
+code `session.other-site`. Without `X-Dustpan-CSRF` it answers `403` with the
+code `session.csrf`.
 
 A wrong current password answers `403` with the error code
 `local-user.current-password-wrong`. When the server has no memory for the

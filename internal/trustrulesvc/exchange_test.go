@@ -1,6 +1,7 @@
 package trustrulesvc_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -255,13 +257,15 @@ func newExchangeFixtureAt(t *testing.T, now func() time.Time) *exchangeFixture {
 func newExchangeFixtureWith(t *testing.T, now func() time.Time, refusals *denylimit.Limiter) *exchangeFixture {
 	t.Helper()
 
-	return newExchangeFixtureOwn(t, now, refusals, nil)
+	return newExchangeFixtureOwn(t, now, refusals, nil, slog.New(slog.DiscardHandler))
 }
 
 // newExchangeFixtureOwn is newExchangeFixtureWith with the check own of the
-// issuers of this installation. Nil means no issuer.
+// issuers of this installation and the logger log of the exchanger. Nil own
+// means no issuer.
 func newExchangeFixtureOwn(
 	t *testing.T, now func() time.Time, refusals *denylimit.Limiter, own trustrulesvc.OwnIssuer,
+	log *slog.Logger,
 ) *exchangeFixture {
 	t.Helper()
 
@@ -295,7 +299,7 @@ func newExchangeFixtureOwn(
 		Rules: f.rules, Exchanges: f.rules, Namespaces: fakeNamespaces{}, Principals: f.people, Tokens: fakeTokens{},
 		Audit: f.audit, ServerAudit: f.audit, Refusals: refusals, Keys: f.keys,
 		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own,
-		Now: now,
+		Now: now, Log: log,
 	})
 	if err != nil {
 		t.Fatalf("exchanger: %v", err)
@@ -557,6 +561,97 @@ func TestExchangeReadsTheKeysOfADiscoveryRule(t *testing.T) {
 	}
 }
 
+// syncBuffer keeps what a slog handler writes, guarded by a mutex: a handler
+// may write from another goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.b.Write(p); err != nil {
+		return 0, fmt.Errorf("write the log line: %w", err)
+	}
+
+	return len(p), nil
+}
+
+// lines returns the lines that the handler wrote so far.
+func (s *syncBuffer) lines() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	text := strings.TrimSuffix(s.b.String(), "\n")
+	if text == "" {
+		return nil
+	}
+
+	return strings.Split(text, "\n")
+}
+
+// TestExchangeWarnsOnceWhenTheKeysOfAnIssuerCannotBeRead sends three tokens
+// of one issuer whose keys the fetcher cannot read: the exchange warns once
+// in the minute of the warning limiter, and warns again in the next minute.
+func TestExchangeWarnsOnceWhenTheKeysOfAnIssuerCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "https://token.actions.example.com"
+
+	var (
+		mu  sync.Mutex
+		now = exchangeNow()
+	)
+
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return now
+	}
+
+	var warnings syncBuffer
+
+	f := newExchangeFixtureOwn(t, clock, nil, nil, slog.New(slog.NewTextHandler(&warnings, nil)))
+	f.rules.rules[0].Keys, f.rules.rules[0].StaticKeys = trustrule.KeySourceDiscovery, ""
+	f.rules.rules[0].Issuer = issuer
+	f.keys.err = trustrule.ErrKeysUnavailable
+
+	tok := f.issuer.token(t, func(c map[string]any) { c["iss"] = issuer })
+
+	for range 3 {
+		if _, err := f.exchange(t, tok); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+			t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+		}
+	}
+
+	lines := warnings.lines()
+	if len(lines) != 1 {
+		t.Fatalf("warnings = %q, want one warning for the issuer in the minute", lines)
+	}
+
+	if line := lines[0]; !strings.Contains(line, "level=WARN") ||
+		!strings.Contains(line, "trust rule keys could not be read") ||
+		!strings.Contains(line, "namespace=acme") || !strings.Contains(line, string(f.rules.rules[0].ID)) ||
+		!strings.Contains(line, trustrule.ErrKeysUnavailable.Error()) {
+		t.Fatalf("warning = %q, want the level, the message, the namespace, the rule and the error", line)
+	}
+
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+
+	if _, err := f.exchange(t, tok); !errors.Is(err, trustrulesvc.ErrNoMatch) {
+		t.Fatalf("Exchange = %v, want ErrNoMatch", err)
+	}
+
+	if lines := warnings.lines(); len(lines) != 2 {
+		t.Fatalf("warnings = %q, want a second warning after the minute", lines)
+	}
+}
+
 // TestExchangeBoundsTheRefusalEntries sends many bad tokens: the first
 // writes an entry, and the others of the window write none.
 func TestExchangeBoundsTheRefusalEntries(t *testing.T) {
@@ -647,7 +742,7 @@ func TestNewExchangerNeedsItsPorts(t *testing.T) {
 	_, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: f.rules, Exchanges: f.rules, Namespaces: fakeNamespaces{}, Principals: f.people, Tokens: fakeTokens{},
 		Audit: f.audit, ServerAudit: nil, Refusals: nil, Keys: f.keys, InstallationURLs: nil, OwnIssuer: nil,
-		Now: nil,
+		Now: nil, Log: nil,
 	})
 	if !errors.Is(err, trustrule.ErrMissingDependency) {
 		t.Fatalf("NewExchanger with no installation log = %v, want ErrMissingDependency", err)
@@ -655,7 +750,7 @@ func TestNewExchangerNeedsItsPorts(t *testing.T) {
 
 	_, err = trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
-		Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil,
+		Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil, Log: nil,
 	})
 	if !errors.Is(err, trustrule.ErrMissingDependency) {
 		t.Fatalf("NewExchanger = %v, want ErrMissingDependency", err)
@@ -1084,7 +1179,7 @@ func TestExchangeAsksTheIssuerOfThisInstallation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newExchangeFixtureOwn(t, exchangeNow, nil, own)
+			f := newExchangeFixtureOwn(t, exchangeNow, nil, own, slog.New(slog.DiscardHandler))
 
 			if _, err := f.exchange(t, f.issuer.token(t, nil)); !errors.Is(err, trustrulesvc.ErrNoMatch) {
 				t.Fatalf("Exchange = %v, want ErrNoMatch", err)
@@ -1102,7 +1197,8 @@ func TestExchangeAsksTheIssuerOfThisInstallation(t *testing.T) {
 	}
 
 	// The same rule exchanges when the service does not sign for the issuer.
-	f := newExchangeFixtureOwn(t, exchangeNow, nil, fakeOwnIssuer{owns: map[string]bool{}, err: nil})
+	f := newExchangeFixtureOwn(t, exchangeNow, nil, fakeOwnIssuer{owns: map[string]bool{}, err: nil},
+		slog.New(slog.DiscardHandler))
 	if _, err := f.exchange(t, f.issuer.token(t, nil)); err != nil {
 		t.Fatalf("Exchange with an issuer of another party = %v, want a token", err)
 	}

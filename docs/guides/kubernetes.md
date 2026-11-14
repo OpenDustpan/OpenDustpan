@@ -139,6 +139,7 @@ The chart can run several replicas of one installation. The [several instances g
 
   The chart cannot read the database URL in its Secret. Put a PostgreSQL URL in it.
 - The chart cannot read a sink variable that uses `valueFrom`, as it cannot read the Secret URL. Make sure that the Secret holds no `file:` sink.
+- The refusals above are best effort. The chart reads only plain values in `server.extraEnv`, and it matches the prefixes `file:` and `sqlite:` in lowercase only. A value with other letter case, such as `FILE:` or `SQLite:`, passes the check. Do not rely on the chart to refuse these values.
 - `podDisruptionBudget.minAvailable` must be less than `replicas`. The chart refuses the install otherwise.
 
 Use an S3-compatible store for the blobs and for the backup target, and one PostgreSQL database. You run the database and the object store, and you keep them available.

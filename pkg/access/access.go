@@ -81,6 +81,10 @@ var (
 	ErrUnitMoved = errors.New("the unit moved to another collection")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrUnknownAction reports an action that no family classifies. The
+	// protected check of a group returns it, so that a new action fails
+	// closed until it is classified.
+	ErrUnknownAction = errors.New("unknown action")
 )
 
 // Family names the group of actions that an action belongs to.
@@ -241,6 +245,70 @@ func Actions(f Family) []identity.Action {
 	sortActions(out)
 
 	return out
+}
+
+// SensitiveActions returns every sensitive action, sorted: each action of
+// the operator, the administration and the delegation families, except the
+// read-only server actions: each server:read-* action. A read-only action
+// cannot raise a privilege, so it is not sensitive. server:observe and each
+// manage, backup, restore and maintenance action stay sensitive. The list
+// comes from the families, so a new action of one of them is in the list
+// with no other change.
+func SensitiveActions() []identity.Action {
+	var out []identity.Action
+
+	for _, family := range []Family{FamilyOperator, FamilyAdministration, FamilyDelegation} {
+		for _, action := range Actions(family) {
+			if readOnlyServer(action) {
+				continue
+			}
+
+			out = append(out, action)
+		}
+	}
+
+	sortActions(out)
+
+	return out
+}
+
+// IsSensitive reports whether action is a sensitive action: its family is
+// the operator family, the administration family or the delegation family,
+// and it is not a read-only server action: each server:read-* action. A
+// read-only action cannot raise a privilege, so it is not sensitive. It
+// returns false for an action that no family classifies: an unknown action
+// is not sensitive. A caller that must fail closed on an unknown action
+// reads FamilyOf itself, as the protected check of a group does.
+func IsSensitive(action identity.Action) bool {
+	family, ok := FamilyOf(action)
+
+	return ok && sensitiveFamily(family) && !readOnlyServer(action)
+}
+
+// sensitiveFamily reports whether a family holds sensitive actions: the
+// operator family, the administration family and the delegation family.
+func sensitiveFamily(family Family) bool {
+	return family == FamilyOperator || family == FamilyAdministration ||
+		family == FamilyDelegation
+}
+
+// readOnlyServer reports whether action is a read-only server action: it
+// reads the principals, the access review, the access tokens, the audit
+// log, the settings, the server instances or the Git host registration of
+// the installation. A read-only action cannot raise a privilege, so it is
+// not sensitive: a group that holds one is not protected, and the identity
+// provider can still manage the group. server:observe and each manage,
+// backup, restore and maintenance action stay sensitive.
+func readOnlyServer(action identity.Action) bool {
+	return slices.Contains([]identity.Action{
+		identity.ActionServerReadPrincipals,
+		identity.ActionServerReadAccess,
+		identity.ActionServerReadTokens,
+		identity.ActionServerReadAudit,
+		identity.ActionServerReadSettings,
+		identity.ActionServerReadInstances,
+		identity.ActionServerReadGitHost,
+	}, action)
 }
 
 // SubjectKind names what a grant subject is.
@@ -465,13 +533,20 @@ type GrantStore interface {
 }
 
 // GrantLookups reads the current grants that a change of who holds them
-// must check: the grants of one subject, and where a role is
+// must check: the grants of one subject or of many, and where a role is
 // granted.
 type GrantLookups interface {
 	// GrantsOf returns every current grant of subject, on any object, in
 	// one query. It serves the checks of a membership change and of a
 	// delete.
 	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
+	// GrantsOfSubjects returns every current grant of each subject of
+	// subjects, on any object, in one query: for each subject, the grants
+	// that GrantsOf returns. It returns no grant of a subject that is not in
+	// subjects, and none for an empty list. It returns ErrInvalid for more
+	// than principal.MaxLimit subjects, the size of one page of a list
+	// route. It serves the protected flag of a page of groups.
+	GrantsOfSubjects(ctx context.Context, subjects []Subject) ([]Grant, error)
 	// RoleGrantedBelowInstallation reports whether a current grant gives
 	// the role with the ID role on a namespace, a collection or a unit.
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)

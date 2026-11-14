@@ -110,7 +110,7 @@ consumes them").
 ### Option 1A. A separate module `opendustpan.org/opendustpan/x/pulumijournal`
 
 The main module path is `opendustpan.org/opendustpan` (`go.mod` at
-`48ca134`). A nested module in `x/pulumijournal/` with its own `go.mod`
+`25586f7`). A nested module in `x/pulumijournal/` with its own `go.mod`
 gets the path `opendustpan.org/opendustpan/x/pulumijournal`.
 
 This is the owner's own suggestion. It gives three real gains:
@@ -215,7 +215,7 @@ The version gate of section 3 makes a missing fix less urgent. A CLI that
 the binary does not know falls back to checkpoints, so a user loses speed,
 not state.
 
-**Repository cost, counted from the Makefile and `ci.yml` at `48ca134`.**
+**Repository cost, counted from the Makefile and `ci.yml` at `25586f7`.**
 
 | Gate | Change for a second module |
 | --- | --- |
@@ -391,7 +391,7 @@ commit `128d3f2` of `v3.268.0`.
 | `govulncheck` v1.8.0, run on 2026-10-12 | 6 in total, in the three classes that govulncheck reports: 4 called (symbol results) in `golang.org/x/net@v0.59.0` (GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6603, fixed in v0.60.0), 1 in an imported package that the code does not call (GO-2026-6610, `x/net`), 1 in a required module only (GO-2026-5932, `golang.org/x/crypto/openpgp`, no fix) | `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` |
 
 For comparison, the main module today has 39 modules in its build list and
-100 edges (`go list -m all`, `go mod graph` at `48ca134`).
+100 edges (`go list -m all`, `go mod graph` at `25586f7`).
 
 The path to the network code: `apitype` imports `common/resource`, which
 imports `common/util/logging`, which imports `google.golang.org/grpc`, which

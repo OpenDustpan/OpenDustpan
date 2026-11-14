@@ -14,6 +14,7 @@ Changed by:
 - ADR 333 changes decision 16: a ceiling of lock alerts for each installation and hour.
 - ADR 333 extends decision 23: the audit kind sign-in.name-lock-ended.
 - ADR 333 extends decision 20: the passkey challenge is a sealed cookie.
+- ADR 372 changes decision 17: a temporary administrator of a recovery resets the factors of a person with no fresh authentication.
 
 ## Context
 
@@ -38,7 +39,7 @@ owner accepted it. The owner also approved the modules
 and `github.com/beevik/etree`. OpenDustpan has no users and no data yet, so
 this decision needs no migration of data and no compatibility path.
 
-Facts on `main` at a50ab96:
+Facts on `main` at 906805a:
 
 - No code stores a password. `pkg/session` has the providers `oidc` and
   `oauth` only.

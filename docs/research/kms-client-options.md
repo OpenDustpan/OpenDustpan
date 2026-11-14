@@ -178,7 +178,7 @@ Notes on the table:
   v0.43.0 and `go-jose/v4` v4.1.6, because the Go tool takes the highest
   version in the graph. `go.mod` also lists `x/crypto`, `x/exp`, `x/oauth2`,
   `x/sync` and `x/sys`. To check this, I added all four SDKs to a clean
-  worktree of commit 1b073cc, ran `go mod tidy`, and ran `govulncheck` on a
+  worktree of commit 9190fbd, ran `go mod tidy`, and ran `govulncheck` on a
   `main` that calls all four. It reported no vulnerability. The same step
   raised the `go list -m all` count from 55 to 285 lines, so the module graph
   grows more than the 71 compiled modules suggest. A future advisory for one

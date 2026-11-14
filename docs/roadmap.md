@@ -98,7 +98,7 @@ previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.
 
-**Status.** Met on 2026-10-12 on main 60f8163, with the upgrade exception
+**Status.** Met on 2026-10-12 on main 7fcc35b, with the upgrade exception
 below. The e2e suite passes the exit-test steps for both tools, on each
 version in the matrix, on SQLite and on PostgreSQL, through the real binary over TLS. The backup and
 restore steps also pass with the blobs on an S3-compatible server, and
@@ -198,11 +198,12 @@ step ends with a check of the audit entries that the step must write
     `pulumi stack init` and `tofu init` for a unit that no rule places fail
     with the error that names the missing rule, and the unit does not exist
     (ADR 51 decision 5).
-11. **Break-glass mode 2.** An installation set at first boot to mode 2
-    (ADR 57) accepts a recovery request that the offline operator key signs,
-    and gives one admin session. A request with a wrong signature, or a
-    second use of the same request, gives no session. The use opens a
-    break-glass review (ADR 142).
+11. **Signed-request recovery.** An installation set at first boot to
+    signed-request recovery (ADR 57, ADR 372) accepts a recovery request that
+    the offline operator key signs, and makes one temporary administrator
+    (ADR 295). A request with a wrong signature, or a second use of the same
+    request, makes none. The use opens a break-glass review (ADR 142, ADR
+    372).
 12. **Audit log, export and sinks.** Each of steps 1 to 11 writes the audit
     entries of ADR 60. The audit export gives them for a time range. The
     `otlp` sink sends them to the test OTLP collector, and the `syslog` and
@@ -223,7 +224,7 @@ an access token of a non-admin principal.
 | server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections, placement, the refusal of a unit with no collection | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all, with the planner role               | discussing; groups, grants and export accepted (ADR 52), the planner role (ADR 212) |
 | server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all: expiry email, workload identity, mTLS | discussing; token life cycle, workload identity, service principals and lifetimes accepted (ADR 53, ADR 54, ADR 67, ADR 69) |
-| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all: OIDC, LDAP, SAML, CAS, OAuth 2.0, trusted header, passkeys, MFA, SCIM, IP allowlists, break-glass mode 2 | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57); design needed for the open questions of ADR 55 |
+| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all: OIDC, LDAP, SAML, CAS, OAuth 2.0, trusted header, passkeys, MFA, SCIM, IP allowlists, signed-request recovery | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57); design needed for the open questions of ADR 55 |
 | server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all: export, the OTLP sink               | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention accepted (ADR 68) |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, groups, grants, access-review export | discussing; groups, grants and export accepted (ADR 52) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
@@ -431,7 +432,7 @@ Out of scope: replication between installations, promotion and forwarding
 (ADR 248); active-active across sites; SQLite with more than one instance; the
 shared cache (ADR 72 decision 9); a flag for the lease period.
 
-**Minimum supported topology.** Two or more instances; PostgreSQL 16 or
+**Minimum supported topology.** Two or more instances; PostgreSQL 18 or
 later; an S3-compatible object store, with no requirement for conditional
 writes; a backup target on an S3-compatible store. The Helm chart refuses the
 `fs`, `dir:` and `file:` settings when `replicas` is more than 1. A later
@@ -824,6 +825,7 @@ place here is not a scope cut of milestone 5.
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |
 | [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification                        | runs (milestone 5)                                              |
+| [RFC 124](rfc/0124-codegen-for-discovered-resources.md) Code for unmanaged resources               | the sweep plugin milestone (RFC 123) for slices 0 to 6; the agents milestone (milestone 10) for slices 7 and 8 |
 | [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code                              | a stable REST API for groups and roles (milestone 4)            |
 | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
 | [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git                                    | runs (milestone 5)                                              |

@@ -432,6 +432,76 @@ func TestFindingsOfBoundsTheKeys(t *testing.T) {
 	}
 }
 
+// keysOf returns the keys of blobs, in order.
+func keysOf(blobs []ManifestBlob) []string {
+	out := make([]string, 0, len(blobs))
+
+	for _, ref := range blobs {
+		out = append(out, ref.Key)
+	}
+
+	return out
+}
+
+// TestFindingsOfCountsEachKeyOnce proves that Named counts each key once,
+// also a key that more than one list names, and that the missing-blob limit
+// result stays the same for a manifest whose keys no two lists share.
+func TestFindingsOfCountsEachKeyOnce(t *testing.T) {
+	t.Parallel()
+
+	limit := EffectiveMissingBlobLimit()
+
+	for _, tc := range []struct {
+		name       string
+		blobs      []ManifestBlob
+		unverified []string
+		damaged    []DamagedBlob
+		named      int
+		missing    int
+		mismatched int
+		exceeded   bool
+	}{
+		{
+			name:  "a key in the blobs and in the unverified keys",
+			blobs: []ManifestBlob{wantRef()}, unverified: []string{liveKey}, damaged: nil,
+			named: 1, missing: 0, mismatched: 0, exceeded: false,
+		},
+		{
+			name:  "a distinct key in each list",
+			blobs: []ManifestBlob{wantRef()}, unverified: []string{liveKey + "/unverified"},
+			damaged: []DamagedBlob{entryOf(liveKey+"/damaged", DamageMismatch)},
+			named:   3, missing: 0, mismatched: 1, exceeded: false,
+		},
+		{
+			name:  "missing and damaged entries over unshared keys",
+			blobs: heldBlobs(6), unverified: nil,
+			damaged: append(missingEntries(3), entryOf(liveKey+"/damaged", DamageMismatch)),
+			named:   10, missing: 3, mismatched: 1, exceeded: true,
+		},
+		{
+			name:  "shared keys in the blobs and the unverified keys still exceed the limit",
+			blobs: heldBlobs(7), unverified: keysOf(heldBlobs(7)),
+			damaged: missingEntries(3),
+			named:   10, missing: 3, mismatched: 0, exceeded: true,
+		},
+	} {
+		manifest := testManifest(t, tc.blobs, tc.damaged)
+		manifest.Unverified = tc.unverified
+
+		found := findingsOf(manifest)
+
+		if found.Named != tc.named || found.Missing != tc.missing || found.Damaged != tc.mismatched ||
+			len(found.Keys) != tc.missing+tc.mismatched {
+			t.Errorf("%s: findingsOf = %+v, want %d named, %d missing, %d damaged", tc.name, found, tc.named,
+				tc.missing, tc.mismatched)
+		}
+
+		if got := limit.Exceeded(found.Missing, found.Named); got != tc.exceeded {
+			t.Errorf("%s: Exceeded(%d, %d) = %t, want %t", tc.name, found.Missing, found.Named, got, tc.exceeded)
+		}
+	}
+}
+
 // fakeOpener is a StateOpener that returns err, or the bytes of the live
 // store when err is nil.
 type fakeOpener struct {
@@ -460,7 +530,8 @@ func (errStore) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 func backupService(source, target blob.Store, opener StateOpener) *Service {
 	return &Service{
 		exporter: nil, kinds: nil, registry: nil, source: source, opener: opener, target: target, targetName: "",
-		now: nil, version: "", maxSQL: 0, runner: nil, operations: nil, lease: 0, logger: slog.New(slog.DiscardHandler),
+		now: nil, version: "", maxSQL: 0, maxUnverified: 0, runner: nil, operations: nil, lease: 0,
+		logger: slog.New(slog.DiscardHandler),
 	}
 }
 

@@ -42,7 +42,7 @@ mergiraf merge them.
 
 ### Method of the measurements
 
-All numbers come from `main` at `b72ef46` (2026-11-03).
+All numbers come from `main` at `db6eccf` (2026-11-03).
 
 - **Last 200 merged PRs.** The 200 newest commits on `main` whose subject
   ends with `(#N)`. Each one is a squash merge of one pull request. They span

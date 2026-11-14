@@ -31,6 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -102,6 +104,9 @@ type envInput struct {
 	// signIn turns on the console sign-in through a test OpenID provider,
 	// in process and with the server binary.
 	signIn bool
+	// signInSecretInVariable passes the client secret of the sign-in in
+	// DUSTPAN_OIDC_CLIENT_SECRET in place of DUSTPAN_OIDC_CLIENT_SECRET_FILE.
+	signInSecretInVariable bool
 	// signInRealTime runs the in-process server of a sign-in env on the
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
@@ -121,9 +126,17 @@ type envInput struct {
 	// sinkSenders replace the built-in notification sink senders of the
 	// in-process server. The server binary has no such seam.
 	sinkSenders []notify.Sender
+	// auditSinks receive a copy of each audit entry of the in-process
+	// server. The server binary takes its sinks through --audit-sink.
+	auditSinks []audit.ShipSink
 	// issuer is a fake OpenID provider of a CI platform whose keys the
 	// in-process server may read, on the loopback, or nil.
 	issuer *OIDCIssuerFake
+	// ldap is a test LDAP directory on the loopback, or nil. With a sign-in,
+	// the in-process server gets the LDAP providers LDAPTLSProvider and
+	// LDAPPlainProvider of it. The server binary cannot reach a loopback
+	// directory, so NewEnvWithLDAP refuses the binary.
+	ldap *ldaptest.Server
 }
 
 // backendConfig groups the settings of one backend process.
@@ -173,14 +186,17 @@ type backendConfig struct {
 const pemCertificate = "CERTIFICATE"
 
 // binarySignIn is the console sign-in of a binary backend. The server reads
-// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE) and
+// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE), or
+// from secret (DUSTPAN_OIDC_CLIENT_SECRET) when secretInVariable is set, and
 // trusts the provider through caFile (SSL_CERT_FILE), so a run proves the
 // flags and the environment variables of the sign-in.
 type binarySignIn struct {
-	publicURL  string
-	issuer     string
-	caFile     string
-	secretFile string
+	publicURL        string
+	issuer           string
+	caFile           string
+	secretFile       string
+	secret           string
+	secretInVariable bool
 }
 
 // args returns the serve arguments of the sign-in, or none for nil.
@@ -202,6 +218,10 @@ func (s *binarySignIn) args() []string {
 func (s *binarySignIn) env() []string {
 	if s == nil {
 		return nil
+	}
+
+	if s.secretInVariable {
+		return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET=" + s.secret}
 	}
 
 	return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET_FILE=" + s.secretFile}
@@ -950,6 +970,67 @@ func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 	e.backendLogs = handle.logs
 }
 
+// StartServerExpectingRefusal starts the binary server on the database at
+// dbURL with the same settings as StartServer, and waits for the process to
+// exit. It does not wait for GET /health/live, because the server must refuse
+// the database. It returns the exit code and the combined output. It fails
+// the test when the server still runs after commandTimeout, and kills it
+// then. It needs E2E_SERVER=binary, and no server of the environment may run.
+func (e *Env) StartServerExpectingRefusal(ctx context.Context, tb testing.TB, dbURL string) (int, string) {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("StartServerExpectingRefusal needs E2E_SERVER=binary")
+	}
+
+	if e.ha != nil {
+		tb.Fatalf("StartServerExpectingRefusal does not run with several instances")
+	}
+
+	if e.backendCmd != nil {
+		tb.Fatalf("StartServerExpectingRefusal: the server still runs")
+	}
+
+	cfg := e.backendCfg
+	cfg.dbURL = dbURL
+
+	cmd, out, err := spawnBinaryBackend(ctx, cfg, e.backendPort)
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	timer := time.NewTimer(commandTimeout)
+	defer timer.Stop()
+
+	select {
+	case waitErr := <-done:
+		var exitErr *exec.ExitError
+		if waitErr != nil && !errors.As(waitErr, &exitErr) {
+			tb.Fatalf("wait for server binary: %v\n%s", waitErr, out.String())
+		}
+
+		return cmd.ProcessState.ExitCode(), out.String()
+	case <-timer.C:
+		// The process may exit between the timer and the kill. Then the kill
+		// reports that the process is done, and the wait below returns its status.
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			tb.Errorf("kill server binary: %v", killErr)
+		}
+
+		tb.Logf("server binary after kill: %v", <-done)
+
+		tb.Fatalf("server binary still runs after %s, want a refusal\n%s", commandTimeout, out.String())
+
+		return 0, ""
+	}
+}
+
 // waitForBackend waits until the backend answers /health/live with 204.
 func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs *lockedBuffer) {
 	tb.Helper()
@@ -1002,7 +1083,7 @@ func binarySignInSetup(tb testing.TB, in envInput, proxy *recordingProxy, cfg *b
 	}
 
 	s := newSignInSetup(tb, proxy.publicURL(), nil)
-	cfg.signIn = writeBinarySignIn(tb, in.dir, s)
+	cfg.signIn = writeBinarySignIn(tb, in.dir, s, in.signInSecretInVariable)
 
 	return s
 }

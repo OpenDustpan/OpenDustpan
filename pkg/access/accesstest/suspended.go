@@ -41,7 +41,7 @@ func testSuspendedMembershipGivesNoRights(t *testing.T, s access.Store) {
 
 	grp := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -75,10 +75,10 @@ func testSuspendedMembershipGivesNoRights(t *testing.T, s access.Store) {
 	}
 }
 
-// testReviewHidesSuspendedMember proves that the access review lists only
+// testReviewHistoryHidesSuspendedMember checks that a history lists only
 // the active member of a group: one suspended and one active member give
 // one expanded row, with a member count of one.
-func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
+func testReviewHistoryHidesSuspendedMember(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
@@ -103,7 +103,7 @@ func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
 
 	grp := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -131,6 +131,7 @@ func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
 
 	q := everyRow(allScope())
 	q.Expand = true
+	q.History, q.FromMs, q.ToMs = true, at(0).UnixMilli(), at(snapshotMinute).UnixMilli()
 
 	rows := review(t, rs, "expanded export without the suspended member", q, "grt-1")
 	if len(rows) != 1 || rows[0].Via == nil || rows[0].Via.PrincipalID != "prn-active" {

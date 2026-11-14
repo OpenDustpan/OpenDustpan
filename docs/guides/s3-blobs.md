@@ -47,7 +47,7 @@ Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, for temporary credentials,
 No flag takes a credential.
 A missing variable stops the start with an error that names the variable.
 The adapter has no cloud identity.
-Pods on AWS with a role need static keys until a later ADR adds it.
+Pods on AWS with a role need static keys until a later release adds it.
 
 ## Start probe
 
@@ -189,7 +189,7 @@ Move blobs with a backup and a restore.
 
 ## What this guide does not cover
 
-These items are not in milestone 3.
+These items are not in this release.
 
 - GCS and Azure Blob targets.
 - Presigned URLs.

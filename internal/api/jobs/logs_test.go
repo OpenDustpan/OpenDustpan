@@ -131,7 +131,9 @@ func logHandler(t *testing.T, holds []string, jobs *fakeJobs, logs *fakeLogs) te
 	return newWorkerHandler(
 		t,
 		newAuthorizer(holds...),
-		handlerDeps{jobs: jobs, starter: nil, entries: nil, artifacts: logs, logs: fastLogs(), cursors: nil},
+		handlerDeps{
+			jobs: jobs, units: nil, starter: nil, entries: nil, artifacts: logs, logs: fastLogs(), cursors: nil,
+		},
 		nil,
 	)
 }

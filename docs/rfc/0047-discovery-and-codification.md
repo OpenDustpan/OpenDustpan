@@ -47,3 +47,7 @@ This RFC does not decide which cases are in scope.
 
 Answered in part on 2026-10-17. ADRs 163 to 165 decide the resource index, the
 state check, cloud sweeps on the team's runner and findings.
+
+RFC 124 (discussing) revises the "write code" part: code for an unmanaged
+resource, checked by a plan that shows no changes, and placed into the
+team's project.

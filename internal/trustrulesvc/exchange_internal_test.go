@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -57,15 +58,20 @@ func signedRule(t *testing.T, issuer, tokenIssuer string) (trustrule.Rule, strin
 	return r, tok
 }
 
-// bareExchanger returns an exchanger with only its clock: check and
-// candidates of a static rule need nothing else.
+// bareExchanger returns an exchanger with only its clock, its warning
+// limiter and a logger that discards: check and candidates of a static rule
+// need nothing else.
 func bareExchanger() *Exchanger {
 	return &Exchanger{
 		cfg: ExchangeConfig{
 			Rules: nil, Exchanges: nil, Namespaces: nil, Principals: nil, Tokens: nil, Audit: nil, ServerAudit: nil,
-			Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil,
+			Refusals: nil, Keys: nil, InstallationURLs: nil, OwnIssuer: nil, Now: nil, Log: nil,
 		},
-		own: nil, refusals: nil, now: internalNow,
+		own: nil, refusals: nil,
+		warnings: denylimit.New(denylimit.Config{
+			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: internalNow,
+		}),
+		log: slog.New(slog.DiscardHandler), now: internalNow,
 	}
 }
 

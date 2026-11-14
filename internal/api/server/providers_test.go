@@ -132,6 +132,21 @@ func (s testStored) openIDClient(p *session.ProviderConfig, clientSecret string)
 func newProviderEnv(t *testing.T) providerEnv {
 	t.Helper()
 
+	return newProviderEnvWith(t, nil)
+}
+
+// newProviderEnvWith builds the env of newProviderEnv with the password
+// providers passwords next to the static provider corp.
+func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) providerEnv {
+	t.Helper()
+
+	static := make([]string, 0, 1+len(passwords))
+	static = append(static, "corp")
+
+	for i := range passwords {
+		static = append(static, passwords[i].ID)
+	}
+
 	var beta, hub *oauthtest.Provider
 
 	var noFaults oauthtest.Faults
@@ -140,6 +155,7 @@ func newProviderEnv(t *testing.T) providerEnv {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, authz: nil, namespaces: nil, hostile: nil,
+		passwords: passwords,
 		stored: func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders) {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,
@@ -165,7 +181,7 @@ func newProviderEnv(t *testing.T) providerEnv {
 			}
 
 			admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
-				Store: st, Binder: st, Secrets: secrets, Now: clock.Now, Static: []string{"corp"},
+				Store: st, Binder: st, Secrets: secrets, Now: clock.Now, Static: static,
 			})
 			if err != nil {
 				t.Fatalf("provider admin: %v", err)

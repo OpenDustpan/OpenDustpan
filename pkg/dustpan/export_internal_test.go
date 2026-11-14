@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -166,7 +165,7 @@ func PlanJob(
 // the phase of job jobID on unit started. It returns the zero time when the
 // service has no phase clock or the clock has no answer.
 func ManualLockPhaseStart(
-	ctx context.Context, unit collection.UnitRef, jobID string, opts ...Option,
+	ctx context.Context, unit manuallock.Unit, jobID string, opts ...Option,
 ) (time.Time, error) {
 	cfg := defaultSettings()
 	for _, opt := range opts {
@@ -200,4 +199,139 @@ func (s *Server) ManualLocks() *manuallock.Service {
 // start.
 func (s *Server) UngatedHandler() http.Handler {
 	return s.ungated
+}
+
+// DescribeOperations returns the operations of the mounted adapters after the
+// checks that the assembly runs, or the error that stops a server.
+func (s *Server) DescribeOperations() ([]apidesc.Operation, error) {
+	if s.mounted == nil {
+		return nil, nil
+	}
+
+	return s.mounted.describeOperations()
+}
+
+// WrappedRoute returns a copy of s with the adapter name wrapped so that it
+// serves pattern too. The wrapper lists pattern among the patterns of the
+// adapter, and op among its operations when op is not nil. A server that does
+// not mount name, or whose adapter lists no routes, is returned unchanged.
+func (s *Server) WrappedRoute(name, pattern string, op *apidesc.Operation) *Server {
+	if s.mounted == nil {
+		return s
+	}
+
+	mount := *s.mounted
+
+	for _, h := range mount.allHandlers() {
+		if h.name != name {
+			continue
+		}
+
+		wrapped, ok := newExtraRoute(h.handler, pattern, op)
+		if !ok {
+			return s
+		}
+
+		mount, ok = withAdapterHandler(mount, name, wrapped)
+		if !ok {
+			return s
+		}
+
+		copied := *s
+		copied.mounted = &mount
+
+		return &copied
+	}
+
+	return s
+}
+
+// extraRoute is one mounted adapter with one more route.
+type extraRoute struct {
+	http.Handler
+
+	patterns []string
+	ops      []apidesc.Operation
+}
+
+// RegisteredPatterns returns the patterns of the adapter and the extra route.
+func (h extraRoute) RegisteredPatterns() []string { return h.patterns }
+
+// Operations returns the operations of the adapter and the extra route.
+func (h extraRoute) Operations() []apidesc.Operation { return h.ops }
+
+// newExtraRoute wraps base with one more route. It returns false when base
+// does not list both its patterns and its operations.
+func newExtraRoute(base http.Handler, pattern string, op *apidesc.Operation) (extraRoute, bool) {
+	patterns, ok := base.(patternLister)
+	if !ok {
+		var none extraRoute
+
+		return none, false
+	}
+
+	operations, ok := base.(operationLister)
+	if !ok {
+		var none extraRoute
+
+		return none, false
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	mux.Handle("/", base)
+
+	ops := append([]apidesc.Operation(nil), operations.Operations()...)
+	if op != nil {
+		ops = append(ops, *op)
+	}
+
+	return extraRoute{
+		Handler:  mux,
+		patterns: append(append([]string(nil), patterns.RegisteredPatterns()...), pattern),
+		ops:      ops,
+	}, true
+}
+
+// withAdapterHandler returns a copy of a with the handler of the adapter
+// called name replaced.
+func withAdapterHandler(a adapters, name string, h http.Handler) (adapters, bool) {
+	set := adapterHandlerSetter(&a, name)
+	if set == nil {
+		return a, false
+	}
+
+	set(h)
+
+	return a, true
+}
+
+// adapterHandlerSetter returns a function that sets the handler field of a
+// that has the name, or nil.
+func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
+	fields := map[string]func(http.Handler){
+		"server":       func(h http.Handler) { a.server = h },
+		"inventory":    func(h http.Handler) { a.inventory = h },
+		"audit":        func(h http.Handler) { a.audit = h },
+		"context":      func(h http.Handler) { a.context = h },
+		"runners":      func(h http.Handler) { a.runners = h },
+		"profiles":     func(h http.Handler) { a.profiles = h },
+		"issuer":       func(h http.Handler) { a.issuer = h },
+		"sinks":        func(h http.Handler) { a.sinks = h },
+		"jobs":         func(h http.Handler) { a.jobs = h },
+		"triggers":     func(h http.Handler) { a.triggers = h },
+		"unitsettings": func(h http.Handler) { a.unitSettings = h },
+		"drift":        func(h http.Handler) { a.drift = h },
+		"registry":     func(h http.Handler) { a.registry = h },
+		"sourcefilter": func(h http.Handler) { a.sourceFilter = h },
+		"trustrules":   func(h http.Handler) { a.trustRules = h },
+		"selfservice":  func(h http.Handler) { a.selfService = h },
+		"pulumi":       func(h http.Handler) { a.pulumi = h },
+		"tfe":          func(h http.Handler) { a.tfe = h },
+		"tofuhttp":     func(h http.Handler) { a.tofuHTTP = h },
+	}
+
+	return fields[name]
 }

@@ -54,11 +54,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -137,12 +139,19 @@ type reviewRowResponse struct {
 
 // reviewViaResponse is the membership of a principal in the group of a
 // row. MemberUntilMs is null while the membership lasts.
+// MemberSource is "local", "scim" or "claim".
+// MemberSourceID is the identity that the source names, or empty for a local membership.
+// MemberSuspended is true when the membership is suspended at the snapshot time and grants nothing.
+// It is always false in a history, which lists only active memberships.
 type reviewViaResponse struct {
-	MemberUntilMs *int64 `json:"memberUntilMs"`
-	Group         string `json:"group"`
-	Member        string `json:"member"`
-	MemberSubject string `json:"memberSubject"`
-	MemberFromMs  int64  `json:"memberFromMs"`
+	MemberUntilMs   *int64 `json:"memberUntilMs"`
+	Group           string `json:"group"`
+	Member          string `json:"member"`
+	MemberSubject   string `json:"memberSubject"`
+	MemberSource    string `json:"memberSource"`
+	MemberSourceID  string `json:"memberSourceId"` //nolint:tagliatelle // The tool-neutral API names this field in lower camel case.
+	MemberFromMs    int64  `json:"memberFromMs"`
+	MemberSuspended bool   `json:"memberSuspended"`
 }
 
 // reviewResponse is one page of an export. Total is the count of every row
@@ -217,15 +226,32 @@ func (h *Handler) reviewRoutes() []Route {
 		{resolvePrincipalPath, principalReviewPath, identity.ActionServerReadAccess},
 	}
 
-	callers := []Route{{
-		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-		Serve: h.serveAccessRead(callerAccess),
-	}, {
-		Method: http.MethodGet, Path: callerGrantsPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-		Serve: h.serveAccessRead(callerGrants),
-	}}
+	callers := []Route{
+		{
+			Method: http.MethodGet,
+			Path:   callerAccessPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerAccess),
+		},
+		{
+			Method: http.MethodGet,
+			Path:   callerGrantsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerGrants),
+		},
+	}
 
 	out := make([]Route, 0, len(kinds)+len(callers))
 
@@ -237,7 +263,7 @@ func (h *Handler) reviewRoutes() []Route {
 			Actions: []identity.Action{
 				k.action,
 			},
-			Resolve: k.resolve, ActionsFor: nil,
+			Resolve: k.resolve, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.serveAccessRead(h.reviewAccess(k.action)),
 		})
 	}
@@ -257,6 +283,14 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 
 		page, err := svc.Review(r.Context(), c.obj, req)
 		if err != nil {
+			appendErr := h.appendReviewFailure(r, c, action, reviewAuditObject(c.obj, req, nil), svc.Now())
+			if appendErr != nil {
+				h.logger.WarnContext(r.Context(), "the audit entry of a failed access review export was not written",
+					slog.String("action", string(action)), slog.String("error", appendErr.Error()))
+
+				return failed(""), reviewExportError{export: err, append: appendErr}
+			}
+
 			return failed(""), err
 		}
 
@@ -267,6 +301,39 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 		return ok(http.StatusOK, reviewPageOf(page), ""), nil
 	}
 }
+
+// classifyReview maps the errors of the export that no other classifier
+// maps: an export of a collection over its unit cap answers 422 with the
+// count, the cap and the setting key.
+func classifyReview(err error) (failure, bool) {
+	over, ok := errors.AsType[*access.CollectionUnitCapError](err)
+	if !ok {
+		return fail(0, ""), false
+	}
+
+	return failCoded(http.StatusUnprocessableEntity, over.Error(), errcode.AccessCollectionUnitCap,
+		errcode.Quantity("count", int64(over.Count)),
+		errcode.Quantity("cap", int64(over.Cap)),
+		errcode.Identifier("key", over.Key)), true
+}
+
+// reviewExportError is the error of an export that failed and whose audit
+// entry also failed. The error of the export decides the answer, as it does
+// when the entry succeeds: the handler maps an error to a status by its wrap
+// chain, and the error of the entry would answer its own class instead (an
+// unavailable store answers 503, a fenced append 409). The error of the
+// entry goes to the log, not to the message.
+type reviewExportError struct {
+	export error
+	append error
+}
+
+func (e reviewExportError) Error() string {
+	return e.export.Error()
+}
+
+// Unwrap returns the error of the export, which decides the answer.
+func (e reviewExportError) Unwrap() error { return e.export }
 
 // reviewPageOf maps one page of an export to the wire.
 func reviewPageOf(page access.ReviewPage) reviewResponse {
@@ -287,10 +354,10 @@ func reviewPageOf(page access.ReviewPage) reviewResponse {
 	return out
 }
 
-// appendReviewRead writes the audit entry of one export request: kind
-// read-access, in the namespace of the object or in @server. It fails
-// closed: the caller answers the error and no rows. NewHandler refuses a
-// config that serves the export with no audit store.
+// appendReviewRead writes the audit entry of one export request that
+// succeeded: kind read-access with the success outcome. It fails closed:
+// the caller answers the error and no rows. NewHandler refuses a config
+// that serves the export with no audit store.
 func (h *Handler) appendReviewRead(
 	r *http.Request,
 	c *call,
@@ -298,10 +365,44 @@ func (h *Handler) appendReviewRead(
 	object string,
 	at time.Time,
 ) error {
+	entry := reviewEntry(r, c, action, object, at)
+	entry.Outcome = audit.OutcomeSuccess
+
+	return h.appendReviewEntry(r, c, entry)
+}
+
+// appendReviewFailure writes the audit entry of one export request that
+// failed: kind read-access with the failure outcome. It fails closed as
+// appendReviewRead does.
+func (h *Handler) appendReviewFailure(
+	r *http.Request,
+	c *call,
+	action identity.Action,
+	object string,
+	at time.Time,
+) error {
+	entry := reviewEntry(r, c, action, object, at)
+	entry.Outcome = audit.OutcomeFailure
+
+	return h.appendReviewEntry(r, c, entry)
+}
+
+// reviewEntry returns the audit entry of one export request: kind
+// read-access, with the action, the object and the time of the request.
+// The caller sets the outcome.
+func reviewEntry(r *http.Request, c *call, action identity.Action, object string, at time.Time) audit.Entry {
 	entry := callerEntry(r, c.p, action)
-	entry.At, entry.Kind, entry.Outcome = at, audit.KindReadAccess, audit.OutcomeSuccess
+	entry.At, entry.Kind = at, audit.KindReadAccess
 	entry.Object = object
 
+	return entry
+}
+
+// appendReviewEntry appends the audit entry of one export request in the
+// namespace of the object or in @server. It fails closed: the caller
+// answers the error and no rows. NewHandler refuses a config that serves
+// the export with no audit store.
+func (h *Handler) appendReviewEntry(r *http.Request, c *call, entry audit.Entry) error {
 	ctx := r.Context()
 
 	if c.obj.Namespace() == "" {
@@ -452,6 +553,7 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 			MemberUntilMs: millisOf(v.RemovedAt), Group: row.Grant.Subject.String(),
 			Member:        access.Subject{Kind: access.SubjectPrincipal, ID: v.PrincipalID}.String(),
 			MemberSubject: v.PrincipalSubject, MemberFromMs: v.AddedAt.UnixMilli(),
+			MemberSource: v.Source, MemberSourceID: v.SourceID, MemberSuspended: v.Suspended,
 		}
 	}
 

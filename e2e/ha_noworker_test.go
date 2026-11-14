@@ -38,6 +38,9 @@ func haNoWorkerRoutes(env *e2e.Env, console func(e2e.SessionRequest) (int, strin
 		{"start a backup", func(ctx context.Context) (int, string, error) {
 			return env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
 		}},
+		{"start a plan job", func(ctx context.Context) (int, string, error) {
+			return env.APIStatus(ctx, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"))
+		}},
 		{"approve an audit chain change", func(context.Context) (int, string, error) {
 			status, body := console(
 				e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""},
@@ -49,9 +52,9 @@ func haNoWorkerRoutes(env *e2e.Env, console func(e2e.SessionRequest) (int, strin
 }
 
 // haNoWorker restarts every instance with only the api component. Once
-// each instance counts the worker as absent, a backup request and an audit
-// chain approval must answer 503 with the error code and the text that names
-// `--components worker`, and no backup may start.
+// each instance counts the worker as absent, a backup request, a job start
+// and an audit chain approval must answer 503 with the error code and the
+// text that names `--components worker`, and no backup or job may start.
 func haNoWorker(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -69,11 +72,23 @@ func haNoWorker(t *testing.T, env *e2e.Env) {
 	// The sign-in is recent when the requests start.
 	routes := haNoWorkerRoutes(env, env.FreshAdminSession(ctx, t))
 
+	before := haCountNoWorkerWork(ctx, t, env)
+
 	// Two rounds of the proxy reach every instance at least once.
 	for round := range 2 * cluster.Size() {
 		for _, route := range routes {
 			haCheckNoWorker(ctx, t, route, round)
 		}
+	}
+
+	after := haCountNoWorkerWork(ctx, t, env)
+	if after.jobs != before.jobs {
+		t.Fatalf("the jobs of the namespace are %d after the refused starts, want %d", after.jobs, before.jobs)
+	}
+
+	if after.operations > before.operations {
+		t.Fatalf("the durable operations are %d after the refused starts, want at most %d",
+			after.operations, before.operations)
 	}
 
 	haCheckNoBackupRuns(ctx, t, env)
@@ -106,6 +121,46 @@ func haCheckNoWorker(ctx context.Context, t *testing.T, route haNoWorkerRoute, r
 		t.Fatalf("%s, request %d answers %q, want the code %s and the text %q",
 			route.name, round, body, haNoWorkerCode, haNoWorkerHelp)
 	}
+}
+
+// haNoWorkerWork is the work that the refused starts must not add: the jobs
+// of the namespace and the durable operations that no worker claimed.
+type haNoWorkerWork struct {
+	jobs       int
+	operations int
+}
+
+// haCountNoWorkerWork counts the jobs of the namespace and the durable
+// operations that the installation lists.
+func haCountNoWorkerWork(ctx context.Context, t *testing.T, env *e2e.Env) haNoWorkerWork {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, jobsRoute, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET jobs answers %d: %v (%s)", status, err, body)
+	}
+
+	var listed jobListDoc
+
+	if err = json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("decode the jobs %q: %v", body, err)
+	}
+
+	// The worker report lists each durable operation that no worker claimed.
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/worker", "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET worker answers %d: %v (%s)", status, err, body)
+	}
+
+	var report struct {
+		Operations []json.RawMessage `json:"operations"`
+	}
+
+	if err = json.Unmarshal([]byte(body), &report); err != nil {
+		t.Fatalf("decode the worker report %q: %v", body, err)
+	}
+
+	return haNoWorkerWork{jobs: len(listed.Jobs), operations: len(report.Operations)}
 }
 
 // haBackupRow is a row of the list of backups.
@@ -151,7 +206,7 @@ func haWaitNoWorker(ctx context.Context, t *testing.T, env *e2e.Env, size int) {
 	defer cancel()
 
 	for stuck := 0; stuck < size; {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/worker", "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/worker", "")
 		if err != nil || status != http.StatusOK {
 			t.Fatalf("GET worker answers %d: %v (%s)", status, err, body)
 		}

@@ -49,6 +49,9 @@ credentials to a planner.
 
 ## Give the role
 
-Make a grant with the role `planner` on a namespace, a collection or a unit.
+Make a grant with the role `planner` on the installation. A grant with the role
+`planner` on a namespace, a collection or a unit answers 400 with the message
+'role planner holds job:read-logs, which only a grant on the installation can
+give'.
 The grant is a stored record. You can list it, audit it and revoke it like
 each other grant. `GET /api/server/roles` lists the role with its actions.

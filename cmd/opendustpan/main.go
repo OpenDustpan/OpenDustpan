@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -136,9 +137,6 @@ var (
 	errNoDatabase = errors.New(
 		"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db",
 	)
-	// errNoDatabaseTrial is errNoDatabase for a person who most likely wants a
-	// trial.
-	errNoDatabaseTrial = errors.New("no database is set. For a trial, run: opendustpan dev")
 	// errDevEnvironment reports serve in a shell that holds DUSTPAN_DEV.
 	errDevEnvironment error = &refusalError{
 		text:  "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. Start serve in a new shell.",
@@ -299,11 +297,13 @@ type serveFlags struct {
 	oidcClientID                 string
 	oidcScopes                   string
 	oidcNoAutoCreate             bool
+	ldap                         ldapFlags
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
 	ipAllowlistsIncludeBootstrap bool
 	gitHostAllowedRanges         string
+	allowPlainConnections        bool
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -335,6 +335,8 @@ type serveFlags struct {
 	planRetention, jobLogRetention string
 	jobRetention                   history.RetentionSettings
 	auditSinks                     []string
+	auditSinkAllowedRanges         string
+	auditSinkRanges                []netip.Prefix
 	// destinationPorts holds the ports, besides 443, that a notification
 	// destination may use.
 	destinationPorts string
@@ -412,6 +414,13 @@ func (f *serveFlags) check() error {
 	if _, err := egress.ParseAllowedRanges(splitList(f.gitHostAllowedRanges)); err != nil {
 		return fmt.Errorf("invalid --git-host-allowed-ranges: %w", err)
 	}
+
+	ranges, parseErr := egress.ParseAllowedRanges(splitList(f.auditSinkAllowedRanges))
+	if parseErr != nil {
+		return fmt.Errorf("invalid --audit-sink-allowed-ranges: %w", parseErr)
+	}
+
+	f.auditSinkRanges = ranges
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -494,6 +503,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-sink-allowed-ranges").String(fs, &f.auditSinkAllowedRanges)
 	cli.ByFlag("destination-ports").String(fs, &f.destinationPorts)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
 	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
@@ -529,12 +539,14 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
+	cli.ByFlag("allow-plain-connections").Bool(fs, &f.allowPlainConnections)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
 	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
 	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
 	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
+	f.ldap.register(fs)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -743,7 +755,9 @@ func hasValue(lookup cli.LookupFunc, name string) bool {
 // no database, in this order, and reports only the first. Serve stops before
 // it opens the database. Each error names one command that helps. A person at
 // a terminal who set no setting of serve most likely wants a trial, so the
-// error names the dev command.
+// error for a missing key names the dev command. The error for a missing
+// database never does: the code reaches the database check only with a key,
+// and a key is a setting of serve.
 func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) error {
 	trial := terminal && f.noSettings(lookup)
 
@@ -756,10 +770,6 @@ func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) erro
 	}
 
 	if strings.TrimSpace(f.database) == "" {
-		if trial {
-			return errNoDatabaseTrial
-		}
-
 		return errNoDatabase
 	}
 
@@ -917,7 +927,7 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
-	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv, f.auditSinkRanges)
 	if err != nil {
 		return err
 	}
@@ -1070,7 +1080,7 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	signIn, signInErr := f.signInOptions()
+	signIn, signInErr := f.signInOptions(os.LookupEnv)
 	if signInErr != nil {
 		return nil, signInErr
 	}
@@ -1127,7 +1137,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
-	tail, tailErr := f.storeOptions(st, wrapper)
+	tail, tailErr := f.storeOptions(st, wrapper, logger)
 
 	return append(opts, tail...), tailErr
 }
@@ -1147,7 +1157,7 @@ func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
 // storeOptions returns the options of the components and of the stores that
 // the store may or may not keep: the durable operations, the runners and the
 // profiles.
-func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.Option, error) {
+func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper, logger *slog.Logger) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -1163,7 +1173,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, sourceFilterStoreOption(st)...)
 	opts = append(opts, trustRuleStoreOption(st)...)
-	opts = append(opts, jobStoreOption(st)...)
+	opts = append(opts, jobStoreOption(st, logger)...)
 	opts = append(opts, triggerStoreOption(st)...)
 	opts = append(opts, unitSettingsStoreOption(st)...)
 	opts = append(opts, savedViewStoreOption(st)...)
@@ -1277,20 +1287,20 @@ func trustRuleStoreOption(st store) []dustpan.Option {
 // for st, or nil when st keeps no jobs. The claimer takes the phases of the
 // jobs as durable operations, so a poll of a runner of a pool for jobs finds
 // work.
-func jobStoreOption(st store) []dustpan.Option {
+func jobStoreOption(st store, logger *slog.Logger) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
 			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
 			}),
 		}
 	case postgresStore:
 		return []dustpan.Option{
 			dustpan.WithJobStore(s.Jobs()),
 			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
+				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g, job.WithClaimerLogger(logger))
 			}),
 		}
 	default:
@@ -1771,7 +1781,9 @@ func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 		return appLog{}, err
 	}
 
-	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, os.LookupEnv)
+	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, sinkEnv{
+		lookup: os.LookupEnv, ranges: f.auditSinkRanges,
+	})
 }
 
 // store is the persistence adapter chosen by --database.

@@ -2,13 +2,21 @@ package sqlite //nolint:testpackage // The white-box template state is unexporte
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
+
+// DB returns the database handle of s, so a test can read or change rows
+// with direct SQL.
+func DB(s *Store) *sql.DB {
+	return s.conn
+}
 
 // RemoveInternalTemplates removes the white-box template directory built for
 // this test binary. It skips removal when the template was never built.
@@ -93,6 +101,22 @@ func SeedRunnerControlRows(ctx context.Context, s *Store) error {
 		if _, err := s.conn.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("seed runner control row: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// SeedHeartbeatRow writes one durable_heartbeats row with exactly the given
+// time and lease, as the upsert of Beat writes it. It is a test hook for the
+// ordering cases of the heartbeat suite, which cannot wait on the clock of
+// the store.
+func SeedHeartbeatRow(ctx context.Context, s *Store, owner string, at time.Time, lease time.Duration) error {
+	const stmt = `INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+		VALUES (?, ?, ?)
+		ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, owner, at.UnixMilli(), lease.Milliseconds()); err != nil {
+		return fmt.Errorf("seed heartbeat row: %w", err)
 	}
 
 	return nil

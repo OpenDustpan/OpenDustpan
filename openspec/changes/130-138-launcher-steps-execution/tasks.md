@@ -1,0 +1,22 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Add failing hostile step tests for bounds and bad program form. Check: TestLauncherRefusesShellArgs in pkg/launcher/run/run_test.go fails on main.
+- [ ] 1.2 Add failing tests for ReportExit (NEW), duplicate report, wrong claim, signal kill, and stream resume in pkg/launcher/run/run_test.go. Check: TestLauncherReportExitAfterRestart fails on main.
+
+## 2. Build
+
+- [ ] 2.1 Build the NEW command `opendustpan job steps validate` for local file checks with machine-readable errors in the NEW file cmd/opendustpan/job_steps_validate.go. Check: `opendustpan job steps validate steps.json` exits 0 on a good file and 2 with code launcher.step-invalid on a bad file, with no server call.
+- [ ] 2.2 Wire checked StartStep (NEW), streaming, and ReportExit (NEW) through ANY /runner/v1 with handoff token at open, stream, and exit. Write the launcher side in the NEW file pkg/launcher/run/step.go. Keep the route declaration and its adapter in the files that main has for ANY /runner/v1. Check: Assignment from route ANY /runner/v1 with credential kind handoff token starts a step with StartStep and no shell under a claim, streams ordered chunks, and ReportExit stores one code.
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+
+## 4. Definition of done
+
+- [ ] 4.1 Write the docs page for step rules and the validate command. Check: Docs page for step rules and the validate command runs each command as written.
+- [ ] 4.2 Run e2e step with real launcher, usability check, and full checks. Check: E2E job on route ANY /runner/v1 with credential kind handoff token runs a real launcher step with no shell, streams logs, and reports one exit; persona completes path from docs page; `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

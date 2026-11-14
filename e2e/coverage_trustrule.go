@@ -21,6 +21,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
 		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
+		Reach:            nil,
 		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
@@ -32,7 +33,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Namespaces: namespaces, Principals: struct{ trustrulesvc.Principals }{nil},
 		Tokens: struct{ trustrulesvc.TokenIssuer }{nil}, Audit: coverageAuditStore{},
 		ServerAudit: struct{ audit.ServerStore }{nil}, Refusals: nil, Keys: nil, InstallationURLs: nil,
-		OwnIssuer: nil, Now: nil,
+		OwnIssuer: nil, Now: nil, Log: nil,
 	})
 	if err != nil {
 		tb.Fatalf("token exchange: %v", err)

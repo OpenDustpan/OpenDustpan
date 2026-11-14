@@ -10,7 +10,7 @@ Changes:
 ## Context
 
 Parallel pull requests collide on a small number of central files. RFC 120
-measured the 200 newest merged pull requests on `main` at `b72ef46`:
+measured the 200 newest merged pull requests on `main` at `db6eccf`:
 
 | File | PRs that changed it | PRs with a branch conflict |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ in code, for `queries.sql`, `dustpan.go` and `e2e/coverage.go`, and one route
 test for the whole server.
 
 An architecture review of RFC 120 on its pull request ran the measurements
-again on `b72ef46`. It found these facts:
+again on `db6eccf`. It found these facts:
 
 - A second count gave the same per-file counts and train fix counts. A new run of
   each merge of the 35 pull requests that changed the SQLite `queries.sql`

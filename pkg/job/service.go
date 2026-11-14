@@ -257,6 +257,7 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 	// The service sets the list itself, so a planner can neither hide a
 	// default nor invent one.
 	spec.Defaulted = DefaultedValues(&req, &spec)
+	spec.LocationSource = locationSource(&req, &spec)
 
 	err = s.authorize(ctx, a, &spec, &req)
 	if err != nil {
@@ -277,6 +278,23 @@ func (s *service) StartOnce(ctx context.Context, a Actor, req StartRequest) (Job
 	}
 
 	return j, created, nil
+}
+
+// locationSource returns the source of the effective code location of spec.
+// A request that named the location decides. For a location that the server
+// took from the settings, the planner names the namespace when the default
+// connection of the namespace gave a value, and the source is the unit
+// otherwise.
+func locationSource(req *StartRequest, spec *Spec) LocationSource {
+	if !req.Location.IsZero() {
+		return LocationSourceRequest
+	}
+
+	if spec.LocationSource == LocationSourceNamespace {
+		return LocationSourceNamespace
+	}
+
+	return LocationSourceUnit
 }
 
 // checkPlanned returns ErrInvalid when the spec that the planner built is for

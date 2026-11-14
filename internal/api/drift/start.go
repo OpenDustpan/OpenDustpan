@@ -88,6 +88,16 @@ func (h *Handler) startCheck(w http.ResponseWriter, r *http.Request, p identity.
 	}
 
 	req := checkRequest(r, t, body)
+
+	// Defense in depth: the drift service validates the request too. This
+	// check stays so that a text that the server cannot keep is refused at the
+	// boundary, before another layer holds it.
+	if err = req.Validate(); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	// A check starts a job, which inserts a durable operation that only a
 	// worker runs.
 	if err = admit.Start(ctx, h.workers); err != nil {
@@ -105,7 +115,7 @@ func (h *Handler) startCheck(w http.ResponseWriter, r *http.Request, p identity.
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
 			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionUnitRunPlan, Object: t.obj, Reason: reason, Window: 0,
+				Action: identity.ActionUnitRunPlan, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
 			})
 		}
 
