@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -108,9 +109,10 @@ func (c *bitCheck) latest(id workspace.StateVersionID, want wantBit, reads int) 
 	}
 }
 
-// outputsReadNoBlob checks that the outputs read of the state id answers its
-// outputs and makes no blob read.
-func (c *bitCheck) outputsReadNoBlob(id workspace.StateVersionID) {
+// outputsStreamTheBlob checks that the outputs read of the state id answers
+// its outputs and streams the state blob once. The read decides the
+// client-encryption bit from the blob, so it never trusts the stored row.
+func (c *bitCheck) outputsStreamTheBlob(id workspace.StateVersionID) {
 	c.t.Helper()
 
 	before := c.counted.reads()
@@ -126,8 +128,8 @@ func (c *bitCheck) outputsReadNoBlob(id workspace.StateVersionID) {
 
 	c.t.Logf("the outputs read of %s: %d blob reads", id, c.counted.reads()-before)
 
-	if got := c.counted.reads() - before; got != 0 {
-		c.t.Fatalf("the outputs read of %s read the blob %d times, want 0", id, got)
+	if got := c.counted.reads() - before; got != 1 {
+		c.t.Fatalf("the outputs read of %s read the blob %d times, want 1", id, got)
 	}
 }
 
@@ -166,7 +168,7 @@ func TestLatestAnswersTheBitWithoutABlobRead(t *testing.T) {
 	plain := pushAndCurrent(t, f, 1, plainDoc)
 
 	c.latest(plain, wantPlaintext, 0)
-	c.outputsReadNoBlob(plain)
+	c.outputsStreamTheBlob(plain)
 
 	encrypted := pushAndCurrent(t, f, 2, `{"serial":2,"lineage":"lineage-1","encrypted_data":"aa"}`)
 
@@ -218,6 +220,35 @@ func TestLatestStreamsTheBlobWhenTheBitIsNull(t *testing.T) {
 
 	if _, err := c.states.Latest(t.Context(), c.u); !errors.Is(err, workspace.ErrInvalidState) {
 		t.Fatalf("latest of a legacy blob with both keys: err = %v, want ErrInvalidState", err)
+	}
+}
+
+// TestOutputsRefusesAClientEncryptedBlobBehindAPlaintextRow proves the outputs
+// read decides the client-encryption bit from the state blob and never from the
+// stored row: a row that says plaintext while its blob holds the
+// client-encryption envelope must give ErrClientEncrypted, never an empty
+// outputs list.
+func TestOutputsRefusesAClientEncryptedBlobBehindAPlaintextRow(t *testing.T) {
+	t.Parallel()
+
+	counted := &countingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, gets: 0, failGet: false}
+	f := newFixtureSized(t, counted, blobguardtest.None{}, 512)
+
+	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	encDoc := `{"serial":1,"lineage":"lineage-1","encrypted_data":"aa"}`
+	encrypted := pushAndCurrent(t, f, 1, encDoc)
+
+	// The row is untrusted input: it claims the state is plaintext.
+	f.store.plainRow(encrypted, encDoc)
+
+	states := workspace.NewOutputStates(f.svc)
+
+	_, err := states.Outputs(t.Context(), unitObjectOf(t, f), encrypted.String())
+	if !errors.Is(err, outputshare.ErrClientEncrypted) {
+		t.Fatalf("outputs of a client-encrypted blob behind a plaintext row: err = %v, want ErrClientEncrypted", err)
 	}
 }
 

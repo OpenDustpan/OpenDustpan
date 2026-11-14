@@ -1712,6 +1712,23 @@ func sum(content string) string {
 	return hex.EncodeToString(s[:])
 }
 
+// rawSum returns the raw MD5 of content, as a state version row stores it. It
+// reuses sum, so a test that needs the bytes of the sum makes no second weak
+// hash call.
+func rawSum(content string) [md5.Size]byte {
+	var out [md5.Size]byte
+
+	raw, err := hex.DecodeString(sum(content))
+	if err != nil {
+		// sum returns the hex of an MD5, so this cannot fail.
+		return out
+	}
+
+	copy(out[:], raw)
+
+	return out
+}
+
 func newState(lineage string, serial int64, content string) workspace.NewState {
 	return workspace.NewState{Lineage: lineage, MD5: sum(content), Outputs: nil, Serial: serial, Force: false}
 }
@@ -5426,8 +5443,22 @@ func (m *memStore) legacyRow(id workspace.StateVersionID, content string) {
 
 	sv := m.versions[id]
 	sv.ClientEncrypted = workspace.ClientEncryptedUnknown
-	sv.MD5 = md5.Sum([]byte(content)) //nolint:gosec // The protocol under test uses MD5 for integrity.
+	sv.MD5 = rawSum(content)
 	sv.Size = int64(len(content))
+	m.versions[id] = sv
+}
+
+// plainRow rewrites the stored version id as a row whose client-encryption bit
+// says plaintext, while its blob holds content, so a test drives a read that
+// must not trust the row.
+func (m *memStore) plainRow(id workspace.StateVersionID, content string) {
+	m.legacyRow(id, content)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sv := m.versions[id]
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
 	m.versions[id] = sv
 }
 

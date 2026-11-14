@@ -33,6 +33,17 @@ func (s *Service) ClientEncryptedOf(ctx context.Context, sv StateVersion) (bool,
 		return sv.ClientEncrypted.Encrypted(), nil
 	}
 
+	return s.clientEncryptedStreamed(ctx, sv)
+}
+
+// clientEncryptedStreamed reports whether the client encrypted the content of
+// the finalized state version sv, from the sealed blob alone. It never reads
+// the stored bit: a row of another version or of a restored backup is untrusted
+// input, and a wrong bit would make this reader agree with it. The outputs read
+// decides with this path, so its refusal to answer an empty list for a
+// client-encrypted state does not depend on the row that the route read. The
+// caller fails closed on each error.
+func (s *Service) clientEncryptedStreamed(ctx context.Context, sv StateVersion) (bool, error) {
 	content, err := s.Open(ctx, sv)
 	if err != nil {
 		return false, err

@@ -139,8 +139,11 @@ func releaseFromRow(row WorkspaceRow) workspace.Release {
 	}
 }
 
-// ToStateVersionRow converts a domain state version into a row.
-func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
+// toStateVersionRow converts a domain state version into a row. It is
+// unexported so that no adapter builds a finalize row without the checks of
+// FinalizeStateVersionRow and PendingStateVersionRow: those two are the only
+// constructors, and a version cannot reach a table without passing one.
+func toStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 	content := sv.Content.String()
 	md5sum := append([]byte{}, sv.MD5[:]...)
 
@@ -233,7 +236,7 @@ func FinalizeStateVersionRow(sv workspace.StateVersion) (StateVersionRow, error)
 		)
 	}
 
-	return ToStateVersionRow(sv), nil
+	return toStateVersionRow(sv), nil
 }
 
 // PendingStateVersionRow converts a pending state version into the row of its
@@ -249,7 +252,7 @@ func PendingStateVersionRow(sv workspace.StateVersion) (StateVersionRow, error) 
 		)
 	}
 
-	return ToStateVersionRow(sv), nil
+	return toStateVersionRow(sv), nil
 }
 
 // MarshalSensitiveMarks renders marks as JSON for the column, or nil when

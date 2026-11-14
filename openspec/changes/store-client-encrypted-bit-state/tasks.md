@@ -1,6 +1,6 @@
 ## 1. failing tests
 
-- [ ] 1.1 Add failing conformance tests for finalize storage and Latest row read on both dialects Check: workspace conformance test asserts finalize stores the bit and Latest returns it for plaintext and client-encrypted states on sqlite and postgres
+- [x] 1.1 Add failing conformance tests for finalize storage and Latest row read on both dialects Check: workspace conformance test asserts finalize stores the bit and Latest returns it for plaintext and client-encrypted states on sqlite and postgres
 - [x] 1.2 Add failing test that Latest with a present bit performs no blob read Check: blob-read counter test fails on main because Latest streams the blob
 - [x] 1.3 Add failing test for legacy null-bit fallback Check: conformance test with a null-bit row fails on main expectations by asserting the streamed fallback path
 

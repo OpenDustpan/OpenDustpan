@@ -783,6 +783,10 @@ _Copy says_: "write without the lock", with the permission (`unit:write-unlocked
 One immutable copy of the state of a workspace, with a lineage and a serial.
 _Avoid_: Snapshot, revision, checkpoint
 
+**Client-encryption bit**:
+Whether the client encrypted the content of one state version, held as the type `workspace.ClientEncrypted`. The value `ClientEncryptedYes` marks a content that is the OpenTofu encryption envelope. The value `ClientEncryptedNo` marks a plaintext content. The value `ClientEncryptedUnknown` marks a version that the server stored before it kept the bit. The server writes the bit at the finalize of a version and reads the bit from the row without a state blob read. A version whose bit is unknown has its bit read from the blob. A restored version holds the unknown bit, so the server reads its bit from the blob again.
+_Avoid_: Encryption flag, encrypted marker
+
 **Sensitive marks**:
 The value paths that the `json-state` rendering of one state version marks in `sensitive_values`. The server keeps only these paths, never a value from the rendering (ADR 41, decision 9). A masked state read masks each marked path.
 _Avoid_: Sensitive values (that is the field of the rendering)

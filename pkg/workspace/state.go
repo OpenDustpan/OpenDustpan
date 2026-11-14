@@ -129,14 +129,8 @@ const (
 // NewClientEncrypted returns the client-encryption bit of a finalized version
 // from the document the client uploaded. The result is always known, so a
 // version that finalizes holds the bit and a reader never streams it again.
-//
-//nolint:revive // flag-parameter: a state document marks the bit with a boolean member, and this is the only place that maps it to the domain bit.
 func NewClientEncrypted(encrypted bool) ClientEncrypted {
-	if encrypted {
-		return ClientEncryptedYes
-	}
-
-	return ClientEncryptedNo
+	return map[bool]ClientEncrypted{false: ClientEncryptedNo, true: ClientEncryptedYes}[encrypted]
 }
 
 // Known reports whether the bit is known. A known bit is ClientEncryptedNo or
