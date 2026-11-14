@@ -7,6 +7,7 @@ Changed by:
 - ADR 166 changes decisions 8, 13, 16 and 18: projection operation, SQL
   adapters, built-in roles, route paths, open question 4.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 366 changes decision 14: a wording refinement, the audit entry of an API write of a context entry.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 
@@ -157,8 +158,8 @@ Facts that this ADR builds on:
     and a reference adapter in memory runs it today. The SQL adapters and
     their migrations come later.
 14. **Writes carry the fence.** Each write checks the fence of the namespace
-    of its object in its transaction (ADR 4). An API write appends its audit
-    entry in the same transaction (ADR 60). An output write is a projection
+    of its object in its transaction (ADR 4). An API write of a context entry
+    appends its audit entry in the same transaction (ADR 60). An output write is a projection
     of a state write, which has its own audit entry, so it appends none.
 15. **Delete and purge.** A soft delete of a unit keeps its entries, so a
     restore brings them back. A purge deletes the entries of the unit and of
@@ -273,3 +274,11 @@ published JSON Schema) stay as they are.
 4. **Context on a deleted resource.** The output entry of a resource that
    the latest state no longer holds stays until the next output. Should the
    read API hide it?
+
+## Changelog
+
+- 2026-11-13, wording refinement (ADR 366): decision 14 said "An API write
+  appends its audit entry in the same transaction". It now says "An API
+  write of a context entry appends its audit entry in the same transaction".
+  This ADR is about context entries. ADR 193 decision 5 says that the write
+  of a draft review writes no audit entry.

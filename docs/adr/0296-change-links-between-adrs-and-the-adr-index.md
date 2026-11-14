@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-31. Decided by the project owner
 
+Changed by:
+
+- ADR 365 changes decision 1: a wording refinement edits the ADR in place,
+  with a changelog. A changed decision still gets a new ADR.
+
 Changes:
 
 - Extends ADR 1: an accepted ADR gets a "Changed by" list.

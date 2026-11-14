@@ -278,7 +278,7 @@ func TestLeaveMaintenanceWhileHeld(t *testing.T) {
 	fake.leaveErr = maintenance.ErrHeld
 	handler := newMaintenanceHandler(t, fake)
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/leave", "")
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "")
 	if status != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (%s)", status, body)
 	}

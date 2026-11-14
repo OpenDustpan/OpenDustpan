@@ -193,7 +193,7 @@ func TestEnterErrorCodes(t *testing.T) {
 		Canceled: []string{"opentofu/acme/net", "opentofu/acme/dns"},
 	}
 
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance", http.NoBody)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/maintenance", http.NoBody)
 	rec := httptest.NewRecorder()
 	apiserver.WriteEnterErrorForTest(rec, r, active)
 

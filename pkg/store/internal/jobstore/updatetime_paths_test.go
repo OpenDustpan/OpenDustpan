@@ -61,7 +61,8 @@ func testJob(unit identity.Object, updatedAt time.Time) job.Job {
 		ID: "job-1", NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationApply, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
-			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			LocationSource: "",
 			Steps: []job.Step{{
 				Name: "apply", Role: job.RoleTool, Phase: job.PhaseApply, Args: nil, Env: nil, Dir: "",
 				Timeout: 0, AllowFailure: false, ChangesResources: true, Outputs: nil,

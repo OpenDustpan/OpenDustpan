@@ -111,6 +111,10 @@ export interface Collection {
   readonly namespace: string;
 }
 
+export interface Components {
+  readonly components: ReadonlyArray<string>;
+}
+
 export interface ContextAnswer {
   readonly action: string;
   readonly data?: Readonly<Record<string, unknown>>;
@@ -330,6 +334,20 @@ export interface DriftUnit {
   readonly id: string;
   readonly name: string;
   readonly tool: string;
+}
+
+export interface DueSchedule {
+  readonly lateSeconds: number;
+  readonly name: string;
+}
+
+export interface EnterMaintenanceRequest {
+  readonly force: boolean;
+}
+
+export interface EnterMaintenanceResponse {
+  readonly canceled: ReadonlyArray<string>;
+  readonly state: string;
 }
 
 /** An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse. */
@@ -619,6 +637,7 @@ export interface JobLocation {
   readonly ref?: string;
   readonly repository?: string;
   readonly revision?: string;
+  readonly source?: string;
 }
 
 export interface JobLocationRequest {
@@ -896,6 +915,10 @@ export interface MaintenanceActiveWorkError {
 export interface MaintenanceActiveWorkErrorArgs {
   readonly canceledCount: number;
   readonly workCount: number;
+}
+
+export interface MaintenanceState {
+  readonly state: string;
 }
 
 export interface ManualLock {
@@ -1896,6 +1919,13 @@ export interface TrustRuleList {
   readonly rules: ReadonlyArray<TrustRule>;
 }
 
+export interface UnclaimedOperation {
+  readonly id: string;
+  readonly kind: string;
+  readonly seconds: number;
+  readonly state: string;
+}
+
 export interface Unit {
   readonly collection?: string;
   readonly consoleUrl?: string;
@@ -2124,6 +2154,15 @@ export interface UpdatePreferencesRequest {
 
 export type UpdateSettingsRequest = Readonly<Record<string, unknown>>;
 
+export interface UpgradeCheck {
+  readonly appliedMigrations: ReadonlyArray<string>;
+  readonly keyEncryptionKey: boolean;
+  readonly minimumBinaryVersion: string;
+  readonly runningJournaledUpdates: number;
+  readonly schemaVersion: number;
+  readonly version: string;
+}
+
 export interface View {
   readonly createdAt: string;
   readonly id: string;
@@ -2140,6 +2179,16 @@ export interface ViewLabel {
 export interface ViewQuery {
   readonly labels: ReadonlyArray<ViewLabel>;
   readonly references: ReadonlyArray<string>;
+}
+
+export interface WorkerReport {
+  readonly components: ReadonlyArray<string>;
+  readonly leaseSeconds: number;
+  readonly oldestUnclaimedSeconds: number;
+  readonly operations: ReadonlyArray<UnclaimedOperation>;
+  readonly schedules: ReadonlyArray<DueSchedule>;
+  readonly silentSeconds: number;
+  readonly stuck: boolean;
 }
 
 export interface WorkloadToken {

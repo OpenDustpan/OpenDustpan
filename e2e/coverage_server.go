@@ -190,12 +190,12 @@ func operatorAllowEntries() []AllowEntry {
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/components",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/components",
 			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
 			Reason:       "Operator route: no CLI calls it.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/worker",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/worker",
 			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
 			Reason:       "Operator route: no CLI calls it.",
 		},

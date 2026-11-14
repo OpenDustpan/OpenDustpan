@@ -186,8 +186,8 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 
 	spec := job.Spec{
 		Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
-		Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}, Steps: steps,
-		Pool: "", Profile: "prf-default", Edits: nil, Delivery: "", Defaulted: nil,
+		Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+		LocationSource: "", Steps: steps, Pool: "", Profile: "prf-default", Edits: nil, Delivery: "", Defaulted: nil,
 	}
 	phase := job.Phase{
 		Kind: job.PhasePlan, Operation: string(id), Claims: 1, Executor: "", Steps: records, StateVersion: "",

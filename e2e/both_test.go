@@ -133,8 +133,8 @@ func checkServerMetrics(t *testing.T, env *e2e.Env) {
 	}
 }
 
-// checkServerComponents proves the component routes: GET /api/server/components
-// and GET /api/server/worker answer 200 with the admin token, which holds
+// checkServerComponents proves the component routes: GET /api/dustpan/v1/components
+// and GET /api/dustpan/v1/worker answer 200 with the admin token, which holds
 // server:observe, and 401 without a token.
 func checkServerComponents(t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -142,8 +142,8 @@ func checkServerComponents(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 
 	for _, route := range []struct{ path, field string }{
-		{"/api/server/components", `"components"`},
-		{"/api/server/worker", `"stuck"`},
+		{"/api/dustpan/v1/components", `"components"`},
+		{"/api/dustpan/v1/worker", `"stuck"`},
 	} {
 		status, body, err := env.TFEStatusA(ctx, http.MethodGet, route.path, "")
 		if err != nil {

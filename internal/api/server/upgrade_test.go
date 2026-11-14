@@ -31,7 +31,7 @@ type upgradeCheckDoc struct {
 func readUpgradeCheck(t *testing.T, handler testHandler) (int, upgradeCheckDoc) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/upgrade-check", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/upgrade-check", http.NoBody)
 	req.Header.Set("Authorization", "Bearer test-token")
 
 	rec := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestUpgradeCheckDeclaresServerObserve(t *testing.T) {
 	var found *apiserver.Route
 
 	for _, route := range handler.Routes() {
-		if route.Method == http.MethodGet && route.Path == "/api/server/upgrade-check" {
+		if route.Method == http.MethodGet && route.Path == "/api/dustpan/v1/upgrade-check" {
 			found = &route
 
 			break
@@ -65,7 +65,7 @@ func TestUpgradeCheckDeclaresServerObserve(t *testing.T) {
 	}
 
 	if found == nil {
-		t.Fatal("upgrade check route is missing, want GET /api/server/upgrade-check")
+		t.Fatal("upgrade check route is missing, want GET /api/dustpan/v1/upgrade-check")
 	}
 
 	if found.Scope != apiserver.ScopeAuthorized {
@@ -338,7 +338,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/upgrade-check", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/upgrade-check", http.NoBody)
 	req.Header.Set("Authorization", "Bearer test-token")
 
 	rec := httptest.NewRecorder()
@@ -361,7 +361,7 @@ func TestUpgradeCheckNeedsToken(t *testing.T) {
 
 	handler := newTestHandler(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/upgrade-check", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/upgrade-check", http.NoBody)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

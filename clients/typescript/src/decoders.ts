@@ -39,6 +39,7 @@ import type {
   Capabilities,
   ChangeOwnPasswordRequest,
   Collection,
+  Components,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -70,6 +71,9 @@ import type {
   DriftResource,
   DriftStatus,
   DriftUnit,
+  DueSchedule,
+  EnterMaintenanceRequest,
+  EnterMaintenanceResponse,
   ErrorAnswer,
   ErrorCode,
   ErrorResponse,
@@ -148,6 +152,7 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  MaintenanceState,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
@@ -286,6 +291,7 @@ import type {
   TrustRuleCondition,
   TrustRuleKeySource,
   TrustRuleList,
+  UnclaimedOperation,
   Unit,
   UnitDefaults,
   UnitDefaultsRequest,
@@ -317,9 +323,11 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpgradeCheck,
   View,
   ViewLabel,
   ViewQuery,
+  WorkerReport,
   WorkloadToken,
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
@@ -486,6 +494,11 @@ export const decodeCollection: Decoder<Collection> = object<Collection>("Collect
   createdAt: int64,
   name: string,
   namespace: string,
+});
+
+/** The validator of Components. */
+export const decodeComponents: Decoder<Components> = object<Components>("Components", {
+  components: array(string),
 });
 
 /** The validator of ContextAnswer. */
@@ -716,6 +729,23 @@ export const decodeDriftUnit: Decoder<DriftUnit> = object<DriftUnit>("DriftUnit"
   id: string,
   name: string,
   tool: string,
+});
+
+/** The validator of DueSchedule. */
+export const decodeDueSchedule: Decoder<DueSchedule> = object<DueSchedule>("DueSchedule", {
+  lateSeconds: number,
+  name: string,
+});
+
+/** The validator of EnterMaintenanceRequest. */
+export const decodeEnterMaintenanceRequest: Decoder<EnterMaintenanceRequest> = object<EnterMaintenanceRequest>("EnterMaintenanceRequest", {
+  force: boolean,
+});
+
+/** The validator of EnterMaintenanceResponse. */
+export const decodeEnterMaintenanceResponse: Decoder<EnterMaintenanceResponse> = object<EnterMaintenanceResponse>("EnterMaintenanceResponse", {
+  canceled: array(string),
+  state: string,
 });
 
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
@@ -1023,6 +1053,7 @@ export const decodeJobLocation: Decoder<JobLocation> = object<JobLocation>("JobL
   ref: optional(string),
   repository: optional(string),
   revision: optional(string),
+  source: optional(string),
 });
 
 /** The validator of JobLocationRequest. */
@@ -1339,6 +1370,11 @@ export const decodeMaintenanceActiveWorkError: Decoder<MaintenanceActiveWorkErro
 export const decodeMaintenanceActiveWorkErrorArgs: Decoder<MaintenanceActiveWorkErrorArgs> = object<MaintenanceActiveWorkErrorArgs>("MaintenanceActiveWorkErrorArgs", {
   canceledCount: int64,
   workCount: int64,
+});
+
+/** The validator of MaintenanceState. */
+export const decodeMaintenanceState: Decoder<MaintenanceState> = object<MaintenanceState>("MaintenanceState", {
+  state: string,
 });
 
 /** The validator of ManualLock. */
@@ -2362,6 +2398,14 @@ export const decodeTrustRuleList: Decoder<TrustRuleList> = object<TrustRuleList>
   rules: array(ref(() => decodeTrustRule)),
 });
 
+/** The validator of UnclaimedOperation. */
+export const decodeUnclaimedOperation: Decoder<UnclaimedOperation> = object<UnclaimedOperation>("UnclaimedOperation", {
+  id: string,
+  kind: string,
+  seconds: number,
+  state: string,
+});
+
 /** The validator of Unit. */
 export const decodeUnit: Decoder<Unit> = object<Unit>("Unit", {
   collection: optional(string),
@@ -2612,6 +2656,16 @@ export const decodeUpdatePreferencesRequest: Decoder<UpdatePreferencesRequest> =
 /** The validator of UpdateSettingsRequest. */
 export const decodeUpdateSettingsRequest: Decoder<UpdateSettingsRequest> = record(anyValue);
 
+/** The validator of UpgradeCheck. */
+export const decodeUpgradeCheck: Decoder<UpgradeCheck> = object<UpgradeCheck>("UpgradeCheck", {
+  appliedMigrations: array(string),
+  keyEncryptionKey: boolean,
+  minimumBinaryVersion: string,
+  runningJournaledUpdates: int64,
+  schemaVersion: int64,
+  version: string,
+});
+
 /** The validator of View. */
 export const decodeView: Decoder<View> = object<View>("View", {
   createdAt: string,
@@ -2631,6 +2685,17 @@ export const decodeViewLabel: Decoder<ViewLabel> = object<ViewLabel>("ViewLabel"
 export const decodeViewQuery: Decoder<ViewQuery> = object<ViewQuery>("ViewQuery", {
   labels: array(ref(() => decodeViewLabel)),
   references: array(string),
+});
+
+/** The validator of WorkerReport. */
+export const decodeWorkerReport: Decoder<WorkerReport> = object<WorkerReport>("WorkerReport", {
+  components: array(string),
+  leaseSeconds: number,
+  oldestUnclaimedSeconds: number,
+  operations: array(ref(() => decodeUnclaimedOperation)),
+  schedules: array(ref(() => decodeDueSchedule)),
+  silentSeconds: number,
+  stuck: boolean,
 });
 
 /** The validator of WorkloadToken. */

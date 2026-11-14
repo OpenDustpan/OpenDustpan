@@ -49,17 +49,18 @@ func startedJob() job.Job {
 
 func emptySpec() job.Spec {
 	return job.Spec{
-		Unit:      identity.Object{},
-		Operation: job.OperationRefresh,
-		Purpose:   job.PurposeDriftCheck,
-		Executor:  job.ExecutorRunner,
-		Location:  noLocation(),
-		Steps:     nil,
-		Pool:      "",
-		Profile:   "",
-		Edits:     nil,
-		Delivery:  "",
-		Defaulted: nil,
+		Unit:           identity.Object{},
+		Operation:      job.OperationRefresh,
+		Purpose:        job.PurposeDriftCheck,
+		Executor:       job.ExecutorRunner,
+		Location:       noLocation(),
+		LocationSource: "",
+		Steps:          nil,
+		Pool:           "",
+		Profile:        "",
+		Edits:          nil,
+		Delivery:       "",
+		Defaulted:      nil,
 	}
 }
 
