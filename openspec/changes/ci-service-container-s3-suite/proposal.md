@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 4
 ---
 
 Issue: #183.
@@ -70,18 +70,11 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. Does the owner say yes to RustFS pinned by digest as a new test tool in CI?
-   - Options: Allow the pinned RustFS image by digest as the S3 service container; Refuse any new test tool in CI and keep the S3 suite local-only.
-   - Provisional decision (owner review 14 Nov): Allow the pinned RustFS image by digest
-   - Reason: ADR 31 decision 8 says a new test tool in CI waits for the owner yes, and issue #183 says work needs the owner yes before it starts. Benchmark: Google: pin third-party CI images by digest and recheck the digest at work start before first use.
-   - Persona impact: No persona loses function. A refusal keeps the current skip behavior that developers already use. Escape hatch: If the owner refuses RustFS, CI keeps skipping the S3 suite and a developer runs it on a local server, per ADR 31 decision 8.
-
 Questions considered and answered:
 
-- Does the S3 suite run in CI or stay local-only? CI runs it once the owner says yes. ADR 31 decision 8 says CI runs the S3 suite on a service container, and until then a developer runs the suite on a local server and CI skips it.
+- Does the owner say yes to RustFS pinned by digest as a new test tool in CI? Yes. ADR 376 decision 2 says: "CI runs the S3 suite on RustFS 1.x, pinned by digest (owner, 2026-11-14)." The agent reads the digest of the current 1.x release again and pins it.
+- Does the S3 suite run in CI or stay local-only? CI runs it on a service container. ADR 31 decision 8 says so, and ADR 376 decision 2 names RustFS 1.x pinned by digest.
 - Does the change need a new GitHub Action? No new action. ADR 31 decision 8 says a container needs no GitHub Action.
-- Who must say yes to the new test tool in CI? The owner decides, per ADR 31 decision 8. The change stays blocked until the owner says yes, and the open question records that gate.
+- Who must say yes to the new test tool in CI? The owner said yes in ADR 376 decision 2. The gate is lifted.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
