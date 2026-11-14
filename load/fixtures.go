@@ -174,14 +174,16 @@ func seedFixtureJob(ctx context.Context, p ports, unit identity.Object, fence na
 	}
 
 	queued := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "load/infra", Ref: "refs/heads/main",
 				Directory: "network", Revision: "0123456789abcdef",
 			},
-			Steps: nil, Pool: "rpl-load", Profile: "prf-load", Edits: nil, Delivery: "",
+			LocationSource: job.LocationSourceRequest,
+			Steps:          nil, Pool: "rpl-load", Profile: "prf-load", Edits: nil, Delivery: "",
 			Defaulted: nil,
 		},
 		State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: phases, Current: 0,

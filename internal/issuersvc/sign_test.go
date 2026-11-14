@@ -260,6 +260,29 @@ func TestLoginRefusesClaimsThatReplaceTheIssuer(t *testing.T) {
 	}
 }
 
+// TestLoginRefusesAuthenticationClaims sends an open whose claims hold an
+// authentication claim. A relying party can read such a claim as a fresh or a
+// stronger sign-in, so the issuer refuses the open and signs no token.
+func TestLoginRefusesAuthenticationClaims(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	for name, value := range map[string]any{
+		"auth_time": h.clock.Now().Unix(), "amr": []string{"mfa", "hwk"}, "acr": "phr",
+	} {
+		o := h.open(h.ns, defaultSubject)
+		o.Claims[name] = value
+
+		tok, err := h.svc.Login(t.Context(), o, "aws", "sts.amazonaws.com", 5*time.Minute)
+		wantErr(t, "claim "+name, err, profile.ErrInvalid)
+
+		if tok.Value != "" {
+			t.Errorf("claim %s: a token was signed", name)
+		}
+	}
+}
+
 func TestLoginChecksTheSubject(t *testing.T) {
 	t.Parallel()
 

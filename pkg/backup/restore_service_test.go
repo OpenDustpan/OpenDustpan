@@ -928,13 +928,14 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 }
 
 // mutatingTarget serves the objects of an inner blob store, but answers the
-// manifest with tampered bytes from the third manifest read on, emulating a
-// backup target mutated after the restore checks passed.
+// manifest with tampered bytes from the manifest read at from on, emulating a
+// backup target mutated after the pin.
 type mutatingTarget struct {
 	inner     *memStore
 	tampered  []byte
 	mu        sync.Mutex
 	manifests int
+	from      int
 }
 
 func (m *mutatingTarget) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -946,7 +947,7 @@ func (m *mutatingTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, 
 		m.mu.Lock()
 		m.manifests++
 
-		if m.manifests >= 3 {
+		if m.manifests >= m.from {
 			data := m.tampered
 			m.mu.Unlock()
 
@@ -995,7 +996,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		t.Fatalf("encode tampered manifest: %v", err)
 	}
 
-	proxy := &mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0}
+	proxy := &mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0, from: 3}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:            setup.live,
@@ -1667,7 +1668,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 	}
 
 	proxy := &foreignManifestTarget{
-		&mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0},
+		&mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0, from: 3},
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
@@ -1767,7 +1768,7 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 	}
 
 	proxy := &foreignManifestTarget{
-		&mutatingTarget{inner: setup.target, tampered: other, mu: sync.Mutex{}, manifests: 0},
+		&mutatingTarget{inner: setup.target, tampered: other, mu: sync.Mutex{}, manifests: 0, from: 3},
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{

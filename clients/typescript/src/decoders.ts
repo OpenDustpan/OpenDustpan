@@ -19,7 +19,10 @@ import {
   union,
 } from "./decode.js";
 import type { Decoder } from "./decode.js";
+import { invalidValue } from "./errors.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
@@ -29,6 +32,8 @@ import type {
   AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -37,6 +42,7 @@ import type {
   Capabilities,
   ChangeOwnPasswordRequest,
   Collection,
+  Components,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -69,6 +75,9 @@ import type {
   DriftResource,
   DriftStatus,
   DriftUnit,
+  DueSchedule,
+  EnterMaintenanceRequest,
+  EnterMaintenanceResponse,
   ErrorAnswer,
   ErrorCode,
   ErrorResponse,
@@ -147,6 +156,7 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  MaintenanceState,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
@@ -287,6 +297,7 @@ import type {
   TrustRuleCondition,
   TrustRuleKeySource,
   TrustRuleList,
+  UnclaimedOperation,
   Unit,
   UnitDefaults,
   UnitDefaultsRequest,
@@ -318,9 +329,11 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpgradeCheck,
   View,
   ViewLabel,
   ViewQuery,
+  WorkerReport,
   WorkloadToken,
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
@@ -345,6 +358,43 @@ import {
   TriggerKindValues,
   TrustRuleKeySourceValues,
 } from "./types.js";
+
+/**
+ * The validator of a value that is one of several types. It tries each
+ * validator in order and gives the first value that one of them accepts.
+ */
+function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder<T> {
+  return (value, path) => {
+    for (const decode of decoders) {
+      try {
+        return decode(value, path);
+      } catch {
+        // The value is not of this type. The next validator gets it.
+      }
+    }
+
+    const kind = typeof value;
+    const article = /^[aeiou]/.test(kind) ? "an" : "a";
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : `${article} ${kind}`;
+
+    throw invalidValue(path, `want ${want}, got ${got}`);
+  };
+}
+
+/** The validator of AccessCollectionUnitCapError. */
+export const decodeAccessCollectionUnitCapError: Decoder<AccessCollectionUnitCapError> = object<AccessCollectionUnitCapError>("AccessCollectionUnitCapError", {
+  code: int64,
+  errorArgs: ref(() => decodeAccessCollectionUnitCapErrorArgs),
+  errorCode: literal("access.collection-unit-cap"),
+  message: string,
+});
+
+/** The validator of AccessCollectionUnitCapErrorArgs. */
+export const decodeAccessCollectionUnitCapErrorArgs: Decoder<AccessCollectionUnitCapErrorArgs> = object<AccessCollectionUnitCapErrorArgs>("AccessCollectionUnitCapErrorArgs", {
+  cap: int64,
+  count: int64,
+  key: string,
+});
 
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
@@ -410,6 +460,20 @@ export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = obj
   backup: string,
 });
 
+/** The validator of BackupTooManyUnverifiedError. */
+export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverifiedError> = object<BackupTooManyUnverifiedError>("BackupTooManyUnverifiedError", {
+  code: int64,
+  errorArgs: ref(() => decodeBackupTooManyUnverifiedErrorArgs),
+  errorCode: literal("backup.too-many-unverified"),
+  message: string,
+});
+
+/** The validator of BackupTooManyUnverifiedErrorArgs. */
+export const decodeBackupTooManyUnverifiedErrorArgs: Decoder<BackupTooManyUnverifiedErrorArgs> = object<BackupTooManyUnverifiedErrorArgs>("BackupTooManyUnverifiedErrorArgs", {
+  count: int64,
+  limit: int64,
+});
+
 /** The validator of BulkUnitSettingsError. */
 export const decodeBulkUnitSettingsError: Decoder<BulkUnitSettingsError> = object<BulkUnitSettingsError>("BulkUnitSettingsError", {
   code: int64,
@@ -461,6 +525,11 @@ export const decodeCollection: Decoder<Collection> = object<Collection>("Collect
   createdAt: int64,
   name: string,
   namespace: string,
+});
+
+/** The validator of Components. */
+export const decodeComponents: Decoder<Components> = object<Components>("Components", {
+  components: array(string),
 });
 
 /** The validator of ContextAnswer. */
@@ -704,9 +773,28 @@ export const decodeDriftUnit: Decoder<DriftUnit> = object<DriftUnit>("DriftUnit"
   tool: string,
 });
 
+/** The validator of DueSchedule. */
+export const decodeDueSchedule: Decoder<DueSchedule> = object<DueSchedule>("DueSchedule", {
+  lateSeconds: number,
+  name: string,
+});
+
+/** The validator of EnterMaintenanceRequest. */
+export const decodeEnterMaintenanceRequest: Decoder<EnterMaintenanceRequest> = object<EnterMaintenanceRequest>("EnterMaintenanceRequest", {
+  force: boolean,
+});
+
+/** The validator of EnterMaintenanceResponse. */
+export const decodeEnterMaintenanceResponse: Decoder<EnterMaintenanceResponse> = object<EnterMaintenanceResponse>("EnterMaintenanceResponse", {
+  canceled: array(string),
+  state: string,
+});
+
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
+  "access.collection-unit-cap": ref(() => decodeAccessCollectionUnitCapError),
   "backup.corrupt": ref(() => decodeBackupCorruptError),
+  "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),
   "gate.approvers-count-above": ref(() => decodeGateApproversCountAboveError),
   "lock.locked": ref(() => decodeLockLockedError),
@@ -1008,6 +1096,7 @@ export const decodeJobLocation: Decoder<JobLocation> = object<JobLocation>("JobL
   ref: optional(string),
   repository: optional(string),
   revision: optional(string),
+  source: optional(string),
 });
 
 /** The validator of JobLocationRequest. */
@@ -1147,6 +1236,7 @@ export const decodeListGitHostLinksResponse: Decoder<ListGitHostLinksResponse> =
 
 /** The validator of ListJobsResponse. */
 export const decodeListJobsResponse: Decoder<ListJobsResponse> = object<ListJobsResponse>("ListJobsResponse", {
+  damaged: int64,
   jobs: array(ref(() => decodeJob)),
   nextPageToken: optional(string),
 });
@@ -1323,6 +1413,11 @@ export const decodeMaintenanceActiveWorkError: Decoder<MaintenanceActiveWorkErro
 export const decodeMaintenanceActiveWorkErrorArgs: Decoder<MaintenanceActiveWorkErrorArgs> = object<MaintenanceActiveWorkErrorArgs>("MaintenanceActiveWorkErrorArgs", {
   canceledCount: int64,
   workCount: int64,
+});
+
+/** The validator of MaintenanceState. */
+export const decodeMaintenanceState: Decoder<MaintenanceState> = object<MaintenanceState>("MaintenanceState", {
+  state: string,
 });
 
 /** The validator of ManualLock. */
@@ -1909,7 +2004,7 @@ export const decodeSelfServiceModule: Decoder<SelfServiceModule> = object<SelfSe
 /** The validator of SelfServiceOperand. */
 export const decodeSelfServiceOperand: Decoder<SelfServiceOperand> = object<SelfServiceOperand>("SelfServiceOperand", {
   input: optional(string),
-  value: optional(anyValue),
+  value: optional(oneOf<string | number | boolean>("a string, a number or a boolean", string, number, boolean)),
 });
 
 /** The validator of SelfServiceOutputRef. */
@@ -2360,6 +2455,14 @@ export const decodeTrustRuleList: Decoder<TrustRuleList> = object<TrustRuleList>
   rules: array(ref(() => decodeTrustRule)),
 });
 
+/** The validator of UnclaimedOperation. */
+export const decodeUnclaimedOperation: Decoder<UnclaimedOperation> = object<UnclaimedOperation>("UnclaimedOperation", {
+  id: string,
+  kind: string,
+  seconds: number,
+  state: string,
+});
+
 /** The validator of Unit. */
 export const decodeUnit: Decoder<Unit> = object<Unit>("Unit", {
   collection: optional(string),
@@ -2610,6 +2713,16 @@ export const decodeUpdatePreferencesRequest: Decoder<UpdatePreferencesRequest> =
 /** The validator of UpdateSettingsRequest. */
 export const decodeUpdateSettingsRequest: Decoder<UpdateSettingsRequest> = record(anyValue);
 
+/** The validator of UpgradeCheck. */
+export const decodeUpgradeCheck: Decoder<UpgradeCheck> = object<UpgradeCheck>("UpgradeCheck", {
+  appliedMigrations: array(string),
+  keyEncryptionKey: boolean,
+  minimumBinaryVersion: string,
+  runningJournaledUpdates: int64,
+  schemaVersion: int64,
+  version: string,
+});
+
 /** The validator of View. */
 export const decodeView: Decoder<View> = object<View>("View", {
   createdAt: string,
@@ -2629,6 +2742,17 @@ export const decodeViewLabel: Decoder<ViewLabel> = object<ViewLabel>("ViewLabel"
 export const decodeViewQuery: Decoder<ViewQuery> = object<ViewQuery>("ViewQuery", {
   labels: array(ref(() => decodeViewLabel)),
   references: array(string),
+});
+
+/** The validator of WorkerReport. */
+export const decodeWorkerReport: Decoder<WorkerReport> = object<WorkerReport>("WorkerReport", {
+  components: array(string),
+  leaseSeconds: number,
+  oldestUnclaimedSeconds: number,
+  operations: array(ref(() => decodeUnclaimedOperation)),
+  schedules: array(ref(() => decodeDueSchedule)),
+  silentSeconds: number,
+  stuck: boolean,
 });
 
 /** The validator of WorkloadToken. */

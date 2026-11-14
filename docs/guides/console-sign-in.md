@@ -320,6 +320,8 @@ The same rule holds for these changes:
 - the approval of a change of the audit chain. Sign in before the server
   restarts with the new setting: maintenance mode refuses a new sign-in
 - the IP allowlist of a namespace (`PUT` and `DELETE`)
+- the accept of a link from a Git host account to the own principal, because
+  the comment commands of that account then run as the principal
 - the reveal of a secret value in the console, for a Pulumi stack, for an
   OpenTofu state version and for a profile (`showSecrets=true`)
 

@@ -65,13 +65,14 @@ type providerResponse struct {
 	AutoCreate      bool     `json:"autoCreate"`
 	Enabled         bool     `json:"enabled"`
 	ClientSecretSet bool     `json:"clientSecretSet"`
-	// Mode is "oidc" or "oauth". The fields below are set for "oauth"
-	// only.
+	// Mode is "oidc", "oauth" or "ldap". The four fields below are set for
+	// "oauth" only, and LDAP for "ldap" only.
 	Mode             string          `json:"mode"`
 	AuthorizationURL string          `json:"authorizationURL,omitempty"`
 	TokenURL         string          `json:"tokenURL,omitempty"`
 	UserinfoURL      string          `json:"userinfoURL,omitempty"`
 	Claims           *providerClaims `json:"claims,omitempty"`
+	LDAP             *providerLDAP   `json:"ldap,omitempty"`
 }
 
 // providerClaims is the claim mapping of a provider in the oauth mode: the
@@ -153,23 +154,23 @@ func (h *Handler) signInProviderRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: signInProvidersPath, Scope: ScopeAuthorized, Actions: read,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.listSignInProviders,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.listSignInProviders,
 		},
 		{
 			Method: http.MethodPost, Path: signInProvidersPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.createSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.createSignInProvider,
 		},
 		{
 			Method: http.MethodGet, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: read,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.readSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.readSignInProvider,
 		},
 		{
 			Method: http.MethodPatch, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.changeSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeSignInProvider,
 		},
 		{
 			Method: http.MethodDelete, Path: signInProviderPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil, Serve: h.deleteSignInProvider,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false, Serve: h.deleteSignInProvider,
 		},
 	}
 }
@@ -185,14 +186,26 @@ func (h *Handler) listSignInProviders(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 
-	out := providersResponse{Providers: make([]providerResponse, 0, len(h.signIn.providers)+len(stored))}
+	out := providersResponse{Providers: make([]providerResponse, 0,
+		len(h.signIn.providers)+len(h.signIn.passwordProviders)+len(stored))}
 
-	for _, id := range slices.Sorted(maps.Keys(h.signIn.providers)) {
-		out.Providers = append(out.Providers, staticProviderOf(h.signIn.providers[id]))
+	static := make(map[string]providerResponse, len(h.signIn.providers)+len(h.signIn.passwordProviders))
+
+	for id, p := range h.signIn.providers {
+		static[id] = staticProviderOf(p)
+	}
+
+	for id := range h.signIn.passwordProviders {
+		p := h.signIn.passwordProviders[id]
+		static[id] = passwordProviderOf(&p)
+	}
+
+	for _, id := range slices.Sorted(maps.Keys(static)) {
+		out.Providers = append(out.Providers, static[id])
 	}
 
 	for i := range stored {
-		if _, static := h.signIn.providers[stored[i].ID]; !static {
+		if _, isStatic := static[stored[i].ID]; !isStatic {
 			out.Providers = append(out.Providers, storedProviderOf(&stored[i]))
 		}
 	}
@@ -208,6 +221,13 @@ func (h *Handler) readSignInProvider(w http.ResponseWriter, r *http.Request, _ i
 
 	if p, ok := h.signIn.providers[id]; ok {
 		h.writeJSON(ctx, w, http.StatusOK, staticProviderOf(p))
+
+		return
+	}
+
+	if p, ok := h.signIn.passwordProviders[id]; ok {
+		w.Header().Set("Cache-Control", "no-store")
+		h.writeJSON(ctx, w, http.StatusOK, passwordProviderOf(&p))
 
 		return
 	}
@@ -386,7 +406,7 @@ func storedProviderOf(p *session.ProviderConfig) providerResponse {
 		Source: providerSourceAPI, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
 		Scopes: valueOr(&p.Scopes, []string{}), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
 		ClientSecretSet: len(p.SealedSecret) > 0, Mode: string(p.Mode), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil,
+		UserinfoURL: "", Claims: nil, LDAP: nil,
 	}
 
 	if p.Mode == session.ModeOAuth {
@@ -472,7 +492,7 @@ func staticProviderOf(p SignInProvider) providerResponse {
 		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
 		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
 		Enabled: true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil,
+		UserinfoURL: "", Claims: nil, LDAP: nil,
 	}
 }
 

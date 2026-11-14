@@ -815,3 +815,16 @@ func TestFreeze(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentModeValid(t *testing.T) {
+	t.Parallel()
+
+	for mode, want := range map[job.AgentMode]bool{
+		job.AgentModeApproveFirst: true, job.AgentModeReviewRequest: true, job.AgentModeDirect: true,
+		"": false, "approve": false, "Direct": false,
+	} {
+		if got := mode.Valid(); got != want {
+			t.Errorf("AgentMode(%q).Valid() = %t, want %t", mode, got, want)
+		}
+	}
+}

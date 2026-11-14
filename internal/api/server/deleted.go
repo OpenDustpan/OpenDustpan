@@ -69,8 +69,8 @@ func (h *Handler) deletedUnitRoutes() []Route {
 			Scope:      ScopeAuthorized,
 			Actions:    []identity.Action{identity.ActionServerMaintenance},
 			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.sweepDeletedUnits,
+			ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.sweepDeletedUnits,
 		},
 	}
 }

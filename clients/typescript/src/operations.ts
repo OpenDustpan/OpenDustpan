@@ -2,6 +2,8 @@
 
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
+  decodeAccessCollectionUnitCapError,
+  decodeAccessCollectionUnitCapErrorArgs,
   decodeAccessLimit,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
@@ -11,6 +13,8 @@ import {
   decodeAuditChain,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
+  decodeBackupTooManyUnverifiedError,
+  decodeBackupTooManyUnverifiedErrorArgs,
   decodeBulkUnitSettingsError,
   decodeBulkUnitSettingsItem,
   decodeBulkUnitSettingsRequest,
@@ -19,6 +23,7 @@ import {
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
   decodeCollection,
+  decodeComponents,
   decodeContextAnswer,
   decodeContextDocument,
   decodeContextEntry,
@@ -51,6 +56,9 @@ import {
   decodeDriftResource,
   decodeDriftStatus,
   decodeDriftUnit,
+  decodeDueSchedule,
+  decodeEnterMaintenanceRequest,
+  decodeEnterMaintenanceResponse,
   decodeErrorAnswer,
   decodeErrorCode,
   decodeErrorResponse,
@@ -129,6 +137,7 @@ import {
   decodeLockRequest,
   decodeMaintenanceActiveWorkError,
   decodeMaintenanceActiveWorkErrorArgs,
+  decodeMaintenanceState,
   decodeManualLock,
   decodeMfaPasskeyLimitError,
   decodeMfaPasskeyLimitErrorArgs,
@@ -269,6 +278,7 @@ import {
   decodeTrustRuleCondition,
   decodeTrustRuleKeySource,
   decodeTrustRuleList,
+  decodeUnclaimedOperation,
   decodeUnit,
   decodeUnitDefaults,
   decodeUnitDefaultsRequest,
@@ -300,15 +310,19 @@ import {
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
   decodeUpdateSettingsRequest,
+  decodeUpgradeCheck,
   decodeView,
   decodeViewLabel,
   decodeViewQuery,
+  decodeWorkerReport,
   decodeWorkloadToken,
   decodeWorkspaceNoStateAtError,
   decodeWorkspaceNoStateAtErrorArgs,
 } from "./decoders.js";
 import { operation } from "./execute.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
@@ -318,6 +332,8 @@ import type {
   AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -326,6 +342,7 @@ import type {
   Capabilities,
   ChangeOwnPasswordRequest,
   Collection,
+  Components,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -358,6 +375,9 @@ import type {
   DriftResource,
   DriftStatus,
   DriftUnit,
+  DueSchedule,
+  EnterMaintenanceRequest,
+  EnterMaintenanceResponse,
   ErrorAnswer,
   ErrorCode,
   ErrorResponse,
@@ -436,6 +456,7 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  MaintenanceState,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
@@ -576,6 +597,7 @@ import type {
   TrustRuleCondition,
   TrustRuleKeySource,
   TrustRuleList,
+  UnclaimedOperation,
   Unit,
   UnitDefaults,
   UnitDefaultsRequest,
@@ -607,9 +629,11 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpgradeCheck,
   View,
   ViewLabel,
   ViewQuery,
+  WorkerReport,
   WorkloadToken,
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
@@ -1062,6 +1086,12 @@ export interface DeleteViewInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation enterMaintenance. */
+export interface EnterMaintenanceInput {
+  readonly body: EnterMaintenanceRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation exchangeWorkloadToken. */
 export interface ExchangeWorkloadTokenInput {
   readonly path: {
@@ -1219,6 +1249,11 @@ export interface GetCollectionLockInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getComponents. */
+export interface GetComponentsInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getGate. */
 export interface GetGateInput {
   readonly path: {
@@ -1287,6 +1322,11 @@ export interface GetLocalUserLocksInput {
 
 /** The input of the operation getLocalUserPolicy. */
 export interface GetLocalUserPolicyInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getMaintenance. */
+export interface GetMaintenanceInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1541,12 +1581,27 @@ export interface GetUnitSettingsSuggestionsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getUpgradeCheck. */
+export interface GetUpgradeCheckInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getView. */
 export interface GetViewInput {
   readonly path: {
     readonly namespace: string;
     readonly view_id: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getWorker. */
+export interface GetWorkerInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation leaveMaintenance. */
+export interface LeaveMaintenanceInput {
   readonly signal?: AbortSignal;
 }
 
@@ -2246,6 +2301,15 @@ export interface SetUnitGateInput {
 
 /** The input of the operation signInWithPassword. */
 export interface SignInWithPasswordInput {
+  readonly body: PasswordSignInRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation signInWithProviderPassword. */
+export interface SignInWithProviderPasswordInput {
+  readonly path: {
+    readonly provider: string;
+  };
   readonly body: PasswordSignInRequest;
   readonly signal?: AbortSignal;
 }
@@ -3136,6 +3200,23 @@ export const operations = {
     },
     undefined,
   ),
+  enterMaintenance: operation<EnterMaintenanceResponse>(
+    {
+      id: "enterMaintenance",
+      method: "POST",
+      path: "/api/dustpan/v1/maintenance/enter",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeEnterMaintenanceResponse),
+  ),
   exchangeWorkloadToken: operation<WorkloadToken>(
     {
       id: "exchangeWorkloadToken",
@@ -3459,6 +3540,23 @@ export const operations = {
     },
     ref(() => decodeManualLock),
   ),
+  getComponents: operation<Components>(
+    {
+      id: "getComponents",
+      method: "GET",
+      path: "/api/dustpan/v1/components",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeComponents),
+  ),
   getGate: operation<Gate>(
     {
       id: "getGate",
@@ -3594,6 +3692,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeLocalUserPolicy),
+  ),
+  getMaintenance: operation<MaintenanceState>(
+    {
+      id: "getMaintenance",
+      method: "GET",
+      path: "/api/dustpan/v1/maintenance",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeMaintenanceState),
   ),
   getModuleRelease: operation<ModuleRelease>(
     {
@@ -4054,6 +4169,23 @@ export const operations = {
     },
     ref(() => decodeUnitSettingsSuggestions),
   ),
+  getUpgradeCheck: operation<UpgradeCheck>(
+    {
+      id: "getUpgradeCheck",
+      method: "GET",
+      path: "/api/dustpan/v1/upgrade-check",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUpgradeCheck),
+  ),
   getView: operation<View>(
     {
       id: "getView",
@@ -4070,6 +4202,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeView),
+  ),
+  getWorker: operation<WorkerReport>(
+    {
+      id: "getWorker",
+      method: "GET",
+      path: "/api/dustpan/v1/worker",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeWorkerReport),
+  ),
+  leaveMaintenance: operation<MaintenanceState>(
+    {
+      id: "leaveMaintenance",
+      method: "POST",
+      path: "/api/dustpan/v1/maintenance/leave",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeMaintenanceState),
   ),
   listAccessLimits: operation<ListAccessLimitsResponse>(
     {
@@ -5165,6 +5331,23 @@ export const operations = {
       method: "POST",
       path: "/api/dustpan/v1/sign-in/password",
       pathParameters: [],
+      queryParameters: [],
+      security: "public",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  signInWithProviderPassword: operation<void>(
+    {
+      id: "signInWithProviderPassword",
+      method: "POST",
+      path: "/api/dustpan/v1/sign-in/providers/{provider}/password",
+      pathParameters: ["provider"],
       queryParameters: [],
       security: "public",
       idempotencyKey: "none",

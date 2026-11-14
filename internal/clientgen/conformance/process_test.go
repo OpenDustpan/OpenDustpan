@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -26,9 +27,23 @@ const canaryEnv = "CONFORMANCE_CANARY_SECRET"
 // runFakeAdapter reads one request on each line, and answers as the mode says.
 func runFakeAdapter(mode string) {
 	switch mode {
-	case "noread", "sleeper":
-		// An adapter that never reads its input, and the child of an adapter.
+	case "noread":
+		// An adapter that never reads its input.
 		<-time.After(time.Minute)
+
+		return
+	case "sleeper":
+		// The child of an adapter. It blocks until a kill ends it.
+		runSleeper()
+
+		return
+	case "grandchildclean":
+		// An adapter that starts a child and then answers as the default mode.
+		startGrandchild()
+	case "waitstdin":
+		// An adapter that answers shutdown, closes its output, and then waits
+		// for the end of its input.
+		runShutdownWait()
 
 		return
 	default:
@@ -39,31 +54,68 @@ func runFakeAdapter(mode string) {
 
 	out := bufio.NewWriter(os.Stdout)
 
-	for in.Scan() {
-		var req struct {
-			ID     json.RawMessage `json:"id"`
-			Method string          `json:"method"`
-		}
-
-		if json.Unmarshal(in.Bytes(), &req) != nil {
-			return
-		}
-
-		reply, stop := fakeReply(mode, req.ID, req.Method)
-		if reply != "" {
-			if _, err := out.WriteString(reply + "\n"); err != nil {
-				return
-			}
-
-			if err := out.Flush(); err != nil {
-				return
-			}
-		}
-
-		if stop || req.Method == conformance.MethodShutdown {
+	for {
+		if answer(mode, in, out) {
 			return
 		}
 	}
+}
+
+// runShutdownWait answers shutdown, closes the output, and then blocks until
+// the input ends. Close closes the input after the answer, and the adapter
+// then exits 0.
+func runShutdownWait() {
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 1<<16), 1<<22)
+
+	out := bufio.NewWriter(os.Stdout)
+
+	for {
+		if answer("waitstdin", in, out) {
+			// Close the output, wait for the end of the input, and exit 0. The
+			// harness must wait for this exit before it stops the group.
+			if err := os.Stdout.Close(); err != nil {
+				return
+			}
+
+			if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+				return
+			}
+
+			return
+		}
+	}
+}
+
+// answer reads one request line and writes its answer. end reports that the
+// adapter must end: the input ended, the request was not JSON, a write failed,
+// the mode stops, or the request was shutdown.
+func answer(mode string, in *bufio.Scanner, out *bufio.Writer) bool {
+	var req struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+
+	if !in.Scan() {
+		return true
+	}
+
+	if json.Unmarshal(in.Bytes(), &req) != nil {
+		return true
+	}
+
+	reply, stop := fakeReply(mode, req.ID, req.Method)
+	if reply != "" {
+		if _, err := out.WriteString(reply + "\n"); err != nil {
+			return true
+		}
+
+		if err := out.Flush(); err != nil {
+			return true
+		}
+	}
+
+	return stop || req.Method == conformance.MethodShutdown
 }
 
 // rightToLeftOverride is the format character U+202E in UTF-8. A report
@@ -199,6 +251,22 @@ func TestProcessAdapterSession(t *testing.T) {
 	}
 
 	if err = a.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// TestProcessAdapterWaitsForTheExit checks that the harness waits for the exit
+// of an adapter that ends on its own before it stops the process group. The
+// fake adapter answers shutdown, closes its output, and then waits for the end
+// of its input. Close closes the input after the answer, and the adapter exits
+// 0. The test needs no clock. Without the wait for the exit, the group kill
+// lands before the exit and Close reports a killed process.
+func TestProcessAdapterWaitsForTheExit(t *testing.T) {
+	t.Parallel()
+
+	a := startFake(t, "waitstdin", 0)
+
+	if err := a.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 }

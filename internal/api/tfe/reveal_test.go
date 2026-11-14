@@ -218,6 +218,7 @@ func revealConfig(
 		OnAuditFailure: onFail,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}
 }
 

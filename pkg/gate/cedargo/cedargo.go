@@ -18,6 +18,7 @@ package cedargo
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -32,7 +33,7 @@ import (
 
 // cedarGoVersion is the version of the cedar-go module that go.mod pins.
 // A test compares it with the build information.
-const cedarGoVersion = "1.8.0"
+const cedarGoVersion = "1.9.0"
 
 // maxPolicies bounds the compiled policies that the engine keeps.
 const maxPolicies = 8192
@@ -115,6 +116,19 @@ func (e *Engine) Check(ctx context.Context, schema gate.Schema, policies []gate.
 	}
 
 	return diags, nil
+}
+
+// CheckLimitMembership implements gate.Engine.
+func (e *Engine) CheckLimitMembership(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("check the membership of an access limit: %w", err)
+	}
+
+	if _, err := LimitGroupDirections(text); errors.Is(err, gate.ErrLimitMembership) {
+		return err
+	}
+
+	return nil
 }
 
 // Evaluate implements gate.Engine.

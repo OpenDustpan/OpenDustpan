@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -25,13 +26,18 @@ func sqliteItemKeyBackupTables() []sqliteBackupTable {
 }
 
 // checkStagedOwnedRows checks the rows of a staged backup that belong to a
-// namespace and carry a rule of their own: the saved views and the item keys.
-func checkStagedOwnedRows(ctx context.Context, conn *sql.DB) error {
+// namespace and carry a rule of their own: the saved views, the item keys and
+// the removal alert markers.
+func checkStagedOwnedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) error {
 	if err := checkStagedSavedViews(ctx, conn); err != nil {
 		return err
 	}
 
 	if err := checkStagedItemKeys(ctx, conn); err != nil {
+		return err
+	}
+
+	if err := checkStagedRemovalAlerts(ctx, conn, restoreAt); err != nil {
 		return err
 	}
 

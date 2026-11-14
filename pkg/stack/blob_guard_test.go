@@ -513,7 +513,7 @@ func (f *buildFixture) startPreview(t *testing.T) {
 	t.Helper()
 
 	next, err := f.svc.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create preview: %v", err)

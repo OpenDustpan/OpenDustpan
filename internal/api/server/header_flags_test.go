@@ -50,6 +50,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	maps.Copy(scenarios, settingsScenarios())
 	maps.Copy(scenarios, gateObjectScenarios())
 	maps.Copy(scenarios, auditChainScenarios())
+	maps.Copy(scenarios, maintenanceScenarios())
 
 	_, h := newGateHandler(t, adminGates())
 

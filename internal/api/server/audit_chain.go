@@ -75,7 +75,7 @@ func (h *Handler) auditChainRoutes() []Route {
 			Path:    auditChainPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerReadAudit},
-			Resolve: resolveServer, ActionsFor: nil,
+			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.getAuditChain,
 		},
 		{
@@ -86,9 +86,10 @@ func (h *Handler) auditChainRoutes() []Route {
 				identity.ActionServerSetAuditChain,
 				identity.ActionServerDisableAuditChain,
 			},
-			Resolve:    resolveServer,
-			ActionsFor: h.auditChainApproveActions,
-			Serve:      h.fresh(identity.ActionServerSetAuditChain, h.approveAuditChain),
+			Resolve:      resolveServer,
+			ActionsFor:   h.auditChainApproveActions,
+			OpaqueDenial: false,
+			Serve:        h.fresh(identity.ActionServerSetAuditChain, h.approveAuditChain),
 		},
 	}
 }

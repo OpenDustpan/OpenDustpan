@@ -5,8 +5,8 @@
 // A job belongs to exactly one unit, named by its unit reference: the tool,
 // the namespace and the tool's own name. The package never reads the model
 // of a tool. Each tool package gives the default steps of its operations
-// through the StepPlanner port, and reports its state versions through the
-// rule of Store.ObserveStateVersion.
+// through the StepPlanner port, and its store publishes the state version of
+// each state write.
 //
 // A job is a list of phases. An executor runs one phase at a time. Each
 // phase is one durable operation, so the claim, its expiry, the fencing
@@ -35,6 +35,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 var (
@@ -42,6 +43,15 @@ var (
 	ErrInvalid = errors.New("job request is not valid")
 	// ErrNotFound reports a job ID that the store does not know.
 	ErrNotFound = errors.New("job not found")
+	// ErrDamaged reports a stored job row that this version cannot read: the
+	// body is not JSON, or it holds a value that this version does not know,
+	// for example a source kind, an agent mode or a verification result that
+	// another version of the server wrote. Store.Get returns it for such a
+	// row. Store.List and Store.Orphans report the row in Damaged and leave
+	// it out of their jobs, and every batch reader skips it: the server
+	// never dispatches, expires or closes a damaged job. A person reads the
+	// reason and cancels the job by its ID (Store.CancelDamaged).
+	ErrDamaged = errors.New("stored job is damaged")
 	// ErrKeyConflict reports a start whose idempotency key names a job with
 	// another request: another spec, or the same spec with another reason,
 	// pool or code location.
@@ -277,6 +287,11 @@ type Spec struct {
 	Purpose  Purpose
 	Executor ExecutorKind
 	Location Location
+	// LocationSource tells where the effective Location came from: the
+	// request, the settings of the unit or the default connection of the
+	// namespace. The service sets it at start, and it is fixed with the rest
+	// of the spec.
+	LocationSource LocationSource
 	// Steps are the steps of a runner job, resolved by the server at start
 	// from the settings of the unit, its blueprint or the defaults of its
 	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
@@ -308,6 +323,20 @@ const (
 	DefaultedPool     = "pool"
 	DefaultedLocation = "location"
 	DefaultedProfile  = "profile"
+)
+
+// LocationSource names where the effective code location of a job came from.
+type LocationSource string
+
+// The sources of a code location.
+const (
+	// LocationSourceRequest is a location that the start request gave.
+	LocationSourceRequest LocationSource = "request"
+	// LocationSourceUnit is a location that the settings of the unit gave.
+	LocationSourceUnit LocationSource = "unit"
+	// LocationSourceNamespace is a location whose connection came from the
+	// default connection of the namespace.
+	LocationSourceNamespace LocationSource = "namespace"
 )
 
 // DefaultedValues returns the names of the values of spec that req did not
@@ -378,14 +407,19 @@ type BreakGlass struct {
 
 // Job is what any instance can read about a job.
 type Job struct {
-	ID    ID
-	Spec  Spec
-	State State
+	ID ID
+	// NamespaceID is the ID of the namespace that held the unit when the
+	// job started. The store sets it from the job row, and a caller never
+	// sets it.
+	NamespaceID namespace.ID
+	Spec        Spec
+	State       State
 	// Wait tells why a queued job does not dispatch now. It is empty when
 	// the job is not queued, or when nothing holds it.
 	Wait WaitReason
 	// Reason tells why a terminal job ended, for example the reason of a
-	// failure.
+	// failure. A job that stays queued keeps the reason of its last replan,
+	// which names the state versions that made its plan stale.
 	Reason string
 	// Phases are the phases of the job, in order. Executor.Phases fixes
 	// them at start.
@@ -570,8 +604,8 @@ func (d *DeliveryResult) CloseAfter() (time.Time, bool) {
 
 // ClosedBy reports whether the state version v closes j: j waits in
 // awaiting-state, v is a final version of the unit of j, and v is at or
-// after the time of CloseAfter. The store applies the rule in three
-// places, in the transaction of each: ObserveStateVersion for a new
+// after the time of CloseAfter. The store applies the rule in the
+// transaction of each write: the state write that publishes a final
 // version, and EventMerged and EventDelivered for the last final version
 // of the unit that the store knows, so that a merge or a delivery that
 // the job sees late still closes it.
@@ -617,6 +651,17 @@ const (
 	// it.
 	VerificationUnverified Verification = "unverified"
 )
+
+// Valid reports whether v is one of the verification results of this
+// package. VerificationNone, the empty result, is one of them.
+func (v Verification) Valid() bool {
+	switch v {
+	case VerificationNone, VerificationPending, VerificationVerified, VerificationUnverified:
+		return true
+	default:
+		return false
+	}
+}
 
 // StateVersion is a new state version of a unit, as the internal wiring
 // of the server reports it for the tool package that wrote it. Commit is

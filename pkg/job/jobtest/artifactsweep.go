@@ -31,6 +31,12 @@ type ArtifactSweepHarness struct {
 	Audit audit.ServerStore
 }
 
+// artifactSweepCase is one named case of the suite of the artifact sweep.
+type artifactSweepCase struct {
+	name string
+	run  func(t *testing.T, h ArtifactSweepHarness)
+}
+
 // ArtifactSweepFactory returns a fresh harness for one case.
 type ArtifactSweepFactory func(t *testing.T) ArtifactSweepHarness
 
@@ -41,10 +47,7 @@ type ArtifactSweepFactory func(t *testing.T) ArtifactSweepHarness
 func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 	t.Helper()
 
-	cases := []struct {
-		name string
-		run  func(t *testing.T, h ArtifactSweepHarness)
-	}{
+	cases := slices.Concat([]artifactSweepCase{
 		{"names: the plan rows and the confirmed chunks of a job are named", testArtifactNames},
 		{"names: an unknown job and a job of another namespace are ErrNotFound", testArtifactNamesNotFound},
 		{"sweep: an old blob that no row names goes, named and young blobs stay", testSweepDeletesOrphans},
@@ -53,7 +56,22 @@ func RunArtifactSweep(t *testing.T, newHarness ArtifactSweepFactory) {
 		{"sweep: a chunk attempt whose confirm comes after the sweep of its blob is refused", testSweepStalledChunk},
 		{"sweep: each run appends one audit entry and lists the keys that it deleted", testSweepRecordsItsRun},
 		{"sweep: an instance clock that runs fast deletes nothing", testSweepFastInstanceClock},
+	}, sweepPlanPartCases())
+
+	runArtifactSweepCases(t, newHarness, cases)
+
+	// A state version comes from the store of a tool. A harness without one
+	// runs no case that reads a version.
+	if newHarness(t).WriteState == nil {
+		return
 	}
+
+	runArtifactSweepCases(t, newHarness, stateSweepPlanPartCases())
+}
+
+// runArtifactSweepCases runs each case against a fresh harness.
+func runArtifactSweepCases(t *testing.T, newHarness ArtifactSweepFactory, cases []artifactSweepCase) {
+	t.Helper()
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +141,7 @@ func newSweeper(t *testing.T, h ArtifactSweepHarness, g blobguard.Watch, ahead t
 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: g,
-		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: h.Audit, Logger: nil,
+		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: h.Durable, Audit: h.Audit, Logger: nil,
 		Now: func() time.Time { return time.Now().Add(ahead) },
 	})
 	if err != nil {
@@ -328,6 +346,8 @@ func testArtifactNames(t *testing.T, h ArtifactSweepHarness) {
 		t.Fatalf("ArtifactNames of the plan job = %+v, %v; want plan %s and no chunk", names, err, plan.ID)
 	}
 
+	checkPlanPartNames(t, h, f, &names, plan.ID)
+
 	a := logJob(t, h, f)
 	mustAppend(t, h.RecorderHarness, a, 0, "line 0\n")
 	version := logOf(t, h.RecorderHarness, a).ID
@@ -339,6 +359,32 @@ func testArtifactNames(t *testing.T, h ArtifactSweepHarness) {
 	names, err = h.Names.ArtifactNames(t.Context(), a.Claim.Fence.Namespace, a.Claim.Job)
 	if err != nil || len(names.Plans) != 0 || !slices.Equal(sorted(names.ChunkKeys), sorted(want)) || len(want) != 1 {
 		t.Fatalf("ArtifactNames of the log job = %+v, %v; want only the confirmed chunk %q", names, err, want)
+	}
+}
+
+// checkPlanPartNames fails t unless a stored plan names the kinds of its
+// manifest, and a reserved plan has a row and names no part. names are the names
+// of the job of the stored plan.
+func checkPlanPartNames(t *testing.T, h ArtifactSweepHarness, f fixture, names *job.ArtifactNames, stored string) {
+	t.Helper()
+
+	kinds := slices.Clone(names.Parts[stored])
+	slices.Sort(kinds)
+
+	if !slices.Equal(kinds, []job.OutputKind{job.OutputPlanApply, job.OutputPlanDisplay}) {
+		t.Fatalf("parts of the stored plan = %v, want both kinds", kinds)
+	}
+
+	reserved := openPlan(t, h.RecorderHarness, f, "unit-reserved")
+
+	begun, err := planRecorder(t, h.RecorderHarness).BeginPlan(t.Context(), reserved.Claim)
+	if err != nil {
+		t.Fatalf("BeginPlan = %v", err)
+	}
+
+	rn, err := h.Names.ArtifactNames(t.Context(), reserved.Claim.Fence.Namespace, reserved.Claim.Job)
+	if err != nil || !slices.Equal(rn.Plans, []string{begun.ID}) || len(rn.Parts[begun.ID]) != 0 {
+		t.Fatalf("ArtifactNames of the reserved plan = %+v, %v; want the plan row and no part", rn, err)
 	}
 }
 
@@ -560,7 +606,7 @@ func tappedSweeper(
 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(),
-		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Audit: tap, Logger: nil,
+		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: h.Durable, Audit: tap, Logger: nil,
 		Now: func() time.Time { return time.Now().Add(ahead + instance) },
 	})
 	if err != nil {

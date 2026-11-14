@@ -894,7 +894,14 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if _, err := h.stacks.Rename(ctx, oldRef, name); err != nil {
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: p,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
+	if _, err := h.stacks.Rename(ctx, oldRef, name, entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -1191,7 +1198,7 @@ func classifyPlacement(err error) (failure, bool) {
 		return coded(http.StatusUnprocessableEntity, err.Error(), errcode.PlacementNoMatch), true
 	case errors.Is(err, errPlacementOff), errors.Is(err, stack.ErrPlacementUnsupported):
 		return coded(http.StatusNotImplemented, err.Error(), errcode.PlacementUnavailable), true
-	case errors.Is(err, collection.ErrNotFound):
+	case errors.Is(err, collection.ErrPlacementCollectionMissing):
 		// The rule names a collection that does not exist (any more).
 		return coded(http.StatusConflict, err.Error(), errcode.CollectionNotFound), true
 	}
