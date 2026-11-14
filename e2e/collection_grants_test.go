@@ -322,6 +322,20 @@ func scopeRefused(t *testing.T, res e2e.Result, what string) {
 	}
 }
 
+// scopeHidden fails the test unless res is a hidden refusal: a non-zero
+// exit with a 404 in the combined CLI output. A caller with no grant left in
+// the namespace gets the same 404 as for an unknown workspace, as across
+// namespaces, so the run hides whether the unit exists.
+func scopeHidden(t *testing.T, res e2e.Result, what string) {
+	t.Helper()
+
+	out := res.Stdout + "\n" + res.Stderr
+
+	if res.ExitCode == 0 || !strings.Contains(out, "404") {
+		t.Fatalf("%s exits %d without a 404, want a hidden refusal:\n%s", what, res.ExitCode, out)
+	}
+}
+
 // scopeAdminPulumi exports one stack with the administrator token.
 func scopeAdminPulumi(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Install, stack string) string {
 	t.Helper()
@@ -446,7 +460,10 @@ func checkScopeRevocation(
 	scopeRefused(t, pulumi.run(ctx, "pulumi", "a", "stack", "export"),
 		"pulumi stack export after the revoke")
 
-	scopeRefused(t, tofu.run(ctx, "opentofu", "a", "state", "pull"),
+	// The revoked writer keeps no grant in the namespace, so OpenTofu hides
+	// the workspace with the same 404 as for an unknown one; the run still
+	// fails on the next request.
+	scopeHidden(t, tofu.run(ctx, "opentofu", "a", "state", "pull"),
 		"tofu state pull after the revoke")
 }
 
