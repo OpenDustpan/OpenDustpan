@@ -40,9 +40,9 @@ When a later state version touched an address of the claim after its base, the s
 - **WHEN** no later version touched an address of a disjoint claim on an older base
 - **THEN** the server stores the claim as accepted
 
-### Requirement: Reject replace claim
+### Requirement: Replace claim is a conflict until the closure test
 
-When a caller registers a claim that holds a replace action, the server SHALL answer 422 and store no claim.
+When a caller registers a claim that holds a replace action, the server SHALL answer 409 with the code `claim.closure-unproven` and store no claim, because this change does not prove the closure of a replacement.
 
 #### Scenario: Replace refused
 - **WHEN** a claim holds a replace action

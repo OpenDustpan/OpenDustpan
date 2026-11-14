@@ -44,6 +44,8 @@ Out of scope:
 
 Depends on:
 
+- ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - local-run-two-cases
 - `local-run-two-cases` (order of the milestone review)
 
@@ -66,29 +68,35 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 3 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The local wrapper gets a launcher token that is bound to its apply claim."
+- Quote: "The local wrapper always acts as the person who signed in."
+- Effect: The local step authenticates with the launcher token bound to the apply claim, and the actor is the signed-in person.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 4 (current), 5 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "A local CLI wrapper (owner). The `dustpan` CLI wraps the real `tofu` or `pulumi` CLI on the machine of the user, in the same way as the runner wrapper does. A local run can then take part: it registers claims, and it can use the other features that today work only in OpenDustpan runners."
 - Quote: "Milestone 8 ports each of these features to the local wrapper."
-- Effect: The change ports only secret masking with StreamMasker. It adds no claim, token or route. Claim and job principal stay in the RFC of decision 6 and in depends_on.
+- Effect: The change ports only secret masking with StreamMasker. It adds no claim, token or route. ADR 369 decides the credential of the local step.
 - Conflict: none.
 
 ## Open questions
 
 none
 
+Answered by ADR 369 (owner, 2026-11-14): the local step authenticates with a launcher token bound to the apply claim, and the actor is the person who signed in. This restores the token decision that the owner approved on 14 November 2026 at about 13:15 UTC.
+
 Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
 
-1. How does a local wrapper run authenticate its server calls during the step, who is the principal, and which actions does it hold?
-   - Options: Mint a claim-bound launcher token for the local step with one principal for each job; Reuse the developer access token for the local step with no job principal.
-   - Provisional decision (owner review 14 Nov): Mint a claim-bound launcher token for the local step with one principal for each job
-   - Reason: ADR 302 decision 6 leaves one principal for each job and the retry and timeout to the RFC. The pack proves no local claim route and no local token mint. Benchmark: AWS STS: short-lived credentials bound to one session and the least privilege of the action.
-   - Persona impact: A developer waits for the owner decision; no extra step once decided. Escape hatch: Masking works with the existing developer credential until the owner decides; runner runs are unchanged.
-   - Owner-tagged ADRs involved: ADR 302 (their words do not change).
-2. Does the C1 inventory name a runner-only feature beyond secret masking that this change must also port?
+1. Does the C1 inventory name a runner-only feature beyond secret masking that this change must also port?
    - Options: Secret masking only in this change; Secret masking plus each non-exempt C1 entry in this change.
    - Provisional decision (owner review 14 Nov): Secret masking only in this change
    - Reason: The pack names no C1 inventory, so no other entry is proven. Benchmark: Google: one reviewable change per concern, each with its own acceptance check.

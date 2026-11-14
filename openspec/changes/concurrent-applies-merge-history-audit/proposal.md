@@ -42,6 +42,7 @@ Out of scope:
 
 Depends on:
 
+- ADR 368 on main (pull request #3052)
 - concurrent-applies-merge-core
 - `concurrent-applies-merge-core` (the part before it in the split)
 
@@ -66,8 +67,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 26: OpenTofu state** (not owner-tagged).
 
 - Decisions that apply: 1 (current), 3 (changed).
-- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
-- Current rule: this ADR, with ADR 31, 44, 45, 220.
+- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2; ADR 368 changes decision 3. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 368, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
+- Current rule: this ADR, with ADR 31, 44, 45, 220, 368.
 - Quote: "Storage. The metadata of workspaces, state versions and locks lives in SQL."
 - Quote: "It needs a higher serial than the current state."
 - Effect: Version metadata stays in SQL and content stays in blobs. This part only stores and shows parent and claim identifiers that merge-core commits. It changes no lineage or serial rule.
@@ -83,14 +84,24 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Merge record commits follow fail-fast and all-or-none transaction rules. A 503 or a broken connection leaves no partial version and no partial audit entry.
 - Conflict: none.
 
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 3 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A state version under an apply claim also stores the ID of its base (the state version that the plan of the apply claim used) and the ID of the apply claim."
+- Quote: "The history shows the apply claim and the job of each merged state version."
+- Effect: Each merged state version stores its parent, its base and its apply claim ID, and the history shows the apply claim and its job.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
+- Current rule: this ADR, with ADR 368.
 - Quote: "The server merges each upload one resource instance at a time."
 - Quote: "This ADR does not decide these points. The RFC answers them."
-- Effect: This part records only what merge-core commits and does not decide serial assignment, fence per claim, or disjointness. Those points stay with the RFC and with concurrent-applies-merge-core.
+- Effect: This part records only what merge-core commits. ADR 368 decides the serial, the fence of each claim and the closure test.
 - Conflict: none.
 
 ## Open questions
@@ -100,7 +111,7 @@ none
 Questions considered and answered:
 
 - Does this change alter base serving or merge commit logic? No. Base serving and one-resource-at-a-time commit stay in concurrent-applies-merge-core. This part only stores parent version ID and claim ID, shows them in history, writes one merged audit entry, and keeps sealed bytes opaque. Cited in ADR 302 decisions 2 and 6.
-- Does this change decide serial assignment, fence per claim, or disjointness? No. Serial assignment, fence per claim, claim registration, overlap refusal, and closure test stay with the RFC and merge-core. This part depends on merge-core and records its result. Cited in ADR 302 decision 6.
+- Does this change decide serial assignment, fence per claim, or disjointness? No. Serial assignment, fence per claim, claim registration, overlap refusal, and closure test are decided in ADR 368 and built in merge-core. This part depends on merge-core and records its result.
 - Are version, claim link, and audit entry atomic? Version rows and the merged audit entry commit in one fenced transaction per ADR 298 decisions 2 and 8. A restart, a fence loss, a 503, or an audit write failure leaves no new version and no merged entry. Cited in ADR 26 decision 1 and ADR 298 decision 8.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
