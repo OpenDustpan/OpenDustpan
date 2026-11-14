@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-01. Decided by the project owner
 
+Changed by:
+
+- ADR 368 extends decision 6: the answers of RFC 129, except one principal for
+  each job on the TFE-compatible path.
+
 Changes:
 
 - Extends ADR 280: milestone 8 follows milestone 7, and it uses the
