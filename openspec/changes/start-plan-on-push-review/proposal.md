@@ -26,6 +26,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- NEW: the trigger names its run-as principal by stable ID. It must be a service principal that the author can act as, or one that the author creates in the same request with no grant (ADR 369 decision 7). The start and the reads of the job use it. The namespace service principal is gone (ADR 370).
 - Trigger gains the Paths field with default to the working directory of the unit code location.
 - Push intake matches units on repository and branch, filters on paths, refuses fork pushes with an audit entry, and replaces the older plan of the same trigger.
 - Started jobs record source kind forge and run author code with unit profile credentials.
@@ -39,6 +40,9 @@ Out of scope:
 
 Depends on:
 
+- ADR 369 on main (pull request #3056)
+- ADR 370 on main (pull request #3058)
+- housekeeping-principals (lands before this change, or with it)
 - run-triggers
 - git-host-webhook-intake-post
 - add-job-service-routes-start-1
@@ -58,23 +62,34 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 267: Run triggers: three kinds, a plan only, started through the job service** (not owner-tagged).
 
 - Decisions that apply: 1 (current), 9 (current), 14 (changed), 15 (current), 19 (changed).
-- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 286, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 273, 299, 307, 310, 338.
+- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14; ADR 369 changes decision 14; ADR 370 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 369, ADR 370, ADR 286, ADR 328, ADR 359.
+- Current rule: this ADR, with ADR 273, 299, 307, 310, 369, 370.
 - Quote: "A trigger belongs to one unit and has one kind."
 - Quote: "A trigger starts a plan and nothing else."
 - Quote: "The start runs as the namespace service principal."
 - Quote: "A push records `forge`."
 - Quote: "A unit matches when the review request targets the repository and the branch of its code location."
-- Effect: The change starts only review-request-push plans through the job service with source kind forge, repository and branch match, paths filter, start as the namespace service principal, and profile credentials by attachment authority.
+- Effect: The change starts only review-request-push plans through the job service with source kind forge, repository and branch match, paths filter, start as the run-as principal of the trigger, and profile credentials by attachment authority.
 - Conflict: none.
 
-**ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
 
-- Decisions that apply: 3 (current).
+- Decisions that apply: 7 (current).
+- Changed by: ADR 370 changes. Chain to the end: ADR 370.
+- Current rule: this ADR, with ADR 370.
+- Quote: "The run-as principal must be a service principal. A hard check in code refuses a person, with an error code."
+- Quote: "The author may name only a service principal that the author can act as."
+- Quote: "A job that a run trigger starts acts and reads as the run-as principal of the trigger, not with the grants of the last saver."
+- Effect: Each trigger names its run-as principal by stable ID. The start and the reads of its job use that principal. The person who saved the trigger is the configurer.
+- Conflict: none.
+
+**ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The principal still holds nothing else (owner, 2026-11-07). The grant covers the start of a plan only. The principal still has no token and no session. The rule of ADR 267 decision 14 about the read check of the last saver does not change."
-- Effect: The push start runs as the namespace service principal with only the stored start-of-plan grant; the job gets unit profile credentials through the profile attachment authority and not through the principal token, and the last-saver read check does not change.
+- Quote: "The namespace service principal is removed (owner, 2026-11-14)."
+- Effect: No start runs as the namespace service principal, and no code rule gives a start permission.
 - Conflict: none.
 
 **ADR 273: Output sharing: the read-outputs action and sharing rules on the producer** (not owner-tagged).
@@ -83,7 +98,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "Check 2: the principal that started the job holds `unit:read-outputs` on the producer with its own current grants, and `unit:read-secrets` for a secret output."
-- Effect: A push-started job reads producer outputs only when a sharing rule names it and the last saver of the trigger holds the read actions.
+- Effect: A push-started job reads producer outputs only when a sharing rule names it and the run-as principal of the trigger holds the read actions.
 - Conflict: none.
 
 **ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged).
@@ -100,7 +115,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
 - R1.1 (adr conflict): The ADR check omits ADR 299, which is owner-tagged and changes decisions 14 and 19 of ADR 267. It lists decision 19 as current and implemented. Per the ADR check rule this conflict blocks the change until the owner decides. Resolution: answered: Added ADR 299 entry with its Changed-by line; the change follows ADR 267 decisions 14 and 19 as changed by owner-tagged ADR 299 with no conflict.
-- R1.2 (open question): The principal that starts a push-triggered plan is not named. ADR 338 decision 3 (owner) allows the namespace service principal only a start-of-plan grant, and the change says jobs run with unit profile credentials. The design must state which principal starts the job and which grants decide its reads. Resolution: answered: Design and specs now name the namespace service principal as starter with the stored start grant, attachment-authority credentials, and last-saver reads per ADR 338 and ADR 273.
+- R1.2 (open question): The principal that starts a push-triggered plan is not named. ADR 338 decision 3 (owner) allows the run-as principal of the trigger only a start-of-plan grant, and the change says jobs run with unit profile credentials. The design must state which principal starts the job and which grants decide its reads. Resolution: answered: Design and specs now name the run-as principal of the trigger as starter with the stored start grant, attachment-authority credentials, and last-saver reads per ADR 338 and ADR 273.
 - R1.3 (failure mode): Fork detection is undefined. The spec refuses fork pushes but does not say which field of the Forge port (#886) gives the fork flag, or what happens when the flag is missing or wrong. Resolution: answered: Fork flag source from the Forge port and refuse-when-missing with audit moved to considered and to the fork refusal requirements; no open question remains.
 - R1.4 (failure mode): No requirement covers authentication of push deliveries. A spoofed or replayed forge event could start plans. The hostile-input layer and its test are missing. Resolution: answered: Added intake authentication requirement with spoof and replay scenarios and hostile intake layer and tasks; no open question remains.
 - R1.5 (missing scenario): The paths match rule is undefined for pushes with many commits, renamed or deleted files, force pushes, and forge payloads that truncate the changed-file list. A truncated list must not silently start no plan or the wrong plan. Resolution: answered: Specs now define union over commits, rename as delete plus add, force-push on head files, and truncation handling with record on the job.
@@ -111,7 +126,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R1.10 (open question): Under ADR 273 decision 14 the last saver of the trigger decides output reads for a job it starts. The change stores LastSaver but does not say whether a push-started job uses it, which ADR 338 leaves unchanged. Resolution: answered: Starter requirement now states output reads use the last saver of the trigger per ADR 273 unchanged by ADR 338.
 - R1.11 (missing scenario): Default paths for a code location that is a subdirectory of a repository, or the repository root, are not specified. The design defaults to the working directory without saying how the value is normalized. Resolution: answered: Default paths requirement now defines subdirectory, root marker, normalization, and trailing separator rule.
 - R2.1 (wrong claim): The ADR check cites a quote for ADR 299 ('ADR 299 changes decisions 14 and 19: one credential rule for every start of') that is not a decision line. ADR 299 is owner-tagged and its decisions list is empty in the pack, so the owner-tagged conflict check has no decision text to test. The 'Conflict: none' claim has no proof and blocks the change until the owner decides. Resolution: answered: Removed the ADR 299 entry because the pack lists no decision text for ADR 299; the change follows ADR 267 with ADR 299 and ADR 338 in its Changed-by chain and claims no owner decision text.
-- R2.2 (adr conflict): ADR 267 decision 14 applies to the starter of a push-started job and is marked changed, but the ADR check lists only decisions 1, 9, 15 and 19. The design and spec name the namespace service principal as starter, which relies on decision 14. The ADR check must quote decision 14 and its changes by ADR 273, 299 and 338. Resolution: answered: adr_check now lists ADR 267 decision 14 with its quote and follows its changes by ADR 273, 299 and 338.
+- R2.2 (adr conflict): ADR 267 decision 14 applies to the starter of a push-started job and is marked changed, but the ADR check lists only decisions 1, 9, 15 and 19. The design and spec name the run-as principal of the trigger as starter, which relies on decision 14. The ADR check must quote decision 14 and its changes by ADR 273, 299 and 338. Resolution: answered: adr_check now lists ADR 267 decision 14 with its quote and follows its changes by ADR 273, 299 and 338.
 - R2.3 (adr conflict): The proposal and spec say started jobs run author code with unit profile credentials, while ADR 338 decision 3 (owner) says the principal holds only the start-of-plan grant with no token and no session. The change does not say how the job obtains unit profile credentials for a principal that holds nothing else, so the credential path is unresolved against the owner decision. Resolution: answered: Design and specs now state that unit profile credentials come from the profile attachment authority and not from the starter token, with output reads by the last saver per ADR 273 and ADR 338 decision 3.
 - R2.4 (open question): The fork flag source and the missing-flag result are open with PM as decider and a recommendation, but there is no 'Provisional decision (owner review 14 Nov)' label. The design already refuses on a missing flag, so the build cannot proceed without the answer. Resolution: answered: Fork flag source and missing-flag refusal moved to considered and to the fork refusal requirement; no open question remains.
 - R2.5 (open question): Push delivery authentication (signature and delivery-ID deduplication) is open, yet the design lists intake authentication as a guard layer with a hostile test. The spec has no requirement or scenario for intake authentication, replay refusal or spoofed events, so a forged push could start a plan. Resolution: answered: Added intake authentication requirement with replay and spoof scenarios and hostile intake task; no open question remains.
@@ -129,8 +144,8 @@ none
 
 Questions considered and answered:
 
-- How does a push match units and what does it start? ADR 267 decisions 1, 9, 14, 15 and 19 answer it as changed by ADR 273, 299, 338: one review-request-push trigger per unit, plan only through the job service, source kind forge, match on repository and branch with paths default, start as the namespace service principal.
-- Which principal starts the job and which grants decide its reads? ADR 299 changes ADR 267 decisions 14 and 19 to one credential rule for every start; ADR 338 decision 3 and ADR 273 decision 5 answer it: the namespace service principal starts the plan with only the stored start grant, output reads use the last saver of the trigger, and unit profile credentials come from the profile attachment authority and not from the starter token.
+- How does a push match units and what does it start? ADR 267 decisions 1, 9, 14, 15 and 19 answer it as changed by ADR 273, 299, 338: one review-request-push trigger per unit, plan only through the job service, source kind forge, match on repository and branch with paths default, start as the run-as principal of the trigger.
+- Which principal starts the job and which grants decide its reads? ADR 299 changes ADR 267 decisions 14 and 19 to one credential rule for every start; ADR 338 decision 3 and ADR 273 decision 5 answer it: the run-as principal of the trigger starts the plan with only the stored start grant, output reads use the run-as principal of the trigger, and unit profile credentials come from the profile attachment authority and not from the starter token.
 - Which field gives the fork flag and what happens when the flag is missing? The Forge port gives the fork flag from head repository versus base repository; a missing flag fails closed with refusal and audit, which follows the fork refusal of the issue.
 - How are push deliveries authenticated and deduplicated? The Forge port authenticates each delivery by signature with delivery-ID deduplication before the dispatcher runs; a failed check starts nothing.
 - What does the dispatcher do when the forge payload truncates the changed-file list? A truncated changed-file list matches every trigger of the same repository and branch and records the truncation on the job, which fails toward a plan with a record instead of a silent miss.

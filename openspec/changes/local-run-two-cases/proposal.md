@@ -43,7 +43,7 @@ Out of scope:
 - strict-case-takes-turns as its own step
 - runner-only-feature-in-local
 - Pulumi CLI claim model
-- Retry values, timeout value, claim lifetime, fence shape, and serial rule, which the RFC decides
+- The fence shape and the serial rule (ADR 368 decisions 2 to 4), built in two-disjoint-claims and concurrent-applies-merge-core
 - Plan splitting with -target
 - Claim history link, expiry and release, authorization, and fence checks, owned by two-disjoint-claims and concurrent-applies-merge-core
 
@@ -52,7 +52,8 @@ Depends on:
 - two-disjoint-claims
 - runner-job-overlapping-claim-refused
 - concurrent-applies-merge-core
-- concurrent-applies-rfc
+- ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - `two-disjoint-claims` (order of the milestone review)
 - `runner-job-overlapping-claim-refused` (order of the milestone review)
 
@@ -77,23 +78,44 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 26: OpenTofu state** (not owner-tagged).
 
 - Decisions that apply: 3 (changed).
-- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
-- Current rule: this ADR, with ADR 31, 44, 45, 220.
+- Changed by: ADR 31 changes; ADR 44 changes decision 3; ADR 44 extends decision 6; ADR 45 changes decisions 4 and 5; ADR 220 changes decision 2; ADR 368 changes decision 3. Chain to the end: ADR 31, ADR 44, ADR 45, ADR 220, ADR 368, ADR 35, ADR 221, ADR 281, ADR 239, ADR 335, ADR 62, ADR 273, ADR 286, ADR 363, ADR 272, ADR 340, ADR 364.
+- Current rule: this ADR, with ADR 31, 44, 45, 220, 368.
 - Quote: "It needs the same lineage as the current state."
 - Quote: "It needs a higher serial than the current state."
-- Effect: This change keeps the lineage check and the serial check. Server-assigned serial under a claim and the claim lifetime stay with the RFC and with two-disjoint-claims.
+- Effect: This change keeps the lineage check. Under a live apply claim the server assigns the serial (ADR 368 decision 2), built in concurrent-applies-merge-core.
+- Conflict: none.
+
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 3 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The local wrapper gets a launcher token that is bound to its apply claim."
+- Quote: "The local wrapper always acts as the person who signed in."
+- Effect: The wrapper acts as the signed-in person and gives `tofu` a launcher token bound to its apply claim, through the credentials helper.
+- Conflict: none.
+
+**ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
+
+- Decisions that apply: 4 (current), 5 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "After a refusal, the wrapper tries again with exponential backoff from 1 second to 30 seconds, with full jitter."
+- Quote: "It waits 30 minutes by default. The flag `--claim-timeout` takes a value from 0 (no wait) to 6 hours."
+- Quote: "The apply claim of the local wrapper has a lease of 90 seconds, which the wrapper renews every 30 seconds."
+- Effect: The wrapper uses these values for its wait, its retry and the renewal of its lease. When the base changed, it plans again and asks again unless `-auto-approve`.
 - Conflict: none.
 
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 4 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "A runner job registers its saved plan as a claim before the apply."
 - Quote: "The `dustpan` CLI wraps the real `tofu` or `pulumi` CLI on the machine of the user, in the same way as the runner wrapper does."
 - Quote: "The retry interval and the timeout of the local wrapper."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: This change specifies the wrapper wait, retry, timeout enforcement, and replan for the two local cases on the claim path. Disjointness rules, history link, expiry, fence shape, serial rule, and retry values stay with two-disjoint-claims, concurrent-applies-merge-core, and the RFC. No code lands before the owner accepts the RFC as an ADR.
+- Effect: This change specifies the wrapper wait, retry, timeout enforcement, and replan for the two local cases on the claim path. The retry values, the timeout and the lease come from ADR 368 decisions 4 and 5. Disjointness rules, history link, fence shape and serial rule stay with two-disjoint-claims and concurrent-applies-merge-core.
 - Conflict: none.
 
 ## Open questions
@@ -103,8 +125,9 @@ none
 Questions considered and answered:
 
 - Does a refused local run wait or end as blocked? ADR 302 decision 2: the local wrapper waits and tries the claim again until the blocking claim ends or until the timeout ends. A runner job turns the same refusal into the status blocked.
-- Does this change set the retry interval, the timeout, or the claim lifetime? No. ADR 302 decision 6 gives the retry interval and the timeout to the RFC. This change sets no number.
-- Does code start before the RFC is accepted? No. ADR 302 decision 6: code comes after the owner accepts the RFC as an ADR. Build tasks wait for that ADR.
+- Which retry interval, timeout and claim lifetime does the wrapper use? ADR 368 decisions 4 and 5: backoff from 1 to 30 seconds with full jitter, a default wait of 30 minutes, `--claim-timeout` from 0 to 6 hours, a lease of 90 seconds renewed every 30 seconds.
+- Does code start before the RFC is accepted? ADR 368 and ADR 369 accept all of RFC 129. Code starts when both are on main.
 - Does this change repeat history, expiry, or auth rules owned by other changes? No. Those belong to two-disjoint-claims and concurrent-applies-merge-core.
+- Which credential does the wrapper give to `tofu`? ADR 369 decision 1 (owner): a launcher token bound to the apply claim of the wrapper, and the actor is the person who signed in (decision 3).
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

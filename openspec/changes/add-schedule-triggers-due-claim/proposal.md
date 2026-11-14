@@ -27,6 +27,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- NEW: the trigger names its run-as principal by stable ID. It must be a service principal that the author can act as, or one that the author creates in the same request with no grant (ADR 369 decision 7). The start and the reads of the job use it. The namespace service principal is gone (ADR 370).
 - ClaimDue port on trigger.Store with one conditional claim per slot
 - Dispatcher.Scheduled with slot check against cron Next and ErrInvalid
 - Durable schedule trigger.schedule that ticks each minute with one catch-up run
@@ -44,6 +45,9 @@ Out of scope:
 
 Depends on:
 
+- ADR 369 on main (pull request #3056)
+- ADR 370 on main (pull request #3058)
+- housekeeping-principals (lands before this change, or with it)
 - run-triggers
 - `run-triggers` (order of the milestone review)
 
@@ -81,21 +85,32 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 267: Run triggers: three kinds, a plan only, started through the job service** (not owner-tagged).
 
 - Decisions that apply: 5 (current), 6 (current), 14 (changed), 15 (current), 18 (current).
-- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 286, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 273, 299, 307, 310, 338.
+- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14; ADR 369 changes decision 14; ADR 370 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 369, ADR 370, ADR 286, ADR 328, ADR 359.
+- Current rule: this ADR, with ADR 273, 299, 307, 310, 369, 370.
 - Quote: "A schedule has a frequency from a list or a custom cron expression."
 - Quote: "A schedule fires once per period across several instances. A schedule trigger uses the durable schedule (ADR 263 decision 14), so that of several instances one starts the job of a period."
 - Quote: "One tick for all schedule triggers (question 7)."
-- Effect: The change implements the schedule frequency, one start per period, the namespace service principal, the schedule source kind, and the one minute tick with one catch-up run.
+- Effect: The change implements the schedule frequency, one start per period, the run-as principal of the trigger, the schedule source kind, and the one minute tick with one catch-up run.
 - Conflict: none.
 
-**ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
 
-- Decisions that apply: 3 (current).
+- Decisions that apply: 7 (current).
+- Changed by: ADR 370 changes. Chain to the end: ADR 370.
+- Current rule: this ADR, with ADR 370.
+- Quote: "The run-as principal must be a service principal. A hard check in code refuses a person, with an error code."
+- Quote: "The author may name only a service principal that the author can act as."
+- Quote: "A job that a run trigger starts acts and reads as the run-as principal of the trigger, not with the grants of the last saver."
+- Effect: Each trigger names its run-as principal by stable ID. The start and the reads of its job use that principal. The person who saved the trigger is the configurer.
+- Conflict: none.
+
+**ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The principal still holds nothing else (owner, 2026-11-07). The grant covers the start of a plan only."
-- Effect: The scheduled start runs as the namespace service principal under its stored grant for plan start only, with no token and no session.
+- Quote: "The namespace service principal is removed (owner, 2026-11-14)."
+- Effect: No start runs as the namespace service principal, and no code rule gives a start permission.
 - Conflict: none.
 
 **ADR 273: Output sharing: the read-outputs action and sharing rules on the producer** (not owner-tagged).
@@ -104,7 +119,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "**A job token reads only what a rule names and the starter can read (15.5, option c).** A job token reads the outputs of another unit only when both checks pass at each read: - Check 1: a sharing rule of the producer names the unit of the job, its collection or its namespace. - Check 2: the principal that started the job holds `unit:read-outputs` on the producer with its own current grants, and `unit:read-secrets` for a secret output."
-- Effect: The tick checks the last saver against unit:read-outputs at each read, and refuses the start when the check fails.
+- Effect: The tick checks the run-as principal against unit:read-outputs at each read, and refuses the start when the check fails.
 - Conflict: none.
 
 ## Adversarial second pass
@@ -112,7 +127,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
 - R1.1 (wrong claim): Design decision 3 and issue #1212 say pkg/cron already has the parser, Next, presets and spread, but the proposal evidence shows pkg/cron does not exist. The design and the issue must say this package is new work. Resolution: answered: Design now states pkg/cron is new work; evidence no longer claims it exists.
-- R1.2 (open question): The change does not name the principal that starts a scheduled plan. ADR 267 decision 14 uses the namespace service principal, and owner decision ADR 338 decision 3 limits that principal to the start of a plan, with no token or session. The change must state this grant and check it in a scenario. Resolution: answered: Spec now requires the namespace service principal and its stored grant; adr_check cites ADR 267 decision 14 and ADR 338 decision 3.
+- R1.2 (open question): The change does not name the principal that starts a scheduled plan. ADR 267 decision 14 uses the run-as principal of the trigger, and owner decision ADR 338 decision 3 limits that principal to the start of a plan, with no token or session. The change must state this grant and check it in a scenario. Resolution: answered: Spec now requires the run-as principal of the trigger and its stored grant; adr_check cites ADR 267 decision 14 and ADR 338 decision 3.
 - R1.3 (failure mode): ClaimDue succeeds, then the instance crashes or the job service refuses the start. The slot is then lost with no retry, no record and no requirement. The spec needs a rule for a claim that does not lead to a job. Resolution: answered: Spec now requires a failed job start after a claim to release the claim path with a record and no silent loss.
 - R1.4 (open question): The one hour minimum is not defined for custom 5-field expressions with lists or steps, such as 0,5 * * * * or */30. The save check needs a rule for how the interval is measured before it can be built. Resolution: answered: Design and spec now define the minimum as the smallest gap between consecutive Next times, including lists and steps.
 - R1.5 (missing scenario): The requirements do not name the authorization actions and objects for the save, read and tick routes. Each endpoint must declare them, as the project rules require. Resolution: answered: Spec now names the authorization actions and objects for save, read, and tick.
@@ -126,7 +141,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R2.2 (failure mode): specs/trigger-schedule/spec.md 'Claim without job' says a later tick retries the next due slot. After a claim and a failed start, the failed slot is then dropped with only a record. The spec does not say whether that period must run, which conflicts with the proposal's rule of no silent loss and with ADR 267 decision 18 (one catch-up run for the latest missed slot). Resolution: answered: Claim-without-job spec now keeps the failed slot due for retry at the next tick with a record, so the period is not dropped silently.
 - R2.3 (open question): The tick start does not check the read rights of the last saver. ADR 267 decision 14 and ADR 273 decision 5 (check 2) require unit:read-outputs for that principal. The provisional answer in proposal.md open question 1 does not say what happens when the last saver loses that right, so the tick cannot be built as specified. Resolution: answered: Spec now requires the tick to check last-saver unit:read-outputs and refuse with a record; open question narrowed to re-save timing only.
 - R2.4 (failure mode): The provisional answer to open question 1 recomputes the next slot from the save time. A re-save just after a due slot can skip that period with no record and no run. The change needs a scenario for a save that races with a claim. Resolution: answered: Added re-save race scenario: a save between tick read and claim writes a record and the stale claim starts nothing.
-- R2.5 (missing scenario): specs/trigger-schedule/spec.md 'Scheduled plan principal' covers only a successful start. It has no scenario for a revoked or missing stored grant of the namespace service principal at tick time, and the outcome and record are not stated. Resolution: answered: Added scenario for revoked or missing stored grant of the namespace service principal at tick time with refusal and record.
+- R2.5 (missing scenario): specs/trigger-schedule/spec.md 'Scheduled plan principal' covers only a successful start. It has no scenario for a revoked or missing stored grant of the run-as principal of the trigger at tick time, and the outcome and record are not stated. Resolution: answered: Added scenario for revoked or missing stored grant of the run-as principal of the trigger at tick time with refusal and record.
 - R2.6 (wrong claim): proposal.md 'Questions considered' says ADR 267 decisions 5 and 18 with ADR 263 decision 15 define the minimum as one hour between consecutive fire times, and that a sub-hour gap is refused. These ADR lines state only 'a minimum interval of 1 hour'. The gap rule for lists and steps is the drafter's own choice and is not in the cited decisions. Resolution: answered: Considered answer now states the gap rule is the drafter interpretation, not ADR text.
 - R2.7 (missing scenario): specs/trigger-schedule/spec.md has no scenario for a trigger whose frequency is re-saved between the tick read and the conditional claim. The design's single time source does not cover a change to the stored slot during the claim. Resolution: answered: Added scenario for frequency re-save between tick read and conditional claim.
 - M.31 (duplicate): run-triggers specifies the same schedule tick, and #1210 is not a change ID. Resolution: answered: Tick stays in this change; take over run-triggers open question 0 as second open question; depends_on now names the change run-triggers and out of scope names it as owner of the trigger record.
@@ -144,7 +159,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 1. What happens to the next slot when a trigger is re-saved with a new frequency after a claim?
    - Options: Recompute the next slot from the save time and keep the claim history as audit only; Keep the old next slot when it still matches the new frequency, else recompute from now.
    - Provisional decision (owner review 14 Nov): Recompute the next slot from the save time and keep the claim history as audit only.
-   - Reason: ADR 267 does not name the re-save timing; the choice sets whether an edit causes an extra run or a missed run. The tick refusal when the last saver loses unit:read-outputs is decided by ADR 273 decision 5 and is specified, not asked here. Benchmark: Google Cloud Scheduler: a paused schedule keeps its config and starts nothing until resumed; a rewrite of the schedule recomputes the next run from now.
+   - Reason: ADR 267 does not name the re-save timing; the choice sets whether an edit causes an extra run or a missed run. The tick refusal when the run-as principal loses unit:read-outputs is decided by ADR 273 decision 5 and is specified, not asked here. Benchmark: Google Cloud Scheduler: a paused schedule keeps its config and starts nothing until resumed; a rewrite of the schedule recomputes the next run from now.
    - Persona impact: A namespace administrator who edits a frequency sees one clear next slot and no surprise catch-up run. Escape hatch: The person re-saves the trigger after the fix and reads the recomputed next slot from the API.
 2. Which change owns the shared schedule tick taken over from run-triggers open question 0?
    - Options: This change owns the trigger.schedule tick, ClaimDue, and Dispatcher.Scheduled; run-triggers owns the trigger record and push and follows starts; Run-triggers owns the tick and this change owns only ClaimDue.
@@ -157,7 +172,7 @@ Questions considered and answered:
 - How does a cron expression map onto the durable schedule? ADR 267 decisions 5, 6, and 18 answer it: use the presets and the 5-field UTC cron syntax, fire once per period through the durable schedule, and tick once per minute with one catch-up run for the latest missed slot.
 - Does a scheduled start skip gates and approvals? ADR 267 decisions 2 and 9 answer it: the trigger starts a plan only through the job service, and gates, approvals, freezes, locks, and limits apply as to any job.
 - What source kind does the job record? ADR 267 decision 15 answers it: a schedule trigger records the source kind schedule on the job.
-- Which principal starts a scheduled plan? ADR 267 decision 14 with ADR 338 decision 3 answers it: the start runs as the namespace service principal under its stored grant for plan start only.
+- Which principal starts a scheduled plan? ADR 267 decision 14 with ADR 338 decision 3 answers it: the start runs as the run-as principal of the trigger under its stored grant for plan start only.
 - How is the one hour minimum measured for lists and steps in a custom expression? ADR 267 decision 5 and ADR 263 decision 15 state only a minimum interval of 1 hour. The drafter interprets this as the smallest gap between two consecutive Next times, so a list or step with a sub-hour gap is refused as the drafter choice, not as ADR text.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

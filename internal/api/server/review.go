@@ -54,6 +54,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -282,6 +283,14 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 
 		page, err := svc.Review(r.Context(), c.obj, req)
 		if err != nil {
+			appendErr := h.appendReviewFailure(r, c, action, reviewAuditObject(c.obj, req, nil), svc.Now())
+			if appendErr != nil {
+				h.logger.WarnContext(r.Context(), "the audit entry of a failed access review export was not written",
+					slog.String("action", string(action)), slog.String("error", appendErr.Error()))
+
+				return failed(""), reviewExportError{export: err, append: appendErr}
+			}
+
 			return failed(""), err
 		}
 
@@ -308,6 +317,24 @@ func classifyReview(err error) (failure, bool) {
 		errcode.Identifier("key", over.Key)), true
 }
 
+// reviewExportError is the error of an export that failed and whose audit
+// entry also failed. The error of the export decides the answer, as it does
+// when the entry succeeds: the handler maps an error to a status by its wrap
+// chain, and the error of the entry would answer its own class instead (an
+// unavailable store answers 503, a fenced append 409). The error of the
+// entry goes to the log, not to the message.
+type reviewExportError struct {
+	export error
+	append error
+}
+
+func (e reviewExportError) Error() string {
+	return e.export.Error()
+}
+
+// Unwrap returns the error of the export, which decides the answer.
+func (e reviewExportError) Unwrap() error { return e.export }
+
 // reviewPageOf maps one page of an export to the wire.
 func reviewPageOf(page access.ReviewPage) reviewResponse {
 	out := reviewResponse{
@@ -327,10 +354,10 @@ func reviewPageOf(page access.ReviewPage) reviewResponse {
 	return out
 }
 
-// appendReviewRead writes the audit entry of one export request: kind
-// read-access, in the namespace of the object or in @server. It fails
-// closed: the caller answers the error and no rows. NewHandler refuses a
-// config that serves the export with no audit store.
+// appendReviewRead writes the audit entry of one export request that
+// succeeded: kind read-access with the success outcome. It fails closed:
+// the caller answers the error and no rows. NewHandler refuses a config
+// that serves the export with no audit store.
 func (h *Handler) appendReviewRead(
 	r *http.Request,
 	c *call,
@@ -338,10 +365,44 @@ func (h *Handler) appendReviewRead(
 	object string,
 	at time.Time,
 ) error {
+	entry := reviewEntry(r, c, action, object, at)
+	entry.Outcome = audit.OutcomeSuccess
+
+	return h.appendReviewEntry(r, c, entry)
+}
+
+// appendReviewFailure writes the audit entry of one export request that
+// failed: kind read-access with the failure outcome. It fails closed as
+// appendReviewRead does.
+func (h *Handler) appendReviewFailure(
+	r *http.Request,
+	c *call,
+	action identity.Action,
+	object string,
+	at time.Time,
+) error {
+	entry := reviewEntry(r, c, action, object, at)
+	entry.Outcome = audit.OutcomeFailure
+
+	return h.appendReviewEntry(r, c, entry)
+}
+
+// reviewEntry returns the audit entry of one export request: kind
+// read-access, with the action, the object and the time of the request.
+// The caller sets the outcome.
+func reviewEntry(r *http.Request, c *call, action identity.Action, object string, at time.Time) audit.Entry {
 	entry := callerEntry(r, c.p, action)
-	entry.At, entry.Kind, entry.Outcome = at, audit.KindReadAccess, audit.OutcomeSuccess
+	entry.At, entry.Kind = at, audit.KindReadAccess
 	entry.Object = object
 
+	return entry
+}
+
+// appendReviewEntry appends the audit entry of one export request in the
+// namespace of the object or in @server. It fails closed: the caller
+// answers the error and no rows. NewHandler refuses a config that serves
+// the export with no audit store.
+func (h *Handler) appendReviewEntry(r *http.Request, c *call, entry audit.Entry) error {
 	ctx := r.Context()
 
 	if c.obj.Namespace() == "" {

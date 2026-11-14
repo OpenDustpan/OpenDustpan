@@ -23,7 +23,8 @@ type PlacementRules interface {
 // PlacementCollections reads a collection of a placement rule.
 type PlacementCollections interface {
 	// CollectionID returns the stable ID of the collection obj, and false when
-	// the collection does not exist.
+	// the collection does not exist. A missing collection is not an error: the
+	// caller answers with collection.ErrPlacementCollectionMissing.
 	CollectionID(ctx context.Context, obj identity.Object) (string, bool, error)
 }
 
@@ -46,8 +47,10 @@ type placement struct {
 // choosePlacement finds the collection of the new stack ref and authorizes the
 // caller on it. It writes the answer and returns false when the stack must not
 // be made: no rule matches, the caller lacks collection:create-unit on the
-// collection of the rule, or the collection does not exist. Without a Placer
-// the stack gets no collection and the answer is true.
+// collection of the rule, or the collection does not exist. A missing
+// collection answers with an error that matches
+// collection.ErrPlacementCollectionMissing. Without a Placer the stack gets no
+// collection and the answer is true.
 //
 // Defense in depth: the route already authorizes unit:manage on the new unit.
 // The check of collection:create-unit stays here, in front of the write, so
@@ -116,7 +119,7 @@ func (h *Handler) choosePlacement(
 		return none, false
 	case !found:
 		h.writeError(ctx, w, fmt.Errorf("placement rule %s names collection %q: %w",
-			rule.ID, rule.Collection, collection.ErrNotFound))
+			rule.ID, rule.Collection, collection.ErrPlacementCollectionMissing))
 
 		return none, false
 	default:

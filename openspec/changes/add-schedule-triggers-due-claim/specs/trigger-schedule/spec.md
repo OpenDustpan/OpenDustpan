@@ -42,14 +42,14 @@ When a schedule trigger starts a job, the server SHALL record the source kind sc
 
 ### Requirement: Start as service principal
 
-When a schedule trigger starts a plan, the server SHALL run the start as the namespace service principal.
+When a schedule trigger starts a plan, the server SHALL run the start as the run-as principal of the trigger.
 
 #### Scenario: Scheduled plan principal
 - **WHEN** a schedule trigger starts a plan
-- **THEN** the job records the namespace service principal under its stored grant for plan start only
+- **THEN** the job records the run-as principal of the trigger under its stored grant for plan start only
 
 #### Scenario: Missing service grant at tick
-- **WHEN** the stored grant of the namespace service principal is revoked or missing at tick time
+- **WHEN** the stored grants of the run-as principal of the trigger is revoked or missing at tick time
 - **THEN** the tick starts nothing and writes a record that names the missing grant
 
 ### Requirement: Claim without job
@@ -66,7 +66,7 @@ When a person saves a schedule trigger, the server SHALL check the settings acti
 
 #### Scenario: Save and tick checks
 - **WHEN** a person saves a trigger and the tick starts a plan
-- **THEN** the save needs the settings action on the unit and the tick needs the stored grant of the namespace service principal
+- **THEN** the save needs the settings action on the unit and the tick needs the stored grants of the run-as principal of the trigger
 
 ### Requirement: Stable unit reference
 
@@ -84,13 +84,13 @@ When a scheduled job holds a phase that writes state, the server SHALL hold the 
 - **WHEN** a scheduled job holds a phase that writes state or changes resources
 - **THEN** the job waits for approval under the built-in schedule gate as any scheduled job waits
 
-### Requirement: Last saver read rights
+### Requirement: Run-as principal read rights
 
-When the last saver lacks unit:read-outputs at tick time, the server SHALL refuse the scheduled start.
+When the run-as principal lacks unit:read-outputs at tick time, the server SHALL refuse the scheduled start.
 
-#### Scenario: Last saver loses read rights
-- **WHEN** the last saver no longer holds unit:read-outputs on the producer at tick time
-- **THEN** the tick starts nothing and writes a denial record that names the last saver and the missing action
+#### Scenario: Run-as principal loses read rights
+- **WHEN** the run-as principal no longer holds unit:read-outputs on the producer at tick time
+- **THEN** the tick starts nothing and writes a denial record that names the run-as principal and the missing action
 
 ### Requirement: Re-save race with claim
 
