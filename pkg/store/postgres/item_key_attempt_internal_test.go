@@ -51,7 +51,9 @@ func TestAttemptErrorMapsTheTimeout(t *testing.T) {
 	timeout := fmt.Errorf("transaction: %w", timeoutErr)
 	other := fmt.Errorf("transaction: %w", otherErr)
 	plain := errPlain
-	past, future := time.Now().Add(-time.Second), time.Now().Add(time.Hour)
+	now := time.UnixMilli(1_700_000_000_000)
+	past, future := now.Add(-time.Minute), now.Add(time.Minute)
+	atNow := func() time.Time { return now }
 
 	for _, tc := range []struct {
 		name    string
@@ -59,11 +61,11 @@ func TestAttemptErrorMapsTheTimeout(t *testing.T) {
 		err     error
 		expired bool
 	}{
-		{"the timeout of the database", &itemKeyAttempt{deadline: future, wrote: false}, timeout, true},
-		{"another SQLSTATE before the deadline", &itemKeyAttempt{deadline: future, wrote: true}, other, false},
-		{"an error after the deadline of a write", &itemKeyAttempt{deadline: past, wrote: true}, plain, true},
-		{"an error after the deadline with no write", &itemKeyAttempt{deadline: past, wrote: false}, plain, false},
-		{"no error", &itemKeyAttempt{deadline: past, wrote: true}, nil, false},
+		{"the timeout of the database", &itemKeyAttempt{deadline: future, wrote: false, now: atNow}, timeout, true},
+		{"another SQLSTATE before the deadline", &itemKeyAttempt{deadline: future, wrote: true, now: atNow}, other, false},
+		{"an error after the deadline of a write", &itemKeyAttempt{deadline: past, wrote: true, now: atNow}, plain, true},
+		{"an error after the deadline with no write", &itemKeyAttempt{deadline: past, wrote: false, now: atNow}, plain, false},
+		{"no error", &itemKeyAttempt{deadline: past, wrote: true, now: atNow}, nil, false},
 	} {
 		got := tc.attempt.attemptError(tc.err)
 		if errors.Is(got, secret.ErrItemKeyAttemptExpired) != tc.expired {
@@ -83,18 +85,22 @@ var errPlain = errors.New("plain")
 func TestBeforeCommitRefusesALateWrite(t *testing.T) {
 	t.Parallel()
 
-	past, future := time.Now().Add(-time.Second), time.Now().Add(time.Hour)
+	now := time.UnixMilli(1_700_000_000_000)
+	past, future := now.Add(-time.Minute), now.Add(time.Minute)
+	atNow := func() time.Time { return now }
 
 	var none *itemKeyAttempt
 
-	if err := (&itemKeyAttempt{deadline: past, wrote: true}).beforeCommit(); !errors.Is(
+	if err := (&itemKeyAttempt{deadline: past, wrote: true, now: atNow}).beforeCommit(); !errors.Is(
 		err, secret.ErrItemKeyAttemptExpired,
 	) {
 		t.Errorf("a late write: %v, want ErrItemKeyAttemptExpired", err)
 	}
 
 	for name, a := range map[string]*itemKeyAttempt{
-		"a write in time": {deadline: future, wrote: true}, "no write": {deadline: past, wrote: false}, "none": none,
+		"a write in time": {deadline: future, wrote: true, now: atNow},
+		"no write":        {deadline: past, wrote: false, now: atNow},
+		"none":            none,
 	} {
 		if err := a.beforeCommit(); err != nil {
 			t.Errorf("%s: %v, want nil", name, err)
@@ -113,7 +119,12 @@ func TestTheDatabaseEndsALateCommit(t *testing.T) {
 	ref := seedItemKey(t, s)
 	late := lateItemKey(t, ref)
 	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
-	attempt := &itemKeyAttempt{deadline: time.Now().Add(300 * time.Millisecond), wrote: false}
+	now := time.UnixMilli(1_700_000_000_000)
+	SetNowForTest(s, func() time.Time { return now })
+	s.attemptDeadline = func(_ context.Context, start time.Time) time.Time {
+		return start.Add(300 * time.Millisecond)
+	}
+	attempt := s.newAttempt(t.Context())
 
 	err := s.inFencedTx(t.Context(), fence, func(q *db.Queries) error {
 		if _, err := (itemKeyTx{q: q, fence: fence, attempt: attempt}).CreateItemKey(t.Context(), late); err != nil {

@@ -119,6 +119,9 @@ type Store struct {
 	// write an item key record. It is secret.AttemptDeadline. An internal test
 	// sets a shorter one.
 	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -260,6 +263,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		marks:               newLongMarks(),
 		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
 		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 	}
 
 	for _, opt := range opts {

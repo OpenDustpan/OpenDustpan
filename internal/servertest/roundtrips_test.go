@@ -860,15 +860,17 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 67. The second save reads the blob guard after the
+		// The budget is 68. The second save reads the blob guard after the
 		// commit that replaces the previous checkpoint blob, so that a backup
 		// that started before the commit cannot lose the blob. The
 		// transaction of the create writes the record of the item key of the
 		// update, which seals its event payloads at rest: a read of the
 		// record, a read of the namespace, the insert and a read back. The
-		// start reads the stack one time, so that the manual lock check
-		// matches the lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 67, func(h *rtHarness) {
+		// item key transaction also arms its attempt deadline with one
+		// set_config: one more round trip. The start reads the stack one
+		// time, so that the manual lock check matches the lock by the stable
+		// ID of the stack, not by its name.
+		{"pulumi update cycle", 68, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -897,17 +899,20 @@ func requestFlows() []requestFlow {
 		// membership of the unit: one more round trip in each budget. The
 		// manual lock check of each flow reads the stack one time, so that it
 		// matches the lock by the stable ID of the stack, not by its name: one
-		// more round trip in each budget.
+		// more round trip in each budget. The import and the restore write the
+		// state of a unit, so the item key transaction of each arms its attempt
+		// deadline with one set_config: one more round trip in each of their
+		// budgets.
 		{"pulumi stack rm", 40, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 70, func(h *rtHarness) {
+		{"pulumi stack import", 71, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 71, func(h *rtHarness) {
+		{"pulumi stack restore", 72, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)

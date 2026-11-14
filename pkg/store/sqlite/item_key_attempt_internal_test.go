@@ -19,7 +19,9 @@ func TestAttemptErrorMapsTheDeadline(t *testing.T) {
 	t.Parallel()
 
 	plain := errPlain
-	past, future := time.Now().Add(-time.Second), time.Now().Add(time.Hour)
+	now := time.UnixMilli(1_700_000_000_000)
+	past, future := now.Add(-time.Minute), now.Add(time.Minute)
+	atNow := func() time.Time { return now }
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -32,13 +34,13 @@ func TestAttemptErrorMapsTheDeadline(t *testing.T) {
 		expired  bool
 	}{
 		{
-			"the deadline of the attempt", false, &itemKeyAttempt{deadline: past, wrote: false},
+			"the deadline of the attempt", false, &itemKeyAttempt{deadline: past, wrote: false, now: atNow},
 			context.DeadlineExceeded, true,
 		},
-		{"an error after the deadline of a write", false, &itemKeyAttempt{deadline: past, wrote: true}, plain, true},
-		{"an error before the deadline", false, &itemKeyAttempt{deadline: future, wrote: true}, plain, false},
-		{"a cancel of the caller", true, &itemKeyAttempt{deadline: past, wrote: true}, context.Canceled, false},
-		{"no error", false, &itemKeyAttempt{deadline: past, wrote: true}, nil, false},
+		{"an error after the deadline of a write", false, &itemKeyAttempt{deadline: past, wrote: true, now: atNow}, plain, true},
+		{"an error before the deadline", false, &itemKeyAttempt{deadline: future, wrote: true, now: atNow}, plain, false},
+		{"a cancel of the caller", true, &itemKeyAttempt{deadline: past, wrote: true, now: atNow}, context.Canceled, false},
+		{"no error", false, &itemKeyAttempt{deadline: past, wrote: true, now: atNow}, nil, false},
 	} {
 		parent := t.Context()
 		if tc.canceled {
@@ -59,18 +61,22 @@ var errPlain = errors.New("plain")
 func TestBeforeCommitRefusesALateWrite(t *testing.T) {
 	t.Parallel()
 
-	past, future := time.Now().Add(-time.Second), time.Now().Add(time.Hour)
+	now := time.UnixMilli(1_700_000_000_000)
+	past, future := now.Add(-time.Minute), now.Add(time.Minute)
+	atNow := func() time.Time { return now }
 
 	var none *itemKeyAttempt
 
-	if err := (&itemKeyAttempt{deadline: past, wrote: true}).beforeCommit(); !errors.Is(
+	if err := (&itemKeyAttempt{deadline: past, wrote: true, now: atNow}).beforeCommit(); !errors.Is(
 		err, secret.ErrItemKeyAttemptExpired,
 	) {
 		t.Errorf("a late write: %v, want ErrItemKeyAttemptExpired", err)
 	}
 
 	for name, a := range map[string]*itemKeyAttempt{
-		"a write in time": {deadline: future, wrote: true}, "no write": {deadline: past, wrote: false}, "none": none,
+		"a write in time": {deadline: future, wrote: true, now: atNow},
+		"no write":        {deadline: past, wrote: false, now: atNow},
+		"none":            none,
 	} {
 		if err := a.beforeCommit(); err != nil {
 			t.Errorf("%s: %v, want nil", name, err)

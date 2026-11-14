@@ -36,6 +36,9 @@ var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "",
 type itemKeyAttempt struct {
 	deadline time.Time
 	wrote    bool
+	// now gives the current time of the attempt. newAttempt takes it from
+	// the store. Tests replace it.
+	now func() time.Time
 }
 
 // newAttempt returns the attempt of a transaction that starts now under ctx,
@@ -43,7 +46,7 @@ type itemKeyAttempt struct {
 // rolls the transaction back. The caller runs the transaction under the
 // returned context and calls cancel after it.
 func (s *Store) newAttempt(ctx context.Context) (*itemKeyAttempt, context.Context, context.CancelFunc) {
-	a := &itemKeyAttempt{deadline: s.attemptDeadline(ctx, time.Now()), wrote: false}
+	a := &itemKeyAttempt{deadline: s.attemptDeadline(ctx, s.now()), wrote: false, now: s.now}
 	txCtx, cancel := context.WithDeadline(ctx, a.deadline)
 
 	return a, txCtx, cancel
@@ -56,7 +59,7 @@ func (a *itemKeyAttempt) beforeCommit() error {
 		return nil
 	}
 
-	return secret.CheckAttemptDeadline(a.deadline, time.Now())
+	return secret.CheckAttemptDeadline(a.deadline, a.now())
 }
 
 // attemptError returns secret.ErrItemKeyAttemptExpired, with no text of the
@@ -70,7 +73,7 @@ func (a *itemKeyAttempt) attemptError(parent context.Context, err error) error {
 		return err
 	}
 
-	if time.Now().Before(a.deadline) {
+	if a.now().Before(a.deadline) {
 		return err
 	}
 
@@ -101,7 +104,7 @@ func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(
 		// Defense in depth: the deadline of txCtx ends the transaction too.
 		// This check stays so that a late commit fails with its own error, and
 		// does not rely on the driver to see the deadline.
-		return secret.CheckAttemptDeadline(attempt.deadline, time.Now())
+		return secret.CheckAttemptDeadline(attempt.deadline, s.now())
 	})
 
 	return attempt.attemptError(ctx, err)
@@ -128,7 +131,7 @@ func (t itemKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.
 	// Defense in depth: the deadline of the context of the transaction and
 	// the check before the commit stop a late commit too. This check stays so
 	// that a write that starts after the deadline never reaches the database.
-	if err := secret.CheckAttemptDeadline(t.attempt.deadline, time.Now()); err != nil {
+	if err := secret.CheckAttemptDeadline(t.attempt.deadline, t.attempt.now()); err != nil {
 		return secret.ItemKey{}, err
 	}
 

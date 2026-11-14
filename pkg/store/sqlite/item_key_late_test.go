@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -23,6 +24,8 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
 	return sqlite.JobRead(ctx, r.s, fn)
 }
+
+func (r jobRunner) Logger() *slog.Logger { return nil }
 
 func TestLateItemKeyCommits(t *testing.T) {
 	t.Parallel()

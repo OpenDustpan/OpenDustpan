@@ -129,6 +129,11 @@ func SetItemKeyAttemptDeadline(s *Store, d time.Duration) {
 	}
 }
 
+// SetNowForTest replaces the clock of the item key attempt code of s.
+func SetNowForTest(s *Store, now func() time.Time) {
+	s.now = now
+}
+
 // JobWrite runs fn in one write transaction of the job stores of s.
 func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobstore.Tx) error) error {
 	return jobRunner{s: s}.Write(ctx, fence, fn)

@@ -285,6 +285,9 @@ type Store struct {
 	// attemptDeadline gives the attempt deadline of an item key transaction.
 	// It is secret.AttemptDeadline. An internal test sets a shorter one.
 	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 var (
@@ -421,6 +424,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 		beforeLockDelete:    nil,
 		betweenPageReads:    nil,
 		binaryVersion:       "",

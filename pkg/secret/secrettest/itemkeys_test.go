@@ -27,6 +27,7 @@ func TestItemKeySuite(t *testing.T) {
 type memItemKeys struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	keys       map[secret.ItemRef]secret.ItemKey
+	now        func() time.Time
 	mu         sync.Mutex
 }
 
@@ -34,6 +35,7 @@ func newMemItemKeys() *memItemKeys {
 	return &memItemKeys{
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		keys:       map[secret.ItemRef]secret.ItemKey{},
+		now:        time.Now,
 		mu:         sync.Mutex{},
 	}
 }
@@ -131,7 +133,7 @@ func (t memItemKeyTx) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.
 // returns nil before the attempt deadline, so a failed or late function leaves
 // no record.
 func (m *memItemKeys) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
-	deadline := secret.AttemptDeadline(ctx, time.Now())
+	deadline := secret.AttemptDeadline(ctx, m.now())
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -148,7 +150,7 @@ func (m *memItemKeys) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn
 		return err
 	}
 
-	if err := secret.CheckAttemptDeadline(deadline, time.Now()); err != nil {
+	if err := secret.CheckAttemptDeadline(deadline, m.now()); err != nil {
 		m.keys = before
 
 		return err

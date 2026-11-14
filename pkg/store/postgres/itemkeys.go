@@ -38,11 +38,14 @@ var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "",
 type itemKeyAttempt struct {
 	deadline time.Time
 	wrote    bool
+	// now gives the current time of the attempt. newAttempt takes it from
+	// the store. Tests replace it.
+	now func() time.Time
 }
 
 // newAttempt returns the attempt of a transaction that starts now under ctx.
 func (s *Store) newAttempt(ctx context.Context) *itemKeyAttempt {
-	return &itemKeyAttempt{deadline: s.attemptDeadline(ctx, time.Now()), wrote: false}
+	return &itemKeyAttempt{deadline: s.attemptDeadline(ctx, s.now()), wrote: false, now: s.now}
 }
 
 // beforeCommit refuses the commit of a transaction that wrote an item key
@@ -52,7 +55,7 @@ func (a *itemKeyAttempt) beforeCommit() error {
 		return nil
 	}
 
-	return secret.CheckAttemptDeadline(a.deadline, time.Now())
+	return secret.CheckAttemptDeadline(a.deadline, a.now())
 }
 
 // attemptError returns secret.ErrItemKeyAttemptExpired, with no text of the
@@ -69,7 +72,7 @@ func (a *itemKeyAttempt) attemptError(err error) error {
 		return fmt.Errorf("%w: the database ended the transaction at its deadline", secret.ErrItemKeyAttemptExpired)
 	}
 
-	if a.wrote && !time.Now().Before(a.deadline) {
+	if a.wrote && !a.now().Before(a.deadline) {
 		return fmt.Errorf("%w: the transaction failed after its deadline", secret.ErrItemKeyAttemptExpired)
 	}
 
@@ -88,7 +91,7 @@ func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(
 	attempt := s.newAttempt(ctx)
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if err := q.SetTransactionTimeout(ctx, transactionTimeoutMs(attempt.deadline, time.Now())); err != nil {
+		if err := q.SetTransactionTimeout(ctx, transactionTimeoutMs(attempt.deadline, s.now())); err != nil {
 			return fmt.Errorf("set the attempt deadline: %w", err)
 		}
 
@@ -99,7 +102,7 @@ func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(
 		// Defense in depth: the database ends the transaction at the
 		// deadline too. This check stays so that a late commit fails on the
 		// clock of the server as well, whatever the setting of the database.
-		return secret.CheckAttemptDeadline(attempt.deadline, time.Now())
+		return secret.CheckAttemptDeadline(attempt.deadline, s.now())
 	})
 
 	return attempt.attemptError(err)
@@ -174,11 +177,11 @@ func (t itemKeyTx) armAttempt(ctx context.Context) error {
 	// Defense in depth: the check before the commit and transaction_timeout
 	// stop a late commit too. This check stays so that a write that starts
 	// after the deadline never reaches the database.
-	if err := secret.CheckAttemptDeadline(t.attempt.deadline, time.Now()); err != nil {
+	if err := secret.CheckAttemptDeadline(t.attempt.deadline, t.attempt.now()); err != nil {
 		return err
 	}
 
-	if err := t.q.SetTransactionTimeout(ctx, transactionTimeoutMs(t.attempt.deadline, time.Now())); err != nil {
+	if err := t.q.SetTransactionTimeout(ctx, transactionTimeoutMs(t.attempt.deadline, t.attempt.now())); err != nil {
 		return fmt.Errorf("set the attempt deadline: %w", err)
 	}
 
