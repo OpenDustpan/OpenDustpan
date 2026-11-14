@@ -4,12 +4,12 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for exchange, renew, source, credentials, step order, log caps and hash, plan caps and the double commit. Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main
-- [ ] 1.2 Write failing hostile tests: runner key on a session path, session key on a runner path, namespace pool with the sweep purpose, takeover during upload, replayed nonce, reused handoff token. Check: `go test ./internal/api/runnerapi/ -run TestSessionHostile -count=1` fails on main
+- [ ] 1.1 Write failing tests for exchange, renew, source, credentials, step order, log caps and hash, plan caps and the double commit in internal/api/runnerapi/session_test.go (NEW). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main
+- [ ] 1.2 Write failing hostile tests in internal/api/runnerapi/session_hostile_test.go (NEW): runner key on a session path, session key on a runner path, namespace pool with the sweep purpose, takeover during upload, replayed nonce, reused handoff token. Check: `go test ./internal/api/runnerapi/ -run TestSessionHostile -count=1` fails on main
 
 ## 2. Behavior and docs
 
-- [ ] 2.1 Wire each session route to one port call after the claim check. Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes
+- [ ] 2.1 Wire each session route to one port call after the claim check. Declare the routes in internal/api/runnerapi/session.go (NEW) and write the adapter in internal/api/runnerapi/runnerapi.go. Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes
 - [ ] 2.2 Write docs/reference/runner-api.md entries for each session path, cap and error code. Check: `make docs-lint` passes
 
 ## 3. Side effects (computed from main)

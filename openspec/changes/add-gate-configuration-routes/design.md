@@ -1,11 +1,11 @@
 ## Context
 
-Gate configuration is security code. A write needs an action check, a scope check, fresh authentication, limits, a version check and an audit entry. The service exists. This change serves it at every scope and keys unit rows on the stable unit ID.
+Gate configuration is security code. A write needs an action check, a scope check, fresh authentication, limits, a version check and an audit entry. The service and the store exist. This change serves the routes at every scope and verifies the stable unit key.
 
 ## Decisions
 
 1. **Routes on ConfigService.** Serve gates, approval rules, approval defaults including the reset, and the carry-over setting at four scopes. The unit scope is the by-name path of ADR 355. Each route declares the read or manage action of its scope.
-2. **Stable unit key.** Key gate rows of a unit on the stable unit ID by an in-place edit of the baseline of each dialect. A rename or a restore keeps the rows. A new unit that reuses a name starts clean. The by-name path resolves to the ID at the start of each request.
+2. **Stable unit key.** Gate rows of a unit key on the stable unit ID. The by-name path resolves to the ID at the start of each request. Tests verify it.
 3. **Version check in the transaction.** The adapter compares If-Match with the stored version in the write transaction. A PUT that creates a new object needs no If-Match. A PUT to an existing object without If-Match fails with 428.
 4. **Fresh authentication.** A change that needs fresh authentication fails closed with mfa.fresh-step-required for an access token and for a session with an old sign-in.
 5. **Final gates and rule IDs.** A narrower scope cannot save a gate or rule with the ID of a wider final object. The server resolves approval:<id> at the gate scope, then at wider scopes.
@@ -46,6 +46,7 @@ Modules that the change touches, and their imports on main:
 ```mermaid
 flowchart LR
 P1[pkg/gate]
+P2[pkg/backup]
 ```
 
 States on main in the touched packages:
@@ -57,6 +58,13 @@ state_import
 valid
 invalid
 state_write
+unit_state
+running
+succeeded
+failed
+missing
+damaged
+state_version_id
 ```
 
 States and transitions after this change:
@@ -130,9 +138,9 @@ flowchart LR
 
 Tests:
 
-- `internal/removalalertsvc/fakes_test.go` names `gate.ErrNotFound`
-- `internal/cost/costtest/mem_test.go` names `gate.ErrNotFound`
-- `internal/outputsharesvc/checker_test.go` names `gate.ErrNotFound`
+- `pkg/tempadmin/tempadmin_test.go` names `gate.ErrNotFound`
+- `pkg/manuallock/manuallock_test.go` names `gate.ErrNotFound`
+- `pkg/outputshare/outputsharetest/mem_test.go` names `gate.ErrNotFound`
 
 Docs pages:
 
@@ -142,4 +150,4 @@ ADRs:
 
 - `docs/adr/0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md` names `gate.ErrNotFound`
 - `docs/adr/0141-freeze-schedules.md` names `gate.ErrNotFound`
-- `docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md` names `gate.ErrNotFound`
+- `docs/adr/0179-conformance-suites-for-provider-wrappers.md` names `gate.ErrNotFound`

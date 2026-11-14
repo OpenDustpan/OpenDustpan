@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing tests for destroy approval fresh step, token and agent refusal, stale proof, zero and narrower windows, and no-factor refusal with enrollment text Check: TestDestroyApprovalNeedsFreshStep fails on main, passes after fix
-- [ ] 1.2 Add failing service and e2e tests for one-approval wait, void on new plan, recheck adds, limit and enforce gate refusals, and stale or digest 409. BLOCKED by the owning changes for the approval route and the session credential; the approval routes are not in the pack, so the route names come from those changes Check: TestPolicyApprovalsComposedRun fails on main, passes after fix
+- [ ] 1.1 Add failing tests in the NEW file `pkg/dustpan/destroyapproval_test.go` for destroy approval fresh step, token and agent refusal, stale proof, zero and narrower windows, and no-factor refusal with enrollment text. Check: TestDestroyApprovalNeedsFreshStep fails on main, passes after fix
+- [ ] 1.2 Add failing service tests in the NEW file `pkg/dustpan/policyapprovals_test.go` and failing e2e tests in the NEW file `e2e/policy_approvals_test.go` for one-approval wait, void on new plan, recheck adds, limit and enforce gate refusals, and stale or digest 409. BLOCKED by the owning changes for the approval route and the session credential; the approval routes are not in the pack, so the route names come from those changes Check: TestPolicyApprovalsComposedRun fails on main, passes after fix
 
 ## 2. Side effects (computed from main)
 

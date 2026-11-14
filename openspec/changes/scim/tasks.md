@@ -4,16 +4,16 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing tests for create, group, membership, mapping and source scim. Check: `go test ./pkg/scim/... -run TestScimCreateUserGroupMembership`
-- [ ] 1.2 Write failing tests for update, active, duplicate and concurrent create. Check: `go test ./pkg/scim/... -run TestScimUpdateActiveDuplicate`
-- [ ] 1.3 Write failing tests for auth scope, invalid body, hostile filter and path values, and rate limit. Check: `go test ./pkg/scim/... -run TestScimAuthScopeAndInvalidBody`
-- [ ] 1.4 Write failing tests for delete, revocation, break-glass 409 and atomic audit. Check: `go test ./pkg/scim/... -run TestScimDeleteDisablesKeeps`
+- [ ] 1.1 Write failing tests for create, group, membership, mapping and source scim in NEW file pkg/scim/create_test.go. Check: `go test ./pkg/scim/... -run TestScimCreateUserGroupMembership`
+- [ ] 1.2 Write failing tests for update, active, duplicate and concurrent create in NEW file pkg/scim/update_test.go. Check: `go test ./pkg/scim/... -run TestScimUpdateActiveDuplicate`
+- [ ] 1.3 Write failing tests for auth scope, invalid body, hostile filter and path values, and rate limit in NEW file pkg/scim/auth_test.go. Check: `go test ./pkg/scim/... -run TestScimAuthScopeAndInvalidBody`
+- [ ] 1.4 Write failing tests for delete, revocation, break-glass 409 and atomic audit in NEW file pkg/scim/delete_test.go. Check: `go test ./pkg/scim/... -run TestScimDeleteDisablesKeeps`
 
 ## 2. Build
 
-- [ ] 2.1 Get the owner decision on SCIM timing. Build tasks are BLOCKED by it. Check: The decision is recorded.
-- [ ] 2.2 Build the port, the service and the adapter. Check: `go test ./pkg/scim/... ./internal/scimsvc/...`
-- [ ] 2.3 Wire the NEW routes with their authorization actions. Check: `go test ./internal/api/... -run TestScimRoutes`
+- [ ] 2.1 Get the owner decision on SCIM timing and record it in proposal.md, section "Open questions", question 1. Build tasks are BLOCKED by it. (open question 1). Build tasks are BLOCKED by it. Check: The decision is recorded.
+- [ ] 2.2 Build the port in NEW file pkg/scim/port.go, the service in NEW file pkg/scim/service.go and the adapter in NEW file internal/scimsvc/adapter.go. Check: `go test ./pkg/scim/... ./internal/scimsvc/...`
+- [ ] 2.3 Wire the NEW routes with their authorization actions. Declare them in NEW file internal/api/scim_routes.go and add the adapter in NEW file internal/api/scim_handlers.go. Check: `go test ./internal/api/... -run TestScimRoutes`
 
 ## 3. Side effects (computed from main)
 

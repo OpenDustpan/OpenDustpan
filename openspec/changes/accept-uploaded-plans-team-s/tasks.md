@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for each spec scenario. Check: `go test ./pkg/job/ -run TestUploadedPlan -count=1` fails on main.
+- [ ] 1.1 Write failing tests for each spec scenario in `pkg/job/uploaded_plan_test.go` (NEW, package job). Check: `go test ./pkg/job/ -run TestUploadedPlan -count=1` fails on main.
 
 ## 2. Side effects (computed from main)
 

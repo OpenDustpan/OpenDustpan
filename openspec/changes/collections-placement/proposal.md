@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:195` (Collections and placement).
@@ -70,7 +70,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Error codes placement.no-match, placement.conflict, placement.invalid-pattern, placement.rule-not-found and placement.too-many-rules exist (`internal/errcode/catalog_placement.go:7 (func catalog entries)`)
 - Error codes collection.not-found and collection.already-exists exist (`internal/errcode/catalog_collection.go:7 (func catalog entries)`)
-- TestPlacementRuleDoesNotAuthorize exists (`pkg/access/access_test.go:841 (func TestPlacementRuleDoesNotAuthorize)`)
+- TestPlacementRuleDoesNotAuthorize exists (`pkg/access/access_test.go:850 (func TestPlacementRuleDoesNotAuthorize)`)
 - TestReviewOfACollection exists (`pkg/access/review_collection_test.go:65 (func TestReviewOfACollection)`)
 - TestApplyStepsRefuseHostilePulumiNames exists (`pkg/dustpan/jobservice_applysteps_internal_test.go:120 (func TestApplyStepsRefuseHostilePulumiNames)`)
 

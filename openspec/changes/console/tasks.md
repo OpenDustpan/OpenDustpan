@@ -4,8 +4,8 @@
 
 ## 1. Wiring first
 
-- [ ] 1.1 Write the failing browser job: add member, make group, give and revoke grant, download export, banner and locked section. It calls GET /api/server/access-review and POST /api/server/grants with a session cookie over TLS. Check: `make e2e CONSOLE=1` fails on main and passes after the wiring; BLOCKED by the console repository job and the depends_on changes.
-- [ ] 1.2 Add NEW test e2e TestConsoleBrowserWiring. It reads the audit entries of each browser step with GET /api/audit/export and an access token of the site administrator. Check: `go test ./e2e/ -run TestConsoleBrowserWiring -count=1` (NEW test).
+- [ ] 1.1 Write the failing browser job in the NEW file e2e/console_browser_test.go: add member, make group, give and revoke grant, download export, banner and locked section. It calls GET /api/server/access-review and POST /api/server/grants with a session cookie over TLS. Check: `make e2e CONSOLE=1` fails on main and passes after the wiring; BLOCKED by the console repository job and the depends_on changes.
+- [ ] 1.2 Add NEW test TestConsoleBrowserWiring in the NEW file e2e/console_browser_wiring_test.go. It reads the audit entries of each browser step with GET /api/audit/export and an access token of the site administrator. Check: `go test ./e2e/ -run TestConsoleBrowserWiring -count=1` (NEW test).
 
 ## 2. Side effects (computed from main)
 

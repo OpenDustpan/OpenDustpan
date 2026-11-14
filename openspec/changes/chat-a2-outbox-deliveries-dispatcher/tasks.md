@@ -1,18 +1,23 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing store conformance tests for outbox append, list, and claim in both dialects. Check: TestOutboxAppendInSameTransaction fails on main, passes after the change.
-- [ ] 1.2 Write failing tests for match, duplicate create, oversize append, invalid UTF-8, lease claim, stored match set, idempotent reclaim, key, retry, dead-letter, manual retry guards, retention, and 404 and 403 on routes. Check: TestSubscriptionsMatchAndDeliveriesWrite fails on main, passes after the change.
+- [ ] 1.1 Add store conformance tests for the Outbox, Subscriptions and Deliveries ports in the NEW file pkg/notify/notifytest/dispatch_suite.go, run by the SQL adapters. Check: TestOutboxCursorDispatch fails on main
+- [ ] 1.2 Add dispatcher tests in the NEW file internal/notifydispatch/dispatcher_test.go for match, isolation, key, mark sent, retry, dead-letter and no match. They read the existing route GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with an access token of a principal. Add the route test in the NEW file internal/api/notifications/deliveries_read_test.go for that route with its action. Check: TestDispatcherFansOutInIsolation fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Implement outbox, subscriptions, and deliveries stores for SQLite and PostgreSQL with lease, stored match set, key, and retention purge. Check: `go test -race ./pkg/notify/... ./internal/subscriptionsvc/...` passes.
-- [ ] 2.2 Implement the dispatcher and the delivery operation with per-subscription retry. Check: `go test -race ./internal/notifydispatch/...` passes. The test calls the existing route POST /api/dustpan/v1/namespaces/{namespace}/deliveries/{id}/redeliver with a personal access token. The send and retry paths need no route.
-- [ ] 2.3 Wire the removal alert service as the first emitting domain. Check: `go test -race ./internal/removalalertsvc/...` passes with one appended server-scope removal alert per recorded alert.
+- [ ] 2.1 Implement the stores in the NEW files pkg/store/sqlite/notify_dispatch.go and pkg/store/postgres/notify_dispatch.go with queries in each queries.sql and the baseline migration. Check: go test -race ./pkg/store/... -timeout 60m passes
+- [ ] 2.2 Implement the dispatcher and the delivery operation in the NEW file internal/notifydispatch/dispatcher.go. It marks a delivery sent after the sink accepts it. The acceptance check reads GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with an access token. Check: go test -race ./internal/notifydispatch/... passes
+- [ ] 2.3 Wire the removal alert service at internal/removalalertsvc/removalalertsvc.go:256 and the dispatcher in pkg/dustpan (NEW file pkg/dustpan/notifydispatch.go). Declare the delivery read route and its action in the NEW file internal/api/notifications/deliveries_routes.go and serve it in the NEW file internal/api/notifications/deliveries_handler.go. The acceptance check calls GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with an access token. Check: TestRemovalAlertIsDelivered passes
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Wire routes with actions, docs page, e2e step against the real server, usability check, and make check with zero findings. Check: The e2e step calls the existing routes GET and POST /api/dustpan/v1/namespaces/{namespace}/subscriptions and GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with a personal access token and gets 200; `make check` reports zero findings.
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Check the routes of internal/api/notifications with their actions: POST /api/dustpan/v1/namespaces/{namespace}/deliveries/{id}/redeliver with an access token. Add the docs page NEW docs/guides/chat-notifications.md and an e2e step in the NEW file e2e/chat_delivery_test.go. Check: make e2e passes and make check reports zero findings

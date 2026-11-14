@@ -4,16 +4,16 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write route tests for the six moved routes with an access token of the caller. Check: `go test ./internal/api/server -run TestCallerRoutesMoved` fails on main
-- [ ] 1.2 Write the paging test for cursor and limit refusal on GET /api/dustpan/v1/me/tokens. Check: `go test ./internal/api/server -run TestCallerPagingNames` fails on main
-- [ ] 1.3 Write the idempotency test for POST /api/dustpan/v1/me/tokens with an access token of the caller. Check: `go test ./internal/api/server -run TestCallerIdempotency` fails on main
-- [ ] 1.4 Write the hostile test for a foreign token id and an oversized pageSize. Check: `go test ./internal/api/server -run TestCallerHostile` fails on main
+- [ ] 1.1 Write route tests for the six moved routes with an access token of the caller in internal/api/server/caller_routes_test.go (NEW). Check: `go test ./internal/api/server -run TestCallerRoutesMoved` fails on main
+- [ ] 1.2 Write the paging test for cursor and limit refusal on GET /api/dustpan/v1/me/tokens in internal/api/server/caller_routes_test.go (NEW). Check: `go test ./internal/api/server -run TestCallerPagingNames` fails on main
+- [ ] 1.3 Write the idempotency test for POST /api/dustpan/v1/me/tokens with an access token of the caller in internal/api/server/caller_routes_test.go (NEW). Check: `go test ./internal/api/server -run TestCallerIdempotency` fails on main
+- [ ] 1.4 Write the hostile test for a foreign token id and an oversized pageSize in internal/api/server/caller_routes_test.go (NEW). Check: `go test ./internal/api/server -run TestCallerHostile` fails on main
 
 ## 2. Move
 
 - [ ] 2.1 Move the handlers (internal/api/server/tokens.go) to the me prefix and remove six entries from the not-moved list. Check: `go test ./pkg/dustpan -run TestClassCheckFailsClosed`
 - [ ] 2.2 Move the coverage rows of /api/server/caller/tokens and /api/server/caller/tokens/{id}, and of the access and grants routes, in e2e/coverage.go to the /api/dustpan/v1/me paths, called with an access token of the caller. Update the docs. Check: `rg -n -F 'caller/' docs e2e internal pkg` returns no hit for the old caller paths
-- [ ] 2.3 Declare the 404, 401, 400 and conflict codes with arguments in the catalog. Check: `go test ./internal/errcode -run TestCallerCodes`
+- [ ] 2.3 Declare the 404, 401, 400 and conflict codes with arguments in internal/api/server/tokens.go, with Declare (internal/api/apidesc/body.go:156). Check: `go test ./internal/errcode -run TestCallerCodes`
 
 ## 3. Side effects (computed from main)
 

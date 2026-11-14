@@ -4,17 +4,17 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the conformance suite and the memory adapter stub. Check: TestSweepStoreConformance fails on main.
-- [ ] 1.2 Write the fence cases. Check: TestSweepStoreFence fails on main.
-- [ ] 1.3 Write the pool cases, including a pool that changes after the save. Check: TestSweepStorePool fails on main.
-- [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts. Check: TestSweepStoreBusy, TestSweepStoreTransitions and TestSweepStoreDeleteTarget fail on main.
-- [ ] 1.5 Write the bounds, concurrency and rollback cases. Check: TestSweepStoreBounds, TestSweepStoreConcurrentFence and TestSweepStoreRollback fail on main.
+- [ ] 1.1 Write the conformance suite in NEW file pkg/unmanaged/unmanagedtest/conformance.go and the memory adapter stub in NEW file pkg/unmanaged/unmanagedtest/mem.go. Check: TestSweepStoreConformance fails on main.
+- [ ] 1.2 Write the fence cases in NEW file pkg/unmanaged/unmanagedtest/fence_test.go. Check: TestSweepStoreFence fails on main.
+- [ ] 1.3 Write the pool cases, including a pool that changes after the save, in NEW file pkg/unmanaged/unmanagedtest/pool_test.go. Check: TestSweepStorePool fails on main.
+- [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts, in NEW file pkg/unmanaged/unmanagedtest/busy_test.go. Check: TestSweepStoreBusy, TestSweepStoreTransitions and TestSweepStoreDeleteTarget fail on main.
+- [ ] 1.5 Write the bounds, concurrency and rollback cases in NEW file pkg/unmanaged/unmanagedtest/bounds_test.go. Check: TestSweepStoreBounds, TestSweepStoreConcurrentFence and TestSweepStoreRollback fail on main.
 
 ## 2. Build
 
-- [ ] 2.1 Add the ports and the memory adapter. Check: TestSweepStoreConformance/memory passes.
-- [ ] 2.2 Edit the baselines and queries, add the adapters. Check: TestSweepStoreConformance/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
-- [ ] 2.3 Add the tables to the table list. Check: The backup round trip test covers the sweep tables.
+- [ ] 2.1 Add the ports in NEW file pkg/unmanaged/ports.go and the memory adapter in NEW file pkg/unmanaged/unmanagedtest/mem.go. Check: TestSweepStoreConformance/memory passes.
+- [ ] 2.2 Add the SQLite and PostgreSQL adapters in NEW files pkg/store/internal/unmanagedstore/unmanagedstore.go and pkg/store/internal/unmanagedstore/unmanagedstore_test.go. Edit the baseline migrations and sqlc queries in the same package. Check: TestSweepStoreConformance/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
+- [ ] 2.3 Add the tables to the table list in NEW file pkg/store/internal/unmanagedstore/tables.go. Check: The backup round trip test covers the sweep tables.
 
 ## 3. Side effects (computed from main)
 

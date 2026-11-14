@@ -4,10 +4,10 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing conformance cases for per-unit and per-source caps on trigger.Store.Put. Check: trigger conformance cap test fails on main: 21st trigger and 51st follower refused with the cap number
-- [ ] 1.2 Add failing cases for PUT count rules and lowered caps. Check: trigger conformance PUT test fails on main: same source succeeds at cap, moved source recounts
-- [ ] 1.3 Add failing cases for cycle refusal with serialized writes. Check: trigger conformance cycle test fails on main: closing save names the loop, concurrent closing saves serialize
-- [ ] 1.4 Add failing tests for the depth counter and the refusal above 10. Check: BLOCKED by write-state-version-unit-state-follows-trigger-start, which adds the trigger start path; then dispatcher depth test with POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire and a namespace administrator access token: depth 11 refused with audit entry and log line, manual fire resets
+- [ ] 1.1 Add failing conformance cases for per-unit and per-source caps on trigger.Store.Put in `pkg/store/internal/triggerstore/triggerstore_test.go:198`. Check: trigger conformance cap test fails on main: 21st trigger and 51st follower refused with the cap number
+- [ ] 1.2 Add failing cases for PUT count rules and lowered caps in `pkg/store/internal/triggerstore/triggerstore_test.go:198`. Check: trigger conformance PUT test fails on main: same source succeeds at cap, moved source recounts
+- [ ] 1.3 Add failing cases for cycle refusal with serialized writes in `pkg/store/internal/triggerstore/triggerstore_test.go:198`. Check: trigger conformance cycle test fails on main: closing save names the loop, concurrent closing saves serialize
+- [ ] 1.4 Add failing tests for the depth counter and the refusal above 10 in NEW file `internal/servertest/trigger_depth_test.go`. Check: BLOCKED by write-state-version-unit-state-follows-trigger-start, which adds the trigger start path; then dispatcher depth test with POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire and a namespace administrator access token: depth 11 refused with audit entry and log line, manual fire resets
 
 ## 2. Side effects (computed from main)
 

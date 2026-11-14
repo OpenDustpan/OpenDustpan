@@ -4,16 +4,16 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add conformance cases for ClaimDue: double claim, invalid slot and collapse of missed slots. Check: TestClaimDueDoubleStart fails on main
+- [ ] 1.1 Add conformance cases for ClaimDue: double claim, invalid slot and collapse of missed slots in pkg/trigger/triggertest/dispatcher.go. ClaimDue is NEW. It is an in-process test: BLOCKED by no route, because the harness calls the store port directly with no credential. Check: TestClaimDueDoubleStart fails on main
 - [ ] 1.2 Add a case to the Dispatcher.Scheduled suite in pkg/trigger/triggertest that returns ErrInvalid for a foreign slot. It is an in-process test: BLOCKED by no route, because the suite calls the dispatcher directly with no credential. Check: TestDispatcherScheduledInvalidSlot fails on main
-- [ ] 1.3 Add cron tests for parser, Next, presets and spread in the new cron package. Check: TestSchedulePresetSpread fails on main
+- [ ] 1.3 Add cron tests for parser, Next, presets and spread in the new cron package, in the NEW file pkg/cron/cron_test.go. Check: TestSchedulePresetSpread fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Implement ClaimDue in each store adapter as one conditional update with a 2 minute lease. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes
-- [ ] 2.2 Extend Dispatcher.Scheduled with the Next check, the run-as grant check, source kind schedule, lease and pause. BLOCKED by housekeeping-principals for the stored grant of the run-as principal. Check: `go test ./pkg/trigger/...` passes for two instances and one slot
-- [ ] 2.3 Wire the durable schedule trigger.schedule to Dispatcher.Scheduled each minute. BLOCKED by run-triggers for the trigger record that the tick reads. Check: `go test ./pkg/durable/...` passes for one tick each minute and one catch-up run
-- [ ] 2.4 Add the docs page for schedule triggers. Check: `make docs-lint` passes
+- [ ] 2.1 Implement ClaimDue (NEW) in the trigger.Store port at pkg/trigger/ports.go:23 and in each store adapter under pkg/store as one conditional update with a 2 minute lease. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes
+- [ ] 2.2 Extend Dispatcher.Scheduled at pkg/trigger/dispatcher.go:88 with the Next check (cron.Next is NEW), the run-as grant check, source kind schedule, lease and pause. BLOCKED by housekeeping-principals for the stored grant of the run-as principal. Check: `go test ./pkg/trigger/...` passes for two instances and one slot
+- [ ] 2.3 Wire the durable schedule trigger.schedule (NEW) to Dispatcher.Scheduled each minute in the NEW file pkg/trigger/schedule.go. BLOCKED by run-triggers for the trigger record that the tick reads. Check: `go test ./pkg/durable/...` passes for one tick each minute and one catch-up run
+- [ ] 2.4 Add the docs page for schedule triggers in the NEW file docs/triggers/schedule.md. Check: `make docs-lint` passes
 
 ## 3. Side effects (computed from main)
 
