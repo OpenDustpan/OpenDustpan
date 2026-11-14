@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #915.
@@ -66,6 +66,14 @@ Each fact names its file, line and function on main. The change specifies only t
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+**ADR 307: OpenTofu only, uploaded plans, TFE run fields and run triggers** (owner-tagged: all decisions).
+
+- Decisions that apply: 2 (current).
+- Changed by: none. Current rule: this ADR.
+- Quote: "**Own-CI teams may upload plans (owner, 2026-10-18).** The owner said: "Own-CI teams: accept uploaded plans". The owner said also: "the apply must present the same plan hash". The owner said also: "weaker than a runner plan, and marked so in the change order"."
+- Effect: the change accepts an uploaded plan, the apply presents the same plan hash, and the change order marks the plan as weaker than a runner plan.
+- Conflict: none.
 
 **ADR 102: Job plans and logs: parts, chunks, uploads and reads** (not owner-tagged).
 

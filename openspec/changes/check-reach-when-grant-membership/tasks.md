@@ -14,7 +14,7 @@
 ## 2. Implementation
 
 - [ ] 2.1 Add the cover proof, the checks, the flag record and its end rule in pkg/access/service.go, pkg/principal/service.go (AddMember, line 496) and pkg/accesstoken. Check: go test ./pkg/access/... ./pkg/principal/... ./pkg/accesstoken/... passes
-- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the adapter in internal/api/apidesc/openapi.json. Check: go test ./internal/api/server/... passes
+- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the adapter in internal/api/apidesc/openapi.json. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: go test ./internal/api/server/... passes
 
 ## 3. Side effects (computed from main)
 

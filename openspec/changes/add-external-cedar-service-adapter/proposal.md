@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #1002.
@@ -121,18 +121,13 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
    - Reason: It tests the code that installations call. Benchmark: Google: CI runs tests against the pinned artifact that ships.
    - Persona impact: No operator impact. Escape hatch: CI runs the linked suite alone until the image is pinned.
    - Owner-tagged ADRs involved: ADR 224 (their words do not change).
-4. What is the save fallback when the service does not answer the check operation?
-   - Options: Store the gate after the local check and record the miss; Refuse the save with ErrUnavailable.
-   - Provisional decision (owner review 14 Nov): Store the gate after the local check and record the miss.
-   - Reason: The local check already satisfies the save rule, and a service outage does not block gate edits. Benchmark: AWS: policy validation is advisory to the stored policy.
-   - Persona impact: The operator can still edit gates during an outage. Escape hatch: Gates stay in evaluate mode until the check passes.
-   - Owner-tagged ADRs involved: ADR 224 (their words do not change).
+4. What is the save fallback when the service does not answer the check operation? ADR 224 decision 8 (owner) answers it: "When the service does not answer, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, and the audit entry says so. Every other save fails with `gate.ErrUnavailable`." The change follows that text. This is security semantics, so no provisional answer applies.
+   - Decides: owner (only if the owner wants to change ADR 224 decision 8).
 5. Do access limits stay on the linked adapter during a service outage?
    - Options: Access limits stay on the linked adapter; All checks fail closed.
-   - Provisional decision (owner review 14 Nov): Access limits stay on the linked adapter.
-   - Reason: The issue says an outage does not refuse calls that only an access limit checks. Benchmark: AWS: authorization stays local when an optional service is down.
-   - Persona impact: Access decisions keep working during an outage. Escape hatch: Clear the service address to return to linked evaluation.
-   - Owner-tagged ADRs involved: ADR 222, ADR 224 (their words do not change).
+   - This is security semantics, so rule 88 allows no provisional answer.
+   - Decides: owner.
+   - Owner-tagged ADRs involved: ADR 222, ADR 224.
 
 Questions considered and answered:
 

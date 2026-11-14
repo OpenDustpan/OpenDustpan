@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1293.
@@ -61,11 +61,11 @@ No ADR is touched.
 
 ## Open questions
 
-1. Does the owner confirm the 2026-10-20 approval of go-crypto v1.5.2, circl v1.6.3 and x/crypto v0.56.0? Decides: owner.
+1. Does the owner confirm the 2026-10-20 approval of go-crypto v1.5.2, circl v1.6.3 and x/crypto v0.56.0 (the versions of issue 1293), for the versions in go.mod on main today: go-crypto v1.5.2, circl v1.6.5 and x/crypto v0.58.1-0.20261020153306-9f2b28d4331a? Decides: owner.
    - Options: Owner confirms the approval as stated in issue 1293; Owner gives a new approval with other versions or date.
    - Recommended: Owner confirms the approval as stated in issue 1293 Reason: The approval rests on the issue text alone. The ADR must cite a decision that the owner states.
 2. Who accepts the GO-2026-5932 residual risk, when is it reviewed, and who is told of a future finding? Decides: owner.
-   - Options: Owner accepts the risk with a review date and a re-check on each dependency change; Owner refuses x/crypto v0.56.0 until the finding clears.
+   - Options: Owner accepts the risk with a review date and a re-check on each dependency change; Owner refuses x/crypto (v0.56.0 in issue 1293, v0.58.1-0.20261020153306-9f2b28d4331a on main) until the finding clears.
    - Recommended: Owner accepts the risk with a review date and a re-check on each dependency change Reason: The frozen package has no fix, so the ADR needs a risk owner, a review date and a re-check trigger.
 3. Is the new ADR owner-tagged? Decides: owner.
    - Options: Owner-tagged, so a later version change needs the owner; Not owner-tagged.

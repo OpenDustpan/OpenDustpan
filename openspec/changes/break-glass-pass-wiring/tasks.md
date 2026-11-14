@@ -13,4 +13,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 BLOCKED by the owner decision on the route field and the proof kind: wire the route with its authorization actions, add the e2e step, the docs page and the usability check. Check: make e2e and make check with zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 BLOCKED by the owner gate until the lead confirms task 3.2. Wire the header X-Dustpan-Break-Glass-Pass on the routes that a gate in error refuses (the state write routes of break-glass-gates-in-error), with their authorization actions; add the e2e step, the docs page and the usability check. Check: make e2e and make check with zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.2 Confirm that the real OpenTofu CLI, the real Pulumi CLI or the local wrapper can send the header X-Dustpan-Break-Glass-Pass on those routes, and record how in the pull request body. If none can send it, the question goes back to the owner. Check: the pull request body names the client that sends the header. A person's step.

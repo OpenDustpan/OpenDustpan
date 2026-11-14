@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #623, #627, #633.

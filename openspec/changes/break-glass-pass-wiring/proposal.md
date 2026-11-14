@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 ## Why
@@ -72,17 +72,10 @@ No ADR is touched.
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. Which store place, route field and proof kind does the break-glass pass use?
-   - Options: A: a new table in the baseline of each dialect, a new request header for the pass, and the existing fresh-authentication proof; B: keep the pass in an existing table, send it in the request body; C: sign the pass without a store.
-   - Provisional decision (owner review 14 Nov): A: a new table in the baseline of each dialect, a new request header for the pass, and the existing fresh-authentication proof
-   - Reason: A table gives exact single use in one transaction with the audit entry. A header works with the real CLIs, which cannot change their bodies. Benchmark: AWS: the STS temporary credential of break-glass access is time limited and logged in CloudTrail.
-   - Persona impact: The administrator needs one fresh proof and one request. The developer sends one header. Escape hatch: An expired or used pass is refused. The administrator issues a new pass.
-
 Questions considered and answered:
 
-- Does an ADR decide the store, the route field or the proof kind? No ADR in the pack does. The roadmap step says so. These are open questions for the owner.
+- Which store place, route field and proof kind does the break-glass pass use? Owner ADR 373 decision 3 decides it: "A pass is a row of a new table, written with its audit entry in one transaction. A request header carries the ID of the pass on the routes that take one. A person gets a pass only after a fresh authentication of ADR 227 decision 1. A pass is for one use, and it ends after 15 minutes." The header is X-Dustpan-Break-Glass-Pass (PM decision, rule 16, a name only).
+
 - Where do single use and expiry get checked? In the store transaction, so that a race cannot use a pass twice. This holds for any store the owner chooses.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
