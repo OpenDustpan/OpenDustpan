@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -16,11 +16,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step BLOCKED by the missing change order fan-out path: over 3 workspaces it checks 3 plan jobs and 3 apply jobs, each on its own unit, each with 1 new state version and 1 history entry. Check: e2e step BLOCKED by the missing change order fan-out path over 3 workspaces with an access token
+- [ ] 4.1 Add the e2e step BLOCKED by the missing change order fan-out path: over 3 workspaces it checks 3 plan jobs and 3 apply jobs, each on its own unit, each with 1 new state version and 1 history entry. Check: e2e step BLOCKED by the missing change order fan-out path over 3 workspaces with an access token. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Add the guide for the fan-out record and the gated apply. Check: add the new file `docs/guides/terragrunt-run-all.md`
-- [ ] 4.3 Run the usability check with the Runner operator from the docs page alone and record where the path costs time. Check: usability walkthrough with the Runner operator from the docs page alone
-- [ ] 4.4 Run `make check` with zero findings. Check: `make check` with zero findings
+- [ ] 4.3 Run the usability check with the Runner operator from the docs page alone and record where the path costs time. Check: usability walkthrough with the Runner operator from the docs page alone. A person's step.
+- [ ] 4.4 Run `make check` with zero findings. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

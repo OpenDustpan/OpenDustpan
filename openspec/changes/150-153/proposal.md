@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 ## Why
@@ -46,7 +46,6 @@ Out of scope:
 Depends on:
 
 - 100-103
-- `100-103` (order of the milestone review)
 
 ## Usability
 

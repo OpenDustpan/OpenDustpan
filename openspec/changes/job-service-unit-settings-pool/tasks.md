@@ -16,10 +16,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper
-- [ ] 4.2 Write the docs page and the usability check from the page alone. Check: make docs-lint
-- [ ] 4.3 Run the full check. Check: make check with zero findings
+- [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page and the usability check from the page alone. Check: make docs-lint. A person's step.
+- [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

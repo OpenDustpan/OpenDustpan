@@ -43,13 +43,13 @@ Out of scope:
 
 Depends on:
 
-- ADR 367 on main (pull request #3048)
 - dusty-proposes-change-order
 - every-step-audited
 - person-confirms
-- `dusty-proposes-change-order` (order of the milestone review)
-- `person-confirms` (order of the milestone review)
-- `every-step-audited` (order of the milestone review)
+
+Builds on (not a change):
+
+- ADR 367 on main (pull request #3048)
 
 ## Usability
 

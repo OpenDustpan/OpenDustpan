@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 ## Why
@@ -29,8 +29,9 @@ Evidence for the claims above:
 
 ## What Changes
 
-- pkg/audit Entry gets the six fields agentRun, agentSession, tool, argsDigest, breakGlass and secretStage, and the channels agent, mcp and mcp-proxy.
-- ComputeHash writes the agent/1 block only when a field is set, in the fixed order of ADR 126 decision 10.
+- pkg/audit Entry gets one NEW field `Origin`, a pointer to the NEW value type `audit.Origin` that holds the six fields agentRun, agentSession, tool, argsDigest, breakGlass and secretStage; nil for an ordinary entry. The channels agent, mcp and mcp-proxy.
+- The portable backup column list of audit_entries gets the six columns.
+- ComputeHash writes the agent/1 block only when Entry.Origin is not nil, in the fixed order of ADR 126 decision 10.
 - The baseline of each SQL dialect gets the six columns, edited in place in name order.
 - The API entry gets an agent block and toAuditEntry fills it.
 - pkg/job replaces Actor.Agent string with job.AgentRef, and the job entries write the block instead of a change key. For a job entry, tool, argsDigest and secretStage are empty.

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -37,6 +37,10 @@ Out of scope:
 - Console views and generated clients.
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - inventory projection at scale (ADR 13)
 

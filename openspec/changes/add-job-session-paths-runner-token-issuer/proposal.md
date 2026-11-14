@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 7
 ---
 
 Issue: #970.
@@ -43,6 +43,10 @@ Out of scope:
 - Sweep pools (no sweep code in this part)
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - #881
 - #968

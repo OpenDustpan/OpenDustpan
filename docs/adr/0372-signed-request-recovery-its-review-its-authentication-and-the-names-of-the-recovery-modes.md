@@ -1,16 +1,18 @@
 # 372. Signed-request recovery: its review, its authentication and the names of the recovery modes
 
-Status: accepted · 2026-11-14. Decided by the project owner, who accepted RFC 130 as written. The owner asked for the new names of decision 1, and the product manager chose them. Decision 6 is a decision of the product manager
+Status: accepted · 2026-11-14. Decided by the project owner, who accepted RFC 130 as written. The owner asked for the new names of decision 1, and the product manager chose them. The owner accepted decision 6 on 14 November 2026
 
 Changes:
 
-- Extends ADR 57 decisions 1 and 5: the names of modes 1 and 2. The review use records the recovery mode and the source.
 - Changes ADR 46 decision 6: on the route of signed-request recovery only, the signed request stands in place of the factor.
+- Extends ADR 57 decisions 1 and 5: the names of modes 1 and 2. The review use records the recovery mode and the source. A wording refinement puts the names in place.
+- Changes ADR 70: a wording refinement, the names of the recovery modes in "Not decided here".
 - Changes ADR 142 decisions 1, 2 and 3: a third kind of use, `temp-admin`. The review of a signed-request recovery opens whatever the opt-in.
-- Changes ADR 245 decision 3: the review store is a condition of signed-request recovery. The two recovery steps need no fresh authentication.
+- Changes ADR 245 decision 3: the review store is a condition of signed-request recovery. The two recovery steps need no fresh authentication. A wording refinement of decisions 2 and 6 puts the names of the recovery modes in place.
 - Changes ADR 285 decision 17: a temporary administrator of a recovery resets the factors of a person with no fresh authentication.
-- Extends ADR 295 decisions 8 and 9: the route also needs the store of break-glass reviews, and its review opens whatever the opt-in.
+- Extends ADR 295 decisions 8 and 9: the route also needs the store of break-glass reviews, and its review opens whatever the opt-in. A wording refinement of the title, the context and decision 1 puts the name signed-request recovery in place.
 - Changes ADR 301 decision 14: a temporary administrator of a recovery issues an enrollment code with no fresh authentication.
+- Changes ADR 320: a wording refinement, the name of signed-request recovery in "Not decided here".
 
 ## Context
 
@@ -103,8 +105,8 @@ finish the recovery that it exists for. Decision 6 answers this point.
      the temporary administrator.
    - Each refusal writes an audit entry with the real reason (ADR 295
      decision 5).
-6. **The two recovery steps need no fresh authentication (product
-   manager).** A temporary administrator of a recovery, from the host
+6. **The two recovery steps need no fresh authentication (owner,
+   2026-11-14).** A temporary administrator of a recovery, from the host
    command or from the route of signed-request recovery, can do exactly two
    steps with no fresh authentication:
    - Reset the factors of a person (ADR 46 decision 9, with the checks of
@@ -147,8 +149,18 @@ finish the recovery that it exists for. Decision 6 answers this point.
   - the rate limit counter in the database.
 - `pkg/breakglass` keeps the three kinds of use. The use gets a field for the
   recovery mode and the source.
-- A later wording refinement (ADR 365) changes the words "mode 1" and "mode
-  2" in the ADRs, the glossary and the guides to the names of decision 1.
+- A wording refinement (ADR 365) puts the names of decision 1 in place of
+  the words "mode 1" and "mode 2" in ADR 57, ADR 70, ADR 245, ADR 295 and ADR
+  320. Each of these ADRs has a changelog entry.
 - The user documentation of recovery states the risk statement of ADR 295
   decision 2, the always-on notice of decision 3 and the two steps of
   decision 6.
+
+## Changelog
+
+- 2026-11-14, attribution: the status line and decision 6 said that decision
+  6 is a decision of the product manager. The owner accepted decision 6 on 14
+  November 2026 (option A: a temporary administrator of a recovery resets the
+  factors of a person and issues an enrollment code with no fresh
+  authentication). Decision 6 now carries "(owner, 2026-11-14)". The words of
+  the decision do not change.

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -11,14 +11,14 @@
 
 - [ ] 2.1 Map identity.KindAgent to gate.PrincipalAgent in principalSubjects.Subject with fail-closed unknown handling through the NEW function newSubjectKind. Check: rg shows identity.KindAgent defined by person-delegates-dusty and its use in pkg/dustpan/stateguard.go through the NEW function newSubjectKind with a fail-closed unknown branch.
 - [ ] 2.2 Apply the same kind mapping at the access-limit schema and the change.propose decision point in pkg/dustpan/stateguard.go through the NEW function newSubjectKind. Check: Same hostile unknown-kind test passes at the adapter, service and handler layers with the NEW error code gate.unknown-principal-kind, covering the access-limit schema and the change.propose decision point.
-- [ ] 2.3 Update docs/guides/state-write-gates.md to state that state.write sets agent for agent principals. Check: docs/guides/state-write-gates.md no longer says the server does not set agent, and its example runs as written.
+- [ ] 2.3 Update docs/guides/state-write-gates.md to state that state.write sets agent for agent principals. Check: docs/guides/state-write-gates.md no longer says the server does not set agent, and its example runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/state_write_gates_context_principal_docs_test.go runs each command of the docs page against the e2e test server).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run an e2e step with a forbid gate on context.principal.kind == agent through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token. Check: E2E gate scenario through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token denies an agent-gated write for an agent caller with gate.denied.
-- [ ] 4.2 Complete the usability check for the namespace administrator path. Check: Usability check: a namespace administrator writes the agent gate from the docs page alone and predicts the outcome for each kind.
-- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings.
+- [ ] 4.1 Run an e2e step with a forbid gate on context.principal.kind == agent through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token. Check: E2E gate scenario through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token denies an agent-gated write for an agent caller with gate.denied. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Complete the usability check for the namespace administrator path. Check: Usability check: a namespace administrator writes the agent gate from the docs page alone and predicts the outcome for each kind. A person's step.
+- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #929.
@@ -44,6 +44,10 @@ Out of scope:
 - Job-token read paths of the dependency item
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - #897
 

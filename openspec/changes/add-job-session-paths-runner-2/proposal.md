@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #982, #1026.
@@ -33,7 +33,8 @@ Evidence for the claims above:
 
 ## What Changes
 
-- New routes under /runner/v1/session for a job claim: POST /runner/v1/session, POST /runner/v1/session/renew, GET /runner/v1/session/source and the LFS object path, credentials, step begin and end, POST /runner/v1/session/logs, plan part upload and plan commit.
+- Main already has these routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go:164-199, PathSession* in pkg/runner/protocol/protocol.go:57-99). Main also has their tests in internal/api/runnerapi/session_test.go and session_guard_test.go, and the docs rows at docs/reference/runner-api.md:160-163.
+- This change adds the routes that main declares but does not route: PathSessionSource (protocol.go:65), PathSessionSourceObject (:68), PathSessionPlanPart (:71), PathSessionCredentials (:74), PathSessionPlanUpload (:89) and PathSessionPlanCommit (:92). It adds their caps, their tests and their docs rows.
 - A runner key on a session path and a session key on a runner path both answer 401 bad-proof.
 - The session paths serve job claims only. A namespace pool with the sweep purpose is refused.
 - Upload caps, a log sequence rule, the Dustpan-Content-SHA256 check, and one plan commit with a stored result.

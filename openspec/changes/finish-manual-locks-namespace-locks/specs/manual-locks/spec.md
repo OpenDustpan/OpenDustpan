@@ -55,11 +55,3 @@ When a caller bulk-locks or bulk-unlocks from 1 to 100 IDs, the server SHALL che
 #### Scenario: Too many IDs
 - **WHEN** a call holds 101 IDs
 - **THEN** the server answers 400 and changes nothing
-
-### Requirement: import-hold-preview
-
-While the manual lock of an import covers a unit, the server SHALL accept a preview start on that unit.
-
-#### Scenario: Preview under import hold
-- **WHEN** a preview starts on a unit under an import hold
-- **THEN** the server accepts the preview start

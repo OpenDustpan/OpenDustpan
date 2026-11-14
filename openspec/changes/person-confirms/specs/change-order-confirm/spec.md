@@ -30,7 +30,7 @@ When a change order was proposed by an agent for its delegator, the server SHALL
 
 #### Scenario: Two-person rule blocks delegator as second approver
 - **WHEN** the namespace sets authorMayApprove false and the delegator confirms then approves
-- **THEN** the second approval is refused with approval.not-eligible until a different eligible person approves.
+- **THEN** the second approval is refused with access.denied until a different eligible person approves.
 
 #### Scenario: Revoked delegation still leaves delegator as author
 - **WHEN** the delegation expired or was revoked after the proposal stored the delegator subject

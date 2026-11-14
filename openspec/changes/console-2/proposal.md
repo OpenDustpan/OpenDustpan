@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:323` (Console).
@@ -49,8 +49,6 @@ Depends on:
 - add-job-service-routes-start-1
 - policy-approvals
 - runners
-- `policy-approvals` (order of the milestone review)
-- `runners` (order of the milestone review)
 
 ## Usability
 

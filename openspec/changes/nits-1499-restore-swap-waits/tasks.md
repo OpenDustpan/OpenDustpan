@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -15,4 +15,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Implement the four changes and add the swap wait to the high-availability docs page. The change adds no route. The existing restore routes keep their access token authorization. Check: `make check` with zero findings
+- [ ] 3.1 Implement the four changes and add the swap wait to the high-availability docs page. The change adds no route. The existing restore routes keep their access token authorization. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

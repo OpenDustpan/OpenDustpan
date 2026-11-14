@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 5
 ---
 
 Issue: #945.
@@ -42,6 +42,10 @@ Out of scope:
 - ACME and Helm chart multi-replica work
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - Helm chart multi-replica work (W7): this change shares one image repository values key with it
 

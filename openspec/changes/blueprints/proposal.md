@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:360` (Blueprints).
@@ -53,7 +53,6 @@ Out of scope:
 Depends on:
 
 - add-sql-adapter-quota-counter
-- `add-sql-adapter-quota-counter` (order of the milestone review)
 
 ## Usability
 

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -10,14 +10,14 @@
 
 ## 2. Build
 
-- [ ] 2.1 Implement module publish checks and module serve routes with namespace grants and audit in NEW file pkg/registry/module_serve.go. Check: `make check` passes with zero findings.
-- [ ] 2.2 Wire module serve routes and add e2e step with tofu init against private module. Declare the routes in NEW file pkg/registry/module_routes.go and add the adapter in NEW file pkg/registry/module_serve.go. Add the e2e step in NEW file e2e/private_module_test.go. Check: e2e step: `tofu init` with an access token calls GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions on the real binary and fetches the private module of its own namespace.
-- [ ] 2.3 Write docs page for private modules in NEW file docs/private-modules.md. Check: Docs page commands run as written and show publish then tofu init use.
+- [ ] 2.1 Implement module publish checks and module serve routes with namespace grants and audit in NEW file pkg/registry/module_serve.go. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 2.2 Wire module serve routes and add e2e step with tofu init against private module. Declare the routes in NEW file pkg/registry/module_routes.go and add the adapter in NEW file pkg/registry/module_serve.go. Add the e2e step in NEW file e2e/private_module_test.go. Check: e2e step: `tofu init` with an access token calls GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions on the real binary and fetches the private module of its own namespace. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.3 Write docs page for private modules in NEW file docs/private-modules.md. Check: Docs page commands run as written and show publish then tofu init use. Confirmed by: CI (an e2e step in the NEW file e2e/artifact_registry_private_module_docs_test.go runs each command of the docs page against the e2e test server).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Confirm wiring, route actions, e2e, docs, audit entries, and usability. Check: Route GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions with an access token passes e2e on SQLite and PostgreSQL; routes declare authorization actions; usability check passes; `make check` passes with zero findings.
+- [ ] 4.1 Confirm wiring, route actions, e2e, docs, audit entries, and usability. Check: Route GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions with an access token passes e2e on SQLite and PostgreSQL; routes declare authorization actions; usability check passes; `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

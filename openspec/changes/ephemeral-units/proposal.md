@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:367` (Ephemeral units).
@@ -52,7 +52,6 @@ Out of scope:
 Depends on:
 
 - blueprints
-- `blueprints` (order of the milestone review)
 
 ## Usability
 

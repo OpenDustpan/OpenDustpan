@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:280` (Policy and approvals).
@@ -66,12 +66,6 @@ Depends on:
 - planner-role-2
 - runners
 - several-approval-requirements-one-change
-- `runners` (order of the milestone review)
-- `planner-role-2` (order of the milestone review)
-- `approval-defaults-take-effect-live` (order of the milestone review)
-- `several-approval-requirements-one-change` (order of the milestone review)
-- `add-access-limits-per-scope` (order of the milestone review)
-- `evaluate-gates-on-pulumi-jobs` (order of the milestone review)
 
 ## Usability
 

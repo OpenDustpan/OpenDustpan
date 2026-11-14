@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -34,6 +34,10 @@ Out of scope:
 - Terraform CLI support
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - REST API stable (#1281)
 - Go client, then Python and TypeScript clients (#966)

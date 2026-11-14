@@ -13,18 +13,18 @@
 ## 2. Implementation
 
 - [ ] 2.1 Verify only: the gate store transaction in pkg/store/internal/gatestore/settings.go:129 and the gate tables in the baseline of each dialect under pkg/store/<dialect>/migrations/. Edit nothing unless the unit key test fails. Check: `go test ./pkg/store/...` on SQLite and PostgreSQL
-- [ ] 2.2 Add the routes: declare them in internal/api/server/gate_config.go:24 (GateConfig port) and serve them from the adapter in pkg/dustpan/gateconfig.go:45 (func gatesPort), with their authorization actions at the four scopes. Check: the route and policy tests pass, including TestActionsWithoutRoutesAreUnclassified
+- [ ] 2.2 Add the routes: declare them in internal/api/server/gate_config.go:24 (GateConfig port) and serve them from the adapter in pkg/dustpan/gateconfig.go:45 (func gatesPort), with their authorization actions at the four scopes. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. The fake coverageGateConfig in e2e/coverage_gate.go:16 implements the GateConfig port too: add CarryOver and PutCarryOver to it, or the build of the end-to-end suite fails. Check: the route and policy tests pass, including TestActionsWithoutRoutesAreUnclassified
 - [ ] 2.3 Verify only: the backup table list in pkg/backup holds the gate rows. Edit nothing unless the round-trip test fails. Check: the backup round-trip test passes on both dialects
-- [ ] 2.4 Regenerate the API description and the clients with the generate target (Makefile:335). It rewrites internal/api/apidesc/openapi.json and the files under clients/typescript/. Check: `make generate` leaves no diff and `make clients-check` passes
+- [ ] 2.4 Regenerate the API description and the clients with the generate target (Makefile:335). It rewrites internal/api/apidesc/openapi.json and the files under clients/typescript/. Check: `make generate` leaves no diff and `make clients-check` passes. Confirmed by: the driver's gates.
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Write the NEW reference page docs/reference/gate-configuration.md. Check: `make docs-lint`
-- [ ] 4.2 Add the e2e step in NEW file e2e/gate_config_test.go. It calls GET /api/dustpan/v1/namespaces/{namespace}/gates and GET /api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}/gates/{id} with the real CLI client and a personal access token of a namespace administrator. It reads an ID of another scope for 404, and reuses a deleted unit name for clean rows. Check: `make e2e`
-- [ ] 4.3 Run the usability check from the docs page alone and confirm each error names its command. Check: the docs page walk-through passes
-- [ ] 4.4 Run the full check. Check: `make check` reports zero findings
+- [ ] 4.2 Add the e2e step in NEW file e2e/gate_config_test.go. It calls GET /api/dustpan/v1/namespaces/{namespace}/gates and GET /api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}/gates/{id} with the real CLI client and a personal access token of a namespace administrator. It reads an ID of another scope for 404, and reuses a deleted unit name for clean rows. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Run the usability check from the docs page alone and confirm each error names its command. Check: the docs page walk-through passes. A person's step.
+- [ ] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

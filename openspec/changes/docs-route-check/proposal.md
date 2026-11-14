@@ -62,7 +62,7 @@ follows the guide and gets a 404.
 
 **IN**
 
-- Add `cmd/opendustpan/docs_routes_test.go`.
+- Add the NEW file `cmd/opendustpan/docs_routes_test.go`.
   - `extractDocRoutes` reads both doc directories. It takes a method and a path
     from a code span `METHOD /path`, from a table row with a path cell and a
     method cell in either order, and from a curl block with `$SERVER` and `-X`

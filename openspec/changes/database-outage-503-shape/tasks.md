@@ -1,10 +1,10 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing server test for ready 503 on GET /health/ready in `pkg/dustpan/health_test.go` (existing file; see TestHealthReadyOK at line 193). Check: TestReady503WithRetryAfterWhenStoreDown (NEW) fails on main; the test needs a store that fails its ping, and main has no such outage hook. BLOCKED by the missing store outage error and ping failure hook (NEW in `pkg/dustpan/outage.go`)
+- [ ] 1.1 Add failing server test for ready 503 on GET /health/ready in `pkg/dustpan/health_test.go` (existing file; see TestHealthReadyOK at line 193). The route is the ready probe of `pkg/dustpan/health.go`, mounted in `pkg/dustpan/dustpan.go` (see :1953); credential: none, public probe route. Check: TestReady503WithRetryAfterWhenStoreDown (NEW) fails on main; the test needs a store that fails its ping, and main has no such outage hook. BLOCKED by the missing store outage error and ping failure hook (NEW in `pkg/dustpan/outage.go`)
 - [ ] 1.2 Add failing adapter tests for Pulumi, TFE-compatible and tool-neutral write mapping in NEW file `internal/api/tfe/outage_test.go`. Check: TestWriteMapsOutageTo503InEachShape (NEW) fails on main; calls the existing route `POST /api/v2/state-versions`, passes the authorizer gate, with an access token
 
 ## 2. Build
@@ -18,4 +18,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, docs page, usability check Check: `make check` with zero findings; full long and short outage e2e is BLOCKED by database-outage-e2e-probe
+- [ ] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, docs page, usability check Check: `make check` with zero findings; full long and short outage e2e is BLOCKED by database-outage-e2e-probe. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

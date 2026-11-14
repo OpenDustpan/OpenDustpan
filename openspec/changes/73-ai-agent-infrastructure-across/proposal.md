@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -40,8 +40,10 @@ Out of scope:
 Depends on:
 
 - 41-interface-ai-agents
+
+Builds on (not a change):
+
 - read-only and access tokens (RFC 20)
-- `41-interface-ai-agents` (order of the milestone review)
 
 ## Usability
 

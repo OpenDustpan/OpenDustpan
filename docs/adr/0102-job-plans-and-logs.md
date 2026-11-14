@@ -14,6 +14,8 @@ Changed by:
 - ADR 299 changes decision 8: the plan comment on a review request holds
   counts and resource addresses by default.
 - ADR 353 extends decision 7: the two plan parts must agree.
+- ADR 378 extends decision 7: the binding of an uploaded plan, with the state
+  version that the server records at upload.
 .
 ## Context
 

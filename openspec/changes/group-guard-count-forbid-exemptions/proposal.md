@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #1160.
@@ -42,7 +42,6 @@ Out of scope:
 Depends on:
 
 - check-reach-when-grant-membership
-- `check-reach-when-grant-membership` (order of the milestone review)
 
 ## Usability
 

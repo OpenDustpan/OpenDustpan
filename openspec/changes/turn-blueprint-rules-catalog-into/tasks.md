@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -16,6 +16,6 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 BLOCKED by the self-service request route, which is not on main yet: the e2e refusal step with a personal token against the real binary waits for it Check: e2e step shows the named input and the decision record ID once the route exists
+- [ ] 3.1 BLOCKED by the self-service request route, which is not on main yet: the e2e refusal step with a personal token against the real binary waits for it Check: e2e step shows the named input and the decision record ID once the route exists. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 Check the wiring, the route actions and the audit entry Check: The route test lists its actions
-- [ ] 3.3 Run the full gate Check: `make check` reports zero findings
+- [ ] 3.3 Run the full gate Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

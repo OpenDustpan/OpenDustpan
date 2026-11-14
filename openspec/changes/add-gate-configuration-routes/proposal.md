@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #1003, #1034, #1035, #1159.
@@ -58,6 +58,10 @@ Out of scope:
 - The default collection and catch-all placement rule at namespace create (namespace create change)
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - #996
 - #1015

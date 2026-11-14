@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Issue: #1228, #1291.
@@ -20,9 +20,9 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Unpack exceeds size, count, ratio, or path limits. | The publish failed the archive check with code registry.bad-archive and the failed limit. Fix the archive and publish again, then run tofu init to confirm the install path. | `tofu init` |
-| Stated protocols differ from the manifest. | The publish failed with code registry.protocol-mismatch and the stated value and the manifest value. Rebuild the publish request from the manifest and publish again, then run tofu init to confirm the install path. | `tofu init` |
-| Republish of the same version with different H1. | The republish changed the archive with code registry.content-changed and the version. Publish a new version with the changed archive, then run tofu init to confirm the install path. | `tofu init` |
-| Install requests an unknown namespace slug. | The registry path uses the namespace slug with code registry.unknown-slug and the requested slug. List releases to copy the slug, then run tofu init to confirm the install path. | `tofu init` |
+| Stated protocols differ from the manifest. | The publish failed with code registry.invalid and the stated value and the manifest value. Rebuild the publish request from the manifest and publish again, then run tofu init to confirm the install path. | `tofu init` |
+| Republish of the same version with different H1. | The republish changed the archive with code registry.version-exists and the version. Publish a new version with the changed archive, then run tofu init to confirm the install path. | `tofu init` |
+| Install requests an unknown namespace slug. | The registry path uses the namespace slug with code registry.not-found and the requested slug. List releases to copy the slug, then run tofu init to confirm the install path. | `tofu init` |
 
 Evidence for the claims above:
 
