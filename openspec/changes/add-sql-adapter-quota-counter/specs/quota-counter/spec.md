@@ -56,9 +56,13 @@ When Record runs, the server SHALL count only submits inside the last window of 
 - **WHEN** Record runs while in-window submits already reach max
 - **THEN** the server returns quota.ErrExceeded and stores no submit
 
-#### Scenario: expired reservations leave with Reserve
+#### Scenario: expired reservations do not count and their rows stay
 - **WHEN** Reserve runs while expired reservations exist for the key
-- **THEN** usage excludes them and no expired row remains for the counted keys
+- **THEN** usage excludes them, and each expired row stays until a release or the reconcile
+
+#### Scenario: release of an expired reservation is idempotent
+- **WHEN** release runs for a reservation past its endsAt, and runs again
+- **THEN** both calls return no error, and usage does not change
 
 #### Scenario: old submits are pruned inline
 - **WHEN** Record runs while submits older than the window exist for the key
