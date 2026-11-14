@@ -24,6 +24,12 @@ at the expiry, and a review after use.
    - `recovery_attempts`: the source group (an IPv4 address, or the /64 group
      of an IPv6 address, or `*` for the installation), the start of the window
      and the count.
+
+   The four tables go in `ControlTables`, so a backup leaves them out and a
+   restore keeps the live rows. The reason, for the doc comment of
+   `ControlTables` in `pkg/backup/coverage.go`: a restore of an older backup
+   must not bring back a removed key, must not let the supplier of a backup
+   add a trusted key, and must not make a used nonce new again.
 2. **The first boot writes the settings once.** `serve` writes the row of
    `recovery_settings` and the first key in one transaction when the row does
    not exist. It reads the public key file under the rules of decision 13.
@@ -71,18 +77,22 @@ at the expiry, and a review after use.
 6. **One structure for the use.** An unexported type `signedRequest` in
    `internal/recovery` has only one constructor, `parseSignedRequest`. It runs
    the checks of the handler again (size, canonical form, members, times),
-   counts the attempt in the shared counter and refuses when a limit applies,
-   and then runs the signature check. The count comes first, so the rate limit
-   bounds the number of signature checks. The method that makes the temporary
+   counts the attempt in the per-source counter and refuses when the per-source
+   limit applies, then runs the signature check, and then counts the attempt in
+   the installation counter and refuses when the installation limit applies.
+   The per-source count comes first, so the per-source rate limit bounds the
+   number of signature checks. The service counts each attempt once; no later
+   step counts it again. The method that makes the temporary
    administrator takes a `signedRequest`, never raw bytes, so no caller can
    skip a check.
 7. **One transaction.** `internal/recovery` calls the host issuer with one
    store call. In one transaction it:
    - checks the stored mode is `signed-request` (a second layer; the handler
      checks the stored mode before any other work),
-   - counts the attempt in `recovery_attempts` and checks both limits (a
-     second layer; the service counts the attempt before the signature check,
-     and each of the two checks carries a comment that names the other layer),
+   - checks both limits in `recovery_attempts` (a second layer; the service
+     counts each attempt, and each of the two checks carries a defense-in-depth
+     comment that names the service count). The transaction writes no count; it
+     refuses a request when the stored count is over the limit,
    - refuses when a temporary administrator record of a recovery is live,
    - inserts the nonce (a unique key, ADR 295 decision 3),
    - makes the person, the grant, the record and the token, with their four
@@ -98,8 +108,9 @@ at the expiry, and a review after use.
    answer creates nothing. On PostgreSQL the transaction pins READ COMMITTED
    and takes the advisory lock of the server audit scope first, as ADR 245
    decision 8 does. A refusal in the transaction rolls back and then writes
-   the refusal audit entry and the attempt count in a second transaction, so
-   a refusal leaves a record and makes no temporary administrator.
+   the refusal audit entry in a second transaction, so a refusal leaves a
+   record and makes no temporary administrator. The refusal writes no second
+   count: the service counted each attempt once.
 
    The client address is the address that the trusted-proxy setting of the
    server gives: the resolver of `internal/clientip` reads a forwarding header
@@ -119,7 +130,12 @@ at the expiry, and a review after use.
    `person` that names a reserved subject or an existing principal refuses
    with the reason `person`, in the transaction, which rolls back and creates
    nothing. The server log line holds the same reason code and no request
-   text.
+   text. The refusal audit entries go through `internal/denylimit`, keyed by
+   the source group (the IPv6 /64 or the IPv4 address) and the reason. The
+   limiter writes the first refusal of each window, counts the later refusals
+   and records the count of suppressed entries. The route has no principal, so
+   the recorder of `internal/api/refusal`, which limits by principal, does not
+   bound it.
 9. **The answer.** On success the server encrypts `{"person", "token",
    "expires"}` with HPKE (RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256),
    HKDF-SHA256, AES-256-GCM, `crypto/hpke` of the standard library) to
@@ -204,6 +220,10 @@ handler import `internal/recovery`.
   The operator uses a restore (no break-glass).
 - A clock skew of more than 2 minutes refuses a fresh request.
   `recovery verify` prints the times of the request.
+- A flood of requests from many sources still costs one signature check for
+  each request under the per-source limit. The help for the operator is the
+  server log, which holds the refusal reason and the source of each refusal,
+  and `opendustpan recovery verify`, which checks a signed request offline.
 - `recovery sign` uses `golang.org/x/crypto/ssh` to read an encrypted OpenSSH
   key file. The module is already in `go.mod`. The package is new in the
   binary of the CLI.
@@ -213,13 +233,13 @@ handler import `internal/recovery`.
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call; a malformed client address gives a refusal with the reason `address`. |
-| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again, and it counts the attempt and refuses before the signature check. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. |
-| Store | The stored mode check (a second layer), the attempt counter (a second layer), the live-recovery check, the `person` check (a reserved subject or an existing principal refuses with the reason `person`) and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, run a recovery with the stored mode `bootstrap`, and run recoveries whose `person` names `admin`, `admin-2` and an existing principal (an expired temporary administrator), straight against the store. Expect one success at most, and a `person` refusal with the reason `person` and no new row. |
+| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again. It counts each attempt once: the per-source attempt, refused before the signature check, and the installation attempt, refused after it. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. Send many bad signatures from many sources: the installation counter does not move, and a valid request after them succeeds. |
+| Store | The stored mode check (a second layer), the attempt count check (a second layer), the live-recovery check, the `person` check (a reserved subject or an existing principal refuses with the reason `person`) and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, run a recovery with the stored mode `bootstrap`, and run recoveries whose `person` names `admin`, `admin-2` and an existing principal (an expired temporary administrator), straight against the store. Expect one success at most, and a `person` refusal with the reason `person` and no new row. |
 | Key file | Every file that the server or the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
 | First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. On a malformed or wrong-type file, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Expect no start, no stored mode and no stored key. |
 | Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
-| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address and the action `recovery:use-signed-request`. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. |
+| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address and the action `recovery:use-signed-request`. The refusal entries go through `internal/denylimit`, keyed by the source group and the reason, so one source writes a bounded number of entries and one count of suppressed entries. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. Send N refusals from one source: expect a bounded number of entries and one count of suppressed entries. |
 
 ## Quality attributes
 
@@ -251,7 +271,7 @@ flowchart LR
 | Network | S | A caller forges a request. | boundary check | The handler refuses a non-canonical or malformed body, a wrong content type, a `person` outside the allowlist, an `answerKey` that is not an X25519 public key of exactly 32 bytes, and a `version` other than 1. | A body with an extra member, a wrong content type or a `person` outside the allowlist gives `recovery.refused` with reason `shape`; an `answerKey` of 31 or 33 bytes or one that is not base64 gives `answer`; a `version` other than 1 gives `shape`. |
 | Network | S | A caller picks a `person` that names a reserved subject or an existing principal. | authorize at point of use | The issuer refuses a reserved subject and the store refuses an existing principal, in the transaction, so the refusal creates nothing. | A `person` of `admin`, `admin-2` and an existing principal (an expired temporary administrator), sent straight to the store, gives a refusal with reason `person` and no new row. |
 | Network | S | A caller forges a request. | encode or contain | The service verifies with the bundle key that `keyId` names, never with the key in the signature, and accepts only `ssh-ed25519`. | A signature with a key that is not in the bundle, or with a key type other than `ssh-ed25519`, gives a refusal. |
-| Network | S | A caller forges a request. | limit | 8 KiB, 5 attempts in 15 minutes for each source, 30 for the installation, in the database. The server counts the attempt and refuses before the signature check. | The sixth attempt from one /64 group is refused on a second instance, and a refused request runs no signature check. |
+| Network | S | A caller forges a request. | limit | 8 KiB, 5 requests in 15 minutes for each source and 30 for the installation, in the database. The service counts each attempt once: the per-source attempt, refused before the signature check, and the installation attempt, refused after the check, so it counts only requests with a valid signature. | The sixth request from one /64 group is refused on a second instance, a refused request runs no signature check, and many bad signatures from many sources do not move the installation counter while a valid request after them succeeds. |
 | Network | S | A caller forges a request. | authorize at point of use | The handler checks the stored mode before any other work, and the store checks it again in the transaction. | A valid request with the stored mode `bootstrap` gives a refusal. |
 | Network | S | A caller forges a request. | boundary check | The server takes the client address from the trusted proxy when one is trusted, and otherwise the address of the TCP peer, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the client address of the peer, and a malformed address gives `recovery.refused` with reason `address`. |
 | Network | S | A caller forges a request. | fail closed | An unknown member, value or store error refuses, with an audit entry. | A store fault gives `recovery.refused` with reason `store`. |
@@ -269,6 +289,7 @@ flowchart LR
 | Server | T | The first boot stores a key of the wrong type or a key that does not parse. | boundary check | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. | An `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and an empty file each refuse the start. |
 | Server | T | The first boot stores a key of the wrong type or a key that does not parse. | fail closed | On a malformed or wrong-type key file, `serve` refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | After each hostile key file the store holds no mode and no key. |
 | Server | R | A use leaves no record. | fail closed | The notification, the audit entries and the record commit together. | A fault in the notification write leaves no temporary administrator. |
+| Server | D | A caller fills the audit chain with refusals. | limit | The refusal entries go through `internal/denylimit`, keyed by the source group and the reason, so one source writes a bounded number of entries and one count of suppressed entries. | N refusals from one source write a bounded number of entries and one count of suppressed entries. |
 
 ## Failure modes
 

@@ -30,6 +30,14 @@ When an installation starts for the first time in signed-request recovery, the s
 - **THEN** the server does not start and the store holds no mode and no key
 - **AND** the log has one error that names the file and the reason, with no key material
 
+### Requirement: restore-keeps-control-tables
+
+The four recovery tables SHALL be in `ControlTables`, so a backup leaves them out and a restore keeps the live rows. A restore of an older backup SHALL NOT bring back a removed key, SHALL NOT let the supplier of a backup add a trusted key, and SHALL NOT make a used nonce new again.
+
+#### Scenario: Restore after a key removal
+- **WHEN** a key is removed and a backup made before the removal is restored
+- **THEN** the key stays removed and a used nonce stays used
+
 ### Requirement: signed-request-makes-one-temporary-administrator
 
 When the stored mode is `signed-request` and a request is canonical, in its time window, names this installation and its audience, is signed by a key of the trust bundle, has a new nonce, is inside the rate limits, and no temporary administrator of a recovery is live, the server SHALL make one temporary administrator and answer with the token encrypted to the key of the request.
@@ -63,12 +71,16 @@ When a signed-request recovery succeeds, the server SHALL write one audit entry 
 
 ### Requirement: one-answer-for-every-refusal
 
-When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write one audit entry with the reason.
+When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write the refusal audit entry with the reason, within the bound of the refusal limiter.
 
 #### Scenario: The fifteen reasons look the same
 - **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`, `address` and `person`
 - **THEN** each answer has the same status, the same body and the same length
 - **AND** each audit entry `recovery.refused` holds its reason
+
+#### Scenario: The refusal entries are bounded
+- **WHEN** one source sends many refusals with one reason
+- **THEN** the audit log holds a bounded number of `recovery.refused` entries and one entry that carries the count of suppressed entries
 
 ### Requirement: answer-key-and-its-seal
 
@@ -119,7 +131,7 @@ When a request has `notAfter` more than 10 minutes after `notBefore`, or the tim
 
 ### Requirement: shared-rate-limit
 
-When one source address, or its /64 group for IPv6, sent 5 recovery requests in 15 minutes, or the installation received 30, the server SHALL refuse more requests in that window on every instance. The server SHALL count the attempt and refuse it before it checks the signature of the request.
+When one source address, or its /64 group for IPv6, sent 5 recovery requests in 15 minutes, the server SHALL refuse more requests from that source in that window on every instance. The server SHALL count the attempt and refuse it before it checks the signature of the request.
 
 #### Scenario: Sixth request on another instance
 - **WHEN** five requests from one /64 group reach instance A and a sixth reaches instance B
@@ -128,6 +140,14 @@ When one source address, or its /64 group for IPv6, sent 5 recovery requests in 
 #### Scenario: The limit bounds the signature check
 - **WHEN** one source sends requests with a bad signature after the limit
 - **THEN** the server refuses them with the one answer, and runs no signature check for a refused request
+
+### Requirement: installation-rate-limit
+
+When the installation received 30 recovery requests with a valid signature in 15 minutes, the server SHALL refuse more such requests in that window on every instance. The server SHALL count that attempt after the signature check, so it counts only requests with a valid signature from a key of the trust bundle.
+
+#### Scenario: Bad signatures do not move the installation counter
+- **WHEN** many sources send requests with a bad signature and then one source sends a valid request
+- **THEN** the installation counter did not move, and the valid request succeeds
 
 ### Requirement: source-address
 

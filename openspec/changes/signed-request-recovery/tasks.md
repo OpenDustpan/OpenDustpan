@@ -10,14 +10,14 @@
 - [ ] 1.3 Fifteen refusal reasons give one answer and fifteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
 - [ ] 1.4 Replay, two at once on two instances, and a crash before the commit. Check: `go test ./pkg/store/... -run TestRecoveryNonceOnce -count=1` fails on main (NEW test).
 - [ ] 1.5 The time window and the skew. Check: `go test ./internal/recovery/ -run TestRequestWindow -count=1` fails on main (NEW test).
-- [ ] 1.6 The shared rate limit with the /64 group. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
+- [ ] 1.6 The shared per-source rate limit with the /64 group, counted once in the service step. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
 - [ ] 1.7 One live recovery. Check: `go test ./pkg/store/... -run TestRecoveryOneLive -count=1` fails on main (NEW test).
 - [ ] 1.8 The review opens whatever the opt-in, and a failed notification makes no temporary administrator. Check: `go test ./internal/recovery/ -run TestRecoveryOpensReview -count=1` fails on main (NEW test).
 - [ ] 1.9 The two recovery steps pass, and other fresh steps refuse. Check: `go test ./internal/api/server/ -run TestRecoveryAdminFreshSteps -count=1` fails on main (NEW test).
 - [ ] 1.10 Key add, overlap, removal and the last key. Check: `go test ./internal/api/server/ -run TestRecoveryKeyRotation -count=1` fails on main (NEW test).
 - [ ] 1.11 The signer refuses a plain key file. Check: `go test ./cmd/opendustpan/ -run TestRecoverySignNeedsPassphrase -count=1` fails on main (NEW test).
 - [ ] 1.12 A hostile-input test for each layer of the design table, each with the other layers off. Check: `go test ./internal/recovery/ ./internal/api/server/ ./pkg/store/... -run 'TestRecoveryLayer' -count=1` fails on main (NEW tests).
-- [ ] 1.13 The rate limit bounds the signature check: many requests with bad signatures from one source stop at the limit, and the signature check does not run for a refused request. Check: `go test ./internal/recovery/ -run TestRecoveryRateLimitBoundsSignature -count=1` fails on main (NEW test).
+- [ ] 1.13 The per-source rate limit bounds the signature check: many requests with bad signatures from one source stop at the limit, the service counts each attempt once, and the signature check does not run for a refused request. Check: `go test ./internal/recovery/ -run TestRecoveryRateLimitBoundsSignature -count=1` fails on main (NEW test).
 - [ ] 1.14 A key file path that leaves the root and a key file larger than 16 KiB are refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryKeyFileContained -count=1` fails on main (NEW test).
 - [ ] 1.15 A private key file that group or others can read is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoverySignPrivateKeyMode -count=1` fails on main (NEW test).
 - [ ] 1.16 A `person` member outside the allowlist is refused. Check: `go test ./internal/recovery/ -run TestRecoveryPersonAllowlist -count=1` fails on main (NEW test).
@@ -41,6 +41,9 @@
 - [ ] 1.34 A first-boot key file that does not parse is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyUnparsable -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 - [ ] 1.35 An empty first-boot key file is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyEmpty -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 - [ ] 1.36 A `person` that names `admin`, `admin-2` and an existing principal (an expired temporary administrator) is refused. The request goes straight to the store transaction, as if the service allowlist had passed it. Check: `go test ./pkg/store/... -run TestRecoveryPersonTaken -count=1` fails on main (NEW test). Expect the reason `person` and no new row.
+- [ ] 1.37 A restore does not bring back a removed key and does not make a used nonce new again. Remove a key, restore a backup made before the removal, and expect the key to stay removed and a used nonce to stay used. Check: `go test ./pkg/store/... -run TestRecoveryRestoreKeepsControl -count=1` fails on main (NEW test).
+- [ ] 1.38 Many requests with bad signatures from many sources do not move the installation counter, and a valid request after them succeeds. Check: `go test ./internal/recovery/ -run TestRecoveryInstallationCounterAfterSignature -count=1` fails on main (NEW test).
+- [ ] 1.39 N refusals from one source write a bounded number of audit entries and one count of suppressed entries. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalBound -count=1` fails on main (NEW test).
 
 ## 2. Build
 
@@ -55,6 +58,7 @@
 - [ ] 2.9 The route test lists `POST /api/dustpan/v1/recovery/signed-requests` on its public list, with the action `recovery:use-signed-request` and the reason that the caller has no identity yet and the signed request is the credential. Check: the route test passes, and the refusal audit entry and the break-glass use record that action.
 - [ ] 2.10 The handler checks the stored recovery mode before any other work, with a defense-in-depth comment that names the store-transaction check. The store transaction keeps its own mode check. Check: the layer test fails when the handler check is removed.
 - [ ] 2.11 Each check that runs at two layers has a defense-in-depth comment that names the other layer, and a test that sends hostile input directly to that layer. Check: the layer tests pass, and each comment names the other layer.
+- [ ] 2.12 Add the four tables `recovery_settings`, `recovery_keys`, `recovery_nonces` and `recovery_attempts` to `ControlTables` in `pkg/backup/coverage.go`, so a backup leaves them out and a restore keeps the live rows, with the reason in the doc comment. Check: the coverage test of `pkg/store/...` passes and reports no table outside the three lists.
 
 ## 3. Side effects (computed from main)
 

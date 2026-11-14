@@ -356,7 +356,9 @@ Questions considered and answered:
 - Where is the rate limit counter? In the database, for each source address,
   with an IPv6 address counted as its /64 group (ADR 295 decision 4). The limit
   is 5 requests in 15 minutes for each source, and 30 in 15 minutes for the
-  installation, so that many sources cannot force unbounded signature checks.
+  installation. The server counts the per-source attempt and refuses it before
+  the signature check. It counts the installation attempt after the signature
+  check, so a flood of unsigned or badly signed requests cannot block recovery.
 - What are the format, the lifetime, the rotation and the rule for a second
   recovery? The four decisions of the product manager above.
 - Why is a copied signed request useless? The request holds the HPKE public
