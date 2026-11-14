@@ -13,28 +13,24 @@ While a decision record of state.write exists, the server SHALL keep it until th
 - **THEN** The record still reads with its fact document and gate outcomes.
 
 #### Scenario: Expired refusal record is pruned
-- **WHEN** The retention sweep runs after the audit retention passes for a refusal record written in its own transaction.
-- **THEN** The refusal record no longer reads and the prune audit entry names its ID while the step audit entry keeps the ID when it exists.
+- **WHEN** The sweep runs after the audit retention passes for a refusal record.
+- **THEN** The refusal record no longer reads and the prune entry names its ID.
 
 #### Scenario: Expired unlocked-write record is pruned
-- **WHEN** The retention sweep runs after the audit retention passes for a state.write record with operation kind unlocked-write.
-- **THEN** The unlocked-write record no longer reads after the sweep.
+- **WHEN** The sweep runs after the audit retention passes for a record with operation kind unlocked-write.
+- **THEN** The record no longer reads after the sweep.
 
 #### Scenario: Open step is kept
-- **WHEN** The sweep meets a state.write record whose explained step is still open.
-- **THEN** The sweep keeps the record and deletes it only after the step completes and the retention passes.
+- **WHEN** The sweep meets a record whose explained step is still open.
+- **THEN** The sweep keeps the record until the step completes and the retention passes.
 
 #### Scenario: Stuck open step prunes with mark
 - **WHEN** The step stays open 7 days after the audit retention passes.
 - **THEN** The sweep deletes the record and the prune entry marks it open-step.
 
-#### Scenario: Record with no step entry still prunes
-- **WHEN** The sweep meets an expired record with no step audit entry and no open step.
-- **THEN** The sweep deletes the record and the prune entry names its ID.
-
 #### Scenario: New write after prune still records
-- **WHEN** A state.write evaluation runs after the sweep pruned its old records.
-- **THEN** The new evaluation writes a new decision record with a new ID.
+- **WHEN** A state.write evaluation runs after the sweep pruned old records.
+- **THEN** The evaluation writes a new decision record with a new ID.
 
 ### Requirement: Record every evaluation
 
@@ -54,23 +50,23 @@ When a lock request arrives while the workspace lock is held, the server SHALL s
 
 #### Scenario: Retry against held lock writes nothing
 - **WHEN** An OpenTofu lock request arrives while the workspace lock is held.
-- **THEN** The server runs no evaluation and writes no decision record.
+- **THEN** The server answers 409, runs no evaluation and writes no decision record.
 
 ### Requirement: Prune keeps the audit reference
 
 When the retention sweep deletes a decision record, the server SHALL keep the record ID in the audit entry of the explained step.
 
 #### Scenario: Step audit entry keeps record ID
-- **WHEN** The retention sweep deletes the decision record of a state.write step.
-- **THEN** The audit entry of the explained step still names the record ID and the prune batch entry names the same ID.
+- **WHEN** The sweep deletes the decision record of a state.write step.
+- **THEN** The audit entry of the step still names the record ID and the prune entry names the same ID.
 
-### Requirement: pruneExpired sweep runs in safe batches
+### Requirement: Sweep runs in safe batches
 
 While the retention sweep runs, the server SHALL delete expired state.write records in bounded batches ordered by stable record ID with one lease holder at a time.
 
 #### Scenario: Restart mid-batch is safe
 - **WHEN** The sweeper restarts in the middle of a batch.
-- **THEN** A rerun deletes only the records that still exist and never deletes an unexpired record.
+- **THEN** A rerun deletes only the records that still exist and never an unexpired record.
 
 #### Scenario: Two sweepers do not overlap
 - **WHEN** Two server processes start the sweep at the same time.
@@ -78,8 +74,8 @@ While the retention sweep runs, the server SHALL delete expired state.write reco
 
 #### Scenario: Writes proceed during sweep
 - **WHEN** A state.write evaluation runs while the sweep holds its lease.
-- **THEN** The state write evaluates and writes its decision record with no block on the sweep lease.
+- **THEN** The evaluation writes its decision record with no block on the lease.
 
 #### Scenario: Effective sweep values are visible
-- **WHEN** An operator reads the installation settings after the sweep is wired.
-- **THEN** The settings resource shows the hourly cadence, the batch size of 100, and the last prune count.
+- **WHEN** An operator reads the installation settings.
+- **THEN** The settings resource shows the hourly cadence, the batch size of 100 and the last prune count.

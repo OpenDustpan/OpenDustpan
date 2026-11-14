@@ -4,10 +4,12 @@ Main has pkg/trustrule, internal/trustrulesvc and the routes in internal/api/tru
 
 ## Decisions
 
-1. **Extend the trust rule domain.** Bundle versions and the SPIFFE and mTLS rule fields go into pkg/trustrule. Save, rotate, update with If-Match and the fresh-authentication check go into internal/trustrulesvc. The routes extend internal/api/trustrules.
-2. **Versioned bundle.** One bundle per namespace with append-only versions and one active pointer. The active version cannot be deleted.
-3. **Stable IDs.** A rule stores the namespace ID, the stable rule ID, the stable principal ID and the bundle reference. Evaluation uses the active version.
-4. **Schema.** The baseline of each dialect gets the new objects in name order. No numbered migration.
+1. **Extend the trust rule domain.** Bundle versions and the rule fields go into pkg/trustrule. Save, rotate, update and the fresh-authentication check go into internal/trustrulesvc. Routes extend internal/api/trustrules.
+2. **Wire shapes.** Paths follow the trust-rules routes. JSON is camelCase. Bundle fields: id, namespace, active, versions, overlapEndsAt, revision, createdAt. Rule fields added: spiffeIDPattern, bundle. Times are RFC 3339.
+3. **Actions.** Writes use a namespace action on the namespace. Reads use the existing read action of the trust-rule reads.
+4. **ETag and revision.** ETag is the revision in quotes, PATCH needs If-Match, a stale value answers 412.
+5. **Tables.** trust_bundles and trust_bundle_versions, with Unix millisecond BIGINT times, go after triggers and before trust_rules in the baseline of each dialect. No numbered migration.
+6. **Stable IDs.** A rule stores the namespace ID, the stable rule ID, the stable principal ID and the bundle ID. Evaluation uses the active version.
 
 ## Structure
 
@@ -111,7 +113,7 @@ flowchart LR
 - Invariant: One bundle per namespace with append-only versions and one active pointer
 - Invariant: The active version holds unexpired CAs only
 - `save-bundle`: pre: namespace action held; fresh authentication; PEM valid. Post: new version stored; audit entry written.
-- `rotate-bundle`: pre: namespace action held; fresh authentication. Post: new version active; overlap end stated.
+- `rotate-bundle`: pre: namespace action held; fresh authentication; If-Match matches. Post: new version active; overlap end stated.
 
 **trust rule**
 

@@ -8,6 +8,8 @@ Changed by:
   administrator.
 - ADR 245 changes decision 2: the recovery-mode setting and the refusal of
   mode 3.
+- ADR 372 extends decisions 1 and 5: the names of modes 1 and 2. The
+  review use records the recovery mode and the source.
 
 ## Context
 

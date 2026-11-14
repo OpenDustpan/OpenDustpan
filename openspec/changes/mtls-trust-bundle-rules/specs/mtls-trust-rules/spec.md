@@ -5,16 +5,20 @@
 When a caller creates a trust rule, the server SHALL check the namespace action on that namespace.
 
 #### Scenario: Create valid rule
-- **WHEN** a caller with the action and a fresh session creates a rule with a valid SPIFFE ID pattern
+- **WHEN** a caller with the action and a fresh session creates a rule with a valid spiffeIDPattern
 - **THEN** the server stores the rule with stable IDs and writes an audit entry
 
-### Requirement: Update rule (update-rule)
+### Requirement: Update rule
 
-When a caller updates a trust rule, the server SHALL require a current ETag in If-Match.
+When a caller runs update-rule, the server SHALL require a current ETag in If-Match.
 
 #### Scenario: Stale update refused
-- **WHEN** an update-rule request carries a stale ETag
+- **WHEN** an update request carries a stale ETag
 - **THEN** the server refuses with 412 and keeps the rule
+
+#### Scenario: Current update stored
+- **WHEN** an update carries the current ETag and a fresh session
+- **THEN** the server stores the rule with a new ETag and writes an audit entry
 
 ### Requirement: Delete rule
 

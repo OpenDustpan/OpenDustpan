@@ -8,6 +8,8 @@
 - [ ] 1.2 Write failing tests for PATCH refusals, atomic apply, stale revision, masked audit and audit failure. Check: TestSettingsPatchRefusals and TestSettingsPatchAtomic
 - [ ] 1.3 Write failing tests for the fresh step, the token refusal and idempotent replay. Check: TestSettingsPatchFreshStep and TestSettingsPatchIdempotency
 - [ ] 1.4 Write failing tests for the session limit, the create audit entry and the host reset. Check: TestTempAdminSessionLimit, TestTempAdminCreateAuditNamesLimit and TestHostResetSessionLimit
+- [ ] 1.5 Add the NEW catalog code settings.revision-stale to internal/errcode/catalog_settings.go, and make the settings routes answer a stale revision with 412 and this code in place of request.precondition-failed (internal/api/server/settings.go, the If-Match check of the patch). Check: the NEW test TestPatchStaleRevisionAnswersRevisionStale fails on main.
+- [ ] 1.6 Keep the statuses of main for a body that is not valid: 400 with settings.key-unknown for an undeclared key and 400 with settings.value-invalid for a value outside its range, as the tool-neutral API decides (a key that is not valid answers 400). Check: the NEW test TestPatchRefusesUnknownKeyWith400 passes on main.
 
 ## 2. Side effects (computed from main)
 

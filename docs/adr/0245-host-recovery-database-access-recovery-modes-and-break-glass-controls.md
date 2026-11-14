@@ -5,6 +5,9 @@ Status: accepted · 2026-10-19. Supersedes in part ADR 39 decisions 1 and 4, for
 Changed by:
 
 - ADR 295 changes decision 12: a route for mode 2 over the network.
+- ADR 372 changes decision 3: the review store is a condition of
+  signed-request recovery, and the two recovery steps need no fresh
+  authentication.
 
 ## Context
 
