@@ -2,14 +2,14 @@ Roadmap: `docs/roadmap.md:648` (A strict case takes turns).
 
 ## Why
 
-**Persona: developer.** A developer changes one workspace while another team applies to it. The change reads a data source, so the server cannot prove it disjoint. The developer needs the apply to take turns on the whole-unit lock and leave a record of why it waited.
+**Persona: developer.** A developer changes one workspace while another team applies to it. The change reads a data source, so the server cannot prove it disjoint. The developer needs the apply to take turns on the whole-unit lock and leave a record of why it waited. A runner job that finds the lock held ends as blocked, and the job service starts it again when the lock is released.
 
 The user path this change must make work:
 
 1. **API.** Start two runner jobs on one workspace through the jobs API. Job A plans a disjoint change. Job D plans a change that reads a data source.
-2. **CLI.** Watch job D with `dustpan job show <job-id>` while job A applies.
+2. **CLI.** Watch job D with `dustpan job show <job-id>` while job A applies. Job D shows the status blocked, the holder and the case data-source, then starts again when the lock of A is released.
 3. **Docs page.** Read the history of the workspace and see the strict case data-source on the item of D.
-4. **E2e.** Run the e2e step with real OpenTofu and a fake cloud provider log that shows ordered apply periods. BLOCKED by the accepted RFC for concurrent applies.
+4. **E2e.** Run the e2e step with real OpenTofu and a fake cloud provider log that shows ordered apply periods. BLOCKED by RFC 129 point 4 (the job on the TFE-compatible path).
 
 Errors the person may hit, and the one command that helps:
 
@@ -26,14 +26,15 @@ Evidence for the claims above:
 ## What Changes
 
 - A saved plan that reads a data source makes the claim strict with the case data-source.
-- A strict apply starts only after the running apply ends.
+- A runner job whose plan needs the whole-unit lock and finds it held turns the refusal into the status blocked. The job service starts it again when the lock is released.
+- The local wrapper waits for a strict case with the retry and the timeout of ADR 368 decision 5.
 - The history item of the strict apply names the case.
 
 Out of scope:
 
 - The other five strict cases
 - The merge of an upload one resource instance at a time
-- The local CLI wrapper and its retry rules
+- The local CLI wrapper code (local-run-two-cases); this change states only its wait rule
 - Splitting a plan with -target
 - Claim ID, parent pointer, fence and serial rules, which ADR 368 decides and other changes build
 
@@ -56,7 +57,8 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The roadmap step names the strict data source case. (`docs/roadmap.md:648`)
-- Source filter code lives in its own package. (`pkg/source`)
+- The workspace lock has the error code `workspace.locked` for a lock that another principal holds. (`internal/errcode/catalog_workspace.go:15 (WorkspaceLocked)`)
+- The workspace service takes the whole-unit lock. (`pkg/workspace/service.go:731 (Service.Lock)`)
 
 ## ADR check
 
@@ -93,16 +95,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Does a runner job with a data source plan wait on the whole-unit lock, or end as blocked? Decides: owner.
-   - Options: End as blocked, and the person starts the job again; Wait on the whole-unit lock inside the server.
-   - Recommended: Wait on the whole-unit lock inside the server. Reason: The exit test says the change starts its apply after the apply of A ends. ADR 302 decision 2 says runner jobs end as blocked on an overlap. The words do not settle a strict case.
+1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
+   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
+   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here"). This change needs it for the e2e step, which writes state through the TFE-compatible routes with a job token.
 
-Not spec-ready: a code check fails: test `TestStrictDataSourceWaits` (.tasks[1].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: main_facts[1]: "where" is not file:line (func Name).
+Not spec-ready: RFC 129 point 4 is open for the owner.
 
 Questions considered and answered:
 
 - Which strict case does this change cover? Data sources only. ADR 302 decision 2 lists six cases. The other five are out of scope.
-- Does the strict job wait on the server or end as blocked? ADR 302 decision 2 says a runner job turns a refusal into blocked. See the open question.
+- Does a runner job with a data source plan wait on the whole-unit lock, or end as blocked? It ends as blocked and the job service starts it again when the lock is released; that is how it takes turns. ADR 302 decision 2 (owner): "A runner job turns the refusal into the status "blocked". The local `dustpan` wrapper waits: it tries the claim again after the refusal until the blocking claim ends, or until a timeout." The owner's approved M8 answer of 14 November 2026 (decisions week log): "a data-source plan waits on the whole-unit lock". Decided by the PM under the decision rule on 14 November 2026. The local wrapper waits with ADR 368 decision 5.
 - Which record fields does the history entry use for the case and the claim? ADR 368 decision 3: the parent, the base and the apply claim ID of each state version.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

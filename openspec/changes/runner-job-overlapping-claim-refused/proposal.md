@@ -59,8 +59,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The claim gate e2e file exists and is the baseline for claim behavior. The pack gives no line or function for it. (`e2e/claim_gate_test.go:1 (func none named in the pack)`)
-- The runner protocol HTTP adapter exists. The pack gives no line or function for it. (`internal/api/runnerapi:1 (func none named in the pack)`)
+- The claim gate e2e step exists and is the baseline for claim behavior. (`e2e/claim_gate_test.go:49 (aGateStopsAClaim)`)
+- The runner protocol HTTP adapter exists. (`internal/api/runnerapi/runnerapi.go:193 (NewHandler)`)
 
 ## ADR check
 
@@ -99,8 +99,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 ## Open questions
 
 none
-
-Not spec-ready: a code check fails: main_facts[1]: `internal/api/runnerapi` does not exist on main.
 
 Questions considered and answered:
 
