@@ -4,12 +4,12 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing store test for state version rollback on mid-commit outage in NEW file pkg/store/postgres/state_commit_test.go. Check: NEW test `TestStateCommitRollsBackOnOutage` fails on main, passes after the fix.
-- [ ] 1.2 Add failing store test for lock acquire rollback on mid-commit outage in NEW file pkg/store/postgres/lock_commit_test.go. Check: NEW test `TestLockAcquireRollsBackOnOutage` fails on main, passes after the fix.
-- [ ] 1.3 Add failing store test for lock release rollback on mid-commit outage in NEW file pkg/store/postgres/unlock_commit_test.go. Check: NEW test `TestUnlockRollsBackOnOutage` fails on main, passes after the fix.
-- [ ] 1.4 Add failing hostile test that sends a stale fence directly to the store layer in NEW file pkg/store/postgres/fence_test.go. Check: NEW test `TestFenceRejectsStaleWrite` fails on main, passes after the fix.
-- [ ] 1.5 Add failing test for fenced takeover of a committed lock in NEW file pkg/store/postgres/lock_takeover_test.go. Check: NEW test `TestCommittedLockSurvivesTakeover` fails on main, passes after the fix.
-- [ ] 1.6 Add failing test for idempotent retry after a lost reply in NEW file pkg/store/postgres/commit_retry_test.go. Check: NEW test `TestRetryWithSameIdentityMakesNoDuplicate` fails on main, passes after the fix.
+- [ ] 1.1 Add failing store test for state version rollback on mid-commit outage (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/state_commit_test.go. Check: NEW test `TestStateCommitRollsBackOnOutage` fails on main, passes after the fix.
+- [ ] 1.2 Add failing store test for lock acquire rollback on mid-commit outage (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/lock_commit_test.go. Check: NEW test `TestLockAcquireRollsBackOnOutage` fails on main, passes after the fix.
+- [ ] 1.3 Add failing store test for lock release rollback on mid-commit outage (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/unlock_commit_test.go. Check: NEW test `TestUnlockRollsBackOnOutage` fails on main, passes after the fix.
+- [ ] 1.4 Add failing hostile test that sends a stale fence directly to the store layer (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/fence_test.go. Check: NEW test `TestFenceRejectsStaleWrite` fails on main, passes after the fix.
+- [ ] 1.5 Add failing test for fenced takeover of a committed lock (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/lock_takeover_test.go. Check: NEW test `TestCommittedLockSurvivesTakeover` fails on main, passes after the fix.
+- [ ] 1.6 Add failing test for idempotent retry after a lost reply (PostgreSQL only: a mid-commit outage of the database server; SQLite runs in the process) in NEW file pkg/store/postgres/commit_retry_test.go. Check: NEW test `TestRetryWithSameIdentityMakesNoDuplicate` fails on main, passes after the fix.
 
 ## 2. Side effects (computed from main)
 

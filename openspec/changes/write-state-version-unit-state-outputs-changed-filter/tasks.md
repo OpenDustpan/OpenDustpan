@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add a failing dispatcher test in NEW file pkg/trigger/upstream_outputs_changed_test.go: unchanged outputs skip, changed outputs start, missing prior starts, mixed when values, retry replays the same pair. It drives Dispatcher.Upstream in process. BLOCKED by no route: the test calls the port with no credential. Check: `go test ./pkg/trigger/... -run TestUpstreamOutputsChangedSkipsWhenDigestMatches` fails on main.
-- [ ] 1.2 Add a failing store test in NEW file pkg/store/sqlite/unit_state_outputs_digest_test.go: publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
+- [ ] 1.2 Add a failing store test in NEW file pkg/store/sqlite/unit_state_outputs_digest_test.go and the same test in NEW file pkg/store/postgres/unit_state_outputs_digest_test.go (publishUnitState is in both dialects): publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
 - [ ] 1.3 Add a failing trigger save test in NEW file internal/servertest/trigger_when_test.go through `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token: unknown when refused, default applied, change reads back. Check: `go test ./pkg/trigger/... -run TestSaveTriggerWhenValue` fails on main.
 
 ## 2. Build
