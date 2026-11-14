@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests and build
 
@@ -12,11 +12,11 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Add the launcher docs page. Check: make docs-lint
 - [ ] 3.2 Run mode tests on amd64 and arm64 builds and the license check. Check: make licenses
-- [ ] 3.3 Usability check: BLOCKED by the sibling part 3 change, which adds the real runner e2e step and the route and credential kind for it. Check: BLOCKED by add-e2e-step-runs-real-runner
-- [ ] 3.4 Run make check. Check: `make check` reports zero findings
+- [ ] 3.3 Usability check: BLOCKED by the sibling part 3 change, which adds the real runner e2e step and the route and credential kind for it. Check: BLOCKED by add-e2e-step-runs-real-runner. A person's step. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

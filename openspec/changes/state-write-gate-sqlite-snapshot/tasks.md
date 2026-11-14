@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -25,7 +25,7 @@
 
 - [ ] 4.1 Confirm the wiring with a server start with and without a gate service. Check: Start log shows the line once without a gate service and not with one
 - [ ] 4.2 Confirm no route or authorization change is needed. Check: Route table unchanged; the route test passes
-- [ ] 4.3 Record the e2e step: BLOCKED by the missing route, because the pack names no existing route and credential kind that reads deleted-unit facts alone. Check: BLOCKED by a route and credential kind for the fact read; TestDeletedUnitFactsSnapshot and the storetest gate suite cover it
+- [ ] 4.3 Record the e2e step: BLOCKED by the missing route, because the pack names no existing route and credential kind that reads deleted-unit facts alone. Check: BLOCKED by a route and credential kind for the fact read; TestDeletedUnitFactsSnapshot and the storetest gate suite cover it. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.4 Record why no docs page applies. Check: Not applicable: only an operational log line
 - [ ] 4.5 Run the operator start-up check. Check: Operator reads the log line with no new command
-- [ ] 4.6 Run format, vet, lint and the full store test suite. Check: `make check` with zero findings
+- [ ] 4.6 Run format, vet, lint and the full store test suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -13,20 +13,20 @@
 - [ ] 1.7 Add failing service test for grant removed after queue in NEW file pkg/job/planner_role_test.go. Check: TestPlannerGrantRemovedKeepsJobRefusesReads fails on main before the fix and passes after.
 - [ ] 1.8 Add failing service test for audit in the same transaction in NEW file pkg/job/planner_role_test.go. Check: TestPlannerAuditInSameTransaction fails on main before the fix and passes after.
 - [ ] 1.9 Add failing service test for unknown operation refusal in NEW file pkg/job/planner_role_test.go. Check: TestUnknownOperationGives400 fails on main before the fix and passes after.
-- [ ] 1.10 Add the e2e step for plan success, masked read, apply 403 and destroy 403 in NEW file test/e2e/planner_role_test.go. The route is declared in internal/api/jobs and adapted in the same package. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Credential: personal access token of a planner principal. BLOCKED by the real runner pool e2e of the runners items listed in depends_on. Check: The e2e step fails on main before the fix and passes after, once the runner e2e exists.
+- [ ] 1.10 Add the e2e step for plan success, masked read, apply 403 and destroy 403 in NEW file test/e2e/planner_role_test.go. The route is declared in internal/api/jobs and adapted in the same package. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Credential: personal access token of a planner principal. BLOCKED by the real runner pool e2e of the runners items listed in depends_on. Check: The e2e step fails on main before the fix and passes after, once the runner e2e exists. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Implementation
 
 - [ ] 2.1 Wire operation-to-action check in job start path in NEW file pkg/job/operation_actions.go. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Declare the route in NEW file internal/api/jobs/routes.go. Adapt the route in NEW file internal/api/jobs/handler.go. Check: Route test lists POST jobs with unit:run-plan for plan, the apply action for apply, the destroy action for destroy, and 400 for unknown operations.
 - [ ] 2.2 Record job decision and audit entry together in pkg/job/service.go:136. Check: Audit entry names starter, operation and decision in the same transaction as the queue insert.
-- [ ] 2.3 Write docs page for the planner role with the workstation caveat in NEW file docs/planner-role.md. Check: Docs page runs as written and warns that workstation plans read state with state actions outside this role.
+- [ ] 2.3 Write docs page for the planner role with the workstation caveat in NEW file docs/planner-role.md. Check: Docs page runs as written and warns that workstation plans read state with state actions outside this role. Confirmed by: CI (an e2e step in the NEW file e2e/planner_role_2_docs_test.go runs each command of the docs page against the e2e test server).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run full check suite. Check: `make check` reports zero findings.
-- [ ] 4.2 Run the e2e step on both stores. Check: E2E step on POST /api/dustpan/v1/namespaces/{namespace}/jobs with a personal access token of a planner principal runs against the real server over TLS on SQLite and PostgreSQL.
-- [ ] 4.3 Complete usability check. Check: Persona completes plan from docs page alone.
+- [ ] 4.1 Run full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Run the e2e step on both stores. Check: E2E step on POST /api/dustpan/v1/namespaces/{namespace}/jobs with a personal access token of a planner principal runs against the real server over TLS on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Complete usability check. Check: Persona completes plan from docs page alone. A person's step.

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -18,11 +18,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e profiles step. Existing route: POST /api/dustpan/v1/namespaces/{namespace}/profiles creates the profile. Existing credential kind: a personal token of a person. Then call the open route and the session read route, and replay the key. BLOCKED by the open route and the session read route until the Build section lands them. Check: `make e2e` runs the profiles step
+- [ ] 4.1 Add the e2e profiles step. Existing route: POST /api/dustpan/v1/namespaces/{namespace}/profiles creates the profile. Existing credential kind: a personal token of a person. Then call the open route and the session read route, and replay the key. BLOCKED by the open route and the session read route until the Build section lands them. Check: `make e2e` runs the profiles step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Document open and sessions with errors and the one help command. Check: `make docs-lint` passes on docs/reference/profiles-api.md
-- [ ] 4.3 Check the user path from the docs page alone. Check: A walk-through of the page opens and reads a session
-- [ ] 4.4 Run the full gate. Check: `make check` reports zero findings
+- [ ] 4.3 Check the user path from the docs page alone. Check: A walk-through of the page opens and reads a session. Confirmed by: CI (an e2e step in the NEW file e2e/open_profile_serve_open_sessions_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.4 Run the full gate. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

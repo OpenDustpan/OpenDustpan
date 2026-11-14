@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Roadmap: `docs/roadmap.md:379` (Serve private providers with signature and checksum checks.).

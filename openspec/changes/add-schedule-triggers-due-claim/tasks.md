@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -22,6 +22,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Check the trigger routes declare their actions, and that the tick has no public route. Check: Route test lists the actions
-- [ ] 4.2 Add an e2e step: save a daily trigger with `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal token of a namespace administrator, then read the job with `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}`. Check: e2e step shows one plan job with source kind schedule
-- [ ] 4.3 Run a usability check of the docs page, with each error naming one command. Check: The persona follows the page alone
-- [ ] 4.4 Run make check. Check: `make check` reports zero findings
+- [ ] 4.2 Add an e2e step: save a daily trigger with `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal token of a namespace administrator, then read the job with `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}`. Check: e2e step shows one plan job with source kind schedule. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Run a usability check of the docs page, with each error naming one command. Check: The persona follows the page alone. A person's step.
+- [ ] 4.4 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

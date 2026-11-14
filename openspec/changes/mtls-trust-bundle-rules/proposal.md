@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:188` (Bundle and rule API with audit ships first.).

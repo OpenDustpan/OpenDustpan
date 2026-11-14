@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. failing tests first
 
@@ -21,11 +21,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 
-- [ ] 4.1 E2E step against the real CLI for history after an update Check: make e2e step; BLOCKED by the NEW history route until it ships
+- [ ] 4.1 E2E step against the real CLI for history after an update Check: make e2e step; BLOCKED by the NEW history route until it ships. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page for history, blame, point-in-time, redaction and retention Check: docs page in the same pull request; make docs-lint
-- [ ] 4.3 Usability check Check: a developer completes the path from the docs page alone
-- [ ] 4.4 Full checks Check: make check with zero findings
+- [ ] 4.3 Usability check Check: a developer completes the path from the docs page alone. A person's step.
+- [ ] 4.4 Full checks Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

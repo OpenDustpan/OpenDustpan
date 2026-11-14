@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. failing tests
 
@@ -15,9 +15,9 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 
-- [ ] 4.1 Run the e2e step with the real server over TLS: a session credential calls PUT /api/dustpan/v1/namespaces/{namespace}/access-limits/{id}, then GET /api/dustpan/v1/namespaces/{namespace}/units is refused with gate.ErrLimited. Add docs page and usability check. Check: `make e2e` passes the access-limit step.
-- [ ] 4.2 Run the full check. Check: `make check` with zero findings.
+- [ ] 4.1 Run the e2e step with the real server over TLS: a session credential calls PUT /api/dustpan/v1/namespaces/{namespace}/access-limits/{id}, then GET /api/dustpan/v1/namespaces/{namespace}/units is refused with gate.ErrLimited. Add docs page and usability check. Check: `make e2e` passes the access-limit step. A person's step. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

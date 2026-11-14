@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -18,5 +18,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run e2e step against real CLI binaries on existing TFE state-version and Pulumi checkpoint routes with mixed binary pool. Check: Real `tofu apply` and `pulumi up` via ANY /api/v2/state-versions with namespace write grant gate and access token show old write 409 and reads 200
-- [ ] 4.2 Docs page for minimum version behavior, route authorization actions listed, usability check from docs page alone. Check: `make check` passes with zero findings
+- [ ] 4.1 Run e2e step against real CLI binaries on existing TFE state-version and Pulumi checkpoint routes with mixed binary pool. Check: Real `tofu apply` and `pulumi up` via ANY /api/v2/state-versions with namespace write grant gate and access token show old write 409 and reads 200. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Docs page for minimum version behavior, route authorization actions listed, usability check from docs page alone. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
