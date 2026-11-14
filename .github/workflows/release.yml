@@ -110,10 +110,11 @@ jobs:
         run: |
           FORGE_REF="${FORGE_IMAGE}:${TAG}"
           HUB_REF="${HUB_IMAGE}:${TAG}"
-          # Defense in depth: the handler validates the tag too; this grep
-          # stays narrow so a new inspect error shape cannot route to a
-          # build. Only the registry's manifest-not-found text counts as
-          # absent. Every other error fails closed.
+          # Defense in depth: the digest comparison after the push checks
+          # the result again; this grep stays narrow so that a new inspect
+          # error shape cannot route to a build. Only the registry's
+          # manifest-not-found text counts as absent. Every other error
+          # fails closed.
           if FORGE_DIGEST="$(docker buildx imagetools inspect "$FORGE_REF" --format '{{json .Manifest.Digest}}' 2>"$RUNNER_TEMP/forge.err")"; then
             :
           elif grep -Eiq 'MANIFEST_UNKNOWN|manifest unknown|: not found' "$RUNNER_TEMP/forge.err"; then
@@ -134,8 +135,11 @@ jobs:
           fi
           if [ -n "$FORGE_DIGEST" ] && [ -n "$HUB_DIGEST" ]; then
             if [ "$FORGE_DIGEST" = "$HUB_DIGEST" ]; then
-              echo "::error::Both registries already hold the same digest for the tag. The tag is released; this re-run changes nothing."
-              exit 1
+              # Both images are released. A re-run then only completes the
+              # chart push, which can fail after the image pushes.
+              echo "Both registries hold the same digest for the tag. The re-run pushes the chart only."
+              echo "MODE=chart-only" >> "$GITHUB_ENV"
+              exit 0
             fi
             echo "::error::The registries hold different digests for the tag. The workflow refuses to overwrite the tag."
             exit 1
@@ -213,5 +217,18 @@ jobs:
         run: |
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_ACTOR" --password-stdin
           VERSION="${TAG#v}"
+          # The workflow never overwrites a released chart version.
+          if helm show chart "oci://ghcr.io/opendustpan/charts/opendustpan" --version "$VERSION" >/dev/null 2>"$RUNNER_TEMP/chart.err"; then
+            if [ "$MODE" = "chart-only" ]; then
+              echo "::error::The chart and both images are already released for the tag. This re-run changes nothing."
+            else
+              echo "::error::The chart version $VERSION is already released. The workflow refuses to overwrite it."
+            fi
+            exit 1
+          elif ! grep -Eiq 'MANIFEST_UNKNOWN|manifest unknown|: not found' "$RUNNER_TEMP/chart.err"; then
+            echo "::error::cannot inspect the chart reference. The workflow stops instead of pushing over an unknown state."
+            cat "$RUNNER_TEMP/chart.err" >&2
+            exit 1
+          fi
           helm package deploy/helm/opendustpan --version "$VERSION" --app-version "$VERSION"
           helm push "opendustpan-$VERSION.tgz" oci://ghcr.io/opendustpan/charts

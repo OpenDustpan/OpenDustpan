@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"errors"
+	"maps"
 	"os/exec"
 	"strings"
 	"testing"
@@ -56,6 +57,15 @@ gh() {
 }
 helm() {
   if [ -n "$STUB_HELM_FAIL" ]; then echo "stub: helm failed" >&2; return 1; fi
+  if [ "$1" = "show" ] && [ "$2" = "chart" ]; then
+    case "$STUB_CHART" in
+      RELEASED) echo "name: opendustpan"; return 0 ;;
+      ""|NOTFOUND) echo "Error: manifest unknown" >&2; return 1 ;;
+      MISSING) echo "Error: not found" >&2; return 1 ;;
+      ERROR:*) echo "${STUB_CHART#ERROR:}" >&2; return 1 ;;
+    esac
+  fi
+  if [ "$1" = "push" ] && [ -n "$STUB_PUSH_FAIL" ]; then echo "stub: push failed" >&2; return 1; fi
   return 0
 }
 `
@@ -171,7 +181,7 @@ func checkBranchTable(t *testing.T, script string, cases []branchCase) {
 }
 
 // TestReleaseWorkflowRerun runs the re-run decision of the workflow with
-// stubbed tools: same digest refuses without change, different digests
+// stubbed tools: same digest pushes the chart only, different digests
 // refuse overwrite, a partial push completes the missing registry, and a
 // transient inspect error fails instead of pushing over unknown state.
 func TestReleaseWorkflowRerun(t *testing.T) {
@@ -182,10 +192,10 @@ func TestReleaseWorkflowRerun(t *testing.T) {
 
 	checkBranchTable(t, script, []branchCase{
 		{
-			name:    "both hold the same digest",
+			name:    "both hold the same digest push the chart only",
 			env:     map[string]string{"TAG": "v0.1.0", "STUB_FORGE": "sha256:aaa", "STUB_HUB": "sha256:aaa"},
-			want:    1,
-			wantOut: "changes nothing",
+			want:    0,
+			wantOut: "MODE=chart-only",
 		},
 		{
 			name:    "different digests refuse",
@@ -431,4 +441,62 @@ func TestReleaseWorkflowChartFailure(t *testing.T) {
 	if code == 0 {
 		t.Errorf("chart push failure: exit code = 0, want a failure\n%s", out)
 	}
+}
+
+// TestReleaseWorkflowChartRerun runs the chart push after each re-run
+// mode: a missing chart version is pushed, a released chart version is
+// never overwritten, and an inspect error or a push error fails.
+func TestReleaseWorkflowChartRerun(t *testing.T) {
+	t.Parallel()
+
+	workflow := releaseWorkflow(t)
+	script := workflowStepScript(t, workflow, "Push the chart as an OCI artifact to the forge registry")
+
+	base := map[string]string{"TAG": "v0.1.0", "GHCR_TOKEN": "token", "GHCR_ACTOR": "owner"}
+	with := func(extra map[string]string) map[string]string {
+		env := make(map[string]string, len(base)+len(extra))
+		maps.Copy(env, base)
+		maps.Copy(env, extra)
+
+		return env
+	}
+
+	checkBranchTable(t, script, []branchCase{
+		{
+			name:    "first run pushes a missing chart",
+			env:     with(map[string]string{"MODE": "build", "STUB_CHART": "NOTFOUND"}),
+			want:    0,
+			wantOut: "",
+		},
+		{
+			name:    "chart-only re-run pushes a missing chart",
+			env:     with(map[string]string{"MODE": "chart-only", "STUB_CHART": "MISSING"}),
+			want:    0,
+			wantOut: "",
+		},
+		{
+			name:    "chart-only re-run with a released chart changes nothing",
+			env:     with(map[string]string{"MODE": "chart-only", "STUB_CHART": "RELEASED"}),
+			want:    1,
+			wantOut: "changes nothing",
+		},
+		{
+			name:    "build run refuses to overwrite a released chart",
+			env:     with(map[string]string{"MODE": "build", "STUB_CHART": "RELEASED"}),
+			want:    1,
+			wantOut: "refuses to overwrite",
+		},
+		{
+			name:    "transient chart inspect error fails closed",
+			env:     with(map[string]string{"MODE": "chart-only", "STUB_CHART": "ERROR:connection reset"}),
+			want:    1,
+			wantOut: "cannot inspect the chart reference",
+		},
+		{
+			name:    "chart push error fails",
+			env:     with(map[string]string{"MODE": "chart-only", "STUB_CHART": "NOTFOUND", "STUB_PUSH_FAIL": "1"}),
+			want:    1,
+			wantOut: "stub: push failed",
+		},
+	})
 }

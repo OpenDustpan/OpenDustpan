@@ -283,14 +283,15 @@ func TestReleaseJobGuardRejectsUntrustedEvents(t *testing.T) {
 }
 
 // checkRerunRules checks that the re-run rules inspect both registries
-// before the build: refuse when both hold the same digest, refuse on
-// different digests, and otherwise push only to the missing registry.
+// before the build: push the chart only when both hold the same digest,
+// refuse on different digests, and otherwise push only to the missing
+// registry.
 func checkRerunRules(t *testing.T, workflow string) {
 	t.Helper()
 
 	for _, want := range []string{
 		"apply the re-run rules",
-		"Both registries already hold the same digest",
+		"MODE=chart-only",
 		"refuses to overwrite",
 		"MODE=complete-hub",
 		"MODE=complete-forge",
@@ -328,11 +329,12 @@ func checkErrorPaths(t *testing.T, workflow string) {
 }
 
 // checkChartPush checks that the chart goes to the forge registry as a
-// packaged OCI artifact.
+// packaged OCI artifact, after a check for a released chart version.
 func checkChartPush(t *testing.T, workflow string) {
 	t.Helper()
 
 	for _, want := range []string{
+		"helm show chart",
 		"helm package deploy/helm/opendustpan",
 		"helm registry login ghcr.io",
 		"helm push \"opendustpan-$VERSION.tgz\" oci://ghcr.io/opendustpan/charts",
