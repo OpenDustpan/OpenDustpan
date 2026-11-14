@@ -38,7 +38,7 @@ opened with `OpenStore`. The server does not close it. `WithSQLite(path)` and
 
 A write through the ports of the handle (`secret.KeyStore`,
 `localuser.PasswordStore`, `access.GrantStore`) skips the checks and the
-audit entries of the services. Use the API for writes; do not use these ports
+audit entries of the services. Use the API for writes. Do not use these ports
 in place of the API.
 
 A third-party store uses the `With...Store` options and the conformance
