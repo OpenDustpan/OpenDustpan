@@ -1,12 +1,16 @@
 ## ADDED Requirements
 
-### Requirement: Session exchange and renew
+### Requirement: Session exchange
 
 When the launcher exchanges a live claim, the server SHALL open one job session and move the renewal of the claim to the session renew path.
 
 #### Scenario: Exchange then runner renew
 - **WHEN** the launcher exchanges the handoff token and the runner then renews the claim
 - **THEN** the runner renew answers sessionOpen true and does not renew the claim
+
+#### Scenario: Reused handoff token
+- **WHEN** the launcher exchanges a handoff token a second time
+- **THEN** the server answers bad-proof and opens no second session
 
 ### Requirement: Credential split
 
@@ -28,6 +32,10 @@ If the pool of the claim has the sweep purpose, then the server SHALL refuse a j
 - **WHEN** a runner of a pool with the sweep purpose asks for a job session
 - **THEN** the server refuses the session and opens none
 
+#### Scenario: Namespace sweep pool
+- **WHEN** a namespace pool is set to the sweep purpose
+- **THEN** the server refuses the setting
+
 ### Requirement: Source read
 
 When the launcher reads source through a live session, the server SHALL serve the snapshot of the commit of the job.
@@ -36,9 +44,17 @@ When the launcher reads source through a live session, the server SHALL serve th
 - **WHEN** the snapshot is still in build
 - **THEN** the server answers source-not-ready with Retry-After
 
-#### Scenario: Snapshot failed
-- **WHEN** the snapshot failed or an LFS object is absent
-- **THEN** the phase fails with the reason of the fetch, or the server answers not found for the object
+#### Scenario: Absent object
+- **WHEN** an LFS object is absent
+- **THEN** the server answers not found
+
+### Requirement: Cancel on renew
+
+When a cancel is requested for the claim, the server SHALL answer canceled true on the session renew.
+
+#### Scenario: Cancel seen
+- **WHEN** a cancel is requested and the launcher renews
+- **THEN** the renew answers canceled true
 
 ### Requirement: Credentials
 
@@ -64,9 +80,25 @@ If a log chunk breaks the size cap, the sequence rule or the hash check, then th
 - **WHEN** the body hash differs from Dustpan-Content-SHA256
 - **THEN** the server refuses the chunk and the sequence does not move
 
-#### Scenario: Crash after bytes
-- **WHEN** the server stops after it stored the bytes and before it moved the counter, and the launcher sends the same chunk again
-- **THEN** the server accepts the chunk once and counts it once
+#### Scenario: Out of order
+- **WHEN** the launcher sends a sequence number that skips one
+- **THEN** the server refuses the chunk
+
+### Requirement: Session caps
+
+If an upload passes a session cap, then the server SHALL refuse it with the code invalid.
+
+#### Scenario: Step chunk cap
+- **WHEN** the launcher sends chunk 20001 of one step
+- **THEN** the server refuses it
+
+#### Scenario: Phase chunk cap
+- **WHEN** the launcher sends chunk 100001 of one phase
+- **THEN** the server refuses it
+
+#### Scenario: Body cap
+- **WHEN** a JSON body is above 4 MiB
+- **THEN** the server refuses it
 
 ### Requirement: Plan commit once
 

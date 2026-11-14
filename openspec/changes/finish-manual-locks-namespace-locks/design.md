@@ -1,25 +1,89 @@
 ## Context
 
-Shared core pkg/manuallock holds the lock check; tool adapters, job dispatch and REST routes call it. Namespace locks widen coverage to every unit of the namespace.
+The shared core pkg/manuallock holds the check. Tool adapters, job dispatch and routes call it.
 
 ## Decisions
 
-1. **One coverage check for every caller.** The service exposes Covered(tool, namespace, unit) backed by one query that checks unit, collection and namespace rows; callers pass the stable namespace ID and unit reference, never a display name.
-2. **Dispatch check at claim time.** Job dispatch reads the lock in the same transaction that claims the next queued phase; a covered unit keeps state queued with reason locked and keeps its queue timeout.
+1. **One coverage check.** One Covered call checks unit, collection and namespace rows, with stable IDs.
+2. **Dispatch check at claim.** Dispatch reads the lock in the transaction that claims the phase.
 
 ## Structure
 
-Unexported lockSet built only by manuallock.Coverage(store, fence); the constructor loads unit, collection and namespace rows in one transaction so no caller can check one level only.
+An unexported lockSet is built only by a constructor that loads all three levels in one transaction, so no caller checks one level only.
 
 ## Risks
 
-- A running job that has not taken its tool lock is refused unless the job-token exception is exact.
-- Namespace lock fans out to many units in inventory and bulk answers.
+- A running job that has not taken its tool lock is refused if the time rule is wrong.
+- A namespace lock fans out to many units.
 
-## Layers (defense in depth)
+## Diagrams
 
-| Layer | Guard | Hostile test |
-| --- | --- | --- |
-| port adapter | Port adapter rejects a null or overlong reason and an unknown object kind. | Send empty reason and 501-character reason directly to the adapter; both fail. |
-| service | Service checks coverage for unit, collection and namespace rows, orders phase start time against lock time with fail-closed on equal or missing times, and allows a job-token tool lock only when its phase started before the lock. | Cover a unit after phase start then send a fresh tool lock; it fails while the pre-lock phase token passes; a lock written between claim and tool lock refuses the tool lock when the phase start time is equal or missing. |
-| HTTP handler | Handler checks unit:lock on the object of the lock and writes the audit entry with holder and reason, including denials. | Call lock without unit:lock on the namespace; the server answers 403 and writes a denial. |
+After this change:
+
+```mermaid
+sequenceDiagram
+participant C as Client
+participant D as Dispatch
+C->>D: Lock namespace
+D-->>C: Covered unit stays queued
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/manuallock]
+```
+
+New imports of this change (each one allowed by the module rules):
+
+- `internal/api/server` imports `pkg/manuallock`
+
+States and transitions after this change:
+
+```mermaid
+stateDiagram-v2
+[*] --> unlocked
+unlocked --> locked
+locked --> unlocked
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| bulk latency | 2000 | ms p95 | bulk lock of 100 IDs on SQLite and PostgreSQL |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+cli-->handler
+handler-->svc
+dispatch-->svc
+svc-->store
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Client to server | E | A caller without unit:lock locks a namespace. | boundary check | Reject reasons over 500 characters. | Send a 501-character reason; the server answers 400. |
+| Client to server | E | A caller without unit:lock locks a namespace. | limit | Limit bulk calls to 100 IDs. | Send 101 IDs; the server answers 400. |
+| Client to server | E | A caller without unit:lock locks a namespace. | authorize at point of use | Check unit:lock on the object. | Call without the grant; the server answers 403. |
+| Client to server | E | A caller without unit:lock locks a namespace. | fail closed | Deny on a missing grant and audit the denial. | Omit the grant; a denial entry exists. |
+
+## Contracts
+
+**manuallock**
+
+- Invariant: One active lock per object.
+- Invariant: Reason is 1 to 500 characters.
+- `Covered`: pre: Caller passes the namespace ID and unit reference.. Post: Answers holder and reason when any level matches..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Dispatch claim | A lock commits between read and dispatch. | Next claim tick. | The phase stays queued with reason locked. |
+| Bulk lock | One item fails. | Caller retries that ID. | Other items keep their results. |

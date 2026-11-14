@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #1215.
 
 ## Why
@@ -15,8 +19,8 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Save of a follows trigger with an unknown when value fails. | 400 with code trigger.bad-when and a message that names the allowed values applied and outputs-changed. | `curl -X PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
-| Apply of source with unchanged outputs starts no follower plan. | 200 with zero starts and an outcome of skipped with reason outputs-unchanged and the source version pair. | `curl /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Save of a follows trigger with an unknown when value fails. | 400 with code trigger.invalid and a message that names the allowed values applied and outputs-changed. | `curl -X PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Apply of source with unchanged outputs starts no follower plan. | No new plan job for followers with when outputs-changed; the trigger read still shows when outputs-changed. | `curl /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
 
 Evidence for the claims above:
 
@@ -26,9 +30,9 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Root-outputs digest written at each final state version, with no secret value in the digest or in any answer
+- Root-outputs digest written at each apply-counting final state version, with no secret value in the digest or in any answer
 - Field value outputs-changed for the when field of a follows trigger on the trigger routes
-- Compare in Dispatcher.Upstream that skips starts when the digest matches the immediate prior final digest
+- Compare in Dispatcher.Upstream that skips starts when the digest matches the immediate prior apply-counting final digest with version-pair binding
 - Docs page and e2e step with real CLI binaries that applies twice, once with a changed output
 
 Out of scope:
@@ -48,8 +52,15 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- A skipped start surprises: the follower page must show skipped with reason outputs-unchanged and the source version pair.
+- A skipped start surprises: the docs page names the dispatcher outcome reason outputs-unchanged.
 - Two words applied and outputs-changed cost a read; the docs page shows one example of each.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Dispatcher.Upstream decides follows starts. (`pkg/trigger/ports.go:192`)
+- Test helper drives Dispatcher.Upstream with an applied final version. (`pkg/trigger/triggertest/dispatcher.go:76`)
 
 ## ADR check
 
@@ -71,7 +82,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 241 changes decision 10; ADR 244 changes decision 10; ADR 265 changes decision 9; ADR 267 extends decision 1; ADR 271 changes decisions 7 and 8; ADR 273 changes decision 1; ADR 273 extends; ADR 286 changes; ADR 300 changes decision 2; ADR 300 changes decision 10; ADR 309 extends decision 5; ADR 353 changes decision 2. Chain to the end: ADR 241, ADR 244, ADR 265, ADR 267, ADR 271, ADR 273, ADR 286, ADR 300, ADR 309, ADR 353, ADR 248, ADR 313, ADR 343, ADR 299, ADR 307, ADR 310, ADR 338, ADR 303, ADR 336, ADR 328, ADR 359.
 - Current rule: this ADR, with ADR 241, 244, 265, 267, 271, 273, 286, 300, 309, 353.
 - Quote: "**A job reads the outputs of another unit on two paths, each with two checks.**"
-- Effect: Keeps the digest inside the server and starts reads through the existing sharing checks; the digest grants no read.
+- Effect: Keeps the digest inside the server; the digest grants no read.
 - Conflict: none.
 
 **ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged).
@@ -83,29 +94,17 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Ships the docs page for the when value in the same pull request.
 - Conflict: none.
 
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (wrong claim): proposal.md: The open questions section says the change is not spec-ready because the route POST /api/dustpan/v1/namespaces/acme/units is not in the API description. The usability table and the error table still use POST .../units/<unit-id>/triggers and GET .../units/<unit-id>/triggers. The change must fix these routes and pass the code check before the gate. Resolution: answered: Replaced angle-bracket IDs with brace placeholders so each command names an existing route from the coverage matrix.
-- R1.2 (scope): tasks.md 2.2 wires the when value through trigger create and replace, and the proposal lists follows trigger create and update as out of scope. The change does work that belongs to the follows-trigger part, or the scope is wrong. Resolution: answered: Narrowed out_of_scope to cycle check, caps and dispatch; the when value validation is in what_changes and tasks.
-- R1.3 (open question): specs/run-triggers/spec.md: The spec does not say which final digest is the prior one: the previous final version of the source, or the version of the last apply that started the follower. The issue says 'since its last apply'. The compare cannot be built without this answer. Resolution: answered: Spec now defines prior as the immediate previous final version of the same source.
-- R1.4 (open question): design.md Decision 1 replaces secret values with a fixed marker, so a change in a secret output does not change the digest. The spec scenario 'the digest changes or stays' does not say whether a secret-only change starts followers. No ADR answers this. Resolution: answered: Spec now states a secret-only change does not change the digest and starts nothing.
-- R1.5 (missing scenario): design.md Decision 2 says a missing prior digest counts as changed, and the risk section names backfilled versions. The spec, the tasks and the test list have no scenario for a missing prior digest. Resolution: answered: Added missing-prior-digest scenario that counts as changed.
-- R1.6 (missing scenario): proposal.md names the answer 'skipped with reason outputs-unchanged' and the source version pair, but the spec has no requirement for the outcome vocabulary, the reason values or the response shape of a skipped start. Resolution: answered: Added outcome vocabulary requirement with reason outputs-unchanged and the version pair.
-- R1.7 (failure mode): The change does not cover two applies of the source at the same time, or a restart between the final write and Dispatcher.Upstream. A follower may compare against a stale digest, or a skipped start may never be retried. Resolution: answered: Design risks now state serialized source writes, ordered committed reads, and replay from the stored final version.
-- R1.8 (adr conflict): proposal.md ADR check says ADR 213 decision 1 is 'Conflict: none' and that the digest uses 'the same boundary the job read checks use'. The quoted decision 1 says nothing about root outputs or digests. The claim is not supported by the quoted text. Resolution: answered: Rewrote ADR 213 effect to claim only server-side digest with no read granted, as the quote supports.
-- R1.9 (missing scenario): The spec and tasks have no scenario for OpenTofu and Pulumi shape drift, which the design names as a risk. The e2e check covers only one apply path on SQLite and PostgreSQL over TLS as stated in the proposal, not the canonicalization of both tools. Resolution: answered: Added canonicalization scenarios for Pulumi and OpenTofu shapes in the digest spec.
-
 ## Open questions
 
-none
+Not spec-ready: a code check fails: task "Add failing dispatcher test: unchanged outputs skip, changed outputs s" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Write the digest at final write and compare in Dispatcher.Upstream aga" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Run the full check: wiring, route actions, e2e, docs, usability." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>"; a code check fails: and 1 more.
 
 Questions considered and answered:
 
 - Should outputs-changed ship now or stay a later slice? ADR 267 decision 13 answers it: default applied, outputs-changed comes in a later slice; this change is that slice.
-- What does the server compare to decide that outputs changed? Issue #1215 answers it: store a digest of the root outputs at final write; the digest never leaves the server and holds no value.
-- Does an outputs-changed start bypass policy checks? ADR 267 decision 2 answers it: gates, approvals, freezes, locks and open-job limits apply to the job as to any job; no new path is added.
-- Which digest is prior, and does a secret-only change count as changed? The prior digest is the digest of the immediate previous final version of the source unit; secret values are replaced by a fixed marker before the digest, so a secret-only change does not change the digest and starts nothing.
+- What does the server compare? Issue #1215 answers it: a digest of the root outputs stored at final write; it never leaves the server and holds no value.
+- Does an outputs-changed start bypass policy checks? ADR 267 decision 2: gates, approvals, freezes, locks and open-job limits apply as to any job.
+- Which version is prior, and does a secret-only change count? The immediate previous apply-counting final version of the same source (ADR 267 decision 12). Secret plain values become a fixed marker; names, types and secret marks stay in the input, so a secret-only value change stays equal and a secret to plain flip differs.
+- Is a migration backfill needed? No backfill and no numbered migration. The baseline holds the new column. A version without a digest counts as changed once at the next compare.
+- What does a retry or replay compare? The version pair of the triggering apply. A replay gives the same pair and the dispatcher starts at most 1 plan per follower per source version.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

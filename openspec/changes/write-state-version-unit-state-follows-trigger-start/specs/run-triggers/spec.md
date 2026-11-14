@@ -6,7 +6,7 @@ When the server records a final state version of a source unit, the server SHALL
 
 #### Scenario: OpenTofu apply starts follower plan
 - **WHEN** unit A writes a final state version and unit B has a follows trigger on A with when applied
-- **THEN** the server starts a plan job with source kind trigger for unit B, once.
+- **THEN** the server starts a plan job with source kind trigger for unit B, once, and writes an audit entry for the automatic start.
 
 #### Scenario: Plan without final version starts nothing
 - **WHEN** an OpenTofu plan writes no final state version
@@ -14,26 +14,34 @@ When the server records a final state version of a source unit, the server SHALL
 
 ### Requirement: One run per version
 
-When the same final version event arrives again, the server SHALL start nothing new.
+When the same final version event arrives again on the intake path, the server SHALL start nothing new.
 
-#### Scenario: Duplicate event starts nothing new
-- **WHEN** the same final version event arrives a second time
+#### Scenario: Duplicate intake event returns first job
+- **WHEN** the same final version event arrives a second time on the intake path
 - **THEN** the server starts no new job and returns the first job.
+
+### Requirement: Older version is refused
+
+If an event names a version older than the last final version recorded for the unit, then the server SHALL return ErrVersionMismatch and start nothing.
 
 #### Scenario: Older version is refused
 - **WHEN** an event names a version older than the last final version recorded for the unit
 - **THEN** the server returns ErrVersionMismatch and starts nothing.
 
+#### Scenario: Concurrent older arrival is refused
+- **WHEN** a newer version already fired and an older version arrives later
+- **THEN** the server returns ErrVersionMismatch for the older event with no backfill.
+
 ### Requirement: Manual refire after missed event
 
-When a caller fires a final state version by hand, the server SHALL start one plan per matching follows trigger unless that version already fired.
+When a caller fires a final state version by hand through the manual fire route, the server SHALL start one plan per matching follows trigger unless that version already fired.
 
 #### Scenario: Refire of unfired version starts one plan per follower
 - **WHEN** a caller fires a final version that no follower processed yet
 - **THEN** the server starts one plan job per matching follows trigger for that version.
 
-#### Scenario: Refire of fired version starts nothing
-- **WHEN** a caller refires a version that the followers already processed
+#### Scenario: Refire of fired version is refused
+- **WHEN** a caller refires a version through the manual fire route that the followers already processed
 - **THEN** the server starts nothing new and answers 409 with code trigger.version-mismatch.
 
 ### Requirement: Per-trigger errors do not stop others
@@ -42,7 +50,7 @@ When the job service refuses the plan of one follower, the server SHALL record t
 
 #### Scenario: One refusal leaves others running
 - **WHEN** the job service refuses the plan for one follower of a source
-- **THEN** the server records the error on that trigger and still starts the plans of the other followers.
+- **THEN** the server stores the error on that trigger row and still starts the plans of the other followers.
 
 ### Requirement: Crash replay is safe
 
@@ -66,11 +74,15 @@ When a plan that a follows trigger started reads an output of the source unit, t
 
 #### Scenario: Missing saver reads nothing
 - **WHEN** a follows plan reads a source output while the last saver is missing, deleted, or disabled
-- **THEN** the server denies the read.
+- **THEN** the server denies the read and writes an audit entry for the denial.
 
 #### Scenario: Secret output needs secrets action
 - **WHEN** a follows plan reads a secret output of the source
 - **THEN** the server denies the read without unit:read-secrets.
+
+#### Scenario: Saver loses grant after save
+- **WHEN** a follows plan reads a source output after the last saver lost unit:read-outputs
+- **THEN** the server denies the read.
 
 ### Requirement: Version ID charset
 
@@ -131,3 +143,11 @@ When a stored follows trigger row fails validation, the server SHALL start no pl
 #### Scenario: Stored row fails validation
 - **WHEN** a stored follows trigger row no longer validates
 - **THEN** the server starts no plan for that row.
+
+#### Scenario: Trigger deleted before fan-out starts nothing
+- **WHEN** a trigger is deleted between the version write and the fan-out
+- **THEN** the server starts no plan for the deleted trigger.
+
+#### Scenario: Cross-namespace source starts nothing
+- **WHEN** a follows trigger names a source unit in another namespace
+- **THEN** the server refuses the trigger save.

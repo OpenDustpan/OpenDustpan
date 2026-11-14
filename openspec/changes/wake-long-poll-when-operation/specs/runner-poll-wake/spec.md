@@ -2,7 +2,7 @@
 
 ### Requirement: Wake on same-instance start
 
-When a durable operation of a kind of the pool starts on the same instance, the server SHALL wake each waiting poll of that pool.
+When a durable operation of a kind of the pool starts on the same instance, the server SHALL publish the kind and wake each waiting poll of that pool.
 
 #### Scenario: Same-kind start wakes poll
 - **WHEN** a durable operation of a kind of the pool starts on the same instance while a poll waits
@@ -16,9 +16,13 @@ When a durable operation of a kind of the pool starts on the same instance, the 
 - **WHEN** a start rolls back
 - **THEN** the poll keeps waiting until the timer or the deadline
 
+#### Scenario: Thundering herd keeps losers waiting
+- **WHEN** many polls of one pool wait and one operation of a kind of the pool starts
+- **THEN** one waiting poll gets the work and the rest keep waiting
+
 ### Requirement: Claim on subscribe
 
-When a poll starts to wait, the server SHALL run Claimer.Claim at once before it waits on the signal.
+When a poll starts to wait, the server SHALL subscribe for its pool kinds and run Claimer.Claim at once before it waits on the signal.
 
 #### Scenario: Commit before subscribe
 - **WHEN** an operation commits just before a poll subscribes
@@ -52,13 +56,21 @@ When a runner with one open poll opens a second poll, the server SHALL answer 42
 - **WHEN** a runner at its rate limit sends one more poll while one poll waits
 - **THEN** the server answers 429 rate-limited and holds no new open poll
 
+### Requirement: Wait lifetime
+
+When the poll request ends or the server shuts down, the server SHALL unsubscribe the wait and leak no goroutine.
+
+#### Scenario: Client end unsubscribes
+- **WHEN** the client ends the request or the server shuts down during a wait
+- **THEN** the server unsubscribes the poll and leaks no goroutine
+
 ### Requirement: Retired runner ends wait
 
 When a runner is retired while its poll waits, the server SHALL end the poll without work.
 
 #### Scenario: Retire during wait
 - **WHEN** an administrator retires the runner while its poll waits
-- **THEN** the waiting poll ends with 401 or 403 and claims no work
+- **THEN** the waiting poll ends without work at the next wake or 5 s tick and the next poll fails authentication as retired
 
 ### Requirement: Drained runner keeps wait
 

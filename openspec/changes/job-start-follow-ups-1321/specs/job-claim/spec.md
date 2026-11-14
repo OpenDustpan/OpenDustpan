@@ -14,11 +14,15 @@ When the read of a job or its namespace fails during a poll, the server SHALL sk
 
 ### Requirement: poison-count
 
-When the poll skips an operation whose job or namespace read failed, the server SHALL increase the poison skip count.
+When the poll skips an operation whose job or namespace read failed, the server SHALL increase the counter job_claim_poison_skips_total.
 
 #### Scenario: Poison skip counted
 - **WHEN** the poll skips an operation whose job or namespace read failed
-- **THEN** the poison skip count increases by one
+- **THEN** the counter job_claim_poison_skips_total increases by one and the log names the job reference
+
+#### Scenario: Poison alert
+- **WHEN** one operation is skipped 10 times for failed reads
+- **THEN** the server raises an operator alert with the job reference
 
 ### Requirement: bound-count
 
@@ -30,16 +34,16 @@ When operations exceed the poll bound of 64, the server SHALL count each skipped
 
 ### Requirement: bound-fairness
 
-When operations were skipped because of the poll bound of 64, the server SHALL process each skipped operation on a later poll.
+When operations were skipped because of the poll bound of 64, the server SHALL process each skipped operation on a later poll in poll order.
 
 #### Scenario: Bound skips processed later
 - **WHEN** operations were skipped because of the poll bound of 64
-- **THEN** a later poll processes each skipped operation with no starvation
+- **THEN** a later poll in poll order processes each skipped operation from its cursor
 
 ### Requirement: bind-phase-check
 
-When the claim phase does not match the job phase, the server SHALL refuse the bind.
+While the bindClaim phase check stays unreachable, the server SHALL keep the check with a defense-in-depth comment.
 
-#### Scenario: Phase mismatch refused
-- **WHEN** the claim phase does not match the job phase
-- **THEN** the server refuses the bind
+#### Scenario: Defense comment present
+- **WHEN** a reviewer reads bindClaim in pkg/store/internal/jobstore/apply.go
+- **THEN** bindClaim carries a comment that states the phase check is defense in depth

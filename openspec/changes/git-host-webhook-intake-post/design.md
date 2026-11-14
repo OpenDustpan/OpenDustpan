@@ -1,30 +1,84 @@
 ## Context
 
-Slice 1 holds the connection store, the installation app registration and map, and Check. This change adds the hint intake, the read adapter methods, and the scoped token, without changing stored shapes from slice 1. Commit waits for the RFC 89 Q4 spike.
+Slice 1 holds the store, the registration map and the check. This change adds the intake, the reads and the scoped token.
 
 ## Decisions
 
-1. **Hint parsing stays in the port.** Parse GitHub events in pkg/forge/github behind the Forge port ParseEvent, with an unexported verifier that checks X-Hub-Signature-256 against the two stored secrets from one registration snapshot with constant-time compare per secret. Either match accepts. An unexported dedupe store holds delivery IDs for 24 hours as a best-effort bound only.
-2. **Intake answers 204 and drops on replicas.** Serve POST /webhooks/{hook ID} outside /api/dustpan/v1 with no auth actions, always answer 204 after record of accept or reject, and increment git_host_event_rejected_total on reject. A replica drops an event for a namespace it does not serve. A repeated delivery causes no second effect when the state of the effect shows the hint already applied.
-3. **Adapter methods and scoped token.** Implement Head, ReadFile, Compare, FindCommit, OpenReview, ReadReview and CloseReview in the GitHub adapter behind capability checks that return ErrUnsupported when the host or auth kind cannot do the call. Hold Commit behind its capability until the RFC 89 Q4 spike fixes author and signature. Add RepoToken that mints a one-repository contents-read token of at most 1 hour with Scoped set.
-4. **Duplicate hints cause no second effect.** Make hints idempotent on the hint key of hook ID plus delivery ID plus event effect key of repository, event type and head sha, so a duplicate that reaches another member or arrives after a restart causes no second effect. The dedupe store is a best-effort bound, and the effect check is the guard that stays correct across members and restarts. When the effect state is unavailable the server drops without effect and counts a reject.
+1. **Hint parsing in the port.** ParseEvent for GitHub uses an unexported verifier that compares X-Hub-Signature-256 against the stored secrets of one registration snapshot in constant time. The number of valid secrets is the active set; the overlap end is held by the open question.
+2. **Intake answers 204.** The route is outside /api/dustpan/v1, takes no auth action and answers 204 with an empty body. A reject counts git_host_event_rejected_total.
+3. **Adapter methods and scoped token.** Implement the Files, Commits and Reviews methods behind capabilities, and RepoToken with Scoped set and an expiry of at most 1 hour.
+4. **Duplicates.** Hint record and effect mark are one atomic check-and-set. The 24-hour delivery store is a best-effort bound.
 
 ## Structure
 
-Unexported type webhookIntake with constructor newWebhookIntake that takes the Forge port, the registration map, the dedupe store and the meter, and checks non-nil and secret length. The constructor is the only way to make a value, so missing checks cannot compile into the route.
+Unexported type webhookIntake with constructor newWebhookIntake that checks its ports and the secret length.
 
 ## Risks
 
-- Replayed deliveries start duplicate hints.
-- Unscoped token leak to runners.
-- Hook hostname tied to one member breaks failover.
-- Log or error exposes secret or token.
+- Replayed delivery causes a second effect
+- Unscoped token reaches a runner
+- Hook URL tied to one member
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| signature and dedupe | Boundary: verify X-Hub-Signature-256 with constant-time compare against each of two stored secrets from one snapshot; reject short secrets, unknown hook ID, bad body and replayed effect. | Send forged body, wrong secret, replayed delivery ID and short secret directly to the adapter and check reject and metric increment. |
-| hook mapping | Containment: map hook ID to app registration through the installation map only; never take a namespace or connection ID from the request; look up installation-to-connection only from stored data. | Send valid signature with guessed hook ID and with path traversal in hook ID and check 204 with reject and no lookup leak. |
-| fail-closed intake | Effect limit: answer 204 for every request with no body echo; bound body size and parse time; drop on replica without fetch. | Send 10 MB body, a bad-signature body above the bound, and 10000 rapid replays and check bound, 204 and stable memory. |
-| scoped token use | Point of use: enforce repo-token and git-access capabilities on the runner git path and refuse any token with Scoped not set. | Call the runner git credential path with an unscoped token and check refusal even when the token is otherwise valid. |
+| signature | Constant-time compare against the stored secrets; reject short secrets. | Forged body and wrong secret sent to the adapter count a reject. |
+| hook mapping | Hook ID resolves through the installation map only. | Traversal hook ID gives 204 and a reject. |
+| scoped token use | The runner path refuses a token with Scoped not set. | A valid unscoped token is refused. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+GitHub->>Server: POST /webhooks/{hook ID}
+Server-->>GitHub: 204
+```
+
+New imports of this change (each one allowed by the module rules):
+
+- `pkg/forge/github` imports `pkg/forge`
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| request bound | 1 | MB max | webhook body read |
+| token lifetime | 1 | hours max | RepoToken expiry |
+| secret strength | 32 | bytes min | event secret length |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+GH[GitHub]-->INTAKE[POST /webhooks/hook ID]
+INTAKE-->VERIFY[verifier]
+VERIFY-->REG[registrations]
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Internet to server | S | Attacker forges a push delivery. | boundary check | Constant-time signature check. | Forged body counts a reject. |
+| Internet to server | S | Attacker forges a push delivery. | encode or contain | Hook ID resolves through the map only. | Traversal hook ID gives 204 and a reject. |
+| Internet to server | S | Attacker forges a push delivery. | limit | Body bound of 1 MB. | A 10 MB body is cut and answers 204. |
+| Internet to server | S | Attacker forges a push delivery. | authorize at point of use | The runner path needs a scoped token. | An unscoped token is refused. |
+| Internet to server | S | Attacker forges a push delivery. | fail closed | Drop on error and count a reject. | Unreadable effect state drops with 204. |
+
+## Contracts
+
+**webhookIntake**
+
+- Invariant: Every answer is 204 with an empty body.
+- Invariant: Hint record and effect mark are one atomic step.
+- `HandleDelivery`: pre: Body within the size bound. Post: A verified hint is recorded once per effect key.
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Hint apply | Duplicate delivery after restart | No retry; the effect check drops it. | Single hint effect. |
+| RepoToken | Git host refuses the mint | No retry; return a refusal that names the host. | No token issued. |

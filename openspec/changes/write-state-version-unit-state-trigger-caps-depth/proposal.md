@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #1214.
 
 ## Why
@@ -51,6 +55,15 @@ Where the path still costs the person time or surprises them:
 - A refused save shows two numbers at once when both caps bind; the person fixes one cap at a time.
 - A loop path lists unit references with tool and namespace, which is long for chains across tools.
 
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Trigger cycle error code exists. (`internal/errcode/catalog_trigger.go:7`)
+- Trigger invalid error code exists. (`internal/errcode/catalog_trigger.go:13`)
+- Trigger not-found error code exists. (`internal/errcode/catalog_trigger.go:16`)
+- A followers query test exists in the trigger store suite. (`pkg/store/internal/triggerstore/triggerstore_test.go:198`)
+
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
@@ -64,7 +77,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "Cycles (question 6). The server refuses a cycle at save. An adapter serializes the trigger writes of one namespace, so that two saves at the same time cannot skip the check. A depth guard at run time refuses a chain that"
 - Quote: "**A `follows` trigger names a source unit, and the server refuses a cycle at save.** After the source applies, a plan of the unit starts. The source is a unit reference, so a unit of one tool can follow a unit of another"
 - Quote: "The error of a cycle names the path. It names the units of the loop in order. The adapter can add the names that the tool of each unit uses."
-- Effect: This change implements the caps of decision 20, the save-time cycle refusal of decisions 7 and 17, and the run-time depth guard of decision 17 with the path names of decision 10. The fixed depth 10 comes from the pack scope, not from the ADR.
+- Effect: This change implements the caps of decision 20, the save-time cycle refusal of decisions 7 and 17, and the run-time depth guard of decision 17 with the path names of decision 10. Cap refusals use error code trigger.invalid. Cycle refusals use error code trigger.cycle. The fixed depth 10 comes from the pack scope, not from the ADR.
 - Conflict: none.
 
 **ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged).
@@ -76,29 +89,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: The trigger caps and the depth guard are visible as errors and settings, so the change ships its docs page in the same pull request.
 - Conflict: none.
 
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (adr conflict): proposal.md says the 422 refusal for a save above a cap names the number of the cap, but ADR 267 decision 10 requires the cycle error to name the loop path; the proposal's Open questions 'none' is not backed by a test that shows the 422 body shape in the spec, so the error contract for caps and cycles is unsettled (proposal.md, ADR check quotes of decision 10). Resolution: answered: Per-unit and per-source specs now state the 422 body shape: cap refusals name the cap number, cycle refusals name the loop path in order, with scenarios for each shape.
-- R1.2 (failure mode): design.md Risks: a concurrent save skips the cycle check if the adapter does not serialize writes of one namespace; the design only uses a per-namespace mutex in unexported triggerStore, but no requirement or scenario says what happens when the adapter (a third-party store, per the Embedder persona) does not serialize. The mutual exclusion is not enforced by a type or a conformance check that fails for such an adapter. Resolution: answered: Added serialized-writes requirement with concurrent-save scenario, design transaction rule, and a conformance task that fails a store that does not serialize per namespace.
-- R1.3 (missing scenario): specs/run-triggers/spec.md has no scenario for a save that adds a trigger when the source's follower count is at 50 and the unit's trigger count is at 20 at once (both caps bind), nor for a save that changes an existing trigger's source without adding a row (PUT), so the count rule for PUT is not specified. Resolution: answered: Added both-caps-bind scenario and PUT count-rule scenarios to the per-unit and per-source requirements.
-- R1.4 (missing scenario): No requirement covers a refusal of a trigger save by the cap when the cap is lowered below the current count by an administrator: the spec says caps are read at each save but does not say whether existing triggers above the new cap are kept, refused on next save, or removed. Resolution: answered: Caps requirement now states existing rows above a lowered cap stay and only a save that adds above the new cap is refused, with raised-cap and lowered-cap scenarios.
-- R1.5 (failure mode): design.md Risks: a changed cap does not apply because the old value is cached past the save; the design loads caps in newTriggerStore, which conflicts with 'read at each save' in Decision 1 and the spec. The design text is self-contradictory and no test covers a cache across a settings change. Resolution: answered: Design now reads caps inside Put at each save with no cached copy and the structure holds no cap copy; task checks a settings change between saves.
-- R1.6 (failure mode): The depth counter is carried in the job origin, but no requirement covers a restore or a row of another version that creates a loop with the origin reset, nor a job started manually (manual fire) that loses or resets depth; the issue's stated threat (loop from a restore) is not tested. Resolution: answered: Depth requirement now covers missing origin starts at zero, manual fire resets to zero, and a restore-made loop still stops at depth 10.
-- R1.7 (open question): The fixed depth of 10 and the audit entry plus log line are taken from the issue scope, but ADR 267 decision 17 does not state the number; the change treats 'depth 10' as settled with no ADR and no owner decision, while the proposal's Open questions say none. Resolution: answered: No open question: the fixed depth 10 comes from the roadmap and issue scope in this pack; the considered answer now separates the ADR guard layer from the pack number.
-- R1.8 (wrong claim): proposal.md cites 'ADR 267 decision 20' and 'decision 17' for the depth guard and says the question is answered; decision 17 names the depth guard without a number, so the claim that the decision answers the fixed depth is not supported by the quoted text. Resolution: answered: Corrected the considered answer: ADR 267 decision 17 names the guard without a number; the number 10 is pack scope, quoted in evidence.
-- R1.9 (scope): tasks.md 2.1 and 2.2 check 'settings GET shows both caps as effective values', but the e2e list does not cover the console or the CLI for changing a cap; the usability check and the 'Each default shows its effective value' rule are satisfied only for the GET path, and the docs page task 2.3 is not in the Why user path step 3 (ask an administrator). Resolution: answered: User path step 3 now names the docs page for the admin cap change, tasks check settings GET effective values plus the docs page, and console stays out of scope.
-- R1.10 (missing scenario): The spec has no scenario for a refusal of a save that the audit or log write itself fails for, nor for an outage of the store during the serialized write; the failure path of the depth refusal (audit write fails) is not defined. Resolution: answered: Added fail-closed requirement: when the audit write for a refused start fails the start stays refused, plus a store-outage save-fails scenario.
-
 ## Open questions
 
 none
 
 Questions considered and answered:
 
-- What are the follower caps and when does a changed cap apply? ADR 267 decision 20 answers it: 20 triggers per unit and 50 followers per source, changeable by an administrator and read at each save with no cache.
-- How are trigger cycles refused and what does each 422 body hold? ADR 267 decisions 7 and 17 answer it: refuse the save, serialize trigger writes of one namespace, and name the loop in order per decision 10. The 422 body for a cap refusal names the cap number; the 422 body for a cycle names the loop path.
-- What stops a loop that a restore or another version row creates and where does the number 10 come from? ADR 267 decision 17 answers the guard layer only: a second layer at run time. The fixed depth 10, the audit entry, and the log line come from the issue scope and the roadmap scope in this pack, not from the ADR.
+- What are the follower caps and when does a changed cap apply? ADR 267 decision 20 answers it: 20 triggers per unit and 50 followers per source, changeable by an administrator and read at each save with no cache. The installation settings resource holds both caps with defaults 20 and 50.
+- How are trigger cycles refused and what does each 422 body hold? ADR 267 decisions 7 and 17 answer it: refuse the save, serialize trigger writes of one namespace, and name the loop in order per decision 10. Cap refusals use trigger.invalid with the cap number. Cycle refusals use trigger.cycle with the loop path.
+- What stops a loop that a restore or another version row creates and where does the number 10 come from? ADR 267 decision 17 answers the guard layer only: a second layer at run time. The fixed depth 10, the audit entry, and the log line come from the issue scope and the roadmap scope in this pack, not from the ADR. No open question stays because the pack fixes the number.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

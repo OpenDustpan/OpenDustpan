@@ -1,25 +1,102 @@
 ## Context
 
-The job planner reads pool, code location, profile reference and steps from the unit settings with namespace defaults as fallback. A location in the start request is an explicit override. Trigger starts carry trigger ID, last saver and caller for the output-read check. The planner snapshots the resolved inputs at start; each output read uses the grant state at that read.
+The planner reads pool, location, profile reference and steps from unit settings with namespace defaults as fallback.
 
 ## Decisions
 
-1. **Settings resolution with explicit override and start snapshot.** Planner resolution order: request override then unit settings then namespace unit defaults then refusal with the docs command. Override of pool needs namespace:manage-runners on the namespace; override of location or steps needs unit:define-steps on the unit. The planner stores the resolved snapshot on the job and a later settings edit changes only later starts and later reads use current grants.
-2. **Trigger saver check at each read.** Output-read handler calls trigger.OutputReadCheck.Allow for each job with Trigger set after check 1 passes, with the manual-fire caller from StartedBy resolved through the same SaverResolver. Any resolver or store error denies. Check 1 passes when a sharing rule names the unit, its collection or its namespace of the job. The profile reference stays a stable ID in settings; provider open and secret resolve stay in the profile item.
-3. **Stable profile reference and missing pool behavior.** Unit settings hold the profile stable ID, never the profile name. The start snapshot holds the ID and the revision in use. A rename keeps the ID so later starts still resolve. A removed profile makes the next start fail closed with 422; a queued job whose pool is deleted stays queued and a run with no runner stays queued per the runner item.
+1. **Settings resolution with snapshot.** Order: request override, unit settings, namespace defaults, refusal. Resolved inputs freeze on the job at start.
+2. **Trigger saver check at each read.** The output-read handler calls OutputReadCheck.Allow for a job with a trigger, after check 1. Any error denies.
+3. **Stable profile reference.** Settings hold the profile stable ID, never its name. A removed profile fails the next start closed.
 
 ## Structure
 
-Unexported settingsResolver built only by NewSettingsResolver with store, defaults and profile reference reader; Start and Allow take its value and never read raw request fields directly.
+Unexported settingsResolver with a constructor NewSettingsResolver; the planner reads no raw request fields directly.
 
 ## Risks
 
-- Pulumi default steps stay undefined until the runner recorder step design lands; a Pulumi start with no stored steps is refused with the docs command.
+- Pulumi default steps stay undefined; a start with no stored steps is refused.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| handler | Handler checks authorization for pool override, location override, manual lock, and sharing rule plus saver check at each read. | Start with pool override without namespace:manage-runners gets 403; read after saver loses unit:read-outputs on source gets 403. |
-| service | Service resolves settings only from stored unit settings and defaults and refuses a trigger start with no stored location. | Trigger start with empty request location and no stored location is refused; forged Trigger with unknown saver denies reads. |
-| port adapter | Store adapter resolves the saver without rebuilding the administrator flag and fails closed on missing, deleted, disabled principal or port error. | Saver deleted or disabled between start and read denies the next read. |
+| handler | Authorization of overrides and saver check at each read. | Pool override without namespace:manage-runners gets 403. |
+| service | Settings come from stored data only. | Start with no stored location is refused. |
+| port adapter | Saver resolution fails closed. | Deleted saver denies the next read. |
+
+## Diagrams
+
+Today: `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings` on main (from the route table and the handler body, route row internal/api/settings/routes.go:98, handler internal/api/settings/serve.go:30).
+
+```mermaid
+sequenceDiagram
+participant C as Client
+participant R as GET route
+participant H as getSettings
+participant AZ as Authorizer
+participant SE as Service
+participant Fservice as service
+C->>R: GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/settings
+R->>AZ: no action (ScopeAuthorized)
+R->>H: getSettings
+H->>SE: Read
+H->>Fservice: Read
+H-->>C: answer
+```
+
+After this change:
+
+```mermaid
+sequenceDiagram
+participant A as admin
+participant P as planner
+A->>P: save settings
+P->>P: resolve and queue
+```
+
+States and transitions after this change:
+
+```mermaid
+stateDiagram-v2
+[*] --> queued
+queued --> running
+running --> failed
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| correctness | deny on the next read | reads | output reads after saver grant change |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+CLI-->API
+API-->PLAN
+PLAN-->SET
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| CLI to server API | E | A forged location runs code with the rights of another unit. | boundary check | Reject oversize and unknown fields. | Oversize location answers 400. |
+| CLI to server API | E | A forged location runs code with the rights of another unit. | encode or contain | Resolve profile by stable ID. | Cross-namespace ID answers 422. |
+| CLI to server API | E | A forged location runs code with the rights of another unit. | limit | Size limit on settings. | Oversize settings body answers 400. |
+| CLI to server API | E | A forged location runs code with the rights of another unit. | authorize at point of use | Check override actions at the route. | Pool override without grant gets 403. |
+| CLI to server API | E | A forged location runs code with the rights of another unit. | fail closed | Deny on store error. | Settings store error gives 503 with no job. |
+
+## Contracts
+
+**job**
+
+- Invariant: Resolved inputs freeze at start.
+- `Start`: pre: Caller holds unit:run-plan.. Post: Job carries the resolved snapshot..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Resolve settings | Store read fails. | Caller retries. | No job; 503. |

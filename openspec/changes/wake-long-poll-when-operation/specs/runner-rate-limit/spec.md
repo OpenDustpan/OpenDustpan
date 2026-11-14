@@ -2,19 +2,31 @@
 
 ### Requirement: Poll rate limit
 
-When a runner sends more than 10 poll requests in one second, the server SHALL answer 429 with code rate-limited and a Retry-After header.
+When a runner sends more than 10 poll requests in one fixed-window second on the server clock, the server SHALL allow the excess only after the window and answer 429 with code rate-limited and a Retry-After header.
 
 #### Scenario: Eleventh poll limited
 - **WHEN** one runner sends an 11th poll in one second
 - **THEN** the server answers 429 rate-limited with Retry-After: 1 and the other runner still polls
 
+#### Scenario: Fixed window edge
+- **WHEN** a runner sends 10 polls at the end of one window and 10 at the start of the next
+- **THEN** the count resets at the next window on the server clock
+
+#### Scenario: Limited poll keeps nonce
+- **WHEN** the limiter refuses a poll
+- **THEN** the server stores no nonce and a retry with a new proof is accepted
+
 ### Requirement: Session rate limit
 
-When a job session sends more than 50 requests in one second, the server SHALL answer 429 with code rate-limited and a Retry-After header.
+When a job session sends more than 50 requests in one fixed-window second on the server clock, the server SHALL allow the excess only after the window and answer 429 with code rate-limited and a Retry-After header.
 
 #### Scenario: Fifty-first session request limited
 - **WHEN** one job session sends a 51st request in one second
 - **THEN** the server answers 429 rate-limited with Retry-After: 1
+
+#### Scenario: Launcher backs off
+- **WHEN** a session request gets 429 rate-limited
+- **THEN** the launcher waits 1 second and retries and the claim stays live
 
 ### Requirement: Retry-After value
 

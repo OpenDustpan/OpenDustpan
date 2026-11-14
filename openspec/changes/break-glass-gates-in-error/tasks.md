@@ -1,11 +1,18 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing conformance tests for error pass, replay, expiry on the store clock, wrong unit or kind, unlocked-write and unit-import kinds, evaluate mode, refusals, deny refusal, and override audit entry. Check: TestStateWriteBreakGlass_ErrorPassesOnce, TestStateWriteBreakGlass_ReplayRefuses, TestStateWriteBreakGlass_BadReasonRefuses, and TestStateWriteBreakGlass_DenyRefuses fail on main.
-- [ ] 1.2 Implement break-glass check, single-use pass store with conditional consume, and decision record link. Check: `go test ./pkg/gate/... ./internal/api/stategate/...` passes.
-- [ ] 1.3 Wire break-glass through Pulumi and TFE-compatible state.write routes with the namespace:break-gate-error action. Check: `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` shows the break-glass marker on the passed write.
+- [ ] 1.1 Write failing tests for error pass, replay, expiry, wrong unit or kind, evaluate mode, refusals, deny refusal and audit entry. Check: TestStateWriteBreakGlass_ErrorPassesOnce, TestStateWriteBreakGlass_ReplayRefuses, TestStateWriteBreakGlass_BadReasonRefuses and TestStateWriteBreakGlass_DenyRefuses fail on main.
+- [ ] 1.2 Implement the check, the pass store and the record marker. Check: `go test ./pkg/gate/...` passes.
 
-## 2. Definition of done
+## 2. Side effects (computed from main)
 
-- [ ] 2.1 Add e2e step against real CLI for error pass and single use. Check: E2E step with real CLI writes state while a unit gate in enforce mode is in error, then reuses the pass and fails.
-- [ ] 2.2 Write docs page for break-glass at state.write. Check: Docs page for state.write break-glass lists reason, fresh auth, 15-minute single use and override audit.
-- [ ] 2.3 Run usability check, wiring check and make check. Check: `opendustpan status` names the gate in error and `make check` reports zero findings.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 3. Definition of done
+
+- [ ] 3.1 Wire the fields into the Pulumi and TFE-compatible routes with the action namespace:break-gate-error. Check: Route test lists the action and its object.
+- [ ] 3.2 Add an e2e step with the real Pulumi CLI. Check: make e2e step: error pass proceeds once and replay fails.
+- [ ] 3.3 Write the docs page and run the usability check. Check: The page lists reason, fresh auth, 15 minutes and single use; `make check` reports zero findings.

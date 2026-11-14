@@ -1,81 +1,77 @@
 ## ADDED Requirements
 
-### Requirement: List and read pools
+### Requirement: List pools
 
 When a principal with namespace:read-runners lists pools, the server SHALL return each pool of the namespace with no join secret.
 
-#### Scenario: List pools in a namespace
-- **WHEN** A principal with namespace:read-runners lists the pools of a namespace
-- **THEN** The server returns each pool of the namespace with its status and release and no join secret.
+#### Scenario: List pools
+- **WHEN** a principal with namespace:read-runners lists the pools of a namespace
+- **THEN** the server returns each pool with status and release and no join secret
 
-#### Scenario: No credential gets 401
-- **WHEN** A caller with no credential requests a pool route
-- **THEN** The server answers 401 and returns no pool data.
+#### Scenario: No credential
+- **WHEN** a caller with no credential requests a pool route
+- **THEN** the server answers 401 and returns no pool data
 
-#### Scenario: No grant gets 403
-- **WHEN** A principal without namespace:read-runners requests a pool route
-- **THEN** The server answers 403 and returns no pool data.
+#### Scenario: No grant
+- **WHEN** a principal without namespace:read-runners requests a pool route
+- **THEN** the server answers 403 and returns no pool data
 
-### Requirement: Create and change a pool
+### Requirement: Create pool
 
-When a principal with namespace:manage-runners creates, changes, or deletes a pool, the server SHALL store the change and its audit entry in one transaction.
+When a principal with namespace:manage-runners creates a pool, the server SHALL store the pool and one pool-created audit entry in one transaction.
 
-#### Scenario: Create pool writes audit
-- **WHEN** A principal with namespace:manage-runners creates a pool
-- **THEN** The server stores the pool and one pool-created audit entry in the same transaction.
+#### Scenario: Create
+- **WHEN** a principal with namespace:manage-runners creates a pool
+- **THEN** the server stores the pool and one audit entry together
 
-#### Scenario: Change pool with runners
-- **WHEN** A principal with namespace:manage-runners changes a pool that still holds runners
-- **THEN** The server stores the change and one pool-changed audit entry in the same transaction.
+#### Scenario: Audit fails
+- **WHEN** the audit write fails
+- **THEN** the server stores no pool row and no audit entry
 
-#### Scenario: Delete pool writes audit
-- **WHEN** A principal with namespace:manage-runners deletes a pool
-- **THEN** The server deletes the pool and stores one pool-deleted audit entry in the same transaction.
+#### Scenario: Duplicate name
+- **WHEN** a principal creates a pool with a name that exists
+- **THEN** the server answers 409 and stores no row
 
-### Requirement: Drain and retire runners
+### Requirement: Change and delete pools
+
+When a principal with namespace:manage-runners changes or deletes a pool, the server SHALL store the change and its audit entry in one transaction.
+
+#### Scenario: Delete
+- **WHEN** a principal deletes a pool with no live runner and no active token
+- **THEN** the server deletes the pool and stores one pool-deleted audit entry
+
+#### Scenario: Delete in use
+- **WHEN** a principal deletes a pool with a live runner
+- **THEN** the server keeps the pool and answers 409
+
+### Requirement: Drain and retire
 
 When a principal with namespace:manage-runners drains or retires a runner, the server SHALL store the change and its audit entry in one transaction.
 
-#### Scenario: Drain runner writes audit
-- **WHEN** A principal with namespace:manage-runners drains a runner
-- **THEN** The server marks the runner draining and stores one runner-drained audit entry in the same transaction.
+#### Scenario: Drain
+- **WHEN** a principal drains a runner
+- **THEN** the server marks it draining and stores one runner-drained entry
 
-#### Scenario: Retire runner writes audit
-- **WHEN** A principal with namespace:manage-runners retires a runner
-- **THEN** The server retires the runner and stores one runner-retired audit entry in the same transaction.
+#### Scenario: Retire
+- **WHEN** a principal retires a runner
+- **THEN** the server retires it and stores one runner-retired entry
 
-### Requirement: Join token create and revoke
+### Requirement: Join tokens
 
-When a principal with namespace:manage-runners creates or revokes a join token, the server SHALL store the change and its audit entry in one transaction.
+When a principal with namespace:manage-runners creates a join token, the server SHALL return the secret once at create and never on a later read or list.
 
-#### Scenario: Create token hides secret on read
-- **WHEN** A principal with namespace:manage-runners creates a join token
-- **THEN** The server returns the secret once at create and never on a later read or list.
+#### Scenario: Create
+- **WHEN** a principal creates a join token
+- **THEN** the answer holds the secret once and a list holds none
 
-#### Scenario: Failed create leaks no secret
-- **WHEN** A join token create fails before commit
-- **THEN** The server stores no token row and returns no secret.
+#### Scenario: Revoke
+- **WHEN** a principal revokes a join token
+- **THEN** the server revokes it and stores one join-token-revoked entry
 
-#### Scenario: Revoke writes audit
-- **WHEN** A principal with namespace:manage-runners revokes a join token
-- **THEN** The server revokes the token and stores one join-token-revoked audit entry in the same transaction.
+### Requirement: No alias
 
-#### Scenario: Failed audit rolls back
-- **WHEN** The audit write of a token revoke fails
-- **THEN** The server keeps the token live and stores no revoke change.
+When a caller requests an old pool path, the server SHALL answer 404 with no redirect and no pool data.
 
-### Requirement: Stable IDs for pools and tokens
-
-Where a pool or join token is stored, the server SHALL key the stored reference by its stable ID.
-
-#### Scenario: Remade pool gets a new ID
-- **WHEN** A principal removes a pool and makes a pool with the same name again
-- **THEN** The server treats the new pool as a new object with no history of the old pool.
-
-### Requirement: Old paths have no alias
-
-Where the caller requests an old pool path, the server SHALL answer 404 with no redirect and no pool data.
-
-#### Scenario: Old path is unknown
-- **WHEN** A caller requests the old pool path
-- **THEN** The server answers 404 with the new path.
+#### Scenario: Old path
+- **WHEN** a caller requests the old pool path
+- **THEN** the server answers 404 and names the new path

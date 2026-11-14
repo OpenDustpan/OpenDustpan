@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-### Requirement: Read last completed outputs during update
+### Requirement: ReadOutputs
 
 When a consumer reads the outputs of a stack with a running journaled update, the server SHALL return the outputs of the last completed checkpoint.
 
@@ -8,15 +8,19 @@ When a consumer reads the outputs of a stack with a running journaled update, th
 - **WHEN** a consumer reads the outputs of a stack with a running journaled update
 - **THEN** the server returns the outputs and the state version id of the last completed checkpoint, not the outputs of the running batches
 
-### Requirement: Name the source checkpoint
+### Requirement: NameSourceCheckpoint
 
-When an output read serves the last completed checkpoint during a running update, the server SHALL return the state version id of that checkpoint with a flag that an update runs.
+When an output read serves the last completed checkpoint, the server SHALL return the state version id of that checkpoint with field updateRunning.
 
-#### Scenario: Read names completed version
+#### Scenario: Read names completed version during update
 - **WHEN** an output read serves the last completed checkpoint during a running update
-- **THEN** the answer carries the state version id of the completed checkpoint and a flag that an update runs
+- **THEN** the answer carries the state version id of the completed checkpoint with field updateRunning set to true
 
-### Requirement: Refuse read with no completed checkpoint
+#### Scenario: ServePinnedCheckpointWithoutUpdate
+- **WHEN** an output read serves a completed checkpoint with no running update
+- **THEN** the answer carries the state version id of that checkpoint with field updateRunning set to false
+
+### Requirement: RefuseReadWithNoCheckpoint
 
 When a consumer reads the outputs of a stack with no completed checkpoint, the server SHALL refuse the read with a 404 unknown-state error.
 
@@ -26,9 +30,13 @@ When a consumer reads the outputs of a stack with no completed checkpoint, the s
 
 #### Scenario: Read after producer delete
 - **WHEN** a consumer reads the outputs of a deleted producer stack
-- **THEN** the server refuses the read with a 404 unknown-state error against the stable producer ID
+- **THEN** the server refuses the read with a 404 unknown-state error against the stable producer id
 
-### Requirement: Refuse read without sharing rule
+#### Scenario: Producer removed and remade by name
+- **WHEN** a producer is removed and remade with the same name after a consumer read
+- **THEN** the server refuses the read against the old stable producer id with a 404 unknown-state error
+
+### Requirement: RefuseReadWithoutSharingRule
 
 When a consumer without a sharing rule reads the outputs of a producer stack, the server SHALL refuse the read with a 403 denied error.
 
@@ -40,7 +48,23 @@ When a consumer without a sharing rule reads the outputs of a producer stack, th
 - **WHEN** the sharing rule is removed before a running output read completes
 - **THEN** the server refuses the read with a 403 denied error
 
-### Requirement: Stable read during completion race
+### Requirement: RefuseReadWithoutGrant
+
+When a caller without unit:read-outputs reads the outputs of a producer stack, the server SHALL refuse the read with a 403 denied error.
+
+#### Scenario: Read without unit read-outputs grant
+- **WHEN** a caller without unit:read-outputs reads the outputs of a producer stack
+- **THEN** the server refuses the read with a 403 denied error
+
+### Requirement: DenyBeforeNotFound
+
+When a read lacks the grant or the sharing rule and the checkpoint is also missing, the server SHALL return 403 denied before any 404 check.
+
+#### Scenario: Missing grant and missing checkpoint
+- **WHEN** a read lacks the grant and the checkpoint is also missing
+- **THEN** the server returns 403 denied and never reveals checkpoint existence
+
+### Requirement: StableReadDuringCompletionRace
 
 When an output read races the completion of a running update, the server SHALL serve one completed checkpoint and return its state version id.
 

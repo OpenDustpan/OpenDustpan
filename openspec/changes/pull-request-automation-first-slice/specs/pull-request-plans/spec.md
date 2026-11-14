@@ -15,3 +15,11 @@ When a new push arrives for the same review request, the server SHALL show the n
 #### Scenario: Same comment edited
 - **WHEN** a new push arrives for the same review request
 - **THEN** the same summary comment shows the new plan summary with no added comment
+
+### Requirement: Push with no touched unit
+
+When a push touches no unit of the namespace, the server SHALL start no plan job through the composed trigger change.
+
+#### Scenario: Empty match starts nothing
+- **WHEN** a push touches no unit of the namespace
+- **THEN** no plan job starts and the review request gets no new status

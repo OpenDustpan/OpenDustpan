@@ -38,27 +38,31 @@ When a principal creates a duplicate active subscription, the server SHALL refus
 
 ### Requirement: Claim outbox row under lease
 
-When the dispatcher claims a pending outbox row, the server SHALL hold the row under a lease with an expiry.
+When the dispatcher claims a pending outbox row, the server SHALL hold the row under a 60-second lease from the server clock.
 
 #### Scenario: Single claim wins
 - **WHEN** two dispatchers claim the same pending outbox row
-- **THEN** only one dispatcher holds the lease and the other sees the row as claimed
+- **THEN** only one dispatcher holds the lease
 
 #### Scenario: Expired lease reclaimed
 - **WHEN** the lease expires before the holder marks the row dispatched
-- **THEN** another dispatcher claims the row again
+- **THEN** another dispatcher claims the row with the stored match set
+
+#### Scenario: Stale mark refused
+- **WHEN** a slow holder marks after its lease expired
+- **THEN** the server refuses the mark with a lease-mismatch error
 
 ### Requirement: Snapshot match set at claim
 
-When the dispatcher claims a pending outbox row, the server SHALL fix the matching active subscription set in the same claim transaction.
+When the dispatcher claims a pending outbox row, the server SHALL store the matching active subscription set in the same claim transaction.
 
 #### Scenario: Late subscription ignored
 - **WHEN** a principal creates a subscription after the claim transaction
 - **THEN** the dispatcher writes no delivery row for that subscription in this dispatch
 
-#### Scenario: Paused after claim ignored
-- **WHEN** a principal pauses a matched subscription after the claim transaction
-- **THEN** the dispatcher still writes the delivery row fixed at claim time
+#### Scenario: Reclaim reuses stored set
+- **WHEN** the dispatcher reclaims an outbox row after a crash
+- **THEN** the reclaim writes rows only for the stored set
 
 ### Requirement: Fan out to subscriptions in isolation
 
@@ -72,17 +76,17 @@ When the dispatcher claims a pending outbox row, the server SHALL fan out one de
 - **WHEN** one sink of the same notification fails
 - **THEN** the deliveries to the working sinks still read sent
 
-#### Scenario: No match or paused
-- **WHEN** a notification matches no active subscription or the subscription is paused at claim time
-- **THEN** the server writes no delivery row for that subscription and marks the outbox row dispatched
+#### Scenario: No match
+- **WHEN** a notification matches no active subscription
+- **THEN** the server writes no delivery row and marks the outbox row dispatched
 
 ### Requirement: Keep fan-out idempotent on reclaim
 
 When a dispatcher reclaims an outbox row, the server SHALL write no second delivery row for the same outbox row and subscription.
 
 #### Scenario: Crash after partial fan-out
-- **WHEN** the dispatcher crashes after it writes some delivery rows and before it marks the outbox row dispatched
-- **THEN** the reclaim writes delivery rows only for matched subscriptions with no row and marks the outbox row dispatched
+- **WHEN** the dispatcher crashes after it writes some delivery rows
+- **THEN** the reclaim writes only the missing rows and marks the outbox row dispatched
 
 ### Requirement: Key each delivery
 
@@ -90,64 +94,60 @@ When the dispatcher writes a delivery row, the server SHALL assign a stable idem
 
 #### Scenario: Retry repeats key
 - **WHEN** the dispatcher retries a delivery after a crash between send and mark
-- **THEN** the sink sees the same idempotency key and keeps one send
+- **THEN** the sink sees the same idempotency key on each attempt
 
 ### Requirement: Retry then dead-letter then manual retry
 
-When a sink send fails, the server SHALL retry with backoff to a retry limit and then mark the delivery dead-letter.
+When a sink send fails, the server SHALL retry with exponential backoff to retry limit 5 within 24 hours and then mark the delivery dead-letter.
 
-#### Scenario: Retry with backoff
-- **WHEN** a sink send fails before the retry limit
-- **THEN** the delivery row reads failed with the error code and the next retry time
+#### Scenario: MarkSent
+- **WHEN** a sink send succeeds
+- **THEN** the delivery row reads sent with the sent time
 
-#### Scenario: Dead-letter after limit
-- **WHEN** a sink send fails at the retry limit
-- **THEN** the delivery row reads dead-letter and the dispatcher stops automatic retry
+#### Scenario: MarkDeadLetter
+- **WHEN** a sink send fails at retry limit 5 within 24 hours
+- **THEN** the delivery row reads dead-letter and automatic retry stops
 
 #### Scenario: Manual retry
 - **WHEN** a principal retries a dead-letter delivery
-- **THEN** the delivery row returns to pending with a new next retry time
+- **THEN** the delivery row returns to pending
 
 #### Scenario: Retry refused
 - **WHEN** a principal retries a delivery that is not dead-letter
 - **THEN** the server answers 409 with code delivery.not-dead-letter
 
-#### Scenario: Race with automatic retry
-- **WHEN** a manual retry races an automatic retry of the same delivery
-- **THEN** only one retry wins and the other sees the updated state
-
-### Requirement: Track delivery state
-
-When a sink send ends, the server SHALL record the outcome on the delivery row.
-
-#### Scenario: Success and failure
-- **WHEN** a sink send succeeds or fails
-- **THEN** the delivery row reads sent with the sent time, or reads failed with the error code and the next retry time
-
-#### Scenario: Error truncated
-- **WHEN** a sink returns an oversize error message
-- **THEN** the delivery row keeps at most 1000 characters of the sink error
-
 ### Requirement: Retain and purge records
 
-When the retention period passes after dispatch, the server SHALL purge the dispatched outbox row and its sent terminal delivery rows.
+When 30 days pass after dispatch with no dead-letter delivery, the server SHALL purge the dispatched outbox row and its sent terminal delivery rows.
 
 #### Scenario: Purge after retention
-- **WHEN** the retention period passes after dispatch
-- **THEN** the server removes the dispatched outbox row and its sent terminal delivery rows
+- **WHEN** 30 days pass after dispatch and no delivery reads dead-letter or failed
+- **THEN** the server removes the outbox row and its delivery rows
 
 #### Scenario: Dead-letter kept
-- **WHEN** the retention period passes while a delivery still reads dead-letter
-- **THEN** the server keeps the dead-letter row until manual retry or explicit delete
+- **WHEN** 30 days pass while a delivery reads dead-letter
+- **THEN** the server keeps the outbox row and the dead-letter row
 
 ### Requirement: Guard read routes
 
 When a principal reads subscriptions, outbox rows, or delivery rows, the server SHALL check the read grant on the namespace.
 
 #### Scenario: Missing row
-- **WHEN** a principal reads an absent subscription, outbox row, or delivery row
+- **WHEN** a principal reads an absent subscription or delivery row
 - **THEN** the server answers 404 with code subscription.not-found or delivery.not-found
 
 #### Scenario: No grant
-- **WHEN** a principal without the read grant reads subscriptions, outbox rows, or delivery rows
+- **WHEN** a principal without the read grant reads deliveries
+- **THEN** the server answers 403 with code subscription.forbidden
+
+### Requirement: Guard write routes
+
+When a principal creates a subscription or retries a dead-letter delivery, the server SHALL check the manage grant on the namespace.
+
+#### Scenario: Create without grant
+- **WHEN** a principal without the manage grant creates a subscription
+- **THEN** the server answers 403 with code subscription.forbidden
+
+#### Scenario: Manual retry without grant
+- **WHEN** a principal without the manage grant retries a dead-letter delivery
 - **THEN** the server answers 403 with code subscription.forbidden

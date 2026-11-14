@@ -1,12 +1,23 @@
-## 1. Build
+## 0. Confirm against the code first
 
-- [ ] 1.1 Failing tests first: add failing conformance tests for path match, rule counting, evaluate mode, ownership unless auto-apply, warn block, unless error, author-only wait and record fields. Check: gatetest.TestOwnershipPathAddsRequirement fails on main, passes after the fix.
-- [ ] 1.2 Implement ownership match, ownership-rule unless evaluation and autoApply in the decision record. Check: gatetest.TestOwnershipUnlessAutoApply passes on SQLite and PostgreSQL.
-- [ ] 1.3 Add limit and matching-cost tests for broad globs and large rule sets. Check: A save above 256 rules, 64 path sets or a 4 KiB condition fails, and 256 rules with broad globs evaluate at change.planned within 500 ms.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
 
-## 2. Definition of done
+## 1. Failing tests
 
-- [ ] 2.1 Add e2e step with a real runner and real CLI binaries over TLS for schedule-sourced and warn paths. Check: Real CLI plan and apply for a schedule-sourced unit show autoApply true with no approval, and a warn case waits, with triggers provided through #901.
-- [ ] 2.2 Write the docs page in the same pull request. Check: Docs page runs as written and shows ownership examples, unless and autoApply behavior.
-- [ ] 2.3 Run usability check for the owner approval and auto-apply path. Check: Namespace administrator completes the path from the docs page alone; each error names the one command that helps.
-- [ ] 2.4 Run full checks and conformance suites. Check: `make check` reports zero findings.
+- [ ] 1.1 Write failing conformance tests for path match, two rules, evaluate mode, unless auto-apply, warn, unless error, operationSource, excuse scope, apply recheck, count with fresh authentication and record fields. Check: gatetest.TestOwnershipPathAddsRequirement fails on main.
+
+## 2. Build
+
+- [ ] 2.1 Implement the ownership matcher, the unless evaluation and the autoApply record fields. Check: gatetest.TestOwnershipUnlessAutoApply passes on SQLite and PostgreSQL.
+- [ ] 2.2 Test matching cost with 256 rules and the 4 KiB condition limit. Check: Evaluation of 256 rules takes at most 500 ms; an oversized body fails at save.
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Add an e2e step: BLOCKED by the trigger fire route of #901 and the rule routes of rest-routes-ownership-rules-create. After they land, use POST /api/dustpan/v1/namespaces/{}/units/{}/triggers/{}/fire with a service access token and the real CLI. Check: e2e step shows autoApply true for the schedule plan and a wait for a warn plan.
+- [ ] 4.2 Write the docs page in the same pull request. Check: The commands on the page run as written.
+- [ ] 4.3 Run the usability check. Check: The persona completes the path from the docs page alone.
+- [ ] 4.4 Run all checks. Check: `make check` reports zero findings.

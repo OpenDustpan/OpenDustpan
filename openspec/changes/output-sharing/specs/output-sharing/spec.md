@@ -16,13 +16,29 @@ When a job token of a consumer named by a sharing rule of the producer requests 
 - **WHEN** a named consumer job requests outputs and the producer has no latest state
 - **THEN** the server returns 404 with error code unit.not-found and records an audit entry.
 
-#### Scenario: Self read needs no rule
+#### Scenario: Self read still needs starter grants
 - **WHEN** a job token requests outputs of its own consumer unit
-- **THEN** the server returns its own root outputs without a sharing rule.
+- **THEN** the server returns its own root outputs only when the starter holds unit:read-outputs and unit:read-secrets for secret outputs, else it denies with 403.
 
 #### Scenario: Empty collection matches nothing
 - **WHEN** the only naming rule names a collection with no member units
 - **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
+
+#### Scenario: Consumer namespace rule
+- **WHEN** a rule names the consumer namespace and a job of that namespace requests the outputs
+- **THEN** the server returns the outputs and records an audit entry.
+
+#### Scenario: Member collection rule
+- **WHEN** a rule names a collection and the consumer unit is a member at read time
+- **THEN** the server returns the outputs and records an audit entry.
+
+#### Scenario: Cross-namespace consumer unit
+- **WHEN** a rule names a unit of another namespace and a job of that unit requests the outputs
+- **THEN** the server returns the outputs and records an audit entry.
+
+#### Scenario: Producer collection rule
+- **WHEN** a rule names a producer collection or namespace and a named consumer job requests outputs of a member
+- **THEN** the server returns the outputs for each member producer under the rule.
 
 ### Requirement: Deny read with no rule
 
@@ -31,6 +47,18 @@ When no sharing rule of the producer names the consumer unit, collection, or nam
 #### Scenario: Read with no rule
 - **WHEN** a job token requests outputs of a unit that no sharing rule names for its consumer
 - **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
+
+### Requirement: Unknown or hidden producer
+
+When the producer does not exist or the starter cannot see it, the server SHALL return 404 without revealing whether the unit exists.
+
+#### Scenario: Producer does not exist
+- **WHEN** a job token requests outputs of a unit ID that does not exist
+- **THEN** the server returns 404 with error code unit.not-found and an audit entry with available request IDs.
+
+#### Scenario: Producer in another namespace without visibility
+- **WHEN** a job token requests outputs of a unit that the starter cannot see
+- **THEN** the server returns 404 with error code unit.not-found and no producer details.
 
 ### Requirement: Secret output needs starter secrets action
 
@@ -42,27 +70,39 @@ When a named consumer job requests outputs that hold a secret output, the server
 
 #### Scenario: Secret output with starter grant
 - **WHEN** a named consumer job requests outputs that hold a secret output and the starter holds unit:read-secrets on the producer
-- **THEN** the server returns secret outputs as ciphertext of the producer for the decrypt-only path.
+- **THEN** the server returns secret outputs as ciphertext of the producer for the Decrypt path.
+
+#### Scenario: Starter deleted or disabled
+- **WHEN** the starter principal is deleted, disabled, expired, or its token is expired at read time
+- **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
 
 ### Requirement: Decrypt only outputs
 
 When a job token that passes both read checks asks to decrypt producer ciphertext, the server SHALL decrypt only ciphertext that the root outputs of the latest checkpoint hold.
 
 #### Scenario: Decrypt latest outputs ciphertext
-- **WHEN** a passing job token asks to decrypt ciphertext that the root outputs of the latest checkpoint of the producer hold
+- **WHEN** a passing job token asks to Decrypt ciphertext that the root outputs of the latest checkpoint of the producer hold
 - **THEN** the server decrypts it for the passing job token.
 
 #### Scenario: Decrypt other ciphertext refused
-- **WHEN** a passing job token asks to decrypt ciphertext from outside those root outputs
-- **THEN** the server denies the decrypt with 403, error code unit.forbidden, and a denial audit entry.
+- **WHEN** a passing job token asks to Decrypt ciphertext from outside those root outputs
+- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
+
+#### Scenario: Starter loses secrets grant before Decrypt
+- **WHEN** the starter loses unit:read-secrets between the outputs read and the Decrypt call
+- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
+
+#### Scenario: Non-named unit Decrypt
+- **WHEN** a job token of a unit that no rule names asks to Decrypt producer ciphertext
+- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
 
 #### Scenario: Client-encrypted latest state
 - **WHEN** the States port reports the latest state as client-encrypted
-- **THEN** the server returns the outputs sealed and decrypts only through the decrypt-only path after both checks pass.
+- **THEN** the server returns the outputs sealed and decrypts only through the Decrypt path after both checks pass.
 
 #### Scenario: Unencrypted latest state
 - **WHEN** the States port reports the latest state as not client-encrypted
-- **THEN** the server returns plain outputs after both checks pass with no decrypt call.
+- **THEN** the server returns plain outputs after both checks pass with no Decrypt call.
 
 ### Requirement: Recheck at each read
 
@@ -76,9 +116,9 @@ When a job reads outputs of another unit, the server SHALL recheck the naming ru
 - **WHEN** the starter loses unit:read-outputs after the job starts and before the job reads
 - **THEN** the server denies the next read with 403, error code unit.forbidden, and a denial audit entry.
 
-#### Scenario: Change lands mid-flight
-- **WHEN** a rule delete or grant revoke lands between the check and the response or decrypt of one read
-- **THEN** the server denies the in-flight read with 403 and a denial audit entry.
+#### Scenario: Membership removed mid-job
+- **WHEN** the consumer unit leaves the named collection after the job starts and before the job reads
+- **THEN** the server denies the next read with 403, error code unit.forbidden, and a denial audit entry.
 
 ### Requirement: Reject hostile read kind
 
@@ -127,6 +167,14 @@ When a unit is renamed or made again, the server SHALL match sharing rules by st
 #### Scenario: Job with no unit attachment
 - **WHEN** a job token with no consumer unit attachment requests outputs of another unit
 - **THEN** the server denies the read with 403, error code unit.forbidden.
+
+### Requirement: Rate-limit denied reads
+
+When one job token repeats a denied outputs read past the limit, the server SHALL return 429 for further denied reads until the window ends.
+
+#### Scenario: Repeated denials limited
+- **WHEN** one job token repeats a denied outputs read past the limit
+- **THEN** the server returns 429 with no further audit writes until the window ends.
 
 ### Requirement: Fail closed on audit failure
 

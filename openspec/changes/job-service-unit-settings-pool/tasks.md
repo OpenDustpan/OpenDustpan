@@ -1,15 +1,18 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing planner tests for settings resolution, override authorization, missing location 422, and Pulumi with no stored steps. Check: TestStartResolvesPoolLocationProfileStepsFromSettings fails on main, passes after the fix.
-- [ ] 1.2 Add failing read-check tests for saver loss of unit:read-outputs, missing trigger, disabled saver and manual-fire caller intersection. Check: TestTriggerOutputReadDeniesAfterSaverLosesReadOutputs fails on main, passes after the fix.
+- [ ] 1.1 Write failing planner tests for settings resolution, override authorization and missing location. Check: TestStartResolvesFromSettings fails on main
+- [ ] 1.2 Write failing read-check tests for saver loss and manual-fire intersection. Check: TestTriggerOutputReadDeniesAfterSaverLoss fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Wire settings resolution with start snapshot into job start and trigger jobstarter with override checks. Check: `go test ./pkg/dustpan ./pkg/trigger/...` passes with no request-only location fallback.
-- [ ] 2.2 Classify unit:run-plan, unit:define-steps, job:read, job:read-plans, job:read-logs and namespace:manage-runners in built-in roles. Check: `go test ./pkg/access/...` shows the planner, lead and administrator role mapping and the route test lists no unclassified start action.
-- [ ] 2.3 Wire the saver check into the Pulumi export, OpenTofu state version and secret-output decrypt handlers. Check: Job-token export, state-version and secret-output decrypt paths call OutputReadCheck.Allow at each read.
+- [ ] 2.1 Add location, pool, profile ID and steps to unit settings with validation. Check: go test ./pkg/unitsettings/...
+- [ ] 2.2 Wire the saver check into the output read handlers. Check: go test ./pkg/dustpan
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add the e2e steps against the real CLI and the real directory. Check: e2e step: non-admin with planner role is refused on pool or location override; trigger plan reads source output then is refused after saver loses unit:read-outputs.
-- [ ] 3.2 Ship docs, wiring, routes with authorization actions, usability check and make check. Check: `make check` with zero findings and the docs page for unit settings and job start.
+- [ ] 3.1 Add the e2e step, docs page and routes with actions. Check: make e2e step passes
+- [ ] 3.2 Run the full check. Check: make check with zero findings

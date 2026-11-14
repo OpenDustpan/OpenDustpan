@@ -1,26 +1,57 @@
 ## Context
 
-Service.Evaluate returns errNotImplemented today and fails closed by accident. When evaluation lands it must apply the pure approver functions from PR #1119 with the live installation kind read once per evaluation.
+Service.Evaluate returns errNotImplemented today and fails closed by accident. Evaluation must apply the pure approver functions with the installation kind read once per call.
 
 ## Decisions
 
-1. **One kind snapshot per evaluation.** Evaluate reads the installation kind once at the start through KindReader and uses that snapshot for rule normalization, Unmeetable checks, and signature counting for that evaluation only. Each later decision point reads the kind again.
-2. **Fail closed on kind error.** A KindReader error or an unknown kind value denies the evaluation with ErrUnavailable before any rule is checked, so no approval passes without a known kind.
+1. **One kind snapshot per Evaluate call.** Evaluate reads the kind once at the start through KindReader and uses it for that call only.
+2. **Fail closed on kind error.** A KindReader error or an unknown kind denies the evaluation before any rule is checked.
 
 ## Structure
 
-Unexported approverPolicy built only by newApproverPolicy(kind installation.Kind) which returns an error on an unknown kind; Service.Evaluate is the only caller and it passes the validated KindReader value.
+Unexported approverPolicy built only by newApproverPolicy(kind installation.Kind), which returns an error on an unknown kind. Service.Evaluate is the only caller.
 
 ## Risks
 
-- Evaluation lands after this change and the wiring call site shifts; the failing tests pin the call so a rebase shows the gap.
-- Table tests 4a and 4b exist only at pure-function level until Evaluate exists; the Evaluate-level tests close that gap.
+- The call site may shift when evaluation lands; the failing tests pin the call.
 
-## Layers (defense in depth)
+## Quality attributes
 
-| Layer | Guard | Hostile test |
-| --- | --- | --- |
-| Rule normalization | Normalize every stored approval rule, ownership rule, and approval default through RuleApprovers before Unmeetable is checked. | Evaluate a rule with approvers [dev:admin] on production and remove the RuleApprovers call; the test must fail because the rule would look meetable. |
-| Unmeetable deny | Deny a requirement that Unmeetable reports as unmeetable, in enforce mode and in evaluate mode. | Evaluate a rule with only NoApprover on production and remove the Unmeetable check; the test must fail because the rule would wait for an approval that nobody can give. |
-| Signature filter | Filter every signature through ApproverPolicy.CountsAsSignature and ignore a refused subject in the count. | Evaluate with one dev-principal signature on production and remove the CountsAsSignature filter; the test must fail because the count would reach quorum. |
-| Kind fail-closed | Read the installation kind from KindReader once per evaluation; on error return deny without counting signatures. | Make KindReader return an error and bypass the error branch; the test must fail because evaluation would allow with unknown kind. |
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| correctness | 100 | % denied | NoApprover or dev-only approvers on production |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+  client[API caller] --> eval[Service.Evaluate]
+  eval --> kind[KindReader]
+  eval --> rules[(Stored gate rules)]
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Server boundary | S | A dev principal signature meets an approval on production. | boundary check | Validate the kind at the start of each call. | Unknown kind sent directly to Evaluate must deny. |
+| Server boundary | S | A dev principal signature meets an approval on production. | encode or contain | Compare subjects only through CountsAsSignature. | DEV:admin must not count. |
+| Server boundary | S | A dev principal signature meets an approval on production. | limit | Read the kind once per call. | A stored decision is not reused across calls. |
+| Server boundary | S | A dev principal signature meets an approval on production. | authorize at point of use | Check Production when each signature counts. | A dev signature must not reach quorum. |
+| Server boundary | S | A dev principal signature meets an approval on production. | fail closed | Deny on a kind error. | A failing KindReader must deny. |
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Kind read | KindReader returns an error. | The caller retries the evaluation. | Denied with no signature counted. |
+
+## Change impact (computed from main)
+
+Tests:
+
+- `pkg/gate/approvers_test.go` names `NoApprover`
+
+ADRs:
+
+- `docs/adr/0253-dev-data-does-not-reach-a-production-installation.md` names `NoApprover`

@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #1211.
 
 ## Why
@@ -15,15 +19,15 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Event for a version older than the last final version of the unit. | The server answers 409 with code trigger.version-mismatch and starts nothing. Send the newer final version. Run `opendustpan status` to see the latest final version of the unit. | `opendustpan status` |
-| Job service refuses the plan for one follower. | The server records an error on that trigger and continues with the other followers. Fix the unit settings or pool, then fire the trigger by hand. Run `opendustpan status` to see the trigger error and the version to refire. | `opendustpan status` |
-| Follows plan reads a source output without permission. | The server denies the read and fails the step that reads. Ask a namespace administrator to change the grants of the last saver. Run `opendustpan audit-chain` to see the denial entry. | `opendustpan audit-chain` |
+| Event for a version older than the last final version of the unit. | The server answers 409 with code trigger.version-mismatch and starts nothing. Run `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` to see the trigger and its last error. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Job service refuses the plan for one follower. | The server records the error on that trigger and continues with the other followers. Fix the unit settings or pool, then fire the version again by hand. Run `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` to see the error. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Follows plan reads a source output without permission. | The server denies the read, writes an audit entry, and fails the reading step. Ask a namespace administrator to change the grants of the last saver. Run `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` to see the last saver. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` |
 
 Evidence for the claims above:
 
 - The trigger dispatcher port and its conformance harness already exist. Proof: pkg/trigger/ports.go:136:// Outcome is the result of one trigger in a Dispatcher.Upstream call. and pkg/trigger/triggertest/dispatcher.go:76:out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: applied})
-- The version-mismatch sentinel already exists in the trigger domain. Proof: pkg/trigger/trigger.go:45:// ErrVersionMismatch reports an upstream event whose state version is not and pkg/trigger/dispatcher.go:129:return nil, ErrVersionMismatch
-- Trigger rows already carry the last saver subject and stable principal ID. Proof: pkg/trigger/trigger.go:170:// LastSaver is the subject of the principal that saved the trigger last. The and pkg/trigger/trigger.go:190:LastSaver string
+- The version-mismatch sentinel already exists in the trigger domain. Proof: pkg/trigger/trigger.go:48:ErrVersionMismatch = errors.New("state version is not a final state version of the unit") and pkg/trigger/dispatcher.go:129:return nil, ErrVersionMismatch
+- Trigger rows already carry the last saver subject and stable principal ID. Proof: pkg/trigger/trigger.go:190:LastSaver string and pkg/trigger/trigger.go:192:LastSaverID string
 
 ## What Changes
 
@@ -32,11 +36,11 @@ Evidence for the claims above:
 - Follows plan jobs carry the trigger ID and check each source output read against the current grants of the last saver.
 - Follows triggers publish a declared dependency edge for the graph and safe delete.
 - Manual fire of a final version through the trigger fire route refires missed followers with the same idempotency key.
-- Docs page names which runs count as an apply.
+- A docs page names which runs count as an apply.
 
 Out of scope:
 
-- Follower caps at run time and depth guard beyond the save-time cycle and follower-count checks
+- Run-time follower caps and run-time depth stop
 - The when value outputs-changed and its changed-outputs filter
 - Pulumi update sender; only the OpenTofu final-version sender ships here
 - Schedule and review-request-push triggers
@@ -53,7 +57,18 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - A Developer who expects a follower plan after every run is surprised when a plan with no state change starts nothing; the docs page states that only a final state version counts.
-- A refire after a missed event needs the version ID from unit history; the error names the history command path.
+- A refire after a missed event needs the version ID from unit history; the error answers name the trigger read route.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Dispatcher.Upstream is the trigger fan-out entry point. (`pkg/trigger/ports.go:192`)
+- ErrVersionMismatch reports an upstream event that is not a final state version of the unit. (`pkg/trigger/trigger.go:48`)
+- The trigger dispatcher conformance harness drives Upstream with an applied version. (`pkg/trigger/triggertest/dispatcher.go:76`)
+- Trigger rows carry LastSaver subject and LastSaverID stable principal ID. (`pkg/trigger/trigger.go:190`)
+- Upstream verifies the event against the final state versions of the unit. (`pkg/trigger/ports.go:183`)
+- A test of the final-version read path exists. (`pkg/dustpan/triggers_versions_internal_test.go:36`)
 
 ## ADR check
 
@@ -79,8 +94,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 5 (current).
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
-- Quote: "**A job token reads only what a rule names and the starter can read (15.5, option c).** A job token reads the outputs of another unit only when both checks pass at each read: - Check 1: a sharing rule of the producer names the unit of the job, its collection or its namespace. - Check 2: the principal that started the job holds `unit:read-outputs` on the producer with its own current grants, and `unit:read-secrets` for a secret output.  The job gets the intersection of the two checks, never more. Check 2 uses `unit:read-outputs` in place of `unit:read`. This supersedes that part of ADR 213 decision 1.  The principal whose grants decide check 2 is one of these: - The principal that started the job (ADR 213 decision 1). - The last saver of the trigger that started the job (ADR 267 decision 14). - For an open of the profile block `outputs/opendustpan` by a job, the attachment authority (ADR 207 decision 7): the principal that made the attachment, or the blueprint publisher of a Catalog attachment. The grants of the starter do not count.  No caller gives the `Checker` a principal whose grants decide. For an open of the profile block, the profile service passes only a reference (`ReadReq"
-- Effect: The read of source outputs by a follows plan uses the last saver check with unit:read-outputs and unit:read-secrets.
+- Quote: "Check 2: the principal that started the job holds `unit:read-outputs` on the producer with its own current grants, and `unit:read-secrets` for a secret output."
+- Effect: The read of source outputs by a follows plan uses the last saver check with unit:read-outputs and unit:read-secrets. This supersedes the unit:read wording of issue 1211.
 - Conflict: none.
 
 **ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
@@ -97,35 +112,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 1 (current), 2 (current).
 - Changed by: ADR 315 extends. Chain to the end: ADR 315.
 - Current rule: this ADR, with ADR 315.
-- Quote: "Docs in the same pull request. A pull request that adds or changes a feature that a person or a client can see adds or changes its page in the user documentation. A feature that a person or a client can see has a route, a setting, a command, a flag, a console page or an error that a user reads. A pull request that changes only internal code needs no page."
 - Quote: "No page, not done. A reviewer refuses such a pull request when the page is not in it. A later pull request for the docs does not make the first one done."
 - Effect: The change ships the docs page that names which runs of each tool count as an apply in the same pull request.
 - Conflict: none.
 
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (wrong claim): The user path and the error table name commands that the code check reports as missing (opendustpan job and opendustpan grant). The one command that helps does not exist, so the usability requirement cannot be met as written. Resolution: answered: Replaced the missing job and grant commands with existing commands opendustpan status and opendustpan audit-chain; the trigger fire path is now a REST manual fire plus docs, covered by a new refire requirement.
-- R1.2 (open question): The Open questions section does not read none. It records failed code checks for the job and grant commands, so the spec-ready gate refuses the change. Resolution: answered: Open questions reads none; the command errors are fixed and no new undecided question remains.
-- R1.3 (missing scenario): The design says the refire path covers a missed event, and the error table tells the person to run trigger fire with a version ID. The spec has no requirement or scenario for a manual refire, for a refire of an already fired version, or for the 409 trigger.version-mismatch answer. Resolution: answered: Added manual refire requirement with 409 trigger.version-mismatch scenarios and the idempotency replay scenario.
-- R1.4 (failure mode): The design says Upstream writes the cursor in the same transaction as the job start. The job start goes through the job service (ADR 267 decision 2), which may use its own store. A crash between the job start and the cursor write is not covered by any scenario, and the replay path is not specified. Resolution: answered: Added crash-replay scenario: a retry after a start uses the same per-trigger idempotency key and starts nothing new; cursor write rides the job-start transaction.
-- R1.5 (adr conflict): ADR 338 decision 3 (owner, 2026-11-07) says the plan starts as the namespace service principal with only the stored plan-start grant. Neither the spec nor the design states the starting principal or checks this grant on start. Resolution: answered: Added starting-principal requirement that the plan starts as the namespace service principal under its stored plan-start grant.
-- R1.6 (wrong claim): The ADR check says ADR 267 decision 14 is a conflict none, but the decision list omits decision 14 and its quote. Decision 14 is changed by ADR 273, 299 and 338 and governs the saver read check that the spec relies on. Resolution: answered: Added ADR 267 decision 14 to the ADR check with its exact decision line.
-- R1.7 (missing scenario): The issue requires that the version ID has only the bytes a-z, A-Z, 0-9, dash, underscore and dot. The spec has no scenario for a malformed or hostile version ID in an event or in the refire command. Resolution: answered: Added version-ID charset requirement with hostile version-ID scenarios.
-- R1.8 (missing scenario): The tasks name routes with the unit:manage-triggers action, and the project requires each endpoint to declare its authorization actions. The spec defines no route, no action and no denial for a caller without that action. Resolution: answered: Added trigger-route authorization requirement for unit:manage-triggers with denial scenario.
-- R1.9 (missing scenario): ADR 267 decision 7 says the server refuses a cycle at save. The proposal puts only the depth guard and cycle path beyond save-time refusal out of scope, but no requirement states the save-time refusal itself. Resolution: answered: Added save-time cycle refusal requirement per ADR 267 decision 7; run-time depth stop stays out of scope.
-- R1.10 (failure mode): Source follower caps are out of scope, but one Upstream call with no cap can start many plans at once. ADR 267 decision 20 sets a limit of 50 followers per source. The change does not say what happens above the limit or whether the fan-out is bounded. Resolution: answered: Clarified that the fan-out is bounded by the save-time limit of 50 followers per source; run-time caps stay out of scope.
-- R1.11 (scope): The spec says safe delete of the source names the follower. The issue says a forced delete is the only way past a follower edge. The spec does not state that a normal delete is refused while a follower edge exists. Resolution: answered: Added delete rule: normal delete of a source with followers is refused and only a forced delete passes the follower edge.
-
 ## Open questions
 
-none
+Not spec-ready: a code check fails: task "Add e2e step against the real CLI" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
 
 Questions considered and answered:
 
 - What counts as an apply of the source unit? ADR 267 decision 12 answers it: for OpenTofu any final state version counts; for the Pulumi CLI only an update of kind update counts. The docs page states this rule.
-- When does a follows trigger fire? ADR 267 decision 13 answers it: field when with default applied; outputs-changed is the later slice write-state-version-unit-state-outputs-changed-filter and is out of scope here.
-- Which principal starts the plan and whose grants govern source output reads? ADR 267 decision 15 plus ADR 273 decision 5 answer it: record source kind trigger, start as namespace service principal per ADR 338, and check output reads against the current grants of the last saver with unit:read-outputs plus unit:read-secrets for secret outputs, fail closed.
+- When does a follows trigger fire? ADR 267 decision 13 answers it: field when with default applied; outputs-changed is a later slice and is out of scope here.
+- Which principal starts the plan and whose grants govern source output reads? ADR 267 decisions 14 and 15, ADR 273 decision 5 and ADR 338 decision 3 answer it: source kind trigger, start as namespace service principal, output reads checked against the current grants of the last saver with unit:read-outputs plus unit:read-secrets, fail closed. ADR 273 governs where issue 1211 says unit:read.
+- How does the fan-out stay safe across the trigger store and the job service? No shared transaction exists between the trigger store and the job service. The per-trigger idempotency key with the lifetime of the version record gives safety. A crash between job start and cursor write replays the same key and returns the first job.
+- Does a follows trigger work across namespaces? ADR 267 decision 21 answers it: no follow across namespaces.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

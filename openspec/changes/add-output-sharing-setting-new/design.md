@@ -1,25 +1,66 @@
 ## Context
 
-Namespace administrators set the default sharing of new stacks and workspaces and write one-step namespace and collection rules. The job-token read path checks the rule and the starter grant at each read.
+The route, the actions and the settings resource exist on main. The change adds the setting, the rules by scope and the read check.
 
 ## Decisions
 
-1. **Default as setting, rules by stable ID.** Store the new-unit default as a namespace setting with effective value visible in the settings read. Store each sharing rule on the producer unit with stable unit ID, collection ID, or namespace ID, never a name.
-2. **Check at read time, fail closed.** Check both conditions at each output read on both tool paths and on the tool-neutral outputs route. Deny closed on missing rule, missing grant, unknown object, cross-namespace target, or in-flight change.
+1. **Rules by stable ID.** A rule stores the stable unit, collection or namespace ID of its target, never a name.
+2. **Check at read, fail closed.** Each output read checks the rule and the starter grant. Any missing rule, error or deleted target denies and writes an audit entry.
 
 ## Structure
 
-Unexported outputSharingRule with constructor that checks producer ID, target scope, target stable ID, creator, and time; only the constructor builds a valid rule.
+An unexported rule type with a constructor that checks the producer, the target scope, the stable ID and the same-namespace invariant.
 
 ## Risks
 
-- A collection rename or re-create must not widen sharing: rules use stable IDs.
-- A rule change during a job changes the next read, which operators must see in the audit log.
+- A collection re-created with the same name must not inherit sharing.
 
-## Layers (defense in depth)
+## Diagrams
 
-| Layer | Guard | Hostile test |
-| --- | --- | --- |
-| handler | API handler rejects unknown scope, unknown ID, and cross-namespace target with 400 or 403 before any read. | POST a rule that names a unit in another namespace and read across namespaces, expect deny. |
-| service | Service resolves stable IDs, checks rule match and starter unit:read-outputs on the producer at each read. | Remove the rule after job start then read again, expect deny; remove the grant then read again, expect deny. |
-| store | Store holds rules by stable ID with fence check in the same transaction as unit writes. | Rename a collection then read with the old name, expect the stored ID rule to still match only its members. |
+After this change:
+
+```mermaid
+sequenceDiagram
+participant Job
+participant Server
+Job->>Server: GET outputs
+Server->>Server: rule and grant check
+Server->>Server: audit
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| deny correctness | 100 | percent of reads without a naming rule denied | Output reads across units |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+ J[job token] --> H[output read handler] --> C[rule and grant check] --> S[(rules by stable ID)]
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Service boundary: sharing check | E | A job keeps read access after its rule or grant is removed. | boundary check | Reject deleted or foreign units. | Read outputs of a deleted producer and expect deny. |
+| Service boundary: sharing check | E | A job keeps read access after its rule or grant is removed. | encode or contain | Match by stable ID. | Re-create a collection with the old name and expect deny. |
+| Service boundary: sharing check | E | A job keeps read access after its rule or grant is removed. | limit | Cap denial audit writes per producer. | Flood denied reads and expect a bounded log. |
+| Service boundary: sharing check | E | A job keeps read access after its rule or grant is removed. | authorize at point of use | Check rule and starter grant at each read. | Remove the grant mid-job and expect deny. |
+| Service boundary: sharing check | E | A job keeps read access after its rule or grant is removed. | fail closed | Deny on store error. | Inject a store error and expect deny. |
+
+## Contracts
+
+**outputSharingRule**
+
+- Invariant: Producer and target are in one namespace.
+- Invariant: Target is a stable ID.
+- `readOutputs`: pre: Job token is valid.. Post: Allowed only with a naming rule and unit:read-outputs of the starter..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Read outputs | Rule removed while a read is in flight. | No retry of the denied read. | Read denied and audited. |

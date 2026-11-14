@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #1164.
 
 ## Why
@@ -8,15 +12,15 @@ The user path this change must make work:
 
 1. **CLI.** Run a stack update with the Pulumi CLI against the server
 2. **API.** Push state with OpenTofu against the TFE-compatible API
-3. **API.** Read the current and final state versions of the unit through the tool-neutral API
+3. **API.** Read the current state through the existing Pulumi state routes and the existing workspace state-version routes
 4. **Docs page.** Follow the docs page for state versions
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| State write fails and writes no version row. | State write failed and wrote no version row; run `opendustpan doctor` and push state again. | `opendustpan doctor` |
-| Final write on a store built without an observer is refused. | Final state write refused: store has no version observer; run `opendustpan doctor` and fix the server wiring. | `opendustpan doctor` |
+| State write fails and writes no version row. | State write failed and wrote no version row. Run `opendustpan doctor` and push state again. | `opendustpan doctor` |
+| Final write on a store built without an observer is refused. | Final state write refused: store has no version observer. Run `opendustpan doctor` and fix the server wiring. | `opendustpan doctor` |
 
 Evidence for the claims above:
 
@@ -35,12 +39,21 @@ Out of scope:
 - Start follows plans from final versions
 - Follower caps, depth stop, and outputs-changed filter
 - Stale-plan detection in plan and apply phases beyond recording versions
+- New read routes for versions; reads use existing tool state routes
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
 - A developer sees no new step: push state as before and the server records versions without extra flags.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- ObserveStateVersion port exists for final state versions (`internal/selfservice/ports.go:81`)
+- Final versions last-final behavior has a test (`pkg/dustpan/triggers_versions_internal_test.go:36`)
+- OpenTofu test helper exists for the e2e path (`e2e/tool.go:110`)
 
 ## ADR check
 
@@ -53,31 +66,19 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 110, 125, 128, 130, 135, 139, 144, 145, 148, 190, 213, 258, 263, 286, 299, 304, 314, 353.
 - Quote: "A final state version closes a write-back job."
 - Quote: "No tool package imports it."
-- Effect: Follows the wiring split and the observe rule: tool stores write versions and call the observe rule in the same transaction through injected wiring, with no tool import of job.
+- Effect: Follows the split and the observe rule. Tool packages do not import job. The internal wiring maps each tool version to job.StateVersion and runs the job-store observe rule in the same fenced transaction.
 - Conflict: none.
 
 **ADR 150: Unit history: blame and point-in-time views** (not owner-tagged).
 
-- Decisions that apply: 2 (current).
+- Decisions that apply: 2 (current), 7 (current), 9 (current).
 - Changed by: ADR 154 changes decisions 14, 15 and 16; ADR 154 extends; ADR 199 changes decision 1; ADR 210 changes; ADR 242 extends decision 3. Chain to the end: ADR 154, ADR 199, ADR 210, ADR 242, ADR 238, ADR 286, ADR 310, ADR 247, ADR 315, ADR 356.
 - Current rule: this ADR, with ADR 154, 199, 210, 242.
 - Quote: "For a workspace, it is the current state version."
-- Effect: Uses the latest state item rule to define the current version for each tool.
+- Quote: "A forced write and a restore (ADR 28) are state items like any other."
+- Quote: "The server cannot read such a state (ADR 41 decision 8)."
+- Effect: Uses the latest-item rule for current versions, treats forced writes and restores as state items, and treats client-encrypted OpenTofu state as opaque.
 - Conflict: none.
-
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (open question): proposal.md states the spec-ready gate is not met: the open questions section does not read 'none' because a code check fails on the command 'opendustpan logs', so the change may not be implemented until this is resolved. Resolution: answered: Fixed errors[0] to use `opendustpan doctor`, an existing command; open questions reads none.
-- R1.2 (missing scenario): The error row promises a 500 'state write failed, versions not written' response, but no spec requirement or scenario covers a failed state write that writes no version row, or the rollback of the state write when observe fails. Resolution: answered: Added rollback scenario to final-version requirement: a failed observe rolls back the state write.
-- R1.3 (missing scenario): No scenario covers a state write by a store constructed without an observer (NewStoreWithObserver absent), even though design.md says such constructors must refuse final writes. The refusal behavior and its error are unspecified. Resolution: answered: Added observer-wiring requirement with refusal scenario for a store built without an observer.
-- R1.4 (failure mode): Design decision 2 requires observe in the fenced transaction, but no requirement covers a fence rejection or a concurrent write that moves the current version between read and write, so the current version could be set to a stale value. Resolution: answered: Fenced-transaction wording added to both version requirements; fence rejection rolls back the write.
-- R1.5 (adr conflict): ADR 100 decision 15 reads 'The store adapter applies the rule of Store.ObserveStateVersion in the transaction of the state write'; the proposal's Questions section cites it correctly, but tasks 2.2 wires the call through internal/jobwiring, which the design places in the tool stores via injected observer; the owner of the wiring location is not decided. Resolution: answered: Clarified design and tasks: the observer lives in each tool store and the server wiring injects it; no separate jobwiring store.
-- R1.6 (missing scenario): No scenario covers a restart or a retried push after a state write that committed the version but not the observe call, or a duplicate final write for an already closed write-back job. Resolution: answered: Added idempotent duplicate-final scenario to the final-version requirement.
-- R1.7 (scope): Task 3.1 asks for an e2e step with the real CLIs over TLS on SQLite and PostgreSQL, but the e2e check names only E2E_FOCUS=state-versions; the test names for scenarios of the second requirement are not mapped to a failing test on main. Resolution: answered: Mapped each scenario to a failing store test in tasks and kept the real-CLI e2e check.
-- R1.8 (wrong claim): ADR 100 decision 1 is quoted as forbidding tool packages from importing job, but the proposal cites it as 'ADR 100 decision 1 forbids'; the quoted text in the ADR check block is a different sentence ('No tool package imports it.'), so the citation mixes two lines. Resolution: answered: Reworded considered answer to quote decision 1 exactly: no tool package imports job.
-- R1.9 (open question): The design does not state how the current version of a unit is identified for a Pulumi stack versus an OpenTofu workspace when a unit is renamed or removed and made again; the stable unit ID rule of project.md is not applied in the spec. Resolution: answered: Added stable-unit-ID requirement: versions are keyed by stable unit ID across rename and remake.
 
 ## Open questions
 
@@ -85,9 +86,9 @@ none
 
 Questions considered and answered:
 
-- Does a tool package import job to report versions? No. ADR 100 decision 1 states no tool package imports job; the internal wiring of the server connects them, as the issue states.
-- Where does the final-version rule run? No. ADR 100 decision 15 states the store adapter applies the rule in the transaction of the state write.
-- What happens on a retried or duplicate final write? A duplicate final write is idempotent: the second observe call closes nothing and changes no version. No retry queue is added in this part.
-- How are versions keyed across rename and remake? Versions are keyed by the stable unit ID, so a rename keeps versions and a removed unit made again starts with no versions.
+- Does a tool package import job to report versions? No. ADR 100 decision 1 says no tool package imports job. Each tool store defines a local Observer port with plain fields. The internal wiring implements it and builds job.StateVersion outside the tool package.
+- Which store runs the final-version rule and how is the transaction shared? The job-store rule runs in the same fenced transaction. The tool transaction calls the injected observer. The wiring adapter delegates to the job-store observe logic with the same transaction handle. No second commit occurs.
+- What makes a state write final for each tool? A Pulumi checkpoint of a completed update is final. A preview or a running update is not final. An OpenTofu state version at finalize is final. A pending or superseded upload is not final.
+- How do concurrent, forced, opaque, redacted, and purged writes behave? The fenced transaction orders versions by commit order and rejects a stale write. A fence loss aborts the write. A duplicate final version ID is idempotent. Opaque, redacted, purged, and checkpoint-less writes keep defined version values.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
