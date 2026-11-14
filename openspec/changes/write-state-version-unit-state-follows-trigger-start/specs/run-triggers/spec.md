@@ -54,18 +54,18 @@ When the sender retries an event after a crash, the server SHALL replay the same
 
 ### Requirement: Starting principal
 
-When a follows trigger starts a plan, the server SHALL start it as the namespace service principal under its stored plan-start grant.
+When a follows trigger starts a plan, the server SHALL start it as the run-as principal of the trigger.
 
 #### Scenario: Follows plan starts as service principal
 - **WHEN** a follows trigger starts a plan
-- **THEN** the start check uses only the stored plan-start grant of the namespace service principal.
+- **THEN** the start check uses only the stored grants of the run-as principal of the trigger.
 
 ### Requirement: Saver read check fails closed
 
-When a plan that a follows trigger started reads an output of the source unit, the server SHALL allow the read only when the current grants of the last saver of the trigger hold unit:read-outputs on the source, plus unit:read-secrets for a secret output.
+When a plan that a follows trigger started reads an output of the source unit, the server SHALL allow the read only when the current grants of the run-as principal of the trigger hold unit:read-outputs on the source, plus unit:read-secrets for a secret output.
 
 #### Scenario: Missing saver reads nothing
-- **WHEN** a follows plan reads a source output while the last saver is missing, deleted, or disabled
+- **WHEN** a follows plan reads a source output while the run-as principal is missing, deleted, or disabled
 - **THEN** the server denies the read.
 
 #### Scenario: Secret output needs secrets action

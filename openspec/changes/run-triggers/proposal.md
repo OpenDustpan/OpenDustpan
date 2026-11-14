@@ -27,6 +27,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- NEW: the trigger names its run-as principal by stable ID. It must be a service principal that the author can act as, or one that the author creates in the same request with no grant (ADR 369 decision 7). The start and the reads of the job use it. The namespace service principal is gone (ADR 370).
 - CRUD routes for unit triggers with declared auth actions and audit entries
 - Plan-only trigger start through the job service
 - Guide page for run triggers
@@ -45,6 +46,9 @@ Out of scope:
 
 Depends on:
 
+- ADR 369 on main (pull request #3056)
+- ADR 370 on main (pull request #3058)
+- housekeeping-principals (lands before this change, or with it)
 - add-job-service-routes-start
 - job-service-unit-settings-pool
 - runners
@@ -70,8 +74,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 267: Run triggers: three kinds, a plan only, started through the job service** (not owner-tagged).
 
 - Decisions that apply: 1 (current), 2 (current), 9 (current).
-- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 286, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 273, 299, 307, 310, 338.
+- Changed by: ADR 273 changes decision 14; ADR 299 changes decisions 14 and 19; ADR 307 extends decision 8; ADR 310 changes decision 22; ADR 338 changes decision 14; ADR 369 changes decision 14; ADR 370 changes decision 14. Chain to the end: ADR 273, ADR 299, ADR 307, ADR 310, ADR 338, ADR 369, ADR 370, ADR 286, ADR 328, ADR 359.
+- Current rule: this ADR, with ADR 273, 299, 307, 310, 369, 370.
 - Quote: "A trigger belongs to one unit and has one kind. The unit is the unit that the trigger starts. The kinds are `review-request-push`, `schedule` and `follows` (24.1). A unit is a stack or a workspace of any tool, and the tr"
 - Quote: "A trigger starts a job through the job service. It has no path of its own. The gates, the approval rules, the change freezes, the manual locks and the limits of open jobs apply to the job as to any job."
 - Quote: "A trigger starts a plan and nothing else. The acceptance criteria name a plan for each kind. The port that a trigger uses to start a job can start a plan and nothing else. No trigger starts an apply in these slices (RFC"
@@ -84,16 +88,27 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "**A job token reads only what a rule names and the starter can read (15.5, option c).** A job token reads the outputs of another unit only when both checks pass at each read: - Check 1: a sharing rule of the producer names the unit of the job"
-- Effect: A job that a trigger starts reads outputs only when a sharing rule names it and its last saver holds unit:read-outputs on the producer.
+- Effect: A job that a trigger starts reads outputs only when a sharing rule names it and its run-as principal holds unit:read-outputs on the producer.
 - Conflict: none.
 
-**ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
 
-- Decisions that apply: 3 (current).
+- Decisions that apply: 7 (current).
+- Changed by: ADR 370 changes. Chain to the end: ADR 370.
+- Current rule: this ADR, with ADR 370.
+- Quote: "The run-as principal must be a service principal. A hard check in code refuses a person, with an error code."
+- Quote: "The author may name only a service principal that the author can act as."
+- Quote: "A job that a run trigger starts acts and reads as the run-as principal of the trigger, not with the grants of the last saver."
+- Effect: Each trigger names its run-as principal by stable ID. The start and the reads of its job use that principal. The person who saved the trigger is the configurer.
+- Conflict: none.
+
+**ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The principal still holds nothing else (owner, 2026-11-07). The grant covers the start of a plan only. The principal still has no token and no session. The rule of ADR 267 decision 14 about the read check of the last saver does not change."
-- Effect: Trigger starts run as the namespace service principal with the stored plan-only grant, with no token and no session.
+- Quote: "The namespace service principal is removed (owner, 2026-11-14)."
+- Effect: No start runs as the namespace service principal, and no code rule gives a start permission.
 - Conflict: none.
 
 ## Adversarial second pass
@@ -107,14 +122,14 @@ A model of another provider than the drafter listed the open questions, failure 
 - R1.5 (missing scenario): The spec does not state the run-time depth guard for follows chains, although ADR 267 decision 17 requires it and the design risk names it. No scenario tests a chain that is valid at save but loops at run time. Resolution: answered: Added run-time depth-guard requirement with chain-refused scenario.
 - R1.6 (missing scenario): The push trigger has no requirement for matching the review request target repository, branch and paths (ADR 267 decision 19), so a push on a wrong branch or path has no test. Resolution: answered: Added push-match requirement with repository, branch and paths scenarios.
 - R1.7 (failure mode): Concurrent saves of triggers in one namespace are required to serialize (ADR 267 decision 17), but the spec and tasks do not name a test for two simultaneous saves that could skip the cycle check. Resolution: answered: Added serialized-saves scenario under the cycle requirement and a concurrent-save task check.
-- R1.8 (open question): The design says the start uses the namespace service principal with a stored plan-start grant (ADR 338 decision 3), but the plan-start grant creation and its owner are not described in the change; the owner must confirm the grant is seeded at namespace creation. Resolution: open question: Added owner-decided open question on seeding time of the stored plan-start grant.
+- R1.8 (open question): The design says the start uses the run-as principal of the trigger with a stored plan-start grant (ADR 338 decision 3), but the plan-start grant creation and its owner are not described in the change; the owner must confirm the grant is seeded at namespace creation. Resolution: open question: Added owner-decided open question on seeding time of the stored plan-start grant.
 - R1.9 (scope): The proposal lists the console job timeline and masked plan diff as part of the user path, but no task or requirement covers the console; the definition of done omits it. Resolution: answered: Console removed from the promised path; console step now reads only data this change exposes, with no console build task.
 - R1.10 (wrong claim): The proposal cites the 'run triggers' guide and the e2e suite as existing evidence, but the change also creates them in tasks 2.4 and 2.3; the evidence claim is not consistent with the task list. Resolution: answered: Evidence claim now states this change extends the existing guide, code and e2e suite.
 - R2.1 (adr conflict): tasks.md and proposal.md ADR check: ADR 267 decision 14 is quoted as current in the ADR check of proposal.md while the decision state is changed; the change relies on decision 14 for the start identity (namespace service principal with plan-only grant) but never states the changed text it implements, so the build cannot be checked against the rule. Resolution: answered: Removed changed decision 14 from the ADR 267 decisions list and quotes; the effect now states the build follows the current rule in ADR 338 with ADR 273.
 - R2.2 (open question): ADR 267 decision 17 and the design require a depth guard at run time, but the spec does not give the depth limit value or the action on refusal beyond recording the chain; the build cannot be done without the number. Resolution: open question: Added a PM-decided open question for the run-time depth guard number; the spec uses the configured guard until decided.
 - R2.3 (failure mode): Single-fire requirement covers restarts but not an outage of the durable schedule store or a partial failure between plan start and the stored last-fire record; no scenario says whether the trigger retries, skips or starts twice. Resolution: open question: Added a PM-decided open question and deduplicate scenarios for partial failure between plan start and last-fire record.
 - R2.4 (missing scenario): The blocked-start requirement says the server refuses the start or holds the job, but does not say which one applies per gate, so the trigger read and the error text in proposal.md cannot be built as written. Resolution: answered: Split blocked-start scenarios into refuse for lock and freeze and wait for approval hold, with the same outcome as a manual start.
-- R2.5 (missing scenario): No scenario for a missing or revoked stored plan-start grant on the namespace service principal, although ADR 338 makes the grant the only start permission. Resolution: answered: Added a missing-grant scenario that refuses the start and writes a denial audit entry.
+- R2.5 (missing scenario): No scenario for a missing or revoked stored plan-start grant on the run-as principal of the trigger, although ADR 338 makes the grant the only start permission. Resolution: answered: Added a missing-grant scenario that refuses the start and writes a denial audit entry.
 - R2.6 (missing scenario): No scenario for a trigger whose source unit is deleted or renamed; the follows edge refers to a unit reference, so the stable ID rule of project.md applies and no requirement states it. Resolution: answered: Added a source-removed requirement that stores the source by stable ID and skips the start with a recorded reason.
 - R2.7 (failure mode): Push match requirement does not cover hostile webhook input: a forged or replayed forge event could start plans; no signature or replay scenario is listed in the layers table or tasks. Resolution: answered: Added forge signature and replay guards with hostile tests in the handler layer and tasks.
 - R2.8 (wrong claim): The proposal says the ADR 267 quote for decision 17 concerns serialized writes, but the design layer test covers only the service path; the concurrent-save task 2.3 proves saves in the trigger package and not through the HTTP route. Resolution: answered: Changed the concurrent-save task to prove serialization through the HTTP route with parallel saves.
@@ -126,16 +141,9 @@ A model of another provider than the drafter listed the open questions, failure 
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. When is the stored plan-start grant of the namespace service principal seeded for new and existing namespaces?
-   - Options: Ensure the plan-start stored grant at namespace creation and lazily at first trigger save; Seed the grant at first trigger save only.
-   - Provisional decision (owner review 14 Nov): Ensure the plan-start stored grant at namespace creation and lazily at first trigger save
-   - Reason: ADR 338 states the stored plan-only grant but not the seeding time, and existing namespaces need cover with no baseline migration. Benchmark: AWS IAM roles for service-linked starts seed the role at resource creation with least privilege
-   - Persona impact: A Developer sees no extra step; the trigger start works on new and old namespaces with no manual grant. Escape hatch: An operator lists the stored grant of the namespace service principal through the access review and revokes the trigger when the grant is absent.
-   - Owner-tagged ADRs involved: ADR 338 (their words do not change).
-
 Questions considered and answered:
+
+- When is the stored grant of the namespace service principal seeded? Never: ADR 370 removes the principal. Each trigger names its run-as principal (ADR 369 decision 7).
 
 - Does a trigger start an apply? ADR 267 decisions 2, 3, 9 and 16: every trigger starts a plan through the job service with the same gates, approvals, freezes, locks and limits as any job, and never starts an apply.
 - How are follows cycles handled? ADR 267 decisions 7, 10, 17 and 21: refused at save with the ordered unit path, serialized writes, cross-namespace follow refused by the fence. Owned by the follows chain changes.

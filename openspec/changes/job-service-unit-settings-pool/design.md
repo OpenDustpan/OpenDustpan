@@ -1,6 +1,6 @@
 ## Context
 
-The job planner reads pool, code location, profile reference and steps from the unit settings with namespace defaults as fallback. A location in the start request is an explicit override. Trigger starts carry trigger ID, last saver and caller for the output-read check. The planner snapshots the resolved inputs at start; each output read uses the grant state at that read.
+The job planner reads pool, code location, profile reference and steps from the unit settings with namespace defaults as fallback. A location in the start request is an explicit override. Trigger starts carry the trigger ID, the stable ID of the run-as principal and the caller for the output-read check (ADR 369 decision 7). The planner snapshots the resolved inputs at start; each output read uses the grant state at that read.
 
 ## Decisions
 

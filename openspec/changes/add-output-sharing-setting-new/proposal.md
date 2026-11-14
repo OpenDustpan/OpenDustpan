@@ -28,6 +28,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- NEW: the trigger names its run-as principal by stable ID. It must be a service principal that the author can act as, or one that the author creates in the same request with no grant (ADR 369 decision 7). The start and the reads of the job use it. The namespace service principal is gone (ADR 370).
 - Namespace setting outputSharing.newUnitDefault with values nobody and namespace, default nobody, with effective value in the settings read
 - One-step sharing rules on the producer for a unit, a collection, or a namespace by stable ID
 - Read check on all output paths at each read: rule match plus unit:read-outputs of the starter, fail closed
@@ -42,6 +43,9 @@ Out of scope:
 
 Depends on:
 
+- ADR 369 on main (pull request #3056)
+- ADR 370 on main (pull request #3058)
+- housekeeping-principals (lands before this change, or with it)
 - #897
 
 ## Usability
@@ -130,6 +134,6 @@ Questions considered and answered:
 - What is the default sharing of a new unit? ADR 273 decision 4 answers it: the namespace setting outputSharing.newUnitDefault with values nobody and namespace, default nobody, which carries owner decision 15.6 recorded in issue 929.
 - How does one step share outputs with a namespace or a collection? ADR 273 decisions 1 and 5 answer it: a rule on the producer that names the unit, its collection, or its namespace, plus unit:read-outputs of the starter.
 - When does a changed rule take effect for a running job? ADR 213 decision 1 and ADR 273 decision 5 answer it: both checks at each read, so a later grant or rule change applies at the next read.
-- Which principal does check 2 use for a trigger-started job? ADR 267 decision 14 answers the trigger part: a trigger start runs as the namespace service principal and check 2 uses the current grants of the trigger last saver; a missing or disabled saver means deny.
+- Which principal does check 2 use for a trigger-started job? ADR 369 decision 7 answers the trigger part (it changes ADR 267 decision 14): a trigger start runs as the run-as principal of the trigger, and check 2 uses the current grants of that principal; a missing or suspended principal means deny.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
