@@ -1,11 +1,11 @@
 ## Context
 
-Server side of runner pools: join tokens, join, poll and claim for jobs of both tools, lease expiry with takeover, live log read stream. Runner binary lives in its own repository and is out of scope.
+Server side of runner pools: join tokens, join, poll and claim for jobs of both tools, lease expiry with takeover, live log read stream. The runner binary lives in its own repository and is out of scope.
 
 ## Decisions
 
-1. **One-use join in one transaction.** Join uses stored SHA-256 of token, one-use consume in the same transaction as runner insert, keyed by pool ID and runner name with stable runner ID after join. Lost join response is not retried with the same token; the operator retires the orphan record and creates a fresh token.
-2. **Claim with lease and takeover.** Poll maps to job.Claimer.Claim for the pool with an immediate try at poll start, then recheck at least every 5 seconds inside the 50 second hold; unmatched labels return no work and the job stays queued; lease expiry returns the claim to the queue for another runner. Cross-instance wake is the wake-long-poll change. Provisional lease is 60 seconds with renew every 20 seconds and takeover after expiry plus 30 second grace.
+1. **One-use join in one transaction.** Join uses stored SHA-256 of the token and consumes it in the same transaction as the runner insert. The runner gets a stable runner ID. A lost join response is not retried with the same token; the operator retires the orphan record and creates a fresh token.
+2. **Claim with lease and takeover.** Poll maps to job.Claimer.Claim for the pool with an immediate try, then a recheck at least every 5 seconds inside the 50 second hold. Unmatched labels return no work and the job stays queued. Lease expiry returns the claim to the queue. Provisional lease is 60 seconds, renew every 20 seconds, takeover after expiry plus 30 seconds grace.
 
 ## Structure
 
@@ -20,8 +20,8 @@ Unexported claimLease type with constructor newClaimLease that checks pool, owne
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP adapter | Handler checks Dustpan-Proof signature, time window, nonce cache, and Dustpan-Release header before any state read. | Replay a poll proof and a stale proof; both get bad-proof and no claim. |
-| service | Service checks join-token hash, expiry, prior use, and pool match; checks claim owner on renew; checks runner live on each claim use. | Join twice with one token; second join gets token-used. Renew a claim from another runner; request is refused. |
+| HTTP adapter | Handler checks Dustpan-Proof signature, time window, nonce cache and Dustpan-Release header before any state read. | Replay a poll proof and a stale proof; both get bad-proof and no claim. |
+| service | Service checks join-token hash, expiry, prior use and pool match; checks claim owner on renew; checks runner live on each claim use. | Join twice with one token; second join gets token-used. Renew a claim from another runner; request is refused. |
 | port adapter | Store consumes token and inserts runner in one transaction; claim insert uses conditional write on lease owner and expiry. | Run two concurrent joins with one token; one wins and the other gets token-used. |
 
 ## Diagrams

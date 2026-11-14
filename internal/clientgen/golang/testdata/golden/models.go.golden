@@ -93,6 +93,7 @@ func (v *CreateProfileRevisionRequest) UnmarshalJSON(data []byte) error {
 type ErrorCode string
 
 const (
+	ErrorCodeAccessCollectionUnitCap               ErrorCode = "access.collection-unit-cap"
 	ErrorCodeAccessDenied                          ErrorCode = "access.denied"
 	ErrorCodeAccessIpNotAllowed                    ErrorCode = "access.ip-not-allowed"
 	ErrorCodeAccessLastSiteAdministrator           ErrorCode = "access.last-site-administrator"

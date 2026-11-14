@@ -12,6 +12,10 @@ When a caller changes a trusted identity provider, a claim mapping, or an accoun
 - **WHEN** A caller with the action has no fresh authentication inside the one window.
 - **THEN** The server answers 403 with code mfa.fresh-step-required.
 
+#### Scenario: No factor
+- **WHEN** A caller with the action has enrolled no factor.
+- **THEN** The server answers 403 with a message that names the enrollment page and each way to enroll.
+
 ### Requirement: Change alert
 
 When such a change occurs, the server SHALL write an audit entry and a WARN line with the injected logger.

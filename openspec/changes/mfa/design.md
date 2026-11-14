@@ -68,21 +68,33 @@ Data flow and trust boundaries:
 
 ```mermaid
 flowchart LR
- C[console] --> S[sign-in service]
- S --> M[mfa store]
+ subgraph Client[Browser or CLI]
+ C[console]
+ end
+ subgraph Server[Server]
+ S[sign-in service]
+ end
+ subgraph Store[Store]
+ M[mfa store]
+ end
+ C --> S
+ S --> M
 ```
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| console to sign-in service | S | An attacker replays a TOTP code. | boundary check | Reject malformed input. | Send a malformed code; refused. |
-| console to sign-in service | S | An attacker replays a TOTP code. | authorize at point of use | Single-use check in the service. | Reuse a code; no session. |
+| console to sign-in service | S | An attacker replays a TOTP code. | boundary check | Reject a code that is not 6 digits. | Send a malformed code; refused. |
+| console to sign-in service | S | An attacker replays a TOTP code. | encode or contain | Compare the code in constant time and store only a hash of used codes. | Read the used-code record; it holds no plain code. |
+| console to sign-in service | S | An attacker replays a TOTP code. | limit | Count wrong factors in the factor lock of the person. | Send wrong codes past the count; the person is locked. |
+| console to sign-in service | S | An attacker replays a TOTP code. | authorize at point of use | Single-use check in the service for the pending sign-in. | Reuse a code; no session. |
+| console to sign-in service | S | An attacker replays a TOTP code. | fail closed | Deny on a store error and write an audit entry. | Fail the store during verify; no session and an audit entry. |
 
 ## Contracts
 
 **mfa.PendingSignIn**
 
 - Invariant: A pending sign-in never authenticates a request.
-- `VerifySecondFactor`: pre: The pending sign-in is valid.. Post: A valid factor issues a session..
+- `VerifySecondFactor`: pre: The pending sign-in is valid.. Post: A valid factor issues a session.; A used code issues no session..
 
 ## Failure modes
 

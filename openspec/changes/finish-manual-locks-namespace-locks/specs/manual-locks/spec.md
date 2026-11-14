@@ -13,12 +13,12 @@ When a manual lock covers a namespace, the server SHALL refuse each state-changi
 When any caller asks whether a unit is covered, the server SHALL answer the holder and the reason when the unit, its collection or its namespace holds a manual lock.
 
 #### Scenario: Covered by namespace
-- **WHEN** Covered is called for a unit whose namespace is locked
+- **WHEN** Covering is called for a unit whose namespace is locked
 - **THEN** the answer holds the holder and the reason of the namespace lock
 
 #### Scenario: Not covered
-- **WHEN** Covered is called for a unit with no lock on any of the three levels
-- **THEN** the answer holds no holder
+- **WHEN** Covering is called for a unit with no lock on any of the three levels
+- **THEN** the answer is ErrNotLocked (the object has no manual lock)
 
 ### Requirement: job-dispatch-waits
 
@@ -55,11 +55,3 @@ When a caller bulk-locks or bulk-unlocks from 1 to 100 IDs, the server SHALL che
 #### Scenario: Too many IDs
 - **WHEN** a call holds 101 IDs
 - **THEN** the server answers 400 and changes nothing
-
-### Requirement: import-hold-preview
-
-While the manual lock of an import covers a unit, the server SHALL accept a preview start on that unit.
-
-#### Scenario: Preview under import hold
-- **WHEN** a preview starts on a unit under an import hold
-- **THEN** the server accepts the preview start

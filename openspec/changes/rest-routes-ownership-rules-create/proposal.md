@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #1238, #1240.
@@ -50,7 +50,6 @@ Out of scope:
 Depends on:
 
 - add-named-path-sets-paths
-- `add-named-path-sets-paths` (order of the milestone review)
 
 ## Usability
 

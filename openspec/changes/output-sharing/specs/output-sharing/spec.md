@@ -22,7 +22,7 @@ When a job token of a consumer named by a sharing rule of the producer requests 
 
 #### Scenario: Empty collection matches nothing
 - **WHEN** the only naming rule names a collection with no member units
-- **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the read with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Consumer namespace rule
 - **WHEN** a rule names the consumer namespace and a job of that namespace requests the outputs
@@ -46,7 +46,7 @@ When no sharing rule of the producer names the consumer unit, collection, or nam
 
 #### Scenario: Read with no rule
 - **WHEN** a job token requests outputs of a unit that no sharing rule names for its consumer
-- **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the read with 403, error code access.denied, and a denial audit entry.
 
 ### Requirement: Unknown or hidden producer
 
@@ -66,7 +66,7 @@ When a named consumer job requests outputs that hold a secret output, the server
 
 #### Scenario: Secret output without starter grant
 - **WHEN** a named consumer job requests outputs that hold a secret output and the starter lacks unit:read-secrets on the producer
-- **THEN** the server denies the read with 403, error code unit.forbidden naming unit:read-secrets, and a denial audit entry.
+- **THEN** the server denies the read with 403, error code access.denied naming unit:read-secrets, and a denial audit entry.
 
 #### Scenario: Secret output with starter grant
 - **WHEN** a named consumer job requests outputs that hold a secret output and the starter holds unit:read-secrets on the producer
@@ -74,7 +74,7 @@ When a named consumer job requests outputs that hold a secret output, the server
 
 #### Scenario: Starter deleted or disabled
 - **WHEN** the starter principal is deleted, disabled, expired, or its token is expired at read time
-- **THEN** the server denies the read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the read with 403, error code access.denied, and a denial audit entry.
 
 ### Requirement: Decrypt only outputs
 
@@ -86,15 +86,15 @@ When a job token that passes both read checks asks to decrypt producer ciphertex
 
 #### Scenario: Decrypt other ciphertext refused
 - **WHEN** a passing job token asks to Decrypt ciphertext from outside those root outputs
-- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the Decrypt with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Starter loses secrets grant before Decrypt
 - **WHEN** the starter loses unit:read-secrets between the outputs read and the Decrypt call
-- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the Decrypt with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Non-named unit Decrypt
 - **WHEN** a job token of a unit that no rule names asks to Decrypt producer ciphertext
-- **THEN** the server denies the Decrypt with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the Decrypt with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Client-encrypted latest state
 - **WHEN** the States port reports the latest state as client-encrypted
@@ -110,15 +110,15 @@ When a job reads outputs of another unit, the server SHALL recheck the naming ru
 
 #### Scenario: Rule removed mid-job
 - **WHEN** the producer rule is deleted after the job starts and before the job reads
-- **THEN** the server denies the next read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the next read with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Starter grant revoked mid-job
 - **WHEN** the starter loses unit:read-outputs after the job starts and before the job reads
-- **THEN** the server denies the next read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the next read with 403, error code access.denied, and a denial audit entry.
 
 #### Scenario: Membership removed mid-job
 - **WHEN** the consumer unit leaves the named collection after the job starts and before the job reads
-- **THEN** the server denies the next read with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server denies the next read with 403, error code access.denied, and a denial audit entry.
 
 ### Requirement: Reject hostile read kind
 
@@ -126,7 +126,7 @@ When an outputs read names an object kind outside the allowlist, the server SHAL
 
 #### Scenario: Principal name as consumer
 - **WHEN** an outputs read presents a principal name where a unit, collection, or namespace is required
-- **THEN** the server rejects the request with 403, error code unit.forbidden, and a denial audit entry.
+- **THEN** the server rejects the request with 403, error code access.denied, and a denial audit entry.
 
 ### Requirement: Output routes covered
 
@@ -154,7 +154,7 @@ When a unit is renamed or made again, the server SHALL match sharing rules by st
 
 #### Scenario: Producer removed and made again
 - **WHEN** the producer unit is removed and made again under the same name
-- **THEN** the server denies the read with 403, error code unit.forbidden, until a new rule names the new stable ID.
+- **THEN** the server denies the read with 403, error code access.denied, until a new rule names the new stable ID.
 
 #### Scenario: Consumer renamed
 - **WHEN** a consumer unit named by stable ID is renamed and its job reads
@@ -162,11 +162,11 @@ When a unit is renamed or made again, the server SHALL match sharing rules by st
 
 #### Scenario: Consumer removed and made again
 - **WHEN** a consumer unit is removed and made again under the same name
-- **THEN** the server denies the read with 403, error code unit.forbidden, until a new rule names the new stable ID.
+- **THEN** the server denies the read with 403, error code access.denied, until a new rule names the new stable ID.
 
 #### Scenario: Job with no unit attachment
 - **WHEN** a job token with no consumer unit attachment requests outputs of another unit
-- **THEN** the server denies the read with 403, error code unit.forbidden.
+- **THEN** the server denies the read with 403, error code access.denied.
 
 ### Requirement: Rate-limit denied reads
 

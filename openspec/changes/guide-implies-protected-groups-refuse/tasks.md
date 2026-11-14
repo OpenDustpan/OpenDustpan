@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Guide fix
 
@@ -8,14 +8,14 @@
 - [ ] 1.2 Edit the guide near lines 243-245 to state that the flag is shown, that the sync does not yet refuse changes to a protected group, and that the accepted rule is not enforced yet. Add the safe step. Fix the sentence about groups that are not protected. Check: rg -n 'protected' docs/guides/principals-and-groups.md shows the corrected paragraph and no sentence that implies a refusal.
 - [ ] 1.3 Find every other section that mentions group sync or identity provider membership. Edit each one that implies a refusal. List each edit in the pull request description. Check: rg -n -i 'identity provider|group claim|scim|sync' docs/guides/principals-and-groups.md lists each hit, and the description lists the edits.
 - [ ] 1.4 Compare the new wording with the sync code and the SQLite and PostgreSQL group_claims adapters. Confirm that the sync applies no protected-group rule. Check: rg -n -i 'protected' pkg/store/internal/groupclaims pkg/store/sqlite pkg/store/postgres shows no check of the flag in the sync, and the description records the result.
-- [ ] 1.5 Comment on issue #2688: this change lands first, and each pull request that enforces the rule, in part or in full, must rewrite the guide sentence and update the catalog of code rules. Check: The comment on issue #2688 exists and the description links it.
-- [ ] 1.6 Run docs lint on the edited guide. Check: make docs-lint passes with zero findings.
+- [ ] 1.5 Comment on issue #2688 (a GitHub issue comment, no file edit; record the link in the pull request description for docs/guides/principals-and-groups.md): this change lands first, and each pull request that enforces the rule, in part or in full, must rewrite the guide sentence and update the catalog of code rules. Check: The comment on issue #2688 exists and the description links it.
+- [ ] 1.6 Run docs lint on the edited guide docs/guides/principals-and-groups.md. Check: make docs-lint passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
 
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 2.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run the full check. Check: make check passes with zero findings.
+- [ ] 3.1 Run the full check. Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

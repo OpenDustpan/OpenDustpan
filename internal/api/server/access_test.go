@@ -123,19 +123,39 @@ func newAccessFixtureFull(
 	return newAccessFixtureSignIn(t, entries, passkeys, nil)
 }
 
+// accessPorts holds the ports of the fixture that a test replaces. A nil
+// field keeps the port of the fixture: the stub collection port that lists no
+// unit, and no settings reader.
+type accessPorts struct {
+	collections access.UnitCollections
+	settings    access.Settings
+}
+
 // accessFixtureParts holds the optional parts of a fixture: its audit store,
 // its passkey service, the change of its console sign-in, its link service,
-// the clock of its access service and the logger of its handler. A nil
-// passkey service gets a real one over the store, a nil link service mounts
-// no link route, a nil clock is time.Now, and a nil logger discards its
-// lines.
+// the ports that a test replaces, the clock of its access service and the
+// logger of its handler. A nil passkey service gets a real one over the store,
+// a nil link service mounts no link route, a nil port keeps the port of the
+// fixture, a nil clock is time.Now, and a nil logger discards its lines.
 type accessFixtureParts struct {
 	entries  func(st *sqlite.Store) auditStore
 	passkeys apiserver.PasskeyService
 	tweak    func(in *apiserver.SignIn, st *sqlite.Store)
 	links    func(*sqlite.Store) *forgelinksvc.Service
+	ports    accessPorts
 	now      func() time.Time
 	logger   *slog.Logger
+}
+
+// newAccessFixturePorts is newAccessFixture with the collection port and the
+// settings reader that ports names.
+func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
+	})
 }
 
 // newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
@@ -148,7 +168,8 @@ func newAccessFixtureSignIn(
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks, now: nil, logger: nil,
+		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
+		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
 	})
 }
 
@@ -169,7 +190,8 @@ func newAccessFixtureLinks(
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: nil, tweak: nil, links: links, now: nil, logger: nil,
+		entries: entries, passkeys: nil, tweak: nil, links: links,
+		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
 	})
 }
 
@@ -182,7 +204,8 @@ func newAccessFixtureClock(
 	t.Helper()
 
 	return newAccessFixtureAll(t, accessFixtureParts{
-		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks, now: now, logger: logger,
+		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
+		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
 	})
 }
 
@@ -215,14 +238,17 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	if _, seedErr := namespaces.Create(t.Context(), "acme"); seedErr != nil {
-		t.Fatalf("seed namespace: %v", seedErr)
-	}
+	seedNamespaces(t, namespaces, []namespace.Name{"acme"})
 
 	seedStack(t, st, "acme", "web", "prod")
 
+	collections := parts.ports.collections
+	if collections == nil {
+		collections = stubCollections{}
+	}
+
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: collections, Units: st, Principals: st},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -234,7 +260,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: parts.now, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: parts.ports.settings, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -327,7 +353,6 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		Schema:           stubSchema{migrations: nil},
 		Journal:          nil,
 		Principals:       principals,
-		Reach:            routeReach(st),
 		Tokens:           tokens,
 		Access:           grants,
 		Audit:            parts.entries(st),
@@ -343,6 +368,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		DenialLimiter:    nil,
 		Instances:        nil,
 		StoreChecks:      nil,
+		Reach:            routeReach(st),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

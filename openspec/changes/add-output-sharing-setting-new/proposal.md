@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #929.
@@ -45,6 +45,10 @@ Out of scope:
 
 Depends on:
 
+- none
+
+Builds on (not a change):
+
 - #897
 
 ## Usability
@@ -89,7 +93,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "**A namespace setting decides the rule of a new unit, and the default is "nobody" (15.6, option c).** The namespace setting `outputSharing.newUnitDefault` has the values `nobody` and `namespace`."
-- Effect: This change implements the setting, the rules and the read check that these decisions give.
+- Effect: This change implements the setting, the rules and the read check that these decisions give. The existing output-sharing route carries the rule CRUD, and no ADR asks for another route.
 - Conflict: none.
 
 **ADR 267: Run triggers: three kinds, a plan only, started through the job service** (not owner-tagged).

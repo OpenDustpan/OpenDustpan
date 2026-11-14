@@ -1,29 +1,29 @@
 ## Context
 
-Token authentication is security code. Enforcement must fail closed at every layer so an expired, revoked, or idle token never authenticates even if one layer is bypassed.
+Token authentication is security code. The existing authenticator is the one place that decides. An ended token and an unknown token take the same path and the same work before the 401. This change adds one shared refusal function, tests, the audit reason, the settings view and a docs section.
 
 ## Decisions
 
-1. **One authenticator checks every request.** Enforcement lives in the token authenticator, not in each CLI adapter. The Pulumi, TFE-compatible, and tool-neutral handlers call one authenticator that checks expiry, revocation, and disable before it returns the principal. The authenticator reads the installation maximum and the namespace maximum from the settings resource at create and rotation time and never hard-codes 365 days.
-2. **Last-used write does not fail authentication.** Last-used update is a separate write that never blocks authentication. A failure to record use leaves the token usable and the next request retries the write. The inactivity sweep re-reads last-used time in the same transaction and skips a token used after the sweep cut-off, with one winner per token row across replicas.
-3. **Fixed overlap stays visible without a new setting.** The 10-minute rotation overlap is a fixed constant with a named constructor argument and a visible effective value in the settings resource. No administrator setting changes it. Revocation of the old token ends it at once inside the overlap.
+1. **Keep one authenticator.** The Pulumi, TFE-compatible and tool-neutral handlers call the same authenticator. No handler checks expiry on its own.
+2. **One refusal function.** One new unexported refusal function builds the 401 and writes the audit entry for every refusal case. No case builds its own answer.
+3. **Same work for ended and unknown.** Both cases do the lookup by digest and the constant-time compare. The ended check runs after. Both cases write one audit entry on the request path.
+4. **Overlap stays as main.** The rotation overlap keeps the value of main. The settings resource shows it as an effective value with its source.
 
 ## Structure
 
-Unexported type `liveToken` with unexported field `live bool` and constructor `newAccessToken` that takes installation and namespace lifetime limits plus the fixed overlap and checks expiry against the applicable limit; only the constructor makes a live token.
+An unexported refusal function in pkg/accesstoken is the only path that builds a refusal for a token. Only it can make the refusal value, so a new case cannot skip the same bytes, headers and audit write.
 
 ## Risks
 
-- Last-used writes on every request contend on the token row under load; the write runs outside the authentication transaction with a bounded retry.
-- Clock skew between instances is bounded by strict expiry comparison with no grace window; a token at or past expiry never authenticates.
+- A limit view may drift from the value the code uses; the settings read comes from the same constant.
+- An audit write for an unknown token adds write load under a flood of bad tokens; it matches the existing audit of refused sign-ins.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | Authenticator rejects expired, revoked, and disabled tokens and checks installation and namespace maxima at create and rotation time. | Send an expired token, a revoked token, and an idle-disabled token directly to the authenticator and check each gives denial. |
-| port adapter | Store live-token query returns only live tokens and applies the fence in the same transaction for state writes. | Insert an expired row and a disabled row, then query the live-token view and check neither row returns. |
-| HTTP handler | HTTP handlers map denial to 401 with a stable error code and no secret in the body, and record the refusal without storing the presented token value. | Send a request with an expired bearer token to the Pulumi and TFE routes and check each answers 401. |
+| service | The authenticator refuses ended and disabled tokens through the one refusal function | Send an idle-disabled token directly to the authenticator and check the refusal |
+| HTTP handler | The handler answers 401 with no token text and the same bytes for each case | Send unknown, expired, revoked and disabled bearer tokens to the Pulumi and TFE routes and compare the bytes and headers |
 
 ## Diagrams
 
@@ -45,17 +45,12 @@ After this change:
 
 ```mermaid
 sequenceDiagram
- participant D as Developer
+ participant C as CLI
  participant API
- participant Auth as Authenticator
- participant Store
- D->>API: create token with expiry
- API->>Auth: check maxima and fresh step
- D->>API: CLI request with token
- API->>Auth: check expiry, revoke, disable
- Auth->>Store: live-token query
- Store-->>Auth: live or none
- Auth-->>API: principal or denial
+ participant Auth
+ C->>API: request with token
+ API->>Auth: check token
+ Auth-->>API: principal or shared refusal
 ```
 
 Modules that the change touches, and their imports on main:
@@ -69,8 +64,7 @@ P1[pkg/accesstoken]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| Authentication latency added by the expiry, revoke and disable checks | 5 | milliseconds at p99 over the live-token query | each token-authenticated request on one server process |
-| Refusal of an ended token | 100 | percent of requests past expiry, revoke or disable answered 401 | Pulumi, TFE-compatible and tool-neutral routes |
+| Refusal latency of an ended token | 50 | milliseconds at the 99th percentile | token authentication on the Pulumi, TFE-compatible and tool-neutral routes |
 
 ## Threat model
 
@@ -79,34 +73,30 @@ Data flow and trust boundaries:
 ```mermaid
 flowchart LR
  subgraph Client[Untrusted client]
- CLI[Pulumi CLI or OpenTofu]
+ CLI[CLI]
  end
  subgraph Server[Server trust boundary]
- H[HTTP handlers]
- A[Token authenticator]
+ H[HTTP handler]
+ A[Authenticator]
  end
- subgraph Data[Data store boundary]
+ subgraph Data[Store boundary]
  S[Token store]
- L[Audit log]
  end
  CLI -->|bearer token| H
  H --> A
  A --> S
- A --> L
 ```
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| HTTP handler to authenticator | S | Stale or forged token authenticates after expiry, revocation, or inactivity disable | boundary check | Reject expired, revoked, and disabled tokens; never store the presented value | Replay an expired bearer token after clock advance |
-| HTTP handler to authenticator | S | Stale or forged token authenticates after expiry, revocation, or inactivity disable | encode or contain | Store and compare only the hash of the token value; log the token ID, never the value | Send a token with CR, LF and a 10000-byte value and check the logs and audit entries hold no token text |
-| HTTP handler to authenticator | S | Stale or forged token authenticates after expiry, revocation, or inactivity disable | limit | Map denial to 401 without secret in body; aggregate unknown-token refusals | Flood unknown tokens and check audit-log size stays bounded |
-| HTTP handler to authenticator | S | Stale or forged token authenticates after expiry, revocation, or inactivity disable | authorize at point of use | The authenticator checks the live state of the token row at each request and each store query returns only live tokens | Revoke a token between two requests and check the second request answers 401 |
-| HTTP handler to authenticator | S | Stale or forged token authenticates after expiry, revocation, or inactivity disable | fail closed | An error or an unknown state in the token read denies the request | Make the store read fail and check the request answers 401 and not success |
+| HTTP handler to authenticator | S | An ended token authenticates, or its state leaks through the answer or timing | boundary check | The authenticator refuses ended and disabled tokens | Replay an expired bearer token |
+| HTTP handler to authenticator | S | An ended token authenticates, or its state leaks through the answer or timing | encode or contain | The one refusal function gives the same bytes and headers for every case and holds no token text | Compare the answers for unknown, expired, revoked and disabled tokens |
+| HTTP handler to authenticator | S | An ended token authenticates, or its state leaks through the answer or timing | limit | The maximum lifetime refuses a create past the limit | Create a token with an expiry past the maximum and check token.invalid |
+| HTTP handler to authenticator | S | An ended token authenticates, or its state leaks through the answer or timing | authorize at point of use | The authenticator re-reads the token status for each request, so a revoke applies at once | Revoke a token and send it in the next request and check 401 |
+| HTTP handler to authenticator | S | An ended token authenticates, or its state leaks through the answer or timing | fail closed | A store read error denies the request | Make the store read fail and check 401 |
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| authenticated request | Last-used write fails | Request still succeeds; next request retries the write; sweep re-reads time in the same transaction | token stays live with stale last-used time until a write succeeds |
-| inactivity sweep | Sweep races a fresh use | Sweep re-reads last-used time in the same transaction and skips the token; next tick re-evaluates | token stays live |
-| authentication with unknown token | Flood of unknown tokens | Answer 401 without a per-request audit entry with the token value; aggregated counter only | no audit-log growth from attacker input |
+| authenticated request | The store read fails | The client retries | No access is granted |

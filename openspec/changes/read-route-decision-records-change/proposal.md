@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #1257.
@@ -13,14 +13,14 @@ The user path this change must make work:
 1. **API.** Developer runs a state write through the tool API and gets a refusal that names a decision record ID.
 2. **API.** Developer opens the record through the NEW read route to see which gate refused and why.
 3. **Docs page.** Developer follows the docs page that shows the read call as written.
-4. **E2e.** The suite runs a refused write with the real OpenTofu CLI, then reads the record with an access token.
+4. **E2e.** The suite runs a refused write with the real OpenTofu CLI, then reads the record with a personal access token.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Caller with namespace access but without the gate read action reads an existing record of the namespace | 403 with code gate.denied and the record ID. | `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` (NEW route) |
-| Any caller reads a missing, expired, malformed or foreign record ID, or a caller has no namespace access | 404 with code gate.not-found and no record content. | `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` (NEW route) |
+| A caller without the gate read action, a caller with no namespace access, or an unauthenticated caller reads a record | 404 with code gate.not-found and the same body as for an unknown ID. | `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` (NEW route) |
+| Any caller reads a missing, expired, malformed or foreign record ID | 404 with code gate.not-found and no record content. | `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` (NEW route) |
 
 Evidence for the claims above:
 
@@ -30,9 +30,9 @@ Evidence for the claims above:
 ## What Changes
 
 - NEW route GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}: read one record by gdr- ID with the namespace gate read action.
-- NEW route GET /api/dustpan/v1/decision-records/{id}: read one record of an access limit on an installation object with installation:read-gates. A caller without the action gets 403 gate.denied. A missing, expired or malformed ID gets 404 gate.not-found.
-- Each error names the record ID where the record is in the scope of the caller.
-- The state.write refusal and the approval refusal name the record ID and the read route, and no change-order command, until the change-order slice ships one.
+- NEW route GET /api/dustpan/v1/decision-records/{id}: read one record of an access limit on an installation object with installation:read-gates.
+- Every denied read, and every read of a missing, expired, malformed or foreign ID, answers 404 gate.not-found with the same body.
+- The state.write refusal and the approval refusal name the record ID and the read route, and name no change-order command until the change-order slice ships one.
 
 Out of scope:
 
@@ -71,12 +71,12 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 230: Gate configuration: actions, routes, errors and audit entries** (not owner-tagged).
 
-- Decisions that apply: 2 (current), 3 (changed), 4 (extended).
+- Decisions that apply: 3 (changed), 4 (extended).
 - Changed by: ADR 268 changes decision 3; ADR 286 changes; ADR 335 extends decision 4; ADR 355 changes decision 3; ADR 355 changes decision 4. Chain to the end: ADR 268, ADR 286, ADR 335, ADR 355.
 - Current rule: this ADR, with ADR 268, 286, 335, 355.
 - Quote: "Routes (PM). Under the prefix of ADR 210, the scope is part of the path."
 - Quote: "Errors. `pkg/gate` holds the sentinels, with these status codes and stable error codes (ADR 182):"
-- Effect: New read routes sit under the ADR 210 prefix, declare the gate read actions and use the gate error table.
+- Effect: New read routes sit under the ADR 210 prefix, declare the gate read actions and use the gate error codes.
 - Conflict: none.
 
 **ADR 355: Gate configuration paths and errors as shipped** (not owner-tagged).
@@ -85,24 +85,18 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "A gate configuration error that wraps `gate.ErrNotFound` has the status 404 and the code `gate.not-found`."
-- Effect: Missing records reuse the shipped 404 shape.
+- Effect: Missing and denied records reuse the shipped 404 shape.
 - Conflict: none.
 
 ## Open questions
 
-1. Does an in-scope caller without the read action get 403 gate.denied or 404 gate.not-found? Decides: PM.
-   - Options: 403 for an in-scope caller without the action, 404 otherwise; 404 for every denied read.
-   - Recommended: 403 for an in-scope caller without the action, 404 otherwise Reason: No ADR sets the disclosure rule for records.
-2. Does a record read return only the stored masked form, or does a named secrets action open plain values? Decides: PM.
-   - Options: Stored masked form on every read, no plain-text open; A new secrets action that opens plain values.
-   - Recommended: Stored masked form on every read, no plain-text open Reason: No quoted ADR names a secrets action for fact documents. The first slice adds no new action.
-
-Not spec-ready: question 2: the benchmark names none of Google, AWS, PCI DSS, SOC 2, ISO 27001.
+none
 
 Questions considered and answered:
 
-- Which paths does the read use? A namespace route for namespace records and an installation route for installation limit records, as ADR 229 decision 5 sets the data scope.
-- Does the record ID link cover waits and warnings? ADR 229 decision 2 requires it. This change adds the link where state.write answers; evaluation logic stays unchanged.
+- Does a denied read answer 403 or 404? 404, with the body of an unknown ID. ADR 215 decision 8: "A path that names a namespace that does not exist, or that the caller cannot read, answers 404. The answer holds no data of a namespace: no name, no ID and no count." The same rule is in ADR 154 decision 9 and ADR 166 decision 14, and in the owner rule against existence oracles.
+- Does a read open plain secret values? No. Every read returns the stored masked form. No action opens plain values. PCI DSS requirement 3 keeps stored sensitive values unreadable.
+- Which paths does the read use? A namespace route and an installation route, as ADR 229 decision 5 sets the data scope.
 - What does a read give after retention expiry? ADR 229 decision 5 keeps state.write records for the audit retention. After that the read gives 404 gate.not-found.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

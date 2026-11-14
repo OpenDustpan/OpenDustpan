@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Issue: #1283.
@@ -29,10 +29,11 @@ Evidence for the claims above:
 
 ## What Changes
 
-- SQLite GetDeletedUnitFacts reads all deleted-unit rows in one read-only transaction scoped to the call with deferred close.
-- Server logs one fixed INFO line per start when there is no gate service.
-- The touched rollback path no longer uses the blank-assign pattern, with unchanged close behavior.
-- No conformance suite behavior change; the fault wrapper keeps its fault behavior.
+Main already has the behavior of this change, so the change only adds the tests that prove it:
+
+- SQLite GetDeletedUnitFacts already reads in one read-only transaction (`pkg/store/sqlite/inventory.go:573`, through `inReadTx` at `pkg/store/sqlite/sqlite.go:1447`). The change adds its snapshot, read-failure and rollback tests.
+- The start log lines and the audit entry are on main (`pkg/dustpan/stategates_start.go:58-67`) and are proven by `TestStateWriteGatesOffIsRecordedAtStart` (`pkg/dustpan/stategates_start_internal_test.go:64`). Nothing is left to do for them.
+- A test that passes on main from the start counts as done: it proves the behavior that main has.
 
 Out of scope:
 
@@ -62,12 +63,13 @@ No ADR is touched.
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Record why no e2e step applies." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
+none
 
 Questions considered and answered:
 
 - Does this change need a wider gate or store redesign? No. The issue lists three small follow-ups. The gated write stays unchanged.
 - Does this change conflict with an ADR? No. The pack adrs list is empty, so adr_check is empty.
 - Should the Postgres GetDeletedUnitFacts path change? No. The issue names only SQLite. Both dialects keep the same logical rows.
+- Does an e2e step apply? No. The pack names no existing route and credential kind that reads deleted-unit facts: the fact read runs inside the state write path and has no route of its own. No e2e step: no route reads the snapshot; the store tests cover the read.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

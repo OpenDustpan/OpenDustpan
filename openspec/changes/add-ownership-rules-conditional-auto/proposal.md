@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #902.
@@ -46,14 +46,14 @@ Out of scope:
 
 Depends on:
 
-- #899
-- #901
 - rest-routes-ownership-rules-create
 - add-named-path-sets-paths
 - several-approval-requirements-one-change
-- `rest-routes-ownership-rules-create` (order of the milestone review)
-- `add-named-path-sets-paths` (order of the milestone review)
-- `several-approval-requirements-one-change` (order of the milestone review)
+
+Builds on (not a change):
+
+- #899
+- #901
 
 ## Usability
 

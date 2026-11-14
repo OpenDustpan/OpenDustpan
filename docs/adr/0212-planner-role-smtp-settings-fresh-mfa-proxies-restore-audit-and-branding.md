@@ -13,6 +13,7 @@ Changed by:
   the one-time code of the first enrollment of a factor.
 - ADR 365 changes decision 5: a wording refinement, the restore entries
   follow the audit switch.
+- ADR 373 extends decision 1: the job and runner actions in the built-in roles.
 
 ## Context
 

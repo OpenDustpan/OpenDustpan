@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Issue: #1264, #1497.
@@ -10,8 +10,8 @@ Issue: #1264, #1497.
 
 The user path this change must make work:
 
-1. **Docs page.** Read the account docs page. It names the new paths /api/dustpan/v1/me/access and /api/dustpan/v1/me/grants (both NEW paths, see what_changes).
-2. **API.** List, create, rotate and delete own tokens through /api/dustpan/v1/me/tokens (NEW path) with a personal access token.
+1. **Docs page.** Read the account docs page. It names the new paths /api/dustpan/v1/me/access and /api/dustpan/v1/me/grants.
+2. **API.** List, create, rotate and delete own tokens through /api/dustpan/v1/me/tokens with an access token of the caller.
 3. **CLI.** Use the token with the Pulumi CLI and OpenTofu against the server.
 4. **Console.** Change the console to call the new paths. The console change merges before the next server tag.
 
@@ -33,11 +33,12 @@ Evidence for the claims above:
 
 ## What Changes
 
-- NEW path GET /api/dustpan/v1/me/access replaces GET /api/server/caller/access
-- NEW path GET /api/dustpan/v1/me/grants replaces GET /api/server/caller/grants
-- NEW paths GET and POST /api/dustpan/v1/me/tokens replace the token list and create under /api/server/caller/tokens
-- NEW path DELETE /api/dustpan/v1/me/tokens/{id} and the rotate route replace the old ones
+- GET /api/dustpan/v1/me/access replaces GET /api/server/caller/access
+- GET /api/dustpan/v1/me/grants replaces GET /api/server/caller/grants
+- GET and POST /api/dustpan/v1/me/tokens replace the token list and create under /api/server/caller/tokens
+- DELETE /api/dustpan/v1/me/tokens/{id} and the rotate route replace the old ones
 - The old paths stop being served, with no alias
+- The moved list routes use pageSize and pageToken, default 50 and maximum 200
 - The six entries leave the not-moved list; the description, e2e rows and docs follow
 
 Out of scope:
@@ -61,6 +62,9 @@ Each fact names its file, line and function on main. The change specifies only t
 - mountV1 mounts handler paths under the v1 prefix (`pkg/dustpan/dustpan.go:3636`)
 - TestClassCheckFailsClosed checks the not-moved list (`pkg/dustpan/apidesc_test.go:420`)
 - Label.WithQuery declares query parameters (`internal/api/apidesc/collect.go:89`)
+- const DefaultPageSize = 50 (`pkg/audit/audit.go:144`)
+- const MaxPageSize = 200 (`pkg/audit/audit.go:147`)
+- The caller token routes /api/server/caller/tokens and /api/server/caller/tokens/{id} are registered (`internal/api/server/tokens.go:181-182`)
 
 ## ADR check
 
@@ -88,11 +92,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. What are the default pageSize and the maximum pageSize of the moved token list? Decides: PM.
-   - Options: default 50, maximum 200; default 20, maximum 100.
-   - Recommended: default 50, maximum 200 Reason: The ADRs fix the names and give no numbers. Tests read the declared values from the API description, so the numbers change in one place.
-
-Not spec-ready: a code check fails: task "Move the coverage rows of the four caller routes in e2e/coverage.go, w" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Add an e2e step with a personal access token that calls GET /api/dustp" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+none
 
 Questions considered and answered:
 
@@ -100,5 +100,6 @@ Questions considered and answered:
 - Do cursor and limit keep their names? No. ADR 210 decision 10 names pageSize and pageToken.
 - Do the moved mutating routes take Idempotency-Key? Yes, by ADR 210 decision 6, through the shared idempotency mechanism.
 - Do error answers carry codes? Yes. ADR 276 decisions 1 and 3.
+- What are the default and maximum page size? The PM answered: default 50, maximum 200, the convention of main in pkg/audit/audit.go.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

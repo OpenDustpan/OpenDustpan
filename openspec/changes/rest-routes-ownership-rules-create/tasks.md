@@ -1,25 +1,25 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing domain tests for the one weakens function across approval rules, approval defaults and ownership rules. Check: `go test ./pkg/gate/... -run TestOwnershipWeaken -count=1` fails on main and shows each direction after the fix.
-- [ ] 1.2 Add failing route tests for list, read, put and delete with actions, ETag, 412 on stale match and 403 mfa.fresh-step-required on weaken with an access token. Check: `go test ./internal/api/... -run TestOwnershipRuleRoutes -count=1` fails on main and passes after the fix.
+- [ ] 1.1 Add failing domain tests for the one weakens function across approval rules, approval defaults and ownership rules in the NEW file pkg/gate/weakens_test.go. Check: `go test ./pkg/gate/... -run TestOwnershipWeaken -count=1` fails on main and shows each direction after the fix.
+- [ ] 1.2 Add failing route tests in the NEW file internal/api/ownership/handler_test.go for list, read, put and delete with actions, ETag, 412 on stale match and 403 mfa.fresh-step-required on weaken with an access token. Check: `go test ./internal/api/... -run TestOwnershipRuleRoutes -count=1` fails on main and passes after the fix.
 
 ## 2. Build
 
-- [ ] 2.1 Add the shared weakens function with a test for each direction and for undecidable expressions failing closed. Check: `go test ./pkg/gate/... -count=1` passes.
-- [ ] 2.2 Add the ownership-rule routes with actions, objects, ETag handling and audit entries. Check: The route test passes and reports no route without an action.
-- [ ] 2.3 Wire the shared weakens check into the existing approval-rule and approval-default routes with no change to their shapes. Check: `go test ./internal/api/... -run TestGateWeakenWiring -count=1` passes.
-- [ ] 2.4 Publish the routes in the API description. Check: `make clients-check` passes.
-- [ ] 2.5 Add the user documentation page for ownership rule routes and access-token writes. Check: `make docs-lint` passes.
+- [ ] 2.1 Add the shared weakens function in the NEW file pkg/gate/weakens.go (the function is NEW), with a test in pkg/gate/weakens_test.go for each direction and for undecidable expressions failing closed. Check: `go test ./pkg/gate/... -count=1` passes.
+- [ ] 2.2 Add the ownership-rule routes in the NEW file internal/api/ownership/handler.go, with the route declaration in the NEW file internal/api/ownership/routes.go, with actions, objects, ETag handling and audit entries. Check: The route test passes and reports no route without an action.
+- [ ] 2.3 Wire the shared weakens check into the existing approval-rule and approval-default routes in pkg/gate/service.go with no change to their shapes. Check: `go test ./internal/api/... -run TestGateWeakenWiring -count=1` passes.
+- [ ] 2.4 Publish the routes in the API description in internal/api/apidesc/openapi.json (generated; never edit by hand). Check: `make clients-check` passes.
+- [ ] 2.5 Add the NEW user documentation page docs/user/ownership-rules.md for ownership rule routes and access-token writes. Check: `make docs-lint` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step that drives each new route under /api/dustpan/v1/namespaces/{namespace}/ownership-rules over TLS against the real server, with an access token of a service principal: list, read, put, delete, stale 412, tighten 200, weaken 403 mfa.fresh-step-required. The step uses the real directory of the suite and calls the routes with the generated Go client. Check: `make e2e` runs the step and passes.
-- [ ] 4.2 Run the full check with race, lint and conformance suites, and confirm a person completes the user path from the docs page alone. Check: `make check` reports zero findings with no new exclusion.
+- [ ] 4.1 BLOCKED by the missing e2e suite file and the missing ownership-rule routes on main, which task 2.2 adds. Then add the e2e step in the NEW file e2e/ownership_rules_test.go that drives each new route under /api/dustpan/v1/namespaces/{namespace}/ownership-rules over TLS against the real server, with an access token of a service principal: list, read, put, delete, stale 412, tighten 200, weaken 403 mfa.fresh-step-required. The step uses the real directory of the suite and calls the routes with the generated Go client. Check: `make e2e` runs the step and passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run the full check with race, lint and conformance suites, and confirm a person completes the user path from the docs page alone. Check: `make check` reports zero findings with no new exclusion. Confirmed by: CI (an e2e step in the NEW file e2e/rest_routes_ownership_rules_create_docs_test.go runs each command of the docs page against the e2e test server). Confirmed by: CI (the agent runs the fast checks only).

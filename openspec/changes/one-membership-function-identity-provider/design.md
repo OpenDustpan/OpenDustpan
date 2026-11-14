@@ -6,7 +6,7 @@ Sign-in claim adapters and the SCIM adapter are not on main. This change lands t
 
 1. **One membership function.** Add ApplyIdentityProviderMemberships in pkg/principal. It takes the principal, group IDs, the source scim, claim or ldap, and the provider or token ID. It returns the sentinel ErrIdpAddRefused for a refused add.
 2. **Closed wins.** A closed group refuses even when trusted or full sync is on. A protected group without trust and without full sync refuses. Otherwise the add is accepted with its source. A local membership keeps its source and one audit entry names both sources.
-3. **One transaction with audit.** Flags, rows and audit entries share one transaction snapshot per request. A SCIM PATCH is atomic and commits nothing when one row is refused. A Bulk request gives a status for each operation.
+3. **One transaction with audit.** Flags, rows and audit entries share one transaction snapshot per request. A SCIM PATCH is atomic: all operations apply or none. A SCIM Bulk request gives a status for each operation.
 4. **Alert channel.** Each configuration change writes an audit entry and a WARN line with the injected logger. The scheduled check warns 168 hours before SCIM token expiry, once per token per expiry value, from a stored alert record.
 
 ## Structure

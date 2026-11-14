@@ -71,7 +71,7 @@ flowchart TB
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | API boundary | E | A planner elevates a plan right into an apply or destroy write. | boundary check | Handler checks the bearer access token and maps operation to action; refuses unknown operation with 400. | Send apply as planner and unknown operation and confirm 403 and 400 with no job. |
-| API boundary | E | A planner elevates a plan right into an apply or destroy write. | encode or contain | Handler encodes the refusal as job.forbidden and never echoes a secret value. | Send hostile operation strings and confirm the refusal body holds no secret value. |
+| API boundary | E | A planner elevates a plan right into an apply or destroy write. | encode or contain | Handler encodes the refusal as access.denied and never echoes a secret value. | Send hostile operation strings and confirm the refusal body holds no secret value. |
 | API boundary | E | A planner elevates a plan right into an apply or destroy write. | limit | Handler limits start payload size and refuses oversize bodies before authorization. | Send an oversize jobs payload as planner and confirm refusal with no job. |
 | API boundary | E | A planner elevates a plan right into an apply or destroy write. | authorize at point of use | Service rechecks the stored grant for the operation and object before queue. | Bypass the handler and call the service as planner for apply; confirm refusal. |
 | API boundary | E | A planner elevates a plan right into an apply or destroy write. | fail closed | Unknown action or error fails closed to refusal with no job. | Send an unknown action and confirm 400 and no queue insert. |

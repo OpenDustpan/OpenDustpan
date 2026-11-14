@@ -38,8 +38,24 @@ If the one function refuses an add, then the server SHALL map a SCIM call to a S
 
 #### Scenario: SCIM error
 - **WHEN** The function refuses a SCIM add.
-- **THEN** The server answers a SCIM error with code idp.protected-group that names the group and the rule.
+- **THEN** The server answers a SCIM error with code access.denied that names the group and the rule.
+
+#### Scenario: Claim skipped
+- **WHEN** A group claim names a protected group that refuses the add.
+- **THEN** The person signs in with no new membership and one audit entry names the group and the rule.
+
+### Requirement: Atomic SCIM patch
+
+If one operation of a SCIM PATCH request is refused, then the server SHALL refuse the whole request and commit no operation.
 
 #### Scenario: Atomic SCIM patch
-- **WHEN** One row of a SCIM PATCH is refused and another is accepted.
+- **WHEN** One operation of a SCIM PATCH is refused and another is accepted.
 - **THEN** The server refuses the whole request and commits no row.
+
+### Requirement: Bulk status per operation
+
+When a SCIM Bulk request holds several operations, the server SHALL answer a status for each operation.
+
+#### Scenario: Mixed bulk
+- **WHEN** One operation of a SCIM Bulk request is refused and another is accepted.
+- **THEN** The server commits the accepted operation, and the answer gives the refusal status for the refused operation and the success status for the other.
