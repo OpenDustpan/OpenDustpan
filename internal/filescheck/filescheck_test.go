@@ -119,7 +119,7 @@ func TestCheckFiles(t *testing.T) {
 			args:       []string{"main"},
 			outside:    false,
 			wantExit:   1,
-			wantOutput: "big\tfile\n.txt is 1048577 bytes",
+			wantOutput: "big?file?.txt is 1048577 bytes",
 		},
 		{
 			name:       "missing base",
@@ -194,12 +194,71 @@ func TestCheckFiles(t *testing.T) {
 			wantOutput: "# is 1048577 bytes",
 		},
 	}
-	for _, tt := range slices.Concat(tests, allowlistCases(large)) {
+	for _, tt := range slices.Concat(tests, allowlistCases(large), controlPathCases(large, binary)) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			checkFilesCase(t, script, tt)
 		})
+	}
+}
+
+func controlPathCases(large, binary string) []filesCase {
+	return []filesCase{
+		{
+			name:       "large file with newline",
+			files:      map[string]string{"big\ninjected.txt": large},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "big?injected.txt is 1048577 bytes",
+		},
+		{
+			name:       "binary file with newline",
+			files:      map[string]string{"small\ninjected.bin": binary},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "small?injected.bin is a binary file outside testdata/",
+		},
+		{
+			name:       "large file with carriage return",
+			files:      map[string]string{"big\rinjected.txt": large},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "big?injected.txt is 1048577 bytes",
+		},
+		{
+			name:       "binary file with carriage return",
+			files:      map[string]string{"small\rinjected.bin": binary},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "small?injected.bin is a binary file outside testdata/",
+		},
+		{
+			name:       "large file with other control bytes",
+			files:      map[string]string{"big\x01\x1b\x7f.txt": large},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "big???.txt is 1048577 bytes",
+		},
+		{
+			name:       "binary file with other control bytes",
+			files:      map[string]string{"small\x01\x1b\x7f.bin": binary},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "small???.bin is a binary file outside testdata/",
+		},
 	}
 }
 
@@ -329,6 +388,12 @@ func checkFilesCase(t *testing.T, script string, tt filesCase) {
 	}
 	if tt.wantExit != 0 && strings.Contains(string(output), "check-files: no file over") {
 		t.Errorf("Failed check reports success:\n%s", output)
+	}
+	if strings.ContainsRune(string(output), '\r') {
+		t.Errorf("Output contains a carriage return: %q", output)
+	}
+	if strings.Contains(string(output), "\ninjected") {
+		t.Errorf("Output contains an injected line: %q", output)
 	}
 }
 

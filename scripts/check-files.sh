@@ -59,6 +59,12 @@ allowed() {
   FILES_CHECK_PATH="$1" awk '!/^#/ && NF >= 2 && ("x" $1) == ("x" ENVIRON["FILES_CHECK_PATH"]) { found = 1 } END { exit !found }' "$allow"
 }
 
+# Defense in depth: log output does not rely on Git path parsing or allowlist validation.
+# The allowlist and file checks use the raw path, not this display value.
+printable_path() {
+  printf '%s' "$1" | LC_ALL=C tr '[:cntrl:]' '?'
+}
+
 problems=0
 
 # The diff goes to a file first, so that a failed git command stops the script.
@@ -81,9 +87,10 @@ while IFS= read -r -d '' rec; do
     continue
   fi
 
+  display_path="$(printable_path "$path")"
   size="$(git cat-file -s "HEAD:$path")"
   if (( size > limit )); then
-    echo "check-files: $path is $size bytes, over $limit; list it in .large-files-allowlist with a reason, or do not commit it" >&2
+    echo "check-files: $display_path is $size bytes, over $limit; list it in .large-files-allowlist with a reason, or do not commit it" >&2
     problems=$((problems + 1))
   fi
 
@@ -91,7 +98,7 @@ while IFS= read -r -d '' rec; do
     case "$path" in
       testdata/*|*/testdata/*) ;;
       *)
-        echo "check-files: $path is a binary file outside testdata/; do not commit build output, or list it in .large-files-allowlist with a reason" >&2
+        echo "check-files: $display_path is a binary file outside testdata/; do not commit build output, or list it in .large-files-allowlist with a reason" >&2
         problems=$((problems + 1))
         ;;
     esac
