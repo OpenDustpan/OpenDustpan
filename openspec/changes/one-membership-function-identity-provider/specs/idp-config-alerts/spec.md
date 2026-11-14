@@ -4,46 +4,38 @@
 
 When a caller changes a trusted identity provider, a claim mapping, or an account matching rule, the server SHALL require server:manage-sign-in on the installation and a fresh authentication inside the one window.
 
-#### Scenario: Route action
-- **WHEN** A caller changes a trusted identity provider, claim mapping, or account matching rule.
-- **THEN** The server answers 403 for a caller without server:manage-sign-in.
+#### Scenario: Missing action
+- **WHEN** A caller without server:manage-sign-in makes such a change.
+- **THEN** The server answers 403.
 
-#### Scenario: Fresh step required on each change
-- **WHEN** A caller with server:manage-sign-in changes a trusted identity provider, claim mapping, or account matching rule without a fresh authentication inside the one window or with a fresh step outside the shortest effective window.
+#### Scenario: Missing fresh step
+- **WHEN** A caller with the action has no fresh authentication inside the one window.
 - **THEN** The server answers 403 with code mfa.fresh-step-required.
 
-#### Scenario: No factor caller
-- **WHEN** A caller of a plain OAuth or trusted-header sign-in with no enrolled passkey, TOTP, or SSH key attempts such a change.
-- **THEN** The server answers 403 with code mfa.fresh-step-required and a message that names the enrollment page.
-
-### Requirement: SCIM token guard for scim change
-
-Where the SCIM token route changes a SCIM token, the server SHALL require the same guard and expiry alert as a sensitive configuration change.
-
-#### Scenario: Guard definition
-- **WHEN** The SCIM token route ships.
-- **THEN** The scim change applies server:manage-sign-in with a fresh authentication inside the one window and the 168-hour expiry alert to its token route.
-
-### Requirement: Change and expiry alert
+### Requirement: Change alert
 
 When such a change occurs, the server SHALL write an audit entry and a WARN line with the injected logger.
 
+#### Scenario: Alert on change
+- **WHEN** A trusted provider changes.
+- **THEN** The server writes one audit entry and one WARN line.
+
+### Requirement: Expiry alert
+
+When a SCIM token is within 168 hours of its expiry, the server SHALL write one audit entry and one WARN line for that token and expiry value.
+
 #### Scenario: Expiry warning
-- **WHEN** A SCIM token nears its expiry.
-- **THEN** The server writes an audit entry and a WARN line 168 hours before expiry with the injected clock.
+- **WHEN** A token nears expiry.
+- **THEN** One alert is written per token per expiry value, also after a restart.
 
-#### Scenario: Expired token and backward clock
-- **WHEN** A SCIM token has already expired or the clock moves backwards.
-- **THEN** The server treats the token as expired, refuses its use, and writes an audit entry.
-
-#### Scenario: No expiry and re-armed expiry
-- **WHEN** A SCIM token has no expiry date or its expiry changes after the alert was written.
-- **THEN** The server raises no warning for a token with no expiry date, and raises one more warning after the expiry changes to a later date past the prior alert.
+#### Scenario: Expired token flood
+- **WHEN** A client uses an expired token 1000 times in one minute.
+- **THEN** The server refuses each use and writes one audit entry for that token and expiry value.
 
 ### Requirement: Config audit failure
 
 When the audit write for such a change fails, the server SHALL fail the change with no state change.
 
 #### Scenario: Failed audit ends change
-- **WHEN** The audit write for a trusted provider, claim mapping, or account matching change fails.
-- **THEN** The server fails the change, changes no configuration, and answers 500.
+- **WHEN** The audit write fails.
+- **THEN** The server answers 500 and changes no configuration.

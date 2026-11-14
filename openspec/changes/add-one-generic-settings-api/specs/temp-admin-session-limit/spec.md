@@ -5,28 +5,28 @@
 The server SHALL end each new temporary administrator record and its token at the shorter of the session limit setting and the token policy maximum, with a default limit of 1 hour.
 
 #### Scenario: Default expiry
-- **WHEN** a temporary administrator is created with the default setting and a token policy maximum of 24 hours or more
-- **THEN** the record and its token end 60 minutes after the create and later use is refused
+- **WHEN** a temporary administrator is created with the default setting and a token policy maximum of 24 hours
+- **THEN** the record and its token end 60 minutes after the create
 
 #### Scenario: Token policy cap
-- **WHEN** the token policy maximum is shorter than the limit
-- **THEN** the record ends at the token policy maximum
+- **WHEN** the session limit is 2 hours and the token policy maximum is 30 minutes
+- **THEN** the record ends 30 minutes after the create
 
-#### Scenario: Create during patch
-- **WHEN** a creation runs while a patch lowers the limit
-- **THEN** the creation uses the value before or after the commit and stores that end time, and the audit entry names the limit used
+### Requirement: Create audit entry
+
+When the server creates a temporary administrator, the server SHALL write an audit entry that names the limit in force.
+
+#### Scenario: Limit in entry
+- **WHEN** a temporary administrator is created with the default setting
+- **THEN** the audit entry names the limit of 1 hour
 
 ### Requirement: New records only
 
 When the session limit setting changes, the server SHALL apply the new limit to new records only.
 
-#### Scenario: Change limit
-- **WHEN** an administrator changes the limit
-- **THEN** new records use it and an earlier record keeps its stored end time
-
-#### Scenario: Lower token policy maximum
-- **WHEN** the token policy maximum is lowered later
-- **THEN** a running record keeps its stored end time
+#### Scenario: Running record
+- **WHEN** the limit changes while a record runs
+- **THEN** the running record keeps its stored end time
 
 ### Requirement: Range
 
@@ -36,50 +36,14 @@ If a patch sets the session limit outside 1 minute to 24 hours, then the server 
 - **WHEN** a patch sets the limit to 25 hours
 - **THEN** the server answers 422 that names the range and changes nothing
 
-#### Scenario: Out of range with fresh step
-- **WHEN** a patch sets the limit to 25 hours with a fresh step
-- **THEN** the server answers 422 and changes nothing
-
-#### Scenario: Longer limit needs a fresh step
-- **WHEN** a patch raises the limit with no fresh step
-- **THEN** the server answers 403 with code mfa.fresh-step-required
-
-#### Scenario: Shorter limit needs no step
-- **WHEN** a patch lowers the limit with no fresh step
-- **THEN** the limit changes
-
-#### Scenario: Stale limit patch
-- **WHEN** a patch of the limit carries an old revision
-- **THEN** the server answers 412 and the limit does not change
-
-#### Scenario: Null limit
-- **WHEN** a patch sets the limit to null
-- **THEN** the stored value is deleted and the effective value is 1 hour
-
-### Requirement: Bad stored value
-
-If the stored session limit is outside the range, then the server SHALL refuse to create the temporary administrator.
-
-#### Scenario: Fail closed
-- **WHEN** a creation reads a stored limit outside the range
-- **THEN** the creation fails, an audit entry and a log line name the key, and no record exists
-
-#### Scenario: Recovery by API
-- **WHEN** an administrator patches the key to null
-- **THEN** the effective value is 1 hour and the next creation works
-
 ### Requirement: Host reset
 
-When an operator runs the host command with the reset option, the server SHALL delete the stored session limit and write an audit entry.
+When an operator runs the host command with the reset option and a reason, the server SHALL delete the stored session limit and write an audit entry with the reason.
 
 #### Scenario: Reset with no API
-- **WHEN** an operator runs the host command with the reset option and no administrator is available
-- **THEN** the stored value is deleted, the effective value is 1 hour and an audit entry names the key and the operator reason
+- **WHEN** an operator runs the reset with a reason
+- **THEN** the stored value is deleted, the effective value is 1 hour and an audit entry names the key and the reason
 
-### Requirement: Audit of the limit
-
-When the server creates a temporary administrator, it SHALL write the limit used in the audit entry.
-
-#### Scenario: Limit in entry
-- **WHEN** a record is created
-- **THEN** the audit entry names the limit and the end time
+#### Scenario: Mode 3
+- **WHEN** the installation chose recovery mode 3
+- **THEN** the command refuses and names the mode
