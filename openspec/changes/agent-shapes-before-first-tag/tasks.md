@@ -12,7 +12,7 @@
 
 - [ ] 2.1 Edit the baseline of each dialect in place for the three additive fields with defaults that keep current rows valid. Edit the baseline files under pkg/store (one per dialect). Check: Baseline builds for both dialects and `sqlc diff` is clean after `make generate`. Confirmed by: the driver's gates.
 - [ ] 2.2 Wire kind and agent fields through the existing principal, audit, and token paths with allowlist checks in pkg/principal, pkg/audit, and pkg/jobtoken. Change the audit adapter at internal/api/audit/audit.go:173 (func toAuditEntry). Check: Route test TestRouteHookFailsOnAnUnknownShape still passes and changed routes declare authorization actions.
-- [ ] 2.3 Update the API description in internal/api/apidesc/openapi.json for the new stored fields with no new routes. Check: API description build passes and lists kind, agent block, and agent key fields.
+- [ ] 2.3 Update the body types of the API description (the Go source in internal/api/apidesc) for the new stored fields with no new routes. Check: API description build passes and lists kind, agent block, and agent key fields.
 - [ ] 2.4 Add e2e coverage against the real directory for create, read, and audit read in NEW file internal/servertest/agent_shapes_test.go. Check: e2e step calls ANY /api/server/principals/{} and ANY /api/audit/entries/{} with a session credential, passes the existing read gates, and reads back kind and agent block. Confirmed by: CI (the agent writes the e2e test).
 
 ## 3. Side effects (computed from main)

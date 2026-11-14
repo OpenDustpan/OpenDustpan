@@ -2,10 +2,10 @@
 
 ### Requirement: Drain on SIGTERM
 
-When SIGTERM arrives, the server SHALL enter draining via BeginDrain and answer 503 on readiness.
+When SIGTERM arrives, the server SHALL drain through the existing drain period and answer 503 with a Retry-After header on readiness.
 
-#### Scenario: BeginDrain on SIGTERM drains readiness
-- **WHEN** SIGTERM arrives at a serving instance and BeginDrain runs.
+#### Scenario: The stop signal drains readiness
+- **WHEN** SIGTERM arrives at a serving instance.
 - **THEN** readiness answers 503 and new durable claims are refused while in-flight requests complete up to the timeout.
 
 #### Scenario: Retry-After on new durable starts

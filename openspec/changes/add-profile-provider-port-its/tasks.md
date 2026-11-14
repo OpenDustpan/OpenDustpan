@@ -12,7 +12,7 @@
 
 ## 2. Wiring
 
-- [ ] 2.1 Add the ports, Spec and the registry with duplicate refusal in pkg/profile/provider/registry.go (NEW), and the depguard globs in .golangci.yml. Check: `go test ./pkg/profile/... -count=1` passes
+- [ ] 2.1 Add the ports (NEW) and Spec (NEW), and extend the existing file pkg/profile/provider/registry.go in place with duplicate refusal (NEW behavior), and add the depguard globs in the existing file .golangci.yml. Check: `go test ./pkg/profile/... -count=1` passes
 - [ ] 2.2 Add the two settings through internal/cli/settings.go with refusals, an audit entry and the fresh step for a weaker list. Check: `GET /api/dustpan/v1/settings` shows both settings and a widening PATCH without a fresh step answers 403
 - [ ] 2.3 Wire the egresshttp client with the limits in NEW file pkg/profile/provider/client.go and route the source Fetcher through the dial guard in internal/source/source.go. Check: `go test -race ./pkg/profile/... ./pkg/egress/... ./internal/source/... -count=1` passes
 
@@ -22,6 +22,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the configuration reference and the provider port guide in the same pull request. Check: `make docs-lint` passes
+- [ ] 4.1 Write the configuration reference for profileProviderNetworks and profileCACertificates in NEW file docs/reference/profile-provider-settings.md, and the provider port guide in NEW file docs/guides/profile-provider-port.md, in the same pull request. Check: `make docs-lint` passes
 - [ ] 4.2 Run an e2e step that starts the real server, then calls `GET /api/dustpan/v1/settings` with an administrator access token and checks both settings. Check: `make e2e` passes with the settings step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
