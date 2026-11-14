@@ -1376,7 +1376,7 @@ func backupModel() costModel {
 // version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 340 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
+		fixed: 340 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips + // 340 is main's 342 minus 2 for unmanaged_targets and unmanaged_scans (each costs 5 round trips instead of 7: -4; the staged-row check reads each once more: +2).
 			stagedPrincipalCheckTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,

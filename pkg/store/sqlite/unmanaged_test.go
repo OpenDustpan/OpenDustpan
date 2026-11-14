@@ -115,6 +115,17 @@ func newUnmanagedHarness(t *testing.T) unmanagedtest.Harness {
 		Scans:          s.UnmanagedScans(),
 		Namespace:      unmanagedDomain{s: s}.Namespace,
 		PurgeNamespace: nil,
+		SetPoolPurpose: func(t *testing.T, ns string, pool string, purpose string) {
+			t.Helper()
+
+			_, err := sqlite.DB(s).ExecContext(t.Context(),
+				`UPDATE runner_pools SET purpose = ? WHERE name = ? AND namespace_id =
+				(SELECT id FROM namespaces WHERE name = ?)`,
+				purpose, pool, ns)
+			if err != nil {
+				t.Fatalf("set the purpose of pool %q: %v", pool, err)
+			}
+		},
 	}
 }
 

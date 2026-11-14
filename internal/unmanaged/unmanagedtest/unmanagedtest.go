@@ -40,6 +40,10 @@ type Harness struct {
 	Scans          unmanaged.ScanStore
 	Namespace      func(t *testing.T, name string) namespace.Fence
 	PurgeNamespace func(t *testing.T, name string)
+	// SetPoolPurpose changes the purpose of the runner pool pool of namespace
+	// ns, as a pool change after a target saved it. It bypasses the rule that
+	// the purpose never changes through the API.
+	SetPoolPurpose func(t *testing.T, ns string, pool string, purpose string)
 }
 
 // Factory returns a fresh harness for one subtest.

@@ -1,7 +1,9 @@
 package unmanagedtest
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +18,9 @@ func scanCases() []suiteCase {
 		{"sweeps: a disabled target reads back disabled", testTargetDisabled},
 		{"sweeps: a target above the limit is refused", testTargetLimit},
 		{"sweeps: one sweep of a target at a time", testScanBusy},
+		{"sweeps: concurrent starts leave one sweep", testScanConcurrent},
+		{"sweeps: a refused write stores nothing", testScanRollback},
+		{"sweeps: a start after the pool changed is refused", testScanPoolChanged},
 		{"sweeps: a delete cancels the sweep that did not end", testDeleteTargetCancelsScan},
 		{"sweeps: the state table holds", testScanTable},
 		{"sweeps: a stale fence refuses each write", testScansFenced},
@@ -454,4 +459,160 @@ func testScansFenced(t *testing.T, h Harness) {
 		e,
 	)
 	wantErr(t, "start", err, namespace.ErrFenced)
+}
+
+// testScanConcurrent proves that concurrent starts of a sweep of one target
+// leave one sweep: one start wins, the others meet ErrScanBusy.
+func testScanConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:start-sweep")
+
+	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	const callers = 8
+
+	ctx := t.Context()
+
+	var wg sync.WaitGroup
+
+	start := make(chan struct{})
+
+	errs := make([]error, callers)
+
+	for i := range callers {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+
+			<-start
+
+			_, errs[i] = h.Scans.StartScan(ctx, scanOf("acme", unmanaged.ScanCloud, "aws"), f, e)
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	won := 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, unmanaged.ErrScanBusy):
+		default:
+			t.Errorf("start = %v, want nil or ErrScanBusy", err)
+		}
+	}
+
+	if won != 1 {
+		t.Errorf("%d starts won, want exactly one", won)
+	}
+
+	list, err := h.Scans.Scans(t.Context(), "acme", "aws", "", 10)
+	must(t, "sweeps", err)
+
+	if len(list) != 1 {
+		t.Errorf("sweeps = %d, want one after the race", len(list))
+	}
+}
+
+// testScanRollback proves that a write that fails part way stores nothing: a
+// refused create, a busy start, a refused transition and a fenced delete leave
+// the targets and the sweeps that the store held before.
+func testScanRollback(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+	s := auditOf("acme", "namespace:start-sweep")
+
+	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	wantErr(t, "create again",
+		h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e), unmanaged.ErrAlreadyExists)
+
+	jobs := targetOf("acme", "on-jobs")
+	jobs.Pool = JobPool
+	wantErr(t, "create on a job pool", h.Scans.CreateTarget(t.Context(), jobs, f, e), unmanaged.ErrInvalidTarget)
+
+	targets, err := h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets", err)
+
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want the one target before the refused writes", len(targets))
+	}
+
+	first, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	must(t, "start", err)
+
+	_, err = h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	wantErr(t, "start a second sweep", err, unmanaged.ErrScanBusy)
+
+	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+		Namespace: "acme",
+		ID:        first.ID,
+		Event:     unmanaged.ScanEventUploaded,
+		Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+	}, f, s)
+	wantErr(t, "upload a queued cloud sweep", err, unmanaged.ErrTransition)
+
+	got, err := h.Scans.Scan(t.Context(), "acme", first.ID)
+	must(t, "sweep", err)
+
+	if got.Status != unmanaged.ScanQueued {
+		t.Errorf("sweep status = %q, want the refused advance to keep queued", got.Status)
+	}
+
+	list, err := h.Scans.Scans(t.Context(), "acme", "aws", "", 10)
+	must(t, "sweeps", err)
+
+	if len(list) != 1 {
+		t.Errorf("sweeps = %d, want the one sweep before the refused writes", len(list))
+	}
+
+	staleFence := stale(f)
+
+	wantErr(t, "delete with a stale fence",
+		h.Scans.DeleteTarget(t.Context(), "acme", "aws", staleFence, e), namespace.ErrFenced)
+
+	targets, err = h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets", err)
+
+	if len(targets) != 1 {
+		t.Errorf("targets = %d, want the one target after the fenced delete", len(targets))
+	}
+}
+
+// testScanPoolChanged proves that a start re-reads the pool of its target: a
+// pool whose purpose changed after the save refuses the start with
+// ErrInvalidTarget and records no sweep.
+func testScanPoolChanged(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+	s := auditOf("acme", "namespace:start-sweep")
+
+	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	h.SetPoolPurpose(t, "acme", Pool, PurposeJobs)
+
+	_, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	wantErr(t, "start after the purpose changed", err, unmanaged.ErrInvalidTarget)
+
+	list, err := h.Scans.Scans(t.Context(), "acme", "", "", 10)
+	must(t, "sweeps", err)
+
+	if len(list) != 0 {
+		t.Errorf("sweeps = %d, want none after the refused start", len(list))
+	}
+
+	h.SetPoolPurpose(t, "acme", Pool, PurposeSweeps)
+
+	_, err = h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	must(t, "start after the purpose returned", err)
 }

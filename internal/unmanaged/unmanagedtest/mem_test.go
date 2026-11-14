@@ -673,8 +673,18 @@ func (m *mem) StartScan(
 	}
 
 	if s.Kind == unmanaged.ScanCloud {
-		if _, ok := m.targets[s.Namespace][s.Target]; !ok {
+		tgt, ok := m.targets[s.Namespace][s.Target]
+		if !ok {
 			return unmanaged.Scan{}, unmanaged.ErrNotFound
+		}
+
+		// Defense in depth: CreateTarget and UpdateTarget check the pool, and
+		// this check stays so that a start after the pool changed cannot run
+		// on a pool that applies changes. It does not rely on the write of
+		// the target.
+		if m.pools[s.Namespace][tgt.Pool] != unmanagedtest.PurposeSweeps {
+			return unmanaged.Scan{}, fmt.Errorf("%w: the pool of target %q runs no sweep",
+				unmanaged.ErrInvalidTarget, s.Target)
 		}
 	}
 
@@ -1114,6 +1124,17 @@ func TestMem(t *testing.T) {
 				delete(m.ids, ns)
 				delete(m.fences, ns)
 				delete(m.pools, ns)
+			},
+			SetPoolPurpose: func(_ *testing.T, ns string, pool string, purpose string) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				name := namespace.Name(ns)
+				if m.pools[name] == nil {
+					m.pools[name] = map[string]string{}
+				}
+
+				m.pools[name][pool] = purpose
 			},
 		}
 	})
