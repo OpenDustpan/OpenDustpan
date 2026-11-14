@@ -1,7 +1,7 @@
 # namespaces Specification
 
 ## Purpose
-The namespaces capability covers how a client reads the list of namespaces that it can see. It pages the list with a cursor that only works with the query that made it, so a changed or reused cursor is refused. It does not cover the content or the settings of a namespace.
+The namespaces capability covers the namespace as the unit of tenancy: its name, its state (active, suspended, disabled or deleted), and the listing of the namespaces that a caller can see. A namespace owns units, access rules, secrets, settings and its own audit scope, and each tool calls it an organization. The units inside a namespace, the access rules, the IP allowlist and the audit log are in their own capabilities.
 
 ## Requirements
 

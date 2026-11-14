@@ -1,7 +1,7 @@
 # manual-locks Specification
 
 ## Purpose
-The manual locks capability covers how a lock that a person puts on a unit, a collection or a namespace interacts with a job that runs. It states which job phases pass a lock and which do not, and it identifies a unit by its stable ID so that a rename does not change the answer. It does not cover the tool locks of Pulumi or OpenTofu.
+The manual locks capability covers the locks that a person puts on one unit, one collection or a whole namespace, with a reason that everyone sees. It states what a lock stops (new jobs, queued phases and the lock requests of a tool), what it lets finish (a phase that already runs), and who can remove it. The tool locks of OpenTofu and the update leases of the Pulumi CLI are in the capabilities of those tools, and a force-unlock of a tool never removes a manual lock.
 
 ## Requirements
 

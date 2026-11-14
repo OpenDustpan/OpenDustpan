@@ -1,7 +1,7 @@
 # ip-allowlist Specification
 
 ## Purpose
-The IP allowlist capability covers the refusal of a request from an address that a namespace allowlist does not hold. It states the one answer for every route that checks access, so that the refusal cannot be mistaken for an unknown object. It does not cover how a person edits the list.
+The IP allowlist capability covers the limit on the client addresses that may use a namespace. An operator turns the feature on for the installation, a namespace administrator sets the list of CIDRs, and a request from another address gets 403. The capability states what the refusal answers and what it never reveals. Sign-in methods, access tokens and the grants of a principal are in their own capabilities.
 
 ## Requirements
 

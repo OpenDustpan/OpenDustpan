@@ -1,7 +1,7 @@
 # log-sinks Specification
 
 ## Purpose
-The log sinks capability covers the sinks that send the audit log and the server log to an outside receiver, such as a webhook or an OTLP endpoint. It states that each request passes the egress rules of the installation and that a refusal appears in the status of the sink. It does not cover the content of the records.
+The log sinks capability covers the outputs that deliver structured records to one target: stdout, a file, syslog, a webhook, OTLP logs or object storage. The audit log and the application log use the same outputs. The capability states the rules for a request to an outside receiver, including the egress rules of the installation, and what the status of each output shows. The records themselves are in the audit capability and in the application log.
 
 ## Requirements
 

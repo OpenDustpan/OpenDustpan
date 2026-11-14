@@ -1,7 +1,7 @@
 # audit Specification
 
 ## Purpose
-The audit capability covers the entries that the server writes to the audit log of a namespace for a change. Each entry names the object by its stable ID, the action and what changed, and it commits in the same transaction as the change. It does not cover the sinks that ship the log to other systems.
+The audit capability covers the audit log: the entries that the server writes for each namespace and for the installation, and the hash chain that lets a person check them. Each entry names the actor, the action, the object by its stable ID and what changed, and it commits in the same transaction as the change. Sending the entries to an outside receiver is in the log sinks capability, and the settings for retention are in their own capability.
 
 ## Requirements
 
