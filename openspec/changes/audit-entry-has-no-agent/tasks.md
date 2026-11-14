@@ -14,7 +14,7 @@
 ## 2. Build
 
 - [ ] 2.1 Remove the agent change key and write the agent block in the same transaction for start entries with an agent ref. Check: Job start with an agent ref, then GET /api/audit/entries with an access token shows the block and no change key.
-- [ ] 2.2 Expose the agent block on the entry read API and document its shape. Check: GET /api/audit/entries returns the block; the docs page shows one example.
+- [ ] 2.2 Document the agent block of a job entry on the docs page, with one example; the field of the entry read API comes from the change audit-agent-block. Check: GET /api/audit/entries with an access token returns the block of a job start entry; the docs page shows the example.
 
 ## 3. Side effects (computed from main)
 
