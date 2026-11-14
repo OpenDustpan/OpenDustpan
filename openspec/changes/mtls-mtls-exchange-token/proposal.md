@@ -111,7 +111,12 @@ A model of another provider than the drafter listed the open questions, failure 
 
 ## Open questions
 
-none
+Not spec-ready. An implementer read this change against main on 14 Nov 2026 and could not start without these answers:
+
+1. Does the mTLS exchange reuse the existing route `POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange` (`internal/api/trustrules/exchange.go`; a public route, the certificate is the credential) with its `trust-rule.*` codes, or a new path? An implementer check found that the path and the `mtls.*` codes named in this change do not exist on main, that `pkg/trustrule` (not `pkg/trust`) holds the domain, and that trust tokens are already issued (`pkg/accesstoken/trust.go`). Decides: PM, by a re-check of this change against main.
+2. Which revocation source applies to a client certificate: a CRL URL or OCSP? Go TLS does no revocation check, and main sets no `ClientAuth` mode (`pkg/dustpan/dustpan.go`). ADR 54 makes mTLS an Authenticator adapter. Decides: PM, with the ADR check.
+
+Earlier answers, before the implementer check:
 
 Questions considered and answered:
 

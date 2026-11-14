@@ -77,7 +77,11 @@ A model of another provider than the drafter listed the open questions, failure 
 
 ## Open questions
 
-none
+Not spec-ready. An implementer read this change against main on 14 Nov 2026 and could not start without these answers:
+
+1. What is left to do? An implementer check found that SQLite `GetDeletedUnitFacts` already reads in one read transaction (`pkg/store/sqlite/inventory.go`), and that the start log requirement contradicts main: main logs INFO when the gates are on, and WARN plus an audit entry when they are off, and the start fails closed if the audit entry fails (`pkg/dustpan/stategates_start.go`). The change must not weaken that fail-closed check. Decides: PM, by a re-check of this change against main.
+
+Earlier answers, before the implementer check:
 
 Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
 

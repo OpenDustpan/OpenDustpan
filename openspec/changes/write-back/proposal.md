@@ -99,6 +99,13 @@ A model of another provider than the drafter listed the open questions, failure 
 
 ## Open questions
 
+Not spec-ready. An implementer read this change against main on 14 Nov 2026 and could not start without these answers:
+
+1. Which route and body start a config edit? `POST` jobs refuses the executor write-back today (`internal/api/jobs/start_test.go`). Is the delivery a direct push or a review request (ADR 101 decision 3 allows both)? Decides: PM, with the ADR check.
+2. An implementer check found that "base still head" and "concurrent second edit" fail on any move of the head, while `Commit` returns `ErrConflict` only when a changed file differs from the base (`pkg/forge/forge.go`, ADR 101 decision 3); that the retry numbers are not from main (main uses the forge sentinels with the durable backoff); and that `internal/jobtest`, `internal/jobsvc` and `E2E_RUN` do not exist. Decides: PM, by a re-check of this change against main.
+
+Earlier answers, before the implementer check:
+
 1. What author and signature does the forge Commit method use for write-back commits? Decides: owner.
    - Options: Server forge identity as commit author with the starting principal named in the commit trailer; Starting principal as commit author with the server as committer.
    - Recommended: Server forge identity as commit author with the starting principal named in the commit trailer Reason: The signing spike in git-host-webhook-intake-post decides the Commit shape, and write-back must follow it.
