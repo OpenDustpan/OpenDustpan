@@ -4,11 +4,11 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the conformance suite in NEW file pkg/unmanaged/unmanagedtest/conformance.go and the memory adapter stub in NEW file pkg/unmanaged/unmanagedtest/mem.go. Check: TestSweepStoreConformance fails on main.
-- [ ] 1.2 Write the fence cases in NEW file pkg/unmanaged/unmanagedtest/fence_test.go. Check: TestSweepStoreFence fails on main.
-- [ ] 1.3 Write the pool cases, including a pool that changes after the save, in NEW file pkg/unmanaged/unmanagedtest/pool_test.go. Check: TestSweepStorePool fails on main.
-- [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts, in NEW file pkg/unmanaged/unmanagedtest/busy_test.go. Check: TestSweepStoreBusy, TestSweepStoreTransitions and TestSweepStoreDeleteTarget fail on main.
-- [ ] 1.5 Write the bounds, concurrency and rollback cases in NEW file pkg/unmanaged/unmanagedtest/bounds_test.go. Check: TestSweepStoreBounds, TestSweepStoreConcurrentFence and TestSweepStoreRollback fail on main.
+- [x] 1.1 Write the conformance suite in NEW file pkg/unmanaged/unmanagedtest/conformance.go and the memory adapter stub in NEW file pkg/unmanaged/unmanagedtest/mem.go. Check: TestSweepStoreConformance fails on main.
+- [x] 1.2 Write the fence cases in NEW file pkg/unmanaged/unmanagedtest/fence_test.go. Check: TestSweepStoreFence fails on main.
+- [x] 1.3 Write the pool cases, including a pool that changes after the save, in NEW file pkg/unmanaged/unmanagedtest/pool_test.go. Check: TestSweepStorePool fails on main.
+- [x] 1.4 Write the busy, transition and delete cases, with concurrent starts, in NEW file pkg/unmanaged/unmanagedtest/busy_test.go. Check: TestSweepStoreBusy, TestSweepStoreTransitions and TestSweepStoreDeleteTarget fail on main.
+- [x] 1.5 Write the bounds, concurrency and rollback cases in NEW file pkg/unmanaged/unmanagedtest/bounds_test.go. Check: TestSweepStoreBounds, TestSweepStoreConcurrentFence and TestSweepStoreRollback fail on main.
 
 ## 2. Build
 
