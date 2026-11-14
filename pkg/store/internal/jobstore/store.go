@@ -681,17 +681,18 @@ func clonePhases(in []job.Phase) []job.Phase {
 // emptySpec returns the spec that decodeBody fills.
 func emptySpec() job.Spec {
 	return job.Spec{
-		Unit:      identity.Object{},
-		Operation: "",
-		Purpose:   "",
-		Executor:  "",
-		Location:  job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
-		Steps:     nil,
-		Pool:      "",
-		Profile:   "",
-		Edits:     nil,
-		Delivery:  "",
-		Defaulted: nil,
+		Unit:           identity.Object{},
+		Operation:      "",
+		Purpose:        "",
+		Executor:       "",
+		Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+		LocationSource: "",
+		Steps:          nil,
+		Pool:           "",
+		Profile:        "",
+		Edits:          nil,
+		Delivery:       "",
+		Defaulted:      nil,
 	}
 }
 

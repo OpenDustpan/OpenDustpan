@@ -159,8 +159,9 @@ func awaitingWriteBackJob(
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network",
 				Revision: stateWriteRevision,
 			},
-			Steps: nil,
-			Pool:  "", Profile: "", Edits: []job.FileEdit{{
+			LocationSource: job.LocationSourceRequest,
+			Steps:          nil,
+			Pool:           "", Profile: "", Edits: []job.FileEdit{{
 				Path: "network.tfvars.json", Keys: map[string][]byte{"size": []byte(`"large"`)},
 			}},
 			Delivery: job.DeliveryDirectPush, Defaulted: nil,
@@ -290,6 +291,7 @@ func stateWriteJob(t *testing.T, s *sqlite.Store, fence namespace.Fence, unit id
 			Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: stateWriteRevision,
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
