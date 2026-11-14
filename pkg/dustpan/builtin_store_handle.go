@@ -143,18 +143,32 @@ func newBuiltinStore(parts builtinStoreParts) *BuiltinStore {
 // OpenStore opens the built-in store that database names. The accepted forms
 // are sqlite:<path>, postgres://... and postgresql://.... A value of another
 // form fails with an error that names the accepted forms and repeats no part
-// of the value. The caller closes the store.
+// of the value. Any other open failure can name the user, the host and the
+// database, never the password. The caller closes the store.
 func OpenStore(ctx context.Context, database string, opts ...StoreOption) (*BuiltinStore, error) {
 	return openStoreConfig(ctx, database, newStoreConfig(opts))
 }
 
 // openStoreConfig opens the built-in store that database names with config.
 func openStoreConfig(ctx context.Context, database string, config storeConfig) (*BuiltinStore, error) {
+	return openStoreConfigWithOpeners(ctx, database, config, openSQLiteStore, openPostgresStore)
+}
+
+// openStoreConfigWithOpeners opens the built-in store with the given open
+// functions. Tests pass stubs to prove the dispatch: a value of another form
+// reaches neither open function and fails with errStoreDatabaseForm.
+func openStoreConfigWithOpeners(
+	ctx context.Context,
+	database string,
+	config storeConfig,
+	openSQLite func(context.Context, string, storeConfig) (*BuiltinStore, error),
+	openPostgres func(context.Context, string, storeConfig) (*BuiltinStore, error),
+) (*BuiltinStore, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		return openSQLiteStore(ctx, strings.TrimPrefix(database, "sqlite:"), config)
+		return openSQLite(ctx, strings.TrimPrefix(database, "sqlite:"), config)
 	case postgresDSNForm(database):
-		return openPostgresStore(ctx, database, config)
+		return openPostgres(ctx, database, config)
 	default:
 		return nil, errStoreDatabaseForm
 	}

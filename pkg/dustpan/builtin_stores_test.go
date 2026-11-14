@@ -188,14 +188,17 @@ func TestServerCloseTwice(t *testing.T) {
 	}
 }
 
-// TestOpenStore proves that OpenStore opens a SQLite path and refuses every
-// other form without repeating the value.
+// TestOpenStore proves that OpenStore opens a SQLite path, refuses every
+// other form without repeating the value, and reports any other open failure
+// without the password: the error can name the user, the host and the
+// database, never the password.
 func TestOpenStore(t *testing.T) {
 	t.Parallel()
 
 	database := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
 	password := "fake-password"
 	postgresURL := fakecred.URL("postgres", "user", password, "127.0.0.1:1", "dustpan")
+	postgresBadSSL := postgresURL + "?sslmode=bogus&connect_timeout=2"
 
 	t.Run("SQLite path", func(t *testing.T) {
 		t.Parallel()
@@ -204,12 +207,18 @@ func TestOpenStore(t *testing.T) {
 	})
 
 	// The message names the accepted form sqlite:<path>, so it holds the word
-	// sqlite by design. Only the refusal is checked for this value.
+	// sqlite by design. Only the refusal is checked for this value, plus the
+	// absence of the password.
 	t.Run("SQLite without a colon", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := dustpan.OpenStore(t.Context(), "sqlite"); !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
+		_, err := dustpan.OpenStore(t.Context(), "sqlite")
+		if !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
 			t.Fatalf("OpenStore(%q) = %v, want the form error", "sqlite", err)
+		}
+
+		if strings.Contains(err.Error(), password) {
+			t.Fatalf("OpenStore error = %v, want it to hold no password", err)
 		}
 	})
 
@@ -220,13 +229,14 @@ func TestOpenStore(t *testing.T) {
 		{name: "empty value", database: ""},
 		{name: "other scheme", database: "mysql://x"},
 		{name: "PostgreSQL on a closed port", database: postgresURL},
+		{name: "PostgreSQL with a bad sslmode", database: postgresBadSSL},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			checkOpenStoreRefused(t, tc.database)
+			checkOpenStoreRefused(t, tc.database, password)
 		})
 	}
 }
@@ -296,8 +306,11 @@ func checkOpenStoreOpens(t *testing.T, database string) {
 	}
 }
 
-// checkOpenStoreRefused proves that database fails without a repeated value.
-func checkOpenStoreRefused(t *testing.T, database string) {
+// checkOpenStoreRefused proves that database fails without a repeated value
+// and without the password. repeatsValue checks the whole value only, so the
+// password gets its own check: a masked error can still leak the password
+// alone while it repeats no whole value.
+func checkOpenStoreRefused(t *testing.T, database, password string) {
 	t.Helper()
 
 	_, err := dustpan.OpenStore(t.Context(), database)
@@ -307,6 +320,10 @@ func checkOpenStoreRefused(t *testing.T, database string) {
 
 	if repeatsValue(err.Error(), database) {
 		t.Fatalf("OpenStore error = %v, want it to repeat no part of the value", err)
+	}
+
+	if password != "" && strings.Contains(err.Error(), password) {
+		t.Fatalf("OpenStore error = %v, want it to hold no password", err)
 	}
 }
 

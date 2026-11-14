@@ -36,6 +36,11 @@ option of the server from the handle. The caller closes a store that it
 opened with `OpenStore`. The server does not close it. `WithSQLite(path)` and
 `WithPostgreSQL(dsn)` open the store in one option and the server closes it.
 
+A write through the ports of the handle (`secret.KeyStore`,
+`localuser.PasswordStore`, `access.GrantStore`) skips the checks and the
+audit entries of the services. Use the API for writes; do not use these ports
+in place of the API.
+
 A third-party store uses the `With...Store` options and the conformance
 suites of the ports. The store options of a built-in store apply after all
 other options, so they replace a `With...Store` option for the same port.
