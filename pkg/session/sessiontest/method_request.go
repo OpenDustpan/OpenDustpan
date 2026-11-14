@@ -39,8 +39,10 @@ type RequestFixture struct {
 	// nil for a method with no key endpoint.
 	Stop func(t *testing.T)
 	// Hang makes the key endpoint of the test issuer answer later than the
-	// timeout of the method. It is nil for a method with no key endpoint.
-	Hang func(t *testing.T)
+	// timeout of the method that it returns. The method is of the same
+	// provider and has a short key timeout. It is nil for a method with no
+	// key endpoint.
+	Hang func(t *testing.T) session.RequestMethod
 	// Refused returns a method of the same provider whose key URL resolves
 	// to an address that the egress rules refuse. It is nil for a method
 	// with no key endpoint.
@@ -680,8 +682,8 @@ func rqNoSubject(t *testing.T, f RequestFixture) {
 func rqKeyHang(t *testing.T, f RequestFixture) {
 	t.Helper()
 
-	f.Hang(t)
-	requestRefused(t, f.Method, f.Facts(t, carol()), session.ErrMethodUnavailable)
+	m := f.Hang(t)
+	requestRefused(t, m, f.Facts(t, carol()), session.ErrMethodUnavailable)
 }
 
 func rqKeyStopped(t *testing.T, f RequestFixture) {

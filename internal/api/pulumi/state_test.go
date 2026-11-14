@@ -88,7 +88,7 @@ func seedStateVersion(t *testing.T, f updateFixture, deployment string) int {
 	t.Helper()
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: stateActor, RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: stateActor, RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1110,7 +1110,7 @@ func startRunningUpdate(t *testing.T, f updateFixture) {
 	t.Helper()
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)

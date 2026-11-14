@@ -24,8 +24,10 @@ const (
 	MaxLimit = 1000
 )
 
-// ErrDamaged reports a stored job that disagrees with itself.
-var ErrDamaged = errors.New("stored job is damaged")
+// ErrDamaged reports a stored row that this version cannot read: a job body
+// that does not decode, or a plan, log or chunk row that disagrees with
+// itself. It is job.ErrDamaged.
+var ErrDamaged = job.ErrDamaged
 
 // createAttempts is how many times Create runs when two creates with one
 // idempotency key race. The second attempt finds the first job.
@@ -139,7 +141,7 @@ func (s *Store) Get(ctx context.Context, id job.ID) (job.Job, error) {
 }
 
 // List implements job.Store.
-func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
+func (s *Store) List(ctx context.Context, f job.Filter) (job.Page, error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
@@ -147,7 +149,7 @@ func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
 
 	limit = min(limit, MaxLimit)
 
-	var out []job.Job
+	var out job.Page
 
 	err := s.run.Read(ctx, func(tx Tx) error {
 		rows, err := tx.List(ctx, Query{
@@ -159,21 +161,83 @@ func (s *Store) List(ctx context.Context, f job.Filter) ([]job.Job, error) {
 			return err
 		}
 
-		out, err = jobsOf(rows)
+		out = pageOf(rows, limit)
 
-		return err
+		return nil
 	})
 
 	return out, err
 }
 
-// Orphans implements job.Store.
-func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
-	if limit <= 0 {
-		return nil, nil
+// CancelDamaged implements job.Store.
+func (s *Store) CancelDamaged(ctx context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
+	if err := checkEntries(e, fence); err != nil {
+		return err
 	}
 
-	var out []job.Orphan
+	return s.run.Write(ctx, fence, func(tx Tx) error {
+		r, ok, err := tx.Job(ctx, id)
+		if err != nil {
+			return err
+		}
+
+		// A row of another namespace is not the job of this fence: the
+		// store answers as it does for an unknown ID.
+		if !ok || r.Namespace != fence.Namespace {
+			return job.ErrNotFound
+		}
+
+		// A cancel through this path does not stop the durable operation of
+		// the job, so it is only for a row that no other path can read.
+		// Defense in depth: the caller checks that Get gives ErrDamaged;
+		// this check stays so that a new caller cannot cancel a readable
+		// job here.
+		if _, err = jobOf(&r); err == nil {
+			return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+		}
+
+		if r.State.Terminal() {
+			return fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, r.State)
+		}
+
+		return cancelRow(ctx, tx, &r, e)
+	})
+}
+
+// cancelRow sets the row r to canceled at the version after its own, updates
+// it in the transaction tx and appends the audit entries e.
+func cancelRow(ctx context.Context, tx Tx, r *Row, e []audit.Entry) error {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return err
+	}
+
+	prev := r.Version
+	r.State, r.Wait, r.Version = job.StateCanceled, job.WaitNone, prev+1
+	r.UpdatedMs, r.StateChangedMs = now.UnixMilli(), now.UnixMilli()
+
+	changed, err := tx.UpdateJob(ctx, *r, prev)
+	if err != nil {
+		return err
+	}
+
+	if !changed {
+		return job.ErrConflict
+	}
+
+	return tx.AppendAudit(ctx, e)
+}
+
+// Orphans implements job.Store.
+func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.DamagedRow, error) {
+	if limit <= 0 {
+		return nil, nil, nil
+	}
+
+	var (
+		out     []job.Orphan
+		damaged []job.DamagedRow
+	)
 
 	err := s.run.Read(ctx, func(tx Tx) error {
 		rows, err := tx.Orphans(ctx, min(limit, MaxLimit))
@@ -184,7 +248,15 @@ func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
 		for i := range rows {
 			j, err := jobOf(&rows[i].Row)
 			if err != nil {
-				return err
+				if !errors.Is(err, job.ErrDamaged) {
+					return err
+				}
+
+				damaged = append(damaged, job.DamagedRow{
+					ID: rows[i].Row.ID, UnitID: rows[i].Row.UnitID, Reason: DamageReason(err),
+				})
+
+				continue
 			}
 
 			out = append(out, job.Orphan{Job: j, Missing: rows[i].Missing})
@@ -193,7 +265,7 @@ func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
 		return nil
 	})
 
-	return out, err
+	return out, damaged, err
 }
 
 // FinalVersion implements job.FinalVersionReader.
@@ -368,6 +440,18 @@ func millisOrZero(t time.Time) int64 {
 	return t.UnixMilli()
 }
 
+// nextUpdateAt returns the update time of a write to a job whose stored
+// update time is stored, at the clock time now. The store keeps Unix
+// milliseconds, so the result is at least one millisecond after stored. Two
+// writes in one millisecond of the clock still move the update time.
+func nextUpdateAt(now, stored time.Time) time.Time {
+	if now.UnixMilli() <= stored.UnixMilli() {
+		return time.UnixMilli(stored.UnixMilli() + 1).UTC()
+	}
+
+	return now
+}
+
 // checkNewJob returns job.ErrInvalid for a job that Create cannot store.
 //
 // Defense in depth: the service checks the same fields before it calls the
@@ -475,7 +559,7 @@ func insert(ctx context.Context, tx Tx, j *job.Job) error {
 }
 
 // update replaces the row of version prev with j.
-func update(ctx context.Context, tx Tx, j *job.Job, prev int64) error {
+func update(ctx context.Context, tx CloseTx, j *job.Job, prev int64) error {
 	r, err := rowOf(j)
 	if err != nil {
 		return err
@@ -505,9 +589,9 @@ func rowOf(j *job.Job) (Row, error) {
 	}
 
 	r := Row{
-		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), UnitID: j.Spec.Unit.UnitID(), Seq: 0, State: j.State,
-		Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
-		Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), NamespaceID: j.NamespaceID, UnitID: j.Spec.Unit.UnitID(), Seq: 0,
+		State: j.State, Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey,
+		Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
 		StateChangedMs: j.StateChangedAt.UnixMilli(),
 	}
 
@@ -519,18 +603,20 @@ func rowOf(j *job.Job) (Row, error) {
 	return r, nil
 }
 
-// jobOf returns the job that a row holds.
+// jobOf returns the job that a row holds. It returns an error that wraps
+// ErrDamaged for a row whose body does not decode, and for a row whose body
+// names another namespace or another unit than the row.
 func jobOf(r *Row) (job.Job, error) {
 	j := job.Job{
-		ID: r.ID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "", Phases: nil, Current: r.Phase,
-		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: job.VerificationNone, IdempotencyKey: r.Key, RequestHash: "", Version: r.Version,
-		CreatedAt: time.UnixMilli(r.CreatedMs).UTC(), UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(),
-		StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
+		ID: r.ID, NamespaceID: r.NamespaceID, Spec: emptySpec(), State: r.State, Wait: r.Wait, Reason: "",
+		Phases: nil, Current: r.Phase, StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil,
+		Trigger: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: r.Key,
+		RequestHash: "", Version: r.Version, CreatedAt: time.UnixMilli(r.CreatedMs).UTC(),
+		UpdatedAt: time.UnixMilli(r.UpdatedMs).UTC(), StateChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
 	}
 
 	if err := decodeBody(r.Body, &j); err != nil {
-		return job.Job{}, err
+		return job.Job{}, fmt.Errorf("%w: %w", ErrDamaged, err)
 	}
 
 	// Defense in depth: the namespace and the unit of the row decide the fence
@@ -538,25 +624,38 @@ func jobOf(r *Row) (job.Job, error) {
 	// unit than its row is damaged, for example by a restored backup, and the
 	// store answers with an error and never with the job.
 	if j.Spec.Unit.Namespace() != r.Namespace || j.Spec.Unit.UnitID() != r.UnitID {
-		return job.Job{}, fmt.Errorf("%w: job %s names another namespace or unit than its row", ErrDamaged, r.ID)
+		return job.Job{}, fmt.Errorf("%w: %w: job %s", ErrDamaged, errRowUnit, r.ID)
 	}
 
 	return j, nil
 }
 
-func jobsOf(rows []Row) ([]job.Job, error) {
-	out := make([]job.Job, 0, len(rows))
+// pageOf returns the page of rows: the jobs that decode, the damaged rows
+// that do not, and the cursor of the last row of a full page. Every error of
+// jobOf is a damage.
+func pageOf(rows []Row, limit int) job.Page {
+	out := job.Page{Jobs: nil, Damaged: nil, After: ""}
 
 	for i := range rows {
 		j, err := jobOf(&rows[i])
 		if err != nil {
-			return nil, err
+			out.Damaged = append(out.Damaged, job.DamagedRow{
+				ID: rows[i].ID, UnitID: rows[i].UnitID, Reason: DamageReason(err),
+			})
+
+			continue
 		}
 
-		out = append(out, j)
+		out.Jobs = append(out.Jobs, j)
 	}
 
-	return out, nil
+	// A full page may have rows behind it: the cursor of the next page is
+	// the last row read, whether it decoded or not.
+	if len(rows) == limit {
+		out.After = rows[len(rows)-1].ID
+	}
+
+	return out
 }
 
 // cloneJob returns a copy of j that shares no slice with it.
@@ -600,6 +699,7 @@ func emptySpec() job.Spec {
 func noJob() job.Job {
 	return job.Job{
 		ID:             "",
+		NamespaceID:    "",
 		Spec:           emptySpec(),
 		State:          "",
 		Wait:           "",
@@ -624,10 +724,11 @@ func noJob() job.Job {
 	}
 }
 
-// Decode returns the job that the row r holds. It returns ErrDamaged for a row
-// whose body names another namespace or another unit than the row, and the
-// error of the decoder for a body that does not decode. The drift store reads a
-// job with it, so that it never trusts a row that the job store would refuse.
+// Decode returns the job that the row r holds. It returns an error that wraps
+// job.ErrDamaged for a row that this version cannot read: a body that does not
+// decode, and a body that names another namespace or another unit than the
+// row. The drift store reads a job with it, so that it never trusts a row that
+// the job store would refuse.
 func Decode(r *Row) (job.Job, error) {
 	return jobOf(r)
 }

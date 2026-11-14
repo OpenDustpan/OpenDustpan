@@ -27,11 +27,9 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		return nil, nil //nolint:nilnil // No jobs API: no job store is set.
 	}
 
-	// The log streams end when the process drains. The readiness probe sets the
-	// signal in drain, and the jobs API reads it.
-	if cfg.streamStop == nil {
-		cfg.streamStop = &streamStop{stopped: atomic.Bool{}}
-	}
+	// The settings always hold the stream signal. defaultSettings creates it, and
+	// the readiness probe sets it in drain. The jobs API reads the same signal,
+	// so the handler makes no signal of its own.
 
 	// A namespace store that keeps no audit entries is an error: a refusal
 	// always writes its entry.
@@ -63,6 +61,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces: svc.namespaces,
 		Jobs:       cfg.jobStore,
+		Units:      cfg.inventoryReader,
 		Artifacts:  artifacts,
 		Logs: &jobsapi.LogOptions{
 			Poll:         0,

@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -215,7 +216,7 @@ type ManualLocks interface {
 	// by a job whose phase started before the lock passes. It returns
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
-	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	CoveringFor(ctx context.Context, unit manuallock.Unit, jobID string) (manuallock.Lock, error)
 	// NamespaceLock returns the manual lock of the namespace, or
 	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
 	// unit has no inventory entry, so CoveringFor cannot find the lock of its
@@ -374,7 +375,12 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		Version:        0,
 		Revision:       1,
 		// Sizes come from the checkpoint rows on read.
-		CreatedBy:       plan.CreatedBy,
+		CreatedBy: plan.CreatedBy,
+		// The job whose token starts the update comes later, with the start.
+		JobID: "",
+		// GitHead comes from the body of the create: no later request of the
+		// update carries it.
+		GitHead:         plan.GitHead,
 		RestoredFrom:    plan.RestoredFrom,
 		CheckpointBytes: 0,
 	}
@@ -459,6 +465,7 @@ func (s *Updates) StartBy(
 
 	u.JournalVersion = journalVersion
 	u.TokenID = by.TokenID
+	u.JobID = by.JobID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {
@@ -507,6 +514,9 @@ type checkpointSave struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
+	// origin is the writer of the state version that the save publishes: the
+	// one of the update.
+	origin identity.StateOrigin
 	// blobs is the scoped blob access of the namespace of this save.
 	blobs *scopedBlobs
 }
@@ -575,7 +585,7 @@ func (s *Updates) SaveCheckpoint(
 
 	return s.storeNewCheckpoint(ctx, checkpointSave{
 		ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), lease: u.Lease.Digest,
-		in: in, digest: digest, prev: prev, key: key, blobs: bl,
+		in: in, digest: digest, prev: prev, key: key, origin: u.Origin(), blobs: bl,
 	})
 }
 
@@ -764,7 +774,11 @@ func (s *Updates) Import(ctx context.Context, ref Ref, subject string, in Checkp
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -805,7 +819,11 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -1030,6 +1048,20 @@ func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, er
 		return nil, fmt.Errorf("history of %s: %w", ref, err)
 	}
 
+	if len(list) == 0 {
+		// The stack can be deleted between the two reads above. The store
+		// answers an empty list for a stack that does not exist, so an empty
+		// list reads the stack again.
+		//
+		// Defense in depth: the route reads the stack before it calls History,
+		// so it answers with the error of the stack route. This check stays
+		// for the same reason as the read above: a new caller cannot read an
+		// empty history for a stack that is missing.
+		if _, stackErr := s.stacks.GetStack(ctx, ref); stackErr != nil {
+			return nil, fmt.Errorf("history of %s: %w", ref, stackErr)
+		}
+	}
+
 	return list, nil
 }
 
@@ -1150,6 +1182,7 @@ func (s *Updates) commitCheckpointRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+		Origin:        save.origin,
 
 		AttemptStartedAt: started,
 	}
@@ -1918,20 +1951,34 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 // a manual lock covers it. The error matches ErrUpdateConflict and
 // manuallock.ErrLocked, and names the holder and the reason of the manual lock.
 func (s *Updates) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
-	return refuseManualLock(ctx, s.manual, ref, jobID)
+	if s.manual == nil {
+		return nil
+	}
+
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("read stack %s: %w", ref, err)
+	}
+
+	return refuseManualLock(ctx, s.manual, st, jobID)
 }
 
 // refuseManualLock returns an error that matches ErrUpdateConflict and
-// manuallock.ErrLocked while a manual lock covers the stack ref, and nil when
+// manuallock.ErrLocked while a manual lock covers the stack st, and nil when
 // locks is nil or no lock covers the stack for the request. A lock that cannot
 // be read refuses the request: the check fails closed.
-func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID string) error {
+func refuseManualLock(ctx context.Context, locks ManualLocks, st Stack, jobID string) error {
 	if locks == nil {
 		return nil
 	}
 
-	unit := collection.UnitRef{
-		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
+	unit := manuallock.Unit{
+		Ref: collection.UnitRef{
+			Namespace: st.Ref.Namespace, Tool: InventoryTool,
+			Name: st.Ref.Project.String() + "/" + st.Ref.Stack.String(),
+		},
+		NamespaceID: st.NamespaceID,
+		UnitID:      st.ID.String(),
 	}
 
 	l, err := locks.CoveringFor(ctx, unit, jobID)
@@ -1940,10 +1987,10 @@ func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID str
 	}
 
 	if err != nil {
-		return fmt.Errorf("read manual lock of %s: %w", ref, err)
+		return fmt.Errorf("read manual lock of %s: %w", st.Ref, err)
 	}
 
 	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{
-		Lock: l, Unit: unit, Noun: "stack", Name: ref.String(),
+		Lock: l, Unit: unit.Ref, Noun: "stack", Name: st.Ref.String(),
 	})
 }

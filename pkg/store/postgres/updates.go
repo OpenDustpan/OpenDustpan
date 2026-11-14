@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 
 	"github.com/jackc/pgx/v5"
@@ -74,6 +75,8 @@ func (s *Store) CreateUpdate(
 			CreatedBy:        row.CreatedBy,
 			RestoredFrom:     row.RestoredFrom,
 			TokenID:          row.TokenID,
+			JobID:            row.JobID,
+			GitHead:          row.GitHead,
 		})
 		if err != nil {
 			if isForeignKeyViolation(err) {
@@ -142,6 +145,8 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
+		GitHead:          row.GitHead,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -199,7 +204,7 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return nil
 		}
 
-		return endMutatingUpdate(ctx, q, u, locked.ID)
+		return endMutatingUpdate(ctx, q, s.logger, u, locked.ID)
 	})
 }
 
@@ -207,7 +212,7 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 // stack stackID to the end of the mutating update u, releases the stack lock,
 // and appends the change log row. The change log row comes last, after every
 // other lock.
-func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID string) error {
+func endMutatingUpdate(ctx context.Context, q *db.Queries, logger *slog.Logger, u stack.Update, stackID string) error {
 	err := q.SetStackVersion(ctx, db.SetStackVersionParams{
 		Version:     u.Version,
 		UpdatedAtMs: codec.Millis(u.EndedAt),
@@ -227,6 +232,20 @@ func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stack
 
 	if lockErr := writeInventoryLock(ctx, q, stackInventoryKey(u), nil); lockErr != nil {
 		return lockErr
+	}
+
+	// The end of a mutating update is final, whatever its result: the current
+	// state version of the unit closes the write-back jobs that wait for it.
+	// The origin is the one of the update: the job whose token started it and
+	// the commit it reported.
+	pubErr := publishUnitState(ctx, q, unitStateWrite{
+		exec:   nil,
+		schema: "",
+		kind:   unitStateWriteEnd, nsName: u.Ref.Namespace.String(), unitID: stackID,
+		version: "", final: false, origin: u.Origin(), atMs: 0, logger: logger,
+	})
+	if pubErr != nil {
+		return pubErr
 	}
 
 	return appendStackChange(ctx, q, u.Ref, unitWrite{unitID: stackID, atMs: endedMs, kind: inventory.ChangeChanged})
@@ -264,6 +283,8 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
+		GitHead:          row.GitHead,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -338,6 +359,8 @@ func listUpdatesWith(ctx context.Context, q *db.Queries, ref stack.Ref, page sta
 			CreatedBy:        rows[i].CreatedBy,
 			RestoredFrom:     rows[i].RestoredFrom,
 			TokenID:          rows[i].TokenID,
+			JobID:            rows[i].JobID,
+			GitHead:          rows[i].GitHead,
 			JournalVersion:   rows[i].JournalVersion,
 			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
@@ -371,7 +394,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 
 		var writeErr error
 
-		known, writeErr = writeCheckpoint(ctx, q, cp, stackID, row)
+		known, writeErr = writeCheckpoint(ctx, unitStateTx{q: q, logger: s.logger}, cp, stackID, row)
 
 		return writeErr
 	})
@@ -407,9 +430,9 @@ func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp s
 // rolls the transaction back: the attempt writes nothing, also when it repeats
 // a committed checkpoint.
 func writeCheckpoint(
-	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+	ctx context.Context, tx unitStateTx, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (bool, error) {
-	write, err := writeCheckpointRows(ctx, q, cp, stackID, row)
+	write, err := writeCheckpointRows(ctx, tx, cp, stackID, row)
 	if err != nil {
 		return false, err
 	}
@@ -418,7 +441,7 @@ func writeCheckpoint(
 		return write.known, nil
 	}
 
-	if attemptErr := checkAttempt(ctx, q, cp.AttemptStartedAt); attemptErr != nil {
+	if attemptErr := checkAttempt(ctx, tx.q, cp.AttemptStartedAt); attemptErr != nil {
 		return false, attemptErr
 	}
 
@@ -439,28 +462,28 @@ type checkpointWrite struct {
 // The result says whether the upsert wrote the row, and so whether the attempt window was checked
 // with the clock that the upsert returned.
 func writeCheckpointRows(
-	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+	ctx context.Context, tx unitStateTx, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) (checkpointWrite, error) {
-	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
+	if keyErr := checkCheckpointKey(ctx, tx.q, stackID, cp); keyErr != nil {
 		return checkpointWrite{known: false, checked: false}, keyErr
 	}
 
-	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
+	if leaseErr := checkLease(ctx, tx.q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
 		return checkpointWrite{known: false, checked: false}, leaseErr
 	}
 
-	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
+	if previewErr := checkMutates(ctx, tx.q, stackID, cp.Update); previewErr != nil {
 		return checkpointWrite{known: false, checked: false}, previewErr
 	}
 
 	if cp.Sequence > 0 {
-		retried, seqErr := checkSequence(ctx, q, cp, stackID)
+		retried, seqErr := checkSequence(ctx, tx.q, cp, stackID)
 		if seqErr != nil || retried {
 			return checkpointWrite{known: retried, checked: false}, seqErr
 		}
 	}
 
-	nowMs, putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
+	nowMs, putErr := tx.q.PutCheckpoint(ctx, db.PutCheckpointParams{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
@@ -477,7 +500,7 @@ func writeCheckpointRows(
 	})
 	if errors.Is(putErr, pgx.ErrNoRows) {
 		// The write lost the race and wrote no row.
-		raced, raceErr := lostCheckpointRace(ctx, q, cp, stackID)
+		raced, raceErr := lostCheckpointRace(ctx, tx.q, cp, stackID)
 
 		return checkpointWrite{known: raced, checked: false}, raceErr
 	}
@@ -490,7 +513,35 @@ func writeCheckpointRows(
 		return checkpointWrite{known: false, checked: false}, attemptErr
 	}
 
+	// The digest of the stored row is the state version of the unit: a plan of
+	// the state that this checkpoint replaced is stale. The write pays no
+	// round trip for the time: it is the clock that the upsert returned.
+	if pubErr := publishCheckpointState(ctx, tx, cp, row, nowMs); pubErr != nil {
+		return checkpointWrite{known: false, checked: false}, pubErr
+	}
+
 	return checkpointWrite{known: false, checked: true}, nil
+}
+
+// publishCheckpointState records the digest of the stored checkpoint row as
+// the current state version of its stack, at the time atMs of the write. A
+// checkpoint that the row marks invalid carries a version of its own, so it
+// changes the version of a valid write that the same update replaced.
+func publishCheckpointState(
+	ctx context.Context, tx unitStateTx, cp stack.Checkpoint, row codec.CheckpointRow, atMs int64,
+) error {
+	return publishUnitState(ctx, tx.q, unitStateWrite{
+		exec:    nil,
+		schema:  "",
+		kind:    unitStateWriteState,
+		nsName:  cp.Ref.Namespace.String(),
+		unitID:  row.StackID,
+		version: checkpointDigest{digest: row.Digest, invalid: row.Invalid}.stateVersion(),
+		final:   false,
+		origin:  cp.Origin,
+		atMs:    atMs,
+		logger:  tx.logger,
+	})
 }
 
 // lostCheckpointRace answers an upsert that wrote no row: a write of the same
@@ -822,6 +873,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		EndedAtMs:        row.EndedAtMs,
 		JournalVersion:   row.JournalVersion,
 		TokenID:          row.TokenID,
+		JobID:            row.JobID,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,

@@ -226,6 +226,16 @@ if [ -z "$MINIO_VERSION" ]; then
 	echo "bench-s3: cannot read the MinIO version; run docker logs $NAME-minio" >&2
 	exit 1
 fi
+GARAGE_VERSION="$(docker exec "$NAME-garage" /garage --version 2>/dev/null | head -1 || true)"
+if [ -z "$GARAGE_VERSION" ]; then
+	echo "bench-s3: cannot read the Garage version; run docker logs $NAME-garage" >&2
+	exit 1
+fi
+POSTGRES_VERSION="$(docker exec "$NAME-postgres" postgres --version 2>/dev/null | head -1 || true)"
+if [ -z "$POSTGRES_VERSION" ]; then
+	echo "bench-s3: cannot read the PostgreSQL version; run docker logs $NAME-postgres" >&2
+	exit 1
+fi
 
 mkdir -p "$OUT_DIR/load"
 {
@@ -235,8 +245,8 @@ mkdir -p "$OUT_DIR/load"
 	echo "toxiproxy=$TOXIPROXY_IMAGE"
 	docker version --format 'docker={{.Server.Version}}'
 	echo "minio-version=$MINIO_VERSION"
-	echo "garage-version=$(docker exec "$NAME-garage" /garage --version 2>/dev/null | head -1)"
-	echo "postgres-version=$(docker exec "$NAME-postgres" postgres --version 2>/dev/null | head -1)"
+	echo "garage-version=$GARAGE_VERSION"
+	echo "postgres-version=$POSTGRES_VERSION"
 } >"$OUT_DIR/images.txt"
 
 COMMON=(

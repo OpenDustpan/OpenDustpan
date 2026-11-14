@@ -199,7 +199,15 @@ func controlChars() string {
 }
 
 func typ(kind model.TypeKind) model.Type {
-	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false}
+	return model.Type{Kind: kind, Format: "", Elem: nil, Ref: "", Const: "", Nullable: false, Members: nil}
+}
+
+// unionOf makes the type of a list of primitive type names.
+func unionOf(kinds ...model.TypeKind) model.Type {
+	t := typ(model.TypeUnion)
+	t.Members = kinds
+
+	return t
 }
 
 func refTo(name string) model.Type {
@@ -333,6 +341,39 @@ func TestRenderRefusesWhatItCannotWrite(t *testing.T) {
 		{"path parameter that is not a string", func(a *model.API, _ *clientgen.Options) {
 			a.Operations[0].Parameters[0].Type = typ(model.TypeInteger)
 		}, clientgen.ErrUnsupported},
+		{"type list in a query parameter", func(a *model.API, _ *clientgen.Options) {
+			a.Operations[0].Parameters = append(a.Operations[0].Parameters, model.Parameter{
+				Name: "value", In: model.InQuery, Required: false,
+				Type: unionOf(model.TypeString, model.TypeNumber), Description: "",
+			})
+		}, clientgen.ErrUnsupported},
+		{"type list in an answer", func(a *model.API, _ *clientgen.Options) {
+			result := unionOf(model.TypeString, model.TypeNumber)
+			a.Operations[0].Result = model.Response{Statuses: []int{200}, Type: &result, ETag: false}
+		}, clientgen.ErrUnsupported},
+		{"type list in a body", func(a *model.API, _ *clientgen.Options) {
+			a.Operations[0].Body = &model.Body{
+				MediaType: model.MediaJSON, Required: true, Type: unionOf(model.TypeString, model.TypeNumber),
+			}
+		}, clientgen.ErrUnsupported},
+		{"type list in a list", func(a *model.API, _ *clientgen.Options) {
+			elem := unionOf(model.TypeString, model.TypeNumber)
+			a.Schemas[0].Fields[0].Type = model.Type{
+				Kind: model.TypeArray, Format: "", Elem: &elem, Ref: "", Const: "", Nullable: false, Members: nil,
+			}
+		}, clientgen.ErrUnsupported},
+		{"type list with one member", func(a *model.API, _ *clientgen.Options) {
+			a.Schemas[0].Fields[0].Type = unionOf(model.TypeString)
+		}, clientgen.ErrInvalidDescription},
+		{"type list with a member two times", func(a *model.API, _ *clientgen.Options) {
+			a.Schemas[0].Fields[0].Type = unionOf(model.TypeString, model.TypeString)
+		}, clientgen.ErrInvalidDescription},
+		{"type list with a member that is not a primitive", func(a *model.API, _ *clientgen.Options) {
+			a.Schemas[0].Fields[0].Type = unionOf(model.TypeString, model.TypeRef)
+		}, clientgen.ErrInvalidDescription},
+		{"type list with an unknown member", func(a *model.API, _ *clientgen.Options) {
+			a.Schemas[0].Fields[0].Type = unionOf(model.TypeString, 99)
+		}, clientgen.ErrInvalidDescription},
 		{"object with additional properties", func(a *model.API, _ *clientgen.Options) {
 			extra := typ(model.TypeAny)
 			a.Schemas[0].Extra = &extra
@@ -403,6 +444,83 @@ func TestRenderRefusesWhatItCannotWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRenderTypeList checks that a type list becomes a named type that holds
+// the JSON types of the list, with the name of the field, and that the
+// description of a field is the doc comment of the field, in place of the
+// description of its type.
+func TestRenderTypeList(t *testing.T) {
+	t.Parallel()
+
+	value := model.Field{
+		Name: "value", Type: unionOf(model.TypeString, model.TypeNumber, model.TypeBoolean),
+		Required: true, Description: "The value.",
+	}
+	note := model.Field{
+		Name: "note", Type: unionOf(model.TypeString, model.TypeBoolean), Required: false, Description: "",
+	}
+	count := model.Field{
+		Name: "count", Type: unionOf(model.TypeInteger, model.TypeString), Required: true, Description: "",
+	}
+	described := model.Field{
+		Name: "described", Type: refTo("Settings"), Required: false, Description: "The described settings.",
+	}
+
+	api := &model.API{
+		Title: "T", Version: descriptionVersion(), Tags: nil, Operations: nil, Error: "ErrorResponse",
+		Schemas: []model.Schema{
+			objectSchema("Settings", "The settings."),
+			objectSchema("Widget", "", value, note, count, described),
+			objectSchema("ErrorResponse", ""),
+		},
+	}
+
+	files, err := golang.New().Render(api, options())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	models := fileText(t, files, "models.go")
+
+	for _, want := range []string{
+		"// WidgetValue holds a string, a number or a boolean.\ntype WidgetValue json.RawMessage",
+		"// WidgetNote holds a string or a boolean.\ntype WidgetNote json.RawMessage",
+		"// WidgetCount holds an integer or a string.\ntype WidgetCount json.RawMessage",
+		`case "string", "number", "boolean":`,
+		`case "string", "boolean":`,
+		`case "number", "string":`,
+		`if kind == "number" && !jsonInteger(data) {`,
+		"func jsonInteger(data []byte) bool {",
+		`return fmt.Errorf("want a string, a number or a boolean, got %s", kind)`,
+		"// The value.\n\tValue WidgetValue",
+		"Note  *WidgetNote",
+		"// The described settings.\n\tDescribed *Settings",
+		"// The settings.\ntype Settings struct",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("models.go does not hold %q", want)
+		}
+	}
+
+	if strings.Contains(models, "// The settings.\n\tDescribed") {
+		t.Error("the description of the type of the field wins over the description of the field")
+	}
+}
+
+// fileText returns the content of one rendered file.
+func fileText(t *testing.T, files []clientgen.File, path string) string {
+	t.Helper()
+
+	for _, f := range files {
+		if f.Path == path {
+			return string(f.Content)
+		}
+	}
+
+	t.Fatalf("the run gave no file %s", path)
+
+	return ""
 }
 
 // declaredNames returns the names of the parameters and of the variables of

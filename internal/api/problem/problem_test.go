@@ -2,16 +2,19 @@ package problem_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -428,9 +431,10 @@ func TestCredentialAnswersTheSentinel(t *testing.T) {
 	}
 }
 
-// TestCredentialRefusalLogsTheWrap checks that the log holds the wrap text of
-// a refusal of the session cookie at Debug, and that the answer does not.
-func TestCredentialRefusalLogsTheWrap(t *testing.T) {
+// TestCredentialRefusalLogsNoWrap checks that the log holds the status and the
+// code of a refusal of the session cookie at Debug, and not the wrap text, and
+// that the answer does not hold the wrap text.
+func TestCredentialRefusalLogsNoWrap(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -445,10 +449,14 @@ func TestCredentialRefusalLogsTheWrap(t *testing.T) {
 	wr.Write(t.Context(), rec, fmt.Errorf("save trigger: %w", sessionauth.ErrCSRF))
 
 	logs := buf.String()
-	for _, want := range []string{"level=DEBUG", `msg="request refused"`, "save trigger"} {
+	for _, want := range []string{"level=DEBUG", `msg="request refused"`} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log %q does not hold %q", logs, want)
 		}
+	}
+
+	if strings.Contains(logs, "save trigger") {
+		t.Errorf("log %q holds the wrap text", logs)
 	}
 
 	if strings.Contains(rec.Body.String(), "save trigger") {
@@ -475,9 +483,9 @@ func TestCredentialBeatsAHostileClassifier(t *testing.T) {
 }
 
 // TestWriteLogsRefusalsAtDebug pins the log rule of Write for each class. A
-// refusal whose answer is not its error text logs that text at Debug. An answer
-// that holds the error text logs nothing more. A 5xx logs no error text, and the
-// body never holds the value that a refusal wraps.
+// refusal whose answer is not its error text logs its status and code at Debug,
+// never the error text. An answer that holds the error text logs nothing more.
+// No log line holds the value that an error wraps, and the body never holds it.
 func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 	t.Parallel()
 
@@ -487,7 +495,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			err:         fmt.Errorf("save trigger: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
-			wantLog:     "save trigger",
+			wantLog:     "status=403",
 			hidden:      "save trigger",
 		},
 		{
@@ -507,8 +515,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 			hidden:      "hunter2",
 		},
 		{
-			// The log is not checked for the secret: a test never pins a secret into a log.
-			name:        "wrapped secret never reaches the body",
+			name:        "wrapped secret never reaches the body or the log",
 			err:         fmt.Errorf("pq: password=hunter2: %w", identity.ErrDenied),
 			status:      http.StatusForbidden,
 			wantRefused: true,
@@ -523,8 +530,13 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 
 			var buf bytes.Buffer
 
+			handler := &recordHandler{
+				text: slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+				recs: nil,
+			}
+
 			wr := problem.Writer{
-				Logger:     slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				Logger:     slog.New(handler),
 				KeepDenied: nil,
 				Classify:   nil,
 			}
@@ -536,7 +548,7 @@ func TestWriteLogsRefusalsAtDebug(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
 			}
 
-			checkRefusalLog(t, tc, buf.String(), rec.Body.String())
+			checkRefusalLog(t, tc, buf.String(), handler.recs, rec.Body.String())
 		})
 	}
 }
@@ -566,7 +578,7 @@ func refusedLineHolds(logs, text string) bool {
 
 // checkRefusalLog fails unless the log and the body follow the rule of
 // TestWriteLogsRefusalsAtDebug.
-func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
+func checkRefusalLog(t *testing.T, tc refusalCase, logs string, recs []logRecord, body string) {
 	t.Helper()
 
 	if got := strings.Contains(logs, `msg="request refused"`); got != tc.wantRefused {
@@ -585,7 +597,105 @@ func checkRefusalLog(t *testing.T, tc refusalCase, logs, body string) {
 		t.Errorf("body %q holds %q", body, tc.hidden)
 	}
 
-	if tc.status >= http.StatusInternalServerError && tc.hidden != "" && strings.Contains(logs, tc.hidden) {
-		t.Errorf("5xx log %q holds %q", logs, tc.hidden)
+	// Defense in depth: the refusal line names the status and the code only,
+	// and the allowlist of a 5xx line checks the names of its fields. This
+	// check stays for the values, so that a new log field or a secret in an
+	// allowed field cannot leak the wrapped value.
+	if tc.hidden != "" && strings.Contains(logs, tc.hidden) {
+		t.Errorf("log %q holds %q", logs, tc.hidden)
+	}
+
+	if tc.status >= http.StatusInternalServerError {
+		checkFailureLog(t, tc, recs)
+	}
+}
+
+// recordHandler writes the text of each record and keeps its message and
+// fields, so a test can check the fields of a 5xx log line.
+type recordHandler struct {
+	text slog.Handler
+	recs []logRecord
+}
+
+// logRecord is one record that a recordHandler kept.
+type logRecord struct {
+	message string
+	fields  map[string]string
+}
+
+// Enabled answers as the text handler does, so the buffer holds the same text.
+func (h *recordHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.text.Enabled(ctx, level)
+}
+
+// Handle keeps the message and the fields of the record and writes its text.
+func (h *recordHandler) Handle(ctx context.Context, r slog.Record) error {
+	fields := make(map[string]string, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		fields[a.Key] = a.Value.String()
+
+		return true
+	})
+
+	h.recs = append(h.recs, logRecord{message: r.Message, fields: fields})
+
+	if err := h.text.Handle(ctx, r); err != nil {
+		return fmt.Errorf("write the log text: %w", err)
+	}
+
+	return nil
+}
+
+// WithAttrs returns the same handler: the writer adds its fields to the record.
+func (h *recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup returns the same handler: the writer logs no group.
+func (h *recordHandler) WithGroup(string) slog.Handler { return h }
+
+// checkFailureLog fails unless the 5xx log line holds the status of the answer
+// and the cause of the error, and no field outside the fields of a failure
+// log: the status, the cause, the request ID, the route, the op and the error
+// code. faultlog checks each value against a closed list or a fixed form, so
+// the line holds no error text.
+func checkFailureLog(t *testing.T, tc refusalCase, recs []logRecord) {
+	t.Helper()
+
+	var found bool
+
+	for _, r := range recs {
+		if r.message != "request failed" {
+			continue
+		}
+
+		found = true
+
+		for key := range r.fields {
+			if !failureField(key) {
+				t.Errorf("5xx log holds the field %q", key)
+			}
+		}
+
+		if got := r.fields["status"]; got != strconv.Itoa(tc.status) {
+			t.Errorf("5xx log status = %q, want %d", got, tc.status)
+		}
+
+		if want := faultlog.Cause(tc.err); r.fields["cause"] != want {
+			t.Errorf("5xx log cause = %q, want %q", r.fields["cause"], want)
+		}
+	}
+
+	if !found {
+		t.Errorf("no 5xx log line in %v", recs)
+	}
+}
+
+// failureField reports whether key is one of the fields that a failure log
+// line may hold.
+func failureField(key string) bool {
+	switch key {
+	case "status", "cause", "request_id", "route", "op", "error_code":
+		return true
+	default:
+		return false
 	}
 }

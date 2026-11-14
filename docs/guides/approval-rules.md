@@ -36,6 +36,16 @@ first version of that gate:
   also makes the start of the job fail. The job approval does not enforce these
   yet.
 
+## A plan whose state changed
+
+An apply refuses a plan whose state changed after the plan. This holds for an
+OpenTofu workspace and a Pulumi stack.
+
+The server compares the state version that the plan read with the current
+version of the unit. When the two versions differ, the job goes back to its plan
+phase and plans again. The reason of the job names the state version that the
+plan read and the current version. The new plan needs approval again.
+
 ## Set the approval default of a namespace
 
 `PUT /api/dustpan/v1/namespaces/<namespace>/approval-default` sets the default.

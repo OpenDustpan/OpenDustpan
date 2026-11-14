@@ -124,8 +124,9 @@ func queryUnitPage(ctx context.Context, q *db.Queries, tx pgx.Tx, query string, 
 // (namespace, unit_id COLLATE "C") of the inventory gives the rows in the page
 // order. With a label filter, the first label drives the read: the index on
 // (namespace, label_key, label_value, unit_id COLLATE "C") of the labels gives
-// the units with the label in the page order, and the statement reads no
-// other unit.
+// the units with the label in the page order. The statement checks the other
+// labels on each of these units, so when the other labels match few or none of
+// them, a page can read every unit that has the first label.
 func unitPageQuery(q inventory.UnitQuery) (string, []any) {
 	var b strings.Builder
 

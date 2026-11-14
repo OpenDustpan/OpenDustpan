@@ -193,6 +193,9 @@ type data struct {
 	Title            string
 	Types            []typeView
 	Operations       []operationView
+	// UsesOneOf is true when a type list needs the oneOf validator of the
+	// generated decoders module.
+	UsesOneOf bool
 }
 
 // newData checks the options, and builds the views of the model.
@@ -283,7 +286,58 @@ func newView(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 		return nil, err
 	}
 
+	d.UsesOneOf = usesOneOf(api)
+
 	return d, nil
+}
+
+// usesOneOf reports whether the model holds a type list, which the decoders
+// module validates with its oneOf function.
+func usesOneOf(api *model.API) bool {
+	for i := range api.Schemas {
+		if schemaUsesOneOf(&api.Schemas[i]) {
+			return true
+		}
+	}
+
+	for i := range api.Operations {
+		if operationUsesOneOf(&api.Operations[i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// schemaUsesOneOf reports whether a schema holds a type list.
+func schemaUsesOneOf(s *model.Schema) bool {
+	if s.Extra != nil && clientgen.HoldsTypeList(*s.Extra) {
+		return true
+	}
+
+	for i := range s.Fields {
+		if clientgen.HoldsTypeList(s.Fields[i].Type) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// operationUsesOneOf reports whether a parameter, a body or the answer of an
+// operation holds a type list.
+func operationUsesOneOf(op *model.Operation) bool {
+	for i := range op.Parameters {
+		if clientgen.HoldsTypeList(op.Parameters[i].Type) {
+			return true
+		}
+	}
+
+	if op.Body != nil && clientgen.HoldsTypeList(op.Body.Type) {
+		return true
+	}
+
+	return op.Result.Type != nil && clientgen.HoldsTypeList(*op.Result.Type)
 }
 
 // sha256Pattern is the shape of a SHA-256 digest in lowercase hexadecimal.

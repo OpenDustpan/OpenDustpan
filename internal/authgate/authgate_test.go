@@ -482,3 +482,61 @@ func TestScopesKeepSeparateSharedCounts(t *testing.T) {
 		t.Fatalf("counts = %v, want one under the source and one under the scope and source", counter.counts)
 	}
 }
+
+// TestSharedBudgetStaysInItsScope exhausts the shared budget of one scope and
+// checks that another scope, with the same source and the same counter, is
+// still usable. The exhausted scope must stay refused after its tokens refill.
+// Only the shared mark keeps it refused, so this test fails if the mark is
+// not set.
+func TestSharedBudgetStaysInItsScope(t *testing.T) {
+	t.Parallel()
+
+	counter := &scopedCounter{counts: map[string]int64{}, mu: sync.Mutex{}}
+	c := newClock()
+
+	newScoped := func(t *testing.T, scope string) *authgate.Gate {
+		t.Helper()
+
+		g, err := authgate.New(authgate.Config{
+			Next: &countingAuthenticator{lookups: atomic.Int64{}}, Failures: counter, Scope: scope,
+			Charge: nil, Logger: nil, Now: c.Now, Window: time.Minute, CounterErrors: nil,
+			Burst: 2, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
+		})
+		if err != nil {
+			t.Fatalf("new gate: %v", err)
+		}
+
+		return g
+	}
+
+	exhausted := newScoped(t, "")
+	other := newScoped(t, "signin")
+	// A canceled request ends the penalty wait of an over-budget source at once,
+	// so no test waits for the penalty.
+	ctx := authgate.WithRequest(canceled(t), "192.0.2.1")
+
+	// The second miss reaches the burst, so the scope is marked as shared.
+	exhausted.Fail(ctx)
+	exhausted.Fail(ctx)
+
+	// One token refills, but the shared mark still holds for the window.
+	c.Advance(time.Second)
+
+	if err := exhausted.Admit(ctx); err == nil {
+		t.Fatal("exhausted scope admitted within the shared window")
+	}
+
+	// One miss of the other scope: it counts under its own key, below the burst.
+	other.Fail(ctx)
+
+	if err := other.Admit(ctx); err != nil {
+		t.Fatalf("other scope refused by the shared budget of its own scope: %v", err)
+	}
+
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+
+	if counter.counts["192.0.2.1"] != 2 || counter.counts["signin|192.0.2.1"] != 1 {
+		t.Fatalf("counts = %v, want two misses under the exhausted scope and one under the other", counter.counts)
+	}
+}

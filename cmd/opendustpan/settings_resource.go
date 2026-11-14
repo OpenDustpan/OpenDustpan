@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // settingsWiring holds what serve needs for the settings resource: the option
@@ -31,19 +32,40 @@ func (f *serveFlags) staticLayer() *cli.StaticLayer {
 // settingsWiring returns the settings wiring for st, or the zero value when
 // st keeps no settings.
 func (f *serveFlags) settingsWiring(st store) (settingsWiring, error) {
+	var ss setting.Store
+
 	switch s := st.(type) {
 	case sqliteStore:
-		return f.wireSettings(s.SettingStore())
+		ss = s.SettingStore()
 	case postgresStore:
-		return f.wireSettings(s.SettingStore())
+		ss = s.SettingStore()
 	default:
 		return settingsWiring{options: nil, sync: nil}, nil
 	}
+
+	// One call for every store kind, so that the declarations of the store
+	// cannot differ between the cases.
+	return f.wireSettings(ss, storeSettingDeclarations(st)...)
 }
 
-// wireSettings builds the wiring over the settings store ss.
-func (f *serveFlags) wireSettings(ss setting.Store) (settingsWiring, error) {
-	declarations := cli.SettingDeclarations()
+// storeSettingDeclarations returns the declarations of the settings of the
+// store itself: the bounds of a PostgreSQL store, and none for a SQLite
+// store or any other store that keeps no settings of its own.
+func storeSettingDeclarations(st store) []setting.Declaration {
+	switch st.(type) {
+	case sqliteStore:
+		return nil
+	case postgresStore:
+		return postgres.SettingDeclarations()
+	default:
+		return nil
+	}
+}
+
+// wireSettings builds the wiring over the settings store ss. extra holds the
+// declarations of the settings of the store itself, when the store has any.
+func (f *serveFlags) wireSettings(ss setting.Store, extra ...setting.Declaration) (settingsWiring, error) {
+	declarations := append(cli.SettingDeclarations(), extra...)
 
 	registry, err := setting.NewRegistry(declarations)
 	if err != nil {

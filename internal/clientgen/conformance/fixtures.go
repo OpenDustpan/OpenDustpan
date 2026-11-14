@@ -302,7 +302,9 @@ func ensureProfile(ctx context.Context, env Env) (string, error) {
 	return got.header.Get("ETag"), nil
 }
 
-// writeSeed makes the seed profile.
+// writeSeed makes the seed profile. A conflict means that another writer made
+// the profile first. The write then succeeds when the server has the profile
+// and answers with a usable ETag.
 func writeSeed(ctx context.Context, env Env) error {
 	post := directRequest{
 		method:      http.MethodPost,
@@ -315,6 +317,22 @@ func writeSeed(ctx context.Context, env Env) error {
 	got, err := direct(ctx, env, post)
 	if err != nil {
 		return err
+	}
+
+	if got.status == http.StatusConflict {
+		existing, readErr := get(ctx, env, profilesPath+"/"+seedProfile, withToken)
+		if readErr != nil {
+			return readErr
+		}
+
+		// Defense in depth: ensureProfile reads the profile again and checks the
+		// same condition. This check stays so that a conflict is never counted as
+		// success without a readable profile, even if a caller skips that read.
+		if existing.status != http.StatusOK || existing.header.Get("ETag") == "" {
+			return failf("the harness could not read the seed profile: %d %s", existing.status, existing.body)
+		}
+
+		return nil
 	}
 
 	if got.status != http.StatusOK && got.status != http.StatusCreated {

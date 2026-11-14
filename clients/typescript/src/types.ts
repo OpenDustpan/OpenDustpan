@@ -50,6 +50,22 @@ export interface BackupCorruptErrorArgs {
   readonly backup: string;
 }
 
+/** The error answer with the code backup.too-many-unverified. */
+export interface BackupTooManyUnverifiedError {
+  /** The HTTP status. */
+  readonly code: number;
+  readonly errorArgs: BackupTooManyUnverifiedErrorArgs;
+  readonly errorCode: "backup.too-many-unverified";
+  /** A text for a person. */
+  readonly message: string;
+}
+
+/** The arguments of the text of the error with the code backup.too-many-unverified. */
+export interface BackupTooManyUnverifiedErrorArgs {
+  readonly count: number;
+  readonly limit: number;
+}
+
 export interface BulkUnitSettingsError {
   readonly code: number;
   readonly errorArgs?: Readonly<Record<string, unknown>>;
@@ -93,6 +109,10 @@ export interface Collection {
   readonly createdAt: number;
   readonly name: string;
   readonly namespace: string;
+}
+
+export interface Components {
+  readonly components: ReadonlyArray<string>;
 }
 
 export interface ContextAnswer {
@@ -316,9 +336,24 @@ export interface DriftUnit {
   readonly tool: string;
 }
 
+export interface DueSchedule {
+  readonly lateSeconds: number;
+  readonly name: string;
+}
+
+export interface EnterMaintenanceRequest {
+  readonly force: boolean;
+}
+
+export interface EnterMaintenanceResponse {
+  readonly canceled: ReadonlyArray<string>;
+  readonly state: string;
+}
+
 /** An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse. */
 export type ErrorAnswer =
   | BackupCorruptError
+  | BackupTooManyUnverifiedError
   | ContextFieldFromCodeError
   | GateApproversCountAboveError
   | LockLockedError
@@ -346,7 +381,7 @@ export type ErrorAnswer =
   | ErrorResponse;
 
 /** The known values of ErrorCode. */
-export const ErrorCodeValues = ["access.denied", "access.ip-not-allowed", "access.last-site-administrator", "access.no-action", "audit.entry-not-found", "audit.entry-read-unavailable", "audit.export-not-recorded", "audit.reason-invalid", "auth.rate-limited", "auth.unauthenticated", "backup.corrupt", "collection.already-exists", "collection.changed", "collection.invalid-name", "collection.move-out-locked", "collection.not-empty", "collection.not-found", "context.field-from-code", "context.invalid", "context.not-set", "context.object-not-found", "context.unit-deleted", "context.unknown-section", "drift.start-conflict", "gate.approvers-count-above", "gate.approvers-group-invalid", "gate.approvers-group-missing", "gate.approvers-unmet", "gate.approvers-user-invalid", "gate.denied", "gate.final", "gate.invalid", "gate.limit", "gate.limited", "gate.not-found", "gate.rule-failed", "gate.unavailable", "gate.version-conflict", "git-host.app-not-registered", "git-host.installation-not-assigned", "git-host.link-account-invalid", "git-host.link-body-invalid", "git-host.link-body-too-large", "git-host.link-conflict", "git-host.link-limit", "git-host.link-not-found", "git-host.link-not-proved", "git-host.link-person-required", "git-host.link-request-expired", "git-host.link-request-not-found", "git-host.link-request-used", "git-host.link-unavailable", "instance.invalid-id", "instance.not-found", "issuer.conflict", "issuer.invalid", "issuer.key-expired", "issuer.key-missing", "issuer.not-configured", "job.agent-denied", "job.frozen", "job.gate-enforced", "job.invalid", "job.limit", "job.log-not-available", "job.not-found", "job.policy-denied", "job.unsupported", "journal.batch-invalid", "journal.build-timeout", "journal.conflict", "journal.incomplete", "local-user.break-glass", "local-user.code-invalid", "local-user.current-password-required", "local-user.current-password-wrong", "local-user.demo-fixed", "local-user.exists", "local-user.hash-busy", "local-user.last-credential", "local-user.name-invalid", "local-user.not-found", "local-user.outside-reach", "local-user.own-account", "local-user.password-sign-in-off", "local-user.reason-required", "local-user.second-factor-required", "local-user.session-ended", "local-user.sign-in-failed", "local-user.unavailable", "lock.already-locked", "lock.changed", "lock.invalid-target", "lock.locked", "lock.not-holder", "lock.not-locked", "lock.reason-required", "lock.target-not-found", "maintenance.active-work", "maintenance.busy", "maintenance.held", "maintenance.in-maintenance", "maintenance.invalid-state", "maintenance.unavailable", "mfa.break-glass-reason-required", "mfa.ceremony-failed", "mfa.ceremony-not-open", "mfa.ceremony-wrong-person", "mfa.fresh-step-required", "mfa.passkey-exists", "mfa.passkey-invalid", "mfa.passkey-limit", "mfa.passkey-not-found", "mfa.passkey-suspended", "mfa.rate-limited", "mfa.session-required", "mfa.sign-in-failed", "mfa.sign-in-source-limit", "mfa.unavailable", "namespace.already-exists", "namespace.fenced", "namespace.invalid-name", "namespace.not-found", "namespace.not-home", "namespace.unavailable", "password.blocked", "password.form", "password.letters-and-digits", "password.too-long", "password.too-short", "placement.conflict", "placement.invalid-pattern", "placement.invalid-position", "placement.invalid-tool", "placement.no-match", "placement.rule-not-found", "placement.too-many-rules", "placement.unavailable", "preferences.body-invalid", "preferences.body-too-large", "preferences.field-invalid", "preferences.field-read-only", "preferences.field-unknown", "preferences.if-match-invalid", "preferences.media-type-unsupported", "preferences.person-not-found", "preferences.person-required", "preferences.precondition-failed", "preferences.unavailable", "principal.already-exists", "principal.disabled", "principal.invalid", "principal.last-break-glass", "principal.managed-by-directory", "principal.not-disabled", "principal.not-found", "principal.reserved-subject", "principal.unsupported", "profile.conflict", "profile.invalid", "profile.limit", "profile.not-found", "profile.routing-change-needs-open", "profile.schema-version", "registry.archive-set-refused", "registry.invalid", "registry.key-exists", "registry.key-invalid", "registry.key-limit", "registry.module-archive-refused", "registry.no-keys", "registry.not-found", "registry.not-staged", "registry.signature-invalid", "registry.signature-untrusted-key", "registry.too-large", "registry.version-exists", "request.body-invalid", "request.body-too-large", "request.content-type-unsupported", "request.idempotency-key-in-progress", "request.idempotency-key-invalid", "request.idempotency-key-lost", "request.idempotency-key-replayed-secret", "request.idempotency-key-required", "request.idempotency-key-reused", "request.idempotency-key-unavailable", "request.idempotency-key-unsupported", "request.if-match-invalid", "request.invalid-object", "request.invalid-path", "request.invalid-query", "request.page-size-invalid", "request.page-token-invalid", "request.precondition-failed", "request.precondition-required", "restore.blobs-missing", "restore.ended", "restore.live-blobs-damaged", "restore.live-blobs-missing", "restore.pre-backup-foreign", "restore.swapped", "runner.immutable", "runner.invalid", "runner.limit", "runner.not-found", "runner.pool-exists", "runner.pool-in-use", "runner.retired", "runner.token-used", "schema.binary-below-minimum", "secret.console-session", "secret.item-key-attempt-expired", "secret.item-key-blob-clock-skew", "secret.item-key-blob-mismatch", "secret.key-not-configured", "secret.not-decrypted", "secret.too-large", "server.component-not-found", "server.internal", "server.method-not-allowed", "server.route-not-found", "session.csrf", "session.other-site", "settings.key-unknown", "settings.locked", "settings.patch-invalid", "settings.retention-invalid", "settings.static-only", "settings.unavailable", "settings.value-invalid", "sign-in.refused", "sink.access-token", "sink.conflict", "sink.delivery-not-found", "sink.delivery-not-redeliverable", "sink.invalid", "sink.no-sender", "sink.no-url", "sink.not-found", "sink.platform-host", "sink.subscription-conflict", "sink.subscription-invalid", "sink.subscription-not-found", "sink.subscription-sink-not-found", "sink.test-limit-unavailable", "sink.test-rate-limited", "source.filter-invalid", "source.filter-unreadable", "stack.already-exists", "stack.has-resources", "stack.invalid-name", "stack.no-state", "stack.no-state-at-time", "stack.not-found", "stack.other-secrets-provider", "stack.resource-not-found", "stack.reveal-path-too-long", "state-version.budget-too-small", "state-version.busy", "state-version.checksum-mismatch", "state-version.invalid", "state-version.lineage-mismatch", "state-version.not-found", "state-version.resource-not-found", "state-version.reveal-path-too-long", "state-version.stale-serial", "state-version.too-large", "state-version.upload-denied", "store.failover-setting-invalid", "storecheck.cooldown", "storecheck.invalid-target", "storecheck.no-target", "storecheck.not-found", "storecheck.refused", "storecheck.running", "token.already-exists", "token.caller-not-person", "token.ended", "token.invalid", "token.kind-has-none", "token.not-found", "token.requires-sign-in", "token.unsupported", "token.wrong-kind", "trigger.cycle", "trigger.disabled", "trigger.fire-conflict", "trigger.invalid", "trigger.not-found", "trigger.saver-denied", "trust-rule.already-exists", "trust-rule.ambiguous", "trust-rule.invalid", "trust-rule.issuer-refused", "trust-rule.limit", "trust-rule.no-match", "trust-rule.not-found", "trust-rule.principal-refused", "trust-rule.sign-in-required", "unit-settings.bulk-size", "unit-settings.connection-lacks-capability", "unit-settings.connection-unknown", "unit-settings.invalid", "unit-settings.not-found", "unit-settings.pool-unknown", "unit.client-encrypted", "unit.deleted-not-found", "unit.history-unavailable", "unit.invalid-name", "unit.name-taken", "unit.no-collection", "unit.no-state", "unit.not-found", "unit.state-moved", "update.attempt-expired", "update.checkpoint-conflict", "update.checkpoint-stale", "update.concurrent-modification", "update.conflict", "update.console-session", "update.delta-invalid", "update.invalid", "update.item-key-unavailable", "update.lease-expired", "update.lease-invalid", "update.not-found", "update.too-large", "update.wrong-state", "view.already-exists", "view.invalid", "view.limit", "view.not-found", "view.not-person", "worker.absent", "workspace.already-exists", "workspace.changed-concurrently", "workspace.client-encrypted", "workspace.invalid-name", "workspace.lock-mismatch", "workspace.locked", "workspace.no-state", "workspace.no-state-at", "workspace.not-found", "workspace.not-locked", "workspace.override-refused", "workspace.pending-state-version", "workspace.too-many-pending"] as const;
+export const ErrorCodeValues = ["access.denied", "access.ip-not-allowed", "access.last-site-administrator", "access.no-action", "audit.entry-not-found", "audit.entry-read-unavailable", "audit.export-not-recorded", "audit.reason-invalid", "auth.rate-limited", "auth.unauthenticated", "backup.corrupt", "backup.too-many-unverified", "collection.already-exists", "collection.changed", "collection.invalid-name", "collection.move-out-locked", "collection.not-empty", "collection.not-found", "context.field-from-code", "context.invalid", "context.not-set", "context.object-not-found", "context.unit-deleted", "context.unknown-section", "drift.start-conflict", "gate.approvers-count-above", "gate.approvers-group-invalid", "gate.approvers-group-missing", "gate.approvers-unmet", "gate.approvers-user-invalid", "gate.denied", "gate.final", "gate.invalid", "gate.limit", "gate.limit-group-reach", "gate.limit-membership", "gate.limited", "gate.not-found", "gate.rule-failed", "gate.unavailable", "gate.version-conflict", "git-host.app-not-registered", "git-host.installation-not-assigned", "git-host.link-account-invalid", "git-host.link-body-invalid", "git-host.link-body-too-large", "git-host.link-conflict", "git-host.link-limit", "git-host.link-not-found", "git-host.link-not-proved", "git-host.link-person-required", "git-host.link-request-expired", "git-host.link-request-not-found", "git-host.link-request-used", "git-host.link-unavailable", "instance.invalid-id", "instance.not-found", "issuer.conflict", "issuer.invalid", "issuer.key-expired", "issuer.key-missing", "issuer.not-configured", "job.agent-denied", "job.frozen", "job.gate-enforced", "job.invalid", "job.limit", "job.log-not-available", "job.not-found", "job.policy-denied", "job.unsupported", "journal.batch-invalid", "journal.build-timeout", "journal.conflict", "journal.incomplete", "local-user.break-glass", "local-user.code-invalid", "local-user.current-password-required", "local-user.current-password-wrong", "local-user.demo-fixed", "local-user.exists", "local-user.hash-busy", "local-user.last-credential", "local-user.name-invalid", "local-user.not-found", "local-user.outside-reach", "local-user.own-account", "local-user.password-sign-in-off", "local-user.reason-required", "local-user.second-factor-required", "local-user.session-ended", "local-user.sign-in-failed", "local-user.unavailable", "lock.already-locked", "lock.changed", "lock.invalid-target", "lock.locked", "lock.not-holder", "lock.not-locked", "lock.reason-required", "lock.target-not-found", "maintenance.active-work", "maintenance.busy", "maintenance.held", "maintenance.in-maintenance", "maintenance.invalid-state", "maintenance.unavailable", "mfa.break-glass-reason-required", "mfa.ceremony-failed", "mfa.ceremony-not-open", "mfa.ceremony-wrong-person", "mfa.fresh-step-required", "mfa.passkey-exists", "mfa.passkey-invalid", "mfa.passkey-limit", "mfa.passkey-not-found", "mfa.passkey-suspended", "mfa.rate-limited", "mfa.session-required", "mfa.sign-in-failed", "mfa.sign-in-source-limit", "mfa.unavailable", "namespace.already-exists", "namespace.fenced", "namespace.invalid-name", "namespace.not-found", "namespace.not-home", "namespace.unavailable", "password.blocked", "password.form", "password.letters-and-digits", "password.too-long", "password.too-short", "placement.conflict", "placement.invalid-pattern", "placement.invalid-position", "placement.invalid-tool", "placement.no-match", "placement.rule-not-found", "placement.too-many-rules", "placement.unavailable", "preferences.body-invalid", "preferences.body-too-large", "preferences.field-invalid", "preferences.field-read-only", "preferences.field-unknown", "preferences.if-match-invalid", "preferences.media-type-unsupported", "preferences.person-not-found", "preferences.person-required", "preferences.precondition-failed", "preferences.unavailable", "principal.already-exists", "principal.disabled", "principal.invalid", "principal.last-break-glass", "principal.managed-by-directory", "principal.not-disabled", "principal.not-found", "principal.removal-alert-failed", "principal.removal-alert-marker-invalid", "principal.removal-alert-unrecorded", "principal.reserved-subject", "principal.unsupported", "profile.conflict", "profile.invalid", "profile.limit", "profile.not-found", "profile.routing-change-needs-open", "profile.schema-version", "registry.archive-set-refused", "registry.invalid", "registry.key-exists", "registry.key-invalid", "registry.key-limit", "registry.module-archive-refused", "registry.no-keys", "registry.not-found", "registry.not-staged", "registry.signature-invalid", "registry.signature-untrusted-key", "registry.too-large", "registry.version-exists", "request.body-invalid", "request.body-too-large", "request.content-type-unsupported", "request.idempotency-key-in-progress", "request.idempotency-key-invalid", "request.idempotency-key-lost", "request.idempotency-key-replayed-secret", "request.idempotency-key-required", "request.idempotency-key-reused", "request.idempotency-key-unavailable", "request.idempotency-key-unsupported", "request.if-match-invalid", "request.invalid-object", "request.invalid-path", "request.invalid-query", "request.page-size-invalid", "request.page-token-invalid", "request.precondition-failed", "request.precondition-required", "restore.blobs-missing", "restore.ended", "restore.live-blobs-damaged", "restore.live-blobs-missing", "restore.pre-backup-foreign", "restore.swapped", "runner.immutable", "runner.invalid", "runner.limit", "runner.not-found", "runner.pool-exists", "runner.pool-in-use", "runner.retired", "runner.token-used", "schema.binary-below-minimum", "secret.console-session", "secret.item-key-attempt-expired", "secret.item-key-blob-clock-skew", "secret.item-key-blob-mismatch", "secret.key-not-configured", "secret.not-decrypted", "secret.too-large", "self-service.blueprint-already-published", "self-service.blueprint-invalid", "self-service.blueprint-limit", "self-service.blueprint-not-found", "self-service.blueprint-stale", "self-service.blueprint-too-large", "server.component-not-found", "server.internal", "server.method-not-allowed", "server.route-not-found", "session.csrf", "session.other-site", "settings.key-unknown", "settings.locked", "settings.patch-invalid", "settings.retention-invalid", "settings.static-only", "settings.unavailable", "settings.value-invalid", "sign-in.failed", "sign-in.refused", "sign-in.unavailable", "sink.access-token", "sink.conflict", "sink.delivery-not-found", "sink.delivery-not-redeliverable", "sink.invalid", "sink.no-sender", "sink.no-url", "sink.not-found", "sink.platform-host", "sink.subscription-conflict", "sink.subscription-invalid", "sink.subscription-not-found", "sink.subscription-sink-not-found", "sink.test-limit-unavailable", "sink.test-rate-limited", "source.filter-invalid", "source.filter-unreadable", "stack.already-exists", "stack.has-resources", "stack.invalid-name", "stack.no-state", "stack.no-state-at-time", "stack.not-found", "stack.other-secrets-provider", "stack.resource-not-found", "stack.reveal-path-too-long", "state-version.budget-too-small", "state-version.busy", "state-version.checksum-mismatch", "state-version.invalid", "state-version.lineage-mismatch", "state-version.not-found", "state-version.resource-not-found", "state-version.reveal-path-too-long", "state-version.stale-serial", "state-version.too-large", "state-version.upload-denied", "store.failover-setting-invalid", "storecheck.cooldown", "storecheck.invalid-target", "storecheck.no-target", "storecheck.not-found", "storecheck.refused", "storecheck.running", "token.already-exists", "token.caller-not-person", "token.ended", "token.invalid", "token.kind-has-none", "token.not-found", "token.outside-reach", "token.requires-sign-in", "token.unsupported", "token.wrong-kind", "trigger.cycle", "trigger.disabled", "trigger.fire-conflict", "trigger.invalid", "trigger.not-found", "trigger.saver-denied", "trust-rule.already-exists", "trust-rule.ambiguous", "trust-rule.invalid", "trust-rule.issuer-refused", "trust-rule.limit", "trust-rule.no-match", "trust-rule.not-found", "trust-rule.principal-refused", "trust-rule.sign-in-required", "unit-settings.bulk-size", "unit-settings.connection-lacks-capability", "unit-settings.connection-unknown", "unit-settings.invalid", "unit-settings.not-found", "unit-settings.pool-unknown", "unit.client-encrypted", "unit.deleted-not-found", "unit.history-unavailable", "unit.invalid-name", "unit.name-taken", "unit.no-collection", "unit.no-state", "unit.not-found", "unit.state-moved", "update.attempt-expired", "update.checkpoint-conflict", "update.checkpoint-stale", "update.concurrent-modification", "update.conflict", "update.console-session", "update.delta-invalid", "update.invalid", "update.item-key-unavailable", "update.lease-expired", "update.lease-invalid", "update.not-found", "update.too-large", "update.wrong-state", "view.already-exists", "view.invalid", "view.limit", "view.not-found", "view.not-person", "worker.absent", "workspace.already-exists", "workspace.changed-concurrently", "workspace.client-encrypted", "workspace.invalid-name", "workspace.lock-mismatch", "workspace.locked", "workspace.no-state", "workspace.no-state-at", "workspace.not-found", "workspace.not-locked", "workspace.override-refused", "workspace.pending-state-version", "workspace.too-many-pending"] as const;
 
 export type ErrorCode = (typeof ErrorCodeValues)[number] | (string & {});
 
@@ -721,6 +756,7 @@ export interface ListGitHostLinksResponse {
 }
 
 export interface ListJobsResponse {
+  readonly damaged: number;
   readonly jobs: ReadonlyArray<Job>;
   readonly nextPageToken?: string;
 }
@@ -878,6 +914,10 @@ export interface MaintenanceActiveWorkError {
 export interface MaintenanceActiveWorkErrorArgs {
   readonly canceledCount: number;
   readonly workCount: number;
+}
+
+export interface MaintenanceState {
+  readonly state: string;
 }
 
 export interface ManualLock {
@@ -1340,6 +1380,184 @@ export interface SchemaBinaryBelowMinimumErrorArgs {
   readonly minimumVersion: string;
 }
 
+export interface SelfServiceBlueprint {
+  readonly delivery: SelfServiceDelivery;
+  readonly description?: string;
+  /** The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused. */
+  readonly exprVersion?: string;
+  readonly inputs: ReadonlyArray<SelfServiceInput>;
+  readonly name: string;
+  readonly platform: SelfServicePlatform;
+  readonly policy?: ReadonlyArray<SelfServicePolicyRule>;
+  readonly program: SelfServiceProgram;
+  readonly quotas?: ReadonlyArray<SelfServiceQuotaRule>;
+  readonly schemaVersion: number;
+  readonly sourcePrincipal?: string;
+  readonly title: string;
+  readonly tool: string;
+  readonly unitName: string;
+}
+
+export interface SelfServiceChoice {
+  readonly source?: SelfServiceSource;
+  readonly values?: ReadonlyArray<string>;
+}
+
+export interface SelfServiceComponent {
+  readonly package: string;
+  readonly type: string;
+  readonly version: string;
+}
+
+export interface SelfServiceDelivery {
+  readonly default: SelfServiceHomeKind;
+  readonly git?: SelfServiceGitDelivery;
+  readonly homes: ReadonlyArray<SelfServiceHomeKind>;
+}
+
+export interface SelfServiceDraft {
+  readonly blueprint: SelfServiceBlueprint;
+  readonly version: number;
+}
+
+export interface SelfServiceDraftWrite {
+  readonly version: number;
+}
+
+export interface SelfServiceFilter {
+  readonly equals: SelfServiceOperand;
+  readonly output: string;
+  readonly path?: string;
+}
+
+export interface SelfServiceGitDelivery {
+  readonly deliveries?: ReadonlyArray<SelfServiceJobDelivery>;
+  readonly repositories?: ReadonlyArray<string>;
+}
+
+/** The known values of SelfServiceHomeKind. */
+export const SelfServiceHomeKindValues = ["git", "opendustpan"] as const;
+
+export type SelfServiceHomeKind = (typeof SelfServiceHomeKindValues)[number] | (string & {});
+
+export interface SelfServiceInput {
+  readonly choice?: SelfServiceChoice;
+  /** Any JSON value. */
+  readonly default?: unknown;
+  readonly description?: string;
+  readonly maps: string;
+  readonly name: string;
+  readonly required?: boolean;
+  readonly title?: string;
+  readonly type: SelfServiceInputType;
+  readonly validate?: ReadonlyArray<SelfServiceRule>;
+}
+
+/** The known values of SelfServiceInputType. */
+export const SelfServiceInputTypeValues = ["string", "integer", "number", "boolean", "string-list"] as const;
+
+export type SelfServiceInputType = (typeof SelfServiceInputTypeValues)[number] | (string & {});
+
+/** The known values of SelfServiceJobDelivery. */
+export const SelfServiceJobDeliveryValues = ["review-request", "direct-push"] as const;
+
+export type SelfServiceJobDelivery = (typeof SelfServiceJobDeliveryValues)[number] | (string & {});
+
+export interface SelfServiceModule {
+  readonly connection?: string;
+  readonly directory?: string;
+  readonly repository?: string;
+  readonly revision?: string;
+  readonly source?: string;
+  readonly version?: string;
+}
+
+export interface SelfServiceOperand {
+  readonly input?: string;
+  /** A JSON scalar: a string, a number or a boolean. The server refuses an object or an array. */
+  readonly value?: string | number | boolean;
+}
+
+export interface SelfServiceOutputRef {
+  readonly output: string;
+  readonly path?: string;
+}
+
+export interface SelfServicePlatform {
+  readonly pool?: string;
+  readonly profile?: string;
+  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+/** The known values of SelfServicePolicyEffect. */
+export const SelfServicePolicyEffectValues = ["allow", "approve", "deny"] as const;
+
+export type SelfServicePolicyEffect = (typeof SelfServicePolicyEffectValues)[number] | (string & {});
+
+export interface SelfServicePolicyRule {
+  readonly approvals?: number;
+  readonly effect: SelfServicePolicyEffect;
+  readonly groups?: ReadonlyArray<string>;
+  readonly message?: string;
+  readonly when: string;
+}
+
+export interface SelfServiceProgram {
+  readonly component?: SelfServiceComponent;
+  readonly module?: SelfServiceModule;
+}
+
+export interface SelfServicePublishRequest {
+  readonly draftVersion: number;
+}
+
+/** The known values of SelfServiceQuotaKind. */
+export const SelfServiceQuotaKindValues = ["units", "requests", "expr"] as const;
+
+export type SelfServiceQuotaKind = (typeof SelfServiceQuotaKindValues)[number] | (string & {});
+
+export interface SelfServiceQuotaRule {
+  readonly kind: SelfServiceQuotaKind;
+  readonly max?: number;
+  readonly message?: string;
+  readonly rule?: string;
+  readonly scope?: SelfServiceQuotaScope;
+  readonly window?: string;
+}
+
+/** The known values of SelfServiceQuotaScope. */
+export const SelfServiceQuotaScopeValues = ["namespace", "requester"] as const;
+
+export type SelfServiceQuotaScope = (typeof SelfServiceQuotaScopeValues)[number] | (string & {});
+
+export interface SelfServiceRule {
+  readonly message: string;
+  readonly rule: string;
+}
+
+export interface SelfServiceSource {
+  readonly blueprint?: string;
+  readonly collection?: string;
+  readonly label?: SelfServiceOutputRef;
+  readonly value: SelfServiceOutputRef;
+  readonly where?: ReadonlyArray<SelfServiceFilter>;
+}
+
+export interface SelfServiceVersion {
+  readonly blueprint: string;
+  readonly draftVersion: number;
+  readonly exprVersion: string;
+  readonly namespace: string;
+  readonly number: number;
+  readonly publishedAt: string;
+  readonly publishedBy: string;
+  readonly retired: boolean;
+}
+
+export interface SelfServiceVersionList {
+  readonly versions: ReadonlyArray<SelfServiceVersion>;
+}
+
 export interface Setting {
   readonly apply: string;
   readonly databaseLayer: boolean;
@@ -1700,6 +1918,13 @@ export interface TrustRuleList {
   readonly rules: ReadonlyArray<TrustRule>;
 }
 
+export interface UnclaimedOperation {
+  readonly id: string;
+  readonly kind: string;
+  readonly seconds: number;
+  readonly state: string;
+}
+
 export interface Unit {
   readonly collection?: string;
   readonly consoleUrl?: string;
@@ -1770,7 +1995,7 @@ export interface UnitNoStateErrorArgs {
 export interface UnitOutputEntry {
   readonly name: string;
   readonly secret: boolean;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly value?: unknown;
 }
 
@@ -1899,13 +2124,13 @@ export interface UpdateContextRequest {
 }
 
 export interface UpdateNamespaceIssuerRequest {
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly allowBlockSubjects: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly includeActorName: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly issuerURL: unknown;
-  /** Any JSON value of a plain output. */
+  /** Any JSON value. */
   readonly subjectTemplate: unknown;
 }
 
@@ -1928,6 +2153,15 @@ export interface UpdatePreferencesRequest {
 
 export type UpdateSettingsRequest = Readonly<Record<string, unknown>>;
 
+export interface UpgradeCheck {
+  readonly appliedMigrations: ReadonlyArray<string>;
+  readonly keyEncryptionKey: boolean;
+  readonly minimumBinaryVersion: string;
+  readonly runningJournaledUpdates: number;
+  readonly schemaVersion: number;
+  readonly version: string;
+}
+
 export interface View {
   readonly createdAt: string;
   readonly id: string;
@@ -1944,6 +2178,16 @@ export interface ViewLabel {
 export interface ViewQuery {
   readonly labels: ReadonlyArray<ViewLabel>;
   readonly references: ReadonlyArray<string>;
+}
+
+export interface WorkerReport {
+  readonly components: ReadonlyArray<string>;
+  readonly leaseSeconds: number;
+  readonly oldestUnclaimedSeconds: number;
+  readonly operations: ReadonlyArray<UnclaimedOperation>;
+  readonly schedules: ReadonlyArray<DueSchedule>;
+  readonly silentSeconds: number;
+  readonly stuck: boolean;
 }
 
 export interface WorkloadToken {

@@ -4,12 +4,12 @@ title: OpenTofu support through the TFE-compatible remote API
 status: accepted
 adr: 25
 created: 2026-10-09
-was: proposed ADR 9
+was: proposed under number 9
 ---
 
 # RFC 1. OpenTofu support through the TFE-compatible remote API
 
-Status: accepted as ADR 25. It was proposed ADR 9 until ADR 15 moved every
+Status: accepted as ADR 25. It was proposed under number 9 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
 ## Context

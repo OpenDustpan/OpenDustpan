@@ -34,11 +34,13 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
+	changes := []groupCheck{}
+	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 	st := openStore(t)
 
 	svc, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: st, Guard: guard, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil, Store: st, Guard: guard, Namespaces: nil, Tokens: nil, GroupReach: nil, Now: nil,
+		NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

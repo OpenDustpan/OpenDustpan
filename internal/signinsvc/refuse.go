@@ -199,11 +199,23 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 	}
 
 	// Defense in depth: SignInPrincipal refuses a break-glass account, a
-	// principal of a namespace and a principal that is not a person, and the
-	// store refuses the last administrator. This check does not rely on any of
-	// them: the raw store disables any principal that it gets, so a faulty
-	// lookup must never reach it with a principal of another subject or kind.
-	if !isTarget(&p, subject) {
+	// principal of a namespace, a principal that is not a person and a
+	// temporary administrator, and the store refuses the last administrator.
+	// This check does not rely on any of them: the raw store disables any
+	// principal that it gets, so a faulty lookup must never reach it with a
+	// principal of another subject or kind, or with a temporary administrator.
+	target, targetErr := s.isTarget(ctx, &p, subject)
+	if targetErr != nil {
+		s.cfg.Logger.WarnContext(ctx, "disable refused: the read of the temporary administrators failed",
+			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+
+		return s.refuse(ctx, req, &refusal{
+			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject,
+			cause: errors.Join(cause, targetErr),
+		})
+	}
+
+	if !target {
 		return s.refuse(ctx, req, &refusal{
 			reason: ReasonDisableNotTarget, answer: AnswerFailed, idpSubject: a.Subject, cause: cause,
 		})

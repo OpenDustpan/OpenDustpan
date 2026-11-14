@@ -141,6 +141,13 @@ func TestDurableHeartbeatConformance(t *testing.T) {
 
 				return s.DurableOperations()
 			},
+			Seed: func(t *testing.T, owner string, at time.Time, lease time.Duration) {
+				t.Helper()
+
+				if err := postgres.SeedHeartbeatRow(t.Context(), first, owner, at, lease); err != nil {
+					t.Fatalf("seed heartbeat: %v", err)
+				}
+			},
 		}
 	})
 }

@@ -74,6 +74,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"append refuses a repeated notification ID", testAppendRepeatedID},
 		{"enqueue refuses a repeated or invalid delivery", testEnqueueID},
 		{"history shows only the deliveries of its scope", testHistoryScope},
+		{"history pages by the keyset cursor", testHistoryCursor},
+		{"history counts the deliveries at or before a cursor", testHistoryCountBefore},
 		{"record needs a live claim and changes only the result", testRecordClaim},
 		{"redeliver of a pending delivery is ErrConflict", testRedeliverPending},
 		{"put subscription refuses an invalid subscription", testSubscriptionValidate},
@@ -299,7 +301,7 @@ func attempt(d notify.Delivery, at time.Time) notify.Attempt {
 func history(t *testing.T, h Harness, scope namespace.Name) []notify.Delivery {
 	t.Helper()
 
-	got, err := h.Deliveries.History(t.Context(), scope, "sub-1", 10)
+	got, err := h.Deliveries.History(t.Context(), scope, "sub-1", nil, 10)
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
@@ -803,7 +805,7 @@ func testEnqueueID(t *testing.T, h Harness) {
 		t.Fatalf("History = %+v, want dlv-1 of ntf-1 in shop only", hist)
 	}
 
-	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", 10); err != nil || len(got) != 0 {
+	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", nil, 10); err != nil || len(got) != 0 {
 		t.Fatalf("History(other) = %+v (%v), want none", got, err)
 	}
 }
@@ -845,12 +847,127 @@ func testHistoryScope(t *testing.T, h Harness) {
 	subscribe(t, h, fence)
 	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
 
-	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", 10); !errors.Is(err, notify.ErrNotFound) {
+	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", nil, 10); !errors.Is(err, notify.ErrNotFound) {
 		t.Fatalf("History of a subscription of another scope = %+v (%v), want ErrNotFound", got, err)
 	}
 
 	if got := history(t, h, shop); ids(got) != "[dlv-1]" {
 		t.Fatalf("History(shop) = %s, want [dlv-1]", ids(got))
+	}
+}
+
+// testHistoryCursor pages the history with the keyset cursor. Many rows share
+// one NextAt, so a page edge between them is the case that a cursor of the
+// next time alone would skip or repeat.
+func testHistoryCursor(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	next := now()
+	rows := make([]notify.Delivery, 0, 6)
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, delivery(fmt.Sprintf("dlv-%d", i), fmt.Sprintf("ntf-%d", i), next))
+	}
+
+	rows = append(rows, delivery("dlv-0", "ntf-0", next.Add(-time.Minute)))
+	enqueue(t, h, fence, rows...)
+
+	// The newest next time comes first, and the greatest ID first among the
+	// rows that share it.
+	var (
+		seen  []string
+		sizes []int
+		after *notify.DeliveryCursor
+	)
+
+	for pages := 0; ; pages++ {
+		if pages > 4 {
+			t.Fatalf("the history by cursor does not end: %s", seen)
+		}
+
+		got, err := h.Deliveries.History(t.Context(), shop, "sub-1", after, 2)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+
+		if len(got) == 0 {
+			break
+		}
+
+		sizes = append(sizes, len(got))
+		for i := range got {
+			seen = append(seen, got[i].ID)
+		}
+
+		last := got[len(got)-1]
+		after = &notify.DeliveryCursor{NextAt: last.NextAt, ID: last.ID}
+	}
+
+	if want := "[2 2 2]"; fmt.Sprint(sizes) != want {
+		t.Fatalf("page sizes = %s, want %s: a page edge skips or repeats rows of one next time",
+			fmt.Sprint(sizes), want)
+	}
+
+	if want := "[dlv-5 dlv-4 dlv-3 dlv-2 dlv-1 dlv-0]"; fmt.Sprint(seen) != want {
+		t.Fatalf("history by cursor = %s, want %s", fmt.Sprint(seen), want)
+	}
+}
+
+// testHistoryCountBefore counts the deliveries at or before a cursor, capped
+// at the limit. The count bounds a read of the history.
+func testHistoryCountBefore(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	next := now()
+	rows := make([]notify.Delivery, 0, 6)
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, delivery(fmt.Sprintf("dlv-%d", i), fmt.Sprintf("ntf-%d", i), next))
+	}
+
+	rows = append(rows, delivery("dlv-0", "ntf-0", next.Add(-time.Minute)))
+	enqueue(t, h, fence, rows...)
+
+	// The history order is dlv-5, dlv-4, dlv-3, dlv-2, dlv-1, dlv-0.
+	cursor := func(id string, at time.Time) *notify.DeliveryCursor {
+		return &notify.DeliveryCursor{NextAt: at, ID: id}
+	}
+
+	cases := []struct {
+		name  string
+		after *notify.DeliveryCursor
+		max   int
+		want  int
+	}{
+		{"no cursor", nil, 10, 0},
+		{"a cursor in the middle", cursor("dlv-3", next), 10, 3},
+		{"a cursor at the oldest", cursor("dlv-0", next.Add(-time.Minute)), 10, 6},
+		{"a cursor past the oldest", cursor("dlv-9", next.Add(-time.Hour)), 10, 6},
+		{"a cursor newer than every delivery", cursor("dlv-9", next.Add(time.Hour)), 10, 0},
+		{"the cap", cursor("dlv-3", next), 2, 2},
+		{"a cap above the rows", cursor("dlv-3", next), 100, 3},
+	}
+
+	for i := range cases {
+		got, err := h.Deliveries.CountBefore(t.Context(), shop, "sub-1", cases[i].after, cases[i].max)
+		if err != nil {
+			t.Fatalf("CountBefore of %s: %v", cases[i].name, err)
+		}
+
+		if got != cases[i].want {
+			t.Fatalf("CountBefore of %s = %d, want %d", cases[i].name, got, cases[i].want)
+		}
+	}
+
+	if got, err := h.Deliveries.CountBefore(t.Context(), other, "sub-1", cursor("dlv-3", next), 10); !errors.Is(
+		err,
+		notify.ErrNotFound,
+	) {
+		t.Fatalf("CountBefore of a subscription of another scope = %d (%v), want ErrNotFound", got, err)
 	}
 }
 

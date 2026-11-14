@@ -152,6 +152,14 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+      # A pull request with the label nolint-approved skips this step. The
+      # three-dot diff needs the history back to the merge base, so the step
+      # fetches main with its history; the checkout of the job stays shallow.
+      - name: No added suppression marker
+        if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'nolint-approved') }}
+        run: |
+          git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          make nolint-check BASE=origin/main
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums

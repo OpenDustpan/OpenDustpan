@@ -249,7 +249,7 @@ func (s deletedReadScope) ReadableUnits(
 		return false, nil, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return true, nil, nil
 	}
 

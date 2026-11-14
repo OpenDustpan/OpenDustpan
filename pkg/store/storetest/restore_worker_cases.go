@@ -1447,7 +1447,7 @@ func testWorkerForceAudit(t *testing.T, newStore RestoreFactory) {
 	}
 
 	want := "restore " + id.String() + " claim token " + strconv.FormatInt(enter.Token, 10) +
-		" canceled the active work: " + canceledUnit
+		" attempted to cancel the active work: " + canceledUnit
 	if n := r.restoreEntries(t, want); n != 1 {
 		t.Fatalf("audit entries of the canceled work = %d, want 1 that names %q", n, want)
 	}

@@ -44,7 +44,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	h.logFailure(ctx, status, err)
 
 	h.logFenced(ctx, err)
-	h.logRefused(ctx, err, body.Message)
+	h.logRefused(ctx, err, status, body.Code, body.Message)
 
 	if status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
@@ -57,7 +57,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
 	wr := problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classifyManagement}
 
-	h.logRefused(ctx, err, wr.Problem(err).Message)
+	p := wr.Problem(err)
+	h.logRefused(ctx, err, p.Status, p.Code, p.Message)
 	wr.Write(ctx, w, err)
 }
 
@@ -69,23 +70,30 @@ func (h *Handler) logFenced(ctx context.Context, err error) {
 	}
 }
 
-// logRefused logs the wrap text of a protocol error that the answer does not
-// hold. A fence has its own line, and an unknown error holds no text for the
-// log: its answer is "internal error" and logFailure records the status. A
-// refusal that any anonymous caller can cause logs at Debug, so that a flood
-// of forged requests does not fill the log.
-func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
+// logRefused logs a refusal whose answer does not hold its error text. A fence
+// has its own line, and an unknown error holds no text for the log: its answer
+// is "internal error" and logFailure records the status. A refusal that any
+// anonymous caller can cause logs at Debug without the text of its error, so
+// that a flood of forged requests does not fill the log and no wrapped secret
+// reaches it. Other refusals log the text at Warn.
+func (h *Handler) logRefused(ctx context.Context, err error, status int, code, sent string) {
 	if sent == err.Error() || sent == internalMessage || errors.Is(err, namespace.ErrFenced) {
 		return
 	}
 
 	if refusedLevel(err) == slog.LevelDebug {
-		h.logger.DebugContext(ctx, "runner request refused", slog.String("error", err.Error()))
+		// Defense in depth: a caller without credentials causes this line, and the
+		// wrap of its error can hold a session or proof detail. The line names the
+		// status and the code only, and this check stays so that a new caller
+		// cannot add the text of err.
+		h.logger.DebugContext(ctx, "runner request refused",
+			slog.Int("status", status), slog.String("code", code))
 
 		return
 	}
 
-	h.logger.WarnContext(ctx, "runner request refused", slog.String("error", err.Error()))
+	h.logger.WarnContext(ctx, "runner request refused",
+		slog.Int("status", status), slog.String("code", code), slog.String("error", err.Error()))
 }
 
 // refusedLevel returns the log level of a refusal. Debug is for the errors
@@ -128,6 +136,12 @@ func classifyProtocol(err error) (int, protocol.Error) {
 	// after the Retry-After time, whatever else the error wraps.
 	if errors.Is(err, namespace.ErrUnavailable) {
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrUnavailable)
+	}
+
+	// A plan that read an old state version failed its phase. The runner does
+	// not try the plan again.
+	if errors.Is(err, job.ErrPlanStale) {
+		return mk(http.StatusConflict, protocol.ErrorPlanStale, job.ErrPlanStale)
 	}
 
 	switch {
@@ -198,7 +212,10 @@ func classifyProtocolOther(
 		}
 	case errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
-		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable, namespace.ErrNotHome)
+		return mk(
+			http.StatusServiceUnavailable, protocol.ErrorUnavailable,
+			namespace.ErrNotHome, maintenance.ErrInMaintenance,
+		)
 	case errors.Is(err, schema.ErrBinaryBelowMinimum):
 		// The text names both versions and nothing else, so a runner can show it.
 		message := schema.ErrBinaryBelowMinimum.Error()

@@ -143,6 +143,15 @@ func sealAll(t *testing.T, svc *secret.Service, scope secret.Scope, plain []byte
 	return out
 }
 
+// closeOpened closes an opened stream, which clears the key that it holds.
+func closeOpened(t *testing.T, opened io.Closer) {
+	t.Helper()
+
+	if err := opened.Close(); err != nil {
+		t.Errorf("close opened stream: %v", err)
+	}
+}
+
 // openAll opens sealed and returns the plaintext.
 func openAll(t *testing.T, svc *secret.Service, scope secret.Scope, sealed []byte) []byte {
 	t.Helper()
@@ -151,6 +160,8 @@ func openAll(t *testing.T, svc *secret.Service, scope secret.Scope, sealed []byt
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
+
+	defer closeOpened(t, opened)
 
 	plain, err := io.ReadAll(opened)
 	if err != nil {
@@ -204,6 +215,8 @@ func testSealStreamBindsScope(t *testing.T, s Store) {
 		return
 	}
 
+	defer closeOpened(t, opened)
+
 	if _, err := io.ReadAll(opened); err == nil {
 		t.Fatal("open in another scope succeeded, want ErrDecrypt")
 	} else if !errors.Is(err, secret.ErrDecrypt) {
@@ -246,6 +259,7 @@ func testSealStreamTamper(t *testing.T, s Store) {
 		}
 
 		_, err = io.ReadAll(opened)
+		closeOpened(t, opened)
 		if err == nil {
 			t.Errorf("%s: tampered stream opened, want ErrDecrypt", name)
 
@@ -338,6 +352,8 @@ func testSealStateBindsVersion(t *testing.T, s Store) {
 		t.Fatalf("open state of its own version: %v", err)
 	}
 
+	defer closeOpened(t, opened)
+
 	got, err := io.ReadAll(opened)
 	if err != nil || !bytes.Equal(got, plain) {
 		t.Fatalf("own version opened %q, err %v", got, err)
@@ -347,6 +363,8 @@ func testSealStateBindsVersion(t *testing.T, s Store) {
 	if err != nil {
 		t.Fatalf("open state of another version: %v", err)
 	}
+
+	defer closeOpened(t, swapped)
 
 	_, err = io.ReadAll(swapped)
 	if !errors.Is(err, secret.ErrDecrypt) {
@@ -382,6 +400,7 @@ func testSealStreamTruncated(t *testing.T, s Store) {
 		opened, err := svc.OpenStream(t.Context(), scope, []byte(streamBindingText), bytes.NewReader(sealed[:cut]))
 		if err == nil {
 			_, err = io.ReadAll(opened)
+			closeOpened(t, opened)
 		}
 
 		if !errors.Is(err, secret.ErrDecrypt) {

@@ -53,6 +53,15 @@ func consoleHandler(dir string, headers []consoleHeader) (http.Handler, error) {
 			return
 		}
 
+		// Defense in depth: the os.Root file system also refuses such a name.
+		// This check stays so that the answer is a client error and no file
+		// lookup runs.
+		if strings.ContainsFunc(r.URL.Path, unicode.IsControl) {
+			writeRouteError(w, http.StatusBadRequest, "invalid path", routeAnswer(errcode.RequestInvalidPath))
+
+			return
+		}
+
 		// The name goes only to fsys, which is an os.Root file system: it
 		// refuses each path that leaves the console directory.
 		// nosemgrep: go.lang.security.filepath-clean-misuse.filepath-clean-misuse

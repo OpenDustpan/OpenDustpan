@@ -66,6 +66,8 @@ A purge of the scheduled retention expiry has the subject `@server`. The subject
 acted: a person, a service or a workload. A purge of an expiry run that a
 person starts through the API has that person as the subject.
 
+A stack rename writes one entry with the old and the new name in `changes`.
+
 Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
@@ -235,7 +237,8 @@ These refusals write an entry:
 
 - An OpenTofu `UNLOCK` that names a lock that is not the current lock, and an `UNLOCK` that finds the lock changed or held by another principal. The `action` is `unit:lock`.
 - The removal of a manual lock by a principal that is not the holder, and a removal that finds the lock changed. The `action` is the action of the route: `unit:lock` for the removal, `unit:manage` for the force-unlock.
-- A grant or a role that gives more than the principal who makes it holds. The `action` is the action of the route, and the `reason` is `grant gives more than the granter holds`.
+- A grant, a role or a membership add that gives more than the principal who makes it holds. The `action` is the action of the route. A refusal that names the missing actions writes `outside the reach of the caller: ` and then each missing action with its object, for example `outside the reach of the caller: server:backup on the installation`. A refusal with no missing action keeps `grant gives more than the granter holds`.
+- A create or a rotation of a token whose service principal reaches outside the reach of the caller. The `reason` names the missing actions and their objects, as above.
 - A state write or a force-unlock that the workspace refuses because the forced-write or unlocked-write switch is off or not granted. A write without the lock to a workspace that no one has locked is such a refusal in two cases. The switch is off, or the principal lacks `unit:write-unlocked`. The client still gets its lock conflict. A write that is refused only because another principal holds the lock writes no entry here. The `action` is `unit:write-forced` or `unit:write-unlocked`, the `kind` is `override` and the `reason` is `override refused`.
 
 The `reason` says which refusal it was.
@@ -809,10 +812,10 @@ The full entry stays in the server audit log, and the chain check on the server 
 ### Webhook
 
 The URL must use HTTPS.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
-If you can, block the metadata endpoints in your network.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 Set the signing key in `DUSTPAN_AUDIT_WEBHOOK_SECRET`, or in a file that `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` names.
 Only the owner of the file can read it.
 Each request carries two headers:
@@ -832,9 +835,10 @@ The URL is the base address of the receiver, for example `otlp:https://collector
 The server adds the path `/v1/logs`, unless the path of the URL already ends with it.
 A query in the URL stays.
 The URL must use HTTPS and must not hold a user name or a password.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 
 Each request is one `ExportLogsServiceRequest` with the header `Content-Type: application/json`.
 It holds one resource with the attribute `service.name` set to `opendustpan`, and one log record for each entry:

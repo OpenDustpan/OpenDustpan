@@ -120,6 +120,9 @@ type Tx interface {
 	Get(ctx context.Context, scope gate.Scope, kind, id string) (Row, bool, error)
 	// List returns the rows of one kind in the scope, ordered by ID.
 	List(ctx context.Context, scope gate.Scope, kind string) ([]Row, error)
+	// ListEveryScope returns every row of one kind, of every scope, with
+	// the rows of one scope ordered by ID.
+	ListEveryScope(ctx context.Context, kind string) ([]Located, error)
 	// ListScope returns every row of the scope, ordered by kind and ID.
 	ListScope(ctx context.Context, scope gate.Scope) ([]Row, error)
 	// Count returns the count of rows of one kind in the scope.

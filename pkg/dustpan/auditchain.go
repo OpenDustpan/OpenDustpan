@@ -1298,6 +1298,7 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 	}
 
 	restoring := c.restoring(ctx)
+	cycle := c.cycleEpoch(ctx)
 
 	var (
 		invalid int
@@ -1305,7 +1306,7 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 	)
 
 	for _, scope := range scopes {
-		ok, err := c.checkScope(ctx, scope)
+		ok, err := c.checkScope(ctx, scope, cycle)
 		if err != nil {
 			// A failed call checks nothing: it is not a mismatch.
 			errs = append(errs, fmt.Errorf("check %s: %w", scope, err))
@@ -1323,7 +1324,7 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 			continue
 		}
 
-		_, err = c.checkpoints.Write(ctx, scope, c.chainNow())
+		_, err = cycle.write(ctx, c.checkpoints, scope, c.chainNow())
 
 		switch {
 		case errors.Is(err, audit.ErrCheckpointMismatch):
@@ -1360,10 +1361,52 @@ func (c *auditChain) restoring(ctx context.Context) bool {
 	return running
 }
 
+// cycleEpoch holds the epoch that one background cycle read once. known is
+// false when that read failed: each scope then reads the epoch itself, so the
+// error reaches the result of the scope as before.
+type cycleEpoch struct {
+	epoch int64
+	known bool
+}
+
+// cycleEpoch reads the current epoch once for a whole cycle.
+func (c *auditChain) cycleEpoch(ctx context.Context) cycleEpoch {
+	epoch, err := c.checkpoints.Epoch(ctx)
+	if err != nil {
+		return cycleEpoch{epoch: 0, known: false}
+	}
+
+	return cycleEpoch{epoch: epoch, known: true}
+}
+
+// verify checks the checkpoints of scope with the epoch of the cycle.
+func (e cycleEpoch) verify(
+	ctx context.Context, cps *audit.Checkpoints, scope namespace.Name,
+) (audit.CheckpointResult, error) {
+	if !e.known {
+		return cps.Verify(ctx, scope)
+	}
+
+	return cps.VerifyAt(ctx, scope, e.epoch)
+}
+
+// write signs a checkpoint of scope with the epoch of the cycle. The write
+// itself reads the epoch again before it stores, so an epoch that changed
+// during the cycle stores nothing.
+func (e cycleEpoch) write(
+	ctx context.Context, cps *audit.Checkpoints, scope namespace.Name, now time.Time,
+) (bool, error) {
+	if !e.known {
+		return cps.Write(ctx, scope, now)
+	}
+
+	return cps.WriteAt(ctx, scope, now, e.epoch)
+}
+
 // checkScope checks the chain of scope and the stored checkpoints of
 // scope. It answers false when either does not match, and an error when a
 // check fails. It never signs: the caller signs the head after both match.
-func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name) (bool, error) {
+func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name, cycle cycleEpoch) (bool, error) {
 	chain, err := c.entries.Check(ctx, scope)
 	if err != nil {
 		return false, fmt.Errorf("chain: %w", err)
@@ -1373,7 +1416,7 @@ func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name) (bool
 		return false, nil
 	}
 
-	result, err := c.checkpoints.Verify(ctx, scope)
+	result, err := cycle.verify(ctx, c.checkpoints, scope)
 	if err != nil {
 		return false, fmt.Errorf("checkpoints: %w", err)
 	}

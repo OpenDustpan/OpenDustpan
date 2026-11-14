@@ -393,13 +393,14 @@ func endRecordTx(ctx context.Context, e audit.Entry, subject access.Subject, end
 func (s *Store) CreateGroup(ctx context.Context, g principal.Group, e audit.Entry) error {
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		n, err := q.CreateGroup(ctx, db.CreateGroupParams{
-			ID:          g.ID,
-			Name:        g.Name,
-			NameKey:     groupNameKey(g.Name),
-			Description: g.Description,
-			Source:      string(g.Source),
-			CreatedAtMs: codec.Millis(g.CreatedAt),
-			UpdatedAtMs: codec.Millis(g.UpdatedAt),
+			ID:                       g.ID,
+			Name:                     g.Name,
+			NameKey:                  groupNameKey(g.Name),
+			Description:              g.Description,
+			Source:                   string(g.Source),
+			CreatedAtMs:              codec.Millis(g.CreatedAt),
+			UpdatedAtMs:              codec.Millis(g.UpdatedAt),
+			ClosedToIdentityProvider: g.ClosedToIdentityProvider,
 		})
 		if err != nil {
 			return fmt.Errorf("insert group: %w", err)
@@ -466,11 +467,12 @@ func (s *Store) UpdateGroup(ctx context.Context, g principal.Group, e audit.Entr
 		}
 
 		n, err := q.UpdateGroup(ctx, db.UpdateGroupParams{
-			Name:        g.Name,
-			NameKey:     key,
-			Description: g.Description,
-			UpdatedAtMs: codec.Millis(g.UpdatedAt),
-			ID:          g.ID,
+			Name:                     g.Name,
+			NameKey:                  key,
+			Description:              g.Description,
+			ClosedToIdentityProvider: g.ClosedToIdentityProvider,
+			UpdatedAtMs:              codec.Millis(g.UpdatedAt),
+			ID:                       g.ID,
 		})
 		if isUniqueViolation(err) {
 			return principal.ErrAlreadyExists
@@ -762,6 +764,35 @@ func (s *Store) ListGroupsOf(
 	return out, total, nil
 }
 
+// ListActiveGroupNamesOf implements principal.Store. It reads the principal
+// and the names in one REPEATABLE READ snapshot.
+func (s *Store) ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error) {
+	var out []string
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		principals, err := q.PrincipalExists(ctx, principalID)
+		if err != nil {
+			return fmt.Errorf("count principals: %w", err)
+		}
+
+		if principals == 0 {
+			return principal.ErrNotFound
+		}
+
+		out, err = q.ListActiveGroupNamesOfPrincipal(ctx, principalID)
+		if err != nil {
+			return fmt.Errorf("select active group names of principal: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // principalFields are the columns of a principal that every read selects.
 type principalFields struct {
 	id, subject, displayName, kind, source string
@@ -809,13 +840,14 @@ func groupRow[T db.GetGroupRow | db.ListGroupsRow | db.ListGroupsOfPrincipalRow]
 // groupOf maps the columns of a group to a group.
 func groupOf(row db.GetGroupRow) principal.Group {
 	return principal.Group{
-		CreatedAt:   codec.FromMillis(row.CreatedAtMs),
-		UpdatedAt:   codec.FromMillis(row.UpdatedAtMs),
-		ID:          row.ID,
-		Name:        row.Name,
-		Description: row.Description,
-		Source:      principal.Source(row.Source),
-		MemberCount: row.MemberCount,
+		CreatedAt:                codec.FromMillis(row.CreatedAtMs),
+		UpdatedAt:                codec.FromMillis(row.UpdatedAtMs),
+		ID:                       row.ID,
+		Name:                     row.Name,
+		Description:              row.Description,
+		Source:                   principal.Source(row.Source),
+		MemberCount:              row.MemberCount,
+		ClosedToIdentityProvider: row.ClosedToIdentityProvider,
 	}
 }
 

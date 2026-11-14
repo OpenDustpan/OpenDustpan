@@ -118,7 +118,9 @@ func prepareAuthFixture(t *testing.T, f fixture) authFixtureIDs {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	ws, err := f.srv.Workspaces().Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := f.srv.Workspaces().Create(
+		ctx, workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

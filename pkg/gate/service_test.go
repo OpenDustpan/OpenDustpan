@@ -201,7 +201,7 @@ func (g grants) Authorize(_ context.Context, p identity.Principal, _ identity.Ac
 }
 
 func (grants) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: true}, nil
+	return identity.Every(), nil
 }
 
 // TestLimitedAuthorizerScopeNotExact proves that the decorator does not say
@@ -228,9 +228,12 @@ func TestLimitedAuthorizer(t *testing.T) {
 		t.Fatalf("Authorize(break-glass account) = %v, want nil: it is outside the access limits", err)
 	}
 
+	// A namespace is not checked yet: that failure is not an access refusal, so
+	// it keeps its cause and does not match identity.ErrDenied. The call is
+	// still refused.
 	err = auth.Authorize(t.Context(), principal("admin", true), identity.ActionNamespaceRead, obj)
-	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, gate.ErrUnavailable) {
-		t.Fatalf("Authorize(admin) = %v, want the access limits to hold for an admin", err)
+	if errors.Is(err, identity.ErrDenied) || !errors.Is(err, gate.ErrUnavailable) {
+		t.Fatalf("Authorize(admin) = %v, want ErrUnavailable without identity.ErrDenied", err)
 	}
 
 	err = auth.Authorize(t.Context(), principal("mallory", false), identity.ActionNamespaceRead, obj)
@@ -239,8 +242,60 @@ func TestLimitedAuthorizer(t *testing.T) {
 	}
 
 	scope, err := auth.ListObjects(t.Context(), principal("admin", true), identity.ActionNamespaceRead)
-	if err != nil || !scope.All {
+	if err != nil || !scope.CoversEveryObject() {
 		t.Fatalf("ListObjects() = %+v, %v, want the scope of the grants", scope, err)
+	}
+}
+
+// TestLimitedAuthorizerKeepsAnInfrastructureFailure checks that a unit source
+// that does not answer fails the call with its own cause. It is a store
+// failure, not an access refusal, so it does not match identity.ErrDenied.
+func TestLimitedAuthorizerKeepsAnInfrastructureFailure(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swFailingUnits{}, nil)
+	auth := gate.LimitedAuthorizer(grants{allow: map[string]bool{"ci": true}}, e.svc)
+
+	unit, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = auth.Authorize(t.Context(), principal("ci", false), identity.ActionUnitWrite, unit)
+	if err == nil || !errors.Is(err, gate.ErrUnavailable) || !errors.Is(err, errUnitsDown) ||
+		errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize(unit of an unreadable source) = %v, "+
+			"want ErrUnavailable with the source error and no identity.ErrDenied", err)
+	}
+}
+
+// TestLimitedAuthorizerErrorKinds checks the classes of the errors of the
+// access limits. A refusal of a limit matches ErrLimited and identity.ErrDenied.
+// A failure that is not a refusal keeps its own cause and does not match
+// identity.ErrDenied.
+func TestLimitedAuthorizerErrorKinds(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putLimit(t, swUnitScope(t, "web"), "limit-1", forbidServices)
+
+	auth := gate.LimitedAuthorizer(grants{allow: map[string]bool{"ci": true}}, e.svc)
+
+	unit, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = auth.Authorize(t.Context(), principal("ci", false), identity.ActionUnitWrite, unit)
+	if !errors.Is(err, gate.ErrLimited) || !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize(limited unit) = %v, want ErrLimited and identity.ErrDenied", err)
+	}
+
+	ns := identity.NamespaceObject("acme")
+
+	err = auth.Authorize(t.Context(), principal("ci", false), identity.ActionNamespaceRead, ns)
+	if err == nil || !errors.Is(err, gate.ErrUnavailable) || errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize(namespace) = %v, want ErrUnavailable without identity.ErrDenied", err)
 	}
 }
 

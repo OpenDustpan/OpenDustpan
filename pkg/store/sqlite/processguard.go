@@ -12,7 +12,9 @@ const guardSuffix = "-lock"
 
 // processGuard holds the guard file of one open store. The operating system
 // releases the lock when the file closes or the process ends, so a crash
-// leaves no stale lock.
+// leaves no stale lock. The release unlocks the file before it closes it, so
+// a copy of the descriptor in a child process that has not yet run exec does
+// not keep the lock.
 type processGuard struct {
 	file *os.File
 }
@@ -35,19 +37,28 @@ func acquireGuard(abs string) (*processGuard, error) {
 	return &processGuard{file: file}, nil
 }
 
-// release closes the guard file, which releases the lock. The file stays on
-// disk, so a later store locks the same file.
+// release unlocks the guard file and closes it. The unlock runs first, so a
+// copy of the descriptor in a child process that has not yet run exec does
+// not keep the lock. The file stays on disk, so a later store locks the same
+// file.
 func (g *processGuard) release() error {
 	if g == nil || g.file == nil {
 		return nil
 	}
 
-	err := g.file.Close()
+	file := g.file
 	g.file = nil
 
-	if err != nil {
-		return fmt.Errorf("release database lock: %w", err)
+	unlockErr := unlockFile(file)
+	closeErr := file.Close()
+
+	if unlockErr != nil {
+		unlockErr = fmt.Errorf("release database lock: %w", unlockErr)
 	}
 
-	return nil
+	if closeErr != nil {
+		closeErr = fmt.Errorf("release database lock: %w", closeErr)
+	}
+
+	return errors.Join(unlockErr, closeErr)
 }

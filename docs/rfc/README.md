@@ -29,7 +29,7 @@ title: What sits under a namespace
 status: draft          # draft | discussing | accepted | dropped
 created: 2026-10-10
 adr: 16                # only when accepted
-was: proposed ADR 9    # only for RFCs 1 to 3, which were proposed ADRs
+was: proposed under number 9    # only for RFCs 1 to 3, which were proposed ADRs
 ```
 
 The front matter and the first lines of prose give the same state. Change
@@ -42,8 +42,8 @@ both together.
 - `make docs-lint` does not check RFCs, so that writing one costs little. The
   ADR that comes from an RFC follows ADR 14.
 - RFCs 1 to 3 were proposed ADRs 9 to 11. ADRs 12 and 13 cite those numbers.
-  ADR 1 forbids edits to accepted ADRs, so read "ADR 9" there as RFC 1,
-  "ADR 10" as RFC 2 and "ADR 11" as RFC 3.
+  ADR 1 forbids edits to accepted ADRs, so read the numbers 9, 10 and 11
+  there as RFC 1, RFC 2 and RFC 3.
 
 ## Index
 
@@ -85,7 +85,7 @@ both together.
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | accepted (ADRs 27, 246, 283) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
-| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
+| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79; open design points in RFC 126 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft; saved views in RFC 100, a saved view is a server object with an API (ADR 266) |
@@ -114,7 +114,7 @@ both together.
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | accepted |
 | [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | accepted |
 | [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | accepted |
-| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244) |
+| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244); no move between namespaces (ADR 346); moves between installations in RFC 126 |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
 | [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings and one settings API accepted (ADR 212), the namespace as the tenant (ADR 215) and a lock that turns a feature off (ADR 219) |
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
@@ -140,7 +140,7 @@ both together.
 | [90](0090-scanner-and-linter-reports.md) | Reports of IaC scanners and linters on stacks and workspaces, SARIF first | draft |
 | [91](0091-plan-review-at-scale.md) | Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire | discussing |
 | [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
-| [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | discussing; proposal of 2026-10-30 |
+| [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | discussing; owner decision of 2026-11-07 (ADR 351) |
 | [94](0094-ci-shim-secrets-at-run-time-out-of-state.md) | The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state | draft |
 | [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft; provider actions wait for a supported tool that has them, slice 1 no code (ADR 260) |
 | [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |
@@ -164,9 +164,14 @@ both together.
 | [114](0114-review-requests-and-change-orders.md) | Review requests and change orders, one integration with the Git host | accepted (ADR 299) |
 | [115](0115-terragrunt-run-all-fan-out-on-runners.md) | Terragrunt run-all fan-out on runners | draft |
 | [116](0116-background-blob-families-are-measured-by-total-job-time.md) | Background blob families are measured by total job time | draft; proposal of 2026-11-01 |
+| [117](0117-the-first-administrator-of-an-installation.md) | The first administrator of an installation with no person who can make a grant | discussing |
 | [118](0118-restore-repairs-damaged-blobs.md) | A restore that repairs damaged live blobs | discussing |
 | [119](0119-gates-on-facts-that-an-operation-does-not-fill.md) | Gates that read a fact which an operation does not fill | discussing |
 | [120](0120-split-the-hot-files-by-area.md) | Split the hot files by area, with one explicit list of the areas | accepted (ADR 326) |
 | [121](0121-agent-principals.md) | Agent principals, delegation and the kind agent | accepted |
 | [122](0122-gates-at-every-step-of-an-untrusted-plan.md) | Gates at every step of a plan that runs untrusted code with a privileged credential | accepted |
+| [123](0123-pluggable-sweepers.md) | Pluggable sweepers: a protocol, an SDK and a repository for sweep plugins | discussing |
 | [124](0124-codegen-for-discovered-resources.md) | Code for unmanaged resources: a verified floor in each language, and a placement engine | discussing |
+| [125](0125-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
+| [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |
+| [128](0128-reach-growth-and-token-managers.md) | Reach growth and token managers | discussing |

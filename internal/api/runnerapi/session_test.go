@@ -403,8 +403,9 @@ func checkAssignment(t *testing.T, a *protocol.Assignment) {
 	t.Helper()
 
 	if a.Namespace != "acme" || a.Tool != "opentofu" || a.Job != phaseKey || a.Phase != string(job.PhasePlan) ||
-		a.ServerURL != serverURL || a.GitCredentials != string(runner.GitCredentialsNone) {
-		t.Fatalf("assignment = %+v, want the plan phase of the unit with git credentials none", a)
+		a.ServerURL != serverURL || a.GitCredentials != string(runner.GitCredentialsNone) ||
+		a.Profile != "prf-default" {
+		t.Fatalf("assignment = %+v, want the plan phase of the unit with git credentials none and the profile", a)
 	}
 
 	names := make([]string, 0, len(a.Steps))

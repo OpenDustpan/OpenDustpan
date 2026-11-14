@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/forge"
 )
@@ -235,5 +236,52 @@ func TestCompareMapsTheStatus(t *testing.T) {
 				t.Fatalf("Compare = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestCompareCutsThePatchAtARuneBoundary checks that a limit that falls inside
+// a multi-byte character cuts the patch at the start of that character.
+func TestCompareCutsThePatchAtARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	f := cannedForge(t, map[string]hostAnswer{
+		comparePath(1): compareWith("ahead", baseSHA, map[string]any{
+			"filename": "a.txt",
+			"status":   "modified",
+			"patch":    "@@ -1 +1 @@\n-héllo\n+wörld 日本😀\n",
+		}),
+	})
+
+	full, err := f.Compare(t.Context(), "acme/infra", baseSHA, headSHA, 1<<20)
+	if err != nil {
+		t.Fatalf("Compare = %v", err)
+	}
+
+	if full.Truncated {
+		t.Fatal("Compare at a large limit = truncated; want the full patch")
+	}
+
+	for limit := 1; limit <= len(full.Patch); limit++ {
+		got, err := f.Compare(t.Context(), "acme/infra", baseSHA, headSHA, int64(limit))
+		if err != nil {
+			t.Errorf("Compare with the limit %d = %v", limit, err)
+			continue
+		}
+
+		if !utf8.Valid(got.Patch) {
+			t.Errorf("Compare with the limit %d = a patch that is not valid UTF-8: %q", limit, got.Patch)
+		}
+
+		if !bytes.HasPrefix(full.Patch, got.Patch) {
+			t.Errorf("Compare with the limit %d = a patch that is not a prefix of the full patch: %q", limit, got.Patch)
+		}
+
+		if len(got.Patch) > limit {
+			t.Errorf("Compare with the limit %d = a patch of %d bytes", limit, len(got.Patch))
+		}
+
+		if got.Truncated != (limit < len(full.Patch)) {
+			t.Errorf("Compare with the limit %d = truncated %v; want %v", limit, got.Truncated, limit < len(full.Patch))
+		}
 	}
 }

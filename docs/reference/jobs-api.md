@@ -130,11 +130,11 @@ The `errorCode` is a stable code for a program.
 | 400 | `request.idempotency-key-invalid` | The key is not valid, or there is more than one key |
 | 400 | `job.invalid` | The operation, the unit name, the pool or the location is not valid |
 | 401 | | The caller did not sign in |
-| 403 | `access.denied` | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. The connection of the location is not usable. The job token of a job tries to start a job. |
+| 403 | `access.denied` | The caller lacks `unit:run-plan`, or lacks `namespace:manage-runners` for a pool or `unit:define-steps` for a location. The connection of the location is not usable. |
 | 403 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace |
 | 403 | `gate.limited` | An access limit forbids the start |
 | 403 | `gate.rule-failed` | An access limit failed to evaluate, so the start is refused |
-| 403 | `job.policy-denied` | The policy refused the start |
+| 403 | `job.policy-denied` | The policy refused the start. A job token cannot start a job, even when it holds the start grants. |
 | 403 | `job.agent-denied` | The agent mode does not allow the start |
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |
 | 404 | | The namespace does not exist, or the caller cannot read it |
@@ -261,7 +261,7 @@ schedule.
 | `executor` | `runner` or `write-back` |
 | `state` | `queued`, `awaiting-approval`, `dispatched`, `running`, `canceling`, `awaiting-state`, `succeeded`, `failed`, `canceled`, `rejected` or `expired` |
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
-| `reason` | Why a job that ended did end. The field is not there for a job that runs. |
+| `reason` | Why a job that ended did end, or why a job that plans again did so. The field is not there for a job that runs. |
 | `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
 | `pool` | The name of the runner pool of a runner job. A start request takes the same value. The field is not there when the pool no longer exists. It is not there when the pool belongs to another namespace. A `POST` that made the job cannot always read the pool. Then the answer is 201 with no `pool`. The server writes a warning with the job ID to its log. A `GET` that cannot read the pool answers 500. |
 | `poolID` | The ID of the runner pool of a runner job. The field stays when the pool no longer exists. |

@@ -122,6 +122,118 @@ func runIfMatchCase(t *testing.T, refuseAll bool) conformance.Result {
 	return conformance.Run(t.Context(), e, cases, 0)[0]
 }
 
+// staleCase is the name of the case under test.
+const staleCase = "stale-if-match-gives-412"
+
+// staleAdapter answers every call with the result of the row.
+type staleAdapter struct {
+	conformance.Adapter
+
+	res conformance.CallResult
+}
+
+func (a *staleAdapter) Call(context.Context, conformance.CallParams) (conformance.CallResult, error) {
+	return a.res, nil
+}
+
+// runStaleCase runs the stale-If-Match case against an adapter that answers the
+// result of the row.
+func runStaleCase(t *testing.T, res conformance.CallResult) conformance.Result {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+
+			return
+		}
+
+		w.Header().Set("ETag", `"1"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	proxy := &fakeProxy{Proxy: nil, mu: sync.Mutex{}, exchanges: nil}
+
+	e := env(proxy)
+	e.Server = seedServer{Server: nil, url: srv.URL}
+	e.Adapter = &staleAdapter{Adapter: nil, res: res}
+	e.Operations = []string{"createProfileRevision"}
+
+	var cases []conformance.Case
+
+	for _, c := range conformance.Cases() {
+		if c.Group == conformance.GroupConcurrency && c.Name == staleCase {
+			cases = append(cases, c)
+		}
+	}
+
+	if len(cases) != 1 {
+		t.Fatalf("want the case %s, got %d cases", staleCase, len(cases))
+	}
+
+	return conformance.Run(t.Context(), e, cases, 0)[0]
+}
+
+// TestStaleIfMatchChecksTheErrorCode proves that the stale-If-Match case
+// accepts only a 412 with the documented errorCode and a message.
+func TestStaleIfMatchChecksTheErrorCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  *conformance.ErrorResult
+		want conformance.Status
+	}{
+		{
+			"the documented errorCode and a message",
+			&conformance.ErrorResult{
+				Code: http.StatusPreconditionFailed, Message: "stale",
+				ErrorCode: "request.precondition-failed", ErrorArgs: nil, Transport: false, Invalid: false,
+			},
+			conformance.StatusPassed,
+		},
+		{
+			"no errorCode",
+			&conformance.ErrorResult{
+				Code: http.StatusPreconditionFailed, Message: "stale",
+				ErrorCode: "", ErrorArgs: nil, Transport: false, Invalid: false,
+			},
+			conformance.StatusFailed,
+		},
+		{
+			"another errorCode",
+			&conformance.ErrorResult{
+				Code: http.StatusPreconditionFailed, Message: "stale",
+				ErrorCode: "profile.conflict", ErrorArgs: nil, Transport: false, Invalid: false,
+			},
+			conformance.StatusFailed,
+		},
+		{
+			"no message",
+			&conformance.ErrorResult{
+				Code: http.StatusPreconditionFailed, Message: "",
+				ErrorCode: "request.precondition-failed", ErrorArgs: nil, Transport: false, Invalid: false,
+			},
+			conformance.StatusFailed,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := runStaleCase(
+				t,
+				conformance.CallResult{Status: http.StatusPreconditionFailed, ETag: "", Body: nil, Error: tc.err},
+			)
+			if r.Status != tc.want {
+				t.Fatalf("status %s (%v), want %s", r.Status, r.Err, tc.want)
+			}
+		})
+	}
+}
+
 // TestMissingIfMatchChecksTheReasonOfTheRefusal proves that the case passes a
 // client that refuses only the call with no If-Match, and fails a client that
 // refuses the call for another argument.

@@ -87,7 +87,7 @@ func TestForceUnlockWritesOneChangeEntry(t *testing.T) {
 	cases := []forceUnlockEntryCase{
 		{"no state", "", "", noOverrides(), false, 0},
 		{"fence", smallDoc, "2", noOverrides(), false, 0},
-		{"client encrypted", `{"encrypted_data":"c2VjcmV0"}`, "", forcedOnly(), true, 1},
+		{"client encrypted", envelope, "", forcedOnly(), true, 1},
 	}
 
 	for _, tc := range cases {
@@ -186,7 +186,7 @@ func TestForceUnlockRefusesWithoutAnEntry(t *testing.T) {
 		{"other lock holder", "", true, expectedLock("lock-1", "bob"), "", workspace.ErrLockMismatch},
 		{"unit not locked", "", false, expectedLock("", ""), "", workspace.ErrNotLocked},
 		{
-			"client encrypted without the override", `{"encrypted_data":"c2VjcmV0"}`, true,
+			"client encrypted without the override", envelope, true,
 			expectedLock("", ""), "", workspace.ErrClientEncrypted,
 		},
 	}

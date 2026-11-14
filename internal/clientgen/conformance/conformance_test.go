@@ -174,3 +174,108 @@ func checkSecondSeed(t *testing.T, etag string, err, wantErr error) {
 		t.Fatalf("second seed: etag %q, err %v", etag, err)
 	}
 }
+
+// seedExistingCase is one row of TestSeedProfileTwiceAgainstAnExistingProfile.
+type seedExistingCase struct {
+	name       string
+	getStatus  int
+	getETag    string
+	postStatus int
+	wantErr    error
+}
+
+// seedExistingCases are the rows of TestSeedProfileTwiceAgainstAnExistingProfile.
+func seedExistingCases() []seedExistingCase {
+	return []seedExistingCase{
+		{
+			name:       "the profile exists with a usable ETag",
+			getStatus:  http.StatusOK,
+			getETag:    `"1"`,
+			postStatus: http.StatusConflict,
+			wantErr:    nil,
+		},
+		{
+			name:       "the profile exists without an ETag",
+			getStatus:  http.StatusOK,
+			getETag:    "",
+			postStatus: http.StatusConflict,
+			wantErr:    conformance.ErrExpectation,
+		},
+		{
+			name:       "the profile cannot be read",
+			getStatus:  http.StatusNotFound,
+			getETag:    "",
+			postStatus: http.StatusConflict,
+			wantErr:    conformance.ErrExpectation,
+		},
+		{
+			name:       "the write fails for another reason",
+			getStatus:  http.StatusOK,
+			getETag:    `"1"`,
+			postStatus: http.StatusInternalServerError,
+			wantErr:    conformance.ErrExpectation,
+		},
+	}
+}
+
+// TestSeedProfileTwiceAgainstAnExistingProfile checks the 409 of the seed
+// write: the profile counts as written only when the server has it and answers
+// with a usable ETag. Both runs of the seed setup must succeed then.
+func TestSeedProfileTwiceAgainstAnExistingProfile(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range seedExistingCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkSeedTwice(t, tc)
+		})
+	}
+}
+
+// checkSeedTwice runs the seed setup twice against a server that answers with
+// the row, and checks the answer of each run.
+func checkSeedTwice(t *testing.T, tc seedExistingCase) {
+	t.Helper()
+
+	var posts atomic.Int64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts.Add(1)
+			w.WriteHeader(tc.postStatus)
+
+			return
+		}
+
+		if tc.getETag != "" {
+			w.Header().Set("ETag", tc.getETag)
+		}
+
+		w.WriteHeader(tc.getStatus)
+	}))
+	t.Cleanup(srv.Close)
+
+	etag, err := conformance.SeedProfile(t.Context(), srv.URL)
+	if tc.wantErr != nil {
+		if !errors.Is(err, tc.wantErr) || etag != "" {
+			t.Fatalf("seed: etag %q, err %v, want %v", etag, err, tc.wantErr)
+		}
+
+		return
+	}
+
+	if err != nil || etag != `"1"` {
+		t.Fatalf("seed: etag %q, err %v", etag, err)
+	}
+
+	// The second run finds the profile, so it writes nothing.
+	etag, err = conformance.SeedProfile(t.Context(), srv.URL)
+	if err != nil || etag != `"1"` {
+		t.Fatalf("second seed: etag %q, err %v", etag, err)
+	}
+
+	if got := posts.Load(); got != 1 {
+		t.Errorf("the seed profile was posted %d times, want 1", got)
+	}
+}

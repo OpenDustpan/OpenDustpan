@@ -113,8 +113,10 @@ func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fix
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"},
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st},
+		Now:   nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
@@ -187,7 +189,7 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 
 	grp := principal.Group{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := f.store.CreateGroup(ctx, grp, storetest.ServerChange(time.Unix(0, 0), "group:"+id)); err != nil {
 		tb.Fatalf("create group %q: %v", name, err)
@@ -972,7 +974,7 @@ func TestListObjects(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 1 || len(scope.Collections) != 1 || len(scope.Units) != 1 {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 1 || len(scope.Collections) != 1 || len(scope.Units) != 1 {
 		t.Fatalf("read scope = %+v, want one namespace, one collection and one unit", scope)
 	}
 
@@ -981,7 +983,8 @@ func TestListObjects(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 || len(scope.Units) != 1 || scope.Units[0].String() != web.String() {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 || len(scope.Units) != 1 ||
+		scope.Units[0].String() != web.String() {
 		t.Fatalf("write scope = %+v, want the unit only", scope)
 	}
 }
@@ -1482,7 +1485,7 @@ func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixtur
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
+	if scope.CoversEveryObject() || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
 		t.Fatalf("principals of alice = %+v, want only %q", scope, fx.acmeBot.String())
 	}
 
@@ -1491,7 +1494,7 @@ func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixtur
 		t.Fatalf("list objects: %v", listErr)
 	}
 
-	if empty.All || len(empty.Principals) != 0 {
+	if empty.CoversEveryObject() || len(empty.Principals) != 0 {
 		t.Fatalf("principals of bob = %+v, want none", empty)
 	}
 }

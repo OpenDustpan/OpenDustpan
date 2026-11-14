@@ -76,7 +76,7 @@ func (s *sessionServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			AssignmentVersion: 1,
 			Assignment: protocol.Assignment{
 				Namespace: "acme", Unit: "", Tool: "", Job: "job-1", Phase: "plan", Sweep: "", ServerURL: "",
-				Source: nil, Steps: s.steps, Plan: nil, GitCredentials: "none", GitHelper: "",
+				Source: nil, Steps: s.steps, Plan: nil, GitCredentials: "none", GitHelper: "", Profile: "",
 			},
 		})
 	case r.URL.Path == protocol.PathSessionRenew:

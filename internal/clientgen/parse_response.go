@@ -322,7 +322,9 @@ func answerParts(op *model.Operation, schemas map[string]*model.Schema) (bool, [
 		items   []string
 	)
 
-	for _, f := range schemas[t.Ref].Fields {
+	fields := schemas[t.Ref].Fields
+	for i := range fields {
+		f := &fields[i]
 		hasNext = hasNext || f.Name == pageNextName
 
 		if f.Type.Kind == model.TypeArray {

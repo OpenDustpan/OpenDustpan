@@ -62,8 +62,9 @@ func testPutCreates(t *testing.T, h Harness) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if got.Version != 1 || !got.UpdatedAt.Equal(writeTime()) {
-		t.Fatalf("Put gave version %d at %v, want 1 at %v", got.Version, got.UpdatedAt, writeTime())
+	if got.Settings.Version != 1 || !got.Settings.UpdatedAt.Equal(writeTime()) {
+		t.Fatalf("Put gave version %d at %v, want 1 at %v", got.Settings.Version, got.Settings.UpdatedAt,
+			writeTime())
 	}
 
 	read, err := h.Store.Get(t.Context(), unit)

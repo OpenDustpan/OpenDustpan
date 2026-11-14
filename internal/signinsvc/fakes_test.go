@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,12 +31,16 @@ type world struct {
 	// What the ports answer.
 	principalErr   error
 	principal      principal.Principal
+	tempAdmin      bool
+	tempAdminErr   error
 	disableErr     error
 	startErr       error
 	auditErr       error
 	groupsErr      error
 	groupsResult   principal.GroupClaimResult
+	removalsErr    error
 	withGroupsPort bool
+	withRemovals   bool
 
 	// What the ports saw.
 	signInInputs []principal.SignInInput
@@ -45,7 +50,55 @@ type world struct {
 	startEntries []audit.Entry
 	entries      []audit.Entry
 	claims       []principal.GroupClaims
+	removals     []principal.RemovalSource
+	removedIDs   [][]string
 	auditFailed  int
+	logs         *capturedLog
+}
+
+// capturedLog is a slog.Handler that keeps the records of the service.
+type capturedLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler.
+func (h *capturedLog) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (h *capturedLog) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (h *capturedLog) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+// WithGroup implements slog.Handler.
+func (h *capturedLog) WithGroup(string) slog.Handler { return h }
+
+// text returns the messages and the attribute values of every record.
+func (h *capturedLog) text() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var b strings.Builder
+
+	for i := range h.records {
+		b.WriteString(h.records[i].Message)
+
+		h.records[i].Attrs(func(a slog.Attr) bool {
+			b.WriteString(a.Value.String())
+
+			return true
+		})
+	}
+
+	return b.String()
 }
 
 // newWorld returns the fake ports of a test. By default the principal prn-1
@@ -53,6 +106,7 @@ type world struct {
 func newWorld() *world {
 	var w world
 
+	w.logs = &capturedLog{mu: sync.Mutex{}, records: nil}
 	w.principal = principal.Principal{
 		CreatedAt: testNow(), UpdatedAt: testNow(), DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:sub-1",
 		DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceOIDC, Namespace: "", GroupCount: 0,
@@ -71,6 +125,13 @@ func (w *world) SignInPrincipal(
 	w.signInInputs = append(w.signInInputs, in)
 
 	return w.principal, false, w.principalErr
+}
+
+func (w *world) IsTempAdmin(_ context.Context, _ string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.tempAdmin, w.tempAdminErr
 }
 
 func (w *world) DisablePrincipal(_ context.Context, id string, _ audit.Entry) error {
@@ -146,6 +207,21 @@ func (w *world) ApplyGroupClaims(
 	return w.groupsResult, w.groupsErr
 }
 
+// Record implements signinsvc.Removals.
+func (w *world) Record(_ context.Context, source principal.RemovalSource, groupIDs []string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.removalsErr != nil {
+		return w.removalsErr
+	}
+
+	w.removals = append(w.removals, source)
+	w.removedIDs = append(w.removedIDs, groupIDs)
+
+	return nil
+}
+
 // service returns a Service over the fakes of w.
 func (w *world) service(t *testing.T) *signinsvc.Service {
 	t.Helper()
@@ -155,9 +231,15 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 		groups = w
 	}
 
+	var removals signinsvc.Removals
+	if w.withRemovals {
+		removals = w
+	}
+
 	svc, err := signinsvc.New(signinsvc.Config{
-		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, Groups: groups,
-		States: nil, Logger: slog.New(slog.DiscardHandler), OnAuditFailure: func() { w.auditFailed++ },
+		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: groups,
+		Removals: removals, States: nil, Locks: nil, NameKeys: nil, Logger: slog.New(w.logs),
+		OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
 		t.Fatalf("New() = %v", err)
